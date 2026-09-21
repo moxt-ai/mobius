@@ -1132,6 +1132,89 @@ describe.sequential("Agent interaction boundaries", () => {
         }
     });
 
+    it("Given an Agent streamed intermediate work, When its turn ends, Then the collapsed work is not mounted until the user reopens it", async () => {
+        const paired = await openReadyApplication();
+
+        try {
+            const promptInput = await screen.findByTestId(dataTestId.promptInput);
+            await waitFor(() => {
+                expect(promptInput.getAttribute("placeholder")).toContain("Ask the local agent");
+            });
+            fireEvent.change(promptInput, { target: { value: "Fix the failing check" } });
+            fireEvent.click(screen.getByTestId(dataTestId.sendPrompt));
+            const prompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
+            await paired.daemon.sendSessionEvent(
+                prompt.sessionId,
+                encodeSessionStartedEvent({
+                    attemptId: "collapsed-mount-attempt",
+                    commandId: prompt.commandId,
+                    kind: "session.started",
+                    sessionId: prompt.sessionId,
+                }),
+            );
+            await paired.daemon.sendSessionEvent(
+                prompt.sessionId,
+                encodeAgentActivityEvent({
+                    activityId: "reasoning-1",
+                    activityType: "reasoning",
+                    commandId: prompt.commandId,
+                    content: [],
+                    detail: { content: [], input: "", kind: "recorded", output: "Reading the failing job log." },
+                    input: "",
+                    kind: "agent.activity",
+                    locations: [],
+                    name: "",
+                    output: "Reading the failing job log.",
+                    sequence: 0,
+                    sessionId: prompt.sessionId,
+                    status: "completed",
+                    title: "Inspect the failing check",
+                    toolKind: "think",
+                }),
+            );
+            // The running Turn keeps its work visible, so the collapse below is the terminal transition
+            // rather than something that was never mounted.
+            const runningProcess = await screen.findByTestId(dataTestId.turnProcess);
+            expect(within(runningProcess).getAllByTestId(dataTestId.agentActivity)).toHaveLength(1);
+            await paired.daemon.sendSessionEvent(
+                prompt.sessionId,
+                encodeAgentMessageDeltaEvent({
+                    commandId: prompt.commandId,
+                    kind: "agent.message.delta",
+                    messageId: "",
+                    sessionId: prompt.sessionId,
+                    text: "Fixed the failing check.",
+                }),
+            );
+            await paired.daemon.sendSessionEvent(
+                prompt.sessionId,
+                encodeSessionCompletedEvent({
+                    commandId: prompt.commandId,
+                    kind: "session.completed",
+                    sessionId: prompt.sessionId,
+                    stopReason: "end_turn",
+                }),
+            );
+            await screen.findByText("Agent response completed.");
+
+            const agentMessage = await screen.findByTestId(dataTestId.agentMessage);
+            const settledProcess = within(agentMessage).getByTestId(dataTestId.turnProcess);
+            expect(settledProcess.hasAttribute("open")).toBe(false);
+            // Work the user cannot see must not cost a mount. A long recorded conversation used to freeze
+            // the tab here, because every settled Turn mounted its entire timeline into a closed details.
+            expect(within(settledProcess).queryAllByTestId(dataTestId.agentActivity)).toHaveLength(0);
+            expect(within(settledProcess).queryByText("Inspect the failing check")).toBeNull();
+
+            fireEvent.click(within(agentMessage).getByTestId(dataTestId.turnProcessSummary));
+            expect(settledProcess.hasAttribute("open")).toBe(true);
+            const steps = within(settledProcess).getAllByTestId(dataTestId.agentActivity);
+            expect(steps).toHaveLength(1);
+            expect(within(settledProcess).getByText("Inspect the failing check")).toBeTruthy();
+        } finally {
+            await paired.close();
+        }
+    });
+
     it("Given an Agent recovers from a failed step, When its turn ends, Then the chat still collapses that work behind the worked-for summary", async () => {
         vi.useFakeTimers({ toFake: ["Date"] });
         vi.setSystemTime(new Date("2026-09-20T09:00:00.000Z"));
@@ -1612,8 +1695,11 @@ describe.sequential("Agent interaction boundaries", () => {
             });
             await waitFor(() => {
                 expect(agentMessage.textContent).toContain("Completed safely");
-                expect(agentMessage.textContent).toContain("Read workspace manifest");
             });
+            // The Turn has settled, so its steps are collapsed and no longer mounted. Reopen the summary to
+            // assert on the recorded step itself.
+            fireEvent.click(within(agentMessage).getByTestId(dataTestId.turnProcessSummary));
+            expect(within(agentMessage).getByText("Read workspace manifest")).toBeTruthy();
             expect(document.querySelector("script")).toBeNull();
             expect(document.querySelector('a[href^="javascript:"]')).toBeNull();
             await waitFor(() => {

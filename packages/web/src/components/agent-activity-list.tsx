@@ -14,7 +14,7 @@ import {
     Terminal,
     Wrench,
 } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { memo, type ReactNode, type SyntheticEvent, useCallback, useEffect, useRef, useState } from "react";
 
 import { AgentMarkdown } from "@/components/agent-markdown";
 import { AgentRichContent } from "@/components/agent-rich-content";
@@ -264,7 +264,12 @@ function DetailAvailability({
     );
 }
 
-function ActivityLine({
+/**
+ * A streaming Turn rebuilds its message on every delta, which re-renders the timeline and would otherwise
+ * walk every recorded step again. Recording a step reuses the objects it did not change, and the connection
+ * is held for the life of the conversation, so an untouched row compares equal and keeps its subtree.
+ */
+const ActivityLine = memo(function ActivityLine({
     activity,
     connection,
     sessionId,
@@ -397,9 +402,9 @@ function ActivityLine({
             <DetailAvailability load={detailLoad} onRetry={loadDetails} />
         </details>
     );
-}
+});
 
-function ProgressUpdate({
+const ProgressUpdate = memo(function ProgressUpdate({
     activity,
     connection,
     sessionId,
@@ -421,7 +426,7 @@ function ProgressUpdate({
             <AgentRichContent connection={connection} contents={activity.content} sessionId={sessionId} />
         </section>
     );
-}
+});
 
 function ActivityTimeline({
     activities,
@@ -472,14 +477,15 @@ function SettledTurnProcess({
 }) {
     const presentation = describeSettledTurnProcess(activities, timing);
     const [open, setOpen] = useState(false);
+    const handleToggle = useCallback((event: SyntheticEvent<HTMLDetailsElement>): void => {
+        setOpen(event.currentTarget.open);
+    }, []);
 
     return (
         <details
             className="group/work mb-3 min-w-0 max-w-full"
             data-testid={dataTestId.turnProcess}
-            onToggle={(event) => {
-                setOpen(event.currentTarget.open);
-            }}
+            onToggle={handleToggle}
             open={open}
         >
             <summary
@@ -490,14 +496,23 @@ function SettledTurnProcess({
                 <span>{presentation.label}</span>
                 <ChevronRight className="size-3 shrink-0 transition-transform duration-150 motion-reduce:transition-none group-open/work:rotate-90" />
             </summary>
-            <div className="mt-1.5">
-                <ActivityTimeline
-                    activities={activities}
-                    connection={connection}
-                    sessionId={sessionId}
-                    streaming={false}
-                />
-            </div>
+            {/*
+             * A settled Turn renders collapsed, so its steps are invisible until the user reopens it. Mounting
+             * them anyway made opening a long recorded conversation freeze the tab: every historical Turn paid
+             * for its whole timeline, including per-step Markdown parsing and tool output up to the protocol's
+             * half-megabyte field limit. The label above already counts the steps, so the collapsed summary
+             * still describes the work without it.
+             */}
+            {open && (
+                <div className="mt-1.5">
+                    <ActivityTimeline
+                        activities={activities}
+                        connection={connection}
+                        sessionId={sessionId}
+                        streaming={false}
+                    />
+                </div>
+            )}
         </details>
     );
 }

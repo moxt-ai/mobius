@@ -4,7 +4,7 @@ import {
     SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT,
 } from "@moxt-ai/mobius-sdk";
 import { ArrowDown, GitFork, LoaderCircle, MoreHorizontal } from "lucide-react";
-import { memo, useLayoutEffect, useRef, useState } from "react";
+import { memo, type UIEvent, useCallback, useLayoutEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { AgentActivityList } from "@/components/agent-activity-list";
 import { AgentAvatar } from "@/components/agent-avatar";
@@ -355,6 +355,12 @@ export function ChatMessageList({ connection }: { readonly connection: ChannelCo
     const previousConversationIdRef = useRef(conversation.id);
     const [showLatest, setShowLatest] = useState(false);
 
+    // Reading `scrollHeight` forces a synchronous layout, so this must not run on every render: an unrelated
+    // state change would measure and re-pin the transcript for nothing. It still has to run per token while a
+    // message streams, though, or the view stops following the text that is arriving. The transcript's last
+    // message changes identity on every appended delta and is stable otherwise, so it marks exactly the
+    // renders that grew the content.
+    const latestMessage = messages.at(-1);
     useLayoutEffect(() => {
         const viewport = viewportRef.current;
         if (viewport === null) {
@@ -364,7 +370,7 @@ export function ChatMessageList({ connection }: { readonly connection: ChannelCo
             previousConversationIdRef.current = conversation.id;
             followLatestRef.current = true;
         }
-        if (messages.length === 0) {
+        if (latestMessage === undefined) {
             viewport.scrollTop = 0;
             setShowLatest(false);
             return;
@@ -373,18 +379,23 @@ export function ChatMessageList({ connection }: { readonly connection: ChannelCo
             viewport.scrollTop = viewport.scrollHeight;
             setShowLatest(false);
         }
-    });
+    }, [conversation.id, latestMessage]);
+
+    const handleScroll = useCallback((event: UIEvent<HTMLDivElement>): void => {
+        const viewport = event.currentTarget;
+        const remaining = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+        followLatestRef.current = remaining <= SCROLL_TAIL_THRESHOLD;
+        // Every scroll event would otherwise schedule a state update, re-rendering the whole transcript
+        // while the user scrolls.
+        const nextShowLatest = !followLatestRef.current;
+        setShowLatest((current) => (current === nextShowLatest ? current : nextShowLatest));
+    }, []);
 
     return (
         <div className="relative min-h-0 flex-1">
             <div
                 className="conversation-scroll h-full overflow-y-auto overscroll-contain"
-                onScroll={(event) => {
-                    const viewport = event.currentTarget;
-                    const remaining = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
-                    followLatestRef.current = remaining <= SCROLL_TAIL_THRESHOLD;
-                    setShowLatest(!followLatestRef.current);
-                }}
+                onScroll={handleScroll}
                 ref={viewportRef}
             >
                 {messages.length === 0 ? (

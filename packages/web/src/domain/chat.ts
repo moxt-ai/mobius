@@ -1114,6 +1114,25 @@ export class AgentChatMessage extends ChatMessage {
         );
 }
 
+/**
+ * Memoizes one value derived from the conversation's message list. A conversation is immutable, so the
+ * only input a message-scanning derivation can see is the list itself; keying on its identity makes the
+ * cache sound, and a replaced list misses and recomputes. Deriving these on every read made the sidebar,
+ * the composer and the background-task count rescan every message of every conversation on each event.
+ */
+class MessageListMemo<Value> {
+    #source: readonly ChatMessage[] | null = null;
+    #value: Value | null = null;
+
+    readonly read = (messages: readonly ChatMessage[], derive: () => Value): Value => {
+        if (this.#source !== messages || this.#value === null) {
+            this.#source = messages;
+            this.#value = derive();
+        }
+        return this.#value;
+    };
+}
+
 export class Conversation {
     readonly additionalDirectories: readonly WorkspaceEntry[];
     readonly agentId: string;
@@ -1141,108 +1160,125 @@ export class Conversation {
     readonly sessionId: string;
     readonly title: string;
 
+    #activeStateLabel = new MessageListMemo<string>();
+    #canStop = new MessageListMemo<boolean>();
+    #followUpMessages = new MessageListMemo<readonly UserChatMessage[]>();
+    #isRunning = new MessageListMemo<boolean>();
+    #steeringCommandIds = new MessageListMemo<ReadonlySet<string>>();
+    #transcriptMessages = new MessageListMemo<readonly ChatMessage[]>();
+
     get activeStateLabel(): string {
-        const steeringCommands = this.steeringCommandIds();
-        for (const message of this.messages.toReversed()) {
-            if (
-                message instanceof AgentChatMessage &&
-                !steeringCommands.has(message.commandId) &&
-                message.state.isStreaming
-            ) {
-                return message.state.label;
+        return this.#activeStateLabel.read(this.messages, () => {
+            const steeringCommands = this.#steeringCommands();
+            for (const message of this.messages.toReversed()) {
+                if (
+                    message instanceof AgentChatMessage &&
+                    !steeringCommands.has(message.commandId) &&
+                    message.state.isStreaming
+                ) {
+                    return message.state.label;
+                }
             }
-        }
-        return "";
+            return "";
+        });
     }
 
     get canStop(): boolean {
-        const steeringCommands = this.steeringCommandIds();
-        for (const message of this.messages.toReversed()) {
-            if (
-                message instanceof AgentChatMessage &&
-                !steeringCommands.has(message.commandId) &&
-                message.state.isStreaming
-            ) {
-                return message.state.canStop;
+        return this.#canStop.read(this.messages, () => {
+            const steeringCommands = this.#steeringCommands();
+            for (const message of this.messages.toReversed()) {
+                if (
+                    message instanceof AgentChatMessage &&
+                    !steeringCommands.has(message.commandId) &&
+                    message.state.isStreaming
+                ) {
+                    return message.state.canStop;
+                }
             }
-        }
-        return false;
+            return false;
+        });
     }
 
     get isRunning(): boolean {
-        const steeringCommands = this.steeringCommandIds();
-        for (const message of this.messages) {
-            if (
-                message instanceof AgentChatMessage &&
-                !steeringCommands.has(message.commandId) &&
-                message.state.isStreaming
-            ) {
-                return true;
+        return this.#isRunning.read(this.messages, () => {
+            const steeringCommands = this.#steeringCommands();
+            for (const message of this.messages) {
+                if (
+                    message instanceof AgentChatMessage &&
+                    !steeringCommands.has(message.commandId) &&
+                    message.state.isStreaming
+                ) {
+                    return true;
+                }
             }
-        }
-        return false;
+            return false;
+        });
     }
 
     get followUpMessages(): readonly UserChatMessage[] {
-        const agentMessages = new Map<string, AgentChatMessage>();
-        for (const message of this.messages) {
-            if (message instanceof AgentChatMessage) {
-                agentMessages.set(message.commandId, message);
+        return this.#followUpMessages.read(this.messages, () => {
+            const agentMessages = new Map<string, AgentChatMessage>();
+            for (const message of this.messages) {
+                if (message instanceof AgentChatMessage) {
+                    agentMessages.set(message.commandId, message);
+                }
             }
-        }
-        const followUps: UserChatMessage[] = [];
-        for (const message of this.messages) {
-            if (
-                message instanceof QueuedUserChatMessage &&
-                agentMessages.get(message.commandId)?.state.appearance === "queued"
-            ) {
-                followUps.push(message);
+            const followUps: UserChatMessage[] = [];
+            for (const message of this.messages) {
+                if (
+                    message instanceof QueuedUserChatMessage &&
+                    agentMessages.get(message.commandId)?.state.appearance === "queued"
+                ) {
+                    followUps.push(message);
+                }
             }
-        }
-        return followUps;
+            return followUps;
+        });
     }
 
     get transcriptMessages(): readonly ChatMessage[] {
-        const pendingFollowUpIds = new Set(this.followUpMessages.map((message) => message.id));
-        const steeringCommands = this.steeringCommandIds();
-        const steeringByTarget = new Map<string, SteeringUserChatMessage[]>();
-        for (const message of this.messages) {
-            if (message instanceof SteeringUserChatMessage) {
-                const messages = steeringByTarget.get(message.targetCommandId) ?? [];
-                messages.push(message);
-                steeringByTarget.set(message.targetCommandId, messages);
+        return this.#transcriptMessages.read(this.messages, () => {
+            const pendingFollowUpIds = new Set(this.followUpMessages.map((message) => message.id));
+            const steeringCommands = this.#steeringCommands();
+            const steeringByTarget = new Map<string, SteeringUserChatMessage[]>();
+            for (const message of this.messages) {
+                if (message instanceof SteeringUserChatMessage) {
+                    const messages = steeringByTarget.get(message.targetCommandId) ?? [];
+                    messages.push(message);
+                    steeringByTarget.set(message.targetCommandId, messages);
+                }
             }
-        }
-        const injectedSteeringIds = new Set<string>();
-        const transcript: ChatMessage[] = [];
-        for (const message of this.messages) {
-            if (message instanceof SteeringUserChatMessage || pendingFollowUpIds.has(message.id)) {
-                continue;
-            }
-            if (message instanceof AgentChatMessage) {
-                if (steeringCommands.has(message.commandId)) {
+            const injectedSteeringIds = new Set<string>();
+            const transcript: ChatMessage[] = [];
+            for (const message of this.messages) {
+                if (message instanceof SteeringUserChatMessage || pendingFollowUpIds.has(message.id)) {
                     continue;
                 }
-                if (!message.state.isStreaming) {
-                    for (const steering of steeringByTarget.get(message.commandId) ?? []) {
-                        transcript.push(steering);
-                        injectedSteeringIds.add(steering.id);
+                if (message instanceof AgentChatMessage) {
+                    if (steeringCommands.has(message.commandId)) {
+                        continue;
+                    }
+                    if (!message.state.isStreaming) {
+                        for (const steering of steeringByTarget.get(message.commandId) ?? []) {
+                            transcript.push(steering);
+                            injectedSteeringIds.add(steering.id);
+                        }
+                    }
+                    if (message.state.appearance === "queued") {
+                        continue;
                     }
                 }
-                if (message.state.appearance === "queued") {
-                    continue;
+                transcript.push(message);
+            }
+            for (const steeringMessages of steeringByTarget.values()) {
+                for (const steering of steeringMessages) {
+                    if (!injectedSteeringIds.has(steering.id)) {
+                        transcript.push(steering);
+                    }
                 }
             }
-            transcript.push(message);
-        }
-        for (const steeringMessages of steeringByTarget.values()) {
-            for (const steering of steeringMessages) {
-                if (!injectedSteeringIds.has(steering.id)) {
-                    transcript.push(steering);
-                }
-            }
-        }
-        return transcript;
+            return transcript;
+        });
     }
 
     constructor(
@@ -1888,7 +1924,7 @@ export class Conversation {
         );
 
     readonly runningTurn = (): PendingTurn => {
-        const steeringCommands = this.steeringCommandIds();
+        const steeringCommands = this.#steeringCommands();
         for (const message of this.messages.toReversed()) {
             if (
                 message instanceof AgentChatMessage &&
@@ -1908,15 +1944,16 @@ export class Conversation {
         throw new Error("Conversation has no active turn");
     };
 
-    private readonly steeringCommandIds = (): ReadonlySet<string> => {
-        const commandIds = new Set<string>();
-        for (const message of this.messages) {
-            if (message instanceof SteeringUserChatMessage) {
-                commandIds.add(message.commandId);
+    #steeringCommands = (): ReadonlySet<string> =>
+        this.#steeringCommandIds.read(this.messages, () => {
+            const commandIds = new Set<string>();
+            for (const message of this.messages) {
+                if (message instanceof SteeringUserChatMessage) {
+                    commandIds.add(message.commandId);
+                }
             }
-        }
-        return commandIds;
-    };
+            return commandIds;
+        });
 
     readonly updateDraft = (draft: string): Conversation =>
         new Conversation(

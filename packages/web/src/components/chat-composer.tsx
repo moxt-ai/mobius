@@ -264,6 +264,11 @@ export function ChatComposer({ placement }: ChatComposerProps) {
         }
     }, [conversation.session.autoPrepare, conversation.sessionId, runtime.canSend]);
 
+    // Measuring the textarea forces a synchronous layout, so this must run only when the text it measures
+    // changes. Without a dependency list it ran on every render, including every streamed token that
+    // re-rendered the composer, forcing a layout the browser would otherwise have deferred. The draft is
+    // the text the measurement depends on even though the effect reads the rendered element, not the value.
+    // biome-ignore lint/correctness/useExhaustiveDependencies: Resizing follows the draft text, not the element reference.
     useLayoutEffect(() => {
         const textarea = textareaRef.current;
         if (textarea === null) {
@@ -271,7 +276,7 @@ export function ChatComposer({ placement }: ChatComposerProps) {
         }
         textarea.style.height = "auto";
         textarea.style.height = `${Math.min(textarea.scrollHeight, COMPOSER_MAX_HEIGHT).toString()}px`;
-    });
+    }, [conversation.draft]);
 
     const submit = (event: FormEvent<HTMLFormElement>): void => {
         event.preventDefault();
