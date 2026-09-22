@@ -1487,6 +1487,78 @@ describe.sequential("Cloudflare session deployment: event delivery and storage",
         }
     });
 
+    it("Given Sessions whose latest Turns are running, failed and completed, When the browser reads the Session directory, Then only the unfinished Turns report a busy status", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, authorization, createSession } = createSessionRequests(app);
+        const pairing = await pairChannel();
+        const daemon = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+        );
+        const host = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+        );
+        await host.messages.next();
+
+        const readBusyStatuses = async (): Promise<ReadonlyMap<unknown, unknown>> => {
+            const directory = await app.request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions?limit=10`,
+                { headers: authorization(pairing.created) },
+            );
+            expect(directory.status).toBe(200);
+            const page: unknown = await directory.json();
+            if (!isRecord(page) || !Array.isArray(page["sessions"])) {
+                throw new Error("Expected a Session directory page");
+            }
+            return new Map(
+                page["sessions"].filter(isRecord).map((session) => [session["sessionId"], session["busyStatus"]]),
+            );
+        };
+
+        try {
+            expect((await createSession(pairing.created, "busy-working")).status).toBe(201);
+            expect((await createSession(pairing.created, "busy-failed")).status).toBe(201);
+
+            const settled = await readBusyStatuses();
+            expect(settled.get("busy-working")).toBeUndefined();
+            expect(settled.get("busy-failed")).toBeUndefined();
+
+            await completeTurn(host, daemon, prompt("busy-working", "settled-turn", "Finish this"), "Done");
+            await expect(readBusyStatuses().then((statuses) => statuses.get("busy-working"))).resolves.toBeUndefined();
+
+            const failing = prompt("busy-failed", "failed-turn", "Break this");
+            await submitPrompt(host, daemon, failing);
+            await commit(
+                host,
+                daemon,
+                envelope("busy-failed", "failed-turn-started", {
+                    attemptId: "failed-turn-attempt",
+                    commandId: failing.commandId,
+                    kind: SESSION_STARTED_KIND,
+                    sessionId: "busy-failed",
+                }),
+            );
+            await commit(
+                host,
+                daemon,
+                envelope("busy-failed", "failed-turn-failed", {
+                    code: "agent_unavailable",
+                    commandId: failing.commandId,
+                    kind: SESSION_FAILED_KIND,
+                    message: "The Agent stopped responding",
+                    sessionId: "busy-failed",
+                }),
+            );
+            await submitPrompt(host, daemon, prompt("busy-working", "working-turn", "Keep working"));
+
+            const busy = await readBusyStatuses();
+            expect(busy.get("busy-working")).toBe("working");
+            expect(busy.get("busy-failed")).toBe("failed");
+        } finally {
+            host.socket.close(1000, "Busy status test complete");
+            daemon.socket.close(1000, "Busy status test complete");
+        }
+    });
+
     it("Given a stored Agent activity no longer decodes, When a browser reads its message page, Then the other Turns still load", async () => {
         const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
         const { pairChannel, openChannelSocket, authorization, createSession } = createSessionRequests(app);

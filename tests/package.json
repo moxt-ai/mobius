@@ -25,6 +25,7 @@
         "@moxt-ai/mobius-relay-core": "workspace:*",
         "@moxt-ai/mobius-relay-cloudflare-platform": "workspace:*",
         "@moxt-ai/mobius-relay-cloudflare-standalone": "workspace:*",
+        "drizzle-orm": "^0.45.2",
         "esbuild": "0.28.2",
         "hono": "^4.13.8",
         "miniflare": "5.20260903.0-alpha",

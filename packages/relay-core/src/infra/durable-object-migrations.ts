@@ -36,7 +36,7 @@ export function applyDurableObjectMigrations(
     namespace: string,
     migrations: readonly DurableObjectMigration[],
 ): void {
-    database.exec(`CREATE TABLE IF NOT EXISTS _mobius_do_schema_migrations (
+    database.run(`CREATE TABLE IF NOT EXISTS _mobius_do_schema_migrations (
         namespace TEXT NOT NULL,
         name TEXT NOT NULL,
         applied_at INTEGER NOT NULL,
@@ -53,7 +53,7 @@ export function applyDurableObjectMigrations(
         }
         database.transaction(() => {
             if (!migrationIsAlreadySatisfied(database, migration.existingState)) {
-                database.exec(migration.sql);
+                database.run(migration.sql);
             }
             database.run("INSERT INTO _mobius_do_schema_migrations (namespace, name, applied_at) VALUES (?, ?, ?)", [
                 namespace,

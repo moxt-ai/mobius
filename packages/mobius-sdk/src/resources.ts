@@ -97,6 +97,17 @@ function booleanField(value: Readonly<Record<string, unknown>>, field: string): 
     return candidate;
 }
 
+function busyStatusField(value: Readonly<Record<string, unknown>>, field: string): MobiusSessionBusyStatus | undefined {
+    const candidate = value[field];
+    if (candidate === undefined || candidate === null) {
+        return undefined;
+    }
+    if (candidate !== "working" && candidate !== "failed") {
+        throw invalidResponse(`The service returned an invalid ${field}`);
+    }
+    return candidate;
+}
+
 function arrayField(
     value: Readonly<Record<string, unknown>>,
     field: string,
@@ -1172,6 +1183,8 @@ export class MobiusDeletedSessionState extends MobiusSessionState {
     }
 }
 
+export type MobiusSessionBusyStatus = "working" | "failed";
+
 export class MobiusSession {
     readonly agentId: string;
     readonly createdAt: string;
@@ -1218,6 +1231,31 @@ export class MobiusSession {
         this.state = state;
         this.title = title;
         this.updatedAt = updatedAt;
+    }
+}
+
+/** A Session returned by the listing endpoint, including its latest turn status. */
+export class MobiusSessionListing extends MobiusSession {
+    readonly busyStatus: MobiusSessionBusyStatus | undefined;
+
+    constructor(session: MobiusSession, busyStatus: MobiusSessionBusyStatus | undefined) {
+        super(
+            session.agentId,
+            session.createdAt,
+            session.createdBy,
+            session.cloudRetention,
+            session.defaultBinding,
+            session.hasNativeHistory,
+            session.lastCommittedSequence,
+            session.policy,
+            session.projectId,
+            session.runtimeId,
+            session.sessionId,
+            session.state,
+            session.title,
+            session.updatedAt,
+        );
+        this.busyStatus = busyStatus;
     }
 }
 
@@ -1284,11 +1322,16 @@ export function decodeMobiusSession(value: unknown): MobiusSession {
     );
 }
 
+export function decodeMobiusSessionListing(value: unknown): MobiusSessionListing {
+    const session = record(value, "Session");
+    return new MobiusSessionListing(decodeMobiusSession(session), busyStatusField(session, "busyStatus"));
+}
+
 export class MobiusSessionPage {
     readonly nextCursor: string;
-    readonly sessions: readonly MobiusSession[];
+    readonly sessions: readonly MobiusSessionListing[];
 
-    constructor(sessions: readonly MobiusSession[], nextCursor: string) {
+    constructor(sessions: readonly MobiusSessionListing[], nextCursor: string) {
         this.nextCursor = nextCursor;
         this.sessions = sessions;
     }
@@ -1297,7 +1340,7 @@ export class MobiusSessionPage {
 export function decodeMobiusSessionPage(value: unknown): MobiusSessionPage {
     const page = record(value, "Session page");
     return new MobiusSessionPage(
-        arrayField(page, "sessions", 100).map(decodeMobiusSession),
+        arrayField(page, "sessions", 100).map(decodeMobiusSessionListing),
         nullableCursor(page, "nextCursor"),
     );
 }

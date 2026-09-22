@@ -180,8 +180,13 @@ function decodeSessionSummaryWithCloudRetention(value: unknown, cloudRetention: 
     if (level !== "full" && level !== "summary") {
         throw new SessionRuntimeError("session_storage_unavailable", "The session policy is invalid");
     }
+    const busyStatus = value["busyStatus"];
+    if (busyStatus !== undefined && busyStatus !== "working" && busyStatus !== "failed") {
+        throw new SessionRuntimeError("session_storage_unavailable", "The session busy status is invalid");
+    }
     return {
         agentId: readString(value, "agentId"),
+        ...(busyStatus === undefined ? {} : { busyStatus }),
         createdAt: readString(value, "createdAt"),
         createdBy: readString(value, "createdBy"),
         cloudRetention,

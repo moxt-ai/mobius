@@ -31,6 +31,9 @@ export type UploadedContentTarget = Readonly<v.InferOutput<typeof UploadedConten
 export const ArtifactCountRecordSchema = v.object({ artifact_count: v.pipe(v.number(), v.safeInteger()) });
 export type ArtifactCountRecord = Readonly<v.InferOutput<typeof ArtifactCountRecordSchema>>;
 
+const TurnStateSchema = v.picklist(["queued", "running", "succeeded", "failed", "cancelled", "indeterminate"]);
+export type TurnState = v.InferOutput<typeof TurnStateSchema>;
+
 export const SessionRecordSchema = v.object({
     scope_key: v.string(),
     project_id: v.string(),
@@ -57,6 +60,12 @@ export const SessionRecordSchema = v.object({
     updated_at: v.pipe(v.number(), v.safeInteger()),
     next_sequence: v.pipe(v.number(), v.safeInteger()),
     minimum_sequence: v.pipe(v.number(), v.safeInteger()),
+    /**
+     * State of the Session's most recent Turn, joined in by every `sessions`
+     * read so activity reporting never needs a second query. Null when the
+     * Session has no Turns at all.
+     */
+    latest_turn_state: v.nullable(TurnStateSchema),
 });
 export type SessionRecord = Readonly<v.InferOutput<typeof SessionRecordSchema>>;
 

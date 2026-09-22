@@ -291,8 +291,16 @@ export class CreateSessionRequest {
 
 export type SessionLifecycle = ResourceSessionLifecycle;
 
+export type SessionBusyStatus = "working" | "failed";
+
 export interface SessionSummary {
     readonly agentId: string;
+    /**
+     * Latest turn activity, present only in directory listings. Absent when a
+     * Session has no turns, its latest turn finished, or the summary came from a
+     * single-Session read.
+     */
+    readonly busyStatus?: SessionBusyStatus;
     readonly createdAt: string;
     readonly createdBy: string;
     readonly cloudRetention: boolean;

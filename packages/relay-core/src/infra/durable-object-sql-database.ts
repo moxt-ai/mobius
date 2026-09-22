@@ -1,3 +1,5 @@
+import { drizzle } from "drizzle-orm/durable-sqlite";
+import * as sessionDoSchema from "../schema/session-do/index.ts";
 import {
     DatabaseError,
     type DoSqlDatabase,
@@ -25,14 +27,12 @@ function decodeRow(value: Readonly<Record<string, SqlStorageValue>>): DoSqlRow {
 
 export class DurableObjectSqlDatabase implements DoSqlDatabase {
     readonly #storage: DurableObjectStorage;
+    readonly orm: DoSqlDatabase["orm"];
 
     constructor(storage: DurableObjectStorage) {
         this.#storage = storage;
+        this.orm = drizzle(storage, { schema: sessionDoSchema });
     }
-
-    readonly exec = (script: string): void => {
-        this.#storage.sql.exec(script);
-    };
 
     readonly query = (sql: string, values: readonly DoSqlValue[] = []): readonly DoSqlRow[] =>
         this.#storage.sql

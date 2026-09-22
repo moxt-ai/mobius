@@ -24,6 +24,7 @@ import {
     type CreateSessionRequest,
     isSessionDirectoryIdentifier,
     type ProjectScope,
+    type SessionBusyStatus,
     type SessionLifecycle,
     SessionRuntimeError,
     type SessionSummary,
@@ -36,6 +37,7 @@ import type {
     SessionBindingRecord,
     SessionRecord,
     TurnRecord,
+    TurnState,
 } from "../../entity/do/session-records.ts";
 
 export const MAX_ARCHIVE_BATCH_SIZE = 256;
@@ -175,14 +177,28 @@ export function lifecycleFromRow(row: SessionRecord): SessionLifecycle {
     throw new SessionRuntimeError("session_storage_unavailable", "The session lifecycle is invalid");
 }
 
+function busyStatusFromTurnState(state: TurnState | null): SessionBusyStatus | undefined {
+    switch (state) {
+        case "queued":
+        case "running":
+            return "working";
+        case "failed":
+            return "failed";
+        default:
+            return undefined;
+    }
+}
+
 export function summaryFromRow(row: SessionRecord): SessionSummary {
     const recordingLevel = rowString(row, "recording_level");
     if (recordingLevel !== "full" && recordingLevel !== "summary") {
         throw new SessionRuntimeError("session_storage_unavailable", "The session recording level is invalid");
     }
     const createdAt = new Date(rowNumber(row, "created_at")).toISOString();
+    const busyStatus = busyStatusFromTurnState(row.latest_turn_state);
     return {
         agentId: rowString(row, "agent_id"),
+        ...(busyStatus === undefined ? {} : { busyStatus }),
         createdAt,
         createdBy: rowString(row, "created_by"),
         cloudRetention: rowNumber(row, "cloud_retention") === 1,

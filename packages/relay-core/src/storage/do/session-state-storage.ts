@@ -1,23 +1,33 @@
+import { and, desc, eq, getTableColumns } from "drizzle-orm";
 import { type SessionRecord, SessionRecordSchema } from "../../entity/do/session-records.ts";
 import type { DoSqlDatabase } from "../../infra/do-sql-database.ts";
+import { sessions } from "../../schema/session-do/sessions.ts";
+import { turns } from "../../schema/session-do/turns.ts";
 import { decodeStorageRows } from "./decode-storage-rows.ts";
 
 export class SessionStateStorage {
     readonly #database: DoSqlDatabase;
     constructor(cx: { readonly doDatabase: DoSqlDatabase }) {
-        const { doDatabase: database } = cx;
-        this.#database = database;
+        this.#database = cx.doDatabase;
     }
 
-    readonly findSession = (scopeKey: string, sessionId: string): SessionRecord | undefined =>
-        decodeStorageRows(
+    readonly findSession = (scopeKey: string, sessionId: string): SessionRecord | undefined => {
+        const latestTurnState = this.#database.orm
+            .select({ state: turns.state })
+            .from(turns)
+            .where(and(eq(turns.scope_key, sessions.scope_key), eq(turns.session_id, sessions.session_id)))
+            .orderBy(desc(turns.created_at), desc(turns.command_id))
+            .limit(1)
+            .as("latest_turn_state");
+        return decodeStorageRows(
             SessionRecordSchema,
-            this.#database.query(
-                `SELECT * FROM sessions
-       WHERE scope_key = ? AND session_id = ?`,
-                [scopeKey, sessionId],
-            ),
+            this.#database.orm
+                .select({ ...getTableColumns(sessions), latest_turn_state: latestTurnState })
+                .from(sessions)
+                .where(and(eq(sessions.scope_key, scopeKey), eq(sessions.session_id, sessionId)))
+                .all(),
         )[0];
+    };
 
     readonly markSessionDeleting = (input: {
         readonly deleteRequestedAt: number;

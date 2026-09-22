@@ -1,3 +1,4 @@
+import { and, desc, eq, getTableColumns, lt, or } from "drizzle-orm";
 import {
     ActiveResponseBlockRecordSchema,
     type ActivityDetailRecord,
@@ -28,6 +29,8 @@ import {
 } from "../../entity/do/session-records.ts";
 import type { DoSqlDatabase } from "../../infra/do-sql-database.ts";
 import { DatabaseError } from "../../infra/sql-database.ts";
+import { sessions } from "../../schema/session-do/sessions.ts";
+import { turns } from "../../schema/session-do/turns.ts";
 import { decodeStorageRows } from "./decode-storage-rows.ts";
 import { decodeStreamBlock, sessionDeltaText } from "./session-stream-codec.ts";
 import { rowNullableString, rowNumber, rowString } from "./sqlite-row.ts";
@@ -310,25 +313,35 @@ export class SessionQueriesStorage {
             readonly updatedAt: number;
             readonly sessionId: string;
         } | null;
-    }): readonly SessionRecord[] =>
-        decodeStorageRows(
+    }): readonly SessionRecord[] => {
+        const latestTurnState = this.#database.orm
+            .select({ state: turns.state })
+            .from(turns)
+            .where(and(eq(turns.scope_key, sessions.scope_key), eq(turns.session_id, sessions.session_id)))
+            .orderBy(desc(turns.created_at), desc(turns.command_id))
+            .limit(1)
+            .as("latest_turn_state");
+        const cursorFilter =
+            input.cursor === null
+                ? undefined
+                : or(
+                      lt(sessions.updated_at, input.cursor.updatedAt),
+                      and(
+                          eq(sessions.updated_at, input.cursor.updatedAt),
+                          lt(sessions.session_id, input.cursor.sessionId),
+                      ),
+                  );
+        return decodeStorageRows(
             SessionRecordSchema,
-            this.#database.query(
-                `SELECT * FROM sessions
-       WHERE scope_key = ? AND lifecycle = 'ready'
-         AND (? IS NULL OR updated_at < ? OR (updated_at = ? AND session_id < ?))
-       ORDER BY updated_at DESC, session_id DESC
-       LIMIT ?`,
-                [
-                    input.scopeKey,
-                    input.cursor?.updatedAt ?? null,
-                    input.cursor?.updatedAt ?? null,
-                    input.cursor?.updatedAt ?? null,
-                    input.cursor?.sessionId ?? null,
-                    input.limit,
-                ],
-            ),
+            this.#database.orm
+                .select({ ...getTableColumns(sessions), latest_turn_state: latestTurnState })
+                .from(sessions)
+                .where(and(eq(sessions.scope_key, input.scopeKey), eq(sessions.lifecycle, "ready"), cursorFilter))
+                .orderBy(desc(sessions.updated_at), desc(sessions.session_id))
+                .limit(input.limit)
+                .all(),
         );
+    };
 
     readonly listEventsAfter = (input: {
         readonly scopeKey: string;

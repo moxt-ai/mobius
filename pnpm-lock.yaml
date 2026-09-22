@@ -344,6 +344,9 @@ importers:
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
+      drizzle-orm:
+        specifier: ^0.45.2
+        version: 0.45.2(@cloudflare/workers-types@5.20260918.1)
       esbuild:
         specifier: 0.28.2
         version: 0.28.2

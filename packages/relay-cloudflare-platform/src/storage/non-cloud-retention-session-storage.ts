@@ -27,17 +27,17 @@ import {
 const terminalTurnStates = ["succeeded", "failed", "cancelled"] as const;
 
 export interface RetainedTerminalTurn {
-    readonly commandId: string;
-    readonly commandJson: string;
-    readonly scopeKey: string;
-    readonly sessionId: string;
+    readonly command_id: string;
+    readonly command_json: string;
+    readonly scope_key: string;
+    readonly session_id: string;
 }
 
 export interface RedactedTerminalTurn {
-    readonly commandId: string;
-    readonly commandJson: string;
-    readonly scopeKey: string;
-    readonly sessionId: string;
+    readonly command_id: string;
+    readonly command_json: string;
+    readonly scope_key: string;
+    readonly session_id: string;
 }
 
 function sourceSequenceIsLater(candidate: string, current: string): boolean {
@@ -54,10 +54,10 @@ export class NonCloudRetentionSessionStorage {
     readonly readTerminalTurns = (): readonly RetainedTerminalTurn[] =>
         drizzle(this.#storage)
             .select({
-                commandId: turns.commandId,
-                commandJson: turns.commandJson,
-                scopeKey: turns.scopeKey,
-                sessionId: turns.sessionId,
+                command_id: turns.command_id,
+                command_json: turns.command_json,
+                scope_key: turns.scope_key,
+                session_id: turns.session_id,
             })
             .from(turns)
             .where(inArray(turns.state, terminalTurnStates))
@@ -144,12 +144,12 @@ export class NonCloudRetentionSessionStorage {
             for (const turn of redactedTurns) {
                 transaction
                     .update(turns)
-                    .set({ commandJson: turn.commandJson, errorMessage: null, response: "" })
+                    .set({ command_json: turn.command_json, error_message: null, response: "" })
                     .where(
                         and(
-                            eq(turns.scopeKey, turn.scopeKey),
-                            eq(turns.sessionId, turn.sessionId),
-                            eq(turns.commandId, turn.commandId),
+                            eq(turns.scope_key, turn.scope_key),
+                            eq(turns.session_id, turn.session_id),
+                            eq(turns.command_id, turn.command_id),
                             inArray(turns.state, terminalTurnStates),
                         ),
                     )
@@ -160,7 +160,7 @@ export class NonCloudRetentionSessionStorage {
                 .set({ deliveryPayload: null })
                 .where(inArray(pendingWork.state, ["completed", "failed"]))
                 .run();
-            transaction.update(sessions).set({ nativeHistoryJson: null, title: "" }).run();
+            transaction.update(sessions).set({ native_history_json: null, title: "" }).run();
         });
     };
 }

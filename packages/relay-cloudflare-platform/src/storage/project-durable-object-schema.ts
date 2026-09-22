@@ -2,7 +2,7 @@ import type { DoSqlDatabase } from "@moxt-ai/mobius-relay-core/database";
 import { projectDurableObjectMigrations } from "../generated/project-do-migrations.ts";
 
 export function initializeProjectDurableObjectSchema(database: DoSqlDatabase): void {
-    database.exec(`CREATE TABLE IF NOT EXISTS project_schema_migrations (
+    database.run(`CREATE TABLE IF NOT EXISTS project_schema_migrations (
         name TEXT PRIMARY KEY,
         applied_at INTEGER NOT NULL
     ) STRICT;`);
@@ -27,7 +27,7 @@ export function initializeProjectDurableObjectSchema(database: DoSqlDatabase): v
                 }
             })();
             if (!alreadySatisfied) {
-                database.exec(migration.sql);
+                database.run(migration.sql);
             }
             database.run("INSERT INTO project_schema_migrations (name, applied_at) VALUES (?, ?)", [
                 migration.name,

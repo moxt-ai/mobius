@@ -12,17 +12,17 @@ export class NonCloudRetentionSessionScrubService {
 
     readonly scrubRetainedContent = (): void => {
         const redactedTurns = this.#storage.readTerminalTurns().map((turn) => {
-            const command = decodeSessionPromptCommand(turn.commandJson);
+            const command = decodeSessionPromptCommand(turn.command_json);
             return {
-                commandId: turn.commandId,
-                commandJson: encodeSessionPromptCommand({
+                command_id: turn.command_id,
+                command_json: encodeSessionPromptCommand({
                     ...command,
                     images: [],
                     prompt: REDACTED_SESSION_PROMPT,
                     resources: [],
                 }),
-                scopeKey: turn.scopeKey,
-                sessionId: turn.sessionId,
+                scope_key: turn.scope_key,
+                session_id: turn.session_id,
             };
         });
         this.#storage.scrubRetainedContent(redactedTurns);
