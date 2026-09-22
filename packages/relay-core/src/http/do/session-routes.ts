@@ -878,6 +878,16 @@ export function createSessionRoutes() {
                 ),
             );
         })
+        .get("/projects/:projectId/sessions/:sessionId/live-event-subscription-target", async (context) =>
+            context.json(
+                await context.env.services.sessions.authorizeLiveEventSubscription(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    bearerToken(context.req.raw),
+                    validateIdentifier(context.req.param("sessionId"), "session_id"),
+                    context.req.raw.signal,
+                ),
+            ),
+        )
         .get("/projects/:projectId/sessions/:sessionId/attempts/:attemptId/tool-calls/:toolCallId", async (context) => {
             const useCases = context.env.services.sessions;
             return context.json(

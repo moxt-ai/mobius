@@ -2,6 +2,7 @@ import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
     AGENT_MESSAGE_DELTA_KIND,
+    decodeCommittedSessionEvent,
     decodeServiceToDaemonMessage,
     decodeSessionPromptCommand,
     encodeDaemonToServiceMessage,
@@ -932,6 +933,31 @@ describe.sequential("Platform Session-only boundary", () => {
                 ),
             ).toMatchObject({ error: { code: "session_history_not_retained" } });
 
+            const transportResponse = await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/transport`, {
+                    headers: { Upgrade: "websocket" },
+                }),
+                environment,
+            );
+            if (transportResponse.webSocket === null) {
+                throw new Error("Expected the browser transport WebSocket");
+            }
+            const transportSocket = transportResponse.webSocket;
+            const transportMessages = new SocketMessages(transportSocket);
+            transportSocket.accept();
+            transportSocket.send(
+                JSON.stringify({
+                    headers: Array.from(credentialHeaders(appCredential).entries()),
+                    kind: "session.events.subscribe",
+                    path: `${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/events`,
+                    subscriptionId: "private-live-events",
+                }),
+            );
+            expect(JSON.parse(await transportMessages.next())).toEqual({
+                kind: "session.events.ready",
+                subscriptionId: "private-live-events",
+            });
+
             socket.send(
                 encodeSessionEventEnvelope({
                     eventId: "private-reconnect-after-eviction",
@@ -952,6 +978,18 @@ describe.sequential("Platform Session-only boundary", () => {
                 kind: SESSION_EVENT_ACK_KIND,
                 sessionId,
             });
+            const liveFrame = record(JSON.parse(await transportMessages.next()));
+            expect(liveFrame).toMatchObject({
+                kind: "session.events.event",
+                subscriptionId: "private-live-events",
+            });
+            const liveEvent = decodeCommittedSessionEvent(text(liveFrame, "data"));
+            expect(text(liveFrame, "eventId")).toBe(liveEvent.cursor);
+            expect(liveEvent).toMatchObject({
+                eventId: "private-reconnect-after-eviction",
+                sessionId,
+            });
+            transportSocket.close();
 
             const retainedMessagesResponse = await worker.fetch(
                 new Request(
@@ -964,6 +1002,22 @@ describe.sequential("Platform Session-only boundary", () => {
                 error: {
                     code: "session_history_not_retained",
                     message: "This Session does not retain Platform message history",
+                },
+            });
+
+            const retainedEventsResponse = await worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/events`,
+                    {
+                        headers: credentialHeaders(appCredential),
+                    },
+                ),
+                environment,
+            );
+            expect(await responseJson(retainedEventsResponse, 409)).toEqual({
+                error: {
+                    code: "session_history_not_retained",
+                    message: "Cursor-based Session events require cloud retention",
                 },
             });
 

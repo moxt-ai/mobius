@@ -19,6 +19,7 @@ import {
     type CreateSessionBindingRequest,
     type CreateSessionRequest,
     ProjectScope,
+    SessionRuntimeError,
 } from "../../entity/do/session.ts";
 import { PairingDirectoryError, VerifiedChannelAccess } from "../../entity/pairing/pairing.ts";
 import type { ChannelGateway } from "../../gateway/channel-gateway.ts";
@@ -374,7 +375,44 @@ export class SessionService {
                   AbortSignal.timeout(Math.max(0, access.lifetime.expiresAtEpochMilliseconds - Date.now())),
               ])
             : signal;
+        const session = await this.#sessionQueries.readSession(access.scope, sessionId, streamSignal);
+        if (!session.cloudRetention) {
+            throw new SessionRuntimeError(
+                "session_history_not_retained",
+                "Cursor-based Session events require cloud retention",
+            );
+        }
         return await this.#sessionEventStreams.openEventStream(access.scope, sessionId, cursor, streamSignal);
+    };
+
+    readonly authorizeLiveEventSubscription = async (
+        projectId: string,
+        token: string,
+        sessionId: string,
+        signal: AbortSignal,
+    ) => {
+        const access = await this.#pairings.authorizeProject(
+            projectId,
+            token,
+            ProjectPermission.ProjectEventsRead,
+            signal,
+        );
+        const session = await this.#sessionQueries.readSession(access.scope, sessionId, signal);
+        if (session.cloudRetention) {
+            throw new SessionRuntimeError("session_conflict", "Live Session events require non-cloud retention");
+        }
+        return access.lifetime.isExpiring
+            ? {
+                  expiresAtEpochMilliseconds: access.lifetime.expiresAtEpochMilliseconds,
+                  kind: "expiring" as const,
+                  projectId: access.scope.projectId,
+                  runtimeId: session.runtimeId,
+              }
+            : {
+                  kind: "durable" as const,
+                  projectId: access.scope.projectId,
+                  runtimeId: session.runtimeId,
+              };
     };
 
     readonly readTurn = async (
@@ -594,14 +632,17 @@ export class SessionService {
         cursor: string | null,
         limit: number,
         signal: AbortSignal,
-    ) =>
-        this.#sessionQueries.readEvents(
-            await this.projectScope(projectId, token, ProjectPermission.ProjectEventsRead, signal),
-            sessionId,
-            cursor,
-            limit,
-            signal,
-        );
+    ) => {
+        const scope = await this.projectScope(projectId, token, ProjectPermission.ProjectEventsRead, signal);
+        const session = await this.#sessionQueries.readSession(scope, sessionId, signal);
+        if (!session.cloudRetention) {
+            throw new SessionRuntimeError(
+                "session_history_not_retained",
+                "Cursor-based Session events require cloud retention",
+            );
+        }
+        return await this.#sessionQueries.readEvents(scope, sessionId, cursor, limit, signal);
+    };
 
     readonly waitForEvents = async (
         projectId: string,
@@ -611,15 +652,17 @@ export class SessionService {
         limit: number,
         waitMilliseconds: number,
         signal: AbortSignal,
-    ) =>
-        this.#sessionEventStreams.waitForEvents(
-            await this.projectScope(projectId, token, ProjectPermission.ProjectEventsRead, signal),
-            sessionId,
-            cursor,
-            limit,
-            waitMilliseconds,
-            signal,
-        );
+    ) => {
+        const scope = await this.projectScope(projectId, token, ProjectPermission.ProjectEventsRead, signal);
+        const session = await this.#sessionQueries.readSession(scope, sessionId, signal);
+        if (!session.cloudRetention) {
+            throw new SessionRuntimeError(
+                "session_history_not_retained",
+                "Cursor-based Session events require cloud retention",
+            );
+        }
+        return await this.#sessionEventStreams.waitForEvents(scope, sessionId, cursor, limit, waitMilliseconds, signal);
+    };
 
     readonly readToolCallDetail = async (
         projectId: string,

@@ -20,7 +20,11 @@ export {
     MobiusValidationError,
 } from "./errors.ts";
 export type { MobiusCredentialProvider } from "./service-client.ts";
-export type { MobiusHttpTransport } from "./transport/http-transport.ts";
+export type {
+    MobiusHttpTransport,
+    MobiusLiveEventTransport,
+    MobiusTransportSessionEvent,
+} from "./transport/http-transport.ts";
 export { HttpTransport } from "./transport/http-transport.ts";
 export type { MobiusWebSocketConnector, WsTransportOptions } from "./transport/ws-transport.ts";
 export { WsTransport } from "./transport/ws-transport.ts";

@@ -1,7 +1,9 @@
+import { DurableObject } from "cloudflare:workers";
 import {
     applyDurableObjectMigrations,
     type DoSqlDatabase,
     DurableObjectSqlDatabase,
+    type SessionEventReceiver,
     SessionRelay as SessionRelayImplementation,
     SessionRuntimeError,
 } from "@moxt-ai/mobius-relay-core";
@@ -16,18 +18,27 @@ import {
 const HIBERNATION_DELAY_MILLISECONDS = 5 * 60_000;
 const HIBERNATION_DEADLINE_KEY = "non-cloud-retention-hibernation-at";
 
-export class NonCloudRetentionSessionRelayDO {
+export class NonCloudRetentionSessionRelayDO extends DurableObject<PlatformDurableObjectEnvironment> {
     readonly #environment: PlatformDurableObjectEnvironment;
     #lifecycle:
         | { readonly kind: "active" }
         | { readonly kind: "hibernating"; readonly completion: PromiseWithResolvers<void> } = { kind: "active" };
     readonly #sessions = new Map<string, Promise<{ readonly relay: SessionRelayImplementation }>>();
+    readonly #liveEventSubscriptions = new Map<
+        string,
+        {
+            readonly finish: () => void;
+            readonly relay: SessionRelayImplementation;
+            readonly relaySubscriptionId: string;
+        }
+    >();
     readonly #operations = new Map<string, Promise<void>>();
     readonly #routes: Hono;
     readonly #liveHistory: PlatformSessionLiveHistoryClient;
     readonly #state: DurableObjectState;
 
     constructor(state: DurableObjectState, environment: PlatformDurableObjectEnvironment) {
+        super(state, environment);
         this.#environment = environment;
         this.#liveHistory = new PlatformSessionLiveHistoryClient(environment);
         this.#state = state;
@@ -43,7 +54,28 @@ export class NonCloudRetentionSessionRelayDO {
         );
     }
 
-    readonly fetch = async (request: Request): Promise<Response> => await this.#routes.fetch(request);
+    override readonly fetch = async (request: Request): Promise<Response> => await this.#routes.fetch(request);
+
+    async subscribeToLiveSessionEvents(
+        subscriptionId: string,
+        projectId: string,
+        runtimeId: string,
+        sessionId: string,
+        receive: SessionEventReceiver,
+    ): Promise<void> {
+        const { relay } = await this.session({ projectId, runtimeId, sessionId }, false, AbortSignal.timeout(20_000));
+        const relaySubscriptionId = await relay.subscribeToLiveSessionEvents(projectId, sessionId, receive);
+        await new Promise<void>((finish) => {
+            this.#liveEventSubscriptions.set(subscriptionId, { finish, relay, relaySubscriptionId });
+        });
+    }
+
+    unsubscribeFromLiveSessionEvents(subscriptionId: string): void {
+        const subscription = this.#liveEventSubscriptions.get(subscriptionId);
+        this.#liveEventSubscriptions.delete(subscriptionId);
+        subscription?.relay.unsubscribeFromLiveSessionEvents(subscription.relaySubscriptionId);
+        subscription?.finish();
+    }
 
     private readonly handleRequest = async (request: Request, route: SessionRequestRoute): Promise<Response> => {
         const identity = sessionRequestIdentity(route);
@@ -108,7 +140,7 @@ export class NonCloudRetentionSessionRelayDO {
         return await operation;
     };
 
-    readonly alarm = async (): Promise<void> => {
+    override readonly alarm = async (): Promise<void> => {
         if (this.#lifecycle.kind === "hibernating") {
             await this.#lifecycle.completion.promise;
             return;

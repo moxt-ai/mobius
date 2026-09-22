@@ -14,6 +14,7 @@ async function createCloudflareRuntime(profile: "standalone" | "platform") {
     const bundle = await build({
         entryPoints: [fileURLToPath(new NodeURL("src/worker.ts", packageDirectory))],
         bundle: true,
+        external: ["cloudflare:workers"],
         format: "esm",
         platform: "browser",
         write: false,

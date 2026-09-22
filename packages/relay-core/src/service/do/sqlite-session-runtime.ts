@@ -184,6 +184,13 @@ export class SqliteSessionRuntime
     readonly openEventStream: SessionEventStreamRuntime["openEventStream"] = (...parameters) =>
         this.#eventStreams.open(...parameters);
 
+    readonly subscribeToLiveEvents = (
+        ...parameters: Parameters<SessionEventStreams["subscribeLive"]>
+    ): Promise<string> => this.#eventStreams.subscribeLive(...parameters);
+
+    readonly unsubscribeFromLiveEvents = (subscriptionId: string): void =>
+        this.#eventStreams.unsubscribeLive(subscriptionId);
+
     readonly waitForEvents: SessionEventStreamRuntime["waitForEvents"] = (...parameters) =>
         this.#eventStreams.wait(...parameters);
 

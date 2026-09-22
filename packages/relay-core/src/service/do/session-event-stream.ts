@@ -6,6 +6,7 @@ import {
     MOBIUS_SESSION_EVENT_STREAM_MEDIA_TYPE,
 } from "@moxt-ai/mobius-protocol";
 import { type ProjectScope, type SessionEventPage, SessionRuntimeError } from "../../entity/do/session.ts";
+import type { SessionEventReceiver } from "../../infra/session-event-receiver.ts";
 import type { SessionQueryRuntime } from "../../infra/session-runtime.ts";
 
 const CATCH_UP_PAGE_SIZE = 100;
@@ -15,6 +16,60 @@ const MAX_EVENT_WAIT_MILLISECONDS = 10_000;
 
 function streamKey(scope: ProjectScope, sessionId: string): string {
     return `${scope.projectId}\u0000${sessionId}`;
+}
+
+class LiveSessionEventSubscriber {
+    readonly #onClose: () => void;
+    readonly #receive: SessionEventReceiver;
+    #state: { readonly kind: "open"; readonly pending: number } | { readonly kind: "closed" } = {
+        kind: "open",
+        pending: 0,
+    };
+    #tail = Promise.resolve();
+    readonly #heartbeatId: ReturnType<typeof globalThis.setInterval>;
+
+    constructor(receive: SessionEventReceiver, onClose: () => void) {
+        this.#receive = receive;
+        this.#onClose = onClose;
+        this.#heartbeatId = globalThis.setInterval(
+            () => this.send({ kind: "heartbeat" }),
+            HEARTBEAT_INTERVAL_MILLISECONDS,
+        );
+        this.send({ kind: "ready" });
+    }
+
+    readonly publish = (event: CommittedSessionEvent): void => this.send({ event, kind: "event" });
+
+    readonly close = (): void => {
+        if (this.#state.kind === "closed") {
+            return;
+        }
+        this.#state = { kind: "closed" };
+        globalThis.clearInterval(this.#heartbeatId);
+        this.#onClose();
+        void this.#tail.then(async () => await this.#receive.receive({ kind: "end" })).catch(() => undefined);
+    };
+
+    private readonly send = (message: Parameters<SessionEventReceiver["receive"]>[0]): void => {
+        if (this.#state.kind === "closed") {
+            return;
+        }
+        if (this.#state.pending >= EVENT_BUFFER_CAPACITY) {
+            this.close();
+            return;
+        }
+        this.#state = { kind: "open", pending: this.#state.pending + 1 };
+        this.#tail = this.#tail
+            .then(async () => await this.#receive.receive(message))
+            .then(
+                () => {
+                    if (this.#state.kind === "open") {
+                        this.#state = { kind: "open", pending: this.#state.pending - 1 };
+                    }
+                },
+                () => this.close(),
+            );
+    };
 }
 
 class SessionEventSubscriber {
@@ -233,6 +288,8 @@ class SessionEventWaiter {
 }
 
 export class SessionEventStreams {
+    readonly #liveSubscriptions = new Map<string, LiveSessionEventSubscriber>();
+    readonly #liveSubscribers = new Map<string, Set<LiveSessionEventSubscriber>>();
     readonly #queries: SessionQueryRuntime;
     readonly #subscribers = new Map<string, Set<SessionEventSubscriber>>();
     readonly #waiters = new Map<string, Set<SessionEventWaiter>>();
@@ -300,8 +357,42 @@ export class SessionEventStreams {
         });
     };
 
+    readonly subscribeLive = async (
+        scope: ProjectScope,
+        sessionId: string,
+        receive: SessionEventReceiver,
+        signal: AbortSignal,
+    ): Promise<string> => {
+        signal.throwIfAborted();
+        const session = await this.#queries.readSession(scope, sessionId, signal);
+        if (session.cloudRetention) {
+            throw new SessionRuntimeError("session_conflict", "Live Session events require non-cloud retention");
+        }
+        const key = streamKey(scope, sessionId);
+        const subscriptionId = crypto.randomUUID();
+        let subscriber: LiveSessionEventSubscriber;
+        subscriber = new LiveSessionEventSubscriber(receive, () => {
+            this.#liveSubscriptions.delete(subscriptionId);
+            const subscribers = this.#liveSubscribers.get(key);
+            subscribers?.delete(subscriber);
+            if (subscribers?.size === 0) {
+                this.#liveSubscribers.delete(key);
+            }
+        });
+        this.#liveSubscriptions.set(subscriptionId, subscriber);
+        const subscribers = this.#liveSubscribers.get(key) ?? new Set<LiveSessionEventSubscriber>();
+        subscribers.add(subscriber);
+        this.#liveSubscribers.set(key, subscribers);
+        return subscriptionId;
+    };
+
+    readonly unsubscribeLive = (subscriptionId: string): void => this.#liveSubscriptions.get(subscriptionId)?.close();
+
     readonly publish = (scope: ProjectScope, event: CommittedSessionEvent): void => {
         const key = streamKey(scope, event.sessionId);
+        for (const subscriber of this.#liveSubscribers.get(key) ?? []) {
+            subscriber.publish(event);
+        }
         const subscribers = this.#subscribers.get(key);
         if (subscribers !== undefined) {
             for (const subscriber of subscribers) {
@@ -351,6 +442,11 @@ export class SessionEventStreams {
     };
 
     readonly close = (): void => {
+        for (const subscriber of this.#liveSubscriptions.values()) {
+            subscriber.close();
+        }
+        this.#liveSubscriptions.clear();
+        this.#liveSubscribers.clear();
         for (const subscribers of this.#subscribers.values()) {
             for (const subscriber of subscribers) {
                 subscriber.close();

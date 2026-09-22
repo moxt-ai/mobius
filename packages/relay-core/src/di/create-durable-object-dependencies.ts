@@ -142,7 +142,10 @@ function createSessionRelayDependencies(cx: {
     const recovery = new SessionRecoveryService({ ...cx, runtime });
     const operations = new DoService({ services: { runtime, recovery } });
     const retention = new SessionRetentionService(new SessionRetentionStorage(cx.database));
-    return { application: createDoRoutes(runtime, operations), services: { recovery, operations, retention } };
+    return {
+        application: createDoRoutes(runtime, operations),
+        services: { eventStreams: runtime, recovery, operations, retention },
+    };
 }
 
 function createRuntimeRelayDependencies(cx: {
@@ -261,6 +264,7 @@ export function createDurableObjectDependencies(cx: {
         utilities: cx.utilities,
         services: {
             ...runtime.services,
+            sessionEventStreams: session.services.eventStreams,
             sessionRecovery: session.services.recovery,
             sessionRetention: session.services.retention,
             operations: session.services.operations,

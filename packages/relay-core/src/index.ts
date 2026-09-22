@@ -132,6 +132,7 @@ export {
     type SessionConfigurationEnvironment,
     sessionQuotaFromEnvironment,
 } from "./infra/session-configuration.ts";
+export type { LiveSessionEvent, SessionEventReceiver } from "./infra/session-event-receiver.ts";
 export type {
     SessionArtifactRuntime,
     SessionCommandRuntime,
