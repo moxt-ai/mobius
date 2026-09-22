@@ -233,7 +233,10 @@ export class CodexAppServerClient {
     readonly initialize = async (signal: AbortSignal): Promise<void> => {
         await this.request(
             "initialize",
-            { clientInfo: { name: "mobius", version: "1.0.0" } },
+            {
+                capabilities: { experimentalApi: true },
+                clientInfo: { name: "mobius", version: "1.0.0" },
+            },
             AbortSignal.any([signal, AbortSignal.timeout(INITIALIZE_TIMEOUT_MILLISECONDS)]),
         );
         this.notify("initialized", undefined);

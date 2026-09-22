@@ -13,6 +13,7 @@ let nextTurn = 0;
 // behaves, so the fixture tracks what each thread has done rather than assuming every one works.
 interface KnownThread {
     archived: boolean;
+    collaborationMode: string;
     cwd: string;
     effort: string;
     id: string;
@@ -147,6 +148,7 @@ input.on("line", (line) => {
         const threadId = `thread-${process.pid.toString()}-${nextThread.toString()}`;
         writeThread({
             archived: false,
+            collaborationMode: "default",
             cwd: typeof cwdValue === "string" ? cwdValue : "",
             effort: "medium",
             id: threadId,
@@ -163,14 +165,48 @@ input.on("line", (line) => {
         });
         return;
     }
+    if (method === "thread/settings/update") {
+        const threadId = readParam("threadId");
+        const collaborationMode = readParam("collaborationMode");
+        const mode =
+            typeof collaborationMode === "object" && collaborationMode !== null
+                ? Reflect.get(collaborationMode, "mode")
+                : undefined;
+        const thread = typeof threadId === "string" ? readThread(threadId) : undefined;
+        if (typeof threadId !== "string" || (mode !== undefined && mode !== "default" && mode !== "plan")) {
+            process.stdout.write(
+                `${JSON.stringify({ id, error: { code: -32602, message: "Invalid collaboration mode" } })}\n`,
+            );
+            return;
+        }
+        if (thread !== undefined && mode !== undefined) {
+            writeThread({ ...thread, collaborationMode: mode });
+        }
+        reply(id, {});
+        return;
+    }
     if (method === "turn/start") {
         nextTurn += 1;
         const threadId = readParam("threadId");
         const turnId = `turn-${nextTurn.toString()}`;
         activeTurnId = turnId;
         const thread = typeof threadId === "string" ? readThread(threadId) : undefined;
+        const collaborationMode = readParam("collaborationMode");
+        const requestedCollaborationMode =
+            typeof collaborationMode === "object" && collaborationMode !== null
+                ? Reflect.get(collaborationMode, "mode")
+                : undefined;
+        const activeCollaborationMode =
+            requestedCollaborationMode === "default" || requestedCollaborationMode === "plan"
+                ? requestedCollaborationMode
+                : (thread?.collaborationMode ?? "default");
         if (thread !== undefined) {
-            writeThread({ ...thread, preview: "Scripted turn", prompted: true });
+            writeThread({
+                ...thread,
+                collaborationMode: activeCollaborationMode ?? thread.collaborationMode,
+                preview: "Scripted turn",
+                prompted: true,
+            });
         }
         reply(id, {
             turn: { id: turnId, items: [], itemsView: "notLoaded", status: "inProgress" },
@@ -208,7 +244,8 @@ input.on("line", (line) => {
                 // reached the app-server rather than only the settings list.
                 text:
                     `Scripted Codex answer (${String(readParam("model"))}/${String(readParam("effort"))}` +
-                    `/${String(readParam("approvalPolicy"))}/${String(readParam("serviceTier"))})`,
+                    `/${String(readParam("approvalPolicy"))}/${String(readParam("serviceTier"))}` +
+                    `/${String(activeCollaborationMode)})`,
                 type: "agentMessage",
             },
             threadId,

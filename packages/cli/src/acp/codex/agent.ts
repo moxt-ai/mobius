@@ -26,6 +26,7 @@ import {
     threadForkResponseSchema,
     threadListResponseSchema,
     threadResumeResponseSchema,
+    threadSettingsUpdatedSchema,
     threadStartResponseSchema,
     turnNotificationSchema,
     turnSchema,
@@ -45,6 +46,7 @@ const MODEL_SETTING_ID = "model";
 const REASONING_EFFORT_SETTING_ID = "reasoning_effort";
 const MODE_SETTING_ID = "mode";
 const FAST_MODE_SETTING_ID = "fast-mode";
+const COLLABORATION_MODE_SETTING_ID = "collaboration_mode";
 const MODEL_CATALOG_LIMIT = 1_000;
 // `additionalSpeedTiers` and `serviceTier` are two vocabularies for one concept: a model advertises
 // "fast" while the thread reports the resolved tier as "priority". Fast mode is offered per model,
@@ -172,6 +174,7 @@ interface ActiveTurn {
  * sent on `turn/start`, which is how Codex applies them to the turn being started.
  */
 interface SessionSelection {
+    collaborationMode: string;
     effort: string;
     fastMode: boolean;
     mode: string;
@@ -238,6 +241,31 @@ function modeSetting(currentValue: string): SessionConfigOption {
             name: mode.name,
             value: mode.id,
         })),
+        type: "select",
+    };
+}
+
+/**
+ * How Codex collaborates on subsequent turns. "Build" is Codex's `default` mode; "Plan" makes Codex
+ * research and propose a plan before making changes. The ids match the retired
+ * `@agentclientprotocol/codex-acp` adapter so a saved selection keeps applying.
+ */
+const COLLABORATION_MODES: readonly ConfigValue[] = Object.freeze([
+    { description: "Codex answers and makes changes directly", name: "Build", value: "default" },
+    { description: "Codex plans before making changes", name: "Plan", value: "plan" },
+]);
+
+function collaborationModeSetting(currentValue: string): SessionConfigOption {
+    const current = COLLABORATION_MODES.some((mode) => mode.value === currentValue)
+        ? currentValue
+        : (COLLABORATION_MODES[0]?.value ?? "default");
+    return {
+        category: "collaboration_mode",
+        currentValue: current,
+        description: "How Codex collaborates for subsequent turns",
+        id: COLLABORATION_MODE_SETTING_ID,
+        name: "Collaboration mode",
+        options: [...COLLABORATION_MODES],
         type: "select",
     };
 }
@@ -323,12 +351,20 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
     // Whether the current turn must carry a policy at all. Until the user picks a mode, Codex's own
     // configuration decides, so `turn/start` omits the fields and inherits what the host set up.
     #policySelected = false;
+    // Whether a collaboration mode choice has been made in this session. A restored thread keeps
+    // the mode Codex already persisted, so the first turn does not reset it to Build.
+    #collaborationModeSelected = false;
+    // Whether the app-server accepts collaboration mode on `turn/start`, probed once per
+    // app-server. An older Codex rejects the experimental field, and the setting must disappear
+    // rather than break every turn.
+    #collaborationModeSupported: boolean | null = null;
     #selection: SessionSelection;
     #turn: ActiveTurn | null = null;
     #updateTail: Promise<void> = Promise.resolve();
 
     constructor(options: InProcessAcpEndpointOptions) {
         this.#selection = {
+            collaborationMode: "default",
             effort: "",
             fastMode: false,
             mode: initialMode(options.environment),
@@ -378,9 +414,12 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 // from Codex. The mode is re-applied on the first turn.
                 this.#selection = {
                     ...this.#selection,
+                    collaborationMode: "default",
                     effort: created.reasoningEffort ?? "",
                     model: created.model ?? "",
                 };
+                this.#collaborationModeSelected = false;
+                await this.#probeCollaborationMode(context.signal);
                 // The settings Mobius discovers come from this response. Without them the Run
                 // settings panel has nothing to render and saved selections cannot be re-applied.
                 return { configOptions: this.#configOptions(), sessionId: created.thread.id };
@@ -404,8 +443,9 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                     ),
                 );
                 this.#selectRestoredThread(resumed);
+                await this.#probeCollaborationMode(context.signal);
                 await this.#replayHistory(resumed.turns);
-                return {};
+                return { configOptions: this.#configOptions() };
             })
             .onRequest(methods.agent.session.fork, async (context) => {
                 const forked = threadForkResponseSchema.parse(
@@ -420,8 +460,9 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                     ),
                 );
                 this.#selectRestoredThread(forked);
+                await this.#probeCollaborationMode(context.signal);
                 await this.#replayHistory(forked.turns);
-                return { sessionId: forked.thread.id };
+                return { configOptions: this.#configOptions(), sessionId: forked.thread.id };
             })
             .onRequest(methods.agent.session.resume, async (context) => {
                 const resumed = threadResumeResponseSchema.parse(
@@ -432,7 +473,8 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                     ),
                 );
                 this.#selectRestoredThread(resumed);
-                return {};
+                await this.#probeCollaborationMode(context.signal);
+                return { configOptions: this.#configOptions() };
             })
             .onRequest(methods.agent.session.prompt, async (context) => {
                 return await this.#runTurn(promptInput(context.params.prompt), context.signal);
@@ -513,6 +555,28 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
 
     readonly #model = (id: string): CodexModel | undefined => this.#models.find((model) => model.id === id);
 
+    /**
+     * Learns, once per app-server, whether collaboration mode can be applied. An empty settings
+     * update is a no-op on a supporting Codex; an older Codex answers an error, which costs the
+     * Build/Plan selector alone without changing a restored thread's persisted mode.
+     */
+    readonly #probeCollaborationMode = async (signal: AbortSignal): Promise<void> => {
+        if (this.#collaborationModeSupported !== null) {
+            return;
+        }
+        try {
+            await this.#appServer.request(
+                "thread/settings/update",
+                { threadId: this.#nativeSessionId },
+                AbortSignal.any([signal, AbortSignal.timeout(APPROVAL_TIMEOUT_MILLISECONDS)]),
+            );
+            this.#collaborationModeSupported = true;
+        } catch {
+            signal.throwIfAborted();
+            this.#collaborationModeSupported = false;
+        }
+    };
+
     /** The ACP settings Mobius discovers and renders in Run settings. */
     readonly #configOptions = (): SessionConfigOption[] => {
         const options: SessionConfigOption[] = [];
@@ -527,6 +591,9 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
         const fastMode = fastModeSetting(this.#model(this.#selection.model), this.#selection.fastMode);
         if (fastMode !== null) {
             options.push(fastMode);
+        }
+        if (this.#collaborationModeSupported === true) {
+            options.push(collaborationModeSetting(this.#selection.collaborationMode));
         }
         options.push(modeSetting(this.#selection.mode));
         return options;
@@ -634,6 +701,18 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
             this.#policySelected = true;
             return;
         }
+        if (configId === COLLABORATION_MODE_SETTING_ID) {
+            if (!COLLABORATION_MODES.some((mode) => mode.value === value)) {
+                throw new AcpExecutionError(
+                    "The requested Codex collaboration mode is unavailable",
+                    {},
+                    "invalid_session_configuration",
+                );
+            }
+            this.#selection = { ...this.#selection, collaborationMode: value };
+            this.#collaborationModeSelected = true;
+            return;
+        }
         if (configId === MODEL_SETTING_ID) {
             if (value === this.#selection.model) {
                 return;
@@ -687,6 +766,18 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
         });
     };
 
+    /** Pushes the current settings so a mode change Codex applied reaches the Run settings panel. */
+    readonly #emitConfigOptionsUpdate = async (): Promise<void> => {
+        const connection = this.#connection;
+        if (connection === null || this.#nativeSessionId.length === 0) {
+            return;
+        }
+        await connection.client.notify(methods.client.session.update, {
+            sessionId: this.#nativeSessionId,
+            update: { configOptions: this.#configOptions(), sessionUpdate: "config_option_update" },
+        });
+    };
+
     // Notifications are serialized so two app-server items cannot interleave into one ACP update
     // stream, and the caller awaits the result: `turn/completed` must not resolve the prompt before
     // the updates it precedes have reached the client.
@@ -717,6 +808,19 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 await this.#enqueue(async () => {
                     await this.#emit({ sessionUpdate: "session_info_update", title: threadName });
                 });
+            }
+            return;
+        }
+        if (method === "thread/settings/updated") {
+            const decoded = threadSettingsUpdatedSchema.safeParse(params);
+            if (decoded.success && decoded.data.threadId === this.#nativeSessionId) {
+                const mode = decoded.data.threadSettings.collaborationMode?.mode;
+                if (mode !== undefined && mode !== this.#selection.collaborationMode) {
+                    this.#selection = { ...this.#selection, collaborationMode: mode };
+                    await this.#enqueue(async () => {
+                        await this.#emitConfigOptionsUpdate();
+                    });
+                }
             }
             return;
         }
@@ -931,6 +1035,22 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                                       approvalPolicy: mode.approvalPolicy,
                                       approvalsReviewer: mode.approvalsReviewer,
                                       sandboxPolicy: mode.sandboxPolicy,
+                                  }
+                                : {}),
+                            // The collaboration mode rides on the turn: Codex applies it to the
+                            // thread, where it persists until changed. "Build" is Codex's `default`
+                            // mode, so it is only sent once a choice exists to apply.
+                            ...(this.#collaborationModeSupported &&
+                            (selection.collaborationMode !== "default" || this.#collaborationModeSelected)
+                                ? {
+                                      collaborationMode: {
+                                          mode: selection.collaborationMode,
+                                          settings: {
+                                              developer_instructions: null,
+                                              model: selection.model,
+                                              reasoning_effort: selection.effort.length === 0 ? null : selection.effort,
+                                          },
+                                      },
                                   }
                                 : {}),
                             ...(selection.effort.length === 0 ? {} : { effort: selection.effort }),

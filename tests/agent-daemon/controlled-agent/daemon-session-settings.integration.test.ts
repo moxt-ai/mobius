@@ -468,7 +468,7 @@ describe("daemon session configuration boundary", () => {
         }
     });
 
-    it("Given Codex runs as an in-process Agent, When Agent settings are discovered, Then Mobius offers the model and reasoning effort the app-server reports", async () => {
+    it("Given Codex supports configurable runs, When settings are discovered and selected, Then Mobius offers and applies Build or Plan, model, reasoning effort, and fast mode", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-codex-settings-"));
         const workspace = join(stateDirectory, "workspace");
         const executableDirectory = join(stateDirectory, "external");
@@ -573,6 +573,11 @@ if (process.argv.includes("--version")) {
                 booleanValue: false,
                 type: "boolean",
             });
+            expect(discovered.settings.find((setting) => setting.id === "collaboration_mode")).toMatchObject({
+                defaultValue: "default",
+                type: "select",
+                values: [{ value: "default" }, { value: "plan" }],
+            });
             expect(discovered.settings.find((setting) => setting.id === "mode")).toMatchObject({
                 defaultValue: "agent",
                 type: "select",
@@ -611,7 +616,7 @@ if (process.argv.includes("--version")) {
             };
             sendText(await socketReady.promise, encodeSessionPromptCommand(inheritedPrompt));
             const inherited = await readTerminalSessionResult(frames, inheritedPrompt.sessionId);
-            expect(inherited.text).toBe("Scripted Codex answer (scripted-small/medium/undefined/undefined)");
+            expect(inherited.text).toBe("Scripted Codex answer (scripted-small/medium/undefined/undefined/default)");
 
             // Discovery alone is not the fix: a selection has to reach Codex. The app-server names
             // the model and effort each turn ran with, so the answer proves the choice was applied.
@@ -641,6 +646,12 @@ if (process.argv.includes("--version")) {
                         value: "agent-full-access",
                         valueType: "select",
                     },
+                    {
+                        booleanValue: false,
+                        configId: "collaboration_mode",
+                        value: "plan",
+                        valueType: "select",
+                    },
                 ],
                 sessionId: "configured_codex_conversation",
                 targetCommandId: "",
@@ -651,7 +662,7 @@ if (process.argv.includes("--version")) {
             // Switching to a model that only supports "high" re-resolves the effort, which is what
             // Codex does and what the reply's own settings then advertise. Full access sends `never`
             // rather than the default mode's `on-request`, so the mode reached Codex too.
-            expect(result.text).toBe("Scripted Codex answer (scripted-large/high/never/undefined)");
+            expect(result.text).toBe("Scripted Codex answer (scripted-large/high/never/undefined/plan)");
 
             // Fast mode is offered per model. Turning it on for a model with a speed tier sends the
             // resolved tier, and switching to a model without one drops it rather than sending a
@@ -680,7 +691,7 @@ if (process.argv.includes("--version")) {
             const fastResult = await readTerminalSessionResult(frames, fastPrompt.sessionId);
             // No mode was selected in this session, so it inherits the host's own policy: the turn
             // omits approval and sandbox rather than overriding what the host configured.
-            expect(fastResult.text).toBe("Scripted Codex answer (scripted-small/medium/undefined/priority)");
+            expect(fastResult.text).toBe("Scripted Codex answer (scripted-small/medium/undefined/priority/default)");
         } finally {
             cancellation.abort();
             for (const socket of relaySockets) {
@@ -854,6 +865,16 @@ if (process.argv.includes("--version")) {
             const secondStore = new SqliteAcpSessionStore(databasePath);
             const restarted = new AcpSessionManager(undefined, secondStore);
             try {
+                const prepared = await restarted.prepareSession({
+                    additionalDirectories: [],
+                    agent: discovered.agent,
+                    cwd: temporaryDirectory,
+                    sessionId: "restart_conversation",
+                    signal: new AbortController().signal,
+                });
+                expect(prepared.configOptions.map((option) => option.id)).toEqual(
+                    expect.arrayContaining(["model", "reasoning_effort", "fast-mode", "collaboration_mode"]),
+                );
                 const reply = await restarted.runPrompt({
                     additionalDirectories: [],
                     agent: discovered.agent,

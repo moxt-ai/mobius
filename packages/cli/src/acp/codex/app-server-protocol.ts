@@ -261,6 +261,20 @@ export const modelListResponseSchema = z.object({
     nextCursor: boundedText(1_024).nullish(),
 });
 
+// The collaboration mode half of a `thread/settings/updated` notification. Only the mode name is
+// load-bearing for Mobius; the mode's settings repeat the model and effort already tracked from the
+// thread lifecycle, and the developer instructions belong to Codex, not the settings panel.
+export const threadSettingsUpdatedSchema = z.object({
+    threadId: boundedText(256),
+    threadSettings: z.object({
+        collaborationMode: z
+            .object({
+                mode: z.enum(["default", "plan"]),
+            })
+            .nullish(),
+    }),
+});
+
 export type McpElicitationParams = z.infer<typeof mcpElicitationParamsSchema>;
 export type UserInputQuestion = z.infer<typeof userInputQuestionSchema>;
 export type CodexModel = z.infer<typeof modelSchema>;

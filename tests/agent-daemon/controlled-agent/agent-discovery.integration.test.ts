@@ -421,13 +421,13 @@ if (process.argv.includes("--version")) {
                 };
 
                 await expect(run("existing-session", "before")).resolves.toBe(
-                    "Scripted Codex answer (scripted-small/medium/undefined/undefined)",
+                    "Scripted Codex answer (scripted-small/medium/undefined/undefined/default)",
                 );
                 await unlink(codexLink);
                 await symlink(secondAgentPath, codexLink);
 
                 await expect(run("existing-session", "after")).resolves.toBe(
-                    "Scripted Codex answer (scripted-small/medium/undefined/undefined)",
+                    "Scripted Codex answer (scripted-small/medium/undefined/undefined/default)",
                 );
                 await expect(run("new-session", "blocked")).rejects.toMatchObject({
                     code: "agent_runtime_changed",
