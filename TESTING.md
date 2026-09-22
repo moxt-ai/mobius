@@ -23,7 +23,9 @@ client, the production daemon, and a permissive local fake LLM provider.
 Every suite that consumes the Agent-daemon unit talks to a shared protocol-level
 `FakeAgentDaemon`. The fake claims a Runtime, connects through the production
 daemon/server WebSocket protocol, and emits normal workspace, Session, event,
-and file-transfer messages. It does not start an Agent, ACP adapter, daemon
+file-transfer, and representative Agent-setting messages. Keep its catalog small
+but useful enough that consumers can exercise normal configuration UI without
+inventing package-local peers. It does not start an Agent, ACP adapter, daemon
 process, or `MobiusRuntimeEngine`. Do not introduce another fake ACP Agent or
 embed a private daemon simulator in one package's harness.
 

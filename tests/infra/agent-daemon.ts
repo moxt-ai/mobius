@@ -476,13 +476,39 @@ async function processHappyPathCommand(
                 kind: "agent.settings.discovered",
                 modelEffort: {
                     effortSettingId: "",
-                    modelSettingId: "",
-                    resolution: "unavailable",
+                    modelSettingId: "model",
+                    resolution: "complete",
                     unsupportedModelIds: [],
-                    valuesByModel: {},
+                    valuesByModel: { "test-large": [], "test-small": [] },
                 },
                 requestId: command.requestId,
-                settings: [],
+                settings: [
+                    {
+                        booleanValue: false,
+                        category: "model",
+                        defaultValue: "test-small",
+                        description: "Model used by the fake Agent-daemon",
+                        id: "model",
+                        name: "Model",
+                        type: "select",
+                        values: [
+                            {
+                                description: "Small deterministic test model",
+                                groupId: "models",
+                                groupName: "Models",
+                                name: "Test Small",
+                                value: "test-small",
+                            },
+                            {
+                                description: "Large deterministic test model",
+                                groupId: "models",
+                                groupName: "Models",
+                                name: "Test Large",
+                                value: "test-large",
+                            },
+                        ],
+                    },
+                ],
                 settingsRevision: "0".repeat(64),
             }),
         );
