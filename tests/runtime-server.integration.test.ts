@@ -1,11 +1,6 @@
 import { MobiusRecordingPolicy } from "@moxt-ai/mobius-sdk";
-import { MobiusOidcCredentialProvider, MobiusPlatformDeveloperClient } from "@moxt-ai/mobius-sdk/platform";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createPlatformGateways } from "../packages/relay-cloudflare-platform/src/worker.ts";
-import { createTestMobiusPlatformApp } from "./infra/app.ts";
-import { FakeClerk } from "./infra/clerk.ts";
-import { createTestMobiusPlatformBindings } from "./infra/cloudflare.ts";
-import { createFakeAgentDaemonRuntime } from "./infra/platform-agent-daemon.ts";
+import { startTestPlatform } from "./infra/platform.ts";
 
 beforeEach(() => {
     vi.useFakeTimers({ toFake: ["Date"] });
@@ -14,30 +9,9 @@ beforeEach(() => {
 
 it("Given a Platform Project, When its owner pairs a local Runtime and creates a Session, Then the Project Durable Object accepts the Session", async () => {
     const signal = AbortSignal.timeout(10_000);
-    await using bindings = await createTestMobiusPlatformBindings();
-    const clerk = new FakeClerk();
-    const app = createTestMobiusPlatformApp(
-        {
-            bindings: bindings.env,
-            developerAuthenticator: clerk.authenticator,
-            operatorSubjects: new Set(["developer-1"]),
-            allowedOrigins: new Set(),
-        },
-        createPlatformGateways,
-    );
-    const developer = new MobiusPlatformDeveloperClient({
-        endpoint: "http://platform.test",
-        authenticationProviderId: "clerk",
-        credentialProvider: new MobiusOidcCredentialProvider(clerk.session("developer-1", clerk.defaultOrganizationId)),
-        transport: { fetch: async (request) => await app.request(request) },
-    });
-    const tenant = (await developer.listTenants(signal))[0];
-    if (tenant === undefined) {
-        throw new Error("Missing organization");
-    }
-    const application = await developer.createApp(tenant.tenantId, "Runtime test", signal, true);
-    const project = await developer.createProject(
-        application.appId,
+    await using platform = await startTestPlatform();
+    const project = await platform.developer.createProject(
+        platform.appId,
         {
             clientReference: "runtime-test",
             displayName: "Runtime test",
@@ -46,12 +20,7 @@ it("Given a Platform Project, When its owner pairs a local Runtime and creates a
         },
         signal,
     );
-    await using runtime = await createFakeAgentDaemonRuntime({
-        credential: application.defaultCredential.credential,
-        projectId: project.projectId,
-        server: app,
-        signal,
-    });
+    const runtime = await platform.connectAgent(project.projectId);
     expect(await runtime.client.runtimes.list(signal)).toMatchObject([
         { runtimeId: runtime.runtimeId, projectId: project.projectId, online: true, agents: [{ id: "codex" }] },
     ]);

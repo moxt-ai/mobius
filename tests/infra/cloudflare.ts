@@ -6,7 +6,7 @@ import { convertV4MiniflareOptions, Miniflare, WebSocketPair, Response as Worker
 import type { PlatformRelayBindings, RelayBindings } from "./app.ts";
 import { miniflareDurableObjects } from "./miniflare-durable-objects.ts";
 
-export { convertV4MiniflareOptions, Miniflare, WebSocketPair, WorkerResponse };
+export { convertV4MiniflareOptions, Miniflare, miniflareDurableObjects, WebSocketPair, WorkerResponse };
 
 /** Owns the real Cloudflare adapters for Runtime/Worker integration scenarios. */
 async function createCloudflareRuntime(profile: "standalone" | "platform") {

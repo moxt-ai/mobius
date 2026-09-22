@@ -66,7 +66,9 @@ directory does not define a new test level:
 - Web tests mount the complete application against the local Relay and shared
   `FakeAgentDaemon`.
 - hosting tests use the production Worker with local Cloudflare bindings.
-- `tests/runtime-server.integration.test.ts` uses the embedding API and SDK.
+- `tests/runtime-server.integration.test.ts` uses the public SDK against the
+  production Platform Worker, Durable Objects, and Runtime protocol. The shared
+  `startTestPlatform` helper owns only startup, credentials, migrations, and cleanup.
 
 Do not test a private helper or class in isolation. Do not repeat a successful
 path already owned by a longer test. Add a narrower case only for a distinct risk:

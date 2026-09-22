@@ -12,6 +12,7 @@
         "./clerk": "./infra/clerk.ts",
         "./cloudflare": "./infra/cloudflare.ts",
         "./gateways": "./infra/gateways.ts",
+        "./platform": "./infra/platform.ts",
         "./platform-agent-daemon": "./infra/platform-agent-daemon.ts",
         "./server": "./infra/server.ts"
     },

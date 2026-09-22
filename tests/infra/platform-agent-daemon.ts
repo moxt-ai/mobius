@@ -2,7 +2,7 @@ import { MobiusClient, StaticMobiusCredentialProvider } from "@moxt-ai/mobius-sd
 import * as v from "valibot";
 import WebSocket from "ws";
 import { type AgentDaemonSocket, FakeAgentDaemon, serveFakeAgentDaemon } from "./agent-daemon.ts";
-import { serveTestApp, type TestServerApp } from "./server.ts";
+import type { TestServerApp } from "./server.ts";
 
 const runtimePairingSchema = v.object({
     pairingId: v.string(),
@@ -15,6 +15,7 @@ const runtimePairingSchema = v.object({
 /** Connects the shared fake through the production Platform Runtime protocol. */
 export async function createFakeAgentDaemonRuntime(options: {
     readonly credential: string;
+    readonly origin: string;
     readonly projectId: string;
     readonly server: TestServerApp;
     readonly signal: AbortSignal;
@@ -23,18 +24,11 @@ export async function createFakeAgentDaemonRuntime(options: {
     const cancellation = new AbortController();
     const signal = AbortSignal.any([options.signal, cancellation.signal]);
     try {
-        const server = resources.use(
-            await serveTestApp({
-                app: options.server,
-                signal,
-                onServerMessage: () => undefined,
-            }),
-        );
         const pairing = v.parse(
             runtimePairingSchema,
             await (
                 await options.server.request(
-                    new Request(`${server.origin}/mobius/api/v1/projects/${options.projectId}/runtime-pairings`, {
+                    new Request(`${options.origin}/mobius/api/v1/projects/${options.projectId}/runtime-pairings`, {
                         body: JSON.stringify({ idempotencyKey: crypto.randomUUID() }),
                         headers: {
                             authorization: `Bearer ${options.credential}`,
@@ -50,7 +44,7 @@ export async function createFakeAgentDaemonRuntime(options: {
             v.object({ runtimeCredential: v.string() }),
             await (
                 await options.server.request(
-                    new Request(`${server.origin}/mobius/api/v1/runtime-pairings/${pairing.pairingId}/redeem`, {
+                    new Request(`${options.origin}/mobius/api/v1/runtime-pairings/${pairing.pairingId}/redeem`, {
                         body: JSON.stringify({
                             agents: [
                                 {
@@ -88,7 +82,7 @@ export async function createFakeAgentDaemonRuntime(options: {
                 )
             ).json(),
         );
-        const relayUrl = new URL("/mobius/api/v1/runtimes/connect", server.origin);
+        const relayUrl = new URL("/mobius/api/v1/runtimes/connect", options.origin);
         relayUrl.protocol = "ws:";
         const daemon = resources.use(
             await FakeAgentDaemon.connect(
@@ -121,7 +115,7 @@ export async function createFakeAgentDaemonRuntime(options: {
         );
         const behavior = resources.use(serveFakeAgentDaemon(daemon, { agentName: "Codex" }));
         const client = new MobiusClient({
-            endpoint: server.origin,
+            endpoint: options.origin,
             projectId: pairing.projectId,
             credentialProvider: new StaticMobiusCredentialProvider(options.credential),
             transport: { fetch: async (request: Request) => await options.server.request(request) },
