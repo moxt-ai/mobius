@@ -128,6 +128,13 @@ export class FakeAgentDaemon implements AsyncDisposable {
                 (event) => {
                     this.#closeCode = event.code ?? 1006;
                     this.#closeReason = event.reason ?? "Connection closed unexpectedly";
+                    for (const pending of this.#pending.splice(0)) {
+                        pending.reject(
+                            new Error(
+                                `The fake Agent-daemon connection closed (${this.#closeCode.toString()}): ${this.#closeReason}`,
+                            ),
+                        );
+                    }
                     resolve();
                 },
                 { once: true },
@@ -236,18 +243,16 @@ export class FakeAgentDaemon implements AsyncDisposable {
                 : Promise.resolve(message);
         }
         return new Promise((resolve, reject) => {
-            const deadline = AbortSignal.timeout(20_000);
-            const signal = cancellation === undefined ? deadline : AbortSignal.any([cancellation, deadline]);
             const pending: PendingMessage = {
                 accepts,
                 kind,
                 priority: 1,
                 reject: (error) => {
-                    signal.removeEventListener("abort", abort);
+                    cancellation?.removeEventListener("abort", abort);
                     reject(error);
                 },
                 resolve: (message) => {
-                    signal.removeEventListener("abort", abort);
+                    cancellation?.removeEventListener("abort", abort);
                     resolve(message);
                 },
             };
@@ -256,10 +261,13 @@ export class FakeAgentDaemon implements AsyncDisposable {
                 if (index >= 0) {
                     this.#pending.splice(index, 1);
                 }
-                reject(cancellation?.aborted ? cancellation.reason : new Error(`Fake Agent-daemon missed ${kind}`));
+                reject(cancellation?.reason);
             };
             this.#pending.push(pending);
-            signal.addEventListener("abort", abort, { once: true });
+            cancellation?.addEventListener("abort", abort, { once: true });
+            if (cancellation?.aborted === true) {
+                abort();
+            }
         });
     };
 

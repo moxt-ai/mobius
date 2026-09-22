@@ -20,7 +20,9 @@ export default defineConfig({
             },
         },
         fileParallelism: true,
-        maxWorkers: 4,
+        // Each file owns a real Wrangler/Cloudflare harness. Four concurrent harnesses intermittently
+        // produce socket resets under shared CI load, so keep enough parallelism without overload.
+        maxWorkers: 2,
         hookTimeout: 40_000,
         include: ["test/**/*.integration.test.tsx"],
         testTimeout: 45_000,

@@ -71,6 +71,7 @@ export async function startAgentDaemonJourney(options: {
         const pairing = await deployment.createPairing(options.signal);
         daemon = await startProductionMobiusCli(deployment, pairing, {
             agentEnvironment: options.agentEnvironment,
+            signal: options.signal,
         });
         expect(daemon.channelId).toBe(pairing.channelId);
 

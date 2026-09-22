@@ -100,15 +100,14 @@ class ObservedProcess {
         return this.#output;
     }
 
-    async waitFor(text: string, timeoutMilliseconds: number): Promise<void> {
+    async waitFor(text: string, signal: AbortSignal): Promise<void> {
+        signal.throwIfAborted();
         if (this.#output.includes(text)) {
             return;
         }
         await new Promise<void>((resolve, reject) => {
-            const timeout = setTimeout(
-                () => finish(new Error(`Process did not report ${text}\n${this.#output}`)),
-                timeoutMilliseconds,
-            );
+            const abort = (): void =>
+                finish(new Error(`Process did not report ${text}\n${this.#output}`, { cause: signal.reason }));
             const output = (): void => {
                 if (this.#output.includes(text)) {
                     finish();
@@ -116,7 +115,7 @@ class ObservedProcess {
             };
             const exit = (): void => finish(new Error(`Process exited before reporting ${text}\n${this.#output}`));
             const finish = (error?: Error): void => {
-                clearTimeout(timeout);
+                signal.removeEventListener("abort", abort);
                 this.child.stdout?.removeListener("data", output);
                 this.child.stderr?.removeListener("data", output);
                 this.child.removeListener("exit", exit);
@@ -129,6 +128,10 @@ class ObservedProcess {
             this.child.stdout?.on("data", output);
             this.child.stderr?.on("data", output);
             this.child.once("exit", exit);
+            signal.addEventListener("abort", abort, { once: true });
+            if (signal.aborted) {
+                abort();
+            }
         });
     }
 
@@ -203,7 +206,7 @@ export async function startStandaloneDeployment(): Promise<StandaloneDeployment>
         },
     );
     try {
-        await process_.waitFor("Ready on http://", 30_000);
+        await process_.waitFor("Ready on http://", AbortSignal.timeout(30_000));
         return new StandaloneDeployment(`http://127.0.0.1:${port.toString()}`, process_, temporaryDirectory);
     } catch (cause) {
         await process_.stop();
@@ -300,10 +303,10 @@ export class ProductionMobiusCli implements AsyncDisposable {
         return this.#process.output;
     }
 
-    async restartFromSavedChannel(): Promise<void> {
+    async restartFromSavedChannel(signal: AbortSignal): Promise<void> {
         await this.#process.stop();
         this.#process = spawnCli(["start", "--channel", this.channelId], this.#environment);
-        await this.#process.waitFor("Mobius daemon is ready for Agent requests.", 20_000);
+        await this.#process.waitFor("Mobius daemon is ready for Agent requests.", signal);
     }
 
     async [Symbol.asyncDispose](): Promise<void> {
@@ -322,7 +325,10 @@ function spawnCli(arguments_: readonly string[], environment: NodeJS.ProcessEnv)
 export async function startProductionMobiusCli(
     deployment: StandaloneDeployment,
     pairing: StandalonePairing,
-    options: { readonly agentEnvironment: Readonly<Record<string, string>> },
+    options: {
+        readonly agentEnvironment: Readonly<Record<string, string>>;
+        readonly signal: AbortSignal;
+    },
 ): Promise<ProductionMobiusCli> {
     const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-e2e-cli-"));
     const workspace = join(temporaryDirectory, "workspace");
@@ -339,7 +345,7 @@ export async function startProductionMobiusCli(
         environment,
     );
     try {
-        await process_.waitFor("Mobius daemon is ready for Agent requests.", 20_000);
+        await process_.waitFor("Mobius daemon is ready for Agent requests.", options.signal);
         return new ProductionMobiusCli(pairing.channelId, environment, process_, temporaryDirectory);
     } catch (cause) {
         await process_.stop();
