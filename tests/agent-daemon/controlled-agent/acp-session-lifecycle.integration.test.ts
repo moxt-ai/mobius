@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
+import { encodeSessionLiveHistoryLoaded } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it, vi } from "vitest";
 
 import { AcpSessionManager, createWritableAcpStream } from "../../../packages/cli/src/acp/session-manager.ts";
@@ -42,6 +43,71 @@ function processExists(pid: number): boolean {
 }
 
 describe("ACP conversation sessions", () => {
+    it("Given ACP history contains large tool activities, When Mobius reloads it for a non-cloud Session, Then the live-history response remains protocol-encodable", async () => {
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-large-history-"));
+        const databasePath = join(temporaryDirectory, "sessions.sqlite");
+        const agent = new LocalAgentDefinition(
+            "claude",
+            "Claude Code",
+            process.execPath,
+            [fakeAgentPath, "--agent-name", "Claude Code", "--large-replay-activity"],
+            { MOBIUS_FAKE_ACP_STATE_DIRECTORY: temporaryDirectory },
+        );
+        const sessionId = "large-activity-conversation";
+        const signal = new AbortController().signal;
+
+        try {
+            const firstStore = new SqliteAcpSessionStore(databasePath);
+            const first = new AcpSessionManager(undefined, firstStore);
+            try {
+                for (const prompt of ["first activity", "second activity", "third activity"]) {
+                    await first.runPrompt({
+                        additionalDirectories: [],
+                        agent,
+                        commandId: `command-${prompt.replace(" ", "-")}`,
+                        cwd: temporaryDirectory,
+                        images: [],
+                        onActivity: () => Promise.resolve(),
+                        onText: () => Promise.resolve(),
+                        prompt,
+                        resources: [],
+                        sessionId,
+                        signal,
+                    });
+                }
+            } finally {
+                await first.close();
+                firstStore.close();
+            }
+
+            const secondStore = new SqliteAcpSessionStore(databasePath);
+            const second = new AcpSessionManager(undefined, secondStore);
+            try {
+                const history = await second.loadSessionHistory({
+                    additionalDirectories: [],
+                    agent,
+                    cwd: temporaryDirectory,
+                    sessionId,
+                    signal,
+                });
+                expect(() =>
+                    encodeSessionLiveHistoryLoaded({
+                        history,
+                        kind: "session.live-history.loaded",
+                        requestId: "large-history-request",
+                        sessionId,
+                    }),
+                ).not.toThrow();
+                expect(history).toMatchObject({ status: "available", truncated: true });
+            } finally {
+                await second.close();
+                secondStore.close();
+            }
+        } finally {
+            await rm(temporaryDirectory, { force: true, recursive: true });
+        }
+    });
+
     it.skipIf(process.platform === "win32")(
         "Given an ACP Turn keeps running, When days elapse, Then Mobius keeps it active until cancellation and releases the process tree",
         async () => {

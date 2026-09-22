@@ -2,6 +2,7 @@ import type { SessionNotification } from "@agentclientprotocol/sdk";
 import {
     type AgentDisplayContent,
     type NativeHistoryMessage,
+    type NativeMessageActivity,
     type NativeSessionHistory,
     SESSION_HISTORY_CHARACTER_LIMIT,
     SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT,
@@ -19,6 +20,37 @@ type ReplayMessage =
           readonly role: "assistant";
           readonly text: string;
       };
+
+const HISTORY_ACTIVITY_FIELD_LIMIT = 100_000;
+const HISTORY_ACTIVITY_LIMIT = 100;
+
+function historyActivity(activity: AcpActivity): NativeMessageActivity {
+    return {
+        activityId: activity.activityId.slice(0, 128),
+        activityType: activity.activityType.slice(0, 128),
+        content: activity.content.slice(0, 100),
+        input: activity.input.slice(0, HISTORY_ACTIVITY_FIELD_LIMIT),
+        locations: activity.locations.slice(0, 100).map((location) => location.slice(0, 2_048)),
+        name: activity.name.slice(0, 128),
+        output: activity.output.slice(0, HISTORY_ACTIVITY_FIELD_LIMIT),
+        sequence: activity.sequence,
+        status: activity.status.slice(0, 64),
+        title: activity.title.slice(0, 500),
+        toolKind: activity.toolKind.slice(0, 64),
+    };
+}
+
+function historyContentCharacters(messages: readonly NativeHistoryMessage[]): number {
+    return messages.reduce(
+        (total, message) =>
+            total +
+            message.text.length +
+            (message.role === "assistant"
+                ? JSON.stringify(message.activities).length + JSON.stringify(message.content).length
+                : 0),
+        0,
+    );
+}
 
 /** Captures ACP load replay without turning historical updates into live turns. */
 export class AcpHistoryReplay {
@@ -140,38 +172,49 @@ export class AcpHistoryReplay {
 
     readonly snapshot = async (): Promise<NativeSessionHistory> => {
         await this.#activityTracker.finish();
+        const messages: NativeHistoryMessage[] = this.#messages.map((message): NativeHistoryMessage => {
+            if (message.role === "user") {
+                return message;
+            }
+            const activities = message.activityIds.flatMap((id) => {
+                const activity = this.#activities.get(id);
+                return activity === undefined ? [] : [historyActivity(activity)];
+            });
+            if (activities.length > HISTORY_ACTIVITY_LIMIT) {
+                this.#truncated = true;
+            }
+            return {
+                role: "assistant",
+                text: message.text,
+                content: message.content.slice(0, 100),
+                activities: activities.slice(-HISTORY_ACTIVITY_LIMIT),
+            };
+        });
+        while (historyContentCharacters(messages) > SESSION_HISTORY_CHARACTER_LIMIT) {
+            const richIndex = messages.findIndex(
+                (message) =>
+                    message.role === "assistant" && (message.activities.length > 0 || message.content.length > 0),
+            );
+            if (richIndex === -1) {
+                messages.shift();
+            } else {
+                const message = messages[richIndex];
+                if (message?.role === "assistant") {
+                    messages[richIndex] = {
+                        ...message,
+                        activities: message.activities.length > 0 ? message.activities.slice(1) : message.activities,
+                        content:
+                            message.activities.length === 0 && message.content.length > 0
+                                ? message.content.slice(1)
+                                : message.content,
+                    };
+                }
+            }
+            this.#truncated = true;
+        }
         return {
             status: "available",
-            messages: this.#messages.map(
-                (message): NativeHistoryMessage =>
-                    message.role === "user"
-                        ? message
-                        : {
-                              role: "assistant",
-                              text: message.text,
-                              content: message.content,
-                              activities: message.activityIds.flatMap((id) => {
-                                  const activity = this.#activities.get(id);
-                                  return activity === undefined
-                                      ? []
-                                      : [
-                                            {
-                                                activityId: activity.activityId,
-                                                activityType: activity.activityType,
-                                                content: activity.content,
-                                                input: activity.input,
-                                                locations: activity.locations,
-                                                name: activity.name,
-                                                output: activity.output,
-                                                sequence: activity.sequence,
-                                                status: activity.status,
-                                                title: activity.title,
-                                                toolKind: activity.toolKind,
-                                            },
-                                        ];
-                              }),
-                          },
-            ),
+            messages,
             truncated: this.#truncated,
             coveredCommandIds: [],
             coveredMessageIds: [],

@@ -34,6 +34,7 @@ import {
     type decodeSessionEventDeferred,
     decodeSessionEventEnvelope,
     decodeSessionLiveHistoryLoad,
+    decodeSessionLiveHistoryPageLoad,
     encodeDaemonToServiceMessage,
     encodeRecordedSessionEvent,
     FILE_FAILED_KIND,
@@ -41,6 +42,8 @@ import {
     NATIVE_SESSION_CANCEL_KIND,
     NATIVE_SESSION_REQUEST_KIND,
     NATIVE_SESSION_TURN_FORK_KIND,
+    type NativeMessagePage,
+    type NativeSessionHistory,
     type RecordedSessionEvent,
     RUNTIME_DELIVERY_COMMITTED_KIND,
     RUNTIME_DELIVERY_KIND,
@@ -57,6 +60,7 @@ import {
     SESSION_EVENT_REJECTED_KIND,
     SESSION_FAILED_KIND,
     SESSION_LIVE_HISTORY_LOAD_KIND,
+    SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
     SESSION_PERMISSION_RESPOND_KIND,
     SESSION_PREPARE_KIND,
     SESSION_PROMPT_KIND,
@@ -1491,6 +1495,104 @@ async function executeSessionPrepare(
     }
 }
 
+interface LiveHistoryCoveredTurnRange {
+    readonly assistantEndIndex: number;
+    readonly assistantStartIndex: number;
+    readonly commandId: string;
+    readonly userIndex: number;
+}
+
+function liveHistoryCursor(sessionId: string, endIndex: number): string {
+    return Buffer.from(JSON.stringify({ endIndex, sessionId }), "utf8").toString("base64url");
+}
+
+function liveHistoryEndIndex(cursor: string, sessionId: string): number {
+    try {
+        if (!/^[A-Za-z0-9_-]{1,512}$/u.test(cursor)) {
+            throw new Error("Invalid cursor alphabet");
+        }
+        const value: unknown = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+        if (typeof value !== "object" || value === null || Array.isArray(value)) {
+            throw new Error("Invalid cursor shape");
+        }
+        const record = Object.fromEntries(Object.entries(value));
+        if (
+            Object.keys(record).sort().join(",") !== "endIndex,sessionId" ||
+            record["sessionId"] !== sessionId ||
+            typeof record["endIndex"] !== "number" ||
+            !Number.isSafeInteger(record["endIndex"]) ||
+            record["endIndex"] < 0
+        ) {
+            throw new Error("Invalid cursor target");
+        }
+        return record["endIndex"];
+    } catch (cause) {
+        throw new AcpExecutionError("The native Session history cursor is invalid", { cause }, "invalid_cursor");
+    }
+}
+
+function liveHistoryCoveredTurnRanges(
+    history: Extract<NativeSessionHistory, { readonly status: "available" }>,
+): readonly LiveHistoryCoveredTurnRange[] {
+    const ranges: LiveHistoryCoveredTurnRange[] = [];
+    let historyIndex = history.messages.length;
+    for (const commandId of history.coveredCommandIds) {
+        let assistantStartIndex = historyIndex;
+        while (assistantStartIndex > 0 && history.messages[assistantStartIndex - 1]?.role === "assistant") {
+            assistantStartIndex -= 1;
+        }
+        const userIndex = assistantStartIndex - 1;
+        if (assistantStartIndex === historyIndex || history.messages[userIndex]?.role !== "user") {
+            break;
+        }
+        ranges.push({ assistantEndIndex: historyIndex, assistantStartIndex, commandId, userIndex });
+        historyIndex = userIndex;
+    }
+    return ranges;
+}
+
+function paginateLiveSessionHistory(
+    history: NativeSessionHistory,
+    sessionId: string,
+    cursor: string | null,
+    limit: number,
+): NativeMessagePage {
+    if (history.status === "unavailable") {
+        if (cursor !== null) {
+            throw new AcpExecutionError("Unavailable native Session history has no cursor", {}, "invalid_cursor");
+        }
+        return { cause: history.cause, nextCursor: null, status: "unavailable" };
+    }
+    const endIndex = cursor === null ? history.messages.length : liveHistoryEndIndex(cursor, sessionId);
+    if (endIndex > history.messages.length) {
+        throw new AcpExecutionError("The native Session history cursor is invalid", {}, "invalid_cursor");
+    }
+    const startIndex = Math.max(0, endIndex - limit);
+    const coveredMessageIds = new Set(history.coveredMessageIds);
+    const ranges = liveHistoryCoveredTurnRanges(history);
+    return {
+        coveredCommandIds: ranges
+            .filter((range) => range.userIndex >= startIndex && range.assistantEndIndex <= endIndex)
+            .map((range) => range.commandId),
+        coveredMessageIds: ranges.flatMap((range) => [
+            ...(range.userIndex >= startIndex &&
+            range.userIndex < endIndex &&
+            coveredMessageIds.has(`${range.commandId}:user`)
+                ? [`${range.commandId}:user`]
+                : []),
+            ...(range.assistantStartIndex >= startIndex &&
+            range.assistantEndIndex <= endIndex &&
+            coveredMessageIds.has(`${range.commandId}:agent`)
+                ? [`${range.commandId}:agent`]
+                : []),
+        ]),
+        messages: history.messages.slice(startIndex, endIndex),
+        nextCursor: startIndex > 0 ? liveHistoryCursor(sessionId, startIndex) : null,
+        status: "available",
+        truncated: history.truncated,
+    };
+}
+
 async function executeSessionLiveHistoryLoad(
     socket: WebSocket,
     command: ReturnType<typeof decodeSessionLiveHistoryLoad>,
@@ -1543,6 +1645,66 @@ async function executeSessionLiveHistoryLoad(
                 cause: { code: operationErrorCode(error), message: operationErrorMessage(error) },
             },
             kind: "session.live-history.loaded",
+            requestId: command.requestId,
+            sessionId: command.sessionId,
+        });
+    }
+}
+
+async function executeSessionLiveHistoryPageLoad(
+    socket: WebSocket,
+    command: ReturnType<typeof decodeSessionLiveHistoryPageLoad>,
+    config: DaemonConfig,
+    directories: WorkspaceDirectoryService,
+    audit: AuditStore,
+    sessions: AcpSessionManager,
+    signal: AbortSignal,
+): Promise<void> {
+    try {
+        const resolved = await resolveSessionDirectories(
+            directories,
+            config.bindingId,
+            command.directoryId,
+            command.additionalDirectoryIds,
+            signal,
+        );
+        const history = await sessions.loadSessionHistory({
+            additionalDirectories: resolved.additionalDirectories,
+            agent: config.catalog.find(command.agentId),
+            cwd: resolved.cwd,
+            sessionId: command.sessionId,
+            signal,
+        });
+        signal.throwIfAborted();
+        const page = paginateLiveSessionHistory(history, command.sessionId, command.cursor, command.limit);
+        audit.record({
+            commandId: command.requestId,
+            event: "session_history_loaded",
+            sessionId: command.sessionId,
+        });
+        send(socket, {
+            kind: "session.live-history.page.loaded",
+            page,
+            requestId: command.requestId,
+            sessionId: command.sessionId,
+        });
+    } catch (error) {
+        if (signal.aborted) {
+            return;
+        }
+        audit.record({
+            commandId: command.requestId,
+            details: { code: operationErrorCode(error) },
+            event: "session_history_unavailable",
+            sessionId: command.sessionId,
+        });
+        send(socket, {
+            kind: "session.live-history.page.loaded",
+            page: {
+                status: "unavailable",
+                cause: { code: operationErrorCode(error), message: operationErrorMessage(error) },
+                nextCursor: null,
+            },
             requestId: command.requestId,
             sessionId: command.sessionId,
         });
@@ -2596,6 +2758,19 @@ async function runRelayConnection(
                     if (kind === SESSION_LIVE_HISTORY_LOAD_KIND) {
                         const command = decodeSessionLiveHistoryLoad(encoded);
                         void executeSessionLiveHistoryLoad(
+                            socket,
+                            command,
+                            config,
+                            directories,
+                            audit,
+                            sessions,
+                            connectionController.signal,
+                        );
+                        return;
+                    }
+                    if (kind === SESSION_LIVE_HISTORY_PAGE_LOAD_KIND) {
+                        const command = decodeSessionLiveHistoryPageLoad(encoded);
+                        void executeSessionLiveHistoryPageLoad(
                             socket,
                             command,
                             config,

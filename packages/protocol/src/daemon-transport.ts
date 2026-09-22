@@ -139,10 +139,16 @@ import {
 import {
     decodeSessionLiveHistoryLoad,
     decodeSessionLiveHistoryLoaded,
+    decodeSessionLiveHistoryPageLoad,
+    decodeSessionLiveHistoryPageLoaded,
     encodeSessionLiveHistoryLoad,
     encodeSessionLiveHistoryLoaded,
+    encodeSessionLiveHistoryPageLoad,
+    encodeSessionLiveHistoryPageLoaded,
     SESSION_LIVE_HISTORY_LOAD_KIND,
     SESSION_LIVE_HISTORY_LOADED_KIND,
+    SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
+    SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
 } from "./session-live-history.ts";
 
 interface MessageSignature<TMessage extends { readonly kind: string }> {
@@ -257,6 +263,11 @@ const serviceToDaemonSignatures = {
         SESSION_LIVE_HISTORY_LOAD_KIND,
         encodeSessionLiveHistoryLoad,
         decodeSessionLiveHistoryLoad,
+    ),
+    [SESSION_LIVE_HISTORY_PAGE_LOAD_KIND]: defineMessageSignature(
+        SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
+        encodeSessionLiveHistoryPageLoad,
+        decodeSessionLiveHistoryPageLoad,
     ),
     [SESSION_PERMISSION_RESPOND_KIND]: defineMessageSignature(
         SESSION_PERMISSION_RESPOND_KIND,
@@ -379,6 +390,11 @@ const daemonToServiceSignatures = {
         SESSION_LIVE_HISTORY_LOADED_KIND,
         encodeSessionLiveHistoryLoaded,
         decodeSessionLiveHistoryLoaded,
+    ),
+    [SESSION_LIVE_HISTORY_PAGE_LOADED_KIND]: defineMessageSignature(
+        SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
+        encodeSessionLiveHistoryPageLoaded,
+        decodeSessionLiveHistoryPageLoaded,
     ),
     [SESSION_READY_KIND]: defineMessageSignature(SESSION_READY_KIND, encodeSessionReadyEvent, decodeSessionReadyEvent),
     [WORKSPACE_ENTRIES_KIND]: defineMessageSignature(

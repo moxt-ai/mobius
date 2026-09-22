@@ -19,18 +19,18 @@ import {
     decodeAgentSettingsDiscoveredEvent,
     decodeMessageKind,
     decodeSessionEventEnvelope,
-    decodeSessionLiveHistoryLoaded,
+    decodeSessionLiveHistoryPageLoaded,
     encodeAgentCatalogRefreshCommand,
     encodeAgentSettingsDiscoverCommand,
     encodeSessionEventAcknowledgement,
-    encodeSessionLiveHistoryLoad,
+    encodeSessionLiveHistoryPageLoad,
     encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
     SESSION_COMPLETED_KIND,
     SESSION_EVENT_ACK_KIND,
     SESSION_EVENT_KIND,
     SESSION_FAILED_KIND,
-    SESSION_LIVE_HISTORY_LOADED_KIND,
+    SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
     type SessionConfigurationSelection,
     type SessionPromptCommand,
     SessionPromptDisposition,
@@ -246,13 +246,13 @@ async function readAgentCatalogRefresh(frames: ClientFrames, requestId: string) 
     }
 }
 
-async function readSessionLiveHistory(frames: ClientFrames, requestId: string) {
+async function readSessionLiveHistoryPage(frames: ClientFrames, requestId: string) {
     for (;;) {
         const message = await frames.next();
-        if (decodeMessageKind(message) !== SESSION_LIVE_HISTORY_LOADED_KIND) {
+        if (decodeMessageKind(message) !== SESSION_LIVE_HISTORY_PAGE_LOADED_KIND) {
             continue;
         }
-        const loaded = decodeSessionLiveHistoryLoaded(message);
+        const loaded = decodeSessionLiveHistoryPageLoaded(message);
         if (loaded.requestId === requestId) {
             return loaded;
         }
@@ -999,20 +999,21 @@ if (process.argv.includes("--version")) {
             const requestId = "reload_native_history";
             sendText(
                 socket,
-                encodeSessionLiveHistoryLoad({
+                encodeSessionLiveHistoryPageLoad({
                     additionalDirectoryIds: [],
                     agentId: agent.id,
                     bindingId: applicationBindingId,
                     directoryId: "default",
-                    kind: "session.live-history.load",
+                    cursor: null,
+                    kind: "session.live-history.page.load",
+                    limit: 1,
                     requestId,
                     sessionId,
                 }),
             );
-            await expect(readSessionLiveHistory(frames, requestId)).resolves.toMatchObject({
-                history: {
+            await expect(readSessionLiveHistoryPage(frames, requestId)).resolves.toMatchObject({
+                page: {
                     messages: expect.arrayContaining([
-                        expect.objectContaining({ role: "user", text: "private conversation" }),
                         expect.objectContaining({
                             activities: expect.arrayContaining([
                                 expect.objectContaining({

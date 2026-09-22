@@ -841,7 +841,9 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                 await context.client.notify(acp.methods.client.session.update, {
                     sessionId: context.params.sessionId,
                     update: {
-                        rawOutput: { name: "mobius-workspace" },
+                        rawOutput: process.argv.includes("--large-replay-activity")
+                            ? { output: "x".repeat(100_000) }
+                            : { name: "mobius-workspace" },
                         sessionUpdate: "tool_call_update",
                         status: "completed",
                         toolCallId: `tool-${replayId}`,

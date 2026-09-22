@@ -975,22 +975,21 @@ describe.sequential("Platform Session-only boundary", () => {
                 environment,
             );
             const load = decodeServiceToDaemonMessage(await messages.next());
-            expect(load).toMatchObject({ kind: "session.live-history.load", sessionId });
-            if (load.kind !== "session.live-history.load") {
-                throw new Error("Expected the live-history request");
+            expect(load).toMatchObject({
+                cursor: null,
+                kind: "session.live-history.page.load",
+                limit: 2,
+                sessionId,
+            });
+            if (load.kind !== "session.live-history.page.load") {
+                throw new Error("Expected the live-history page request");
             }
             socket.send(
                 encodeDaemonToServiceMessage({
-                    history: {
+                    page: {
                         coveredCommandIds: [],
                         coveredMessageIds: ["daemon-message:agent"],
                         messages: [
-                            {
-                                activities: [],
-                                content: [],
-                                role: "assistant",
-                                text: "Oldest daemon history",
-                            },
                             {
                                 role: "user",
                                 text: "Recent daemon prompt",
@@ -1042,10 +1041,11 @@ describe.sequential("Platform Session-only boundary", () => {
                                 text: "History owned by the daemon",
                             },
                         ],
+                        nextCursor: "daemon-page-2",
                         status: "available",
                         truncated: false,
                     },
-                    kind: "session.live-history.loaded",
+                    kind: "session.live-history.page.loaded",
                     requestId: load.requestId,
                     sessionId,
                 }),
@@ -1071,7 +1071,7 @@ describe.sequential("Platform Session-only boundary", () => {
                 ],
                 status: "available",
             });
-            expect(firstPage).toHaveProperty("nextCursor", expect.any(String));
+            expect(firstPage).toHaveProperty("nextCursor", "daemon-page-2");
 
             const olderHistoryResponse = worker.fetch(
                 new Request(
@@ -1081,24 +1081,26 @@ describe.sequential("Platform Session-only boundary", () => {
                 environment,
             );
             const olderLoad = decodeServiceToDaemonMessage(await messages.next());
-            expect(olderLoad).toMatchObject({ kind: "session.live-history.load", sessionId });
-            if (olderLoad.kind !== "session.live-history.load") {
-                throw new Error("Expected the older live-history request");
+            expect(olderLoad).toMatchObject({
+                cursor: "daemon-page-2",
+                kind: "session.live-history.page.load",
+                limit: 2,
+                sessionId,
+            });
+            if (olderLoad.kind !== "session.live-history.page.load") {
+                throw new Error("Expected the older live-history page request");
             }
             socket.send(
                 encodeDaemonToServiceMessage({
-                    history: {
+                    page: {
                         coveredCommandIds: [],
                         coveredMessageIds: ["daemon-message:agent"],
-                        messages: [
-                            { activities: [], content: [], role: "assistant", text: "Oldest daemon history" },
-                            { role: "user", text: "Recent daemon prompt" },
-                            { activities: [], content: [], role: "assistant", text: "History owned by the daemon" },
-                        ],
+                        messages: [{ activities: [], content: [], role: "assistant", text: "Oldest daemon history" }],
+                        nextCursor: null,
                         status: "available",
                         truncated: false,
                     },
-                    kind: "session.live-history.loaded",
+                    kind: "session.live-history.page.loaded",
                     requestId: olderLoad.requestId,
                     sessionId,
                 }),

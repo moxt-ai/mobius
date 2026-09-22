@@ -2,8 +2,6 @@ import {
     applyDurableObjectMigrations,
     type DoSqlDatabase,
     DurableObjectSqlDatabase,
-    ProjectScope,
-    paginateNativeSessionHistory,
     SessionRelay as SessionRelayImplementation,
     SessionRuntimeError,
 } from "@moxt-ai/mobius-relay-core";
@@ -58,21 +56,14 @@ export class NonCloudRetentionSessionRelayDO {
         if (route.operation === "query-native-messages") {
             try {
                 const page = await queryNativeMessagesRequest(request, identity.projectId, identity.sessionId);
-                const restored = await this.#liveHistory.restore(
+                const restored = await this.#liveHistory.restorePage(
                     identity.projectId,
                     identity.runtimeId,
                     identity.sessionId,
+                    page,
                     request.signal,
                 );
-                return Response.json(
-                    paginateNativeSessionHistory(
-                        restored.history,
-                        new ProjectScope(identity.projectId),
-                        identity.sessionId,
-                        page.cursor,
-                        page.limit,
-                    ),
-                );
+                return Response.json(restored);
             } catch (cause) {
                 if (cause instanceof SessionRuntimeError) {
                     const error = cause.toHttpJson();
@@ -290,7 +281,9 @@ async function queryNativeMessagesRequest(
         Object.entries(scope)[0]?.[1] !== expectedProjectId ||
         (cursor !== null && (typeof cursor !== "string" || cursor.length > 512)) ||
         typeof limit !== "number" ||
-        !Number.isSafeInteger(limit)
+        !Number.isSafeInteger(limit) ||
+        limit < 1 ||
+        limit > 100
     ) {
         throw new SessionRuntimeError("invalid_request", "The native Session history request is invalid");
     }

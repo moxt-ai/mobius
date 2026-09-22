@@ -1,8 +1,13 @@
 import {
     decodeMessageKind,
     decodeSessionLiveHistoryLoaded,
+    decodeSessionLiveHistoryPageLoaded,
     encodeSessionLiveHistoryLoad,
+    encodeSessionLiveHistoryPageLoad,
+    type NativeMessagePage,
     type NativeSessionHistory,
+    type SessionLiveHistoryLoaded,
+    type SessionLiveHistoryPageLoaded,
 } from "@moxt-ai/mobius-protocol";
 import { CreateSessionRequest, SessionRecordingPolicy } from "@moxt-ai/mobius-relay-core";
 import {
@@ -93,15 +98,28 @@ export class PlatformSessionLiveHistoryClient {
             typeof route.summary["title"] === "string" ? route.summary["title"] : "",
             stringField(route.summary, "createdBy"),
         );
-        const history = await this.load(route, sessionId, signal);
+        const loaded = await this.load(route, sessionId, signal);
+        const history = loaded.history;
         return { createdAt, history, request };
+    };
+
+    readonly restorePage = async (
+        projectId: string,
+        runtimeId: string,
+        sessionId: string,
+        page: { readonly cursor: string | null; readonly limit: number },
+        signal: AbortSignal,
+    ): Promise<NativeMessagePage> => {
+        const route = await this.route(projectId, runtimeId, sessionId, signal);
+        const loaded = await this.loadPage(route, sessionId, page, signal);
+        return loaded.page;
     };
 
     private readonly load = async (
         route: SessionRoute,
         sessionId: string,
         signal: AbortSignal,
-    ): Promise<NativeSessionHistory> => {
+    ): Promise<SessionLiveHistoryLoaded> => {
         const requestId = crypto.randomUUID();
         const deadline = AbortSignal.any([signal, AbortSignal.timeout(LIVE_HISTORY_TIMEOUT_MILLISECONDS)]);
         const headers = new Headers({ Upgrade: "websocket" });
@@ -121,7 +139,7 @@ export class PlatformSessionLiveHistoryClient {
         const socket = response.webSocket;
         let cleanup = () => {};
         try {
-            return await new Promise<NativeSessionHistory>((resolve, reject) => {
+            return await new Promise<SessionLiveHistoryLoaded>((resolve, reject) => {
                 const failed = () => reject(new Error("The Session Runtime live-history channel closed"));
                 const aborted = () => reject(deadline.reason);
                 const received = (event: MessageEvent) => {
@@ -134,7 +152,7 @@ export class PlatformSessionLiveHistoryClient {
                         }
                         const result = decodeSessionLiveHistoryLoaded(event.data);
                         if (result.requestId === requestId && result.sessionId === sessionId) {
-                            resolve(result.history);
+                            resolve(result);
                         }
                     } catch (cause) {
                         reject(new Error("The Session Runtime returned invalid live history", { cause }));
@@ -166,6 +184,81 @@ export class PlatformSessionLiveHistoryClient {
         } finally {
             cleanup();
             socket.close(1000, "Live Session history operation complete");
+        }
+    };
+
+    private readonly loadPage = async (
+        route: SessionRoute,
+        sessionId: string,
+        page: { readonly cursor: string | null; readonly limit: number },
+        signal: AbortSignal,
+    ): Promise<SessionLiveHistoryPageLoaded> => {
+        const requestId = crypto.randomUUID();
+        const deadline = AbortSignal.any([signal, AbortSignal.timeout(LIVE_HISTORY_TIMEOUT_MILLISECONDS)]);
+        const headers = new Headers({ Upgrade: "websocket" });
+        headers.set(INTERNAL_CHANNEL_ID_HEADER, route.channelId);
+        headers.set(INTERNAL_RUNTIME_ID_HEADER, route.runtimeId);
+        const response = await this.#environment.RUNTIME_RELAY.get(
+            this.#environment.RUNTIME_RELAY.idFromName(route.channelId),
+        ).fetch(
+            new Request(`https://runtime.internal/projects/${encodeURIComponent(route.projectId)}/live-history`, {
+                headers,
+                signal: deadline,
+            }),
+        );
+        if (response.status !== 101 || response.webSocket === null) {
+            throw new Error("The Session Runtime live-history channel is unavailable");
+        }
+        const socket = response.webSocket;
+        let cleanup = () => {};
+        try {
+            return await new Promise<SessionLiveHistoryPageLoaded>((resolve, reject) => {
+                const failed = () => reject(new Error("The Session Runtime live-history channel closed"));
+                const aborted = () => reject(deadline.reason);
+                const received = (event: MessageEvent) => {
+                    if (typeof event.data !== "string") {
+                        return;
+                    }
+                    try {
+                        if (decodeMessageKind(event.data) !== "session.live-history.page.loaded") {
+                            return;
+                        }
+                        const result = decodeSessionLiveHistoryPageLoaded(event.data);
+                        if (result.requestId === requestId && result.sessionId === sessionId) {
+                            resolve(result);
+                        }
+                    } catch (cause) {
+                        reject(new Error("The Session Runtime returned an invalid live-history page", { cause }));
+                    }
+                };
+                cleanup = () => {
+                    deadline.removeEventListener("abort", aborted);
+                    socket.removeEventListener("close", failed);
+                    socket.removeEventListener("error", failed);
+                    socket.removeEventListener("message", received);
+                };
+                deadline.addEventListener("abort", aborted, { once: true });
+                socket.addEventListener("close", failed);
+                socket.addEventListener("error", failed);
+                socket.addEventListener("message", received);
+                socket.accept();
+                socket.send(
+                    encodeSessionLiveHistoryPageLoad({
+                        additionalDirectoryIds: [],
+                        agentId: route.agentId,
+                        bindingId: route.bindingId,
+                        cursor: page.cursor,
+                        directoryId: route.directoryId,
+                        kind: "session.live-history.page.load",
+                        limit: page.limit,
+                        requestId,
+                        sessionId,
+                    }),
+                );
+            });
+        } finally {
+            cleanup();
+            socket.close(1000, "Live Session history page operation complete");
         }
     };
 

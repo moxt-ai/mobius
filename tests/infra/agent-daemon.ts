@@ -9,6 +9,7 @@ import {
     decodeSessionEventDeferred,
     decodeSessionEventRejection,
     decodeSessionLiveHistoryLoad,
+    decodeSessionLiveHistoryPageLoad,
     decodeSessionPrepareCommand,
     decodeSessionPromptCommand,
     decodeSessionStartedEvent,
@@ -26,6 +27,7 @@ import {
     encodeSessionCompletedEvent,
     encodeSessionEventEnvelope,
     encodeSessionLiveHistoryLoaded,
+    encodeSessionLiveHistoryPageLoaded,
     encodeSessionReadyEvent,
     encodeSessionStartedEvent,
     encodeWorkspaceEntriesEvent,
@@ -37,6 +39,7 @@ import {
     SESSION_EVENT_KIND,
     SESSION_EVENT_REJECTED_KIND,
     SESSION_LIVE_HISTORY_LOAD_KIND,
+    SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
     SESSION_PREPARE_KIND,
     SESSION_PROMPT_KIND,
     SESSION_STARTED_KIND,
@@ -562,13 +565,32 @@ async function processHappyPathCommand(
         daemon.send(
             encodeSessionLiveHistoryLoaded({
                 history: {
-                    status: "unavailable",
                     cause: {
                         code: "native_history_unsupported",
                         message: "The fake Agent daemon does not provide native message history.",
                     },
+                    status: "unavailable",
                 },
                 kind: "session.live-history.loaded",
+                requestId: command.requestId,
+                sessionId: command.sessionId,
+            }),
+        );
+        return;
+    }
+    if (kind === SESSION_LIVE_HISTORY_PAGE_LOAD_KIND) {
+        const command = decodeSessionLiveHistoryPageLoad(encoded);
+        daemon.send(
+            encodeSessionLiveHistoryPageLoaded({
+                kind: "session.live-history.page.loaded",
+                page: {
+                    cause: {
+                        code: "native_history_unsupported",
+                        message: "The fake Agent daemon does not provide native message history.",
+                    },
+                    nextCursor: null,
+                    status: "unavailable",
+                },
                 requestId: command.requestId,
                 sessionId: command.sessionId,
             }),
