@@ -16,13 +16,17 @@ export class ClaudeFixture implements AsyncDisposable {
         this.environment = environment;
     }
 
-    static async create(provider: FakeAnthropicProvider): Promise<ClaudeFixture> {
-        const [executable, adapter] = await Promise.all([
-            resolveTestExecutable("claude", "MOBIUS_TEST_CLAUDE_PATH"),
-            resolveTestExecutable("claude-agent-acp", "MOBIUS_TEST_CLAUDE_ACP_PATH"),
-        ]);
+    static async create(
+        provider: FakeAnthropicProvider,
+        options: { readonly requireAdapter?: boolean } = {},
+    ): Promise<ClaudeFixture> {
+        const executable = await resolveTestExecutable("claude", "MOBIUS_TEST_CLAUDE_PATH");
         const directory = await mkdtemp(join(tmpdir(), "mobius-agent-daemon-claude-"));
         const missing = join(directory, "missing-agent");
+        const adapter =
+            options.requireAdapter === false
+                ? missing
+                : await resolveTestExecutable("claude-agent-acp", "MOBIUS_TEST_CLAUDE_ACP_PATH");
         return new ClaudeFixture(directory, executable, {
             ANTHROPIC_API_KEY: FakeAnthropicProvider.apiKey,
             ANTHROPIC_BASE_URL: provider.origin,

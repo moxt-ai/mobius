@@ -157,3 +157,34 @@ select their protocol group; shared daemon, ACP, SDK, protocol, and server code
 select every Agent. Documentation and unrelated application code select none.
 Unknown files under this test suite and failures to read the diff select every
 Agent so the optimization cannot silently omit coverage.
+
+## Manual development
+
+Launch any supported real Agent CLI against the same local fake provider and
+isolated configuration used above. This needs the Agent executable, but no
+hosted LLM account or subscription:
+
+```sh
+pnpm dev:agent claude
+pnpm dev:agent codex
+pnpm dev:agent opencode
+```
+
+The command runs in the current workspace and remains interactive. The fake
+provider chooses a harmless tool when the Agent advertises one, waits for its
+result, and returns a recognizable response. Pass Agent-specific arguments
+after `--`, for example `pnpm dev:agent codex -- exec "say hello"`. Executable
+overrides use the same `MOBIUS_TEST_*_PATH` variables as the integration tests.
+
+To exercise the normal Mobius pairing and Web path, first start the local Relay
+with `pnpm dev:relay` and open `http://127.0.0.1:8787`. Add `--daemon` before the
+pairing arguments shown by the browser:
+
+```sh
+pnpm dev:agent claude --daemon -- pair --url http://127.0.0.1:8787 --pairing <id> --code <code>
+```
+
+This runs the production daemon and its normal Agent discovery and setup path.
+Only the hosted model is replaced. Pairing state is retained separately for each
+Agent under `.mobius/dev-agents/`; restart a saved connection by passing the
+printed `start --connection ...` arguments after `--daemon`.

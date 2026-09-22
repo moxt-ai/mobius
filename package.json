@@ -22,6 +22,7 @@
         "pretypecheck": "pnpm db:codegen",
         "pretest": "pnpm db:codegen",
         "dev": "pnpm dev:relay",
+        "dev:agent": "node scripts/dev-agent.ts",
         "dev:cli": "pnpm --filter @moxt-ai/mobius dev",
         "dev:web": "pnpm --filter @moxt-ai/mobius-web dev",
         "dev:cloudflare": "pnpm --filter @moxt-ai/mobius-relay-cloudflare-standalone dev",

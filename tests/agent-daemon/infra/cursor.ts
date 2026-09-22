@@ -9,6 +9,7 @@ function shellQuote(value: string): string {
 }
 
 export class CursorFixture implements AsyncDisposable {
+    readonly cliExecutable: string;
     readonly environment: Readonly<Record<string, string>>;
     readonly executable: string;
     readonly stderrPath: string;
@@ -16,11 +17,13 @@ export class CursorFixture implements AsyncDisposable {
 
     private constructor(
         directory: string,
+        cliExecutable: string,
         executable: string,
         stderrPath: string,
         environment: Readonly<Record<string, string>>,
     ) {
         this.#directory = directory;
+        this.cliExecutable = cliExecutable;
         this.executable = executable;
         this.stderrPath = stderrPath;
         this.environment = environment;
@@ -44,7 +47,7 @@ export class CursorFixture implements AsyncDisposable {
             { mode: 0o700 },
         );
         await chmod(executable, 0o700);
-        return new CursorFixture(directory, executable, stderrPath, {
+        return new CursorFixture(directory, cursor, executable, stderrPath, {
             AGENT_CLI_CREDENTIAL_STORE: "file",
             CURSOR_AGENT_CLI_AUTHLESS_MODE: "true",
             CURSOR_API_ENDPOINT: cursorProvider.origin,
