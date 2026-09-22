@@ -1,4 +1,4 @@
-export type { AgentExecutionConfiguration } from "@moxt-ai/mobius-protocol";
+export type { AgentExecutionConfiguration, TurnRequest } from "@moxt-ai/mobius-protocol";
 export {
     AGENT_DEFAULT_EXECUTION_SETTING,
     AGENT_PERMISSION_MODE_CONFIG_ID,

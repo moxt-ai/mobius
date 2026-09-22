@@ -10,8 +10,6 @@ import {
 import { Hono } from "hono";
 import { PlatformSessionLiveHistoryClient } from "../gateway/platform-session-live-history-client.ts";
 import { nonCloudRetentionSessionRelayDurableObjectMigrations } from "../generated/non-cloud-retention-session-relay-do-migrations.ts";
-import { NonCloudRetentionSessionScrubService } from "../service/non-cloud-retention-session-scrub-service.ts";
-import { NonCloudRetentionSessionStorage } from "../storage/non-cloud-retention-session-storage.ts";
 import {
     createPlatformDurableObjectContext,
     type PlatformDurableObjectEnvironment,
@@ -156,9 +154,7 @@ export class NonCloudRetentionSessionRelayDO {
                 this.#sessions.clear();
                 this.#operations.clear();
                 try {
-                    new NonCloudRetentionSessionScrubService(
-                        new NonCloudRetentionSessionStorage(this.#state.storage),
-                    ).scrubRetainedContent();
+                    this.createRelay(new DurableObjectSqlDatabase(this.#state.storage)).scrubNonRetainedContent();
                     await this.#state.storage.delete(HIBERNATION_DEADLINE_KEY);
                     await this.#state.storage.deleteAlarm();
                 } catch (cause) {
@@ -183,6 +179,15 @@ export class NonCloudRetentionSessionRelayDO {
         }
     };
 
+    private readonly createRelay = (database: DurableObjectSqlDatabase): SessionRelayImplementation =>
+        new SessionRelayImplementation(
+            createPlatformDurableObjectContext(this.#state, this.#environment, {
+                content: { kind: "sqlite" },
+                database,
+                initializeSessionSchema: initializeNonCloudRetentionSessionRelaySchema,
+            }),
+        );
+
     private readonly session = async (
         identity: SessionRequestIdentity,
         creating: boolean,
@@ -194,13 +199,7 @@ export class NonCloudRetentionSessionRelayDO {
         }
         const created = (async () => {
             const database = new DurableObjectSqlDatabase(this.#state.storage);
-            const relay = new SessionRelayImplementation(
-                createPlatformDurableObjectContext(this.#state, this.#environment, {
-                    content: { kind: "sqlite" },
-                    database,
-                    initializeSessionSchema: initializeNonCloudRetentionSessionRelaySchema,
-                }),
-            );
+            const relay = this.createRelay(database);
             const persisted =
                 database.query(
                     `SELECT 1 AS present

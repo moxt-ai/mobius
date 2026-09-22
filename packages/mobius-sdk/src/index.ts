@@ -36,6 +36,7 @@ export type {
     SessionPromptUsageUpdatedEvent,
     SessionReadyEvent,
     SessionUsageUpdatedEvent,
+    TurnRequest,
     WorkspaceEntriesEvent,
     WorkspaceEntry,
 } from "@moxt-ai/mobius-protocol";

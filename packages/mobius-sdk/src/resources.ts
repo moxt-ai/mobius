@@ -30,6 +30,7 @@ import {
     type SessionCapabilities,
     type SessionConfigurationSelection,
     sessionCapabilitiesSchema,
+    type TurnRequest,
 } from "@moxt-ai/mobius-protocol";
 
 import { MobiusProtocolError, MobiusValidationError } from "./errors.ts";
@@ -1416,10 +1417,9 @@ export class MobiusIndeterminateTurnState extends MobiusTurnState {
 export class MobiusTurn {
     readonly acceptedAt: string;
     readonly bindingId: string;
-    readonly content: string;
     readonly idempotencyKey: string;
+    readonly request: TurnRequest;
     readonly sessionId: string;
-    readonly sessionConfigurations: readonly SessionConfigurationSelection[];
     readonly state: MobiusTurnState;
     readonly turnId: string;
 
@@ -1432,15 +1432,23 @@ export class MobiusTurn {
         sessionConfigurations: readonly SessionConfigurationSelection[],
         state: MobiusTurnState,
         turnId: string,
+        request: TurnRequest = { content, kind: "prompt", sessionConfigurations },
     ) {
         this.acceptedAt = acceptedAt;
         this.bindingId = bindingId;
-        this.content = content;
         this.idempotencyKey = idempotencyKey;
+        this.request = request;
         this.sessionId = sessionId;
-        this.sessionConfigurations = sessionConfigurations;
         this.state = state;
         this.turnId = turnId;
+    }
+
+    get content(): string {
+        return this.request.kind === "prompt" ? this.request.content : "";
+    }
+
+    get sessionConfigurations(): readonly SessionConfigurationSelection[] {
+        return this.request.kind === "prompt" ? this.request.sessionConfigurations : [];
     }
 }
 
@@ -1478,12 +1486,13 @@ export function decodeMobiusTurn(value: unknown): MobiusTurn {
     return new MobiusTurn(
         turn.acceptedAt,
         turn.bindingId,
-        turn.request.content,
+        turn.request.kind === "prompt" ? turn.request.content : "",
         turn.idempotencyKey,
         turn.sessionId,
-        turn.request.sessionConfigurations,
+        turn.request.kind === "prompt" ? turn.request.sessionConfigurations : [],
         state,
         turn.turnId,
+        turn.request,
     );
 }
 

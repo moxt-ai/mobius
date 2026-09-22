@@ -1,6 +1,17 @@
 module.exports = {
     forbidden: [
         {
+            name: "hosts-do-not-access-session-persistence",
+            severity: "error",
+            from: {
+                path: "^packages/relay-cloudflare-(platform|standalone)/src/",
+                pathNot: "^packages/relay-cloudflare-(platform|standalone)/src/schema/",
+            },
+            to: {
+                path: "^packages/(relay-core/src/(schema/session-do/|storage/do/session-)|relay-cloudflare-platform/src/schema/non-cloud-retention-session-relay-do/)",
+            },
+        },
+        {
             /*
              * Lower layers must not reach up into the layers that compose them. The upper layers are named
              * directories, plus the composition entrypoints that live at a package root instead of in an

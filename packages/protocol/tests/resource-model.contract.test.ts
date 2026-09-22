@@ -8,9 +8,57 @@ import {
     decodeToolCallView,
     decodeTurn,
     transitionAttempt,
+    transitionTurn,
 } from "../src/index.ts";
 
 describe("Mobius resource model contract", () => {
+    it("Given a Turn request was not retained, When its public record is decoded, Then only terminal states without request content are accepted", () => {
+        const turn = {
+            acceptedAt: "2026-09-07T00:00:01.000Z",
+            bindingId: "binding-a",
+            idempotencyKey: "submit-a",
+            request: { kind: "not_retained" },
+            sessionId: "session-a",
+            turnId: "turn-a",
+        };
+        const terminalStates = [
+            {
+                completedAt: "2026-09-07T00:00:03.000Z",
+                kind: "succeeded",
+                result: { kind: "agent_result", stopReason: "end_turn" },
+            },
+            {
+                error: { code: "agent_failed", message: "The Agent failed", retryable: false },
+                failedAt: "2026-09-07T00:00:03.000Z",
+                kind: "failed",
+            },
+            { cancelledAt: "2026-09-07T00:00:03.000Z", kind: "cancelled" },
+        ];
+        for (const state of terminalStates) {
+            const decoded = decodeTurn({ ...turn, state });
+            expect(decoded.request).toEqual({ kind: "not_retained" });
+            expect(() => transitionTurn(decoded, { kind: "queued" })).toThrowError(
+                expect.objectContaining({ code: "invalid_resource_transition" }),
+            );
+            expect(() =>
+                decodeTurn({ ...turn, request: { kind: "not_retained", content: "leaked prompt" }, state }),
+            ).toThrow();
+            expect(() =>
+                decodeTurn({ ...turn, request: { kind: "not_retained", sessionConfigurations: [] }, state }),
+            ).toThrow();
+        }
+        for (const state of [
+            { kind: "queued" },
+            { kind: "running", startedAt: "2026-09-07T00:00:02.000Z" },
+            {
+                kind: "indeterminate",
+                reconciliation: { detectedAt: "2026-09-07T00:00:03.000Z", reason: "connection_lost" },
+            },
+        ]) {
+            expect(() => decodeTurn({ ...turn, state })).toThrow();
+        }
+    });
+
     it("Given stable Session, binding, Turn, and Attempt resources, When their public records are decoded, Then lifecycle-specific data is accepted without infrastructure identities", () => {
         expect(
             decodeSession({

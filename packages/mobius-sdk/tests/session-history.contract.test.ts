@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
     decodeMobiusMessagePage,
+    decodeMobiusTurn,
     MobiusActivitySummary,
     MobiusMessage,
     type MobiusMessagePage,
@@ -59,6 +60,45 @@ function message(commandId: string, activities: readonly unknown[]) {
 }
 
 describe("restored Session history", () => {
+    it("Given a terminal Turn request was not retained, When the SDK decodes its response, Then consumers can distinguish unavailable content from a retained empty prompt", () => {
+        const resource = {
+            acceptedAt: "2026-09-06T00:00:00.000Z",
+            bindingId: "binding-a",
+            idempotencyKey: "submit-a",
+            sessionId: "session-a",
+            state: { cancelledAt: "2026-09-06T00:00:01.000Z", kind: "cancelled" },
+            turnId: "turn-a",
+        };
+        const notRetained = decodeMobiusTurn({ ...resource, request: { kind: "not_retained" } });
+        expect(notRetained.request).toEqual({ kind: "not_retained" });
+        expect(notRetained.content).toBe("");
+        expect(notRetained.sessionConfigurations).toEqual([]);
+        expect(notRetained.state.kind).toBe("cancelled");
+
+        const retained = decodeMobiusTurn({ ...resource, request: { content: "", kind: "prompt" } });
+        expect(retained.request).toEqual({ content: "", kind: "prompt", sessionConfigurations: [] });
+        expect(retained.content).toBe("");
+
+        const configured = decodeMobiusTurn({
+            ...resource,
+            request: {
+                content: "Inspect the repository",
+                kind: "prompt",
+                sessionConfigurations: [
+                    { booleanValue: false, configId: "model", value: "model-a", valueType: "select" },
+                ],
+            },
+        });
+        expect(configured.request.kind).toBe("prompt");
+        expect(configured.content).toBe("Inspect the repository");
+        expect(configured.sessionConfigurations).toEqual([
+            { booleanValue: false, configId: "model", value: "model-a", valueType: "select" },
+        ]);
+        expect(() =>
+            decodeMobiusTurn({ ...resource, request: { kind: "not_retained" }, state: { kind: "queued" } }),
+        ).toThrow();
+    });
+
     it("Given a stored step no longer matches the current shape, When the SDK decodes its message page, Then the readable message and steps survive", () => {
         const page = decodeMobiusMessagePage({
             lastCommittedSeq: "4",

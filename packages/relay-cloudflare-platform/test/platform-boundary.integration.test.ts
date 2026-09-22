@@ -12,6 +12,7 @@ import {
     RUNTIME_DELIVERY_RECEIVED_KIND,
     SESSION_COMPLETED_KIND,
     SESSION_EVENT_ACK_KIND,
+    SESSION_FAILED_KIND,
     SESSION_INFO_UPDATED_KIND,
     SESSION_STARTED_KIND,
 } from "@moxt-ai/mobius-protocol";
@@ -527,41 +528,42 @@ describe.sequential("Platform Session-only boundary", () => {
                 kind: "runtime.liveness.ready",
             });
 
+            const turnRequest = {
+                additionalDirectoryIds: [],
+                artifactIds: [],
+                content: "private prompt must be scrubbed",
+                idempotencyKey: "private-reconnect-turn",
+                images: [
+                    {
+                        data: "cHJpdmF0ZSBpbWFnZSBtdXN0IGJlIHNjcnViYmVk",
+                        mimeType: "image/png",
+                        name: "private.png",
+                    },
+                ],
+                resources: [
+                    {
+                        mimeType: "text/plain",
+                        name: "private.txt",
+                        text: "private resource must be scrubbed",
+                        type: "embedded",
+                        uri: "file:///private.txt",
+                    },
+                ],
+                sessionConfigurations: [
+                    {
+                        booleanValue: false,
+                        configId: "model",
+                        value: "gpt-5.6-terra",
+                        valueType: "select",
+                    },
+                ],
+            };
             const acceptedTurn = await responseJson(
                 await worker.fetch(
                     new Request(
                         `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/turns`,
                         {
-                            body: JSON.stringify({
-                                additionalDirectoryIds: [],
-                                artifactIds: [],
-                                content: "private prompt must be scrubbed",
-                                idempotencyKey: "private-reconnect-turn",
-                                images: [
-                                    {
-                                        data: "cHJpdmF0ZSBpbWFnZSBtdXN0IGJlIHNjcnViYmVk",
-                                        mimeType: "image/png",
-                                        name: "private.png",
-                                    },
-                                ],
-                                resources: [
-                                    {
-                                        mimeType: "text/plain",
-                                        name: "private.txt",
-                                        text: "private resource must be scrubbed",
-                                        type: "embedded",
-                                        uri: "file:///private.txt",
-                                    },
-                                ],
-                                sessionConfigurations: [
-                                    {
-                                        booleanValue: false,
-                                        configId: "model",
-                                        value: "gpt-5.6-terra",
-                                        valueType: "select",
-                                    },
-                                ],
-                            }),
+                            body: JSON.stringify(turnRequest),
                             headers: credentialHeaders(appCredential),
                             method: "POST",
                         },
@@ -626,6 +628,128 @@ describe.sequential("Platform Session-only boundary", () => {
                 });
             }
 
+            const readResource = async (path: string) =>
+                responseJson(
+                    await worker.fetch(
+                        new Request(
+                            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/${path}`,
+                            { headers: credentialHeaders(appCredential) },
+                        ),
+                        environment,
+                    ),
+                    200,
+                );
+            const additionalTurns = new Map<
+                string,
+                { readonly turnId: string; readonly attemptId: string; readonly commandId: string }
+            >();
+            for (const outcome of ["failed", "running", "steering"]) {
+                const accepted = await responseJson(
+                    await worker.fetch(
+                        new Request(
+                            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/turns`,
+                            {
+                                body: JSON.stringify({
+                                    ...turnRequest,
+                                    content: `private ${outcome} prompt`,
+                                    idempotencyKey: `private-${outcome}-turn`,
+                                    ...(outcome === "steering"
+                                        ? {
+                                              disposition: "steer",
+                                              targetCommandId: additionalTurns.get("running")?.commandId,
+                                          }
+                                        : {}),
+                                }),
+                                headers: credentialHeaders(appCredential),
+                                method: "POST",
+                            },
+                        ),
+                        environment,
+                    ),
+                    202,
+                );
+                const delivered = decodeServiceToDaemonMessage(await messages.next());
+                if (delivered.kind !== RUNTIME_DELIVERY_KIND) {
+                    throw new Error("Expected the additional private Session prompt delivery");
+                }
+                socket.send(
+                    encodeDaemonToServiceMessage({
+                        deliveryId: delivered.deliveryId,
+                        kind: RUNTIME_DELIVERY_RECEIVED_KIND,
+                        sessionId,
+                    }),
+                );
+                expect(decodeServiceToDaemonMessage(await messages.next())).toMatchObject({
+                    deliveryId: delivered.deliveryId,
+                    kind: RUNTIME_DELIVERY_COMMITTED_KIND,
+                });
+                const deliveredCommand = decodeSessionPromptCommand(delivered.payload);
+                const additionalAttemptId = `private-${outcome}-attempt`;
+                const events = [
+                    {
+                        attemptId: additionalAttemptId,
+                        commandId: deliveredCommand.commandId,
+                        kind: SESSION_STARTED_KIND,
+                        sessionId,
+                    },
+                    ...(outcome === "failed"
+                        ? [
+                              {
+                                  code: "agent_failed",
+                                  commandId: deliveredCommand.commandId,
+                                  kind: SESSION_FAILED_KIND,
+                                  message: "private error must be scrubbed",
+                                  sessionId,
+                              },
+                          ]
+                        : outcome === "steering"
+                          ? [
+                                {
+                                    commandId: deliveredCommand.commandId,
+                                    kind: SESSION_COMPLETED_KIND,
+                                    sessionId,
+                                    stopReason: "end_turn",
+                                },
+                            ]
+                          : []),
+                ];
+                for (const [eventIndex, event] of events.entries()) {
+                    const eventId = `private-${outcome}-${eventIndex}`;
+                    socket.send(
+                        encodeSessionEventEnvelope({
+                            eventId,
+                            kind: "session.event",
+                            payload: JSON.stringify(event),
+                            sessionId,
+                            source: {
+                                attemptId: additionalAttemptId,
+                                kind: "attempt",
+                                sourceSeq: (eventIndex + 1).toString(),
+                            },
+                        }),
+                    );
+                    expect(decodeServiceToDaemonMessage(await messages.next())).toMatchObject({
+                        eventId,
+                        kind: SESSION_EVENT_ACK_KIND,
+                    });
+                }
+                const additionalTurnId = text(accepted, "turnId");
+                additionalTurns.set(outcome, {
+                    turnId: additionalTurnId,
+                    attemptId: additionalAttemptId,
+                    commandId: deliveredCommand.commandId,
+                });
+                expect(await readResource(`turns/${additionalTurnId}`)).toMatchObject({
+                    request: { content: `private ${outcome} prompt`, kind: "prompt" },
+                    state: { kind: outcome === "steering" ? "succeeded" : outcome },
+                });
+                if (outcome === "failed") {
+                    expect(await readResource(`attempts/${additionalAttemptId}`)).toMatchObject({
+                        state: { error: { message: "private error must be scrubbed" }, kind: "failed" },
+                    });
+                }
+            }
+
             socket.send(
                 encodeSessionEventEnvelope({
                     eventId: "private-reconnect-before-eviction",
@@ -651,43 +775,20 @@ describe.sequential("Platform Session-only boundary", () => {
                 if (instance.alarm === undefined) {
                     throw new Error("Expected the non-retained Session alarm handler");
                 }
-                state.storage.sql.exec(
-                    "UPDATE turns SET error_message = 'private error must be scrubbed' WHERE turn_id = ?",
-                    turnId,
-                );
                 await state.storage.deleteAlarm();
                 await instance.alarm();
-                expect(state.storage.sql.exec("SELECT title FROM sessions").toArray()).toEqual([
-                    { title: "private content must be scrubbed" },
-                ]);
-                vi.setSystemTime(new Date("2030-01-01T00:05:00.000Z"));
+            });
+            expect(await readResource(`turns/${turnId}`)).toMatchObject({
+                request: { content: turnRequest.content, kind: "prompt" },
+                state: { kind: "succeeded" },
+            });
+            vi.setSystemTime(new Date("2030-01-01T00:05:00.000Z"));
+            await runInDurableObject(sessionStub, async (instance, state) => {
+                if (instance.alarm === undefined) {
+                    throw new Error("Expected the non-retained Session alarm handler");
+                }
                 await state.storage.deleteAlarm();
                 await instance.alarm();
-                expect(state.storage.sql.exec("SELECT payload FROM session_events").toArray()).toEqual([]);
-                expect(state.storage.sql.exec("SELECT title, native_history_json FROM sessions").toArray()).toEqual([
-                    { native_history_json: null, title: "" },
-                ]);
-                const scrubbedRows = state.storage.sql
-                    .exec("SELECT command_json, error_message, response FROM turns")
-                    .toArray();
-                expect(scrubbedRows).toHaveLength(1);
-                expect(scrubbedRows[0]).toMatchObject({ error_message: null, response: "" });
-                const scrubbedCommandJson = JSON.stringify(scrubbedRows[0]?.["command_json"]);
-                expect(scrubbedCommandJson).toContain("[Content unavailable]");
-                expect(scrubbedCommandJson).toContain("gpt-5.6-terra");
-                expect(scrubbedCommandJson).not.toContain("private prompt");
-                expect(scrubbedCommandJson).not.toContain("private resource");
-                expect(scrubbedCommandJson).not.toContain("cHJpdmF0ZSBpbWFnZSBtdXN0IGJlIHNjcnViYmVk");
-                expect(JSON.stringify(scrubbedRows)).not.toContain("private error");
-                expect(
-                    state.storage.sql
-                        .exec("SELECT event_id, source_seq FROM session_event_receipts")
-                        .toArray()
-                        .toSorted((left, right) => String(left["event_id"]).localeCompare(String(right["event_id"]))),
-                ).toEqual([
-                    { event_id: "private-reconnect-before-eviction", source_seq: "1" },
-                    { event_id: "private-reconnect-session.completed", source_seq: "3" },
-                ]);
             });
             await evictDurableObject(sessionStub);
 
@@ -700,18 +801,7 @@ describe.sequential("Platform Session-only boundary", () => {
             );
             const scrubbedTurn = await responseJson(scrubbedTurnResponse, 200);
             expect(scrubbedTurn).toMatchObject({
-                request: {
-                    content: "[Content unavailable]",
-                    kind: "prompt",
-                    sessionConfigurations: [
-                        {
-                            booleanValue: false,
-                            configId: "model",
-                            value: "gpt-5.6-terra",
-                            valueType: "select",
-                        },
-                    ],
-                },
+                request: { kind: "not_retained" },
                 state: { kind: "succeeded" },
                 turnId,
             });
@@ -719,6 +809,128 @@ describe.sequential("Platform Session-only boundary", () => {
             expect(JSON.stringify(scrubbedTurn)).not.toContain("private resource");
             expect(JSON.stringify(scrubbedTurn)).not.toContain("private response");
             expect(JSON.stringify(scrubbedTurn)).not.toContain("cHJpdmF0ZSBpbWFnZSBtdXN0IGJlIHNjcnViYmVk");
+
+            expect(scrubbedTurn["request"]).toEqual({ kind: "not_retained" });
+            for (const [outcome, resource] of additionalTurns) {
+                const turn = await readResource(`turns/${resource.turnId}`);
+                expect(turn).toMatchObject({
+                    state: { kind: outcome === "steering" ? "succeeded" : outcome },
+                    turnId: resource.turnId,
+                });
+                if (outcome === "failed") {
+                    expect(turn["request"]).toEqual({ kind: "not_retained" });
+                    const attempt = await readResource(`attempts/${resource.attemptId}`);
+                    expect(attempt).toMatchObject({
+                        attemptId: resource.attemptId,
+                        state: { error: { code: "agent_failed" }, kind: "failed" },
+                    });
+                    expect(JSON.stringify({ turn, attempt })).not.toContain("private error");
+                    const retriedFailure = await responseJson(
+                        await worker.fetch(
+                            new Request(
+                                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/turns`,
+                                {
+                                    body: JSON.stringify({
+                                        ...turnRequest,
+                                        content: "private failed prompt",
+                                        idempotencyKey: "private-failed-turn",
+                                    }),
+                                    headers: credentialHeaders(appCredential),
+                                    method: "POST",
+                                },
+                            ),
+                            environment,
+                        ),
+                        202,
+                    );
+                    expect(retriedFailure).toEqual(turn);
+                } else if (outcome === "steering") {
+                    expect(turn["request"]).toEqual({ kind: "not_retained" });
+                } else {
+                    expect(turn["request"]).toMatchObject({ content: "private running prompt", kind: "prompt" });
+                }
+            }
+            const retriedTurn = await responseJson(
+                await worker.fetch(
+                    new Request(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/turns`,
+                        {
+                            body: JSON.stringify(turnRequest),
+                            headers: credentialHeaders(appCredential),
+                            method: "POST",
+                        },
+                    ),
+                    environment,
+                ),
+                202,
+            );
+            expect(retriedTurn).toEqual(scrubbedTurn);
+            vi.setSystemTime(new Date("2030-01-01T00:10:00.000Z"));
+            await runInDurableObject(sessionStub, async (instance, state) => {
+                if (instance.alarm === undefined) {
+                    throw new Error("Expected the non-retained Session alarm handler");
+                }
+                await state.storage.deleteAlarm();
+                await instance.alarm();
+            });
+            expect(await readResource(`turns/${turnId}`)).toEqual(scrubbedTurn);
+
+            for (const [outcome, resource] of additionalTurns) {
+                const turn = await readResource(`turns/${resource.turnId}`);
+                expect(turn).toMatchObject({
+                    state: { kind: outcome === "steering" ? "succeeded" : outcome },
+                    turnId: resource.turnId,
+                });
+                expect(turn["request"]).toMatchObject(
+                    outcome !== "running"
+                        ? { kind: "not_retained" }
+                        : { content: "private running prompt", kind: "prompt" },
+                );
+            }
+            const queuedAfterScrub = await responseJson(
+                await worker.fetch(
+                    new Request(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/turns`,
+                        {
+                            body: JSON.stringify({
+                                ...turnRequest,
+                                content: "Queue after a completed steering Turn was scrubbed",
+                                disposition: "queue",
+                                idempotencyKey: "private-queue-after-scrub",
+                                targetCommandId: additionalTurns.get("running")?.commandId,
+                            }),
+                            headers: credentialHeaders(appCredential),
+                            method: "POST",
+                        },
+                    ),
+                    environment,
+                ),
+                202,
+            );
+            expect(queuedAfterScrub).toMatchObject({ state: { kind: "queued" } });
+            // Recreate the invalid command JSON written by the former retention cleanup.
+            // This persistence fixture belongs to upgrade recovery; all Turn creation used the public API.
+            await runInDurableObject(sessionStub, async (_instance, state) => {
+                state.storage.sql.exec(
+                    "UPDATE turns SET command_json = ? WHERE turn_id = ?",
+                    JSON.stringify({ ...command, prompt: "", images: [], resources: [] }),
+                    turnId,
+                );
+            });
+            await evictDurableObject(sessionStub);
+            expect(await readResource(`turns/${turnId}`)).toEqual(scrubbedTurn);
+            expect(
+                await responseJson(
+                    await worker.fetch(
+                        new Request(
+                            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/export`,
+                            { headers: credentialHeaders(appCredential) },
+                        ),
+                        environment,
+                    ),
+                    409,
+                ),
+            ).toMatchObject({ error: { code: "session_history_not_retained" } });
 
             socket.send(
                 encodeSessionEventEnvelope({

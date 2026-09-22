@@ -82,6 +82,18 @@ completed sessions are not disconnected again when recovery resumes.
 monotonic event sequencing, paginated query projections, retention, deletion,
 and recoverable archive work.
 
+Session content cleanup also belongs to core. The non-retained Platform host owns
+the idle deadline and invokes `SessionRelay.scrubNonRetainedContent`; it does not
+interpret Session tables or commands. Static dependency checks prohibit hosting
+runtime code from importing Session schemas and storage directly. Schema-only
+declarations remain available to generate each hosting target's migrations.
+Cleanup replaces terminal requests with explicit content tombstones and removes
+their error text, while retaining identities, receipts, outcomes, and queue/steer
+target metadata. Active and indeterminate requests remain executable. Public Turn
+reads return `request: { kind: "not_retained" }`; exports needing deleted commands
+fail with `session_history_not_retained`. Loading a Session repairs the empty
+terminal prompts written by older cleanup code before serving requests.
+
 `packages/relay-cloudflare-standalone` is the standalone composition root, using
 the Cloudflare implementations in `packages/relay-core`. Core pairing storage uses the
 D1 SQL executor for the daemon token hash, machine metadata, and locally

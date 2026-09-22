@@ -187,9 +187,7 @@ const reconciliationSchema = z
 
 export type Reconciliation = z.infer<typeof reconciliationSchema>;
 
-const turnStateSchema = z.discriminatedUnion("kind", [
-    z.strictObject({ kind: z.literal("queued") }).readonly(),
-    z.strictObject({ kind: z.literal("running"), startedAt: timestampSchema }).readonly(),
+const terminalTurnStateSchema = z.discriminatedUnion("kind", [
     z
         .strictObject({
             completedAt: timestampSchema,
@@ -210,6 +208,12 @@ const turnStateSchema = z.discriminatedUnion("kind", [
             kind: z.literal("cancelled"),
         })
         .readonly(),
+]);
+
+const turnStateSchema = z.discriminatedUnion("kind", [
+    z.strictObject({ kind: z.literal("queued") }).readonly(),
+    z.strictObject({ kind: z.literal("running"), startedAt: timestampSchema }).readonly(),
+    ...terminalTurnStateSchema.options,
     z
         .strictObject({
             kind: z.literal("indeterminate"),
@@ -220,29 +224,29 @@ const turnStateSchema = z.discriminatedUnion("kind", [
 
 export type TurnState = z.infer<typeof turnStateSchema>;
 
-const turnRequestSchema = z.discriminatedUnion("kind", [
-    z
-        .strictObject({
-            content: z.string().max(100_000),
-            kind: z.literal("prompt"),
-            sessionConfigurations: sessionConfigurationSelectionsSchema.default([]),
-        })
-        .readonly(),
-]);
+const promptTurnRequestSchema = z
+    .strictObject({
+        content: z.string().max(100_000),
+        kind: z.literal("prompt"),
+        sessionConfigurations: sessionConfigurationSelectionsSchema.default([]),
+    })
+    .readonly();
+const notRetainedTurnRequestSchema = z.strictObject({ kind: z.literal("not_retained") }).readonly();
+const turnRequestSchema = z.discriminatedUnion("kind", [promptTurnRequestSchema, notRetainedTurnRequestSchema]);
 
 export type TurnRequest = z.infer<typeof turnRequestSchema>;
 
-const turnSchema = z
-    .strictObject({
-        acceptedAt: timestampSchema,
-        bindingId: identifierSchema,
-        idempotencyKey: identifierSchema,
-        request: turnRequestSchema,
-        sessionId: identifierSchema,
-        state: turnStateSchema,
-        turnId: identifierSchema,
-    })
-    .readonly();
+const turnIdentitySchema = z.strictObject({
+    acceptedAt: timestampSchema,
+    bindingId: identifierSchema,
+    idempotencyKey: identifierSchema,
+    sessionId: identifierSchema,
+    turnId: identifierSchema,
+});
+const turnSchema = z.union([
+    turnIdentitySchema.extend({ request: promptTurnRequestSchema, state: turnStateSchema }).readonly(),
+    turnIdentitySchema.extend({ request: notRetainedTurnRequestSchema, state: terminalTurnStateSchema }).readonly(),
+]);
 
 export type Turn = z.infer<typeof turnSchema>;
 
@@ -792,10 +796,10 @@ export function transitionSession(session: Session, lifecycle: SessionLifecycle)
 }
 
 export function transitionTurn(turn: Turn, state: TurnState): Turn {
-    if (!canTransitionTurn(turn.state.kind, state.kind)) {
+    if (turn.request.kind === "not_retained" || !canTransitionTurn(turn.state.kind, state.kind)) {
         throw new ResourceTransitionError("Turn", turn.state.kind, state.kind);
     }
-    return { ...turn, state };
+    return { ...turn, request: turn.request, state };
 }
 
 export function transitionAttempt(attempt: Attempt, state: AttemptState): Attempt {

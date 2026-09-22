@@ -226,6 +226,9 @@ describe("session prompt protocol", () => {
         };
 
         expect(decodeSessionPromptCommand(encodeSessionPromptCommand(command))).toEqual(command);
+        expect(() =>
+            decodeSessionPromptCommand(JSON.stringify({ ...command, prompt: "", images: [], resources: [] })),
+        ).toThrowError(ProtocolMessageError);
     });
 
     it("Given a persisted prompt predates Turn configuration snapshots, When a current daemon decodes it, Then the legacy command remains readable without inventing a snapshot", () => {

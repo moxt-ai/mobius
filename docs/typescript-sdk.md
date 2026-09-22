@@ -279,10 +279,19 @@ are recorded as ignored rather than failing the Turn, so a snapshot collected
 before a Session existed stays usable. A queued Turn keeps its own snapshot;
 steering may only carry the active Turn's already-applied snapshot and cannot
 reconfigure a running Agent, so the daemon checks the running Session against the
-snapshot without applying anything. `MobiusTurn.sessionConfigurations` exposes
-the accepted snapshot on submit and read responses.
+snapshot without applying anything. `MobiusTurn.request` describes whether the
+accepted input remains available. When `request.kind === "prompt"`, its `content`
+and `sessionConfigurations` contain the accepted request. For a terminal Turn
+whose cloud content was not retained, `request` is `{ kind: "not_retained" }`.
+Queued, running, and indeterminate Turns always keep their prompt request.
 
-Omitting the field retains the legacy execution behavior for rolling upgrades
+The compatibility getters `MobiusTurn.content` and
+`MobiusTurn.sessionConfigurations` return an empty string and an empty array
+when the request was not retained. Check `request.kind` to distinguish that
+state from an actually empty retained prompt; do not infer availability from
+the getter values. Submit and read responses expose the same request contract.
+
+Omitting `sessionConfigurations` retains the legacy execution behavior for rolling upgrades
 and previously persisted commands. New integrations that depend on deterministic
 configuration should require the advertised capability and always send the
 complete snapshot, including boolean options and fixed `agent_default` choices.

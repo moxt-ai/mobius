@@ -7,11 +7,16 @@ export class SessionRelay {
 
     constructor(dependencies: DurableObjectContext) {
         this.#dependencies = dependencies;
+        dependencies.services.sessionRetention.repairLegacyNonRetainedTurns();
     }
 
     async fetch(request: Request): Promise<Response> {
         return await this.#dependencies.applications.session.fetch(request);
     }
+
+    readonly scrubNonRetainedContent = (): void => {
+        this.#dependencies.services.sessionRetention.scrubNonRetainedContent();
+    };
 
     async alarm(): Promise<void> {
         const controller = new AbortController();

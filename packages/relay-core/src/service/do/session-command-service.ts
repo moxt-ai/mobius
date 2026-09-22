@@ -55,6 +55,7 @@ import {
     validateTimestamp,
 } from "./session-records.ts";
 import type { SessionStateService } from "./session-state-service.ts";
+import { storedTurnContent } from "./session-turn-content.ts";
 
 export class SessionCommandService {
     readonly #archive: SessionArchiveService;
@@ -443,14 +444,11 @@ export class SessionCommandService {
                 "The Runtime does not own the Turn's immutable binding",
             );
         }
-        let command: SessionPromptCommand;
-        try {
-            command = decodeSessionPromptCommand(rowString(turnRow, "command_json"));
-        } catch (cause) {
-            throw new SessionRuntimeError("session_storage_unavailable", "The stored Turn request is invalid", {
-                cause,
-            });
+        const content = storedTurnContent(turnRow);
+        if (content.kind === "not_retained") {
+            throw new SessionRuntimeError("session_conflict", "Only a queued follow-up can be steered");
         }
+        const command = content.command;
         if (command.disposition === SessionPromptDisposition.Steer) {
             return turnFromRow(turnRow);
         }

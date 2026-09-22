@@ -4,8 +4,6 @@ import {
     type CommittedSessionEvent,
     decodeCommandReceipt,
     decodeRecordedSessionEvent,
-    decodeSessionPromptCommand,
-    type SessionPromptCommand,
 } from "@moxt-ai/mobius-protocol";
 import {
     type CreateSessionBindingRequest,
@@ -36,6 +34,7 @@ import {
     validateTimestamp,
 } from "./session-records.ts";
 import type { SessionStateService } from "./session-state-service.ts";
+import { storedTurnContent } from "./session-turn-content.ts";
 
 export class SessionTransferService {
     readonly #archive: SessionArchiveService;
@@ -103,16 +102,15 @@ export class SessionTransferService {
             if (exportBytes > MAX_EXPORT_BYTE_LENGTH) {
                 throw new SessionRuntimeError("content_too_large", "The session export exceeds the configured limit");
             }
-            let command: SessionPromptCommand;
-            try {
-                command = decodeSessionPromptCommand(encodedCommand);
-            } catch (cause) {
-                throw new SessionRuntimeError("session_storage_unavailable", "A stored session command is invalid", {
-                    cause,
-                });
+            const content = storedTurnContent(row);
+            if (content.kind === "not_retained") {
+                throw new SessionRuntimeError(
+                    "session_history_not_retained",
+                    "This Session no longer retains the content required for export",
+                );
             }
             return {
-                command,
+                command: content.command,
                 createdAt: new Date(rowNumber(row, "created_at")).toISOString(),
                 response,
                 state: attemptSummaryFromRow(row) ?? { kind: "queued" },

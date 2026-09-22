@@ -8,7 +8,6 @@ import {
     decodeInteractionResponse,
     decodeRecordedAgentContentValue,
     decodeSessionBinding,
-    decodeSessionPromptCommand,
     encodeCommittedSessionEvent,
     type Interaction,
     type PendingWork,
@@ -16,7 +15,6 @@ import {
     SESSION_EVENT_COMMITTED_KIND,
     type SessionBinding,
     type SessionEventEnvelope,
-    type SessionPromptCommand,
     type Turn,
 } from "@moxt-ai/mobius-protocol";
 import {
@@ -52,6 +50,7 @@ export const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 export const DECIMAL_SEQUENCE_PATTERN = /^(?:0|[1-9][0-9]*)$/;
 
 import { encodeCursor } from "./session-cursors.ts";
+import { storedTurnContent } from "./session-turn-content.ts";
 
 export interface PreparedEvent {
     readonly activityDetail: {
@@ -286,12 +285,7 @@ function eventSourceFromRow(row: CommittedEventRecord): SessionEventEnvelope["so
 }
 
 export function turnFromRow(row: TurnRecord): Turn {
-    let command: SessionPromptCommand;
-    try {
-        command = decodeSessionPromptCommand(rowString(row, "command_json"));
-    } catch (cause) {
-        throw new SessionRuntimeError("session_storage_unavailable", "The stored Turn request is invalid", { cause });
-    }
+    const content = storedTurnContent(row);
     const state = rowString(row, "state");
     const updatedAt = new Date(rowNumber(row, "updated_at")).toISOString();
     let turnState: Turn["state"];
@@ -347,18 +341,27 @@ export function turnFromRow(row: TurnRecord): Turn {
     } else {
         throw new SessionRuntimeError("session_storage_unavailable", "The stored Turn state is invalid");
     }
-    return {
+    const identity = {
         acceptedAt: new Date(rowNumber(row, "created_at")).toISOString(),
         bindingId: rowString(row, "binding_id"),
         idempotencyKey: rowString(row, "idempotency_key"),
-        request: {
-            content: command.prompt,
-            kind: "prompt",
-            sessionConfigurations: command.sessionConfigurations ?? [],
-        },
-        sessionId: command.sessionId,
-        state: turnState,
+        sessionId: row.session_id,
         turnId: rowString(row, "turn_id"),
+    };
+    if (content.kind === "not_retained") {
+        if (turnState.kind !== "succeeded" && turnState.kind !== "failed" && turnState.kind !== "cancelled") {
+            throw new SessionRuntimeError("session_storage_unavailable", "The Turn content state is invalid");
+        }
+        return { ...identity, request: { kind: "not_retained" }, state: turnState };
+    }
+    return {
+        ...identity,
+        request: {
+            content: content.command.prompt,
+            kind: "prompt",
+            sessionConfigurations: content.command.sessionConfigurations ?? [],
+        },
+        state: turnState,
     };
 }
 

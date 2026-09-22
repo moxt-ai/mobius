@@ -7,11 +7,9 @@ import {
     decodeNativeSessionHistory,
     decodeRecordedSessionEvent,
     decodeSessionConfigUpdatedEvent,
-    decodeSessionPromptCommand,
     type Interaction,
     type NativeMessagePage,
     type NativeSessionHistory,
-    type SessionPromptCommand,
     type Turn,
 } from "@moxt-ai/mobius-protocol";
 import {
@@ -46,6 +44,7 @@ import {
     validateLimit,
 } from "./session-records.ts";
 import type { SessionStateService } from "./session-state-service.ts";
+import { storedTurnContent } from "./session-turn-content.ts";
 
 export class SessionQueryService {
     readonly #archive: SessionArchiveService;
@@ -456,7 +455,10 @@ export class SessionQueryService {
         sessionId: string,
         rows: readonly TurnRecord[],
     ): readonly SessionMessage[] => {
-        const commands = rows.map((row) => ({ command: decodeCommand(row), row }));
+        const commands = rows.flatMap((row) => {
+            const content = storedTurnContent(row);
+            return content.kind === "retained" ? [{ command: content.command, row }] : [];
+        });
         const commandIds = commands.map(({ command }) => command.commandId);
         const key = { commandIds, scopeKey: scopeKey(scope), sessionId };
 
@@ -527,14 +529,6 @@ export class SessionQueryService {
             };
         });
     };
-}
-
-function decodeCommand(row: TurnRecord): SessionPromptCommand {
-    try {
-        return decodeSessionPromptCommand(rowString(row, "command_json"));
-    } catch (cause) {
-        throw new SessionRuntimeError("session_storage_unavailable", "The stored command is invalid", { cause });
-    }
 }
 
 function groupByCommandId<TRow extends { readonly command_id: string }>(rows: readonly TRow[]): Map<string, TRow[]> {

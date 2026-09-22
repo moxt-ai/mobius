@@ -28,6 +28,7 @@ import { SessionInteractionService } from "../service/do/session-interaction-ser
 import { SessionLifecycleService } from "../service/do/session-lifecycle-service.ts";
 import { SessionQueryService } from "../service/do/session-query-service.ts";
 import { SessionRecoveryService } from "../service/do/session-recovery-service.ts";
+import { SessionRetentionService } from "../service/do/session-retention-service.ts";
 import { SessionStateService } from "../service/do/session-state-service.ts";
 import { SessionTransferService } from "../service/do/session-transfer-service.ts";
 import { SqliteSessionRuntime } from "../service/do/sqlite-session-runtime.ts";
@@ -41,6 +42,7 @@ import { SessionInteractionsStorage } from "../storage/do/session-interactions-s
 import { SessionLifecycleStorage } from "../storage/do/session-lifecycle-storage.ts";
 import { SessionQueriesStorage } from "../storage/do/session-queries-storage.ts";
 import { SessionRecoveryStorage } from "../storage/do/session-recovery-storage.ts";
+import { SessionRetentionStorage } from "../storage/do/session-retention-storage.ts";
 import { SessionStateStorage } from "../storage/do/session-state-storage.ts";
 import { SessionTransferStorage } from "../storage/do/session-transfer-storage.ts";
 import { SqliteContentStore } from "../storage/do/sqlite-content-store.ts";
@@ -139,7 +141,8 @@ function createSessionRelayDependencies(cx: {
     const runtime = createSessionRuntime(cx);
     const recovery = new SessionRecoveryService({ ...cx, runtime });
     const operations = new DoService({ services: { runtime, recovery } });
-    return { application: createDoRoutes(runtime, operations), services: { recovery, operations } };
+    const retention = new SessionRetentionService(new SessionRetentionStorage(cx.database));
+    return { application: createDoRoutes(runtime, operations), services: { recovery, operations, retention } };
 }
 
 function createRuntimeRelayDependencies(cx: {
@@ -259,6 +262,7 @@ export function createDurableObjectDependencies(cx: {
         services: {
             ...runtime.services,
             sessionRecovery: session.services.recovery,
+            sessionRetention: session.services.retention,
             operations: session.services.operations,
         },
         applications: {
