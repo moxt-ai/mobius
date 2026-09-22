@@ -139,6 +139,9 @@ input.on("line", (line) => {
         return;
     }
     if (method === "model/list") {
+        if (process.env["MOBIUS_FAKE_CODEX_EXIT_DURING_MODEL_LIST"] === "1") {
+            process.exit(73);
+        }
         reply(id, { data: MODELS, nextCursor: null });
         return;
     }
@@ -208,9 +211,32 @@ input.on("line", (line) => {
                 prompted: true,
             });
         }
+        const promptInput = readParam("input");
+        const promptText = Array.isArray(promptInput)
+            ? promptInput
+                  .flatMap((part: unknown) => {
+                      if (typeof part !== "object" || part === null || Reflect.get(part, "type") !== "text") {
+                          return [];
+                      }
+                      const text = Reflect.get(part, "text");
+                      return typeof text === "string" ? [text] : [];
+                  })
+                  .join("\n")
+            : "";
+        if (promptText === "fixture: exit before turn acknowledgement") {
+            process.exit(71);
+        }
         reply(id, {
             turn: { id: turnId, items: [], itemsView: "notLoaded", status: "inProgress" },
         });
+        if (promptText === "fixture: exit after turn acknowledgement") {
+            process.stdout.write("", () => process.exit(72));
+            return;
+        }
+        if (promptText === "fixture: invalid frame after turn acknowledgement") {
+            process.stdout.write("{invalid app-server frame\n");
+            return;
+        }
         notify("turn/started", { threadId, turn: { id: turnId, items: [], status: "inProgress" } });
         notify("item/started", {
             item: {
@@ -223,6 +249,9 @@ input.on("line", (line) => {
             threadId,
             turnId,
         });
+        if (promptText === "fixture: wait for cancellation") {
+            return;
+        }
         notify("item/completed", {
             item: {
                 aggregatedOutput: "/workspace\n",

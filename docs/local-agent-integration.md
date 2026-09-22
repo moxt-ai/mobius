@@ -55,7 +55,12 @@ The in-process Agent itself lives under `packages/cli/src/acp/<vendor>/` and
 implements `InProcessAcpEndpoint`:
 
 ```ts
+type AcpEndpointTermination =
+    | { readonly kind: "closed" }
+    | { readonly kind: "failed"; readonly error: AcpExecutionError };
+
 interface InProcessAcpEndpoint {
+    readonly terminated: Promise<AcpEndpointTermination>;
     readonly app: () => AgentApp;
     readonly initialize: (signal: AbortSignal) => Promise<void>;
     readonly close: () => Promise<void>;
@@ -68,6 +73,15 @@ every resource it starts and releases them in `close()` on success, failure, and
 cancellation alike, including the vendor process tree. Because the endpoint is
 reached only through the specification's `createEndpoint` factory, the generic
 discovery, probe, and session modules never name a vendor.
+
+`terminated` resolves exactly once and never rejects. Backend exit, loss of its
+response stream, protocol failure, and handler failure report `failed`; explicit
+close reports `closed`. The first terminal outcome remains authoritative during
+cleanup. Both readiness probes and Session operations observe this outcome,
+including while a Turn waits after its initial acknowledgement. The endpoint
+must also settle its own pending RPCs and Turn completions, preserve cancellation,
+and make repeated `close()` calls share the same process-tree cleanup. A healthy
+long-running Turn has no arbitrary total execution deadline.
 
 Managed ACP adapter metadata and installation stay under
 `packages/cli/src/agent-installation/`. After a paired daemon's first Relay

@@ -22,10 +22,12 @@ import {
     decodeSessionLiveHistoryPageLoaded,
     encodeAgentCatalogRefreshCommand,
     encodeAgentSettingsDiscoverCommand,
+    encodeSessionCancelCommand,
     encodeSessionEventAcknowledgement,
     encodeSessionLiveHistoryPageLoad,
     encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
+    SESSION_CANCEL_KIND,
     SESSION_COMPLETED_KIND,
     SESSION_EVENT_ACK_KIND,
     SESSION_EVENT_KIND,
@@ -155,11 +157,13 @@ class OpenCodeProviderSettlementTimer implements DaemonTimer {
 class TerminalSessionResult {
     readonly code: string;
     readonly kind: string;
+    readonly stopReason: string;
     readonly text: string;
 
-    constructor(kind: string, text: string, code: string) {
+    constructor(kind: string, text: string, code: string, stopReason: string) {
         this.code = code;
         this.kind = kind;
+        this.stopReason = stopReason;
         this.text = text;
     }
 }
@@ -198,7 +202,12 @@ async function readTerminalSessionResult(
             text += readStringField(payload, "text");
         }
         if (kind === SESSION_COMPLETED_KIND || kind === SESSION_FAILED_KIND) {
-            return new TerminalSessionResult(kind, text, readStringField(payload, "code"));
+            return new TerminalSessionResult(
+                kind,
+                text,
+                readStringField(payload, "code"),
+                readStringField(payload, "stopReason"),
+            );
         }
     }
 }
@@ -468,19 +477,25 @@ describe("daemon session configuration boundary", () => {
         }
     });
 
-    it("Given Codex supports configurable runs, When settings are discovered and selected, Then Mobius offers and applies Build or Plan, model, reasoning effort, and fast mode", async () => {
+    it("Given Codex supports configurable runs, When settings change and its backend fails or is cancelled, Then settings apply and the same Session recovers", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-codex-settings-"));
         const workspace = join(stateDirectory, "workspace");
         const executableDirectory = join(stateDirectory, "external");
+        const nativeStateDirectory = join(stateDirectory, "native");
         const auditDatabasePath = join(stateDirectory, "audit", "channel_alpha.sqlite");
         const codexPath = join(executableDirectory, "codex");
-        await Promise.all([mkdir(workspace, { recursive: true }), mkdir(executableDirectory, { recursive: true })]);
+        await Promise.all([
+            mkdir(workspace, { recursive: true }),
+            mkdir(executableDirectory, { recursive: true }),
+            mkdir(nativeStateDirectory),
+        ]);
         await writeFile(
             codexPath,
             executableSource(`
 if (process.argv.includes("--version")) {
   process.stdout.write("codex 0.153.0\\n");
 } else if (process.argv.includes("app-server")) {
+  process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = ${JSON.stringify(nativeStateDirectory)};
   await import(${JSON.stringify(turnAppServerUrl)});
 } else {
   process.exit(80);
@@ -692,6 +707,83 @@ if (process.argv.includes("--version")) {
             // No mode was selected in this session, so it inherits the host's own policy: the turn
             // omits approval and sandbox rather than overriding what the host configured.
             expect(fastResult.text).toBe("Scripted Codex answer (scripted-small/medium/undefined/priority/default)");
+
+            for (const fault of [
+                {
+                    name: "exit-after-ack",
+                    prompt: "fixture: exit after turn acknowledgement",
+                    code: "codex_app_server_exited",
+                },
+                {
+                    name: "exit-before-ack",
+                    prompt: "fixture: exit before turn acknowledgement",
+                    code: "codex_app_server_exited",
+                },
+                {
+                    name: "invalid-frame",
+                    prompt: "fixture: invalid frame after turn acknowledgement",
+                    code: "codex_app_server_protocol_error",
+                },
+            ]) {
+                const interruptedPrompt: SessionPromptCommand = {
+                    ...inheritedPrompt,
+                    commandId: `codex-${fault.name}`,
+                    prompt: fault.prompt,
+                };
+                sendText(await socketReady.promise, encodeSessionPromptCommand(interruptedPrompt));
+                const failure = await readTerminalSessionResult(
+                    frames,
+                    interruptedPrompt.sessionId,
+                    interruptedPrompt.commandId,
+                );
+                expect(failure).toMatchObject({ kind: SESSION_FAILED_KIND, code: fault.code });
+                const recoveredPrompt: SessionPromptCommand = {
+                    ...inheritedPrompt,
+                    commandId: `codex-recovered-${fault.name}`,
+                    prompt: "continue the same conversation",
+                };
+                sendText(await socketReady.promise, encodeSessionPromptCommand(recoveredPrompt));
+                const recovered = await readTerminalSessionResult(
+                    frames,
+                    recoveredPrompt.sessionId,
+                    recoveredPrompt.commandId,
+                );
+                expect(recovered.kind).toBe(SESSION_COMPLETED_KIND);
+                expect(recovered.text).toContain("Scripted Codex answer");
+            }
+
+            const heldPrompt: SessionPromptCommand = {
+                ...inheritedPrompt,
+                commandId: "codex-cancel-running-turn",
+                prompt: "fixture: wait for cancellation",
+            };
+            sendText(await socketReady.promise, encodeSessionPromptCommand(heldPrompt));
+            await readCommandActivity(frames, heldPrompt.sessionId, heldPrompt.commandId);
+            sendText(
+                await socketReady.promise,
+                encodeSessionCancelCommand({
+                    kind: SESSION_CANCEL_KIND,
+                    sessionId: heldPrompt.sessionId,
+                    commandId: heldPrompt.commandId,
+                }),
+            );
+            expect(await readTerminalSessionResult(frames, heldPrompt.sessionId, heldPrompt.commandId)).toMatchObject({
+                kind: SESSION_COMPLETED_KIND,
+                stopReason: "cancelled",
+            });
+            const afterCancellation: SessionPromptCommand = {
+                ...inheritedPrompt,
+                commandId: "codex-after-cancellation",
+                prompt: "continue after cancellation",
+            };
+            sendText(await socketReady.promise, encodeSessionPromptCommand(afterCancellation));
+            const resumed = await readTerminalSessionResult(
+                frames,
+                afterCancellation.sessionId,
+                afterCancellation.commandId,
+            );
+            expect(resumed.kind).toBe(SESSION_COMPLETED_KIND);
+            expect(resumed.text).toContain("Scripted Codex answer");
         } finally {
             cancellation.abort();
             for (const socket of relaySockets) {

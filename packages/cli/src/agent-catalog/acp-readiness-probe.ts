@@ -16,6 +16,7 @@ import {
 import type { SessionCapabilities } from "@moxt-ai/mobius-protocol";
 
 import { type AcpClientHandler, createAcpClient } from "../acp/create-client.ts";
+import { acpEndpointTerminationError } from "../acp/in-process/acp-endpoint.ts";
 import { normalizeAcpCapabilities } from "../acp/session-capabilities.ts";
 import { captureProcessTree, stopProcessTree } from "../process/executable.ts";
 import { AgentProbeError } from "./agent-probe-error.ts";
@@ -126,24 +127,40 @@ async function probeInProcessReadiness(
         environment: { ...filterEnvironment(environment), ...agent.environment },
     });
     try {
-        await inProcess.initialize(controller.signal);
         const connection = createAcpClient(new DiscoveryAcpHandler()).connect(inProcess.app());
-        const initialized = await connection.agent.request(
-            methods.agent.initialize,
-            {
-                clientCapabilities: {},
-                clientInfo: { name: "mobius", version: "0.0.3" },
-                protocolVersion: PROTOCOL_VERSION,
-            },
-            { cancellationSignal: controller.signal },
-        );
-        if (initialized.protocolVersion !== PROTOCOL_VERSION) {
-            throw new AgentProbeError("acp_incompatible", "ACP agent selected an unsupported protocol version");
+        try {
+            return await Promise.race([
+                (async () => {
+                    await inProcess.initialize(controller.signal);
+                    const initialized = await connection.agent.request(
+                        methods.agent.initialize,
+                        {
+                            clientCapabilities: {},
+                            clientInfo: { name: "mobius", version: "0.0.3" },
+                            protocolVersion: PROTOCOL_VERSION,
+                        },
+                        { cancellationSignal: controller.signal },
+                    );
+                    if (initialized.protocolVersion !== PROTOCOL_VERSION) {
+                        throw new AgentProbeError(
+                            "acp_incompatible",
+                            "ACP agent selected an unsupported protocol version",
+                        );
+                    }
+                    return new VerifiedAcpReadiness(
+                        normalizeVersionOutput(initialized.agentInfo?.version ?? ""),
+                        normalizeAcpCapabilities(initialized),
+                    );
+                })(),
+                inProcess.terminated.then((termination) => {
+                    throw new AgentProbeError("acp_incompatible", "The ACP endpoint stopped during initialization", {
+                        cause: acpEndpointTerminationError(termination),
+                    });
+                }),
+            ]);
+        } finally {
+            connection.close();
         }
-        return new VerifiedAcpReadiness(
-            normalizeVersionOutput(initialized.agentInfo?.version ?? ""),
-            normalizeAcpCapabilities(initialized),
-        );
     } finally {
         await inProcess.close();
     }

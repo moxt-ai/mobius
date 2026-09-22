@@ -70,7 +70,11 @@ import {
     normalizeContentBlock,
 } from "./activity.ts";
 import { type AcpClientHandler, createAcpClient } from "./create-client.ts";
-import type { InProcessAcpEndpoint } from "./in-process/acp-endpoint.ts";
+import {
+    type AcpEndpointTermination,
+    acpEndpointTerminationError,
+    type InProcessAcpEndpoint,
+} from "./in-process/acp-endpoint.ts";
 import { emitMarkdownChunksWithLocalImages } from "./markdown-images.ts";
 import {
     type NativeSessionOrigin,
@@ -818,8 +822,8 @@ class AcpProcessSession implements AcpClientHandler {
     readonly #pendingElicitations = new Map<string, PendingElicitation>();
     readonly #pendingPermissions = new Map<string, PendingPermission>();
     readonly #preSessionUpdates: SessionNotification[] = [];
-    // The adapter-process topology only. An in-process agent owns the app-server child itself.
-    readonly #processExit: Promise<void>;
+    // Both topologies report a terminal outcome, even after a prompt's initial RPC is acknowledged.
+    readonly #termination: Promise<AcpEndpointTermination>;
     readonly #runtimeChild: ReturnType<typeof spawn> | null;
     readonly #metrics: OperationMetrics;
     readonly #sessionConfigProtocol: SessionConfigProtocol;
@@ -875,7 +879,7 @@ class AcpProcessSession implements AcpClientHandler {
             });
             this.#inProcessAgent = inProcess;
             this.#runtimeChild = null;
-            this.#processExit = new Promise<void>(() => {});
+            this.#termination = inProcess.terminated;
             this.#connection = createAcpClient(this).connect(inProcess.app());
             return;
         }
@@ -899,9 +903,16 @@ class AcpProcessSession implements AcpClientHandler {
         stderr.on("data", (chunk: string) => {
             process.stderr.write(`[${agent.id}-acp] ${chunk}`);
         });
-        this.#processExit = new Promise<void>((resolve) => {
-            child.once("error", resolve);
-            child.once("exit", resolve);
+        this.#termination = new Promise<AcpEndpointTermination>((resolve) => {
+            child.once("error", (cause) => {
+                resolve({ kind: "failed", error: new AcpExecutionError("The ACP process could not run", { cause }) });
+            });
+            child.once("exit", (code, signal) => {
+                resolve({
+                    kind: "failed",
+                    error: new AcpExecutionError("The ACP process stopped", { cause: { code, signal } }),
+                });
+            });
         });
         const stream = ndJsonStream(createWritableAcpStream(stdin), readableWebStream(stdout));
         this.#connection = createAcpClient(this).connect(stream);
@@ -2184,8 +2195,9 @@ class AcpProcessSession implements AcpClientHandler {
             try {
                 return await Promise.race([
                     operation,
-                    this.#processExit.then(() => {
-                        throw new AcpExecutionError(exitMessage);
+                    this.#termination.then((termination) => {
+                        const cause = acpEndpointTerminationError(termination);
+                        throw new AcpExecutionError(exitMessage, { cause }, cause.code);
                     }),
                     aborted,
                 ]);

@@ -361,6 +361,46 @@ if (process.argv.includes("--version")) {
         }
     });
 
+    it("Given Codex initializes but exits while listing models, When discovery runs, Then the dead backend is unavailable", async () => {
+        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-agent-readiness-exit-"));
+        const agentPath = join(stateDirectory, "codex");
+        try {
+            await writeFile(
+                agentPath,
+                executableSource(`
+if (process.argv.includes("--version")) {
+  process.stdout.write("codex 0.153.0\\n");
+} else if (process.argv.includes("app-server")) {
+  process.env["MOBIUS_FAKE_CODEX_EXIT_DURING_MODEL_LIST"] = "1";
+  await import(${JSON.stringify(turnAppServerUrl)});
+} else {
+  process.exit(80);
+}
+`),
+                { mode: 0o700 },
+            );
+            await chmod(agentPath, 0o700);
+
+            const inventory = await discoverLocalAgentInventory({
+                defaultWorkspace: repositoryRoot,
+                environment: { MOBIUS_STATE_DIRECTORY: stateDirectory, PATH: stateDirectory },
+                signal: new AbortController().signal,
+                specifications: [new CodexAgentSpecification()],
+            });
+
+            expect(inventory.available).toEqual([]);
+            expect(inventory.unavailable).toEqual([
+                expect.objectContaining({
+                    agent: expect.objectContaining({ id: "codex" }),
+                    code: "acp_incompatible",
+                    status: "incompatible_adapter",
+                }),
+            ]);
+        } finally {
+            await rm(stateDirectory, { force: true, recursive: true });
+        }
+    });
+
     it.skipIf(process.platform === "win32")(
         "Given a discovered Agent symlink changes, When an existing conversation continues and a new one starts, Then the existing process remains usable and the new runtime is rejected",
         async () => {

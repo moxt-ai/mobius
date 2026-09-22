@@ -1,4 +1,22 @@
 import type { AgentApp } from "@agentclientprotocol/sdk";
+import { AcpExecutionError } from "../acp-error.ts";
+
+export type AcpEndpointTermination =
+    | { readonly kind: "closed" }
+    | { readonly kind: "failed"; readonly error: AcpExecutionError };
+
+export function acpEndpointTerminationError(termination: AcpEndpointTermination): AcpExecutionError {
+    switch (termination.kind) {
+        case "failed":
+            return termination.error;
+        case "closed":
+            return new AcpExecutionError("The ACP endpoint is closed", {}, "acp_endpoint_closed");
+        default: {
+            const unreachable: never = termination;
+            return unreachable;
+        }
+    }
+}
 
 /**
  * An ACP Agent that Mobius hosts inside the daemon instead of spawning as an adapter process.
@@ -12,6 +30,8 @@ import type { AgentApp } from "@agentclientprotocol/sdk";
  * every process they started, on success, failure, and cancellation alike.
  */
 export interface InProcessAcpEndpoint {
+    /** Reports when the endpoint becomes unusable, even without a pending RPC. Never rejects; close awaits cleanup. */
+    readonly terminated: Promise<AcpEndpointTermination>;
     /** The ACP agent app the daemon connects its client to. */
     readonly app: () => AgentApp;
     /** Prepares the backing resources and completes any vendor handshake. */

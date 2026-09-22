@@ -1,17 +1,16 @@
 import { type ChildProcess, spawn } from "node:child_process";
 
+import { AcpExecutionError } from "../acp-error.ts";
+import { type AcpEndpointTermination, acpEndpointTerminationError } from "../in-process/acp-endpoint.ts";
 import { decodeAppServerMessage } from "./app-server-protocol.ts";
 
 const INITIALIZE_TIMEOUT_MILLISECONDS = 30_000;
 const OUTPUT_LIMIT_BYTES = 32 * 1_024 * 1_024;
 
 /** A failure in the Codex app-server boundary, reported with a stable code. */
-export class CodexAppServerError extends Error {
-    readonly code: string;
-
+export class CodexAppServerError extends AcpExecutionError {
     constructor(code: string, message: string, options: ErrorOptions = {}) {
-        super(message, options);
-        this.code = code;
+        super(message, options, code);
         this.name = "CodexAppServerError";
     }
 }
@@ -47,12 +46,14 @@ export class CodexAppServerClient {
     readonly #child: ChildProcess;
     readonly #handlers: CodexAppServerHandlers;
     readonly #pending = new Map<number | string, PendingRequest>();
-    readonly #processExit: Promise<void>;
-    #failure: CodexAppServerError | null = null;
+    readonly #termination = Promise.withResolvers<AcpEndpointTermination>();
+    readonly terminated = this.#termination.promise;
+    #lifecycle: { readonly kind: "open" } | { readonly kind: "terminated"; readonly result: AcpEndpointTermination } = {
+        kind: "open",
+    };
     #nextRequestId = 1;
     #pendingBuffer = "";
     #receivedBytes = 0;
-    #closed = false;
 
     constructor(options: CodexAppServerOptions) {
         this.#handlers = options.handlers;
@@ -78,27 +79,61 @@ export class CodexAppServerClient {
         stderr.on("data", (chunk: string) => {
             process.stderr.write(`[codex-app-server] ${chunk}`);
         });
-        this.#processExit = new Promise<void>((resolve) => {
-            this.#child.once("error", resolve);
-            this.#child.once("exit", resolve);
+        this.#child.once("error", (cause) => {
+            this.#fail(
+                new CodexAppServerError("codex_app_server_exited", "The Codex app-server could not run", { cause }),
+            );
+        });
+        this.#child.once("exit", (code, signal) => {
+            this.#fail(
+                new CodexAppServerError("codex_app_server_exited", "The Codex app-server stopped", {
+                    cause: { code, signal },
+                }),
+            );
+        });
+        for (const stream of [stdin, stdout, stderr]) {
+            stream.on("error", (cause: Error) => {
+                this.#fail(
+                    new CodexAppServerError("codex_app_server_io_error", "The Codex app-server connection failed", {
+                        cause,
+                    }),
+                );
+            });
+        }
+        stdout.once("end", () => {
+            this.#fail(new CodexAppServerError("codex_app_server_exited", "The Codex app-server output closed"));
         });
     }
 
     readonly child = (): ChildProcess => this.#child;
 
     readonly #fail = (error: CodexAppServerError): void => {
-        this.#failure ??= error;
+        this.#terminate({ kind: "failed", error });
+    };
+
+    readonly #terminate = (result: AcpEndpointTermination): void => {
+        if (this.#lifecycle.kind === "terminated") {
+            return;
+        }
+        this.#lifecycle = { kind: "terminated", result };
+        this.#termination.resolve(result);
+        const error = acpEndpointTerminationError(result);
         for (const [id, pending] of this.#pending) {
             this.#pending.delete(id);
             pending.completion.reject(error);
         }
     };
 
-    readonly #exitedFailure = (method: string): CodexAppServerError =>
-        this.#failure ??
-        new CodexAppServerError("codex_app_server_exited", `The Codex app-server stopped during ${method}`);
+    readonly #requireOpen = (): void => {
+        if (this.#lifecycle.kind === "terminated") {
+            throw acpEndpointTerminationError(this.#lifecycle.result);
+        }
+    };
 
     readonly #consume = (chunk: string): void => {
+        if (this.#lifecycle.kind === "terminated") {
+            return;
+        }
         try {
             this.#receivedBytes += Buffer.byteLength(chunk);
             if (this.#receivedBytes > OUTPUT_LIMIT_BYTES) {
@@ -129,7 +164,6 @@ export class CodexAppServerClient {
                           { cause: error },
                       ),
             );
-            this.#child.kill("SIGKILL");
         }
     };
 
@@ -184,9 +218,7 @@ export class CodexAppServerClient {
     /** Sends a request and waits for its response, bounded by the caller's cancellation signal. */
     readonly request = async (method: string, params: unknown, signal: AbortSignal): Promise<unknown> => {
         signal.throwIfAborted();
-        if (this.#closed) {
-            throw new CodexAppServerError("codex_app_server_closed", "The Codex app-server is closed");
-        }
+        this.#requireOpen();
         const id = this.#nextRequestId;
         this.#nextRequestId += 1;
         const completion = Promise.withResolvers<unknown>();
@@ -199,7 +231,7 @@ export class CodexAppServerClient {
         signal.addEventListener("abort", abort, { once: true });
         try {
             this.#write({ id, method, params });
-            return await Promise.race([completion.promise, this.#processExit.then(() => this.#exitedFailure(method))]);
+            return await completion.promise;
         } finally {
             signal.removeEventListener("abort", abort);
             this.#pending.delete(id);
@@ -219,12 +251,12 @@ export class CodexAppServerClient {
     };
 
     readonly #write = (message: unknown): void => {
-        if (this.#closed) {
-            return;
-        }
+        this.#requireOpen();
         const stdin = this.#child.stdin;
         if (stdin === null || stdin.destroyed) {
-            throw new CodexAppServerError("codex_app_server_closed", "The Codex app-server input is closed");
+            const error = new CodexAppServerError("codex_app_server_io_error", "The Codex app-server input is closed");
+            this.#fail(error);
+            throw error;
         }
         stdin.write(`${JSON.stringify(message)}\n`);
     };
@@ -248,14 +280,6 @@ export class CodexAppServerClient {
      * app-server and every tool subprocess it started.
      */
     readonly detach = (): void => {
-        if (this.#closed) {
-            return;
-        }
-        this.#closed = true;
-        this.#fail(new CodexAppServerError("codex_app_server_closed", "The Codex app-server is closed"));
-        const stdin = this.#child.stdin;
-        if (stdin !== null && !stdin.destroyed) {
-            stdin.end();
-        }
+        this.#terminate({ kind: "closed" });
     };
 }

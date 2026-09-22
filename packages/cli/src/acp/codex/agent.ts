@@ -13,7 +13,12 @@ import {
 
 import { captureProcessTree, type ProcessTreeIdentity, stopProcessTree } from "../../process/executable.ts";
 import { AcpExecutionError } from "../acp-error.ts";
-import type { InProcessAcpEndpoint, InProcessAcpEndpointOptions } from "../in-process/acp-endpoint.ts";
+import {
+    type AcpEndpointTermination,
+    acpEndpointTerminationError,
+    type InProcessAcpEndpoint,
+    type InProcessAcpEndpointOptions,
+} from "../in-process/acp-endpoint.ts";
 import { CodexAppServerClient, type CodexAppServerServerRequest } from "./app-server-client.ts";
 import {
     type CodexModel,
@@ -345,6 +350,8 @@ function userInputSchema(questions: readonly UserInputQuestion[]): unknown {
 export class CodexAcpAgent implements InProcessAcpEndpoint {
     readonly #app: AgentApp;
     readonly #appServer: CodexAppServerClient;
+    readonly terminated: Promise<AcpEndpointTermination>;
+    #closePromise: Promise<void> | null = null;
     #connection: AgentConnection | null = null;
     #models: readonly CodexModel[] = [];
     #nativeSessionId = "";
@@ -382,6 +389,15 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                     await this.#onServerRequest(request);
                 },
             },
+        });
+        this.terminated = this.#appServer.terminated;
+        void this.terminated.then((termination) => {
+            this.#turn?.completion.reject(acpEndpointTerminationError(termination));
+            if (termination.kind === "failed") {
+                void this.close().catch((cause: unknown) => {
+                    console.error("The failed Codex endpoint could not release its process tree", cause);
+                });
+            }
         });
         this.#app = createAgentApp({ name: "mobius-codex" })
             .onConnect((connection) => {
@@ -519,11 +535,21 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
      * Releases the app-server and every process it started. Mirrors the adapter path's teardown so a
      * cancelled or closed session cannot leak the tool subprocesses running under the app-server.
      */
-    readonly close = async (): Promise<void> => {
-        const child = this.#appServer.child();
-        const captured: readonly ProcessTreeIdentity[] = await captureProcessTree(child);
-        this.#appServer.detach();
-        await stopProcessTree(child, captured);
+    readonly close = (): Promise<void> => {
+        if (this.#closePromise === null) {
+            // Publish closure immediately, but keep stdio intact until the process tree is captured.
+            this.#appServer.detach();
+            this.#closePromise = (async () => {
+                const child = this.#appServer.child();
+                try {
+                    const captured: readonly ProcessTreeIdentity[] = await captureProcessTree(child);
+                    await stopProcessTree(child, captured);
+                } finally {
+                    this.#connection?.close();
+                }
+            })();
+        }
+        return this.#closePromise;
     };
 
     /**
@@ -791,7 +817,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
         if (method === "turn/started") {
             const decoded = turnNotificationSchema.safeParse(params);
             if (decoded.success && decoded.data.threadId === this.#nativeSessionId && this.#turn !== null) {
-                this.#turn = { completion: this.#turn.completion, turn: { id: decoded.data.turn.id } };
+                this.#turn.turn.id = decoded.data.turn.id;
             }
             return;
         }
@@ -1007,10 +1033,21 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
     };
 
     readonly #runTurn = async (input: readonly unknown[], signal: AbortSignal): Promise<PromptResponse> => {
+        signal.throwIfAborted();
         if (this.#turn !== null) {
             throw new AcpExecutionError("Another prompt is already running in this conversation", {}, "session_busy");
         }
         const completion = Promise.withResolvers<PromptResponse>();
+        // A failure can arrive before turn/start responds. Its rejection is awaited below,
+        // but must already be handled while that RPC is still pending.
+        void completion.promise.catch(() => {});
+        const aborted = (): void => {
+            completion.reject(signal.reason);
+            void this.close().catch((cause: unknown) => {
+                console.error("The cancelled Codex endpoint could not release its process tree", cause);
+            });
+        };
+        signal.addEventListener("abort", aborted, { once: true });
         // The turn is armed before `turn/start` is sent: a short turn can complete before its own
         // response arrives, and a completion for an unarmed turn would be lost.
         const turn: ActiveTurn = { completion, turn: { id: "" } };
@@ -1068,6 +1105,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
             }
             return await completion.promise;
         } finally {
+            signal.removeEventListener("abort", aborted);
             if (this.#turn === turn) {
                 this.#turn = null;
             }
@@ -1102,7 +1140,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
         if (active === null) {
             return;
         }
-        this.#turn = null;
+        // Keep this Turn reachable by termination and cancellation until its output has drained.
         // The app-server dispatches notifications concurrently, so an item update can still be in
         // flight when the turn completes. Drain it: a client must never see the turn finish before
         // the activity that belongs to it.
