@@ -3,8 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { NativeSessionCommand, NativeSessionEntry } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it, vi } from "vitest";
+import { CodexAcpAgent } from "../../../packages/cli/src/acp/codex/agent.ts";
 import { AcpSessionManager, NullAcpSessionObserver } from "../../../packages/cli/src/acp/session-manager.ts";
 import { SqliteAcpSessionStore } from "../../../packages/cli/src/acp/session-store.ts";
+import { InProcessAcpAgentDefinition } from "../../../packages/cli/src/agent-catalog/local-agent.ts";
 import { AuditStore } from "../../../packages/cli/src/audit/audit-store.ts";
 import { WorkspaceDirectoryService } from "../../../packages/cli/src/authorization/workspace-directory.ts";
 import { createDaemonConfig, LocalAgentDefinition } from "../../../packages/cli/src/config.ts";
@@ -146,6 +148,107 @@ async function fixture(
 }
 
 describe("native Agent session boundary", () => {
+    // The restored Codex listing path: Mobius hosts the ACP Agent in-process and drives
+    // `codex app-server` directly, so the fixture plays that protocol against the real adapter.
+    async function codexFixture() {
+        const temporary = await realpath(await mkdtemp(join(tmpdir(), "mobius-native-codex-")));
+        const workspace = join(temporary, "workspace");
+        const native = join(temporary, "native");
+        await mkdir(workspace);
+        await mkdir(native);
+        const previous = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+        process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = native;
+        const appServerUrl = new URL("../fixtures/fake-acp-agent/src/app-server.ts", import.meta.url).toString();
+        const executable = join(temporary, "codex.mjs");
+        await writeFile(executable, `#!${process.execPath}\nawait import(${JSON.stringify(appServerUrl)});\n`, {
+            mode: 0o700,
+        });
+        const agent = new InProcessAcpAgentDefinition(
+            "codex",
+            "Codex",
+            executable,
+            (options) => new CodexAcpAgent(options),
+        );
+        const store = new SqliteAcpSessionStore(join(temporary, "sessions.sqlite"));
+        const sessions = new AcpSessionManager(new NullAcpSessionObserver(), store);
+        const audit = new AuditStore(join(temporary, "audit.sqlite"));
+        const config = createDaemonConfig(
+            {
+                defaultWorkspace: workspace,
+                auditDatabasePath: join(temporary, "audit.sqlite"),
+                channelId: "test-channel",
+                relayUrl: new URL("ws://localhost/"),
+            },
+            [agent],
+        );
+        const directories = new WorkspaceDirectoryService("workspace", workspace);
+        const service = new NativeSessionService(config, directories, sessions, audit);
+        const identity = {
+            additionalDirectoryIds: [],
+            agentId: agent.id,
+            bindingId: "workspace",
+            directoryId: "default",
+            kind: "native.session.request",
+            requestId: "native-operation",
+            sessionId: "browser",
+        } satisfies Omit<NativeSessionCommand, "action">;
+        const seed = async (title: string): Promise<void> => {
+            await writeFile(
+                join(native, `${encodeURIComponent(crypto.randomUUID())}.json`),
+                JSON.stringify({ cwd: workspace, title, history: [{ role: "user", text: title }] }),
+            );
+        };
+        const list = async (cursor: string | null = null) => {
+            const result = await service.execute({ ...identity, action: "list", cursor }, new AbortController().signal);
+            if (result.action !== "list") {
+                throw new Error("Expected a native session list");
+            }
+            return result;
+        };
+        const close = async (): Promise<void> => {
+            await sessions.close();
+            store.close();
+            audit.close();
+            if (previous === undefined) {
+                delete process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+            } else {
+                process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = previous;
+            }
+            await rm(temporary, { recursive: true, force: true });
+        };
+        return { identity, list, native, seed, service, workspace, close };
+    }
+
+    it("Given saved Codex threads, When its directory is listed through the in-process Agent, Then every thread becomes an authorized entry whose history previews", async () => {
+        const f = await codexFixture();
+        try {
+            await f.seed("Thread from the Codex CLI");
+            const result = await f.list();
+            expect(result.capabilities.listSessions).toBe(true);
+            expect(result.nextCursor).toBeNull();
+            const entry = result.entries[0];
+            if (entry === undefined) {
+                throw new Error("Missing native conversation");
+            }
+            expect(entry.title).toBe("Thread from the Codex CLI");
+            expect(typeof entry.updatedAt).toBe("string");
+            const preview = await f.service.execute(
+                { ...f.identity, action: "preview", entryId: entry.entryId },
+                new AbortController().signal,
+            );
+            expect(preview).toMatchObject({
+                action: "preview",
+                reason: "requested",
+                history: {
+                    status: "available",
+                    messages: expect.arrayContaining([{ role: "user", text: "Thread from the Codex CLI" }]),
+                },
+            });
+        } finally {
+            await f.close();
+        }
+    });
+
     it("Given a saved local conversation, When its history is previewed and then forked, Then preview leaves the source untouched and only the fork creates a new conversation", async () => {
         vi.useFakeTimers({ toFake: ["Date"] });
         vi.setSystemTime(new Date("2026-09-15T12:00:00Z"));

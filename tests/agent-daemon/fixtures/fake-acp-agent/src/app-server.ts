@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 
@@ -28,9 +28,47 @@ input.on("line", (line) => {
         reply({ userAgent: "stateful-codex" });
     } else if (method === "initialized") {
         initialized = true;
-    } else if ((method === "thread/read" || method === "thread/turns/list") && initialized) {
+    } else if (
+        (method === "thread/read" || method === "thread/turns/list" || method === "thread/list") &&
+        initialized
+    ) {
         const params: unknown = Reflect.get(value, "params");
         if (typeof params !== "object" || params === null) {
+            return;
+        }
+        if (method === "thread/list") {
+            if (directory === undefined) {
+                return;
+            }
+            const threads = readdirSync(directory)
+                .filter((file) => file.endsWith(".json"))
+                .toSorted()
+                .map((file) => {
+                    const saved: unknown = JSON.parse(readFileSync(join(directory, file), "utf8"));
+                    if (typeof saved !== "object" || saved === null) {
+                        throw new Error("Invalid saved conversation");
+                    }
+                    const cwd: unknown = Reflect.get(saved, "cwd");
+                    if (typeof cwd !== "string") {
+                        throw new Error("Invalid saved conversation cwd");
+                    }
+                    return {
+                        cwd,
+                        id: decodeURIComponent(file.slice(0, -5)),
+                        name: null,
+                        preview: typeof Reflect.get(saved, "title") === "string" ? Reflect.get(saved, "title") : null,
+                        updatedAt: Math.floor(statSync(join(directory, file)).mtimeMs / 1000),
+                    };
+                });
+            const cursor: unknown = Reflect.get(params, "cursor");
+            const offset = typeof cursor === "string" ? Number(cursor) : 0;
+            const limit: unknown = Reflect.get(params, "limit");
+            const pageSize = typeof limit === "number" && Number.isInteger(limit) && limit > 0 ? limit : threads.length;
+            const data = threads.slice(offset, offset + pageSize);
+            reply({
+                data,
+                nextCursor: offset + data.length < threads.length ? String(offset + data.length) : null,
+            });
             return;
         }
         const threadId: unknown = Reflect.get(params, "threadId");

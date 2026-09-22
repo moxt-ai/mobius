@@ -387,8 +387,8 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
             })
             // Declare only what this Agent actually serves. Mobius gates every request on these bits,
             // so an optimistic bit here becomes an unsupported ACP call at the far end. Session
-            // restore, listing, forking, and steering stay undeclared until they are implemented;
-            // the daemon's existing degradation paths handle their absence.
+            // restore, forking, and steering stay undeclared until they are implemented; the
+            // daemon's existing degradation paths handle their absence.
             .onRequest(methods.agent.initialize, async () => ({
                 agentCapabilities: {
                     loadSession: false,
