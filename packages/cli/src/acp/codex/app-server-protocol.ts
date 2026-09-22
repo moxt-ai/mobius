@@ -195,7 +195,6 @@ export const mcpElicitationParamsSchema = z.object({
     url: z.string().optional(),
 });
 
-// `thread/resume` answers with the same shape as `thread/start`, so the two share one schema.
 export const threadStartResponseSchema = z.object({
     approvalPolicy: z.unknown().optional(),
     approvalsReviewer: z.unknown().optional(),
@@ -206,14 +205,38 @@ export const threadStartResponseSchema = z.object({
     thread: z.object({ id: boundedText(256) }),
 });
 
-/**
- * `thread/resume` answers with an empty body when the thread exists but never ran a turn, so a
- * resumable thread is reported as present only when the reply names one.
- */
-export const threadResumeResponseSchema = z.object({
+const threadLifecycleResponseSchema = z.object({
     model: boundedText(256).nullish(),
     reasoningEffort: boundedText(256).nullish(),
-    thread: z.object({ id: boundedText(256) }).nullish(),
+    serviceTier: boundedText(256).nullish(),
+    thread: z.object({ id: boundedText(256) }),
+    turns: z
+        .array(
+            z.object({
+                items: z.array(z.unknown()).max(100_000),
+            }),
+        )
+        .max(100_000)
+        .nullish(),
+});
+
+export const threadResumeResponseSchema = threadLifecycleResponseSchema;
+export const threadForkResponseSchema = threadLifecycleResponseSchema;
+
+// A thread summary as `thread/list` reports it. `updatedAt` is Unix seconds and becomes the ACP
+// session's ISO 8601 timestamp; `name` is the user-facing title with `preview` — usually the first
+// user message — as the fallback label.
+const threadSummarySchema = z.object({
+    cwd: boundedText(2_048),
+    id: boundedText(256),
+    name: boundedText(500).nullish(),
+    preview: boundedText(500).nullish(),
+    updatedAt: z.number().int().nonnegative(),
+});
+
+export const threadListResponseSchema = z.object({
+    data: z.array(threadSummarySchema).max(500),
+    nextCursor: boundedText(1_024).nullish(),
 });
 
 const reasoningEffortOptionSchema = z.object({
@@ -237,27 +260,6 @@ export const modelListResponseSchema = z.object({
     data: z.array(modelSchema).max(1_000),
     nextCursor: boundedText(1_024).nullish(),
 });
-
-// The subset of `Thread` Mobius reads to describe a native session. `preview` is the first user
-// message and stands in for a title, since Codex names threads separately and often leaves `name`
-// null.
-const threadSchema = z.object({
-    createdAt: z.number().nullish(),
-    cwd: boundedText(4_096).nullish(),
-    id: boundedText(256),
-    name: boundedText(4_096).nullish(),
-    preview: boundedText(4_096).nullish(),
-    updatedAt: z.number().nullish(),
-});
-
-export const threadListResponseSchema = z.object({
-    data: z.array(threadSchema).max(10_000),
-    nextCursor: boundedText(1_024).nullish(),
-});
-
-export const turnSteerResponseSchema = z.object({ turnId: boundedText(256) });
-
-export type CodexThread = z.infer<typeof threadSchema>;
 
 export type McpElicitationParams = z.infer<typeof mcpElicitationParamsSchema>;
 export type UserInputQuestion = z.infer<typeof userInputQuestionSchema>;

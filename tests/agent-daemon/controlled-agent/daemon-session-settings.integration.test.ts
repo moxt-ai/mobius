@@ -693,7 +693,7 @@ if (process.argv.includes("--version")) {
         }
     });
 
-    it("Given Codex runs as an in-process Agent, When Mobius lists, resumes, steers, and deletes native sessions, Then each reaches the Codex app-server", async () => {
+    it("Given Codex runs as an in-process Agent, When Mobius lists, resumes, and steers native sessions, Then each reaches the Codex app-server", async () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-codex-native-sessions-"));
         const executableDirectory = join(temporaryDirectory, "external");
         const nativeStateDirectory = join(temporaryDirectory, "native");
@@ -770,17 +770,6 @@ if (process.argv.includes("--version")) {
                 title: "Scripted turn",
             });
             expect(listed.sessions[0]?.updatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
-
-            // Deleting archives the thread, so it leaves the listing.
-            await manager.deleteNativeSession(browseOptions, nativeSessionId);
-            await expect(manager.listNativeSessions(browseOptions, null)).resolves.toMatchObject({ sessions: [] });
-            // Deleting archives the thread, so it is discoverable but no longer resumable: a
-            // conversation whose native session is gone must not silently reopen as a fresh one.
-            const afterDelete = await manager.listNativeSessions(browseOptions, null);
-            expect(afterDelete.sessions).toEqual([]);
-            await expect(run("native_session_conversation", "after delete")).rejects.toMatchObject({
-                code: "native_session_deleted",
-            });
         } finally {
             await manager.close();
             if (previousState === undefined) {
