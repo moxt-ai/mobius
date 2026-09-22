@@ -320,6 +320,7 @@ export function createPlatformApplication(
         .get("/:sessionId/files/content", sessionAccessTargetMiddleware, projectHandler)
         .get("/:sessionId/native-messages", sessionAccessTargetMiddleware, projectHandler)
         .get("/:sessionId/events", sessionAccessTargetMiddleware, projectHandler)
+        .get("/:sessionId/live-event-subscription-target", sessionAccessTargetMiddleware, projectHandler)
         .get("/:sessionId/interactions", sessionAccessTargetMiddleware, projectHandler)
         .get("/:sessionId/interactions/:interactionId", sessionAccessTargetMiddleware, projectHandler)
         .get("/:sessionId/turns/:turnId", sessionAccessTargetMiddleware, projectHandler)

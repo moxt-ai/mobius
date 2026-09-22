@@ -933,6 +933,21 @@ describe.sequential("Platform Session-only boundary", () => {
                 ),
             ).toMatchObject({ error: { code: "session_history_not_retained" } });
 
+            const sessionAccess = await responseJson(
+                await worker.fetch(
+                    new Request(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/access-credentials`,
+                        {
+                            body: JSON.stringify({ expiresInSeconds: 3_600 }),
+                            headers: credentialHeaders(appCredential),
+                            method: "POST",
+                        },
+                    ),
+                    environment,
+                ),
+                201,
+            );
+            const sessionAccessCredential = text(sessionAccess, "credential");
             const transportResponse = await worker.fetch(
                 new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/transport`, {
                     headers: { Upgrade: "websocket" },
@@ -947,7 +962,7 @@ describe.sequential("Platform Session-only boundary", () => {
             transportSocket.accept();
             transportSocket.send(
                 JSON.stringify({
-                    headers: Array.from(credentialHeaders(appCredential).entries()),
+                    headers: Array.from(credentialHeaders(sessionAccessCredential).entries()),
                     kind: "session.events.subscribe",
                     path: `${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/events`,
                     subscriptionId: "private-live-events",
