@@ -2,6 +2,7 @@ import { it } from "vitest";
 import { HermesFixture } from "../infra/hermes.ts";
 import { expectPersistedToolTurn, runAgentDaemonTurn, startAgentDaemonJourney } from "../infra/journey.ts";
 import { FakeOpenAiProvider } from "../providers/openai.ts";
+import { fakeProviderPrompts } from "../providers/scenarios.ts";
 
 it("Given real Hermes uses a local OpenAI-compatible upstream, When a prompt causes a tool call across the server and daemon protocols, Then the ACP tool and response are persisted", {
     timeout: 120_000,
@@ -16,6 +17,7 @@ it("Given real Hermes uses a local OpenAI-compatible upstream, When a prompt cau
         agentEnvironment: hermes.environment,
         agentId: "hermes",
         agentPath: hermes.executable,
+        prompt: fakeProviderPrompts.streamedTool,
         sessionId: "real-hermes-local-provider",
         signal,
         title: "Real Hermes local provider",
@@ -23,7 +25,7 @@ it("Given real Hermes uses a local OpenAI-compatible upstream, When a prompt cau
 
     try {
         await runAgentDaemonTurn(journey);
-        await expectPersistedToolTurn(journey, provider.response);
+        await expectPersistedToolTurn(journey, provider.responseFor(journey.prompt));
     } catch (error) {
         process.stderr.write(
             `Hermes integration diagnostics:\n${JSON.stringify(

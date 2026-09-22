@@ -1,5 +1,14 @@
 import { createServer, type ServerResponse } from "node:http";
 
+import {
+    countMatchingObjects,
+    type FakeProviderScenario,
+    fakeProviderPrompts,
+    fakeProviderResponse,
+    responseChunks,
+    selectFakeProviderScenario,
+} from "./scenarios.ts";
+
 type JsonObject = Record<string, unknown>;
 
 interface AvailableTool {
@@ -9,28 +18,17 @@ interface AvailableTool {
 }
 
 interface SelectedTool extends AvailableTool {
+    readonly callId: string;
     readonly input: string;
 }
 
 interface ProviderRequestDiagnostic {
-    readonly hasToolResult: boolean;
+    readonly scenario: FakeProviderScenario;
     readonly selectedTool: Readonly<Pick<SelectedTool, "kind" | "name">> | undefined;
+    readonly toolResultCount: number;
     readonly tools: readonly Readonly<Pick<AvailableTool, "kind" | "name">>[];
     readonly url: string;
 }
-
-interface ToolPreference {
-    readonly customInput?: string;
-    readonly name: RegExp;
-}
-
-interface ProviderOptions {
-    readonly firstAnswer?: string;
-    readonly textChunks?: readonly string[];
-    readonly toolPreference?: ToolPreference;
-}
-
-const toolCallId = "call_mobius";
 
 function isObject(value: unknown): value is JsonObject {
     return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -71,23 +69,16 @@ function availableTools(payload: JsonObject): readonly AvailableTool[] {
     return [...direct, ...additional];
 }
 
-function includesToolResult(value: unknown): boolean {
-    if (Array.isArray(value)) {
-        return value.some(includesToolResult);
-    }
-    if (!isObject(value)) {
-        return false;
-    }
-    const type = value["type"];
-    if (
-        value["role"] === "tool" ||
-        type === "tool_result" ||
-        type === "function_call_output" ||
-        type === "custom_tool_call_output"
-    ) {
-        return true;
-    }
-    return Object.values(value).some(includesToolResult);
+function toolResultCount(value: unknown): number {
+    return countMatchingObjects(value, (object) => {
+        const type = object["type"];
+        return (
+            object["role"] === "tool" ||
+            type === "tool_result" ||
+            type === "function_call_output" ||
+            type === "custom_tool_call_output"
+        );
+    });
 }
 
 function stringProperty(parameters: JsonObject | undefined, candidates: readonly string[]): string | undefined {
@@ -98,12 +89,12 @@ function stringProperty(parameters: JsonObject | undefined, candidates: readonly
     return candidates.find((candidate) => isObject(properties[candidate]));
 }
 
-function selectTool(tools: readonly AvailableTool[], preference?: ToolPreference): SelectedTool | undefined {
-    const preferred = preference === undefined ? undefined : tools.find((tool) => preference.name.test(tool.name));
-    if (preferred?.kind === "function") {
-        return { ...preferred, input: "{}" };
-    }
-
+function selectTool(
+    tools: readonly AvailableTool[],
+    scenario: FakeProviderScenario,
+    completedToolCalls: number,
+): SelectedTool | undefined {
+    const callId = `call_mobius_${(completedToolCalls + 1).toString()}`;
     const shell = tools.find((tool) =>
         /(?:^|\.)(?:terminal|exec|bash|shell|command|run_terminal_command)$/iu.test(tool.name),
     );
@@ -113,19 +104,18 @@ function selectTool(tools: readonly AvailableTool[], preference?: ToolPreference
                 kind: "custom",
                 name: shell.name.slice(shell.name.lastIndexOf(".") + 1),
                 parameters: undefined,
-                input:
-                    preference?.customInput ??
-                    'const result = await tools.exec_command({ cmd: "pwd", max_output_tokens: 1000 });\ntext(result.output);',
+                callId,
+                input: `const result = await tools.exec_command({ cmd: ${JSON.stringify(scenario.command)}, max_output_tokens: 1000 });\ntext(result.output);`,
             };
         }
         const command = stringProperty(shell.parameters, ["command", "cmd"]);
         if (command !== undefined) {
-            const input: Record<string, string> = { [command]: "pwd" };
+            const input: Record<string, string> = { [command]: scenario.command };
             const description = stringProperty(shell.parameters, ["description"]);
             if (description !== undefined) {
                 input[description] = "Print the current working directory";
             }
-            return { ...shell, input: JSON.stringify(input) };
+            return { ...shell, callId, input: JSON.stringify(input) };
         }
     }
 
@@ -133,7 +123,11 @@ function selectTool(tools: readonly AvailableTool[], preference?: ToolPreference
     if (read !== undefined && read.kind === "function") {
         const path = stringProperty(read.parameters, ["filePath", "path", "file"]);
         if (path !== undefined) {
-            return { ...read, input: JSON.stringify({ [path]: "." }) };
+            return {
+                ...read,
+                callId,
+                input: JSON.stringify({ [path]: scenario.command === "false" ? "./mobius-missing-file" : "." }),
+            };
         }
     }
     return undefined;
@@ -236,7 +230,7 @@ function sendResponsesToolCall(response: ServerResponse, model: string, tool: Se
     const item = {
         id: "tool_mobius",
         type,
-        call_id: toolCallId,
+        call_id: tool.callId,
         name: tool.name,
         status: "completed",
         ...(tool.kind === "custom" ? { input: tool.input } : { arguments: tool.input }),
@@ -315,7 +309,7 @@ function sendChatToolCall(response: ServerResponse, model: string, tool: Selecte
                 tool_calls: [
                     {
                         index: 0,
-                        id: toolCallId,
+                        id: tool.callId,
                         type: "function",
                         function: { name: tool.name, arguments: tool.input },
                     },
@@ -356,7 +350,7 @@ function sendChatCompletion(
                                   content: null,
                                   tool_calls: [
                                       {
-                                          id: toolCallId,
+                                          id: tool.callId,
                                           type: "function",
                                           function: { name: tool.name, arguments: tool.input },
                                       },
@@ -377,19 +371,24 @@ export class FakeOpenAiProvider implements AsyncDisposable {
     readonly model: string;
     readonly origin: string;
     readonly response: string;
+    readonly #answer: string;
     readonly #close: () => Promise<void>;
     readonly #requests: ProviderRequestDiagnostic[];
 
     private constructor(
         origin: string,
         model: string,
-        response: string,
+        answer: string,
         requests: ProviderRequestDiagnostic[],
         close: () => Promise<void>,
     ) {
+        this.#answer = answer;
         this.model = model;
         this.origin = origin;
-        this.response = response;
+        this.response = fakeProviderResponse(
+            answer,
+            selectFakeProviderScenario({ input: fakeProviderPrompts.successfulTool }),
+        );
         this.#requests = requests;
         this.#close = close;
     }
@@ -398,13 +397,21 @@ export class FakeOpenAiProvider implements AsyncDisposable {
         return this.#requests;
     }
 
-    static async start(model: string, answer: string, options: ProviderOptions = {}): Promise<FakeOpenAiProvider> {
-        const textChunks = options.textChunks ?? [answer];
-        if (textChunks.join("") !== answer) {
-            throw new Error("Fake OpenAI provider text chunks must concatenate to the configured answer");
-        }
+    responseFor(prompt: string): string {
+        return fakeProviderResponse(this.#answer, selectFakeProviderScenario({ input: prompt }));
+    }
+
+    static async start(
+        model: string,
+        answer: string,
+        options: { readonly fallbackPrompt?: string } = {},
+    ): Promise<FakeOpenAiProvider> {
         const requests: ProviderRequestDiagnostic[] = [];
-        let textResponses = 0;
+        const fallbackScenario =
+            options.fallbackPrompt === undefined
+                ? undefined
+                : selectFakeProviderScenario({ input: options.fallbackPrompt });
+        let activeScenario: FakeProviderScenario | undefined;
         const server = createServer(async (request, response) => {
             if (request.method === "GET" && request.url?.endsWith("/models") === true) {
                 response.writeHead(200, { "content-type": "application/json" });
@@ -431,14 +438,24 @@ export class FakeOpenAiProvider implements AsyncDisposable {
                 return;
             }
             const tools = availableTools(payload);
-            const hasToolResult = includesToolResult(payload);
-            const tool = hasToolResult ? undefined : selectTool(tools, options.toolPreference);
-            const selectedAnswer =
-                textResponses === 0 && options.firstAnswer !== undefined ? options.firstAnswer : answer;
-            const selectedChunks = selectedAnswer === answer ? textChunks : [selectedAnswer];
+            const completedToolCalls = toolResultCount(payload);
+            const detectedScenario = selectFakeProviderScenario(payload);
+            const selectedScenario =
+                detectedScenario.toolCalls === 0 && fallbackScenario !== undefined
+                    ? fallbackScenario
+                    : detectedScenario;
+            if (activeScenario === undefined && selectedScenario.toolCalls > 0) {
+                activeScenario = selectedScenario;
+            }
+            const scenario = activeScenario ?? selectedScenario;
+            const tool =
+                completedToolCalls < scenario.toolCalls ? selectTool(tools, scenario, completedToolCalls) : undefined;
+            const selectedAnswer = fakeProviderResponse(answer, scenario);
+            const selectedChunks = responseChunks(selectedAnswer, scenario);
             requests.push({
-                hasToolResult,
+                scenario,
                 selectedTool: tool === undefined ? undefined : { kind: tool.kind, name: tool.name },
+                toolResultCount: completedToolCalls,
                 tools: tools.map(({ kind, name }) => ({ kind, name })),
                 url: request.url ?? "",
             });
@@ -446,7 +463,6 @@ export class FakeOpenAiProvider implements AsyncDisposable {
             if (request.url?.endsWith("/responses") === true) {
                 response.writeHead(200, responseHeaders());
                 if (tool === undefined) {
-                    textResponses += 1;
                     sendResponsesText(response, model, selectedAnswer, selectedChunks);
                 } else {
                     sendResponsesToolCall(response, model, tool);
@@ -454,15 +470,11 @@ export class FakeOpenAiProvider implements AsyncDisposable {
                 return;
             }
             if (payload["stream"] === false) {
-                if (tool === undefined) {
-                    textResponses += 1;
-                }
                 sendChatCompletion(response, model, selectedAnswer, tool);
                 return;
             }
             response.writeHead(200, responseHeaders());
             if (tool === undefined) {
-                textResponses += 1;
                 sendChatText(response, model, selectedChunks);
             } else {
                 sendChatToolCall(response, model, tool);

@@ -1,5 +1,14 @@
 import { createServer, type ServerResponse } from "node:http";
 
+import {
+    countMatchingObjects,
+    type FakeProviderScenario,
+    fakeProviderPrompts,
+    fakeProviderResponse,
+    responseChunks,
+    selectFakeProviderScenario,
+} from "./scenarios.ts";
+
 type JsonObject = Record<string, unknown>;
 
 interface AnthropicTool {
@@ -8,26 +17,19 @@ interface AnthropicTool {
 }
 
 interface ProviderRequestDiagnostic {
-    readonly hasToolResult: boolean;
+    readonly scenario: FakeProviderScenario;
     readonly selectedTool: string | undefined;
+    readonly toolResultCount: number;
     readonly tools: readonly string[];
     readonly url: string;
 }
-
-const toolCallId = "toolu_mobius";
 
 function isObject(value: unknown): value is JsonObject {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function hasToolResult(value: unknown): boolean {
-    if (Array.isArray(value)) {
-        return value.some(hasToolResult);
-    }
-    if (!isObject(value)) {
-        return false;
-    }
-    return value["type"] === "tool_result" || Object.values(value).some(hasToolResult);
+function toolResultCount(value: unknown): number {
+    return countMatchingObjects(value, (object) => object["type"] === "tool_result");
 }
 
 function availableTools(payload: JsonObject): readonly AnthropicTool[] {
@@ -52,19 +54,26 @@ function stringProperty(tool: AnthropicTool, candidates: readonly string[]): str
 
 function selectTool(
     tools: readonly AnthropicTool[],
-): { readonly input: JsonObject; readonly name: string } | undefined {
+    scenario: FakeProviderScenario,
+    completedToolCalls: number,
+): { readonly id: string; readonly input: JsonObject; readonly name: string } | undefined {
+    const id = `toolu_mobius_${(completedToolCalls + 1).toString()}`;
     const shell = tools.find((tool) => /(?:^|_)(?:bash|shell|command)$/iu.test(tool.name));
     if (shell !== undefined) {
         const command = stringProperty(shell, ["command", "cmd"]);
         if (command !== undefined) {
-            return { input: { [command]: "pwd" }, name: shell.name };
+            return { id, input: { [command]: scenario.command }, name: shell.name };
         }
     }
     const read = tools.find((tool) => /(?:^|_)(?:read|read_file)$/iu.test(tool.name));
     if (read !== undefined) {
         const path = stringProperty(read, ["file_path", "filePath", "path", "file"]);
         if (path !== undefined) {
-            return { input: { [path]: "." }, name: read.name };
+            return {
+                id,
+                input: { [path]: scenario.command === "false" ? "./mobius-missing-file" : "." },
+                name: read.name,
+            };
         }
     }
     return undefined;
@@ -91,6 +100,7 @@ function sendStream(
     response: ServerResponse,
     model: string,
     content: JsonObject,
+    chunks: readonly string[],
     stopReason: "end_turn" | "tool_use",
 ): void {
     response.writeHead(200, {
@@ -115,10 +125,12 @@ function sendStream(
             delta: { type: "input_json_delta", partial_json: JSON.stringify(content["input"]) },
         });
     } else {
-        event(response, "content_block_delta", {
-            index: 0,
-            delta: { type: "text_delta", text: content["text"] },
-        });
+        for (const chunk of chunks) {
+            event(response, "content_block_delta", {
+                index: 0,
+                delta: { type: "text_delta", text: chunk },
+            });
+        }
     }
     event(response, "content_block_stop", { index: 0 });
     event(response, "message_delta", {
@@ -135,25 +147,34 @@ export class FakeAnthropicProvider implements AsyncDisposable {
     readonly model: string;
     readonly origin: string;
     readonly response: string;
+    readonly #answer: string;
     readonly #close: () => Promise<void>;
     readonly #requests: ProviderRequestDiagnostic[];
 
     private constructor(
         origin: string,
         model: string,
-        response: string,
+        answer: string,
         requests: ProviderRequestDiagnostic[],
         close: () => Promise<void>,
     ) {
         this.origin = origin;
         this.model = model;
-        this.response = response;
+        this.#answer = answer;
+        this.response = fakeProviderResponse(
+            answer,
+            selectFakeProviderScenario({ input: fakeProviderPrompts.successfulTool }),
+        );
         this.#requests = requests;
         this.#close = close;
     }
 
     diagnostics(): readonly ProviderRequestDiagnostic[] {
         return this.#requests;
+    }
+
+    responseFor(prompt: string): string {
+        return fakeProviderResponse(this.#answer, selectFakeProviderScenario({ input: prompt }));
     }
 
     static async start(model: string, answer: string): Promise<FakeAnthropicProvider> {
@@ -172,21 +193,25 @@ export class FakeAnthropicProvider implements AsyncDisposable {
             }
 
             const tools = availableTools(payload);
-            const receivedToolResult = hasToolResult(payload);
-            const tool = receivedToolResult ? undefined : selectTool(tools);
+            const scenario = selectFakeProviderScenario(payload);
+            const completedToolCalls = toolResultCount(payload);
+            const tool =
+                completedToolCalls < scenario.toolCalls ? selectTool(tools, scenario, completedToolCalls) : undefined;
+            const selectedAnswer = fakeProviderResponse(answer, scenario);
             requests.push({
-                hasToolResult: receivedToolResult,
+                scenario,
                 selectedTool: tool?.name,
+                toolResultCount: completedToolCalls,
                 tools: tools.map(({ name }) => name),
                 url: request.url ?? "",
             });
             const content =
                 tool === undefined
-                    ? { type: "text", text: answer }
-                    : { type: "tool_use", id: toolCallId, name: tool.name, input: tool.input };
+                    ? { type: "text", text: selectedAnswer }
+                    : { type: "tool_use", id: tool.id, name: tool.name, input: tool.input };
             const stopReason = tool === undefined ? "end_turn" : "tool_use";
             if (payload["stream"] === true) {
-                sendStream(response, model, content, stopReason);
+                sendStream(response, model, content, responseChunks(selectedAnswer, scenario), stopReason);
                 return;
             }
             response.writeHead(200, { "content-type": "application/json" });

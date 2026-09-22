@@ -3,6 +3,7 @@ import { MobiusAgentActivityEvent } from "../../../packages/mobius-sdk/src/serve
 import { CodexFixture } from "../infra/codex.ts";
 import { expectPersistedToolTurn, runAgentDaemonTurn, startAgentDaemonJourney } from "../infra/journey.ts";
 import { FakeOpenAiProvider } from "../providers/openai.ts";
+import { fakeProviderPrompts } from "../providers/scenarios.ts";
 
 it("Given real Codex and Mobius' in-process ACP Agent use a local OpenAI upstream, When a prompt causes a tool call across the server and daemon protocols, Then the ACP tool and response are persisted", {
     timeout: 120_000,
@@ -17,6 +18,7 @@ it("Given real Codex and Mobius' in-process ACP Agent use a local OpenAI upstrea
         agentEnvironment: codex.environment,
         agentId: "codex",
         agentPath: codex.executable,
+        prompt: fakeProviderPrompts.twoTools,
         sessionId: "real-codex-local-provider",
         signal,
         title: "Real Codex local provider",
@@ -41,7 +43,7 @@ it("Given real Codex and Mobius' in-process ACP Agent use a local OpenAI upstrea
                 );
             },
         });
-        await expectPersistedToolTurn(journey, provider.response);
+        await expectPersistedToolTurn(journey, provider.responseFor(journey.prompt), { toolCount: 2 });
     } catch (error) {
         process.stderr.write(
             `Codex integration diagnostics:\n${JSON.stringify(

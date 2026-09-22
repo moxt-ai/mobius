@@ -2,6 +2,7 @@ import { it } from "vitest";
 import { expectPersistedToolTurn, runAgentDaemonTurn, startAgentDaemonJourney } from "../infra/journey.ts";
 import { OpenCodeFixture } from "../infra/opencode.ts";
 import { FakeOpenAiProvider } from "../providers/openai.ts";
+import { fakeProviderPrompts } from "../providers/scenarios.ts";
 
 it("Given real OpenCode configured with a local provider, When a prompt causes a tool call across the server and daemon protocols, Then the ACP tool and response are persisted", {
     timeout: 120_000,
@@ -16,11 +17,12 @@ it("Given real OpenCode configured with a local provider, When a prompt causes a
         agentEnvironment: openCode.environment,
         agentId: "opencode",
         agentPath: openCode.executable,
+        prompt: fakeProviderPrompts.twoTools,
         sessionId: "real-opencode-local-provider",
         signal,
         title: "Real OpenCode local provider",
     });
 
     await runAgentDaemonTurn(journey);
-    await expectPersistedToolTurn(journey, provider.response, { exactResponse: true });
+    await expectPersistedToolTurn(journey, provider.responseFor(journey.prompt), { exactResponse: true, toolCount: 2 });
 });

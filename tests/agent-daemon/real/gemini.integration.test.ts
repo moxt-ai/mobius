@@ -2,6 +2,7 @@ import { it } from "vitest";
 import { GeminiFixture } from "../infra/gemini.ts";
 import { expectPersistedToolTurn, runAgentDaemonTurn, startAgentDaemonJourney } from "../infra/journey.ts";
 import { FakeGeminiProvider } from "../providers/gemini.ts";
+import { fakeProviderPrompts } from "../providers/scenarios.ts";
 
 it("Given real Gemini CLI uses a local Gemini upstream, When a prompt causes a tool call across the server and daemon protocols, Then the ACP tool and response are persisted", {
     timeout: 120_000,
@@ -13,11 +14,12 @@ it("Given real Gemini CLI uses a local Gemini upstream, When a prompt causes a t
         agentEnvironment: gemini.environment,
         agentId: "gemini-cli",
         agentPath: gemini.executable,
+        prompt: fakeProviderPrompts.twoTools,
         sessionId: "real-gemini-local-provider",
         signal,
         title: "Real Gemini local provider",
     });
 
     await runAgentDaemonTurn(journey);
-    await expectPersistedToolTurn(journey, provider.response);
+    await expectPersistedToolTurn(journey, provider.responseFor(journey.prompt), { toolCount: 2 });
 });

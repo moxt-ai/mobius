@@ -3,6 +3,7 @@ import { discoverLocalAgentInventory } from "../../../packages/cli/src/agent-cat
 import { GrokFixture } from "../infra/grok.ts";
 import { expectPersistedToolTurn, runAgentDaemonTurn, startAgentDaemonJourney } from "../infra/journey.ts";
 import { FakeOpenAiProvider } from "../providers/openai.ts";
+import { fakeProviderPrompts } from "../providers/scenarios.ts";
 
 it("Given real Grok Build uses a local OpenAI-compatible upstream, When a prompt causes a tool call across the server and daemon protocols, Then the ACP tool and response are persisted", {
     timeout: 120_000,
@@ -17,6 +18,7 @@ it("Given real Grok Build uses a local OpenAI-compatible upstream, When a prompt
         agentEnvironment: grok.environment,
         agentId: "grok-build",
         agentPath: grok.executable,
+        prompt: fakeProviderPrompts.successfulTool,
         onDiscoveryFailure: async (daemon) => {
             const diagnostics = await discoverLocalAgentInventory({
                 defaultWorkspace: process.cwd(),
@@ -43,7 +45,7 @@ it("Given real Grok Build uses a local OpenAI-compatible upstream, When a prompt
 
     try {
         await runAgentDaemonTurn(journey);
-        await expectPersistedToolTurn(journey, provider.response);
+        await expectPersistedToolTurn(journey, provider.responseFor(journey.prompt));
     } catch (error) {
         process.stderr.write(
             `Grok Build integration diagnostics:\n${JSON.stringify(

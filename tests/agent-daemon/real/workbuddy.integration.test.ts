@@ -2,6 +2,7 @@ import { it } from "vitest";
 import { expectPersistedToolTurn, runAgentDaemonTurn, startAgentDaemonJourney } from "../infra/journey.ts";
 import { WorkBuddyFixture } from "../infra/workbuddy.ts";
 import { FakeOpenAiProvider } from "../providers/openai.ts";
+import { fakeProviderPrompts } from "../providers/scenarios.ts";
 
 it("Given real WorkBuddy uses a local OpenAI-compatible upstream, When a prompt causes a tool call across the server and daemon protocols, Then the ACP tool and response are persisted", {
     timeout: 120_000,
@@ -16,6 +17,7 @@ it("Given real WorkBuddy uses a local OpenAI-compatible upstream, When a prompt 
         agentEnvironment: workBuddy.environment,
         agentId: "workbuddy",
         agentPath: workBuddy.executable,
+        prompt: fakeProviderPrompts.twoTools,
         sessionId: "real-workbuddy-local-provider",
         signal,
         title: "Real WorkBuddy local provider",
@@ -23,7 +25,7 @@ it("Given real WorkBuddy uses a local OpenAI-compatible upstream, When a prompt 
 
     try {
         await runAgentDaemonTurn(journey);
-        await expectPersistedToolTurn(journey, provider.response);
+        await expectPersistedToolTurn(journey, provider.responseFor(journey.prompt), { toolCount: 2 });
     } catch (error) {
         process.stderr.write(
             `WorkBuddy integration diagnostics:\n${JSON.stringify(

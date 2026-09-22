@@ -55,6 +55,7 @@ const sharedFiles = new Set([
     "scripts/worktree/environment.ts",
     "scripts/wrangler.ts",
     "tests/agent-daemon/infra/executable.ts",
+    "tests/agent-daemon/providers/scenarios.ts",
     "vitest.agent-daemon.config.ts",
     "packages/relay-cloudflare-standalone/wrangler.jsonc",
 ]);

@@ -13,8 +13,9 @@ import {
     MobiusTurnFailedEvent,
     StaticMobiusCredentialProvider,
 } from "../../../packages/mobius-sdk/src/server.ts";
+import { fakeProviderPrompts } from "../providers/scenarios.ts";
 
-const defaultPrompt = "Reply using the configured model";
+const defaultPrompt = fakeProviderPrompts.successfulTool;
 
 export class AgentDaemonJourney implements AsyncDisposable {
     readonly client: MobiusClient;
@@ -218,22 +219,42 @@ export async function allowOneTimeToolPermission(journey: AgentDaemonJourney): P
 export async function expectPersistedToolTurn(
     journey: AgentDaemonJourney,
     response: string,
-    options: { readonly exactResponse?: boolean } = {},
+    options: { readonly exactResponse?: boolean; readonly toolCount?: number } = {},
 ): Promise<void> {
     await expect
-        .poll(() => journey.messages(), { timeout: 10_000 })
-        .toMatchObject([
-            {
-                attempt: { kind: "succeeded" },
-                activities: expect.arrayContaining([
-                    expect.objectContaining({
-                        activityType: "tool",
-                        status: "completed",
-                        toolCallId: expect.any(String),
-                    }),
-                ]),
-                prompt: journey.prompt,
-                response: options.exactResponse ? response : expect.stringContaining(response),
+        .poll(
+            async () => {
+                const messages = await journey.messages();
+                const message = messages.find(
+                    (candidate): candidate is Record<string, unknown> =>
+                        typeof candidate === "object" &&
+                        candidate !== null &&
+                        (candidate as Record<string, unknown>)["prompt"] === journey.prompt,
+                );
+                const activities = Array.isArray(message?.["activities"]) ? message["activities"] : [];
+                const tools = activities.filter(
+                    (activity) =>
+                        typeof activity === "object" &&
+                        activity !== null &&
+                        (activity as Record<string, unknown>)["activityType"] === "tool" &&
+                        (activity as Record<string, unknown>)["status"] === "completed" &&
+                        typeof (activity as Record<string, unknown>)["toolCallId"] === "string",
+                );
+                const attempt = message?.["attempt"];
+                return {
+                    attemptKind:
+                        typeof attempt === "object" && attempt !== null
+                            ? (attempt as Record<string, unknown>)["kind"]
+                            : undefined,
+                    response: message?.["response"],
+                    toolCount: tools.length,
+                };
             },
-        ]);
+            { timeout: 10_000 },
+        )
+        .toEqual({
+            attemptKind: "succeeded",
+            response: options.exactResponse ? response : expect.stringContaining(response),
+            toolCount: options.toolCount ?? 1,
+        });
 }

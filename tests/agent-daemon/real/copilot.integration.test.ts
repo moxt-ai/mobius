@@ -7,6 +7,7 @@ import {
     startAgentDaemonJourney,
 } from "../infra/journey.ts";
 import { FakeOpenAiProvider } from "../providers/openai.ts";
+import { fakeProviderPrompts } from "../providers/scenarios.ts";
 
 it("Given real GitHub Copilot CLI uses a local OpenAI upstream, When a prompt causes a tool call across the server and daemon protocols, Then the ACP tool and response are persisted", {
     timeout: 120_000,
@@ -21,6 +22,7 @@ it("Given real GitHub Copilot CLI uses a local OpenAI upstream, When a prompt ca
         agentEnvironment: copilot.environment,
         agentId: "github-copilot-cli",
         agentPath: copilot.executable,
+        prompt: fakeProviderPrompts.failedTool,
         sessionId: "real-copilot-local-provider",
         signal,
         title: "Real Copilot local provider",
@@ -31,15 +33,15 @@ it("Given real GitHub Copilot CLI uses a local OpenAI upstream, When a prompt ca
             afterSubmit: () => allowOneTimeToolPermission(journey),
             completionTimeoutMilliseconds: 40_000,
         });
-        await expectPersistedToolTurn(journey, provider.response);
+        await expectPersistedToolTurn(journey, provider.responseFor(journey.prompt));
         expect(provider.diagnostics()).toEqual([
             expect.objectContaining({
-                hasToolResult: false,
                 selectedTool: { kind: "function", name: "bash" },
+                toolResultCount: 0,
             }),
             expect.objectContaining({
-                hasToolResult: true,
                 selectedTool: undefined,
+                toolResultCount: 1,
             }),
         ]);
     } catch (error) {

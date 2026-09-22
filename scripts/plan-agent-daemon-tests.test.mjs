@@ -55,6 +55,7 @@ describe("agent and daemon test planning", () => {
         ];
         assert.deepEqual(selected(["packages/cli/src/acp/session-manager.ts"]), all);
         assert.deepEqual(selected(["tests/agent-daemon/new-shared-helper.ts"]), all);
+        assert.deepEqual(selected(["tests/agent-daemon/providers/scenarios.ts"]), all);
         assert.deepEqual(selected([".github/actions/setup/action.yml"]), all);
         assert.deepEqual(selected(["scripts/plan-agent-daemon-tests.mjs"]), all);
     });

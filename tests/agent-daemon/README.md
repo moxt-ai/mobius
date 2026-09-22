@@ -51,6 +51,13 @@ Return the final answer only after a tool-result item appears in the next model
 request. This keeps the provider tolerant of Agent-specific tool names and
 unrelated model calls while proving the complete tool round trip.
 
+The shared scenario selector recognizes ordinary prompt keywords instead of
+requiring protocol-specific fixtures. Real-Agent cases distribute successful
+tools, failed tools, two sequential tools, and chunked Unicode responses across
+the matrix. Every case still proves at least one tool round trip. Each varied
+scenario replaces the duplicate baseline in an existing Agent case rather than
+adding another expensive setup.
+
 ## Layout
 
 ```text
@@ -100,6 +107,7 @@ tests/agent-daemon/
     cursor.ts
     gemini.ts
     openai.ts
+    scenarios.ts
 ```
 
 Each file in `controlled-agent/` owns either a shared daemon behavior or one
@@ -170,11 +178,13 @@ pnpm dev:agent codex
 pnpm dev:agent opencode
 ```
 
-The command runs in the current workspace and remains interactive. The fake
-provider chooses a harmless tool when the Agent advertises one, waits for its
-result, and returns a recognizable response. Pass Agent-specific arguments
-after `--`, for example `pnpm dev:agent codex -- exec "say hello"`. Executable
-overrides use the same `MOBIUS_TEST_*_PATH` variables as the integration tests.
+The command runs in the current workspace and remains interactive. Ask for a
+tool, a failing tool, two tools, or a streamed Unicode response to select the
+same scenarios as the automated cases. The provider loosely matches those
+keywords, waits for requested tool results, and returns a recognizable
+response. Pass Agent-specific arguments after `--`, for example
+`pnpm dev:agent codex -- exec "use two shell tools"`. Executable overrides use
+the same `MOBIUS_TEST_*_PATH` variables as the integration tests.
 
 To exercise the normal Mobius pairing and Web path, first start the local Relay
 with `pnpm dev:relay` and open `http://127.0.0.1:8787`. Add `--daemon` before the
