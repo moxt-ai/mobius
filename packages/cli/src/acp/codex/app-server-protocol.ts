@@ -225,12 +225,14 @@ export const threadForkResponseSchema = threadLifecycleResponseSchema;
 
 // A thread summary as `thread/list` reports it. `updatedAt` is Unix seconds and becomes the ACP
 // session's ISO 8601 timestamp; `name` is the user-facing title with `preview` — usually the first
-// user message — as the fallback label.
+// user message — as the fallback label. Codex does not bound either title source, while ACP limits
+// a native session title to 500 characters, so normalize the validated strings at this boundary.
+const threadTitleSchema = z.string().transform((value) => value.slice(0, 500));
 const threadSummarySchema = z.object({
     cwd: boundedText(2_048),
     id: boundedText(256),
-    name: boundedText(500).nullish(),
-    preview: boundedText(500).nullish(),
+    name: threadTitleSchema.nullish(),
+    preview: threadTitleSchema.nullish(),
     updatedAt: z.number().int().nonnegative(),
 });
 

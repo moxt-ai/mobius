@@ -249,6 +249,21 @@ describe("native Agent session boundary", () => {
         }
     });
 
+    it("Given a saved Codex thread with a long preview, When its directory is listed, Then the thread has a bounded title", async () => {
+        const f = await codexFixture();
+        try {
+            const preview = "Long Codex preview ".repeat(30);
+            await f.seed(preview);
+
+            const result = await f.list();
+
+            expect(result.entries).toHaveLength(1);
+            expect(result.entries[0]?.title).toBe(preview.slice(0, 500));
+        } finally {
+            await f.close();
+        }
+    });
+
     it("Given a saved local conversation, When its history is previewed and then forked, Then preview leaves the source untouched and only the fork creates a new conversation", async () => {
         vi.useFakeTimers({ toFake: ["Date"] });
         vi.setSystemTime(new Date("2026-09-15T12:00:00Z"));
