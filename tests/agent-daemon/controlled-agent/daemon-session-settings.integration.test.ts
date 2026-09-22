@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { writeFileSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -46,7 +45,6 @@ import { discoverLocalAgentInventory } from "../../../packages/cli/src/agent-cat
 import { LocalAgentDefinition } from "../../../packages/cli/src/agent-catalog/local-agent.ts";
 import { AuditStore } from "../../../packages/cli/src/audit/audit-store.ts";
 import { createDaemonConfig, DaemonLocalContext } from "../../../packages/cli/src/config.ts";
-import type { DaemonScheduledTask, DaemonTimer } from "../../../packages/cli/src/relay-connection/timer.ts";
 import { runDaemon } from "../../../packages/cli/src/run-daemon.ts";
 import { listen, port, sendText } from "../../../tests/infra/websocket.ts";
 
@@ -130,27 +128,6 @@ class ClientFrames {
                 resolve(message);
             }
         }
-    };
-}
-
-class OpenCodeProviderSettlementTimer implements DaemonTimer {
-    readonly #marker: string;
-
-    constructor(marker: string) {
-        this.#marker = marker;
-    }
-
-    readonly schedule = (callback: () => void, milliseconds: number): DaemonScheduledTask => {
-        let cancelled = false;
-        if (milliseconds === 1_000) {
-            writeFileSync(this.#marker, "ready");
-            queueMicrotask(() => {
-                if (!cancelled) {
-                    callback();
-                }
-            });
-        }
-        return { cancel: () => (cancelled = true) };
     };
 }
 
@@ -269,12 +246,11 @@ async function readSessionLiveHistoryPage(frames: ClientFrames, requestId: strin
 }
 
 describe("daemon session configuration boundary", () => {
-    it("Given OpenCode's custom provider settles after startup, When Agent settings are discovered, Then the custom model is available", async () => {
+    it("Given OpenCode's ACP catalog omits a locally configured model, When Agent settings are discovered, Then the CLI model is available", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-opencode-provider-settlement-"));
         const workspace = join(stateDirectory, "workspace");
         const nativeStateDirectory = join(stateDirectory, "native");
         const auditDatabasePath = join(stateDirectory, "audit", "channel_alpha.sqlite");
-        const readinessMarker = join(nativeStateDirectory, "custom-provider-ready");
         await Promise.all([mkdir(workspace), mkdir(nativeStateDirectory)]);
 
         const socketReady = Promise.withResolvers<Duplex>();
@@ -315,7 +291,7 @@ describe("daemon session configuration boundary", () => {
             "opencode",
             "OpenCode",
             process.execPath,
-            [fakeAgentPath, "--custom-model-after-readiness"],
+            [fakeAgentPath, "acp", "--acp-omits-custom-model"],
             { MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory },
         );
         const config = createDaemonConfig(
@@ -331,12 +307,7 @@ describe("daemon session configuration boundary", () => {
         );
         const cancellation = new AbortController();
         const audit = new AuditStore(auditDatabasePath);
-        const daemon = runDaemon(
-            config,
-            audit,
-            cancellation.signal,
-            new OpenCodeProviderSettlementTimer(readinessMarker),
-        );
+        const daemon = runDaemon(config, audit, cancellation.signal);
 
         try {
             const frames = new ClientFrames(await socketReady.promise);

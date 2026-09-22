@@ -372,8 +372,13 @@ function usesReducedModelCatalog(): boolean {
 
 const reducedModelCatalog = usesReducedModelCatalog();
 
+if (process.argv.includes("models") && process.argv.includes("--acp-omits-custom-model")) {
+    process.stdout.write("custom-provider/custom-model\n");
+    process.exit(0);
+}
+
 function modelOptions(): Array<{ readonly name: string; readonly value: string }> {
-    if (!process.argv.includes("--custom-model-after-readiness")) {
+    if (!process.argv.includes("--acp-omits-custom-model")) {
         return reducedModelCatalog
             ? [
                   { name: "Test Small", value: "test-small" },
@@ -384,14 +389,7 @@ function modelOptions(): Array<{ readonly name: string; readonly value: string }
                   { name: "Test Large", value: "test-large" },
               ];
     }
-    const directory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
-    if (directory === undefined || !existsSync(join(directory, "custom-provider-ready"))) {
-        return [{ name: "Test Small", value: "test-small" }];
-    }
-    return [
-        { name: "Test Small", value: "test-small" },
-        { name: "Custom Model", value: "custom-provider/custom-model" },
-    ];
+    return [{ name: "Test Small", value: "test-small" }];
 }
 
 function configOptions(state: FakeSessionState): acp.SessionConfigOption[] {
