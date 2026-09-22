@@ -5,8 +5,9 @@ import { SingleDatabaseResolver } from "../src/database-resolver.ts";
 import { StandaloneProjectStorageDirectory } from "../src/project-storage-directory.ts";
 import { STANDALONE_NAMESPACE_PREFIX } from "../src/standalone-namespace.ts";
 
-// Real Session DO requests cannot be made to stall deterministically. This stateful
-// transport forwards real traffic, then suspends disconnect delivery until cancellation or release.
+// Real Session DO requests cannot be made to stall deterministically. This stateful transport lets the first
+// disconnect complete, then suspends every later one until cancellation or release. It claims the suspension
+// before forwarding, so which Session completes and which suspends stays deterministic.
 export class SuspendedDisconnectTransport implements SessionTransport {
     readonly #transport: SessionTransport = {
         fetch: ({ scope, sessionId }, request) =>
@@ -31,27 +32,38 @@ export class SuspendedDisconnectTransport implements SessionTransport {
 
     readonly fetch: SessionTransport["fetch"] = async (target, request) => {
         const { sessionId } = target;
-        if (new URL(request.url).pathname.endsWith("/disconnect")) {
-            if (this.#state.kind === "suspending") {
-                request.signal.throwIfAborted();
-                const aborted = Promise.withResolvers<never>();
-                const cancel = () => aborted.reject(request.signal.reason);
-                request.signal.addEventListener("abort", cancel, { once: true });
-                this.#suspended.resolve(this.#state.completedSessionId);
-                try {
-                    await Promise.race([aborted.promise, this.#released.promise]);
-                    return await this.#transport.fetch(target, request);
-                } finally {
-                    request.signal.removeEventListener("abort", cancel);
-                }
-            }
-            const response = await this.#transport.fetch(target, request);
-            if (response.ok && this.#state.kind === "ready") {
-                this.#state = { kind: "suspending", completedSessionId: sessionId };
-            }
-            return response;
+        if (!new URL(request.url).pathname.endsWith("/disconnect")) {
+            return await this.#transport.fetch(target, request);
         }
-        return await this.#transport.fetch(target, request);
+        if (this.#state.kind === "ready") {
+            // Claim the one completed disconnect synchronously, before awaiting: concurrent settles would
+            // otherwise all observe "ready" and none would suspend.
+            this.#state = { kind: "suspending", completedSessionId: sessionId };
+            try {
+                const response = await this.#transport.fetch(target, request);
+                if (!response.ok) {
+                    this.#state = { kind: "ready" };
+                }
+                return response;
+            } catch (error) {
+                this.#state = { kind: "ready" };
+                throw error;
+            }
+        }
+        if (this.#state.kind === "released") {
+            return await this.#transport.fetch(target, request);
+        }
+        request.signal.throwIfAborted();
+        const aborted = Promise.withResolvers<never>();
+        const cancel = () => aborted.reject(request.signal.reason);
+        request.signal.addEventListener("abort", cancel, { once: true });
+        this.#suspended.resolve(this.#state.completedSessionId);
+        try {
+            await Promise.race([aborted.promise, this.#released.promise]);
+            return await this.#transport.fetch(target, request);
+        } finally {
+            request.signal.removeEventListener("abort", cancel);
+        }
     };
 }
 
@@ -217,5 +229,27 @@ export class RecordingDeliveryProbeTransport implements SessionTransport {
         } finally {
             this.#inFlight -= 1;
         }
+    };
+}
+
+// Settling a Runtime disconnect must reach only the Sessions the Runtime still had work for. This records the
+// Sessions a disconnect visited, so "a finished Session is never revisited" stays observable through the same
+// production Session port the Relay uses in deployment.
+export class RecordingDisconnectTransport implements SessionTransport {
+    readonly #transport: SessionTransport = {
+        fetch: ({ scope, sessionId }, request) =>
+            env.SESSION_RELAY.get(
+                env.SESSION_RELAY.idFromName(`${STANDALONE_NAMESPACE_PREFIX}:${scope.projectId}:${sessionId}`),
+            ).fetch(request),
+    };
+    readonly #disconnected = new Set<string>();
+
+    readonly disconnectedSessions = (): readonly string[] => [...this.#disconnected].sort();
+
+    readonly fetch: SessionTransport["fetch"] = async (target, request) => {
+        if (new URL(request.url).pathname.endsWith("/disconnect")) {
+            this.#disconnected.add(target.sessionId);
+        }
+        return await this.#transport.fetch(target, request);
     };
 }

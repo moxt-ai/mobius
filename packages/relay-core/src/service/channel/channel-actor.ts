@@ -93,6 +93,7 @@ import {
 } from "../../entity/do/session.ts";
 import type { SessionCommandRuntime, SessionQueryRuntime } from "../../infra/session-runtime.ts";
 import { sha256 } from "../do/session-archive-codec.ts";
+import type { RuntimeConnectionService } from "./runtime-connection-service.ts";
 
 const DEFAULT_RETENTION_MILLISECONDS = 30 * 24 * 60 * 60 * 1_000;
 const MINIMUM_TRUNCATED_HISTORY_MATCH_CHARACTERS = 32;
@@ -263,6 +264,7 @@ export class ChannelActor {
     readonly #backpressuredEventBySource = new Map<string, string>();
     readonly #clock: RelayClock;
     readonly #commands: SessionCommandRuntime;
+    readonly #connections: Pick<RuntimeConnectionService, "clearActiveSession" | "current" | "recordActiveSession">;
     readonly #peers: ChannelPeers;
     readonly #queries: SessionQueryRuntime;
     readonly #runtimeId: string;
@@ -274,6 +276,7 @@ export class ChannelActor {
 
     constructor(cx: {
         readonly config: { readonly runtimeId: string; readonly scope: ProjectScope };
+        readonly connections: Pick<RuntimeConnectionService, "clearActiveSession" | "current" | "recordActiveSession">;
         readonly gateways: {
             readonly peers: ChannelPeers;
             readonly clock?: RelayClock;
@@ -285,6 +288,7 @@ export class ChannelActor {
         const { commands, queries } = cx.runtimes;
         this.#clock = clock;
         this.#commands = commands;
+        this.#connections = cx.connections;
         this.#peers = peers;
         this.#queries = queries;
         this.#runtimeId = runtimeId;
@@ -309,6 +313,30 @@ export class ChannelActor {
         }
         this.#deliveryReceipts = deliveryReceipts;
         this.#clearInFlightDeliveries();
+    };
+
+    /**
+     * Remember that this Runtime now has work for a Session.
+     *
+     * A Session holds its own Attempt state, so settling a Runtime disconnect means asking each affected
+     * Session Durable Object to mark its in-flight Attempts indeterminate. Recording the Sessions the Relay
+     * hands work to is what lets a disconnect settle only those Sessions instead of every ready Session in the
+     * Project, so a Session whose Turn already finished is never revisited.
+     */
+    readonly recordActiveSession = (sessionId: string): void => {
+        const current = this.#connections.current();
+        if (current === null || current.runtimeId !== this.#runtimeId) {
+            return;
+        }
+        this.#connections.recordActiveSession(this.#runtimeId, sessionId, current.connectionEpoch, this.#clock.now());
+    };
+
+    readonly clearActiveSession = (sessionId: string): void => {
+        const current = this.#connections.current();
+        if (current === null || current.runtimeId !== this.#runtimeId) {
+            return;
+        }
+        this.#connections.clearActiveSession(this.#runtimeId, sessionId, current.connectionEpoch);
     };
 
     readonly attachHost = (socket: ChannelSocket, _signal: AbortSignal): Promise<void> => {
@@ -445,6 +473,8 @@ export class ChannelActor {
                     (decodeMessageKind(envelope.payload) === "session.completed" ||
                         decodeMessageKind(envelope.payload) === "session.failed")
                 ) {
+                    // The Turn reached a terminal outcome, so this Session no longer holds Runtime work.
+                    this.clearActiveSession(envelope.sessionId);
                     await this.dispatchPending(signal);
                 }
                 return;
@@ -1453,6 +1483,9 @@ export class ChannelActor {
             }
             for (const delivery of batch) {
                 signal.throwIfAborted();
+                // Record before handing off: a disconnect may run before the Runtime answers, and an extra
+                // recorded Session only costs one idempotent settle while a missed one strands the Attempt.
+                this.recordActiveSession(delivery.pendingWork.sessionId);
                 if (!this.sendToDaemon(decodeServiceToDaemonMessage(delivery.payload))) {
                     return;
                 }
@@ -1491,6 +1524,9 @@ export class ChannelActor {
                 if (this.#inFlightDeliveryBytes + byteLength > RUNTIME_DELIVERY_BYTE_LIMIT) {
                     continue;
                 }
+                // Record before handing off: a disconnect may run before the Runtime answers, and an extra
+                // recorded Session only costs one idempotent settle while a missed one strands the Attempt.
+                this.recordActiveSession(delivery.pendingWork.sessionId);
                 if (!this.sendToDaemon(daemonMessage)) {
                     return;
                 }

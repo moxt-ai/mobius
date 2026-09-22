@@ -1,4 +1,8 @@
-import type { RuntimeConnectionIdentity, RuntimeDisconnect } from "../../entity/channel/runtime-connection.ts";
+import type {
+    RuntimeConnectionIdentity,
+    RuntimeDisconnect,
+    RuntimeDisconnectTarget,
+} from "../../entity/channel/runtime-connection.ts";
 import type { ProjectScope } from "../../entity/do/session.ts";
 import type { RuntimeConnectionStorage } from "../../storage/runtime-connection-storage.ts";
 
@@ -16,6 +20,12 @@ export class RuntimeConnectionService {
     readonly isRevoked = (runtimeId: string, scope: ProjectScope) => this.#storage.isRevoked(runtimeId, scope);
     readonly revoke = (runtimeId: string, scope: ProjectScope, now: number) =>
         this.#storage.revoke(runtimeId, scope, now);
+    readonly recordActiveSession = (runtimeId: string, sessionId: string, connectionEpoch: number, now: number) =>
+        this.#storage.recordActiveSession(runtimeId, sessionId, connectionEpoch, now);
+    readonly clearActiveSession = (runtimeId: string, sessionId: string, connectionEpoch: number) =>
+        this.#storage.clearActiveSession(runtimeId, sessionId, connectionEpoch);
+    readonly listActiveSessions = (runtimeId: string): readonly RuntimeDisconnectTarget[] =>
+        this.#storage.listActiveSessions(runtimeId);
 
     readonly prepare = (
         runtimeId: string,

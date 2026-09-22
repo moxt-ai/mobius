@@ -1,5 +1,9 @@
 import * as v from "valibot";
-import type { RuntimeConnectionIdentity, RuntimeDisconnect } from "../entity/channel/runtime-connection.ts";
+import type {
+    RuntimeConnectionIdentity,
+    RuntimeDisconnect,
+    RuntimeDisconnectTarget,
+} from "../entity/channel/runtime-connection.ts";
 import type { ProjectScope } from "../entity/do/session.ts";
 import { runtimeConnectionDurableObjectMigrations } from "../generated/runtime-connection-do-migrations.ts";
 import type { DoSqlDatabase } from "../infra/do-sql-database.ts";
@@ -12,10 +16,6 @@ const disconnectSchema = v.object({
     connectionId: v.string(),
     projectId: v.string(),
     disconnectedAt: v.number(),
-    progress: v.variant("kind", [
-        v.object({ kind: v.literal("listing") }),
-        v.object({ kind: v.literal("disconnecting"), remaining: v.array(v.string()) }),
-    ]),
 });
 
 export class RuntimeConnectionStorage {
@@ -32,6 +32,66 @@ export class RuntimeConnectionStorage {
             WHERE runtime_id = ? AND project_id = ?`,
             [runtimeId, scope.projectId],
         )[0] !== undefined;
+
+    /**
+     * Remember that this Runtime still has work for a Session.
+     *
+     * Only a Session the Channel handed work to can be in flight, so recording these keeps a disconnect sweep
+     * proportional to the Runtime's outstanding work instead of the Project's Session count. A Session whose
+     * Turn already finished is never recorded, so it is never revisited.
+     */
+    readonly recordActiveSession = (
+        runtimeId: string,
+        sessionId: string,
+        connectionEpoch: number,
+        now: number,
+    ): void => {
+        this.#database.run(
+            `INSERT INTO runtime_active_sessions (runtime_id, session_id, connection_epoch, recorded_at)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT(runtime_id, session_id) DO UPDATE SET
+               connection_epoch = excluded.connection_epoch,
+               recorded_at = excluded.recorded_at`,
+            [runtimeId, sessionId, connectionEpoch, now],
+        );
+    };
+
+    /**
+     * Forget a Session once its in-flight Attempts are settled.
+     *
+     * Scoping to the recording connection epoch keeps a settle that ran across a reconnect from forgetting a
+     * Session the newer connection has since recorded.
+     */
+    readonly clearActiveSession = (runtimeId: string, sessionId: string, connectionEpoch: number): void => {
+        this.#database.run(
+            `DELETE FROM runtime_active_sessions
+             WHERE runtime_id = ? AND session_id = ? AND connection_epoch = ?`,
+            [runtimeId, sessionId, connectionEpoch],
+        );
+    };
+
+    readonly listActiveSessions = (runtimeId: string): readonly RuntimeDisconnectTarget[] =>
+        this.#database
+            .query(
+                `SELECT session_id, connection_epoch FROM runtime_active_sessions
+                 WHERE runtime_id = ?
+                 ORDER BY recorded_at, session_id`,
+                [runtimeId],
+            )
+            .map((row) => {
+                const sessionId = row["session_id"];
+                const connectionEpoch = row["connection_epoch"];
+                if (
+                    typeof sessionId !== "string" ||
+                    sessionId.length === 0 ||
+                    typeof connectionEpoch !== "number" ||
+                    !Number.isSafeInteger(connectionEpoch) ||
+                    connectionEpoch < 1
+                ) {
+                    throw new DatabaseError("database_unavailable", "The active Session record is invalid");
+                }
+                return { connectionEpoch, sessionId };
+            });
 
     readonly revoke = (runtimeId: string, scope: ProjectScope, now: number): void => {
         this.#database.run(

@@ -154,7 +154,7 @@ function createRuntimeRelayDependencies(cx: {
     readonly runtimes: {
         readonly sessions: SessionCommandRuntime &
             SessionQueryRuntime &
-            Pick<RemoteSessionRuntime, "listRuntimeSessionIds" | "disconnectSession">;
+            Pick<RemoteSessionRuntime, "disconnectSessions">;
     };
     readonly utilities: {
         readonly schedule: (timestamp: number, signal: AbortSignal) => Promise<void>;
@@ -182,6 +182,7 @@ function createRuntimeRelayDependencies(cx: {
         channel: (runtimeId: string, scope: ProjectScope) =>
             new ChannelActor({
                 config: { runtimeId, scope },
+                connections: services.connections,
                 gateways: { peers: cx.gateways.peers },
                 runtimes: { commands: cx.runtimes.sessions, queries: cx.runtimes.sessions },
             }),

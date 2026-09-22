@@ -7,7 +7,15 @@ export interface RuntimeConnectionIdentity {
 export interface RuntimeDisconnect extends RuntimeConnectionIdentity {
     readonly projectId: string;
     readonly disconnectedAt: number;
-    readonly progress:
-        | { readonly kind: "listing" }
-        | { readonly kind: "disconnecting"; readonly remaining: readonly string[] };
+}
+
+/**
+ * One Session that still has work outstanding on the disconnecting Runtime.
+ *
+ * The Session holds the Attempt state, so only these Sessions need revisiting when a Runtime drops. Carrying
+ * the recording epoch keeps a resumed sweep from touching a Session a newer connection has since taken over.
+ */
+export interface RuntimeDisconnectTarget {
+    readonly connectionEpoch: number;
+    readonly sessionId: string;
 }

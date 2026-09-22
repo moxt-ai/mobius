@@ -41,6 +41,7 @@ import { createStandaloneGateways } from "../src/worker.ts";
 import { testBindings } from "./infra/bindings.ts";
 import {
     RecordingDeliveryProbeTransport,
+    RecordingDisconnectTransport,
     runtimeWithTransport,
     SuspendedDisconnectTransport,
 } from "./runtime-recovery-transport.ts";
@@ -1505,12 +1506,31 @@ describe.sequential("Cloudflare session deployment: Session recovery and concurr
             const { pairChannel, openChannelSocket, createSession } = createSessionRequests(app);
             vi.setSystemTime(new Date("2030-09-06T00:00:00.000Z"));
             const pairing = await pairChannel();
-            for (const suffix of ["a", "b"]) {
-                expect((await createSession(pairing.created, `revocation-race-${mode}-${suffix}`)).status).toBe(201);
-            }
+            const sessionIds = ["a", "b"].map((suffix) => `revocation-race-${mode}-${suffix}`);
             const daemon = await openChannelSocket(
                 `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
             );
+            const host = await openChannelSocket(
+                `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+            );
+            await host.messages.next();
+            // Cleanup only revisits Sessions the Runtime still has work for, so give both Sessions an
+            // in-flight Turn. One settles and the next suspends the transport, which is the state under test.
+            for (const sessionId of sessionIds) {
+                expect((await createSession(pairing.created, sessionId)).status).toBe(201);
+                const command = prompt(sessionId, `${sessionId}-command`, "hold this Turn open");
+                await submitPrompt(host, daemon, command);
+                await commit(
+                    host,
+                    daemon,
+                    envelope(sessionId, `${sessionId}-started`, {
+                        commandId: command.commandId,
+                        kind: SESSION_STARTED_KIND,
+                        attemptId: `${sessionId}-attempt`,
+                        sessionId,
+                    }),
+                );
+            }
             const stub = env.RUNTIME_RELAY.get(env.RUNTIME_RELAY.idFromName(pairing.created.channelId));
             try {
                 await runInDurableObject(stub, async (_instance, state) => {
@@ -1581,6 +1601,7 @@ describe.sequential("Cloudflare session deployment: Session recovery and concurr
                     await expect(host.json()).resolves.toMatchObject({ error: { code: "runtime_revoked" } });
                 });
             } finally {
+                host.socket.close(1000, "Test complete");
                 daemon.socket.close(1000, "Test complete");
             }
         },
@@ -1836,5 +1857,64 @@ describe.sequential("Cloudflare session deployment: Session recovery and concurr
         // Serial probing keeps this at 1 and lets a large Project's Session count push the attach past the
         // daemon's connection deadline; overlapping probes keep the attach bounded by concurrency, not count.
         expect(maximumConcurrentProbes).toBeGreaterThan(1);
+    });
+
+    it("Given a Project owns a finished Session and an in-flight Session, When its daemon disconnects, Then only the in-flight Session is revisited", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, createSession } = createSessionRequests(app);
+        vi.setSystemTime(new Date("2030-09-06T00:00:00.000Z"));
+        const pairing = await pairChannel();
+        const finishedSessionId = "settle-finished-session";
+        const inFlightSessionId = "settle-in-flight-session";
+        const daemon = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+        );
+        const host = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+        );
+        await host.messages.next();
+        for (const sessionId of [finishedSessionId, inFlightSessionId]) {
+            expect((await createSession(pairing.created, sessionId)).status).toBe(201);
+        }
+        // One Session runs a Turn to a terminal outcome; the other keeps a Turn in flight.
+        await completeTurn(host, daemon, prompt(finishedSessionId, "settle-finished-command", "finish"), "done");
+        await submitPrompt(host, daemon, prompt(inFlightSessionId, "settle-in-flight-command", "stay open"));
+        await commit(
+            host,
+            daemon,
+            envelope(inFlightSessionId, "settle-in-flight-started", {
+                commandId: "settle-in-flight-command",
+                kind: SESSION_STARTED_KIND,
+                attemptId: "settle-in-flight-attempt",
+                sessionId: inFlightSessionId,
+            }),
+        );
+        const stub = env.RUNTIME_RELAY.get(env.RUNTIME_RELAY.idFromName(pairing.created.channelId));
+        try {
+            const visited = await runInDurableObject(stub, async (instance, state) => {
+                const socket = state.getWebSockets("daemon")[0];
+                if (socket === undefined || instance.webSocketClose === undefined) {
+                    throw new Error("Expected a connected runtime");
+                }
+                const transport = new RecordingDisconnectTransport();
+                vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+                vi.setSystemTime(new Date("2030-09-06T00:00:00.000Z"));
+                try {
+                    await runtimeWithTransport(state, transport).webSocketClose(socket);
+                    vi.advanceTimersByTime(30_000);
+                    return transport.disconnectedSessions();
+                } finally {
+                    vi.useRealTimers();
+                    vi.useFakeTimers({ toFake: ["Date"] });
+                    vi.setSystemTime(new Date("2030-09-06T00:00:30.000Z"));
+                }
+            });
+            // A Session whose Turn already finished holds no in-flight Attempt, so revisiting it would only
+            // cost a round trip and risk regressing a reconciled outcome.
+            expect(visited).toEqual([inFlightSessionId]);
+        } finally {
+            host.socket.close(1000, "Test complete");
+            daemon.socket.close(1000, "Test complete");
+        }
     });
 });

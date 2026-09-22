@@ -1,4 +1,4 @@
-import { and, desc, eq, lt, ne, or } from "drizzle-orm";
+import { and, desc, eq, inArray, lt, ne, or } from "drizzle-orm";
 import type { ProjectScope, SessionQuotaPolicy, SessionSummary } from "../entity/do/session.ts";
 import type { DatabaseResolver } from "../infra/database-resolver.ts";
 import { relayDrizzle } from "../infra/drizzle-database.ts";
@@ -143,6 +143,36 @@ export class SessionDirectoryStorage {
             .where(and(eq(sessionDirectory.projectId, scope.projectId), eq(sessionDirectory.sessionId, sessionId)))
             .limit(1);
         return row ?? null;
+    };
+
+    /**
+     * Resolve the retention routing for several Sessions in one round trip.
+     *
+     * A Runtime disconnect needs each affected Session's retention routing to reach the right namespace.
+     * Asking D1 once per Session turned that into one cross-region round trip per Session; one bounded read
+     * keeps the settle proportional to the Runtime's outstanding work instead of its Session count.
+     */
+    readonly readRetention = async (
+        project: ProjectStorageContext,
+        scope: ProjectScope,
+        sessionIds: readonly string[],
+        signal: AbortSignal,
+    ) => {
+        if (sessionIds.length === 0) {
+            return [] as readonly { readonly cloud_retention: boolean; readonly session_id: string }[];
+        }
+        return (await relayDrizzle(this.#databases.resolve(project.storagePlacement), signal)
+            .select({
+                cloud_retention: sessionDirectory.cloudRetention,
+                session_id: sessionDirectory.sessionId,
+            })
+            .from(sessionDirectory)
+            .where(
+                and(
+                    eq(sessionDirectory.projectId, scope.projectId),
+                    inArray(sessionDirectory.sessionId, [...sessionIds]),
+                ),
+            )) satisfies readonly { readonly cloud_retention: boolean; readonly session_id: string }[];
     };
 
     readonly update = async (

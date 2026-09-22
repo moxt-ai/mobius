@@ -29,6 +29,7 @@ import {
     type SessionPromptCommand,
     type Turn,
 } from "@moxt-ai/mobius-protocol";
+import type { RuntimeDisconnectTarget } from "../../entity/channel/runtime-connection.ts";
 import {
     type ActivityDetail,
     ArtifactContent,
@@ -1615,6 +1616,64 @@ export class RemoteSessionRuntime
         const project = await this.#projects.resolve(scope.projectId, signal);
         const rows = await this.#directory.listRuntime(project, scope, runtimeId, signal);
         return rows.map((row) => row.session_id);
+    };
+
+    /**
+     * Settle in-flight Attempts for several Sessions at once.
+     *
+     * Only a Session the Runtime was handed work for can be in flight, so the caller passes that recorded set.
+     * Resolving retention for the whole set in one directory read keeps a Runtime disconnect proportional to
+     * its outstanding work rather than to the number of Sessions the Project ever created. Sessions settle in
+     * order and each is reported as it completes, so the caller forgets it immediately and an interrupted sweep
+     * resumes only the Sessions still outstanding instead of replaying ones already settled.
+     */
+    readonly disconnectSessions = async (
+        scope: ProjectScope,
+        runtimeId: string,
+        sessions: readonly RuntimeDisconnectTarget[],
+        now: number,
+        signal: AbortSignal,
+        onDisconnected: (session: RuntimeDisconnectTarget) => void,
+    ): Promise<void> => {
+        signal.throwIfAborted();
+        if (sessions.length === 0) {
+            return;
+        }
+        const project = await this.#projects.resolve(scope.projectId, signal);
+        const rows = await this.#directory.readRetention(
+            project,
+            scope,
+            sessions.map((session) => session.sessionId),
+            signal,
+        );
+        const retention = new Map(rows.map((row) => [row.session_id, row.cloud_retention]));
+        for (const session of sessions) {
+            signal.throwIfAborted();
+            // A Session no longer in the directory was deleted while its Runtime was offline, so it has no
+            // Attempt left to settle and the caller only needs to stop tracking it.
+            if (retention.get(session.sessionId) === true) {
+                try {
+                    await this.requestTarget(
+                        scope,
+                        runtimeId,
+                        true,
+                        session.sessionId,
+                        "disconnect",
+                        { now, runtimeId },
+                        signal,
+                    );
+                } catch (error) {
+                    signal.throwIfAborted();
+                    if (
+                        !(error instanceof SessionRuntimeError) ||
+                        (error.code !== "session_deleted" && error.code !== "session_not_found")
+                    ) {
+                        throw error;
+                    }
+                }
+            }
+            onDisconnected(session);
+        }
     };
 
     readonly disconnectSession = async (

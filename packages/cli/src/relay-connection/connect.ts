@@ -4,7 +4,11 @@ import { environmentProxyDispatcher } from "../network/environment-proxy.ts";
 import { runtimeAuthorization } from "./runtime-authentication.ts";
 import { isRuntimeRelayRevocation, RuntimeRelayRevokedError } from "./runtime-revocation.ts";
 
-const CONNECTION_TIMEOUT_MILLISECONDS = 15_000;
+// The Relay accepts a daemon only after it has made the Channel's previous connection offline, and a
+// Project whose Runtime had several Sessions in flight takes longer to reach that point than a small one.
+// A tight deadline made the daemon give up mid-accept, reconnect, and give up again, so allow enough room
+// for a large Project while still failing a genuinely dead Relay.
+const CONNECTION_TIMEOUT_MILLISECONDS = 60_000;
 
 class RelayConnectionError extends Error {
     readonly code: string;
