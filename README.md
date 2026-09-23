@@ -29,4 +29,33 @@ pnpm build
 
 No staging or production deployment workflow is configured.
 
+## Local Runtime connections
+
+Pairing starts or reuses one detached Mobius manager for the current user. If the
+installed CLI version changes, the next `mobius pair` or `mobius start` command
+stops the old manager and launches the matching version.
+
+Manage saved Runtime pairings by their local Connection ID:
+
+```bash
+mobius pair list
+mobius pair list --output-json=/path/to/existing-file.json
+mobius pair stop --connection <connection-id>
+mobius start --connection <connection-id>
+mobius pair remove --connection <connection-id>
+mobius quit
+```
+
+Stopping preserves the pairing and its `stopped` status across manager restarts.
+Starting resumes the same Connection ID, while removing deletes its local
+credential. `mobius pair list` shows the Connection ID, Platform App ID, Runtime
+ID, workspace, and current status. Channel IDs remain internal Relay routing
+identities and are not accepted as local lifecycle selectors. Older records that
+predate persisted Platform App IDs display `unknown`; remove and pair them again
+to record the App ID.
+
+The JSON form writes the same list as an array with `connection_id`, `app_id`,
+`runtime_id`, `workspace`, and `status` fields. Its target must already exist; the
+CLI refuses to create it.
+
 See [DEVELOPMENT.md](./DEVELOPMENT.md) and [TESTING.md](./TESTING.md).

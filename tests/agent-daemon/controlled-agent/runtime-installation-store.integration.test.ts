@@ -26,8 +26,10 @@ describe("Runtime installation storage", () => {
             );
             const mobiusConnection = await mobius.saveConnection(
                 {
+                    appId: "app_mobius",
                     channelId,
                     defaultWorkspace: "/workspace/mobius",
+                    pairingId: "pairing_mobius",
                     relayOrigin: new URL("https://relay.example.com/"),
                     runtimeCredential: "a".repeat(43),
                     runtimeId: "runtime_mobius",
@@ -36,8 +38,10 @@ describe("Runtime installation storage", () => {
             );
             const moxtConnection = await moxt.saveConnection(
                 {
+                    appId: "app_moxt",
                     channelId,
                     defaultWorkspace: "/workspace/moxt",
+                    pairingId: "pairing_moxt",
                     relayOrigin: new URL("https://relay.example.com/"),
                     runtimeCredential: "b".repeat(43),
                     runtimeId: "runtime_moxt",
@@ -53,6 +57,9 @@ describe("Runtime installation storage", () => {
                 throw new Error("Expected a verified Runtime connection");
             }
             expect(resumed.runtimeId).toBe("runtime_moxt");
+            expect(resumed.appId).toBe("app_moxt");
+            await expect(moxt.listConnections(signal)).resolves.toEqual([resumed]);
+            await expect(moxt.readConnectionForPairing("pairing_moxt", signal)).resolves.toEqual(resumed);
             expect(mobius.connectionPath(mobiusConnection.connectionId)).not.toContain("com.moxt.cli");
             expect(moxt.connectionPath(moxtConnection.connectionId)).toContain("com.moxt.cli");
             expect(mobius.connectionPath(mobiusConnection.connectionId)).not.toContain(channelId);
