@@ -20,7 +20,6 @@ function createRuntimeRelayDependencies(cx: {
         readonly peers: RuntimePeers;
     };
     readonly utilities: {
-        readonly schedule: (timestamp: number, signal: AbortSignal) => Promise<void>;
         readonly waitUntil: (operation: Promise<void>) => void;
     };
 }) {
@@ -76,7 +75,6 @@ export function createDurableObjectDependencies(cx: {
         readonly peers: RuntimePeers;
     };
     readonly utilities: {
-        readonly schedule: (timestamp: number, signal: AbortSignal) => Promise<void>;
         readonly waitUntil: (operation: Promise<void>) => void;
     };
 }) {
