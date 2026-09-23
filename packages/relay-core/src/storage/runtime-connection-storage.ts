@@ -1,18 +1,9 @@
-import * as v from "valibot";
-import type { RuntimeConnectionIdentity, RuntimeDisconnect } from "../entity/channel/runtime-connection.ts";
+import type { RuntimeConnectionIdentity } from "../entity/channel/runtime-connection.ts";
 import type { ProjectScope } from "../entity/do/session.ts";
 import { runtimeConnectionDurableObjectMigrations } from "../generated/runtime-connection-do-migrations.ts";
 import type { DoSqlDatabase } from "../infra/do-sql-database.ts";
 import { applyDurableObjectMigrations } from "../infra/durable-object-migrations.ts";
 import { DatabaseError } from "../infra/sql-database.ts";
-
-const disconnectSchema = v.object({
-    runtimeId: v.string(),
-    connectionEpoch: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
-    connectionId: v.string(),
-    projectId: v.string(),
-    disconnectedAt: v.number(),
-});
 
 export class RuntimeConnectionStorage {
     readonly #database: DoSqlDatabase;
@@ -35,32 +26,6 @@ export class RuntimeConnectionStorage {
             VALUES (?, ?, ?) ON CONFLICT DO NOTHING`,
             [runtimeId, scope.projectId, now],
         );
-    };
-
-    readonly pendingDisconnect = (): RuntimeDisconnect | null => {
-        const row = this.#database.query("SELECT job_json FROM runtime_disconnect WHERE singleton = 1")[0];
-        if (row === undefined) {
-            return null;
-        }
-        try {
-            const json = v.parse(v.string(), row["job_json"]);
-            const value: unknown = JSON.parse(json);
-            return v.parse(disconnectSchema, value);
-        } catch (cause) {
-            throw new DatabaseError("database_unavailable", "The Runtime disconnect state is invalid", { cause });
-        }
-    };
-
-    readonly saveDisconnect = (job: RuntimeDisconnect): void => {
-        this.#database.run(
-            `INSERT INTO runtime_disconnect (singleton, job_json) VALUES (1, ?)
-            ON CONFLICT(singleton) DO UPDATE SET job_json = excluded.job_json`,
-            [JSON.stringify(job)],
-        );
-    };
-
-    readonly completeDisconnect = (): void => {
-        this.#database.run("DELETE FROM runtime_disconnect WHERE singleton = 1", []);
     };
 
     readonly read = (): (RuntimeConnectionIdentity & { readonly state: "online" | "offline" }) | null => {

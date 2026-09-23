@@ -17,12 +17,6 @@ import type { RuntimeConnectionService } from "./runtime-connection-service.ts";
 import { RuntimeMessageScheduler, RuntimeMessageSchedulerCapacityError } from "./runtime-message-scheduler.ts";
 
 const DAEMON_ATTACHMENT_TIMEOUT_MILLISECONDS = 30_000;
-// Settling a disconnect runs behind `waitUntil`, so it owns its budget. Each Session is checkpointed as it
-// settles and the alarm resumes an interrupted settle, so a timeout only defers the remaining work.
-const DAEMON_DISCONNECT_SETTLE_TIMEOUT_MILLISECONDS = 30_000;
-// A disconnect settles one Session at a time, so the working set is also the settle's step count. Report an
-// unusually wide set so an operator can see the Channel accumulating in-flight work before the sweep becomes
-// slow: a Channel is meant to carry many Sessions, so this warns rather than refuses.
 
 export type RuntimeSocketIdentity =
     | {
@@ -69,7 +63,6 @@ interface RuntimeContext {
         readonly peers: RuntimePeers;
     };
     readonly utilities: {
-        readonly schedule: (timestamp: number, signal: AbortSignal) => Promise<void>;
         readonly waitUntil: (operation: Promise<void>) => void;
     };
 }
@@ -91,7 +84,6 @@ export class RuntimeService {
         readonly controller: AbortController;
         readonly identity: DaemonSocketIdentity;
     }>();
-    #disconnectTail: Promise<void> = Promise.resolve();
     #acceptTail: Promise<void> = Promise.resolve();
     readonly #accepting = new Set<{
         readonly runtimeId: string;
@@ -154,15 +146,6 @@ export class RuntimeService {
         if (this.isRevoked(runtimeId, scope)) {
             return { kind: "revoked" };
         }
-        // Settle a pending disconnect off the upgrade path. The daemon's connect deadline is shorter than
-        // settling a Runtime that has several Sessions in flight, and timing out here made the daemon
-        // reconnect into the same unfinished cleanup. The job is durable and the alarm resumes it, so the
-        // accept never has to wait on Session work.
-        this.settlePendingDisconnectInBackground();
-        signal.throwIfAborted();
-        if (this.isRevoked(runtimeId, scope)) {
-            return { kind: "revoked" };
-        }
         const current = this.#cx.services.connections.current();
         if (current !== null && current.runtimeId !== runtimeId) {
             return { kind: "conflict" };
@@ -177,14 +160,6 @@ export class RuntimeService {
         }
         for (const { socket } of previous) {
             socket.replaceDaemon();
-        }
-        if (previous.length > 0 && current !== null) {
-            this.#cx.services.connections.saveDisconnect({
-                ...current,
-                projectId: scope.projectId,
-                disconnectedAt: Date.now(),
-            });
-            this.settlePendingDisconnectInBackground();
         }
         signal.throwIfAborted();
         // No await may separate this durable revocation check from accept + connect.
@@ -255,31 +230,6 @@ export class RuntimeService {
         this.#cx.utilities.waitUntil(operation);
     };
 
-    /**
-     * Settle a Runtime disconnect without delaying the WebSocket upgrade.
-     *
-     * The upgrade must not wait on Session cleanup, or a Runtime with several Sessions in flight would push the
-     * accept past the daemon's connect deadline and leave the daemon reconnecting into unfinished cleanup. The
-     * job is durable, and the alarm the settle arms keeps it recoverable when this Durable Object is evicted.
-     */
-    private readonly settlePendingDisconnectInBackground = (): void => {
-        if (this.#cx.services.connections.pendingDisconnect() === null) {
-            return;
-        }
-        // A settle is only ever needed for a stored disconnect job, so an idle connection starts no timers.
-        const controller = new AbortController();
-        const signal = AbortSignal.any([
-            controller.signal,
-            AbortSignal.timeout(DAEMON_DISCONNECT_SETTLE_TIMEOUT_MILLISECONDS),
-        ]);
-        const operation = this.resumeDisconnect(signal, false).catch((error: unknown) => {
-            if (!controller.signal.aborted) {
-                console.error("Mobius relay could not settle a Runtime disconnect", error);
-            }
-        });
-        this.#cx.utilities.waitUntil(operation);
-    };
-
     readonly acceptHost = async (
         identity: Extract<RuntimeSocketIdentity, { readonly role: "host" }>,
         signal: AbortSignal,
@@ -314,16 +264,6 @@ export class RuntimeService {
         }
     };
 
-    readonly alarm = async (signal: AbortSignal): Promise<void> => {
-        await this.resumeDisconnect(signal);
-        const daemon = this.#cx.gateways.peers
-            .sockets()
-            .find(({ identity, socket }) => identity.role === "daemon" && socket.isOpen());
-        if (daemon !== undefined) {
-            await this.recover(daemon.identity, signal);
-        }
-    };
-
     readonly revokeRuntime = async (
         channelId: string,
         runtimeId: string,
@@ -342,13 +282,11 @@ export class RuntimeService {
                 attachment.controller.abort(new DOMException("Runtime revoked", "AbortError"));
             }
         }
-        const daemons: RuntimeSocket[] = [];
         for (const { identity, socket } of this.#cx.gateways.peers.sockets()) {
             if (identity.runtimeId !== runtimeId || identity.projectId !== scope.projectId) {
                 continue;
             }
             if (identity.role === "daemon") {
-                daemons.push(socket);
                 socket.close(1008, "Runtime revoked");
             } else if (identity.role === "host" && identity.channelId === channelId) {
                 socket.close(1008, "Runtime revoked");
@@ -356,18 +294,9 @@ export class RuntimeService {
         }
         const current = this.#cx.services.connections.current();
         if (current !== null && current.runtimeId === runtimeId) {
-            if (daemons.length > 0 && this.#cx.services.connections.pendingDisconnect() === null) {
-                this.#cx.services.connections.saveDisconnect({
-                    ...current,
-                    projectId: scope.projectId,
-                    disconnectedAt: Date.now(),
-                });
-            }
             this.#cx.services.connections.disconnected(current, Date.now());
-            await this.#cx.utilities.schedule(Date.now() + 30_000, signal);
+            this.notifyOffline(runtimeId);
         }
-        // The durable fence is effective immediately. Session recovery belongs to
-        // the armed alarm; revocation must not wait behind in-flight attachment cleanup.
     };
 
     readonly isOnline = (runtimeId: string): boolean => {
@@ -392,10 +321,6 @@ export class RuntimeService {
 
     readonly attachHost = (runtimeId: string, scope: ProjectScope, socket: ChannelSocket, signal: AbortSignal) =>
         this.channel(runtimeId, scope).attachHost(socket, signal);
-
-    readonly recover = async (_identity: RuntimeSocketIdentity, signal: AbortSignal): Promise<void> => {
-        signal.throwIfAborted();
-    };
 
     readonly receiveMessage = async (
         identity: RuntimeSocketIdentity,
@@ -491,7 +416,7 @@ export class RuntimeService {
 
     readonly detach = async (
         identity: RuntimeSocketIdentity,
-        _socket: ChannelSocket,
+        socket: ChannelSocket,
         signal: AbortSignal,
     ): Promise<void> => {
         if (identity.role !== "daemon" || !this.#cx.services.connections.isCurrent(identity)) {
@@ -505,45 +430,19 @@ export class RuntimeService {
                 attachment.controller.abort(new DOMException("Runtime connection closed", "AbortError"));
             }
         }
-        if (this.#cx.services.connections.pendingDisconnect() === null) {
-            this.#cx.services.connections.saveDisconnect({
-                ...identity,
-                disconnectedAt: Date.now(),
-            });
+        await this.#daemonMessages.idle(signal);
+        if (!this.#cx.services.connections.isCurrent(identity)) {
+            return;
         }
-        // Arm recovery before waiting for prior frames or any remote session work.
-        await this.#cx.utilities.schedule(Date.now() + 30_000, signal);
-        await this.resumeDisconnect(signal);
+        this.#cx.services.connections.disconnected(identity, Date.now());
+        await this.channel(identity.runtimeId, new ProjectScope(identity.projectId)).detachDaemon(socket, signal);
     };
 
-    private readonly resumeDisconnect = async (signal: AbortSignal, announceOffline = true): Promise<void> => {
-        const operation = this.#disconnectTail.then(async () => {
-            signal.throwIfAborted();
-            const pending = this.#cx.services.connections.pendingDisconnect();
-            if (pending === null) {
-                return;
+    private readonly notifyOffline = (runtimeId: string): void => {
+        for (const host of this.#cx.gateways.peers.hosts()) {
+            if (host.isOpen()) {
+                host.send(encodeRuntimeStatusEvent({ kind: RUNTIME_STATUS_KIND, runtimeId, online: false }));
             }
-            const job = pending;
-            await this.#cx.utilities.schedule(Date.now() + 30_000, signal);
-            await this.#daemonMessages.idle(signal);
-            signal.throwIfAborted();
-            this.#cx.services.connections.disconnected(job, job.disconnectedAt);
-            this.#cx.services.connections.completeDisconnect();
-            if (announceOffline) {
-                for (const host of this.#cx.gateways.peers.hosts()) {
-                    if (host.isOpen()) {
-                        host.send(
-                            encodeRuntimeStatusEvent({
-                                kind: RUNTIME_STATUS_KIND,
-                                runtimeId: job.runtimeId,
-                                online: false,
-                            }),
-                        );
-                    }
-                }
-            }
-        });
-        this.#disconnectTail = operation.catch(() => undefined);
-        await operation;
+        }
     };
 }

@@ -15,6 +15,13 @@
             "when": 1790160246429,
             "tag": "0001_secret_pete_wisdom",
             "breakpoints": true
+        },
+        {
+            "idx": 2,
+            "version": "6",
+            "when": 1790194829527,
+            "tag": "0002_loud_shiva",
+            "breakpoints": true
         }
     ]
 }

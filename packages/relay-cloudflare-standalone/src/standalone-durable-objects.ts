@@ -39,10 +39,6 @@ export class RuntimeRelay extends DurableObject<StandaloneDurableObjectEnvironme
         return await this.#runtime.fetch(request);
     }
 
-    override async alarm(): Promise<void> {
-        await this.#runtime.alarm();
-    }
-
     override async webSocketMessage(socket: WebSocket, message: unknown): Promise<void> {
         await this.#runtime.webSocketMessage(socket, message);
     }

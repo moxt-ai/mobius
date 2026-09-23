@@ -185,7 +185,7 @@ describe.sequential("Platform Session-only boundary", () => {
         expect(retired).toMatchObject({ error: { code: "project_permission_invalid" } });
     });
 
-    it("Given a linked Codex Runtime, When Chat sends a prompt, Then the answer arrives without cloud Session storage", async () => {
+    it("Given a linked Codex Runtime, When Chat sends a prompt and the Runtime reconnects, Then the answer and connection status arrive without cloud Session storage", async () => {
         vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
@@ -350,10 +350,29 @@ describe.sequential("Platform Session-only boundary", () => {
                 kind: SESSION_EVENT_ACK_KIND,
                 sessionId,
             });
+            daemon.close(1000, "Reconnect Runtime");
+            expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "runtime.status", online: false });
+            const reconnectResponse = await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect?deliveryReceipts=1&liveness=1`, {
+                    headers: { authorization: `Bearer ${text(claimed, "runtimeCredential")}`, Upgrade: "websocket" },
+                }),
+                environment,
+            );
+            expect(reconnectResponse.status).toBe(101);
+            if (reconnectResponse.webSocket === null) {
+                throw new Error("Expected the reconnected Runtime socket");
+            }
+            const reconnected = reconnectResponse.webSocket;
+            const reconnectMessages = new SocketMessages(reconnected);
+            reconnected.accept();
+            expect(decodeServiceToDaemonMessage(await reconnectMessages.next()).kind).toBe("runtime.liveness.ready");
+            expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "runtime.status", online: true });
+            reconnected.close(1000, "Test complete");
+            expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "runtime.status", online: false });
             await runInDurableObject(environment.RUNTIME_RELAY.getByName(runtimeId), async (_instance, state) => {
                 const sessionTables = [
                     ...state.storage.sql.exec<{ name: string }>(
-                        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('sessions', 'session_bindings', 'session_configuration_snapshots', 'turns', 'attempts', 'interactions', 'pending_work', 'command_receipts', 'session_event_receipts', 'runtime_active_sessions')",
+                        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('sessions', 'session_bindings', 'session_configuration_snapshots', 'turns', 'attempts', 'interactions', 'pending_work', 'command_receipts', 'session_event_receipts', 'runtime_active_sessions', 'runtime_disconnect')",
                     ),
                 ];
                 expect(sessionTables).toEqual([]);

@@ -15,10 +15,6 @@ export class RuntimeRelay {
         );
     }
 
-    async alarm(): Promise<void> {
-        await this.withOperationSignal((signal) => this.#dependencies.services.runtime.alarm(signal));
-    }
-
     async webSocketMessage(webSocket: WebSocket, message: unknown): Promise<void> {
         const socket = new CloudflareChannelSocket(webSocket);
         const controller = new AbortController();
