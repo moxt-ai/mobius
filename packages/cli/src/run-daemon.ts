@@ -333,13 +333,25 @@ async function runRelayConnection(
 
             const processingDeliveryIds = new Set<string>();
 
+            const sessionAvailable = (command: SessionPromptCommand): boolean => {
+                if (command.disposition === SessionPromptDisposition.Steer) {
+                    return true;
+                }
+                const first = [...activeTurns.values()].find(
+                    (turn) =>
+                        turn.command.sessionId === command.sessionId &&
+                        turn.command.disposition !== SessionPromptDisposition.Steer,
+                );
+                return first === undefined || first.command.commandId === command.commandId;
+            };
+
             const processDeliveredPrompt = async (
                 delivery: RuntimeDelivery,
                 command: SessionPromptCommand,
                 trackActiveAttempt: boolean,
                 execute: (
                     attemptId: string,
-                    activateAttempt: () => void,
+                    activateAttempt: () => { readonly epoch: string; readonly sequence: 0 },
                     signal: AbortSignal,
                     turn: ActiveDaemonTurn,
                 ) => Promise<void>,
@@ -372,11 +384,12 @@ async function runRelayConnection(
 
                 const turn = new ActiveDaemonTurn(command, receipt.attemptId);
                 activeTurns.set(command.commandId, turn);
-                const activateAttempt = (): void => {
-                    turn.accept();
+                const activateAttempt = (): { readonly epoch: string; readonly sequence: 0 } => {
+                    const stream = turn.accept();
                     if (trackActiveAttempt) {
                         activeAttemptIds.set(command.sessionId, receipt.attemptId);
                     }
+                    return stream;
                 };
                 try {
                     await execute(receipt.attemptId, activateAttempt, turn.signal, turn);
@@ -481,6 +494,7 @@ async function runRelayConnection(
                                 sessions,
                                 attemptId,
                                 activateAttempt,
+                                () => sessionAvailable(command),
                                 timer,
                                 executionSignal,
                                 turn.recordText,
@@ -1281,11 +1295,13 @@ async function runRelayConnection(
                         sessions,
                         receipt.attemptId,
                         () => {
-                            turn.accept();
+                            const stream = turn.accept();
                             if (command.disposition !== SessionPromptDisposition.Steer) {
                                 activeAttemptIds.set(command.sessionId, receipt.attemptId);
                             }
+                            return stream;
                         },
+                        () => sessionAvailable(command),
                         timer,
                         turn.signal,
                         turn.recordText,

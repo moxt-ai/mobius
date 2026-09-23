@@ -101,8 +101,11 @@ describe("reliable session event protocol", () => {
     it("Given a daemon event has a stable identity, When it is retransmitted and acknowledged, Then its identity and durable cursor round-trip exactly", () => {
         const payload = encodeSessionStartedEvent({
             commandId: "command-1",
+            epoch: "epoch-1",
             kind: "session.started",
             attemptId: "attempt-1",
+            prompt: "Hello",
+            sequence: 0,
             sessionId: "session-1",
         });
         const envelope = {

@@ -91,8 +91,11 @@ export interface RuntimeDeliveryCommitted {
 
 export interface SessionStartedEvent {
     readonly commandId: string;
+    readonly epoch: string;
     readonly kind: typeof SESSION_STARTED_KIND;
     readonly attemptId: string;
+    readonly prompt: string;
+    readonly sequence: 0;
     readonly sessionId: string;
 }
 

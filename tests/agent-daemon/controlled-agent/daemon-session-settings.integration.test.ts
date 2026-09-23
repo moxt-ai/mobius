@@ -831,7 +831,7 @@ if (process.argv.includes("--version")) {
         }
     });
 
-    it("Given a cloud-disabled Codex Session uses an application binding, When Mobius reloads its native history, Then the daemon reads rich history without acquiring another writer", async () => {
+    it("Given a Codex Session uses the Runtime binding, When Mobius reloads native history, Then the daemon reads rich history without acquiring another writer", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-live-history-"));
         const workspace = join(stateDirectory, "workspace");
         const nativeStateDirectory = join(stateDirectory, "native");
@@ -899,12 +899,11 @@ if (process.argv.includes("--version")) {
         try {
             const socket = await socketReady.promise;
             const frames = new ClientFrames(socket);
-            const sessionId = "cloud_disabled_conversation";
-            const applicationBindingId = "binding_application_alpha";
+            const sessionId = "native_history_conversation";
             const prompt: SessionPromptCommand = {
                 additionalDirectoryIds: [],
                 agentId: agent.id,
-                bindingId: applicationBindingId,
+                bindingId: config.bindingId,
                 commandId: "save_native_history",
                 directoryId: "default",
                 disposition: SessionPromptDisposition.Reject,
@@ -928,7 +927,7 @@ if (process.argv.includes("--version")) {
                 encodeSessionLiveHistoryPageLoad({
                     additionalDirectoryIds: [],
                     agentId: agent.id,
-                    bindingId: applicationBindingId,
+                    bindingId: config.bindingId,
                     directoryId: "default",
                     cursor: null,
                     kind: "session.live-history.page.load",

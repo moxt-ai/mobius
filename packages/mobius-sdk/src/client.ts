@@ -122,9 +122,9 @@ import {
     type SessionInfoUpdatedEvent,
     type SessionPermissionRequestedEvent,
     type SessionPermissionResolvedEvent,
-    type SessionPromptCommand,
     SessionPromptDisposition,
     type SessionReadyEvent,
+    type SessionStartedEvent,
     type SessionUsageUpdatedEvent,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
@@ -154,7 +154,7 @@ const HISTORY_CHANGING_MESSAGE_KINDS: ReadonlySet<string> = new Set([
 ]);
 
 export type LiveSessionMessage =
-    | SessionPromptCommand
+    | SessionStartedEvent
     | AgentMessageDeltaEvent
     | SessionCompletedEvent
     | SessionFailedEvent;
@@ -1093,7 +1093,7 @@ export class MobiusClient {
                 return;
             }
             if (kind === SESSION_PROMPT_KIND) {
-                this.#options.onLiveMessage?.(decodeSessionPromptCommand(encoded));
+                decodeSessionPromptCommand(encoded);
             } else if (kind === NATIVE_SESSION_REQUEST_KIND) {
                 decodeNativeSessionCommand(encoded);
             } else if (kind === NATIVE_SESSION_TURN_FORK_REQUEST_KIND) {
@@ -1145,7 +1145,7 @@ export class MobiusClient {
             } else if (kind === SESSION_ELICITATION_RESOLVED_KIND) {
                 this.#options.onElicitationResolved?.(decodeSessionElicitationResolvedEvent(encoded));
             } else if (kind === SESSION_STARTED_KIND) {
-                decodeSessionStartedEvent(encoded);
+                this.#options.onLiveMessage?.(decodeSessionStartedEvent(encoded));
             } else if (kind === AGENT_MESSAGE_DELTA_KIND) {
                 this.#options.onLiveMessage?.(decodeAgentMessageDeltaEvent(encoded));
             } else if (kind === AGENT_ACTIVITY_KIND) {

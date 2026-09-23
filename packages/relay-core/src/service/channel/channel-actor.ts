@@ -67,6 +67,7 @@ import {
     SESSION_PROMPT_KIND,
     SESSION_READY_KIND,
     type ServiceToDaemonMessage,
+    type SessionPromptCommand,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-protocol";
@@ -346,7 +347,7 @@ export class ChannelActor {
             const kind = decodeMessageKind(message);
             if (kind === SESSION_PROMPT_KIND) {
                 const command = decodeSessionPromptCommand(message);
-                this.forwardControl(socket, command, command.commandId, command.sessionId);
+                this.forwardPrompt(socket, command);
                 return;
             }
             if (kind === SESSION_PREPARE_KIND) {
@@ -607,6 +608,20 @@ export class ChannelActor {
             return;
         }
         this.broadcast(this.#peers.hosts(), encodeServiceToDaemonMessage(broadcastMessage));
+    };
+
+    private readonly forwardPrompt = (socket: ChannelSocket, command: SessionPromptCommand): void => {
+        if (!this.sendToDaemon(command)) {
+            socket.send(
+                encodeSessionFailedEvent({
+                    code: "runtime_offline",
+                    commandId: command.commandId,
+                    kind: SESSION_FAILED_KIND,
+                    message: "The local runtime is offline",
+                    sessionId: command.sessionId,
+                }),
+            );
+        }
     };
 
     private readonly forwardAgentCatalogRefresh = (

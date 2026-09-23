@@ -9,6 +9,7 @@ import {
     decodeAgentMessageDeltaEvent,
     decodeMessageKind,
     decodeSessionEventEnvelope,
+    decodeSessionStartedEvent,
     encodeSessionEventAcknowledgement,
     encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
@@ -131,6 +132,12 @@ test("Given real Codex and a local model provider, When a Turn streams, Then the
             const kind = decodeMessageKind(envelope.payload);
             if (kind === SESSION_STARTED_KIND) {
                 expect(started).toBe(false);
+                expect(decodeSessionStartedEvent(envelope.payload)).toMatchObject({
+                    commandId,
+                    epoch: expect.any(String),
+                    prompt: "Reply briefly using the configured model",
+                    sequence: 0,
+                });
                 started = true;
             } else if (kind === AGENT_MESSAGE_DELTA_KIND) {
                 expect(started).toBe(true);
