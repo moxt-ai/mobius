@@ -388,12 +388,14 @@ export class FakeAgentDaemon implements AsyncDisposable {
 }
 
 const imagePath = "/fake/generated-image.png";
+const sourcePath = "/fake/generated-source.ts";
 const imageBytes = Uint8Array.from(
     Buffer.from(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
         "base64",
     ),
 );
+const sourceBytes = new TextEncoder().encode("export const generated = true;\n");
 
 export interface FakeAgentDaemonBehavior {
     readonly agentName?: string;
@@ -405,20 +407,22 @@ export interface RunningFakeAgentDaemon extends AsyncDisposable {
     readonly failure: Promise<never>;
 }
 
-async function sendImageFile(daemon: FakeAgentDaemon, encoded: string): Promise<void> {
+async function sendFile(daemon: FakeAgentDaemon, encoded: string): Promise<void> {
     const command = decodeFileReadCommand(encoded);
+    const source = command.path === sourcePath;
+    const bytes = source ? sourceBytes : imageBytes;
     await daemon.sendBatch([
         encodeFileBeginEvent({
-            byteLength: imageBytes.byteLength,
+            byteLength: bytes.byteLength,
             kind: "file.begin",
-            mediaType: "image/png",
+            mediaType: source ? "text/typescript" : "image/png",
             modifiedAt: "2026-01-01T00:00:00.000Z",
-            name: "generated-image.png",
+            name: source ? "generated-source.ts" : "generated-image.png",
             requestId: command.requestId,
             sessionId: command.sessionId,
         }),
         encodeFileChunkEvent({
-            data: Buffer.from(imageBytes).toString("base64"),
+            data: Buffer.from(bytes).toString("base64"),
             kind: "file.chunk",
             requestId: command.requestId,
             sequence: 0,
@@ -606,7 +610,7 @@ async function processHappyPathCommand(
         return;
     }
     if (kind === FILE_READ_KIND) {
-        await sendImageFile(daemon, encoded);
+        await sendFile(daemon, encoded);
         return;
     }
     if (kind !== SESSION_PROMPT_KIND) {
@@ -670,7 +674,9 @@ async function processHappyPathCommand(
             kind: "agent.message.delta",
             messageId: `fake-message-${turn.toString()}`,
             sessionId: command.sessionId,
-            text: `${behavior.agentName ?? "Fake Agent"} turn ${turn.toString()}: ${command.prompt}`,
+            text: `${behavior.agentName ?? "Fake Agent"} turn ${turn.toString()}: ${command.prompt}${
+                createsImage ? `\n\n[Generated source](<${sourcePath}:104>)` : ""
+            }`,
         }),
         signal,
     );
