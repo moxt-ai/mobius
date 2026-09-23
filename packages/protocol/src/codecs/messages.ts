@@ -465,13 +465,20 @@ export function decodeSessionStartedEvent(encoded: string): SessionStartedEvent 
 
 export function decodeAgentMessageDeltaEvent(encoded: string): AgentMessageDeltaEvent {
     const value = parseJson(encoded);
-    assertExactKeys(value, ["commandId", "kind", "messageId", "sessionId", "text"]);
+    assertExactKeys(value, ["commandId", "epoch", "kind", "messageId", "sequence", "sessionId", "text"]);
     assertKind(value, AGENT_MESSAGE_DELTA_KIND);
+
+    const sequence = readSequence(value, "sequence");
+    if (sequence === 0) {
+        throw new ProtocolMessageError("Invalid live sequence");
+    }
 
     return {
         commandId: readIdentifier(value, "commandId"),
+        epoch: readIdentifier(value, "epoch"),
         kind: AGENT_MESSAGE_DELTA_KIND,
         messageId: value["messageId"] === undefined ? "" : readText(value, "messageId", 255),
+        sequence,
         sessionId: readIdentifier(value, "sessionId"),
         text: readString(value, "text", MAX_EVENT_TEXT_LENGTH),
     };

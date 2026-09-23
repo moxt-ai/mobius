@@ -325,8 +325,10 @@ describe.sequential("Platform Session-only boundary", () => {
                 kind: "session.event",
                 payload: JSON.stringify({
                     commandId: prompt.commandId,
+                    epoch: prompt.commandId,
                     kind: AGENT_MESSAGE_DELTA_KIND,
                     messageId: "local-codex-message",
+                    sequence: 1,
                     sessionId,
                     text: "local answer",
                 }),

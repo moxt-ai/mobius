@@ -570,7 +570,7 @@ export async function executePrompt(
     activateAttempt: () => void,
     timer: DaemonTimer,
     signal: AbortSignal,
-    recordLiveText: (delta: string) => void,
+    recordLiveText: (delta: string) => { readonly epoch: string; readonly sequence: number },
 ): Promise<void> {
     const activities = new CoalescingDaemonActivityPublisher(timer, (activity) => {
         publisher.recordAttempt(command.sessionId, daemonActivity(command, activity), attemptId);
@@ -598,12 +598,15 @@ export async function executePrompt(
     const text = new CoalescingTextPublisher(
         timer,
         (messageId, delta) => {
+            const stream = recordLiveText(delta);
             publisher.recordAttempt(
                 command.sessionId,
                 {
                     commandId: command.commandId,
+                    epoch: stream.epoch,
                     kind: AGENT_MESSAGE_DELTA_KIND,
                     messageId,
+                    sequence: stream.sequence,
                     sessionId: command.sessionId,
                     text: delta,
                 },
@@ -714,7 +717,6 @@ export async function executePrompt(
                     return Promise.resolve();
                 },
                 onText: (delta, messageId) => {
-                    recordLiveText(delta);
                     text.record(messageId, delta);
                     return Promise.resolve();
                 },

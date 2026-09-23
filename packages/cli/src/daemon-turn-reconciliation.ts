@@ -37,13 +37,14 @@ export class ActiveDaemonTurn {
         this.#accepted = true;
     };
 
-    readonly recordText = (delta: string): void => {
+    readonly recordText = (delta: string): { readonly epoch: string; readonly sequence: number } => {
         this.#sequence += 1;
         this.#text += delta;
         if (this.#text.length > ACTIVE_TURN_TEXT_LIMIT) {
             this.#text = this.#text.slice(-ACTIVE_TURN_TEXT_LIMIT);
             this.#truncated = true;
         }
+        return { epoch: this.#epoch, sequence: this.#sequence };
     };
 
     readonly snapshot = (): ActiveTurnSnapshot =>
