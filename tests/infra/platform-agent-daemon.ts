@@ -56,7 +56,7 @@ export async function createFakeAgentDaemonRuntime(options: {
                                 {
                                     agentSettingsDiscovery: true,
                                     sessionTurnConfiguration: true,
-                                    agentPath: "/fake/codex",
+                                    agentPath: `/fake/${options.behavior?.agentId ?? "codex"}`,
                                     agentVersion: "fake-agent-daemon",
                                     capabilities: {
                                         additionalDirectories: true,
@@ -72,8 +72,8 @@ export async function createFakeAgentDaemonRuntime(options: {
                                         steering: false,
                                         unstableForkSession: false,
                                     },
-                                    id: "codex",
-                                    label: "Codex",
+                                    id: options.behavior?.agentId ?? "codex",
+                                    label: options.behavior?.agentName ?? "Codex",
                                 },
                             ],
                             installableAgents: [],
@@ -120,7 +120,9 @@ export async function createFakeAgentDaemonRuntime(options: {
                 signal,
             ),
         );
-        const behavior = resources.use(serveFakeAgentDaemon(daemon, { ...options.behavior, agentName: "Codex" }));
+        const behavior = resources.use(
+            serveFakeAgentDaemon(daemon, { ...options.behavior, agentName: options.behavior?.agentName ?? "Codex" }),
+        );
         const client = new MobiusClient({
             endpoint: options.origin,
             projectId: pairing.projectId,

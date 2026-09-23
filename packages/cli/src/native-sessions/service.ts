@@ -16,7 +16,10 @@ import type { AuditStore } from "../audit/audit-store.ts";
 import { LocalAuthorizationError } from "../authorization/local-authorization-error.ts";
 import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
 import type { DaemonConfig } from "../config.ts";
+import { supportsNativeChat } from "./chat-agent.ts";
+import { readClaudeHistory } from "./claude-history.ts";
 import { readCodexFullHistory, readCodexHistory } from "./codex-history.ts";
+import { readCodexLinkedHistory } from "./codex-linked-history.ts";
 
 interface ListedTarget {
     readonly scope: string;
@@ -74,29 +77,6 @@ export class NativeSessionService {
             signal,
         };
         if (command.action === "linked-history") {
-            if (options.agent.id !== "codex") {
-                const history = await this.#sessions.loadLinkedSessionHistory({
-                    ...options,
-                    sessionId: command.targetSessionId,
-                });
-                this.record(command, "native_session_history_read");
-                return history === null
-                    ? {
-                          action: "unlinked-history",
-                          kind: "native.session.result",
-                          requestId: command.requestId,
-                          sessionId: command.sessionId,
-                          targetSessionId: command.targetSessionId,
-                      }
-                    : {
-                          action: "linked-history",
-                          history,
-                          kind: "native.session.result",
-                          requestId: command.requestId,
-                          sessionId: command.sessionId,
-                          targetSessionId: command.targetSessionId,
-                      };
-            }
             const nativeSessionId = nativeSessionIdSchema.parse(command.targetSessionId);
             if (
                 this.#sessions.hasPreparedSession(nativeSessionId, options.agent.id, cwd, additionalDirectories) &&
@@ -118,19 +98,41 @@ export class NativeSessionService {
                     targetSessionId: command.targetSessionId,
                 };
             }
-            const snapshot = await readCodexFullHistory(options.agent, cwd, nativeSessionId, signal);
-            const resolved = await this.#directories.identify(command.bindingId, snapshot.cwd, signal);
-            if (snapshot.nativeSessionId !== nativeSessionId || resolved.path !== cwd) {
+            if (options.agent.id === "claude") {
+                const history = await readClaudeHistory(
+                    this.#sessions,
+                    this.#directories,
+                    command.bindingId,
+                    options,
+                    nativeSessionId,
+                );
+                this.record(command, "native_session_history_read");
+                return {
+                    action: "linked-history",
+                    history,
+                    kind: "native.session.result",
+                    requestId: command.requestId,
+                    sessionId: command.sessionId,
+                    targetSessionId: command.targetSessionId,
+                };
+            }
+            if (options.agent.id !== "codex") {
                 throw new AcpExecutionError(
-                    "Codex returned history for a different session or workspace.",
+                    "This Agent does not support Chat history",
                     {},
-                    "invalid_native_session_response",
+                    "native_session_unsupported",
                 );
             }
+            const history = await readCodexLinkedHistory(
+                this.#directories,
+                command.bindingId,
+                options,
+                nativeSessionId,
+            );
             this.record(command, "native_session_history_read");
             return {
                 action: "linked-history",
-                history: snapshot.history,
+                history,
                 kind: "native.session.result",
                 requestId: command.requestId,
                 sessionId: command.sessionId,
@@ -138,7 +140,7 @@ export class NativeSessionService {
             };
         }
         if (command.action === "create") {
-            if (options.agent.id !== "codex") {
+            if (!supportsNativeChat(options.agent.id)) {
                 throw new AcpExecutionError(
                     "Native session creation is unavailable for this Agent",
                     {},
