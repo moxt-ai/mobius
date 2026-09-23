@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -751,7 +751,12 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
     .onRequest(acp.methods.agent.session.load, async (context) => {
         acquireWriter(context.params.sessionId);
         const directory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
-        if (directory !== undefined && existsSync(join(directory, "pause-load"))) {
+        const pausePath = directory === undefined ? null : join(directory, "pause-load");
+        const pauseTarget = pausePath !== null && existsSync(pausePath) ? readFileSync(pausePath, "utf8").trim() : null;
+        if (
+            directory !== undefined &&
+            (pauseTarget === "" || pauseTarget === "*" || pauseTarget === context.params.sessionId)
+        ) {
             writeFileSync(join(directory, "load-paused"), context.params.sessionId);
             await context.client.notify(acp.methods.client.session.update, {
                 sessionId: context.params.sessionId,
@@ -760,7 +765,27 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                     title: "Loading saved conversation",
                 },
             });
-            await waitForAbort(context.signal);
+            await new Promise<void>((resolve, reject) => {
+                const watcher = watch(directory, () => {
+                    if (!existsSync(join(directory, "pause-load"))) {
+                        cleanup();
+                        resolve();
+                    }
+                });
+                const abort = () => {
+                    cleanup();
+                    reject(context.signal.reason);
+                };
+                const cleanup = () => {
+                    watcher.close();
+                    context.signal.removeEventListener("abort", abort);
+                };
+                context.signal.addEventListener("abort", abort, { once: true });
+                if (!existsSync(join(directory, "pause-load"))) {
+                    cleanup();
+                    resolve();
+                }
+            });
             context.signal.throwIfAborted();
         }
         const state = readPersistedState(context.params.sessionId);
