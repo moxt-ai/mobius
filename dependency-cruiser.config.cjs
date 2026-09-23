@@ -8,7 +8,7 @@ module.exports = {
                 pathNot: "^packages/relay-cloudflare-(platform|standalone)/src/schema/",
             },
             to: {
-                path: "^packages/(relay-core/src/(schema/session-do/|storage/do/session-)|relay-cloudflare-platform/src/schema/non-cloud-retention-session-relay-do/)",
+                path: "^packages/(relay-core/src/(schema/session-do/|storage/do/session-)|relay-cloudflare-platform/src/schema/session-relay-do/)",
             },
         },
         {
