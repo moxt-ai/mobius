@@ -6,17 +6,10 @@ import {
     AGENT_CATALOG_REFRESH_KIND,
     AGENT_CATALOG_REFRESHED_KIND,
     AGENT_INSTALL_CANCEL_KIND,
-    AGENT_INSTALL_CANCELLED_KIND,
-    AGENT_INSTALL_COMPLETED_KIND,
-    AGENT_INSTALL_FAILED_KIND,
-    AGENT_INSTALL_PROGRESS_KIND,
     AGENT_INSTALL_REQUEST_KIND,
-    AGENT_INSTALL_STARTED_KIND,
     AGENT_SETTINGS_DISCOVER_KIND,
     AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
     type AgentCatalogRefreshCommand,
-    type AgentContentEvent,
-    type DaemonToServiceMessage,
     decodeServiceToDaemonMessage,
     decodeSessionLiveHistoryLoad,
     decodeSessionLiveHistoryPageLoad,
@@ -43,26 +36,12 @@ import {
     SESSION_PERMISSION_RESPOND_KIND,
     SESSION_PREPARE_KIND,
     SESSION_PROMPT_KIND,
-    type SessionCancelCommand,
-    type SessionCommandsUpdatedEvent,
-    type SessionConfigUpdatedEvent,
-    type SessionElicitationRequestedEvent,
-    type SessionElicitationResolvedEvent,
-    type SessionInfoUpdatedEvent,
-    type SessionPermissionRequestedEvent,
-    type SessionPermissionResolvedEvent,
     SessionPromptDisposition,
-    type SessionUsageUpdatedEvent,
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-protocol";
-import { fetch, type MessageEvent, WebSocket } from "undici";
+import { type MessageEvent, WebSocket } from "undici";
 
-import {
-    AcpConfigurationValueUnavailableError,
-    AcpExecutionError,
-    AcpSessionManager,
-    type AcpSessionObserver,
-} from "./acp/session-manager.ts";
+import { AcpConfigurationValueUnavailableError, AcpExecutionError, AcpSessionManager } from "./acp/session-manager.ts";
 import { MemoryAcpSessionStore } from "./acp/session-store.ts";
 import { discoverAgentSettings } from "./agent-catalog/discover-agent-settings.ts";
 import {
@@ -71,23 +50,14 @@ import {
 } from "./agent-catalog/discover-local-agents.ts";
 import { type AcpAgentDefinition, AgentIntegrationDefinition } from "./agent-catalog/local-agent.ts";
 import { publishAgentCatalog } from "./agent-catalog/publish-agent-catalog.ts";
-import {
-    type AgentInstallation,
-    AgentInstallationManager,
-    CancelledInstallation,
-    FailedInstallation,
-    type InstallationAudit,
-    type InstallationObserver,
-    RequestedInstallation,
-    RunningInstallation,
-    SucceededInstallation,
-} from "./agent-installation/agent-installation-manager.ts";
+import { AgentInstallationManager } from "./agent-installation/agent-installation-manager.ts";
 import { FixedInstallationExecutor } from "./agent-installation/fixed-installation-executor.ts";
 import { streamLocalFile } from "./artifacts/local-file-streamer.ts";
 import type { AuditStore } from "./audit/audit-store.ts";
 import { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
 import { type DaemonConfig, DaemonLocalContext, withDaemonEnvironment } from "./config.ts";
 import { DaemonDiagnosticLog } from "./daemon-diagnostic-log.ts";
+import { AuditInstallationEvents, DaemonAcpObserver, DaemonInstallationObserver } from "./daemon-observers.ts";
 import {
     agentSettingsFailureDetails,
     type DaemonTurnCommand,
@@ -104,319 +74,20 @@ import {
     send,
     settleAbandonedTurn,
 } from "./daemon-session-commands.ts";
+import { ActiveDaemonTurn, ActiveTurnReconciliationError, reconcileActiveTurns } from "./daemon-turn-reconciliation.ts";
 import { readCodexFullHistory } from "./native-sessions/codex-history.ts";
 import { NativeSessionService } from "./native-sessions/service.ts";
-import { environmentProxyDispatcher } from "./network/environment-proxy.ts";
 import { revalidateExecutable } from "./process/executable.ts";
 import { connectRelay } from "./relay-connection/connect.ts";
 import { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
 import { RelayConnectionLiveness } from "./relay-connection/liveness.ts";
-import { relayHttpEndpoint, runtimeAuthorization } from "./relay-connection/runtime-authentication.ts";
 import { isRuntimeRelayRevocation, RuntimeRelayRevokedError } from "./relay-connection/runtime-revocation.ts";
 import { RuntimeDeliveryInboxCapacityError, SessionEventOutbox } from "./relay-connection/session-event-outbox.ts";
 import { DaemonSessionEventPublisher } from "./relay-connection/session-event-publisher.ts";
 import { type DaemonTimer, systemDaemonTimer } from "./relay-connection/timer.ts";
 
 const RELAY_RECONNECT_DELAY_MILLISECONDS = 500;
-const ACTIVE_TURN_RECONCILIATION_TIMEOUT_MILLISECONDS = 20_000;
 const ACTIVE_TURN_RECONCILIATION_CLOSE_CODE = 4009;
-
-class DaemonAcpObserver implements AcpSessionObserver {
-    readonly #record: (sessionId: string, event: RecordedSessionEvent) => void;
-
-    constructor(record: (sessionId: string, event: RecordedSessionEvent) => void) {
-        this.#record = record;
-    }
-
-    readonly onCommands = (event: SessionCommandsUpdatedEvent): Promise<void> => {
-        this.#record(event.sessionId, event);
-        return Promise.resolve();
-    };
-
-    readonly onConfig = (event: SessionConfigUpdatedEvent): Promise<void> => {
-        this.#record(event.sessionId, event);
-        return Promise.resolve();
-    };
-
-    readonly onContent = (event: AgentContentEvent): Promise<void> => {
-        this.#record(event.sessionId, event);
-        return Promise.resolve();
-    };
-
-    readonly onElicitation = (event: SessionElicitationRequestedEvent): Promise<void> => {
-        this.#record(event.sessionId, event);
-        return Promise.resolve();
-    };
-
-    readonly onElicitationResolved = (event: SessionElicitationResolvedEvent): Promise<void> => {
-        this.#record(event.sessionId, event);
-        return Promise.resolve();
-    };
-
-    readonly onInfo = (event: SessionInfoUpdatedEvent): Promise<void> => {
-        this.#record(event.sessionId, event);
-        return Promise.resolve();
-    };
-
-    readonly onPermission = (event: SessionPermissionRequestedEvent): Promise<void> => {
-        this.#record(event.sessionId, event);
-        return Promise.resolve();
-    };
-
-    readonly onPermissionResolved = (event: SessionPermissionResolvedEvent): Promise<void> => {
-        this.#record(event.sessionId, event);
-        return Promise.resolve();
-    };
-
-    readonly onUsage = (event: SessionUsageUpdatedEvent): Promise<void> => {
-        this.#record(event.sessionId, event);
-        return Promise.resolve();
-    };
-}
-
-class AuditInstallationEvents implements InstallationAudit {
-    readonly #audit: AuditStore;
-
-    constructor(audit: AuditStore) {
-        this.#audit = audit;
-    }
-
-    readonly record = (
-        event: string,
-        requestId: string,
-        agentId: string,
-        details: Readonly<Record<string, string>> = {},
-    ): void => {
-        this.#audit.record({
-            commandId: requestId,
-            details,
-            event,
-            sessionId: `agent-installation:${agentId}`,
-        });
-    };
-}
-
-class DaemonInstallationObserver implements InstallationObserver {
-    readonly #started = new Set<string>();
-    #socket: WebSocket | null = null;
-
-    readonly connect = (socket: WebSocket): void => {
-        this.#socket = socket;
-    };
-
-    readonly disconnect = (socket: WebSocket): void => {
-        if (this.#socket === socket) {
-            this.#socket = null;
-        }
-    };
-
-    readonly #send = (socket: WebSocket, message: DaemonToServiceMessage): void => {
-        try {
-            send(socket, message);
-        } catch {
-            if (this.#socket === socket) {
-                this.#socket = null;
-            }
-        }
-    };
-
-    readonly onState = (state: AgentInstallation): Promise<void> => {
-        const socket = this.#socket;
-        if (socket === null || socket.readyState !== WebSocket.OPEN) {
-            return Promise.resolve();
-        }
-        if (state instanceof RequestedInstallation) {
-            return Promise.resolve();
-        }
-        if (state instanceof RunningInstallation) {
-            if (!this.#started.has(state.requestId)) {
-                this.#started.add(state.requestId);
-                this.#send(socket, {
-                    agentId: state.agentId,
-                    kind: AGENT_INSTALL_STARTED_KIND,
-                    requestId: state.requestId,
-                });
-            }
-            this.#send(socket, {
-                agentId: state.agentId,
-                kind: AGENT_INSTALL_PROGRESS_KIND,
-                requestId: state.requestId,
-                stage: state.stage,
-            });
-            return Promise.resolve();
-        }
-        if (state instanceof SucceededInstallation) {
-            this.#send(socket, {
-                agentId: state.agentId,
-                authenticationMayBeRequired: state.authenticationMayBeRequired,
-                kind: AGENT_INSTALL_COMPLETED_KIND,
-                requestId: state.requestId,
-            });
-            return Promise.resolve();
-        }
-        if (state instanceof FailedInstallation) {
-            this.#send(socket, {
-                agentId: state.agentId,
-                code: state.code,
-                kind: AGENT_INSTALL_FAILED_KIND,
-                message: state.message,
-                requestId: state.requestId,
-            });
-            return Promise.resolve();
-        }
-        if (state instanceof CancelledInstallation) {
-            this.#send(socket, {
-                agentId: state.agentId,
-                kind: AGENT_INSTALL_CANCELLED_KIND,
-                requestId: state.requestId,
-            });
-            return Promise.resolve();
-        }
-        throw new Error("Unsupported Agent integration installation state");
-    };
-}
-
-class ActiveDaemonTurn {
-    readonly attemptId: string;
-    readonly command: DaemonTurnCommand;
-    readonly #controller: AbortController;
-    readonly #finished = Promise.withResolvers<void>();
-    #cancellationRequested = false;
-
-    constructor(command: DaemonTurnCommand, attemptId: string) {
-        this.attemptId = attemptId;
-        this.command = command;
-        this.#controller = new AbortController();
-    }
-
-    readonly abortDaemon = (): void => {
-        this.#controller.abort();
-    };
-
-    readonly finish = (): void => this.#finished.resolve();
-
-    readonly matches = (cancellation: SessionCancelCommand): boolean =>
-        cancellation.commandId === this.command.commandId && cancellation.sessionId === this.command.sessionId;
-
-    readonly requestCancellation = (): boolean => {
-        if (this.#cancellationRequested) {
-            return false;
-        }
-        this.#cancellationRequested = true;
-        return true;
-    };
-
-    get signal(): AbortSignal {
-        return this.#controller.signal;
-    }
-
-    get completion(): Promise<void> {
-        return this.#finished.promise;
-    }
-}
-
-class ActiveTurnReconciliationError extends Error {
-    readonly code = "active_turn_reconciliation_failed";
-    readonly diagnosticDetails: Readonly<Record<string, string>>;
-    readonly relayErrorCode: string | null;
-    readonly terminal: boolean;
-
-    constructor(
-        message: string,
-        options: ErrorOptions & { readonly relayErrorCode?: string | null; readonly terminal?: boolean } = {},
-    ) {
-        super(message, options);
-        this.name = "ActiveTurnReconciliationError";
-        this.relayErrorCode = options.relayErrorCode ?? null;
-        this.terminal = options.terminal ?? false;
-        this.diagnosticDetails = this.relayErrorCode === null ? {} : { relayErrorCode: this.relayErrorCode };
-    }
-}
-
-/**
- * The Relay reports a reconciliation conflict when the Attempt is no longer owned by this Runtime or has
- * already reached a terminal state. Retrying cannot change that outcome, so the daemon must abandon the
- * stale turn instead of replacing its connection forever.
- */
-const TERMINAL_RECONCILIATION_RELAY_CODES = new Set(["session_conflict"]);
-
-async function relayErrorCode(response: Awaited<ReturnType<typeof fetch>>): Promise<string | null> {
-    try {
-        const body: unknown = JSON.parse(await response.text());
-        if (typeof body !== "object" || body === null) {
-            return null;
-        }
-        const error = Reflect.get(body, "error");
-        if (typeof error !== "object" || error === null) {
-            return null;
-        }
-        const code = Reflect.get(error, "code");
-        return typeof code === "string" && code.length > 0 ? code : null;
-    } catch {
-        return null;
-    }
-}
-
-function activeTurnReconciliationEndpoint(config: DaemonConfig, turn: ActiveDaemonTurn): URL {
-    const endpoint = relayHttpEndpoint(config.relayUrl);
-    let channelPath = "";
-    if (endpoint.pathname.endsWith("/daemon")) {
-        channelPath = endpoint.pathname.slice(0, -"/daemon".length);
-    } else {
-        const runtimePath = "/v1/runtimes/connect";
-        if (!endpoint.pathname.endsWith(runtimePath)) {
-            throw new ActiveTurnReconciliationError("The Relay URL is invalid");
-        }
-        channelPath = `${endpoint.pathname.slice(0, -runtimePath.length)}/channels/${encodeURIComponent(config.channelId)}`;
-    }
-    endpoint.pathname = `${channelPath}/sessions/${encodeURIComponent(turn.command.sessionId)}/attempts/${encodeURIComponent(turn.attemptId)}/reconciliation`;
-    return endpoint;
-}
-
-async function reconcileActiveTurn(config: DaemonConfig, turn: ActiveDaemonTurn, signal: AbortSignal): Promise<void> {
-    signal.throwIfAborted();
-    const timeoutSignal = AbortSignal.timeout(ACTIVE_TURN_RECONCILIATION_TIMEOUT_MILLISECONDS);
-    const requestSignal = AbortSignal.any([signal, timeoutSignal]);
-    let response: Awaited<ReturnType<typeof fetch>>;
-    try {
-        response = await fetch(activeTurnReconciliationEndpoint(config, turn), {
-            body: JSON.stringify({ outcome: { kind: "running" } }),
-            dispatcher: environmentProxyDispatcher,
-            headers: { ...runtimeAuthorization(config.relayUrl), "content-type": "application/json" },
-            method: "POST",
-            signal: requestSignal,
-        });
-    } catch (error) {
-        if (signal.aborted) {
-            signal.throwIfAborted();
-        }
-        throw new ActiveTurnReconciliationError(
-            timeoutSignal.aborted
-                ? "The active Agent turn reconciliation timed out"
-                : "The active Agent turn could not be reconciled",
-            { cause: error },
-        );
-    }
-    if (!response.ok) {
-        const errorCode = await relayErrorCode(response);
-        const terminal = errorCode !== null && TERMINAL_RECONCILIATION_RELAY_CODES.has(errorCode);
-        throw new ActiveTurnReconciliationError(
-            terminal
-                ? `The Relay reported that the active Agent turn can no longer be reconciled (${errorCode})`
-                : `The Relay rejected the active Agent turn reconciliation with status ${response.status.toString()}`,
-            { relayErrorCode: errorCode, terminal },
-        );
-    }
-    await response.body?.cancel();
-}
-
-async function reconcileActiveTurns(
-    config: DaemonConfig,
-    turns: readonly ActiveDaemonTurn[],
-    signal: AbortSignal,
-): Promise<void> {
-    await Promise.all(turns.map(async (turn) => await reconcileActiveTurn(config, turn, signal)));
-}
 
 function closeRelaySocket(socket: WebSocket, code: number, reason: string): void {
     try {

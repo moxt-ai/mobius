@@ -1,7 +1,7 @@
 import { readAcpHistory } from "./acp-history.ts";
 import type { NativeSessionAdapter } from "./agent-adapter.ts";
 
-export const openCodeSessionAdapter: NativeSessionAdapter = {
+export const acpSessionAdapter: NativeSessionAdapter = {
     linkedHistory: async ({ sessions, directories, bindingId, options, nativeSessionId }) =>
         await readAcpHistory(sessions, directories, bindingId, options, nativeSessionId),
     history: async ({ sessions, directories, bindingId, options, nativeSessionId }) =>
