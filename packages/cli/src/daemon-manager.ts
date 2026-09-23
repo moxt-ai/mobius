@@ -8,11 +8,7 @@ import { join } from "node:path";
 import type { PairedDaemon } from "./pairing/pair-local-machine.ts";
 import { pairLocalMachine, resumeLocalMachine } from "./pairing/pair-local-machine.ts";
 import { MobiusRuntimeEngine } from "./runtime.ts";
-import {
-    type RuntimeInstallationStore,
-    type StoredRuntimeConnection,
-    VerifiedRuntimeConnection,
-} from "./storage/runtime-installation-store.ts";
+import type { RuntimeInstallationStore, VerifiedRuntimeConnection } from "./storage/runtime-installation-store.ts";
 
 const CONTROL_TIMEOUT_MILLISECONDS = 130_000;
 const START_TIMEOUT_MILLISECONDS = 120_000;
@@ -54,7 +50,7 @@ type DecodedManagerResponse =
     | { readonly kind: "legacy-listed"; readonly pairs: readonly ManagedRuntimeSummary[] };
 
 interface ActiveRuntime {
-    readonly connection: StoredRuntimeConnection;
+    readonly connection: VerifiedRuntimeConnection;
     readonly controller: AbortController;
     readonly completion: Promise<void>;
     readonly ready: Promise<void>;
@@ -204,26 +200,26 @@ function isManagedRuntimeSummary(value: unknown): value is ManagedRuntimeSummary
     );
 }
 
-function summary(connection: StoredRuntimeConnection, status: ManagedRuntimeStatus): ManagedRuntimeSummary {
+function summary(connection: VerifiedRuntimeConnection, status: ManagedRuntimeStatus): ManagedRuntimeSummary {
     return {
         appId: connection.appId,
         connectionId: connection.connectionId,
-        runtimeId: connection instanceof VerifiedRuntimeConnection ? connection.runtimeId : "unknown",
+        runtimeId: connection.runtimeId,
         status,
         workspace: connection.defaultWorkspace,
     };
 }
 
 class RuntimeSupervisor {
-    readonly #failed = new Map<string, StoredRuntimeConnection>();
+    readonly #failed = new Map<string, VerifiedRuntimeConnection>();
     readonly #installation: RuntimeInstallationStore;
     readonly #pairingRequests = new Map<
         string,
         Promise<{ readonly alreadyOnline: boolean; readonly pair: ManagedRuntimeSummary }>
     >();
-    readonly #restoring = new Map<string, StoredRuntimeConnection>();
+    readonly #restoring = new Map<string, VerifiedRuntimeConnection>();
     readonly #runtimes = new Map<string, ActiveRuntime>();
-    readonly #stopped = new Map<string, StoredRuntimeConnection>();
+    readonly #stopped = new Map<string, VerifiedRuntimeConnection>();
 
     constructor(installation: RuntimeInstallationStore) {
         this.#installation = installation;
@@ -337,7 +333,7 @@ class RuntimeSupervisor {
         await Promise.all(runtimes.map(async (runtime) => await runtime.completion));
     };
 
-    #activate(connection: StoredRuntimeConnection, paired: PairedDaemon): ActiveRuntime {
+    #activate(connection: VerifiedRuntimeConnection, paired: PairedDaemon): ActiveRuntime {
         const existing = this.#runtimes.get(connection.connectionId);
         if (existing !== undefined) {
             return existing;

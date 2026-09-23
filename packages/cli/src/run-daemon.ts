@@ -23,19 +23,14 @@ import {
     type AgentContentEvent,
     type DaemonToServiceMessage,
     decodeServiceToDaemonMessage,
-    type decodeSessionEventDeferred,
-    decodeSessionEventEnvelope,
     decodeSessionLiveHistoryLoad,
     decodeSessionLiveHistoryPageLoad,
     encodeDaemonToServiceMessage,
-    encodeRecordedSessionEvent,
     FILE_FAILED_KIND,
     FILE_READ_KIND,
     NATIVE_SESSION_CANCEL_KIND,
     NATIVE_SESSION_REQUEST_KIND,
     NATIVE_SESSION_TURN_FORK_KIND,
-    type NativeMessagePage,
-    type NativeSessionHistory,
     type RecordedSessionEvent,
     RUNTIME_DELIVERY_COMMITTED_KIND,
     RUNTIME_DELIVERY_KIND,
@@ -63,7 +58,6 @@ import {
     type SessionConfigureCommand,
     type SessionElicitationRequestedEvent,
     type SessionElicitationResolvedEvent,
-    type SessionEventEnvelope,
     type SessionInfoUpdatedEvent,
     type SessionPermissionRequestedEvent,
     type SessionPermissionResolvedEvent,
@@ -121,10 +115,15 @@ import { type DaemonConfig, DaemonLocalContext, withDaemonEnvironment } from "./
 import { DaemonDiagnosticLog } from "./daemon-diagnostic-log.ts";
 import { AccumulatingOperationMetrics, type DurationMetric } from "./infra/operation-metrics.ts";
 import { readCodexFullHistory } from "./native-sessions/codex-history.ts";
+import { paginateLiveSessionHistory } from "./native-sessions/live-history-page.ts";
 import { NativeSessionService } from "./native-sessions/service.ts";
 import { environmentProxyDispatcher } from "./network/environment-proxy.ts";
 import { revalidateExecutable } from "./process/executable.ts";
 import { PromptArtifactError, resolvePromptArtifacts } from "./prompt-artifact-resolver.ts";
+import {
+    AGENT_ACTIVITY_COALESCING_MILLISECONDS,
+    CoalescingDaemonActivityPublisher,
+} from "./relay-connection/coalescing-activity-publisher.ts";
 import { CoalescingNarrationPublisher } from "./relay-connection/coalescing-narration-publisher.ts";
 import { CoalescingTextPublisher } from "./relay-connection/coalescing-text-publisher.ts";
 import { connectRelay } from "./relay-connection/connect.ts";
@@ -132,15 +131,11 @@ import { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
 import { RelayConnectionLiveness } from "./relay-connection/liveness.ts";
 import { relayHttpEndpoint, runtimeAuthorization } from "./relay-connection/runtime-authentication.ts";
 import { isRuntimeRelayRevocation, RuntimeRelayRevokedError } from "./relay-connection/runtime-revocation.ts";
-import {
-    RuntimeDeliveryInboxCapacityError,
-    SessionEventOutbox,
-    SessionEventOutboxCapacityError,
-} from "./relay-connection/session-event-outbox.ts";
-import { type DaemonScheduledTask, type DaemonTimer, systemDaemonTimer } from "./relay-connection/timer.ts";
+import { RuntimeDeliveryInboxCapacityError, SessionEventOutbox } from "./relay-connection/session-event-outbox.ts";
+import { DaemonSessionEventPublisher } from "./relay-connection/session-event-publisher.ts";
+import { type DaemonTimer, systemDaemonTimer } from "./relay-connection/timer.ts";
 
 const RELAY_RECONNECT_DELAY_MILLISECONDS = 500;
-const AGENT_ACTIVITY_COALESCING_MILLISECONDS = 100;
 const AGENT_TEXT_COALESCING_MILLISECONDS = 100;
 // Mirrors the protocol's per-event text limit; a delta larger than this is
 // rejected by the Session event codec rather than truncated.
@@ -492,348 +487,6 @@ function closeRelaySocket(socket: WebSocket, code: number, reason: string): void
     }
 }
 
-abstract class DaemonSessionEventConnectionState {
-    abstract readonly disconnect: (socket: WebSocket) => DaemonSessionEventConnectionState;
-    abstract readonly matches: (socket: WebSocket) => boolean;
-    abstract readonly send: (message: SessionEventEnvelope) => boolean;
-}
-
-class DisconnectedDaemonSessionEventState extends DaemonSessionEventConnectionState {
-    readonly disconnect = (): DaemonSessionEventConnectionState => this;
-    readonly matches = (): boolean => false;
-    readonly send = (): boolean => false;
-}
-
-class ConnectedDaemonSessionEventState extends DaemonSessionEventConnectionState {
-    readonly #socket: WebSocket;
-
-    constructor(socket: WebSocket) {
-        super();
-        this.#socket = socket;
-    }
-
-    readonly disconnect = (socket: WebSocket): DaemonSessionEventConnectionState =>
-        socket === this.#socket ? new DisconnectedDaemonSessionEventState() : this;
-
-    readonly matches = (socket: WebSocket): boolean => socket === this.#socket;
-
-    readonly send = (message: SessionEventEnvelope): boolean => {
-        if (this.#socket.readyState !== WebSocket.OPEN) {
-            return false;
-        }
-        try {
-            this.#socket.send(encodeDaemonToServiceMessage(message));
-            return true;
-        } catch {
-            // The in-memory outbox retains the event for the replacement connection.
-            return false;
-        }
-    };
-}
-
-const SESSION_EVENT_REPLAY_WINDOW = 16;
-const SESSION_EVENT_SOURCE_REPLAY_WINDOW = 4;
-const SESSION_EVENT_REPLAY_BYTE_LIMIT = 32 * 1024 * 1024;
-/**
- * Events that settle a Turn reserve capacity streaming events cannot consume. A
- * completed narrative activity carries the text that supersedes its increments, so it
- * is the only event that can settle a streamed narration; without the reservation the
- * snapshot could be shed after its increments were, losing the text entirely.
- */
-function reservesSessionEventCapacity(event: RecordedSessionEvent): boolean {
-    if (event.kind === SESSION_COMPLETED_KIND || event.kind === SESSION_FAILED_KIND) {
-        return true;
-    }
-    return (
-        event.kind === AGENT_ACTIVITY_KIND &&
-        (event.activityType === "progress" || event.activityType === "reasoning") &&
-        (event.status === "completed" || event.status === "failed")
-    );
-}
-
-class InFlightSessionEvent {
-    readonly byteLength: number;
-    readonly sourceKey: string;
-
-    constructor(sourceKey: string, byteLength: number) {
-        this.byteLength = byteLength;
-        this.sourceKey = sourceKey;
-    }
-}
-
-function sessionEventSourceKey(envelope: ReturnType<typeof decodeSessionEventEnvelope>): string {
-    return envelope.source.kind === "attempt"
-        ? `attempt:${envelope.sessionId}:${envelope.source.attemptId}`
-        : `runtime:${envelope.sessionId}`;
-}
-
-class DaemonSessionEventPublisher {
-    readonly #outbox: SessionEventOutbox;
-    readonly #inFlightEvents = new Map<string, InFlightSessionEvent>();
-    readonly #pausedSources = new Map<string, DaemonScheduledTask>();
-    readonly #shedEventKinds = new Set<string>();
-    readonly #timer: DaemonTimer;
-    #inFlightBytes = 0;
-    #connection: DaemonSessionEventConnectionState = new DisconnectedDaemonSessionEventState();
-
-    constructor(outbox: SessionEventOutbox, timer: DaemonTimer) {
-        this.#outbox = outbox;
-        this.#timer = timer;
-    }
-
-    readonly connect = (socket: WebSocket): void => {
-        this.#connection = new ConnectedDaemonSessionEventState(socket);
-        this.#clearInFlight();
-        this.#publishNextBatch();
-    };
-
-    readonly disconnect = (socket: WebSocket): void => {
-        if (!this.#connection.matches(socket)) {
-            return;
-        }
-        this.#connection = this.#connection.disconnect(socket);
-        this.#clearInFlight();
-    };
-
-    readonly recordAttempt = (sessionId: string, event: RecordedSessionEvent, attemptId: string): void => {
-        const encoded = encodeRecordedSessionEvent(event);
-        if (reservesSessionEventCapacity(event)) {
-            this.#enqueueReserved(sessionId, encoded, attemptId, event.kind);
-        } else {
-            this.#enqueueStandard(sessionId, encoded, attemptId, event.kind);
-        }
-        this.#publishNextBatch();
-    };
-
-    readonly recordRuntime = (sessionId: string, event: RecordedSessionEvent): void => {
-        this.#enqueueStandard(sessionId, encodeRecordedSessionEvent(event), "", event.kind);
-        this.#publishNextBatch();
-    };
-
-    /**
-     * Enqueue a standard event, shedding it instead of ending the daemon when the
-     * in-memory outbox is full.
-     *
-     * A capacity error used to escape the coalescing timer that publishes activities,
-     * so the process exited and every restart died on the same retained backlog. A full
-     * outbox is a recoverable runtime condition, not a fatal one: narration increments are
-     * superseded by the completed snapshot, so they are shed first, and any other streaming
-     * event is shed only at the wall rather than terminating the daemon.
-     */
-    readonly #enqueueStandard = (sessionId: string, encoded: string, attemptId: string, kind: string): void => {
-        if (kind === AGENT_ACTIVITY_NARRATION_KIND && this.#outbox.standardCapacityRemaining() <= 0) {
-            this.#reportShedEvent(kind);
-            return;
-        }
-        try {
-            this.#outbox.enqueue(sessionId, encoded, attemptId);
-        } catch (error) {
-            if (!(error instanceof SessionEventOutboxCapacityError)) {
-                throw error;
-            }
-            this.#reportShedEvent(kind);
-        }
-    };
-
-    /**
-     * Enqueue on the reserved budget, degrading to a reported drop instead of raising.
-     * Streaming events are shed before this budget is reached, so a Turn's terminal
-     * events and the completed snapshot that carries its narration still land; a drop
-     * here is the last resort for a backlog no acknowledgement can drain.
-     */
-    readonly #enqueueReserved = (sessionId: string, encoded: string, attemptId: string, kind: string): void => {
-        try {
-            this.#outbox.enqueueCritical(sessionId, encoded, attemptId);
-        } catch (error) {
-            if (!(error instanceof SessionEventOutboxCapacityError)) {
-                throw error;
-            }
-            this.#reportShedEvent(kind);
-        }
-    };
-
-    readonly #reportShedEvent = (kind: string): void => {
-        if (this.#shedEventKinds.has(kind)) {
-            return;
-        }
-        this.#shedEventKinds.add(kind);
-        console.warn(`Mobius daemon is dropping queued "${kind}" events because the Session event outbox is full`);
-    };
-
-    readonly acknowledge = (acknowledgement: Parameters<SessionEventOutbox["acknowledge"]>[0]): void => {
-        if (!this.#outbox.acknowledge(acknowledgement)) {
-            return;
-        }
-        this.#removeInFlight(acknowledgement.eventId);
-        this.#publishNextBatch();
-    };
-
-    readonly quarantine = (rejection: Parameters<SessionEventOutbox["quarantine"]>[0]): boolean => {
-        const quarantined = this.#outbox.quarantine(rejection);
-        if (!quarantined) {
-            return false;
-        }
-        this.#removeInFlight(rejection.eventId);
-        this.#publishNextBatch();
-        return true;
-    };
-
-    readonly defer = (deferred: ReturnType<typeof decodeSessionEventDeferred>): void => {
-        const inFlight = this.#inFlightEvents.get(deferred.eventId);
-        if (inFlight === undefined) {
-            return;
-        }
-        this.#clearInFlightSource(inFlight.sourceKey);
-        if (!this.#pausedSources.has(inFlight.sourceKey)) {
-            this.#pausedSources.set(
-                inFlight.sourceKey,
-                this.#timer.schedule(() => {
-                    this.#pausedSources.delete(inFlight.sourceKey);
-                    this.#publishNextBatch();
-                }, deferred.retryAfterMilliseconds),
-            );
-        }
-        this.#publishNextBatch();
-    };
-
-    readonly close = (): void => {
-        for (const task of this.#pausedSources.values()) {
-            task.cancel();
-        }
-        this.#pausedSources.clear();
-        this.#clearInFlight();
-    };
-
-    readonly #publishNextBatch = (): void => {
-        while (this.#inFlightEvents.size < SESSION_EVENT_REPLAY_WINDOW) {
-            const sourceCounts = new Map<string, number>();
-            for (const inFlight of this.#inFlightEvents.values()) {
-                sourceCounts.set(inFlight.sourceKey, (sourceCounts.get(inFlight.sourceKey) ?? 0) + 1);
-            }
-            const saturatedSources = [...sourceCounts.entries()]
-                .filter(([, count]) => count >= SESSION_EVENT_SOURCE_REPLAY_WINDOW)
-                .map(([sourceKey]) => sourceKey);
-            const batch = this.#outbox.pendingSourceHeads(
-                SESSION_EVENT_REPLAY_WINDOW - this.#inFlightEvents.size,
-                [...this.#inFlightEvents.keys()],
-                [...this.#pausedSources.keys(), ...saturatedSources],
-            );
-            let sent = 0;
-            for (const encoded of batch) {
-                const envelope = decodeSessionEventEnvelope(encoded);
-                const sourceKey = sessionEventSourceKey(envelope);
-                const sourceCount = sourceCounts.get(sourceKey) ?? 0;
-                if (sourceCount >= SESSION_EVENT_SOURCE_REPLAY_WINDOW) {
-                    continue;
-                }
-                const byteLength = new TextEncoder().encode(encoded).byteLength;
-                if (this.#inFlightBytes + byteLength > SESSION_EVENT_REPLAY_BYTE_LIMIT) {
-                    continue;
-                }
-                if (!this.#connection.send(envelope)) {
-                    this.#clearInFlight();
-                    return;
-                }
-                this.#inFlightEvents.set(envelope.eventId, new InFlightSessionEvent(sourceKey, byteLength));
-                this.#inFlightBytes += byteLength;
-                sourceCounts.set(sourceKey, sourceCount + 1);
-                sent += 1;
-            }
-            if (sent === 0) {
-                return;
-            }
-        }
-    };
-
-    readonly #removeInFlight = (eventId: string): void => {
-        const inFlight = this.#inFlightEvents.get(eventId);
-        if (inFlight === undefined) {
-            return;
-        }
-        this.#inFlightEvents.delete(eventId);
-        this.#inFlightBytes -= inFlight.byteLength;
-    };
-
-    readonly #clearInFlight = (): void => {
-        this.#inFlightEvents.clear();
-        this.#inFlightBytes = 0;
-    };
-
-    readonly #clearInFlightSource = (sourceKey: string): void => {
-        for (const [eventId, inFlight] of this.#inFlightEvents) {
-            if (inFlight.sourceKey !== sourceKey) {
-                continue;
-            }
-            this.#inFlightEvents.delete(eventId);
-            this.#inFlightBytes -= inFlight.byteLength;
-        }
-    };
-}
-
-class CoalescingDaemonActivityPublisher {
-    readonly #pending = new Map<string, AcpActivity>();
-    readonly #publish: (activity: AcpActivity) => void;
-    readonly #publishedActivityIds = new Set<string>();
-    readonly #scheduled = new Map<string, DaemonScheduledTask>();
-    readonly #timer: DaemonTimer;
-
-    constructor(timer: DaemonTimer, publish: (activity: AcpActivity) => void) {
-        this.#publish = publish;
-        this.#timer = timer;
-    }
-
-    readonly flush = (): void => {
-        const activities = [...this.#pending.values()].sort((left, right) => left.sequence - right.sequence);
-        for (const task of this.#scheduled.values()) {
-            task.cancel();
-        }
-        this.#pending.clear();
-        this.#scheduled.clear();
-        for (const activity of activities) {
-            this.#publish(activity);
-        }
-    };
-
-    readonly record = (activity: AcpActivity): Promise<void> => {
-        if (activity.status !== "pending" && activity.status !== "running") {
-            this.#discardPending(activity.activityId);
-            this.#publishedActivityIds.add(activity.activityId);
-            this.#publish(activity);
-            return Promise.resolve();
-        }
-        if (!this.#publishedActivityIds.has(activity.activityId)) {
-            this.#publishedActivityIds.add(activity.activityId);
-            this.#publish(activity);
-            return Promise.resolve();
-        }
-        this.#pending.set(activity.activityId, activity);
-        if (!this.#scheduled.has(activity.activityId)) {
-            this.#scheduled.set(
-                activity.activityId,
-                this.#timer.schedule(
-                    () => this.#flushActivity(activity.activityId),
-                    AGENT_ACTIVITY_COALESCING_MILLISECONDS,
-                ),
-            );
-        }
-        return Promise.resolve();
-    };
-
-    readonly #discardPending = (activityId: string): void => {
-        this.#scheduled.get(activityId)?.cancel();
-        this.#scheduled.delete(activityId);
-        this.#pending.delete(activityId);
-    };
-
-    readonly #flushActivity = (activityId: string): void => {
-        const activity = this.#pending.get(activityId);
-        this.#discardPending(activityId);
-        if (activity !== undefined) {
-            this.#publish(activity);
-        }
-    };
-}
-
 function daemonActivity(command: DaemonTurnCommand, activity: AcpActivity): AgentActivityEvent {
     return {
         activityId: activity.activityId,
@@ -1136,104 +789,6 @@ async function executeSessionPrepare(
         });
         reportOperationFailure(socket, command.requestId, command.sessionId, error, metrics.snapshot());
     }
-}
-
-interface LiveHistoryCoveredTurnRange {
-    readonly assistantEndIndex: number;
-    readonly assistantStartIndex: number;
-    readonly commandId: string;
-    readonly userIndex: number;
-}
-
-function liveHistoryCursor(sessionId: string, endIndex: number): string {
-    return Buffer.from(JSON.stringify({ endIndex, sessionId }), "utf8").toString("base64url");
-}
-
-function liveHistoryEndIndex(cursor: string, sessionId: string): number {
-    try {
-        if (!/^[A-Za-z0-9_-]{1,512}$/u.test(cursor)) {
-            throw new Error("Invalid cursor alphabet");
-        }
-        const value: unknown = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
-        if (typeof value !== "object" || value === null || Array.isArray(value)) {
-            throw new Error("Invalid cursor shape");
-        }
-        const record = Object.fromEntries(Object.entries(value));
-        if (
-            Object.keys(record).sort().join(",") !== "endIndex,sessionId" ||
-            record["sessionId"] !== sessionId ||
-            typeof record["endIndex"] !== "number" ||
-            !Number.isSafeInteger(record["endIndex"]) ||
-            record["endIndex"] < 0
-        ) {
-            throw new Error("Invalid cursor target");
-        }
-        return record["endIndex"];
-    } catch (cause) {
-        throw new AcpExecutionError("The native Session history cursor is invalid", { cause }, "invalid_cursor");
-    }
-}
-
-function liveHistoryCoveredTurnRanges(
-    history: Extract<NativeSessionHistory, { readonly status: "available" }>,
-): readonly LiveHistoryCoveredTurnRange[] {
-    const ranges: LiveHistoryCoveredTurnRange[] = [];
-    let historyIndex = history.messages.length;
-    for (const commandId of history.coveredCommandIds) {
-        let assistantStartIndex = historyIndex;
-        while (assistantStartIndex > 0 && history.messages[assistantStartIndex - 1]?.role === "assistant") {
-            assistantStartIndex -= 1;
-        }
-        const userIndex = assistantStartIndex - 1;
-        if (assistantStartIndex === historyIndex || history.messages[userIndex]?.role !== "user") {
-            break;
-        }
-        ranges.push({ assistantEndIndex: historyIndex, assistantStartIndex, commandId, userIndex });
-        historyIndex = userIndex;
-    }
-    return ranges;
-}
-
-function paginateLiveSessionHistory(
-    history: NativeSessionHistory,
-    sessionId: string,
-    cursor: string | null,
-    limit: number,
-): NativeMessagePage {
-    if (history.status === "unavailable") {
-        if (cursor !== null) {
-            throw new AcpExecutionError("Unavailable native Session history has no cursor", {}, "invalid_cursor");
-        }
-        return { cause: history.cause, nextCursor: null, status: "unavailable" };
-    }
-    const endIndex = cursor === null ? history.messages.length : liveHistoryEndIndex(cursor, sessionId);
-    if (endIndex > history.messages.length) {
-        throw new AcpExecutionError("The native Session history cursor is invalid", {}, "invalid_cursor");
-    }
-    const startIndex = Math.max(0, endIndex - limit);
-    const coveredMessageIds = new Set(history.coveredMessageIds);
-    const ranges = liveHistoryCoveredTurnRanges(history);
-    return {
-        coveredCommandIds: ranges
-            .filter((range) => range.userIndex >= startIndex && range.assistantEndIndex <= endIndex)
-            .map((range) => range.commandId),
-        coveredMessageIds: ranges.flatMap((range) => [
-            ...(range.userIndex >= startIndex &&
-            range.userIndex < endIndex &&
-            coveredMessageIds.has(`${range.commandId}:user`)
-                ? [`${range.commandId}:user`]
-                : []),
-            ...(range.assistantStartIndex >= startIndex &&
-            range.assistantEndIndex <= endIndex &&
-            coveredMessageIds.has(`${range.commandId}:agent`)
-                ? [`${range.commandId}:agent`]
-                : []),
-        ]),
-        messages: history.messages.slice(startIndex, endIndex),
-        nextCursor: startIndex > 0 ? liveHistoryCursor(sessionId, startIndex) : null,
-        status: "available",
-        truncated: history.truncated,
-    };
 }
 
 async function executeSessionLiveHistoryLoad(

@@ -90,8 +90,4 @@ export class MoxtPlatformServerClients {
             projectId,
         });
     }
-
-    readonly close = (): void => {
-        this.project.close();
-    };
 }

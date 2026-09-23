@@ -1,7 +1,7 @@
 import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import { fromByteArray, toByteArray } from "base64-js";
 import { MobiusApiError, MobiusConnectionError, MobiusProtocolError, MobiusValidationError } from "../errors.ts";
-import type { MobiusHttpTransport, MobiusTransportSessionEvent } from "./http-transport.ts";
+import type { MobiusHttpTransport } from "./http-transport.ts";
 
 const DEFAULT_CONNECTION_TIMEOUT_MILLISECONDS = 15_000;
 
@@ -36,24 +36,9 @@ type PendingWsRequest = {
     readonly reject: (cause: unknown) => void;
     readonly resolve: (response: Response) => void;
 };
-type LiveEventSubscription =
-    | {
-          readonly cleanup: () => void;
-          readonly kind: "opening";
-          readonly reject: (cause: unknown) => void;
-          readonly resolve: (events: ReadableStream<MobiusTransportSessionEvent>) => void;
-      }
-    | {
-          readonly cleanup: () => void;
-          readonly controller: ReadableStreamDefaultController<MobiusTransportSessionEvent>;
-          readonly kind: "open";
-      };
-
 const WS_REQUEST_KIND = "http.request";
 const WS_RESPONSE_KIND = "http.response";
 const WS_ERROR_KIND = "http.error";
-const EVENT_SUBSCRIBE_KIND = "session.events.subscribe";
-const EVENT_UNSUBSCRIBE_KIND = "session.events.unsubscribe";
 
 function bytesToBase64(bytes: Uint8Array): string {
     return fromByteArray(bytes);
@@ -150,7 +135,6 @@ export class WsTransport implements MobiusHttpTransport {
     readonly #connector: MobiusWebSocketConnector;
     readonly #idleTimeoutMilliseconds: number;
     readonly #pending = new Map<string, PendingWsRequest>();
-    readonly #subscriptions = new Map<string, LiveEventSubscription>();
     #origin: string | null = null;
     #state: WsTransportState = { kind: "disconnected" };
 
@@ -216,49 +200,6 @@ export class WsTransport implements MobiusHttpTransport {
         return await response;
     };
 
-    readonly openLiveSessionEvents = async (request: Request): Promise<ReadableStream<MobiusTransportSessionEvent>> => {
-        request.signal.throwIfAborted();
-        const requestUrl = new URL(request.url);
-        if (this.#origin !== null && this.#origin !== requestUrl.origin) {
-            throw new MobiusValidationError("A WebSocket transport cannot connect to multiple Mobius origins");
-        }
-        this.#origin = requestUrl.origin;
-        const socket = await this.#socket(requestUrl);
-        const id = crypto.randomUUID();
-        const abort = (): void => {
-            const subscription = this.#subscriptions.get(id);
-            this.#subscriptions.delete(id);
-            subscription?.cleanup();
-            if (subscription?.kind === "opening") {
-                subscription.reject(request.signal.reason);
-            } else {
-                subscription?.controller.error(request.signal.reason);
-            }
-            this.#sendUnsubscribe(id);
-        };
-        const cleanup = (): void => request.signal.removeEventListener("abort", abort);
-        const events = new Promise<ReadableStream<MobiusTransportSessionEvent>>((resolve, reject) => {
-            this.#subscriptions.set(id, { cleanup, kind: "opening", reject, resolve });
-        });
-        request.signal.addEventListener("abort", abort, { once: true });
-        try {
-            socket.send(
-                JSON.stringify({
-                    headers: Array.from(request.headers.entries()),
-                    kind: EVENT_SUBSCRIBE_KIND,
-                    path: `${requestUrl.pathname}${requestUrl.search}`,
-                    subscriptionId: id,
-                }),
-            );
-            this.#touch(socket);
-        } catch (cause) {
-            this.#subscriptions.delete(id);
-            cleanup();
-            throw cause;
-        }
-        return await events;
-    };
-
     readonly close = (): void => {
         const state = this.#state;
         this.#state = { kind: "closed" };
@@ -267,7 +208,6 @@ export class WsTransport implements MobiusHttpTransport {
             state.socket.close(1000, "Mobius transport closed");
         }
         this.#failPending(new MobiusConnectionError("The Mobius WebSocket transport closed"));
-        this.#failSubscriptions(new MobiusConnectionError("The live Session event transport closed"));
     };
 
     readonly #socket = async (requestUrl: URL): Promise<WebSocket> => {
@@ -326,10 +266,6 @@ export class WsTransport implements MobiusHttpTransport {
             const value: unknown = JSON.parse(event.data);
             const message = wsRecord(value);
             const kind = wsString(message, "kind", 32);
-            if (kind.startsWith("session.events.")) {
-                this.#receiveSubscription(kind, message);
-                return;
-            }
             const requestId = wsString(message, "requestId", 128);
             const pending = this.#pending.get(requestId);
             if (pending === undefined) {
@@ -362,7 +298,6 @@ export class WsTransport implements MobiusHttpTransport {
             );
         } catch (cause) {
             this.#failPending(cause);
-            this.#failSubscriptions(cause);
         }
     };
 
@@ -374,7 +309,6 @@ export class WsTransport implements MobiusHttpTransport {
             this.#state = { kind: "disconnected" };
         }
         this.#failPending(new MobiusConnectionError("The Mobius WebSocket transport disconnected"));
-        this.#failSubscriptions(new MobiusConnectionError("The live Session event transport disconnected"));
     };
 
     readonly #failPending = (cause: unknown): void => {
@@ -383,95 +317,6 @@ export class WsTransport implements MobiusHttpTransport {
         for (const request of pending) {
             request.reject(cause);
         }
-    };
-
-    readonly #failSubscriptions = (cause: unknown): void => {
-        const subscriptions = Array.from(this.#subscriptions.values());
-        this.#subscriptions.clear();
-        for (const subscription of subscriptions) {
-            subscription.cleanup();
-            if (subscription.kind === "opening") {
-                subscription.reject(cause);
-            } else {
-                subscription.controller.error(cause);
-            }
-        }
-    };
-
-    readonly #receiveSubscription = (kind: string, message: Readonly<Record<string, unknown>>): void => {
-        const id = wsString(message, "subscriptionId", 128);
-        const subscription = this.#subscriptions.get(id);
-        if (subscription === undefined) {
-            return;
-        }
-        if (kind === "session.events.ready") {
-            if (subscription.kind !== "opening") {
-                throw new MobiusProtocolError("The live Session event subscription became ready more than once");
-            }
-            let streamController: ReadableStreamDefaultController<MobiusTransportSessionEvent> | null = null;
-            const stream = new ReadableStream<MobiusTransportSessionEvent>({
-                start(controller) {
-                    streamController = controller;
-                },
-                cancel: () => {
-                    subscription.cleanup();
-                    this.#subscriptions.delete(id);
-                    this.#sendUnsubscribe(id);
-                },
-            });
-            if (streamController === null) {
-                throw new MobiusProtocolError("The live Session event subscription could not initialize");
-            }
-            this.#subscriptions.set(id, { cleanup: subscription.cleanup, controller: streamController, kind: "open" });
-            subscription.resolve(stream);
-            return;
-        }
-        if (kind === "session.events.heartbeat") {
-            return;
-        }
-        if (kind === "session.events.error") {
-            const status = message["status"];
-            if (typeof status !== "number" || !Number.isSafeInteger(status) || status < 400 || status > 599) {
-                throw new MobiusProtocolError("The live Session event subscription returned an invalid status");
-            }
-            const cause = new MobiusApiError(
-                wsString(message, "code", 128),
-                wsString(message, "message", 1_024),
-                status,
-            );
-            this.#subscriptions.delete(id);
-            subscription.cleanup();
-            if (subscription.kind === "opening") {
-                subscription.reject(cause);
-            } else {
-                subscription.controller.error(cause);
-            }
-            return;
-        }
-        if (subscription.kind !== "open") {
-            throw new MobiusProtocolError("The live Session event subscription received data before it was ready");
-        }
-        if (kind === "session.events.end") {
-            this.#subscriptions.delete(id);
-            subscription.cleanup();
-            subscription.controller.close();
-            return;
-        }
-        if (kind !== "session.events.event") {
-            throw new MobiusProtocolError("The live Session event subscription returned an unsupported message");
-        }
-        subscription.controller.enqueue({
-            data: wsString(message, "data", 8 * 1024 * 1024),
-            eventId: wsString(message, "eventId", 512),
-        });
-    };
-
-    readonly #sendUnsubscribe = (id: string): void => {
-        if (this.#state.kind !== "connected") {
-            return;
-        }
-        this.#state.socket.send(JSON.stringify({ kind: EVENT_UNSUBSCRIBE_KIND, subscriptionId: id }));
-        this.#touch(this.#state.socket);
     };
 
     readonly #connected = (socket: WebSocket): Extract<WsTransportState, { readonly kind: "connected" }> => ({
