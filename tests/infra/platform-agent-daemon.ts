@@ -137,6 +137,8 @@ export async function createFakeAgentDaemonRuntime(options: {
             client,
             failure: behavior.failure,
             runtimeId: pairing.runtimeId,
+            publishSessionEvent: (sessionId: string, payload: string, eventSignal: AbortSignal) =>
+                daemon.sendSessionEvent(sessionId, payload, eventSignal),
             [Symbol.asyncDispose]: () => owned.disposeAsync(),
         };
     } finally {
