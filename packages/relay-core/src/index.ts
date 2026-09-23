@@ -1,4 +1,4 @@
-export { createPlatformMobiusApplication } from "./app.ts";
+export { createMobiusApplication } from "./app.ts";
 export { createDurableObjectContext } from "./di/create-durable-object-context.ts";
 export type { RelayContext } from "./di/create-relay-dependencies.ts";
 export { createWorkerContext, type WorkerRuntimeGateways } from "./di/create-worker-context.ts";
@@ -91,9 +91,14 @@ export { CloudflareChannelRuntime } from "./gateway/cloudflare-channel-runtime.t
 export { CloudflareSessionTransport } from "./gateway/cloudflare-session-transport.ts";
 export type { ChannelGateway } from "./gateway/index.ts";
 export type { ProjectAccessAuthorizer } from "./gateway/project-access-authorizer.ts";
+export { SessionLiveHistoryClient } from "./gateway/session-live-history-client.ts";
 export type { SessionTransport } from "./gateway/session-transport.ts";
 export { errorMiddleware, rethrowHonoError } from "./http/middleware/error-middleware.ts";
 export { requestTimeoutMiddleware } from "./http/middleware/request-timeout-middleware.ts";
+export {
+    acceptWebSocketHttpTransport,
+    type SubscribeSessionEvents,
+} from "./http/transport/websocket-http-transport.ts";
 export {
     RequestBodyError,
     type RequestBodyErrorCode,

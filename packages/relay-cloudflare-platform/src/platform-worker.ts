@@ -1,8 +1,9 @@
 import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import {
+    acceptWebSocketHttpTransport,
     CloudflareChannelRuntime,
     CloudflareSessionTransport,
-    createPlatformMobiusApplication,
+    createMobiusApplication,
     createWorkerContext,
     type HttpError,
     instrumentD1Database,
@@ -30,7 +31,6 @@ import {
 import { createPlatformControlApplication } from "./http/platform-routes.ts";
 import { createProjectApplication } from "./http/project-routes.ts";
 import { createSessionCredentialRoutes } from "./http/session-credential-routes.ts";
-import { acceptWebSocketHttpTransport } from "./http/websocket-http-transport.ts";
 import { ClerkOrganizationGateway } from "./infra/clerk-organization-gateway.ts";
 import type { OrganizationMembershipGateway } from "./infra/organization-membership-gateway.ts";
 import { PlatformProjectStorageDirectory } from "./infra/platform-project-storage-directory.ts";
@@ -236,7 +236,7 @@ async function subscribeToLiveEvents(
     };
 }
 
-const projectApplication = createPlatformMobiusApplication();
+const projectApplication = createMobiusApplication();
 const scopedProjectApplication = createProjectApplication();
 const controlApplication = createPlatformControlApplication();
 const PLATFORM_REQUEST_TIMEOUT_MILLISECONDS = 30_000;

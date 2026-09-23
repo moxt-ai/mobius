@@ -1,12 +1,12 @@
 # Development
 
-Mobius serves Mobius Chat through the Platform Worker and SDK. The local CLI connects to the Worker, discovers ACP agents, and executes session commands. Protocol messages cross the browser, Worker, and daemon boundaries; validate them at each receiving boundary.
+Mobius serves Mobius Chat through the Platform Worker and SDK. The Standalone Worker exposes the same Project, Runtime, and Session API under a single deployment-owned Project. The local CLI connects to either Worker, discovers ACP agents, and executes session commands. Protocol messages cross the client, Worker, and daemon boundaries; validate them at each receiving boundary.
 
 ## Data and migrations
 
 The project starts from new databases and has no old-data import path. Authoritative Drizzle schemas live in each package's `src/schema/<target>` directory. Generate migrations with the pinned Drizzle CLI through the `db:generate:*` scripts. Do not edit generated migration SQL. `pnpm db:codegen` prepares ignored SQL modules for targets that cannot import `.sql` directly.
 
-Sessions use one Platform Session Relay binding. Session content is not retained in cloud storage. Do not add a retained-content mode or a migration path for previous Mobius deployments.
+Sessions use one Session Relay binding per hosting profile. Session content is not retained in cloud storage. Do not add a retained-content mode or a migration path for previous Mobius deployments.
 
 ## Boundaries
 

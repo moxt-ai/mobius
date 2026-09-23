@@ -7,7 +7,7 @@ import { createPairingClaimRoutes } from "./http/pairing/pairing-routes.ts";
 import { createProjectRuntimePairingRoutes } from "./http/pairing/project-runtime-pairing-routes.ts";
 import type { RelayHttpEnvironment } from "./http/relay-http-environment.ts";
 
-export function createPlatformMobiusApplication(apiPrefix: string = MOBIUS_API_PREFIX) {
+export function createMobiusApplication(apiPrefix: string = MOBIUS_API_PREFIX) {
     return new Hono<RelayHttpEnvironment>()
         .basePath(parseMobiusApiPrefix(apiPrefix))
         .onError(rethrowHonoError)

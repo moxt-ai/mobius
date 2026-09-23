@@ -1,7 +1,6 @@
 import { type CommittedSessionEvent, encodeCommittedSessionEvent } from "@moxt-ai/mobius-protocol";
-import { SessionRuntimeError } from "@moxt-ai/mobius-relay-core";
+import { acceptWebSocketHttpTransport, SessionRuntimeError } from "@moxt-ai/mobius-relay-core";
 import { expect, it } from "vitest";
-import { acceptWebSocketHttpTransport } from "../src/http/websocket-http-transport.ts";
 
 class FailingDaemonBoundary {
     requests = 0;

@@ -1,6 +1,6 @@
 import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import {
-    createPlatformMobiusApplication,
+    createMobiusApplication,
     errorMiddleware,
     type RelayContext,
     rethrowHonoError,
@@ -9,7 +9,7 @@ import { Hono } from "hono";
 import { createBrowserCors } from "../middleware/browser-cors.ts";
 
 export function createProjectApplication() {
-    const projectApplication = createPlatformMobiusApplication();
+    const projectApplication = createMobiusApplication();
     return new Hono<{
         readonly Bindings: { readonly relay: RelayContext; readonly allowedOrigins: ReadonlySet<string> };
     }>()

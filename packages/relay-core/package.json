@@ -21,6 +21,7 @@
     },
     "dependencies": {
         "@moxt-ai/mobius-protocol": "workspace:*",
+        "base64-js": "^1.5.1",
         "drizzle-orm": "^0.45.2",
         "hono": "^4.13.8",
         "pino": "^10.3.1",
