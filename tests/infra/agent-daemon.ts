@@ -408,7 +408,7 @@ const imageBytes = Uint8Array.from(
 const sourceBytes = new TextEncoder().encode("export const generated = true;\n");
 
 export interface FakeAgentDaemonBehavior {
-    readonly agentId?: "codex" | "claude" | "opencode";
+    readonly agentId?: "codex" | "claude" | "opencode" | "pi";
     readonly agentName?: string;
     readonly afterSessionStarted?: (signal: AbortSignal) => Promise<void>;
     readonly directoryLabel?: string;

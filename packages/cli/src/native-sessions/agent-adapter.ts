@@ -1,9 +1,8 @@
 import type { NativeSessionHistory } from "@moxt-ai/mobius-protocol";
 import { AcpExecutionError, type AcpPrepareOptions, type AcpSessionManager } from "../acp/session-manager.ts";
 import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
-import { claudeSessionAdapter } from "./claude-adapter.ts";
+import { acpSessionAdapter } from "./acp-adapter.ts";
 import { codexSessionAdapter } from "./codex-adapter.ts";
-import { openCodeSessionAdapter } from "./opencode-adapter.ts";
 
 export interface NativeSessionAdapterContext {
     readonly sessions: AcpSessionManager;
@@ -34,11 +33,8 @@ export function nativeSessionAdapter(agentId: string): NativeSessionAdapter {
     if (agentId === "codex") {
         return codexSessionAdapter;
     }
-    if (agentId === "claude") {
-        return claudeSessionAdapter;
-    }
-    if (agentId === "opencode") {
-        return openCodeSessionAdapter;
+    if (agentId === "claude" || agentId === "opencode" || agentId === "pi") {
+        return acpSessionAdapter;
     }
     return genericSessionAdapter;
 }

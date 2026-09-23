@@ -50,7 +50,8 @@ async function fixture(
         `#!${process.execPath}\nawait import(process.argv.includes("app-server") ? ${JSON.stringify(appServerUrl)} : ${JSON.stringify(acpUrl)});\n`,
         { mode: 0o700 },
     );
-    const agentId = label === "Codex" ? "codex" : label === "Claude Code" ? "claude" : "opencode";
+    const agentId =
+        label === "Codex" ? "codex" : label === "Claude Code" ? "claude" : label === "Pi" ? "pi" : "opencode";
     const agent = new LocalAgentDefinition(agentId, label, executable, [
         "--agent-name",
         label,
@@ -272,7 +273,7 @@ describe("native Agent session boundary", () => {
         return { identity, list, native, seed, service, workspace, close };
     }
 
-    it.each(["Codex", "Claude Code", "OpenCode"])(
+    it.each(["Codex", "Claude Code", "OpenCode", "Pi"])(
         "Given a new %s chat, When the Runtime restarts, Then its native ID resumes the saved thread and history",
         async (agentName) => {
             const f = await fixture(agentName, "supported", "native");
@@ -320,7 +321,7 @@ describe("native Agent session boundary", () => {
         },
     );
 
-    it.each(["Codex", "Claude Code", "OpenCode"])(
+    it.each(["Codex", "Claude Code", "OpenCode", "Pi"])(
         "Given a new empty %s chat, When its first prompt arrives, Then the native ID runs that prompt and history becomes available",
         async (agentName) => {
             const f = await fixture(agentName, "persist-after-first-prompt", "native");
@@ -368,7 +369,7 @@ describe("native Agent session boundary", () => {
         },
     );
 
-    it.each(["Claude Code", "OpenCode"])(
+    it.each(["Claude Code", "OpenCode", "Pi"])(
         "Given a saved %s conversation, When Chat opens its history, Then Runtime returns the native messages",
         async (agentName) => {
             const f = await fixture(agentName);

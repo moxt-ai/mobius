@@ -12,7 +12,6 @@ import {
     AGENT_SETTINGS_DISCOVER_KIND,
     AGENT_SETTINGS_DISCOVERED_KIND,
     AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
-    type CommittedSessionEvent,
     type DaemonToServiceMessage,
     decodeAgentCatalogRefreshCommand,
     decodeAgentInstallCancelCommand,
@@ -35,7 +34,6 @@ import {
     decodeWorkspaceListCommand,
     encodeAgentCatalogRefreshFailedEvent,
     encodeAgentSettingsDiscoveryFailedEvent,
-    encodeCommittedSessionEvent,
     encodeDaemonToServiceMessage,
     encodeRuntimeStatusEvent,
     encodeServiceToDaemonMessage,
@@ -57,8 +55,6 @@ import {
     SESSION_CANCEL_KIND,
     SESSION_CONFIGURE_KIND,
     SESSION_ELICITATION_RESPOND_KIND,
-    SESSION_EVENT_ACK_KIND,
-    SESSION_EVENT_COMMITTED_KIND,
     SESSION_EVENT_KIND,
     SESSION_FAILED_KIND,
     SESSION_LIVE_HISTORY_LOAD_KIND,
@@ -71,11 +67,11 @@ import {
     SESSION_PROMPT_KIND,
     SESSION_READY_KIND,
     type ServiceToDaemonMessage,
-    validateSessionEventEnvelope,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-protocol";
 import { SessionRuntimeError } from "../../entity/do/session.ts";
+import { LiveSessionEventRelay } from "./live-session-event-relay.ts";
 
 const _SESSION_EVENT_BACKPRESSURE_RETRY_MILLISECONDS = 1_000;
 const NATIVE_IMPORT_DEADLINE_MILLISECONDS = 5 * 60 * 1_000;
@@ -185,8 +181,7 @@ export class ChannelActor {
     readonly #clock: RelayClock;
     readonly #peers: ChannelPeers;
     readonly #runtimeId: string;
-    #liveEventSequence = 0n;
-    readonly #liveEventReceipts = new Map<string, { readonly payload: string; readonly sequence: string }>();
+    readonly #liveEvents: LiveSessionEventRelay;
 
     constructor(cx: {
         readonly config: { readonly runtimeId: string };
@@ -200,6 +195,7 @@ export class ChannelActor {
         this.#clock = clock;
         this.#peers = peers;
         this.#runtimeId = runtimeId;
+        this.#liveEvents = new LiveSessionEventRelay(clock, peers);
     }
 
     readonly attachDaemon = async (replacedExistingConnection: boolean, _signal: AbortSignal): Promise<void> => {
@@ -247,58 +243,7 @@ export class ChannelActor {
                 throw new ProtocolMessageError("Cloud Session delivery is unavailable");
             }
             if (kind === SESSION_EVENT_KIND) {
-                const envelope = message;
-                validateSessionEventEnvelope(envelope);
-                const receiptKey = `${envelope.sessionId}\u0000${envelope.eventId}`;
-                const existingReceipt = this.#liveEventReceipts.get(receiptKey);
-                if (existingReceipt !== undefined) {
-                    if (existingReceipt.payload !== envelope.payload) {
-                        throw new ProtocolMessageError("A Session event ID was reused with different content");
-                    }
-                    socket.send(
-                        encodeServiceToDaemonMessage({
-                            cursor: envelope.eventId,
-                            duplicate: true,
-                            eventId: envelope.eventId,
-                            kind: SESSION_EVENT_ACK_KIND,
-                            sequence: existingReceipt.sequence,
-                            sessionId: envelope.sessionId,
-                        }),
-                    );
-                    return;
-                }
-                const timeSequence = BigInt(this.#clock.now()) * 1_000_000n;
-                this.#liveEventSequence =
-                    this.#liveEventSequence >= timeSequence ? this.#liveEventSequence + 1n : timeSequence;
-                const sequence = String(this.#liveEventSequence);
-                const committed: CommittedSessionEvent = {
-                    cursor: envelope.eventId,
-                    eventId: envelope.eventId,
-                    kind: SESSION_EVENT_COMMITTED_KIND,
-                    payload: envelope.payload,
-                    recordedAt: new Date(this.#clock.now()).toISOString(),
-                    sequence,
-                    sessionId: envelope.sessionId,
-                    source: envelope.source,
-                };
-                this.broadcast(this.#peers.hosts(), encodeCommittedSessionEvent(committed));
-                if (this.#liveEventReceipts.size >= 10_000) {
-                    const oldest = this.#liveEventReceipts.keys().next().value;
-                    if (oldest !== undefined) {
-                        this.#liveEventReceipts.delete(oldest);
-                    }
-                }
-                this.#liveEventReceipts.set(receiptKey, { payload: envelope.payload, sequence });
-                socket.send(
-                    encodeServiceToDaemonMessage({
-                        cursor: committed.cursor,
-                        duplicate: false,
-                        eventId: committed.eventId,
-                        kind: SESSION_EVENT_ACK_KIND,
-                        sequence,
-                        sessionId: committed.sessionId,
-                    }),
-                );
+                await this.#liveEvents.receive(socket, message, signal);
                 return;
             }
             if (kind === NATIVE_SESSION_RESULT_KIND) {
