@@ -5,8 +5,35 @@ export interface DurableObjectMigration {
     readonly sql: string;
     readonly existingState:
         | { readonly kind: "execute" }
-        | { readonly kind: "adopt-table"; readonly table: string }
-        | { readonly kind: "adopt-missing-table"; readonly table: string };
+        | { readonly kind: "execute-missing-schema-objects" }
+        | { readonly kind: "adopt-table"; readonly table: string };
+}
+
+const migrationStatementSeparator = "--> statement-breakpoint";
+
+function executeMissingSchemaObjects(database: DoSqlDatabase, sql: string): void {
+    for (const rawStatement of sql.split(migrationStatementSeparator)) {
+        const statement = rawStatement.trim();
+        if (statement === "") {
+            continue;
+        }
+        const created = /^CREATE (?:UNIQUE )?(TABLE|INDEX) `([^`]+)`/u.exec(statement);
+        if (created === null) {
+            throw new Error("A reconciled Durable Object migration may only create schema objects");
+        }
+        const [, rawType, name] = created;
+        const type = rawType?.toLowerCase();
+        if ((type !== "table" && type !== "index") || name === undefined) {
+            throw new Error("A reconciled Durable Object migration has an invalid schema object");
+        }
+        const present = database.query("SELECT 1 AS present FROM sqlite_master WHERE type = ? AND name = ?", [
+            type,
+            name,
+        ])[0];
+        if (present === undefined) {
+            database.run(statement);
+        }
+    }
 }
 
 export function applyDurableObjectMigrations(
@@ -34,17 +61,14 @@ export function applyDurableObjectMigrations(
                 switch (migration.existingState.kind) {
                     case "execute":
                         return false;
+                    case "execute-missing-schema-objects":
+                        executeMissingSchemaObjects(database, migration.sql);
+                        return true;
                     case "adopt-table":
                         return (
                             database.query("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?", [
                                 migration.existingState.table,
                             ])[0] !== undefined
-                        );
-                    case "adopt-missing-table":
-                        return (
-                            database.query("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?", [
-                                migration.existingState.table,
-                            ])[0] === undefined
                         );
                 }
             })();

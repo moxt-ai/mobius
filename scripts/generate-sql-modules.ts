@@ -6,8 +6,8 @@ interface MigrationSource {
     readonly path: string;
     readonly existingState:
         | { readonly kind: "execute" }
-        | { readonly kind: "adopt-table"; readonly table: string }
-        | { readonly kind: "adopt-missing-table"; readonly table: string };
+        | { readonly kind: "execute-missing-schema-objects" }
+        | { readonly kind: "adopt-table"; readonly table: string };
 }
 
 async function sqlFiles(directory: string): Promise<MigrationSource[]> {
@@ -47,10 +47,8 @@ await writeMigrationModule(
     "sessionDurableObjectMigrations",
     (await sqlFiles(join(relayCore, "migrations/session-do"))).map((source) =>
         source.name === "0000_early_mathemanic.sql"
-            ? { ...source, existingState: { kind: "adopt-table" as const, table: "sessions" } }
-            : source.name === "0001_sticky_magma.sql"
-              ? { ...source, existingState: { kind: "adopt-missing-table" as const, table: "immutable_content" } }
-              : source,
+            ? { ...source, existingState: { kind: "execute-missing-schema-objects" as const } }
+            : source,
     ),
 );
 await writeMigrationModule(

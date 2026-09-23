@@ -170,8 +170,30 @@ describe.sequential("Platform Session schema boundary", () => {
                 state.storage.sql.exec(`DROP TABLE IF EXISTS "${table}"`);
             }
             database.run(baseline.sql);
-            database.run("DROP TABLE immutable_content");
-            database.run("DROP TABLE tool_call_narrations");
+            const legacyTables = new Set([
+                "archive_segments",
+                "archive_work",
+                "artifacts",
+                "attempts",
+                "command_receipts",
+                "interactions",
+                "pending_work",
+                "session_bindings",
+                "session_events",
+                "sessions",
+                "tool_call_views",
+                "turns",
+                "uploaded_artifacts",
+            ]);
+            for (const match of baseline.sql.matchAll(/CREATE TABLE `([^`]+)`/gu)) {
+                const table = match[1];
+                if (table === undefined) {
+                    throw new Error("Expected a baseline table name");
+                }
+                if (!legacyTables.has(table)) {
+                    state.storage.sql.exec(`DROP TABLE "${table}"`);
+                }
+            }
 
             initializeSessionSchema(database);
 
@@ -180,6 +202,11 @@ describe.sequential("Platform Session schema boundary", () => {
                     "SELECT name FROM _mobius_do_schema_migrations WHERE namespace = 'session-do' ORDER BY name",
                 ),
             ]).toEqual([{ name: "0000_early_mathemanic.sql" }, { name: "0001_sticky_magma.sql" }]);
+            expect([
+                ...state.storage.sql.exec<{ name: string }>(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('session_configuration_snapshots', 'session_event_receipts') ORDER BY name",
+                ),
+            ]).toEqual([{ name: "session_configuration_snapshots" }, { name: "session_event_receipts" }]);
         });
     });
 });
