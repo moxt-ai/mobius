@@ -13,7 +13,7 @@ export const agentDaemonConfigurations = [
         cacheKey: "claude-2.1.273-acp-0.73.0",
         packages: "@anthropic-ai/claude-code@2.1.273 @agentclientprotocol/claude-agent-acp@0.73.0",
     },
-    { agent: "deepseek", cacheKey: "deepseek-0.1.2-rc.1", packages: "@deepseek-ai/dsh@0.1.2-rc.1" },
+    { agent: "deepseek", cacheKey: "deepseek-0.1.5-rc.3", packages: "@deepseek-ai/dsh@0.1.5-rc.3" },
     { agent: "hermes", cacheKey: "hermes-2026.9.7", packages: "" },
     { agent: "grok", cacheKey: "grok-1.0.21", packages: "@xai-official/grok@1.0.21" },
     { agent: "workbuddy", cacheKey: "workbuddy-2.146.0", packages: "@tencent-ai/codebuddy-code@2.146.0" },
