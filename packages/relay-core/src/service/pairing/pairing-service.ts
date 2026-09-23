@@ -4,9 +4,10 @@ import type {
     WorkspaceListCommand,
 } from "@moxt-ai/mobius-protocol";
 import { ProjectPermission } from "../../entity/authentication/project-authentication.ts";
-import { PairingDirectoryError } from "../../entity/pairing/pairing.ts";
+import { PairingDirectoryError, VerifiedChannelAccess } from "../../entity/pairing/pairing.ts";
 import type { ChannelGateway } from "../../gateway/channel-gateway.ts";
 import { type OperationTiming, unmeasuredOperationTiming } from "../../infra/operation-timing.ts";
+import { RuntimeDescriptor } from "../channel/channel.ts";
 import type { PairingOperations } from "./pairing-operations.ts";
 import {
     type RuntimeControlCommand,
@@ -37,8 +38,21 @@ export class PairingService {
         signal: AbortSignal,
     ) => this.#pairings.createProjectRuntimePairing(projectId, token, idempotencyKey, signal);
 
-    readonly listProjectRuntimes = (projectId: string, token: string, signal: AbortSignal) =>
-        this.#pairings.listProjectRuntimes(projectId, token, signal);
+    readonly listProjectRuntimes = async (projectId: string, token: string, signal: AbortSignal) => {
+        const channels = await this.#pairings.listProjectRuntimes(projectId, token, signal);
+        return await Promise.all(
+            channels.map(
+                async (channel) =>
+                    new RuntimeDescriptor(
+                        channel,
+                        await this.#channels.readRuntimeStatus(
+                            new VerifiedChannelAccess(channel.channelId, channel.runtimeId, channel.projectId, []),
+                            signal,
+                        ),
+                    ),
+            ),
+        );
+    };
 
     readonly requestControl = async (
         projectId: string,
