@@ -127,6 +127,8 @@ export class OpenCodeAgentSpecification extends DirectAcpAgentDefinition {
     readonly agentExecutable = "opencode";
     readonly id = "opencode";
     readonly label = "OpenCode";
+    override readonly minimumSupportedAgentVersion = OPENCODE_MANAGED_VERSION;
+    override readonly maximumTestedAgentVersion = OPENCODE_MANAGED_VERSION;
 
     constructor() {
         super(

@@ -32,6 +32,8 @@ export class GrokBuildAgentSpecification extends DirectAcpAgentDefinition {
     override readonly adapterVersionArguments: readonly string[] = ["version"];
     readonly id = "grok-build";
     readonly label = "Grok Build";
+    override readonly minimumSupportedAgentVersion = GROK_BUILD_MANAGED_VERSION;
+    override readonly maximumTestedAgentVersion = GROK_BUILD_MANAGED_VERSION;
 
     constructor() {
         super(

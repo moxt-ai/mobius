@@ -28,6 +28,8 @@ export class WorkBuddyAgentSpecification extends DirectAcpAgentDefinition {
     readonly agentExecutable = "codebuddy";
     readonly id = "workbuddy";
     readonly label = "WorkBuddy";
+    override readonly minimumSupportedAgentVersion = "2.115.0";
+    override readonly maximumTestedAgentVersion = WORKBUDDY_MANAGED_VERSION;
 
     constructor() {
         super(

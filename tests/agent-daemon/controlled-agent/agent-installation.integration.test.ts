@@ -300,7 +300,7 @@ const arguments_ = process.argv.slice(2);
 const prefixIndex = arguments_.indexOf("--prefix");
 const prefix = arguments_[prefixIndex + 1];
 if (prefixIndex < 0 || prefix === undefined) process.exit(81);
-if (!arguments_.includes("--before=2026-09-18T00:00:00.000Z")) process.exit(82);
+if (!arguments_.includes("--before=2026-09-23T00:00:00.000Z")) process.exit(82);
 if (!arguments_.includes("--include=optional")) process.exit(83);
 if (arguments_.includes("--omit=optional")) process.exit(84);
 if (!arguments_.includes("--ignore-scripts")) process.exit(85);
@@ -313,7 +313,7 @@ mkdirSync(join(executable, ".."), { recursive: true });
 writeFileSync(join(packageRoot, "package.json"), JSON.stringify({
   bin: { dsh: "lib/bin.js" },
   name: "@deepseek-ai/dsh",
-  version: "0.1.5-rc.2",
+  version: ${JSON.stringify(DEEPSEEK_HARNESS_PACKAGE.version)},
 }));
 writeFileSync(executable, ${JSON.stringify(executableSource('process.stdout.write("managed-deepseek\\n");\n'))}, { mode: 0o700 });
 chmodSync(executable, 0o700);
@@ -323,7 +323,7 @@ writeFileSync(join(prefix, "package-lock.json"), JSON.stringify({
     "node_modules/@deepseek-ai/dsh": {
       integrity: ${JSON.stringify(DEEPSEEK_HARNESS_PACKAGE.integrity)},
       resolved: ${JSON.stringify(DEEPSEEK_HARNESS_PACKAGE.tarballUrl)},
-      version: "0.1.5-rc.2",
+      version: ${JSON.stringify(DEEPSEEK_HARNESS_PACKAGE.version)},
     },
   },
 }));

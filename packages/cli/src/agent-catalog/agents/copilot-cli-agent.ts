@@ -16,6 +16,8 @@ export class CopilotCliAgentSpecification extends DirectAcpAgentDefinition {
     readonly agentExecutable = "copilot";
     readonly id = "github-copilot-cli";
     readonly label = "GitHub Copilot CLI";
+    override readonly minimumSupportedAgentVersion = COPILOT_CLI_TESTED_VERSION;
+    override readonly maximumTestedAgentVersion = COPILOT_CLI_TESTED_VERSION;
     override readonly versionProbeTimeoutMilliseconds = 10_000;
 
     constructor() {
