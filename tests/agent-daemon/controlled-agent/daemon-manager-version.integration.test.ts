@@ -8,6 +8,7 @@ import { basename, join, resolve } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import cliPackage from "../../../packages/cli/package.json" with { type: "json" };
 import { runManager } from "../../../packages/cli/src/daemon-manager.ts";
 import { openMobiusCliInstallation } from "../../../packages/cli/src/pairing/pair-local-machine.ts";
 
@@ -40,8 +41,8 @@ describe("Mobius manager version compatibility", () => {
 
                 expect(listed.code).toBe(0);
                 expect(listed.stderr).toBe("");
-                expect(listed.stdout).toContain("Starting mobius daemon 0.0.94\n");
-                expect(listed.stdout).toContain("Mobius daemon 0.0.94 started\n");
+                expect(listed.stdout).toContain(`Starting mobius daemon ${cliPackage.version}\n`);
+                expect(listed.stdout).toContain(`Mobius daemon ${cliPackage.version} started\n`);
                 expect(listed.stdout).toContain("| connection_id");
                 await expect(oldManager).resolves.toBeUndefined();
             } finally {

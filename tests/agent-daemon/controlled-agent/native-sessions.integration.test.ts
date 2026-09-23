@@ -318,6 +318,30 @@ describe("native Agent session boundary", () => {
         },
     );
 
+    it("Given a saved Claude Code conversation, When Chat opens its history, Then Runtime returns the native messages", async () => {
+        const f = await fixture("Claude Code");
+        try {
+            await f.seed("Claude's earlier message");
+            const entry = (await f.list()).entries[0];
+            if (entry === undefined) {
+                throw new Error("Missing Claude Code conversation");
+            }
+            const result = await f.service.execute(
+                { ...f.identity, action: "history", entryId: entry.entryId },
+                new AbortController().signal,
+            );
+            expect(result).toMatchObject({
+                action: "history",
+                history: {
+                    status: "available",
+                    messages: expect.arrayContaining([{ role: "user", text: "Claude's earlier message" }]),
+                },
+            });
+        } finally {
+            await f.close();
+        }
+    });
+
     it("Given saved Codex threads, When its directory is listed through the in-process Agent, Then every thread becomes an authorized entry whose history previews", async () => {
         const f = await codexFixture();
         try {
