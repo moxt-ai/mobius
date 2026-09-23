@@ -100,6 +100,7 @@ export class CreatedRuntimePairing {
 }
 
 export interface ClaimedPairing {
+    readonly appId: string;
     readonly channelId: string;
     readonly daemonToken: string;
     readonly runtimeId: string;

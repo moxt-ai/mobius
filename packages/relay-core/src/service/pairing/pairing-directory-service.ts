@@ -34,6 +34,7 @@ import {
 import type { PairingIdentityCredential } from "../../entity/pairing/pairing-identity.ts";
 import type { PairingChannelRow, RuntimePairingRow } from "../../entity/pairing/pairing-records.ts";
 import type { ProjectAccessAuthorizer } from "../../gateway/project-access-authorizer.ts";
+import type { ProjectApplicationResolver } from "../../infra/project-application-resolver.ts";
 import type { ProjectStorageContext, ProjectStorageDirectory } from "../../infra/project-storage-directory.ts";
 import type { AuthorizedChannelRow, PairingStorage } from "../../storage/pairing-storage.ts";
 import type { PairingIdentityService } from "./pairing-identity-service.ts";
@@ -41,6 +42,7 @@ import type { PairingOperations } from "./pairing-operations.ts";
 import { deriveRuntimePairingSecrets } from "./runtime-pairing-secrets.ts";
 
 export interface PairingDirectoryInfrastructure {
+    readonly gateways: { readonly projectApplications: ProjectApplicationResolver };
     readonly storages: {
         readonly forProject: (project: ProjectStorageContext) => PairingStorage;
         readonly projectDirectory: ProjectStorageDirectory;
@@ -450,6 +452,7 @@ export class PairingDirectoryService implements PairingOperations {
             throw new PairingDirectoryError("invalid_pairing_code", "The pairing code is invalid or expired");
         }
         if (pairing.status === "pending" && pairing.expires_at > now) {
+            const appId = await this.#cx.gateways.projectApplications.resolveApplicationId(pairing.project_id, signal);
             const daemonToken = `${pairing.project_id}_${createRandomToken(32)}`;
             const claimed = await storage.claim(
                 codeHash,
@@ -463,7 +466,7 @@ export class PairingDirectoryService implements PairingOperations {
                 signal,
             );
             if (claimed[0]?.meta.changes === 1) {
-                return { channelId: pairing.channel_id, daemonToken, runtimeId: pairing.runtime_id };
+                return { appId, channelId: pairing.channel_id, daemonToken, runtimeId: pairing.runtime_id };
             }
         }
         const current = await storage.readPairingCode(codeHash, signal);

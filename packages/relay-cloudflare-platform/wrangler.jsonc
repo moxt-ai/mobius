@@ -19,7 +19,31 @@
     "migrations": [
         {
             "tag": "platform-initial",
-            "new_sqlite_classes": ["RuntimeRelay", "ProjectRelay"]
+            "new_sqlite_classes": ["RuntimeRelay", "PlatformSessionRelay", "BotConnectionActor"]
+        },
+        {
+            "tag": "platform-project-relay",
+            "new_sqlite_classes": ["ProjectRelay"]
+        },
+        {
+            "tag": "platform-remove-bot-connections",
+            "deleted_classes": ["BotConnectionActor"]
+        },
+        {
+            "tag": "platform-non-cloud-retention-session-relay",
+            "new_sqlite_classes": ["NonCloudRetentionSessionRelayDO"]
+        },
+        {
+            "tag": "platform-remove-non-cloud-retention-session-relay",
+            "deleted_classes": ["NonCloudRetentionSessionRelayDO"]
+        },
+        {
+            "tag": "platform-recreate-non-cloud-retention-session-relay",
+            "new_sqlite_classes": ["NonCloudRetentionSessionRelayDO"]
+        },
+        {
+            "tag": "platform-remove-legacy-session-relays",
+            "deleted_classes": ["PlatformSessionRelay", "NonCloudRetentionSessionRelayDO"]
         }
     ],
     "d1_databases": [
@@ -39,5 +63,57 @@
     },
     "observability": {
         "enabled": true
+    },
+    "env": {
+        "staging": {
+            "name": "mobius-platform-staging",
+            "kv_namespaces": [{ "binding": "APP_CREDENTIAL_CACHE", "id": "04588dbeba594690b790fcb087ddeb23" }],
+            "workers_dev": false,
+            "preview_urls": false,
+            "routes": [{ "pattern": "mobius.moxt.ws", "custom_domain": true }],
+            "durable_objects": {
+                "bindings": [
+                    { "name": "RUNTIME_RELAY", "class_name": "RuntimeRelay" },
+                    { "name": "PROJECT_RELAY", "class_name": "ProjectRelay" }
+                ]
+            },
+            "d1_databases": [
+                {
+                    "binding": "PLATFORM_DIRECTORY_DATABASE",
+                    "database_name": "mobius-platform-staging-control-plane-wnam",
+                    "database_id": "2068a52c-5681-4e0f-b00d-4f2cc980b89a",
+                    "migrations_dir": "migrations/d1"
+                }
+            ],
+            "r2_buckets": [
+                { "binding": "R2_BUCKET_APAC", "bucket_name": "mobius-cloud-staging-apac-objects" },
+                { "binding": "R2_BUCKET_WNAM", "bucket_name": "mobius-cloud-staging-wnam-objects" }
+            ]
+        },
+        "production": {
+            "name": "mobius-platform-production",
+            "kv_namespaces": [{ "binding": "APP_CREDENTIAL_CACHE", "id": "b15cc4481591452392682c2ff0793196" }],
+            "workers_dev": false,
+            "preview_urls": false,
+            "routes": [{ "pattern": "mobius.moxt.ai", "custom_domain": true }],
+            "durable_objects": {
+                "bindings": [
+                    { "name": "RUNTIME_RELAY", "class_name": "RuntimeRelay" },
+                    { "name": "PROJECT_RELAY", "class_name": "ProjectRelay" }
+                ]
+            },
+            "d1_databases": [
+                {
+                    "binding": "PLATFORM_DIRECTORY_DATABASE",
+                    "database_name": "mobius-platform-production-control-plane-wnam",
+                    "database_id": "f7035824-ba09-4042-8599-9c32ca16c13d",
+                    "migrations_dir": "migrations/d1"
+                }
+            ],
+            "r2_buckets": [
+                { "binding": "R2_BUCKET_APAC", "bucket_name": "mobius-cloud-production-apac-objects" },
+                { "binding": "R2_BUCKET_WNAM", "bucket_name": "mobius-cloud-production-wnam-objects" }
+            ]
+        }
     }
 }

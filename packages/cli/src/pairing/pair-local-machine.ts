@@ -26,12 +26,11 @@ const PAIRING_TIMEOUT_MILLISECONDS = 20_000;
 const PAIRING_CODE_PATTERN = /^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){4}$/;
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const TOKEN_PATTERN = /^[a-zA-Z0-9_-]{32,256}$/;
-const CLAIM_RESPONSE_KEYS: readonly string[] = ["channelId", "daemonToken", "runtimeId"];
-const REDEEM_RESPONSE_KEYS: readonly string[] = ["channelId", "runtimeCredential", "runtimeId"];
+const CLAIM_RESPONSE_KEYS: readonly string[] = ["appId", "channelId", "daemonToken", "runtimeId"];
+const REDEEM_RESPONSE_KEYS: readonly string[] = ["appId", "channelId", "runtimeCredential", "runtimeId"];
 const MOBIUS_CLI_APPLICATION_ID = "dev.mobius.cli";
 
 interface PairCommandOptions {
-    readonly appId: string;
     readonly code: string;
     readonly pairingId: string;
     readonly relayOrigin: URL;
@@ -39,6 +38,7 @@ interface PairCommandOptions {
 }
 
 interface ClaimPairingResponse {
+    readonly appId: string;
     readonly channelId: string;
     readonly runtimeCredential: string;
     readonly runtimeId: string;
@@ -99,13 +99,7 @@ function readSingleOption(arguments_: readonly string[], option: string): string
 function assertKnownArguments(arguments_: readonly string[]): void {
     for (let index = 0; index < arguments_.length; index += 2) {
         const option = arguments_[index];
-        if (
-            option !== "--url" &&
-            option !== "--code" &&
-            option !== "--pairing" &&
-            option !== "--workspace" &&
-            option !== "--app-id"
-        ) {
+        if (option !== "--url" && option !== "--code" && option !== "--pairing" && option !== "--workspace") {
             throw new PairingClientError("invalid_arguments", `Unknown pairing option: ${option ?? "missing option"}`);
         }
     }
@@ -147,9 +141,6 @@ function parsePairingCode(value: string): string {
 function parsePairCommand(arguments_: readonly string[], defaultWorkspace: string): PairCommandOptions {
     assertKnownArguments(arguments_);
     return {
-        appId: arguments_.includes("--app-id")
-            ? validatePairingId(readSingleOption(arguments_, "--app-id"))
-            : "standalone",
         code: parsePairingCode(readSingleOption(arguments_, "--code")),
         pairingId: arguments_.includes("--pairing") ? validatePairingId(readSingleOption(arguments_, "--pairing")) : "",
         relayOrigin: parseRelayOrigin(readSingleOption(arguments_, "--url")),
@@ -232,10 +223,13 @@ function decodePairingResponse(
     if (!isRecord(value) || !hasExactKeys(value, expectedKeys)) {
         throw new PairingClientError("invalid_relay_response", "The relay returned an invalid pairing response");
     }
+    const appId = value["appId"];
     const channelId = value["channelId"];
     const runtimeCredential = value[credentialField];
     const runtimeId = value["runtimeId"];
     if (
+        typeof appId !== "string" ||
+        !IDENTIFIER_PATTERN.test(appId) ||
         typeof channelId !== "string" ||
         !IDENTIFIER_PATTERN.test(channelId) ||
         typeof runtimeCredential !== "string" ||
@@ -245,7 +239,7 @@ function decodePairingResponse(
     ) {
         throw new PairingClientError("invalid_relay_response", "The relay returned an invalid pairing response");
     }
-    return { channelId, runtimeCredential, runtimeId };
+    return { appId, channelId, runtimeCredential, runtimeId };
 }
 
 async function claimPairing(
@@ -351,7 +345,7 @@ async function pairRuntime(
     const claim = await claimPairing(options, defaultWorkspace, agents, inventory.installable, signal);
     const connection = await installation.saveConnection(
         {
-            appId: options.appId,
+            appId: claim.appId,
             channelId: claim.channelId,
             defaultWorkspace,
             pairingId: options.pairingId,
@@ -373,7 +367,6 @@ export async function pairMobiusRuntime(
     return await pairRuntime(
         installation,
         {
-            appId: "embedded",
             code: parsePairingCode(options.pairingCode),
             pairingId: validatePairingId(options.pairingId),
             relayOrigin: parseRelayOrigin(options.relayOrigin),
@@ -439,7 +432,6 @@ export async function pairLocalMachine(
     return await pairRuntime(
         installation,
         {
-            appId: requested.appId,
             code: requested.code,
             pairingId: requested.pairingId,
             relayOrigin: requested.relayOrigin,

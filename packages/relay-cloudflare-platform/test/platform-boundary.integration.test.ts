@@ -266,6 +266,7 @@ describe.sequential("Platform Session-only boundary", () => {
             ),
             200,
         );
+        expect(claimed["appId"]).toBe(appId);
         const runtimeId = text(claimed, "runtimeId");
         const sessionId = "local-codex-session";
         const daemonResponse = await worker.fetch(

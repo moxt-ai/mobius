@@ -347,6 +347,7 @@ export function createPlatformApplication(
             const { control, databases, storageRegistry, projectDatabases } = context.var;
             const projects = new PlatformProjectStorageDirectory(storageRegistry);
             const cx = createWorkerContext({
+                applications: control,
                 gateways: gateways(environment),
                 authorization: control,
                 databases,

@@ -8,6 +8,7 @@ import {
     PerpetualProjectAccessLifetime,
     type ProjectAccessAuthorizer,
     ProjectAccessContext,
+    type ProjectApplicationResolver,
     ProjectAuthenticationError,
     type ProjectPermission,
     ProjectScope,
@@ -1129,6 +1130,14 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
             actorReference(actorRef),
             signal,
         );
+    };
+
+    readonly resolveApplicationId: ProjectApplicationResolver["resolveApplicationId"] = async (projectId, signal) => {
+        const project = await this.#projectAuthorization.read(validateIdentifier(projectId, "project_id"), signal);
+        if (project === null || project.lifecycle !== "active") {
+            throw new ProjectAuthenticationError("project_access_denied", "The Project is unavailable");
+        }
+        return project.app_id;
     };
 
     readonly authorizePlatformCredential = async (

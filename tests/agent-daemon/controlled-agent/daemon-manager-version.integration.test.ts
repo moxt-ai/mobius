@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { watch } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createConnection, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 
@@ -39,14 +40,49 @@ describe("Mobius manager version compatibility", () => {
 
                 expect(listed.code).toBe(0);
                 expect(listed.stderr).toBe("");
-                expect(listed.stdout).toContain("Starting mobius daemon 0.0.91\n");
-                expect(listed.stdout).toContain("Mobius daemon 0.0.91 started\n");
+                expect(listed.stdout).toContain("Starting mobius daemon 0.0.93\n");
+                expect(listed.stdout).toContain("Mobius daemon 0.0.93 started\n");
                 expect(listed.stdout).toContain("| connection_id");
                 await expect(oldManager).resolves.toBeUndefined();
             } finally {
                 oldManagerController.abort();
                 await runCli(["quit"], environment, AbortSignal.timeout(10_000)).catch(() => undefined);
                 await oldManager.catch(() => undefined);
+            }
+        },
+    );
+
+    it.skipIf(process.platform === "win32")(
+        "Given another control client remains connected, When the CLI quits, Then the manager exits before reporting success",
+        async () => {
+            const stateRoot = await mkdtemp(join(tmpdir(), "mobius-manager-quit-"));
+            temporaryDirectories.push(stateRoot);
+            const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: stateRoot };
+            const deadline = AbortSignal.timeout(15_000);
+            const installation = await openMobiusCliInstallation(deadline, environment);
+            const socketName = basename(controlSocketPath(installation.stateDirectory));
+            const socketReady = waitForDirectoryEntry(tmpdir(), socketName, deadline);
+            const managerController = new AbortController();
+            const manager = runManager(installation, "0.0.92", managerController.signal);
+            let heldConnection: Socket | undefined;
+
+            try {
+                await socketReady;
+                heldConnection = await holdControlConnection(installation.stateDirectory, deadline);
+
+                const quit = await runCli(["quit"], environment, deadline);
+
+                expect(quit).toEqual({ code: 0, stderr: "", stdout: "Mobius daemon stopped.\n" });
+                await expect(readFile(join(installation.stateDirectory, "manager.lock"), "utf8")).rejects.toMatchObject(
+                    {
+                        code: "ENOENT",
+                    },
+                );
+                await expect(manager).resolves.toBeUndefined();
+            } finally {
+                heldConnection?.destroy();
+                managerController.abort();
+                await manager.catch(() => undefined);
             }
         },
     );
@@ -156,6 +192,50 @@ async function waitForDirectoryEntry(directory: string, entry: string, signal: A
         });
         watcher.once("error", reject);
     });
+}
+
+async function holdControlConnection(stateDirectory: string, signal: AbortSignal): Promise<Socket> {
+    const token = (await readFile(join(stateDirectory, "manager.token"), "utf8")).trim();
+    const socket = createConnection({ allowHalfOpen: true, path: controlSocketPath(stateDirectory) });
+    try {
+        await new Promise<void>((resolve_, reject) => {
+            const finish = (cause?: unknown): void => {
+                signal.removeEventListener("abort", abort);
+                socket.removeListener("connect", connected);
+                socket.removeListener("error", finish);
+                cause === undefined ? resolve_() : reject(cause);
+            };
+            const abort = (): void => finish(signal.reason);
+            const connected = (): void => finish();
+            socket.once("connect", connected);
+            socket.once("error", finish);
+            signal.addEventListener("abort", abort, { once: true });
+        });
+        socket.write(`${JSON.stringify({ kind: "list", token })}\n`);
+        await new Promise<void>((resolve_, reject) => {
+            let encoded = "";
+            const finish = (cause?: unknown): void => {
+                signal.removeEventListener("abort", abort);
+                socket.removeListener("data", data);
+                socket.removeListener("error", finish);
+                cause === undefined ? resolve_() : reject(cause);
+            };
+            const abort = (): void => finish(signal.reason);
+            const data = (chunk: Buffer): void => {
+                encoded += chunk.toString("utf8");
+                if (encoded.includes("\n")) {
+                    finish();
+                }
+            };
+            socket.on("data", data);
+            socket.once("error", finish);
+            signal.addEventListener("abort", abort, { once: true });
+        });
+        return socket;
+    } catch (cause) {
+        socket.destroy();
+        throw cause;
+    }
 }
 
 async function runCli(

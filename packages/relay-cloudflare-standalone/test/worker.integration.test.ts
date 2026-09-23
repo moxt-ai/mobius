@@ -87,7 +87,7 @@ describe("Standalone Relay", () => {
         );
         expect(redeemed.status).toBe(200);
         const runtime: unknown = await redeemed.json();
-        expect(runtime).toMatchObject({ runtimeId: Reflect.get(pairing, "runtimeId") });
+        expect(runtime).toMatchObject({ appId: "standalone", runtimeId: Reflect.get(pairing, "runtimeId") });
         if (typeof runtime !== "object" || runtime === null || typeof Reflect.get(runtime, "runtimeId") !== "string") {
             throw new Error("The Runtime response is invalid");
         }

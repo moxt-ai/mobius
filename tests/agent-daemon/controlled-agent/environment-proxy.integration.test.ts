@@ -47,6 +47,7 @@ describe("daemon environment proxy", () => {
             response.writeHead(200, { "content-type": "application/json" });
             response.end(
                 JSON.stringify({
+                    appId: "app_proxy",
                     channelId: "proxy-channel",
                     runtimeCredential: "a".repeat(32),
                     runtimeId: "proxy-runtime",
@@ -185,6 +186,9 @@ describe("daemon environment proxy", () => {
             expect(paired.connectionPath).toBe(installation.connectionPath(paired.connectionId));
             expect(paired.config.auditDatabasePath).toBe(installation.auditDatabasePath(paired.connectionId));
             expect(paired.config.localContext.stateDirectory).toBe(installation.stateDirectory);
+            expect((await installation.readConnection(paired.connectionId, AbortSignal.timeout(2_000))).appId).toBe(
+                "app_proxy",
+            );
 
             const relayPort = port(relayServer);
             expect(describeEnvironmentProxyRoute(new URL(`ws://127.0.0.1:${relayPort}/daemon`))).toEqual({
