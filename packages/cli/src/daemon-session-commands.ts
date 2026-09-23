@@ -570,6 +570,7 @@ export async function executePrompt(
     activateAttempt: () => void,
     timer: DaemonTimer,
     signal: AbortSignal,
+    recordLiveText: (delta: string) => void,
 ): Promise<void> {
     const activities = new CoalescingDaemonActivityPublisher(timer, (activity) => {
         publisher.recordAttempt(command.sessionId, daemonActivity(command, activity), attemptId);
@@ -713,6 +714,7 @@ export async function executePrompt(
                     return Promise.resolve();
                 },
                 onText: (delta, messageId) => {
+                    recordLiveText(delta);
                     text.record(messageId, delta);
                     return Promise.resolve();
                 },

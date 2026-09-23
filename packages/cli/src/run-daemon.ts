@@ -36,6 +36,7 @@ import {
     SESSION_PERMISSION_RESPOND_KIND,
     SESSION_PREPARE_KIND,
     SESSION_PROMPT_KIND,
+    type SessionPromptCommand,
     SessionPromptDisposition,
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-protocol";
@@ -60,7 +61,6 @@ import { DaemonDiagnosticLog } from "./daemon-diagnostic-log.ts";
 import { AuditInstallationEvents, DaemonAcpObserver, DaemonInstallationObserver } from "./daemon-observers.ts";
 import {
     agentSettingsFailureDetails,
-    type DaemonTurnCommand,
     executePrompt,
     executeSessionConfigure,
     executeSessionLiveHistoryLoad,
@@ -335,9 +335,14 @@ async function runRelayConnection(
 
             const processDeliveredPrompt = async (
                 delivery: RuntimeDelivery,
-                command: DaemonTurnCommand,
+                command: SessionPromptCommand,
                 trackActiveAttempt: boolean,
-                execute: (attemptId: string, activateAttempt: () => void, signal: AbortSignal) => Promise<void>,
+                execute: (
+                    attemptId: string,
+                    activateAttempt: () => void,
+                    signal: AbortSignal,
+                    turn: ActiveDaemonTurn,
+                ) => Promise<void>,
             ): Promise<void> => {
                 if (command.sessionId !== delivery.sessionId) {
                     throw new Error("Runtime delivery Session identity does not match its payload");
@@ -368,12 +373,13 @@ async function runRelayConnection(
                 const turn = new ActiveDaemonTurn(command, receipt.attemptId);
                 activeTurns.set(command.commandId, turn);
                 const activateAttempt = (): void => {
+                    turn.accept();
                     if (trackActiveAttempt) {
                         activeAttemptIds.set(command.sessionId, receipt.attemptId);
                     }
                 };
                 try {
-                    await execute(receipt.attemptId, activateAttempt, turn.signal);
+                    await execute(receipt.attemptId, activateAttempt, turn.signal, turn);
                 } finally {
                     activeTurns.delete(command.commandId);
                     if (activeAttemptIds.get(command.sessionId) === receipt.attemptId) {
@@ -464,7 +470,7 @@ async function runRelayConnection(
                         delivery,
                         command,
                         command.disposition !== SessionPromptDisposition.Steer,
-                        (attemptId, activateAttempt, executionSignal) =>
+                        (attemptId, activateAttempt, executionSignal, turn) =>
                             executePrompt(
                                 outbox,
                                 publisher,
@@ -477,6 +483,7 @@ async function runRelayConnection(
                                 activateAttempt,
                                 timer,
                                 executionSignal,
+                                turn.recordText,
                             ),
                     );
                     return;
@@ -930,6 +937,7 @@ async function runRelayConnection(
                             nativeRequests.has(command.requestId) ||
                             nativeRequests.size >= 4 ||
                             (command.action !== "linked-history" &&
+                                command.action !== "active-turn" &&
                                 previous.some((request) => !request.controller.signal.aborted))
                         ) {
                             reportOperationFailure(
@@ -960,7 +968,7 @@ async function runRelayConnection(
                         const completion = (async (): Promise<void> => {
                             try {
                                 operationSignal.throwIfAborted();
-                                if (previous.length > 0) {
+                                if (previous.length > 0 && command.action !== "active-turn") {
                                     await new Promise<void>((resolve, reject) => {
                                         const cancel = (): void => reject(operationSignal.reason);
                                         operationSignal.addEventListener("abort", cancel, {
@@ -1273,12 +1281,14 @@ async function runRelayConnection(
                         sessions,
                         receipt.attemptId,
                         () => {
+                            turn.accept();
                             if (command.disposition !== SessionPromptDisposition.Steer) {
                                 activeAttemptIds.set(command.sessionId, receipt.attemptId);
                             }
                         },
                         timer,
                         turn.signal,
+                        turn.recordText,
                     )
                         .catch((error: unknown) => {
                             console.error("Mobius daemon turn failed", error);
@@ -1413,7 +1423,19 @@ export async function runDaemon(
         config.relayUrl,
         new DaemonDiagnosticLog(stateDirectory),
     );
-    const nativeSessions = new NativeSessionService(config, directories, sessions, audit);
+    const nativeSessions = new NativeSessionService(config, directories, sessions, audit, (request) => {
+        const turn = [...activeTurns.values()].find(
+            (candidate) =>
+                candidate.command.sessionId === request.targetSessionId &&
+                candidate.command.agentId === request.agentId &&
+                candidate.command.directoryId === request.directoryId &&
+                candidate.command.additionalDirectoryIds.length === request.additionalDirectoryIds.length &&
+                candidate.command.additionalDirectoryIds.every(
+                    (directoryId, index) => directoryId === request.additionalDirectoryIds[index],
+                ),
+        );
+        return turn?.snapshot() ?? null;
+    });
     const installations = new AgentInstallationManager(
         specifications,
         installationExecutor,

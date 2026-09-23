@@ -44,17 +44,24 @@ export class NativeSessionService {
     readonly #directories: WorkspaceDirectoryService;
     readonly #sessions: AcpSessionManager;
     readonly #audit: AuditStore;
+    readonly #activeTurn: (
+        command: Extract<NativeSessionCommand, { readonly action: "active-turn" }>,
+    ) => Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"];
 
     constructor(
         config: DaemonConfig,
         directories: WorkspaceDirectoryService,
         sessions: AcpSessionManager,
         audit: AuditStore,
+        activeTurn: (
+            command: Extract<NativeSessionCommand, { readonly action: "active-turn" }>,
+        ) => Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"],
     ) {
         this.#config = config;
         this.#directories = directories;
         this.#sessions = sessions;
         this.#audit = audit;
+        this.#activeTurn = activeTurn;
     }
 
     readonly execute = async (command: NativeSessionCommand, signal: AbortSignal): Promise<NativeSessionResult> => {
@@ -73,6 +80,18 @@ export class NativeSessionService {
             sessionId: command.sessionId,
             signal,
         };
+        if (command.action === "active-turn") {
+            nativeSessionIdSchema.parse(command.targetSessionId);
+            this.record(command, "active_turn_read");
+            return {
+                action: "active-turn",
+                kind: "native.session.result",
+                requestId: command.requestId,
+                sessionId: command.sessionId,
+                targetSessionId: command.targetSessionId,
+                turn: this.#activeTurn(command),
+            };
+        }
         if (command.action === "linked-history") {
             const nativeSessionId = nativeSessionIdSchema.parse(command.targetSessionId);
             if (

@@ -1,20 +1,27 @@
-import type { SessionCancelCommand } from "@moxt-ai/mobius-protocol";
+import { randomUUID } from "node:crypto";
+import type { NativeSessionResult, SessionCancelCommand, SessionPromptCommand } from "@moxt-ai/mobius-protocol";
 import { fetch } from "undici";
 import type { DaemonConfig } from "./config.ts";
-import type { DaemonTurnCommand } from "./daemon-session-commands.ts";
 import { environmentProxyDispatcher } from "./network/environment-proxy.ts";
 import { relayHttpEndpoint, runtimeAuthorization } from "./relay-connection/runtime-authentication.ts";
 
 const ACTIVE_TURN_RECONCILIATION_TIMEOUT_MILLISECONDS = 20_000;
+const ACTIVE_TURN_TEXT_LIMIT = 100_000;
+type ActiveTurnSnapshot = Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"];
 
 export class ActiveDaemonTurn {
     readonly attemptId: string;
-    readonly command: DaemonTurnCommand;
+    readonly command: SessionPromptCommand;
     readonly #controller: AbortController;
     readonly #finished = Promise.withResolvers<void>();
     #cancellationRequested = false;
+    #accepted = false;
+    #text = "";
+    #truncated = false;
+    #sequence = 0;
+    readonly #epoch = randomUUID();
 
-    constructor(command: DaemonTurnCommand, attemptId: string) {
+    constructor(command: SessionPromptCommand, attemptId: string) {
         this.attemptId = attemptId;
         this.command = command;
         this.#controller = new AbortController();
@@ -25,6 +32,32 @@ export class ActiveDaemonTurn {
     };
 
     readonly finish = (): void => this.#finished.resolve();
+
+    readonly accept = (): void => {
+        this.#accepted = true;
+    };
+
+    readonly recordText = (delta: string): void => {
+        this.#sequence += 1;
+        this.#text += delta;
+        if (this.#text.length > ACTIVE_TURN_TEXT_LIMIT) {
+            this.#text = this.#text.slice(-ACTIVE_TURN_TEXT_LIMIT);
+            this.#truncated = true;
+        }
+    };
+
+    readonly snapshot = (): ActiveTurnSnapshot =>
+        this.#accepted
+            ? {
+                  commandId: this.command.commandId,
+                  prompt: this.command.prompt,
+                  text: this.#text,
+                  truncated: this.#truncated,
+                  epoch: this.#epoch,
+                  sequence: this.#sequence,
+                  state: "running",
+              }
+            : null;
 
     readonly matches = (cancellation: SessionCancelCommand): boolean =>
         cancellation.commandId === this.command.commandId && cancellation.sessionId === this.command.sessionId;

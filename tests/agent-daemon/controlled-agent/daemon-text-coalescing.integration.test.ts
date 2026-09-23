@@ -9,10 +9,15 @@ import { fileURLToPath } from "node:url";
 import {
     AGENT_MESSAGE_DELTA_KIND,
     decodeMessageKind,
+    decodeNativeSessionResult,
     decodeSessionEventEnvelope,
+    encodeNativeSessionRequest,
+    encodeSessionCancelCommand,
     encodeSessionEventAcknowledgement,
     encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
+    NATIVE_SESSION_RESULT_KIND,
+    SESSION_CANCEL_KIND,
     SESSION_COMPLETED_KIND,
     SESSION_EVENT_ACK_KIND,
     SESSION_EVENT_KIND,
@@ -218,6 +223,151 @@ describe("daemon assistant text coalescing", () => {
             // A burst of 64 chunks must not become 64 durable events.
             expect(deltaCount).toBeGreaterThan(0);
             expect(deltaCount).toBeLessThan(64);
+        } finally {
+            cancellation.abort();
+            await daemon;
+            audit.close();
+            for (const socket of relaySockets) {
+                socket.destroy();
+            }
+            await new Promise<void>((resolve) => relay.close(() => resolve()));
+            await rm(stateDirectory, { force: true, recursive: true });
+        }
+    }, 30_000);
+
+    it("Given a native Agent Turn has emitted partial text, When another viewer reads active state, Then the daemon returns a bounded snapshot and releases it after cancellation", async () => {
+        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-active-turn-"));
+        const workspace = join(stateDirectory, "workspace");
+        const nativeStateDirectory = join(stateDirectory, "native");
+        await Promise.all([mkdir(workspace), mkdir(nativeStateDirectory)]);
+        const socketReady = Promise.withResolvers<Duplex>();
+        const relaySockets = new Set<Duplex>();
+        const relay = createServer((_request, response) => {
+            response.writeHead(404);
+            response.end();
+        });
+        relay.on("connection", (socket) => {
+            relaySockets.add(socket);
+            socket.once("close", () => relaySockets.delete(socket));
+            socket.on("error", () => undefined);
+        });
+        relay.on("upgrade", (request, socket) => {
+            const key = request.headers["sec-websocket-key"];
+            if (typeof key !== "string") {
+                socket.destroy();
+                return;
+            }
+            const accept = createHash("sha1").update(`${key}${websocketGuid}`).digest("base64");
+            socket.write(
+                "HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+            );
+            socketReady.resolve(socket);
+        });
+        await listen(relay);
+        const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
+        relayUrl.searchParams.set("token", "d".repeat(43));
+        const agent = new LocalAgentDefinition(
+            "deepseek-harness",
+            "DeepSeek Harness",
+            process.execPath,
+            [fakeAgentPath, "--agent-name", "DeepSeek Harness"],
+            { MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory },
+        );
+        const config = createDaemonConfig(
+            { channelId: "channel_alpha", defaultWorkspace: workspace, relayUrl },
+            [agent],
+            [],
+            new DaemonLocalContext(stateDirectory),
+        );
+        const cancellation = new AbortController();
+        const audit = new AuditStore();
+        const daemon = runDaemon(config, audit, cancellation.signal);
+        try {
+            const socket = await socketReady.promise;
+            const frames = new ClientFrames(socket);
+            const sessionId = "snapshot_conversation";
+            const prompt: SessionPromptCommand = {
+                additionalDirectoryIds: [],
+                agentId: agent.id,
+                bindingId: config.bindingId,
+                commandId: "snapshot_turn",
+                directoryId: "default",
+                disposition: SessionPromptDisposition.Reject,
+                images: [],
+                kind: "session.prompt",
+                prompt: "hold after first delta",
+                resources: [],
+                sessionId,
+                targetCommandId: "",
+            };
+            let eventSequence = 0;
+            const next = async (): Promise<string> => {
+                for (;;) {
+                    const message = await frames.next();
+                    if (decodeMessageKind(message) !== SESSION_EVENT_KIND) {
+                        return message;
+                    }
+                    const envelope = decodeSessionEventEnvelope(message);
+                    eventSequence += 1;
+                    sendText(
+                        socket,
+                        encodeSessionEventAcknowledgement({
+                            cursor: `cursor-${eventSequence.toString()}`,
+                            duplicate: false,
+                            eventId: envelope.eventId,
+                            kind: SESSION_EVENT_ACK_KIND,
+                            sequence: eventSequence.toString(),
+                            sessionId,
+                        }),
+                    );
+                    return envelope.payload;
+                }
+            };
+            sendText(socket, encodeSessionPromptCommand(prompt));
+            let delta: string;
+            do {
+                delta = await next();
+            } while (decodeMessageKind(delta) !== AGENT_MESSAGE_DELTA_KIND);
+            const request = (requestId: string) =>
+                encodeNativeSessionRequest({
+                    action: "active-turn",
+                    additionalDirectoryIds: [],
+                    agentId: agent.id,
+                    bindingId: config.bindingId,
+                    directoryId: "default",
+                    kind: "native.session.request",
+                    requestId,
+                    sessionId,
+                    targetSessionId: sessionId,
+                });
+            sendText(socket, request("active_one"));
+            let result: string;
+            do {
+                result = await next();
+            } while (decodeMessageKind(result) !== NATIVE_SESSION_RESULT_KIND);
+            const active = decodeNativeSessionResult(result);
+            expect(active).toMatchObject({
+                action: "active-turn",
+                turn: { commandId: prompt.commandId, prompt: prompt.prompt, text: "Partial reply", truncated: false },
+            });
+            sendText(
+                socket,
+                encodeSessionCancelCommand({ commandId: prompt.commandId, kind: SESSION_CANCEL_KIND, sessionId }),
+            );
+            do {
+                result = await next();
+            } while (
+                decodeMessageKind(result) !== SESSION_COMPLETED_KIND &&
+                decodeMessageKind(result) !== SESSION_FAILED_KIND
+            );
+            sendText(socket, request("active_two"));
+            do {
+                result = await next();
+            } while (decodeMessageKind(result) !== NATIVE_SESSION_RESULT_KIND);
+            expect(decodeNativeSessionResult(result)).toMatchObject({ action: "active-turn", turn: null });
         } finally {
             cancellation.abort();
             await daemon;
