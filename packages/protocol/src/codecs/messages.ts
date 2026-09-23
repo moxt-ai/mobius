@@ -452,13 +452,21 @@ export function decodeRuntimeDeliveryCommitted(encoded: string): RuntimeDelivery
 
 export function decodeSessionStartedEvent(encoded: string): SessionStartedEvent {
     const value = parseJson(encoded);
-    assertExactKeys(value, ["commandId", "kind", "attemptId", "sessionId"]);
+    assertExactKeys(value, ["commandId", "epoch", "kind", "attemptId", "prompt", "sequence", "sessionId"]);
     assertKind(value, SESSION_STARTED_KIND);
+
+    const sequence = readSequence(value, "sequence");
+    if (sequence !== 0) {
+        throw new ProtocolMessageError("Invalid live start sequence");
+    }
 
     return {
         commandId: readIdentifier(value, "commandId"),
+        epoch: readIdentifier(value, "epoch"),
         kind: SESSION_STARTED_KIND,
         attemptId: readIdentifier(value, "attemptId"),
+        prompt: readText(value, "prompt", MAX_PROMPT_LENGTH),
+        sequence,
         sessionId: readIdentifier(value, "sessionId"),
     };
 }

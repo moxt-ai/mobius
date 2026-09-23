@@ -567,7 +567,7 @@ export async function executePrompt(
     audit: AuditStore,
     sessions: AcpSessionManager,
     attemptId: string,
-    activateAttempt: () => void,
+    activateAttempt: () => { readonly epoch: string; readonly sequence: 0 },
     timer: DaemonTimer,
     signal: AbortSignal,
     recordLiveText: (delta: string) => { readonly epoch: string; readonly sequence: number },
@@ -676,17 +676,20 @@ export async function executePrompt(
             sessionId: command.sessionId,
         });
         outbox.transitionExecution(command.commandId, "running");
+        const stream = activateAttempt();
         publisher.recordAttempt(
             command.sessionId,
             {
                 commandId: command.commandId,
+                epoch: stream.epoch,
                 kind: SESSION_STARTED_KIND,
                 attemptId,
+                prompt: command.prompt,
+                sequence: stream.sequence,
                 sessionId: command.sessionId,
             },
             attemptId,
         );
-        activateAttempt();
         const attachments = await resolvePromptArtifacts(config, command, signal);
         let stopReason: string;
         if (command.disposition === SessionPromptDisposition.Steer) {

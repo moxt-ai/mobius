@@ -33,8 +33,9 @@ export class ActiveDaemonTurn {
 
     readonly finish = (): void => this.#finished.resolve();
 
-    readonly accept = (): void => {
+    readonly accept = (): { readonly epoch: string; readonly sequence: 0 } => {
         this.#accepted = true;
+        return { epoch: this.#epoch, sequence: 0 };
     };
 
     readonly recordText = (delta: string): { readonly epoch: string; readonly sequence: number } => {

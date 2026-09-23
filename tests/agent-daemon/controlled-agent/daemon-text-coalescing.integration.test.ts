@@ -11,7 +11,10 @@ import {
     decodeAgentMessageDeltaEvent,
     decodeMessageKind,
     decodeNativeSessionResult,
+    decodeSessionCompletedEvent,
     decodeSessionEventEnvelope,
+    decodeSessionFailedEvent,
+    decodeSessionStartedEvent,
     encodeNativeSessionRequest,
     encodeSessionCancelCommand,
     encodeSessionEventAcknowledgement,
@@ -23,6 +26,7 @@ import {
     SESSION_EVENT_ACK_KIND,
     SESSION_EVENT_KIND,
     SESSION_FAILED_KIND,
+    SESSION_STARTED_KIND,
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -363,6 +367,25 @@ describe("daemon assistant text coalescing", () => {
                     truncated: false,
                 },
             });
+            sendText(socket, encodeSessionPromptCommand({ ...prompt, commandId: "second_burst_turn" }));
+            let rejected: string;
+            for (;;) {
+                rejected = await next();
+                const kind = decodeMessageKind(rejected);
+                if (kind === SESSION_STARTED_KIND) {
+                    expect(decodeSessionStartedEvent(rejected).commandId).not.toBe("second_burst_turn");
+                }
+                if (
+                    kind === SESSION_FAILED_KIND &&
+                    decodeSessionFailedEvent(rejected).commandId === "second_burst_turn"
+                ) {
+                    break;
+                }
+            }
+            expect(decodeSessionFailedEvent(rejected)).toMatchObject({
+                code: "session_busy",
+                commandId: "second_burst_turn",
+            });
             sendText(
                 socket,
                 encodeSessionCancelCommand({ commandId: prompt.commandId, kind: SESSION_CANCEL_KIND, sessionId }),
@@ -370,8 +393,14 @@ describe("daemon assistant text coalescing", () => {
             do {
                 result = await next();
             } while (
-                decodeMessageKind(result) !== SESSION_COMPLETED_KIND &&
-                decodeMessageKind(result) !== SESSION_FAILED_KIND
+                !(
+                    decodeMessageKind(result) === SESSION_COMPLETED_KIND &&
+                    decodeSessionCompletedEvent(result).commandId === prompt.commandId
+                ) &&
+                !(
+                    decodeMessageKind(result) === SESSION_FAILED_KIND &&
+                    decodeSessionFailedEvent(result).commandId === prompt.commandId
+                )
             );
             sendText(socket, request("active_two"));
             do {

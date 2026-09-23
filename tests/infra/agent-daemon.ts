@@ -717,7 +717,10 @@ async function processHappyPathCommand(
         encodeSessionStartedEvent({
             attemptId: `fake-attempt-${turn.toString()}`,
             commandId: command.commandId,
+            epoch: command.commandId,
             kind: SESSION_STARTED_KIND,
+            prompt: command.prompt,
+            sequence: 0,
             sessionId: command.sessionId,
         }),
         signal,

@@ -336,10 +336,7 @@ describe.sequential("Platform Session-only boundary", () => {
                 source: { attemptId: "local-codex-attempt", kind: "attempt", sourceSeq: "1" },
             });
             daemon.send(answer);
-            const firstHostMessage = await hostMessages.next();
-            const committedMessage =
-                JSON.parse(firstHostMessage).kind === "session.prompt" ? await hostMessages.next() : firstHostMessage;
-            expect(decodeCommittedSessionEvent(committedMessage).payload).toContain("local answer");
+            expect(decodeCommittedSessionEvent(await hostMessages.next()).payload).toContain("local answer");
             expect(decodeServiceToDaemonMessage(await daemonMessages.next())).toMatchObject({
                 eventId: "local-codex-event",
                 kind: SESSION_EVENT_ACK_KIND,
