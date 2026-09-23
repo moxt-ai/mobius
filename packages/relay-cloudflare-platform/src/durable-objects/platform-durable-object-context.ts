@@ -17,7 +17,6 @@ import {
 export interface PlatformDurableObjectEnvironment extends LiteSessionConfigurationEnvironment, PlatformStorageBindings {
     readonly R2_BUCKET_APAC: R2Bucket;
     readonly RUNTIME_RELAY: DurableObjectNamespace;
-    readonly SESSION_RELAY: DurableObjectNamespace;
 }
 
 export function createPlatformDurableObjectContext(
@@ -39,11 +38,9 @@ export function createPlatformDurableObjectContext(
     const projects = new PlatformProjectStorageDirectory(registry);
     return createDurableObjectContext(state, {
         environment,
-        sessions: environment.SESSION_RELAY,
-        namespacePrefix: "platform",
+        runtimeRelay: environment.RUNTIME_RELAY,
         sessionTransport: new CloudflareSessionTransport(
-            environment.SESSION_RELAY,
-            "platform",
+            environment.RUNTIME_RELAY,
             (projectId) => decodePlatformProjectPlacement(projectId)?.locationHint,
         ),
         databases,

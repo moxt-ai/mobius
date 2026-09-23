@@ -18,8 +18,7 @@ export function createDurableObjectContext(
     state: DurableObjectState,
     options: {
         readonly environment: LiteSessionConfigurationEnvironment;
-        readonly sessions: DurableObjectNamespace;
-        readonly namespacePrefix: string;
+        readonly runtimeRelay: DurableObjectNamespace;
         readonly databases: ProjectDatabaseBindings;
         readonly projects: ProjectStorageDirectory;
         readonly content: { readonly kind: "sqlite" } | { readonly kind: "r2"; readonly buckets: BucketResolver };
@@ -43,8 +42,7 @@ export function createDurableObjectContext(
             projectDirectory: options.projects,
         },
         gateways: {
-            sessionTransport:
-                options.sessionTransport ?? new CloudflareSessionTransport(options.sessions, options.namespacePrefix),
+            sessionTransport: options.sessionTransport ?? new CloudflareSessionTransport(options.runtimeRelay),
             peers: new CloudflareChannelPeers(state),
         },
         utilities: {

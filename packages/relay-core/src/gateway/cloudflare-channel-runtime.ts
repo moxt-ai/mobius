@@ -44,7 +44,7 @@ export class CloudflareChannelRuntime implements ChannelGateway {
         headers.set(INTERNAL_CHANNEL_ID_HEADER, access.channelId);
         headers.set(INTERNAL_HOST_CREDENTIAL_ID_HEADER, access.credentialId);
         headers.set(INTERNAL_RUNTIME_ID_HEADER, access.runtimeId);
-        const objectId = this.#namespace.idFromName(access.channelId);
+        const objectId = this.#namespace.idFromName(access.runtimeId);
         const response = await this.#namespace.get(objectId).fetch(
             new Request(
                 `https://runtime.internal/projects/${encodeURIComponent(access.projectId)}/host-credentials/revoke`,
@@ -66,7 +66,7 @@ export class CloudflareChannelRuntime implements ChannelGateway {
         const headers = new Headers();
         headers.set(INTERNAL_CHANNEL_ID_HEADER, access.channelId);
         headers.set(INTERNAL_RUNTIME_ID_HEADER, access.runtimeId);
-        const objectId = this.#namespace.idFromName(access.channelId);
+        const objectId = this.#namespace.idFromName(access.runtimeId);
         const response = await this.#namespace.get(objectId).fetch(
             new Request(`https://runtime.internal/projects/${encodeURIComponent(access.projectId)}/runtime/revoke`, {
                 headers,
@@ -85,7 +85,7 @@ export class CloudflareChannelRuntime implements ChannelGateway {
         const headers = new Headers();
         headers.set(INTERNAL_CHANNEL_ID_HEADER, access.channelId);
         headers.set(INTERNAL_RUNTIME_ID_HEADER, access.runtimeId);
-        const objectId = this.#namespace.idFromName(access.channelId);
+        const objectId = this.#namespace.idFromName(access.runtimeId);
         const response = await this.#namespace.get(objectId).fetch(
             new Request(
                 `https://runtime.internal/projects/${encodeURIComponent(access.projectId)}/pending-daemon-deliveries`,
@@ -138,7 +138,7 @@ export class CloudflareChannelRuntime implements ChannelGateway {
         const endpoint = new URL(request.url);
         endpoint.pathname = `/projects/${encodeURIComponent(access.projectId)}${endpoint.pathname}`;
         const forwarded = new Request(endpoint, { method: request.method, headers, signal });
-        const objectId = this.#namespace.idFromName(access.channelId);
+        const objectId = this.#namespace.idFromName(access.runtimeId);
         const response = await this.#namespace.get(objectId).fetch(forwarded.url, forwarded);
         signal.throwIfAborted();
         return response;

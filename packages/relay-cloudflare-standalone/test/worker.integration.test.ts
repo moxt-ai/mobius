@@ -91,30 +91,35 @@ describe("Standalone Relay", () => {
         if (typeof runtime !== "object" || runtime === null || typeof Reflect.get(runtime, "runtimeId") !== "string") {
             throw new Error("The Runtime response is invalid");
         }
-        const session = await worker.fetch(
-            new Request("https://standalone.test/mobius/api/v1/projects/standalone/sessions", {
-                method: "POST",
-                headers: { authorization: `Bearer ${env.MOBIUS_STANDALONE_TOKEN}`, "content-type": "application/json" },
-                body: JSON.stringify({
-                    agentId: "codex",
-                    bindingId: "workspace",
-                    directoryId: "root",
-                    policy: {
-                        contentLimitBytes: 2_000_000,
-                        hotEventLimit: 100,
-                        idempotencyRetentionMilliseconds: 86_400_000,
-                        level: "full",
-                        retentionMilliseconds: 86_400_000,
+        for (const sessionId of ["standalone-first-session", "standalone-second-session"]) {
+            const session = await worker.fetch(
+                new Request("https://standalone.test/mobius/api/v1/projects/standalone/sessions", {
+                    method: "POST",
+                    headers: {
+                        authorization: `Bearer ${env.MOBIUS_STANDALONE_TOKEN}`,
+                        "content-type": "application/json",
                     },
-                    runtimeId: Reflect.get(runtime, "runtimeId"),
-                    sessionId: "standalone-first-session",
-                    title: "Standalone Session",
+                    body: JSON.stringify({
+                        agentId: "codex",
+                        bindingId: "workspace",
+                        directoryId: "root",
+                        policy: {
+                            contentLimitBytes: 2_000_000,
+                            hotEventLimit: 100,
+                            idempotencyRetentionMilliseconds: 86_400_000,
+                            level: "full",
+                            retentionMilliseconds: 86_400_000,
+                        },
+                        runtimeId: Reflect.get(runtime, "runtimeId"),
+                        sessionId,
+                        title: "Standalone Session",
+                    }),
                 }),
-            }),
-            env,
-        );
-        expect(session.status).toBe(201);
-        expect(await session.json()).toMatchObject({ sessionId: "standalone-first-session" });
+                env,
+            );
+            expect(session.status).toBe(201);
+            expect(await session.json()).toMatchObject({ sessionId });
+        }
 
         const transport = await worker.fetch(
             new Request("https://standalone.test/mobius/api/v1/transport", {

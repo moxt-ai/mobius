@@ -802,7 +802,7 @@ class DoRoutes {
                 await this.#operations.recoverFromFailure(error, request.signal);
                 return errorResponse(error);
             }
-            console.error("Session Durable Object operation failed", error);
+            console.error("Runtime relay operation failed", error);
             return Response.json(
                 {
                     error: {

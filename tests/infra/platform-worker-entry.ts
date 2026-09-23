@@ -40,7 +40,6 @@ export default {
 };
 
 export {
-    PlatformSessionRelay,
     ProjectRelay,
     RuntimeRelay,
 } from "../../packages/relay-cloudflare-platform/src/worker.ts";

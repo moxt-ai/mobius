@@ -31,8 +31,8 @@ pnpm build
 ## Standalone Worker
 
 Standalone runs the Relay without the Platform control plane. It has one Project named
-`standalone`, a deployment-owned bearer credential, one D1 database, and Runtime and
-Session Durable Objects. Generate a credential and start it locally:
+`standalone`, a deployment-owned bearer credential, one D1 database, and a Runtime
+Durable Object that also handles its Sessions. Generate a credential and start it locally:
 
 ```sh
 printf 'MOBIUS_STANDALONE_TOKEN=%s\n' "$(openssl rand -hex 32)" > packages/relay-cloudflare-standalone/.dev.vars

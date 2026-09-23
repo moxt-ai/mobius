@@ -1,4 +1,4 @@
-import { evictDurableObject, runInDurableObject } from "cloudflare:test";
+import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
     AGENT_MESSAGE_DELTA_KIND,
@@ -61,7 +61,6 @@ function bindings(): PlatformRelayBindings {
         R2_BUCKET_WNAM: env.R2_BUCKET_WNAM,
         RUNTIME_RELAY: env.RUNTIME_RELAY,
         SESSION_ARCHIVE_BYTES_PER_SESSION: "16384",
-        SESSION_RELAY: env.SESSION_RELAY,
     };
 }
 
@@ -303,7 +302,7 @@ describe.sequential("Platform Session-only boundary", () => {
             201,
         );
 
-        const sessionStub = environment.SESSION_RELAY.getByName(`platform:${projectId}:${sessionId}`);
+        const sessionStub = environment.RUNTIME_RELAY.getByName(runtimeId);
         const response = await worker.fetch(
             new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect?deliveryReceipts=1&liveness=1`, {
                 headers: {
@@ -587,7 +586,6 @@ describe.sequential("Platform Session-only boundary", () => {
                 await state.storage.deleteAlarm();
                 await instance.alarm();
             });
-            await evictDurableObject(sessionStub);
 
             const scrubbedTurnResponse = await worker.fetch(
                 new Request(

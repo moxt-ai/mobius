@@ -15,22 +15,18 @@ export type SessionLocationHint =
 
 export class CloudflareSessionTransport implements SessionTransport {
     readonly #namespace: DurableObjectNamespace;
-    readonly #namespacePrefix: string;
     readonly #locationHint: ((projectId: string) => SessionLocationHint | undefined) | undefined;
 
     constructor(
         namespace: DurableObjectNamespace,
-        namespacePrefix: string,
         locationHint?: (projectId: string) => SessionLocationHint | undefined,
     ) {
         this.#namespace = namespace;
-        this.#namespacePrefix = namespacePrefix;
         this.#locationHint = locationHint;
     }
 
     readonly fetch: SessionTransport["fetch"] = ({ runtimeId, scope, sessionId }, request) => {
-        const objectName = `${this.#namespacePrefix}:${scope.projectId}:${sessionId}`;
-        const id = this.#namespace.idFromName(objectName);
+        const id = this.#namespace.idFromName(runtimeId);
         const locationHint = this.#locationHint?.(scope.projectId);
         const session =
             locationHint === undefined ? this.#namespace.get(id) : this.#namespace.get(id, { locationHint });
