@@ -362,7 +362,9 @@ function decodeVerifiedConnection(value: Readonly<Record<string, unknown>>): Ver
         validateConnectionId(connectionId),
         validateIdentifier(channelId, "invalid_connection"),
         defaultWorkspace,
-        current || versionThree ? validateIdentifier(savedPairingId, "invalid_connection") : "",
+        (current || versionThree) && savedPairingId.length > 0
+            ? validateIdentifier(savedPairingId, "invalid_connection")
+            : "",
         parseRelayOrigin(relayOrigin),
         validateRuntimeCredential(runtimeCredential),
         validateIdentifier(runtimeId, "invalid_connection"),
