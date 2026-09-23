@@ -4,11 +4,12 @@ import { dirname, join, relative, resolve } from "node:path";
 interface MigrationSource {
     readonly name: string;
     readonly path: string;
+    readonly existingState: { readonly kind: "execute" } | { readonly kind: "adopt-table"; readonly table: string };
 }
 
 async function sqlFiles(directory: string): Promise<MigrationSource[]> {
     const names = (await readdir(directory)).filter((name) => name.endsWith(".sql")).sort();
-    return names.map((name) => ({ name, path: join(directory, name) }));
+    return names.map((name) => ({ name, path: join(directory, name), existingState: { kind: "execute" } }));
 }
 
 async function writeMigrationModule(
@@ -20,6 +21,7 @@ async function writeMigrationModule(
         sources.map(async (source) => ({
             name: source.name,
             sql: await readFile(source.path, "utf8"),
+            existingState: source.existingState,
         })),
     );
     const sourcePaths = sources.map((source) => relative(dirname(outputPath), source.path));
@@ -50,5 +52,9 @@ await writeMigrationModule(
 await writeMigrationModule(
     join(platform, "src/generated/project-do-migrations.ts"),
     "projectDurableObjectMigrations",
-    await sqlFiles(join(platform, "migrations/project-do")),
+    (await sqlFiles(join(platform, "migrations/project-do"))).map((source) =>
+        source.name === "0000_steep_sentinels.sql"
+            ? { ...source, existingState: { kind: "adopt-table" as const, table: "project_object_identity" } }
+            : source,
+    ),
 );

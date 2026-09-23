@@ -17,9 +17,11 @@ import {
     SESSION_INFO_UPDATED_KIND,
     SESSION_STARTED_KIND,
 } from "@moxt-ai/mobius-protocol";
+import { DurableObjectSqlDatabase } from "@moxt-ai/mobius-relay-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestMobiusPlatformApp } from "../../../tests/infra/app.ts";
 import { FakeClerk } from "../../../tests/infra/clerk.ts";
+import { initializeProjectDurableObjectSchema } from "../src/storage/project-durable-object-schema.ts";
 import {
     createPlatformGateways,
     PlatformAuthenticationConfiguration,
@@ -130,6 +132,21 @@ beforeEach(() => {
 
 afterEach(() => {
     vi.useRealTimers();
+});
+
+describe.sequential("Platform Project schema boundary", () => {
+    it("Given a Project schema from before the migration squash, When the Project starts, Then it adopts the baseline without recreating tables", async () => {
+        const projectStub = env.PROJECT_RELAY.get(env.PROJECT_RELAY.idFromName("legacy-project-schema"));
+        await runInDurableObject(projectStub, async (_instance, state) => {
+            state.storage.sql.exec("DROP TABLE project_schema_migrations");
+
+            initializeProjectDurableObjectSchema(new DurableObjectSqlDatabase(state.storage));
+
+            expect([
+                ...state.storage.sql.exec<{ name: string }>("SELECT name FROM project_schema_migrations ORDER BY name"),
+            ]).toEqual([{ name: "0000_steep_sentinels.sql" }]);
+        });
+    });
 });
 
 describe.sequential("Platform Session-only boundary", () => {
