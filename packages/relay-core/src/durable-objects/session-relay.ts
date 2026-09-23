@@ -9,6 +9,8 @@ export class SessionRelay {
 
     constructor(dependencies: DurableObjectContext) {
         this.#dependencies = dependencies;
+        // A Session Host reads its schema before the first route dispatch.
+        void dependencies.applications.session;
     }
 
     async fetch(request: Request): Promise<Response> {

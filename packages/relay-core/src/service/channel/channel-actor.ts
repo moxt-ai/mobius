@@ -208,6 +208,7 @@ export class ChannelActor {
     #inFlightDeliveryBytes = 0;
     #deliveryReceipts = false;
     #liveEventSequence = 0n;
+    readonly #liveEventReceipts = new Map<string, { readonly payload: string; readonly sequence: string }>();
     #dispatchTail: Promise<void> = Promise.resolve();
 
     constructor(cx: {
@@ -342,6 +343,24 @@ export class ChannelActor {
             if (kind === SESSION_EVENT_KIND) {
                 const envelope = message;
                 validateSessionEventEnvelope(envelope);
+                const receiptKey = `${envelope.sessionId}\u0000${envelope.eventId}`;
+                const existingReceipt = this.#liveEventReceipts.get(receiptKey);
+                if (existingReceipt !== undefined) {
+                    if (existingReceipt.payload !== envelope.payload) {
+                        throw new ProtocolMessageError("A Session event ID was reused with different content");
+                    }
+                    socket.send(
+                        encodeServiceToDaemonMessage({
+                            cursor: envelope.eventId,
+                            duplicate: true,
+                            eventId: envelope.eventId,
+                            kind: SESSION_EVENT_ACK_KIND,
+                            sequence: existingReceipt.sequence,
+                            sessionId: envelope.sessionId,
+                        }),
+                    );
+                    return;
+                }
                 const timeSequence = BigInt(this.#clock.now()) * 1_000_000n;
                 this.#liveEventSequence =
                     this.#liveEventSequence >= timeSequence ? this.#liveEventSequence + 1n : timeSequence;
@@ -357,6 +376,13 @@ export class ChannelActor {
                     source: envelope.source,
                 };
                 this.broadcast(this.#peers.hosts(), encodeCommittedSessionEvent(committed));
+                if (this.#liveEventReceipts.size >= 10_000) {
+                    const oldest = this.#liveEventReceipts.keys().next().value;
+                    if (oldest !== undefined) {
+                        this.#liveEventReceipts.delete(oldest);
+                    }
+                }
+                this.#liveEventReceipts.set(receiptKey, { payload: envelope.payload, sequence });
                 socket.send(
                     encodeServiceToDaemonMessage({
                         cursor: committed.cursor,

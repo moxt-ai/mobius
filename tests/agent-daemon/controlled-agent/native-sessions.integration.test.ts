@@ -249,6 +249,40 @@ describe("native Agent session boundary", () => {
         }
     });
 
+    it("Given a Codex thread longer than one preview page, When Chat reads its native history, Then older turns are returned from the Runtime", async () => {
+        const f = await codexFixture();
+        try {
+            const history = Array.from({ length: 15 }, (_, index) => [
+                { role: "user", text: `Question ${index + 1}` },
+                { role: "assistant", text: `Answer ${index + 1}` },
+            ]).flat();
+            await writeFile(
+                join(f.native, `${encodeURIComponent(crypto.randomUUID())}.json`),
+                JSON.stringify({ cwd: f.workspace, title: "Long Codex conversation", history }),
+            );
+            const entry = (await f.list()).entries[0];
+            if (entry === undefined) {
+                throw new Error("Missing native conversation");
+            }
+            const result = await f.service.execute(
+                { ...f.identity, action: "history", entryId: entry.entryId },
+                new AbortController().signal,
+            );
+            expect(result).toMatchObject({
+                action: "history",
+                history: {
+                    status: "available",
+                    messages: expect.arrayContaining([
+                        { role: "user", text: "Question 1" },
+                        { role: "user", text: "Question 15" },
+                    ]),
+                },
+            });
+        } finally {
+            await f.close();
+        }
+    });
+
     it("Given a saved Codex thread with a long preview, When its directory is listed, Then the thread has a bounded title", async () => {
         const f = await codexFixture();
         try {

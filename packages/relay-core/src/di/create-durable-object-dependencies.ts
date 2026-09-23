@@ -216,12 +216,16 @@ export function createDurableObjectDependencies(cx: {
         storages: cx.storages,
         utilities: cx.utilities,
     });
-    const session = createSessionRelayDependencies({
-        database: cx.doDatabase,
-        initializeSessionSchema: cx.initializeSessionSchema ?? initializeSessionSchema,
-        quota: cx.quota,
-        schedule: cx.utilities.schedule,
-    });
+    let session: ReturnType<typeof createSessionRelayDependencies> | null = null;
+    const sessionDependencies = (): ReturnType<typeof createSessionRelayDependencies> => {
+        session ??= createSessionRelayDependencies({
+            database: cx.doDatabase,
+            initializeSessionSchema: cx.initializeSessionSchema ?? initializeSessionSchema,
+            quota: cx.quota,
+            schedule: cx.utilities.schedule,
+        });
+        return session;
+    };
     return {
         doDatabase: cx.doDatabase,
         gateways: cx.gateways,
@@ -230,14 +234,24 @@ export function createDurableObjectDependencies(cx: {
         utilities: cx.utilities,
         services: {
             ...runtime.services,
-            sessionEventStreams: session.services.eventStreams,
-            sessionRecovery: session.services.recovery,
-            sessionRetention: session.services.retention,
-            operations: session.services.operations,
+            get sessionEventStreams() {
+                return sessionDependencies().services.eventStreams;
+            },
+            get sessionRecovery() {
+                return sessionDependencies().services.recovery;
+            },
+            get sessionRetention() {
+                return sessionDependencies().services.retention;
+            },
+            get operations() {
+                return sessionDependencies().services.operations;
+            },
         },
         applications: {
             runtime: createRuntimeRoutes(runtime.services.runtime),
-            session: session.application,
+            get session() {
+                return sessionDependencies().application;
+            },
         },
     };
 }

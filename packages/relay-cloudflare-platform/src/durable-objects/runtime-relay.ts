@@ -8,7 +8,7 @@ import { PlatformSessionHost } from "./platform-session-host.ts";
 
 export class RuntimeRelay extends DurableObject<PlatformDurableObjectEnvironment> {
     readonly #runtime: RuntimeRelayImplementation;
-    readonly #sessions: PlatformSessionHost;
+    #sessions: PlatformSessionHost | null = null;
 
     constructor(state: DurableObjectState, environment: PlatformDurableObjectEnvironment) {
         super(state, environment);
@@ -17,12 +17,16 @@ export class RuntimeRelay extends DurableObject<PlatformDurableObjectEnvironment
                 database: new DurableObjectSqlDatabase(state.storage),
             }),
         );
-        this.#sessions = new PlatformSessionHost(state, environment);
     }
+
+    private readonly sessionHost = (): PlatformSessionHost => {
+        this.#sessions ??= new PlatformSessionHost(this.ctx, this.env);
+        return this.#sessions;
+    };
 
     override async fetch(request: Request): Promise<Response> {
         return new URL(request.url).pathname.startsWith("/internal/projects/")
-            ? await this.#sessions.fetch(request)
+            ? await this.sessionHost().fetch(request)
             : await this.#runtime.fetch(request);
     }
 
@@ -33,10 +37,12 @@ export class RuntimeRelay extends DurableObject<PlatformDurableObjectEnvironment
         } catch (cause) {
             failures.push(cause);
         }
-        try {
-            await this.#sessions.alarm();
-        } catch (cause) {
-            failures.push(cause);
+        if (this.#sessions !== null) {
+            try {
+                await this.#sessions.alarm();
+            } catch (cause) {
+                failures.push(cause);
+            }
         }
         if (failures.length > 0) {
             throw new AggregateError(failures, "The Runtime relay could not recover");
@@ -62,10 +68,10 @@ export class RuntimeRelay extends DurableObject<PlatformDurableObjectEnvironment
         sessionId: string,
         receive: Parameters<PlatformSessionHost["subscribeToLiveSessionEvents"]>[4],
     ): Promise<void> {
-        await this.#sessions.subscribeToLiveSessionEvents(subscriptionId, projectId, runtimeId, sessionId, receive);
+        await this.sessionHost().subscribeToLiveSessionEvents(subscriptionId, projectId, runtimeId, sessionId, receive);
     }
 
     unsubscribeFromLiveSessionEvents(subscriptionId: string): void {
-        this.#sessions.unsubscribeFromLiveSessionEvents(subscriptionId);
+        this.#sessions?.unsubscribeFromLiveSessionEvents(subscriptionId);
     }
 }

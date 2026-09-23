@@ -15,7 +15,7 @@ import type { AuditStore } from "../audit/audit-store.ts";
 import { LocalAuthorizationError } from "../authorization/local-authorization-error.ts";
 import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
 import type { DaemonConfig } from "../config.ts";
-import { readCodexHistory } from "./codex-history.ts";
+import { readCodexFullHistory, readCodexHistory } from "./codex-history.ts";
 
 interface ListedTarget {
     readonly scope: string;
@@ -101,7 +101,7 @@ export class NativeSessionService {
                 entryId,
                 mobiusSessionIds: this.#sessions
                     .findLinkedSessions(command.agentId, info.sessionId)
-                    .filter((session) => session.cwd === authorized.cwd)
+                    .filter((session) => session.prompted && session.cwd === authorized.cwd)
                     .map((session) => session.sessionId),
                 title: info.title ?? "Untitled session",
                 directoryId: authorized.directoryId,
@@ -208,6 +208,18 @@ export class NativeSessionService {
             );
         }
         const target = await this.resolveTarget(command, options, selected);
+        if (command.action === "history") {
+            const history = await this.readHistory(command, options, target, signal);
+            signal.throwIfAborted();
+            this.record(command, "native_session_history_read");
+            return {
+                ...envelope,
+                action: "history",
+                entryId: command.entryId,
+                history,
+                title: target.info.title ?? "Untitled session",
+            };
+        }
         if (command.action === "preview") {
             const history = await this.previewHistory(command, options, target, signal);
             signal.throwIfAborted();
@@ -385,6 +397,31 @@ export class NativeSessionService {
         // thread/read + thread/turns/list, instead of ACP session/load, avoids
         // acquiring that lock so an externally owned thread stays previewable.
         const snapshot = await readCodexHistory(options.agent, target.cwd, target.info.sessionId, signal);
+        const resolved = await this.#directories.identify(command.bindingId, snapshot.cwd, signal);
+        if (snapshot.nativeSessionId !== target.info.sessionId || resolved.path !== target.cwd) {
+            throw new AcpExecutionError(
+                "Codex returned history for a different session or workspace.",
+                {},
+                "invalid_native_session_response",
+            );
+        }
+        return snapshot.history;
+    };
+
+    private readonly readHistory = async (
+        command: NativeSessionCommand,
+        options: AcpPrepareOptions,
+        target: AuthorizedNativeSession,
+        signal: AbortSignal,
+    ): Promise<NativeSessionHistory> => {
+        if (options.agent.id !== "codex") {
+            throw new AcpExecutionError(
+                "Native history is unavailable for this Agent",
+                {},
+                "native_session_unsupported",
+            );
+        }
+        const snapshot = await readCodexFullHistory(options.agent, target.cwd, target.info.sessionId, signal);
         const resolved = await this.#directories.identify(command.bindingId, snapshot.cwd, signal);
         if (snapshot.nativeSessionId !== target.info.sessionId || resolved.path !== target.cwd) {
             throw new AcpExecutionError(
