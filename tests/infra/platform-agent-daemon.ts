@@ -29,6 +29,31 @@ export async function createFakeAgentDaemonRuntime(options: {
     const resources = new AsyncDisposableStack();
     const cancellation = new AbortController();
     const signal = AbortSignal.any([options.signal, cancellation.signal]);
+    const agents = [
+        { id: options.behavior?.agentId ?? "codex", name: options.behavior?.agentName ?? "Codex" },
+        ...(options.behavior?.additionalAgents ?? []),
+    ].map((agent) => ({
+        agentSettingsDiscovery: true,
+        sessionTurnConfiguration: true,
+        agentPath: `/fake/${agent.id}`,
+        agentVersion: "fake-agent-daemon",
+        capabilities: {
+            additionalDirectories: true,
+            audioPrompt: false,
+            closeSession: true,
+            deleteSession: true,
+            embeddedContextPrompt: true,
+            imagePrompt: true,
+            listSessions: true,
+            loadSession: true,
+            promptQueueing: false,
+            resumeSession: true,
+            steering: false,
+            unstableForkSession: false,
+        },
+        id: agent.id,
+        label: agent.name,
+    }));
     try {
         const pairing = v.parse(
             runtimePairingSchema,
@@ -52,30 +77,7 @@ export async function createFakeAgentDaemonRuntime(options: {
                 await options.server.request(
                     new Request(`${options.origin}/mobius/api/v1/runtime-pairings/${pairing.pairingId}/redeem`, {
                         body: JSON.stringify({
-                            agents: [
-                                {
-                                    agentSettingsDiscovery: true,
-                                    sessionTurnConfiguration: true,
-                                    agentPath: `/fake/${options.behavior?.agentId ?? "codex"}`,
-                                    agentVersion: "fake-agent-daemon",
-                                    capabilities: {
-                                        additionalDirectories: true,
-                                        audioPrompt: false,
-                                        closeSession: true,
-                                        deleteSession: true,
-                                        embeddedContextPrompt: true,
-                                        imagePrompt: true,
-                                        listSessions: true,
-                                        loadSession: true,
-                                        promptQueueing: false,
-                                        resumeSession: true,
-                                        steering: false,
-                                        unstableForkSession: false,
-                                    },
-                                    id: options.behavior?.agentId ?? "codex",
-                                    label: options.behavior?.agentName ?? "Codex",
-                                },
-                            ],
+                            agents,
                             installableAgents: [],
                             machineName: "Fake Runtime",
                             pairingCode: pairing.pairingCode,
