@@ -3,6 +3,7 @@ import type { DoSqlDatabase } from "./do-sql-database.ts";
 export interface DurableObjectMigration {
     readonly name: string;
     readonly sql: string;
+    readonly existingState: { readonly kind: "execute" } | { readonly kind: "adopt-table"; readonly table: string };
 }
 
 export function applyDurableObjectMigrations(
@@ -26,7 +27,21 @@ export function applyDurableObjectMigrations(
             continue;
         }
         database.transaction(() => {
-            database.run(migration.sql);
+            const alreadySatisfied = (() => {
+                switch (migration.existingState.kind) {
+                    case "execute":
+                        return false;
+                    case "adopt-table":
+                        return (
+                            database.query("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?", [
+                                migration.existingState.table,
+                            ])[0] !== undefined
+                        );
+                }
+            })();
+            if (!alreadySatisfied) {
+                database.run(migration.sql);
+            }
             database.run("INSERT INTO _mobius_do_schema_migrations (namespace, name, applied_at) VALUES (?, ?, ?)", [
                 namespace,
                 migration.name,

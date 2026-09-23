@@ -17,10 +17,11 @@ import {
     SESSION_INFO_UPDATED_KIND,
     SESSION_STARTED_KIND,
 } from "@moxt-ai/mobius-protocol";
-import { DurableObjectSqlDatabase } from "@moxt-ai/mobius-relay-core";
+import { DurableObjectSqlDatabase, initializeSessionSchema } from "@moxt-ai/mobius-relay-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestMobiusPlatformApp } from "../../../tests/infra/app.ts";
 import { FakeClerk } from "../../../tests/infra/clerk.ts";
+import { sessionDurableObjectMigrations } from "../../relay-core/src/generated/session-do-migrations.ts";
 import { initializeProjectDurableObjectSchema } from "../src/storage/project-durable-object-schema.ts";
 import {
     createPlatformGateways,
@@ -145,6 +146,38 @@ describe.sequential("Platform Project schema boundary", () => {
             expect([
                 ...state.storage.sql.exec<{ name: string }>("SELECT name FROM project_schema_migrations ORDER BY name"),
             ]).toEqual([{ name: "0000_steep_sentinels.sql" }]);
+        });
+    });
+});
+
+describe.sequential("Platform Session schema boundary", () => {
+    it("Given a Session schema from before migration tracking, When the Runtime starts, Then it adopts the baseline without recreating tables", async () => {
+        const runtimeStub = env.RUNTIME_RELAY.get(
+            env.RUNTIME_RELAY.idFromName(`legacy-session-schema-${crypto.randomUUID()}`),
+        );
+        await runInDurableObject(runtimeStub, async (_instance, state) => {
+            const database = new DurableObjectSqlDatabase(state.storage);
+            const baseline = sessionDurableObjectMigrations[0];
+            if (baseline === undefined) {
+                throw new Error("Expected the Session baseline migration");
+            }
+            database.run("DELETE FROM _mobius_do_schema_migrations WHERE namespace = ?", ["session-do"]);
+            for (const match of baseline.sql.matchAll(/CREATE TABLE `([^`]+)`/gu)) {
+                const table = match[1];
+                if (table === undefined) {
+                    throw new Error("Expected a baseline table name");
+                }
+                state.storage.sql.exec(`DROP TABLE IF EXISTS "${table}"`);
+            }
+            database.run(baseline.sql);
+
+            initializeSessionSchema(database);
+
+            expect([
+                ...state.storage.sql.exec<{ name: string }>(
+                    "SELECT name FROM _mobius_do_schema_migrations WHERE namespace = 'session-do' ORDER BY name",
+                ),
+            ]).toEqual([{ name: "0000_early_mathemanic.sql" }, { name: "0001_sticky_magma.sql" }]);
         });
     });
 });

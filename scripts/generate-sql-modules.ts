@@ -42,7 +42,11 @@ const platform = join(root, "packages/relay-cloudflare-platform");
 await writeMigrationModule(
     join(relayCore, "src/generated/session-do-migrations.ts"),
     "sessionDurableObjectMigrations",
-    await sqlFiles(join(relayCore, "migrations/session-do")),
+    (await sqlFiles(join(relayCore, "migrations/session-do"))).map((source) =>
+        source.name === "0000_early_mathemanic.sql"
+            ? { ...source, existingState: { kind: "adopt-table" as const, table: "sessions" } }
+            : source,
+    ),
 );
 await writeMigrationModule(
     join(relayCore, "src/generated/runtime-connection-do-migrations.ts"),
