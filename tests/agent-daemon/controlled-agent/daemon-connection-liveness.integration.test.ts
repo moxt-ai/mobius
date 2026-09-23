@@ -3,7 +3,6 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 
@@ -11,9 +10,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuditStore } from "../../../packages/cli/src/audit/audit-store.ts";
 import { createDaemonConfig, LocalAgentDefinition } from "../../../packages/cli/src/config.ts";
 import { RuntimeRelayRevokedError } from "../../../packages/cli/src/relay-connection/runtime-revocation.ts";
-import { SessionEventOutbox } from "../../../packages/cli/src/relay-connection/session-event-outbox.ts";
 import type { DaemonScheduledTask, DaemonTimer } from "../../../packages/cli/src/relay-connection/timer.ts";
 import { runDaemon } from "../../../packages/cli/src/run-daemon.ts";
+
 import {
     AGENT_ACTIVITY_KIND,
     AGENT_MESSAGE_DELTA_KIND,
@@ -23,15 +22,11 @@ import {
     decodeRuntimeDeliveryReceived,
     decodeRuntimeHeartbeatEvent,
     decodeSessionEventEnvelope,
-    decodeSessionFailedEvent,
     encodeRuntimeDelivery,
     encodeRuntimeDeliveryCommitted,
     encodeRuntimeHeartbeatAckEvent,
     encodeSessionCancelCommand,
     encodeSessionEventAcknowledgement,
-    encodeSessionEventDeferred,
-    encodeSessionEventRejection,
-    encodeSessionInfoUpdatedEvent,
     encodeSessionPromptCommand,
     encodeWorkspaceListCommand,
     MOBIUS_API_PREFIX,
@@ -43,14 +38,9 @@ import {
     RUNTIME_LIVENESS_READY_KIND,
     SESSION_COMPLETED_KIND,
     SESSION_EVENT_ACK_KIND,
-    SESSION_EVENT_DEFERRED_KIND,
     SESSION_EVENT_KIND,
-    SESSION_EVENT_REJECTED_KIND,
-    SESSION_FAILED_KIND,
-    SESSION_INFO_UPDATED_KIND,
     SESSION_PROMPT_KIND,
     SESSION_STARTED_KIND,
-    SessionEventRejectionCode,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
 } from "../../../packages/protocol/src/index.ts";
@@ -230,562 +220,6 @@ describe("daemon relay connection liveness", () => {
         vi.useRealTimers();
     });
 
-    it("Given one Session fills the reconnect backlog, When the daemon reconnects, Then replay stays bounded and a fresh Session is served in the first batch", async () => {
-        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-replay-window-"));
-        const defaultWorkspace = join(stateDirectory, "workspace");
-        await mkdir(defaultWorkspace);
-        const relay = createServer((request, response) => {
-            if (request.method === "PUT" && request.url === `${MOBIUS_API_PREFIX}/channels/replay-channel/catalog`) {
-                request.resume();
-                response.writeHead(204);
-                response.end();
-                return;
-            }
-            response.writeHead(426);
-            response.end();
-        });
-        const sockets = new Set<Duplex>();
-        const daemonSockets: Duplex[] = [];
-        const observedFrames: ClientWebSocketFrame[] = [];
-        const removeObservers: Array<() => void> = [];
-        let resolveFirstBatch = (): void => undefined;
-        let resolveSecondBatch = (): void => undefined;
-        const firstBatch = new Promise<void>((resolve) => {
-            resolveFirstBatch = resolve;
-        });
-        const secondBatch = new Promise<void>((resolve) => {
-            resolveSecondBatch = resolve;
-        });
-        relay.on("connection", (socket) => {
-            sockets.add(socket);
-            socket.once("close", () => sockets.delete(socket));
-            socket.on("error", () => undefined);
-        });
-        relay.on("upgrade", (request, socket) => {
-            const key = request.headers["sec-websocket-key"];
-            if (typeof key !== "string") {
-                socket.destroy();
-                return;
-            }
-            const accept = createHash("sha1").update(`${key}${WEBSOCKET_GUID}`).digest("base64");
-            socket.write(
-                "HTTP/1.1 101 Switching Protocols\r\n" +
-                    "Connection: Upgrade\r\n" +
-                    "Upgrade: websocket\r\n" +
-                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
-            );
-            daemonSockets.push(socket);
-            removeObservers.push(
-                observeClientFrames(socket, (frame) => {
-                    if (frame.opcode !== 1) {
-                        return;
-                    }
-                    observedFrames.push(frame);
-                    if (observedFrames.length >= 5) {
-                        resolveFirstBatch();
-                    }
-                    if (observedFrames.length >= 6) {
-                        resolveSecondBatch();
-                    }
-                }),
-            );
-            respondToClientClose(socket);
-        });
-        await listen(relay);
-
-        const auditDatabasePath = join(stateDirectory, "daemon.sqlite");
-        const seededOutbox = new SessionEventOutbox(auditDatabasePath);
-        for (let sequence = 1; sequence <= 10; sequence += 1) {
-            seededOutbox.enqueue(
-                "noisy-session",
-                JSON.stringify({ kind: "agent.activity", sequence }),
-                "noisy-attempt",
-            );
-        }
-        seededOutbox.enqueue("fresh-session", JSON.stringify({ kind: "session.ready" }));
-        seededOutbox.close();
-        const audit = new AuditStore(auditDatabasePath);
-        const cancellation = new AbortController();
-        const previousCodexPath = process.env["MOBIUS_CODEX_PATH"];
-        const previousClaudePath = process.env["MOBIUS_CLAUDE_PATH"];
-        const previousCopilotPath = process.env["MOBIUS_COPILOT_PATH"];
-        const previousHermesPath = process.env["MOBIUS_HERMES_PATH"];
-        const previousGeminiPath = process.env["MOBIUS_GEMINI_PATH"];
-        const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
-        const previousNoProxy = process.env["NO_PROXY"];
-        const previousLowerNoProxy = process.env["no_proxy"];
-        const previousPath = process.env["PATH"];
-        process.env["MOBIUS_CODEX_PATH"] = join(stateDirectory, "missing-codex");
-        process.env["MOBIUS_CLAUDE_PATH"] = join(stateDirectory, "missing-claude");
-        process.env["MOBIUS_COPILOT_PATH"] = join(stateDirectory, "missing-copilot");
-        process.env["MOBIUS_HERMES_PATH"] = join(stateDirectory, "missing-hermes");
-        process.env["MOBIUS_GEMINI_PATH"] = join(stateDirectory, "missing-gemini");
-        process.env["MOBIUS_STATE_DIRECTORY"] = stateDirectory;
-        process.env["NO_PROXY"] = "127.0.0.1,localhost";
-        process.env["no_proxy"] = "127.0.0.1,localhost";
-        process.env["PATH"] = "";
-        const config = createDaemonConfig({
-            defaultWorkspace,
-            auditDatabasePath,
-            channelId: "replay-channel",
-            relayUrl: new URL(`ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/replay-channel/daemon`),
-        });
-        const daemon = runDaemon(config, audit, cancellation.signal);
-
-        try {
-            await firstBatch;
-            await new Promise<void>((resolve) => setImmediate(resolve));
-            expect(observedFrames).toHaveLength(5);
-            const firstEnvelopes = observedFrames.map((frame) => decodeSessionEventEnvelope(frame.text));
-            expect(firstEnvelopes.map((event) => event.sessionId)).toEqual([
-                "noisy-session",
-                "fresh-session",
-                "noisy-session",
-                "noisy-session",
-                "noisy-session",
-            ]);
-            const socket = daemonSockets[0];
-            if (socket === undefined) {
-                throw new Error("Test relay did not retain the daemon connection");
-            }
-            const firstEnvelope = firstEnvelopes[0];
-            if (firstEnvelope === undefined) {
-                throw new Error("Test relay did not observe the first Session event");
-            }
-            writeServerTextFrame(
-                socket,
-                encodeSessionEventAcknowledgement({
-                    cursor: "cursor-0",
-                    duplicate: false,
-                    eventId: firstEnvelope.eventId,
-                    kind: SESSION_EVENT_ACK_KIND,
-                    sequence: "1",
-                    sessionId: firstEnvelope.sessionId,
-                }),
-            );
-            await secondBatch;
-            await new Promise<void>((resolve) => setImmediate(resolve));
-            expect(observedFrames).toHaveLength(6);
-            expect(decodeSessionEventEnvelope(observedFrames[5]?.text ?? "").source.sourceSeq).toBe("5");
-
-            const database = new DatabaseSync(auditDatabasePath, { readOnly: true });
-            try {
-                expect(
-                    database.prepare("SELECT COUNT(*) AS count FROM relay_session_event_outbox").get(),
-                ).toMatchObject({ count: 10 });
-            } finally {
-                database.close();
-            }
-        } finally {
-            cancellation.abort();
-            await daemon;
-            audit.close();
-            for (const removeObserver of removeObservers) {
-                removeObserver();
-            }
-            for (const socket of sockets) {
-                socket.destroy();
-            }
-            await new Promise<void>((resolve, reject) => {
-                relay.close((error) => {
-                    if (error === undefined) {
-                        resolve();
-                        return;
-                    }
-                    reject(error);
-                });
-            });
-            restoreEnvironmentVariable("MOBIUS_CODEX_PATH", previousCodexPath);
-            restoreEnvironmentVariable("MOBIUS_CLAUDE_PATH", previousClaudePath);
-            restoreEnvironmentVariable("MOBIUS_COPILOT_PATH", previousCopilotPath);
-            restoreEnvironmentVariable("MOBIUS_HERMES_PATH", previousHermesPath);
-            restoreEnvironmentVariable("MOBIUS_GEMINI_PATH", previousGeminiPath);
-            restoreEnvironmentVariable("MOBIUS_STATE_DIRECTORY", previousStateDirectory);
-            restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
-            restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
-            restoreEnvironmentVariable("PATH", previousPath);
-            await rm(stateDirectory, { force: true, recursive: true });
-        }
-    });
-
-    it("Given Relay applies archive backpressure to one durable event, When the retry delay expires, Then the daemon resends it on the same connection and retires it only after acknowledgement", async () => {
-        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-session-backpressure-"));
-        const defaultWorkspace = join(stateDirectory, "workspace");
-        await mkdir(defaultWorkspace);
-        const relay = createServer((request, response) => {
-            if (
-                request.method === "PUT" &&
-                request.url === `${MOBIUS_API_PREFIX}/channels/backpressure-channel/catalog`
-            ) {
-                request.resume();
-                response.writeHead(204);
-                response.end();
-                return;
-            }
-            response.writeHead(426);
-            response.end();
-        });
-        const sockets = new Set<Duplex>();
-        const daemonSockets: Duplex[] = [];
-        const observedEnvelopes: ReturnType<typeof decodeSessionEventEnvelope>[] = [];
-        let removeObserver = (): void => undefined;
-        let resolveFirstAttempt = (): void => undefined;
-        let resolveRetry = (): void => undefined;
-        const firstAttempt = new Promise<void>((resolve) => {
-            resolveFirstAttempt = resolve;
-        });
-        const retry = new Promise<void>((resolve) => {
-            resolveRetry = resolve;
-        });
-        relay.on("connection", (socket) => {
-            sockets.add(socket);
-            socket.once("close", () => sockets.delete(socket));
-            socket.on("error", () => undefined);
-        });
-        relay.on("upgrade", (request, socket) => {
-            const key = request.headers["sec-websocket-key"];
-            if (typeof key !== "string") {
-                socket.destroy();
-                return;
-            }
-            const accept = createHash("sha1").update(`${key}${WEBSOCKET_GUID}`).digest("base64");
-            socket.write(
-                "HTTP/1.1 101 Switching Protocols\r\n" +
-                    "Connection: Upgrade\r\n" +
-                    "Upgrade: websocket\r\n" +
-                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
-            );
-            daemonSockets.push(socket);
-            removeObserver = observeClientFrames(socket, (frame) => {
-                if (frame.opcode !== 1) {
-                    return;
-                }
-                const kind = decodeMessageKind(frame.text);
-                if (kind === WORKSPACE_ENTRIES_KIND) {
-                    resolveRetry();
-                    return;
-                }
-                if (kind !== SESSION_EVENT_KIND) {
-                    return;
-                }
-                const event = decodeSessionEventEnvelope(frame.text);
-                observedEnvelopes.push(event);
-                if (observedEnvelopes.length === 1) {
-                    writeServerTextFrame(
-                        socket,
-                        encodeSessionEventDeferred({
-                            eventId: event.eventId,
-                            kind: SESSION_EVENT_DEFERRED_KIND,
-                            retryAfterMilliseconds: 1_000,
-                            sessionId: event.sessionId,
-                        }),
-                    );
-                    resolveFirstAttempt();
-                    return;
-                }
-                writeServerTextFrame(
-                    socket,
-                    encodeSessionEventAcknowledgement({
-                        cursor: "backpressure-cursor",
-                        duplicate: false,
-                        eventId: event.eventId,
-                        kind: SESSION_EVENT_ACK_KIND,
-                        sequence: "1",
-                        sessionId: event.sessionId,
-                    }),
-                );
-                writeServerTextFrame(
-                    socket,
-                    encodeWorkspaceListCommand({
-                        bindingId: "workspace",
-                        directoryId: "default",
-                        kind: WORKSPACE_LIST_KIND,
-                        requestId: "after-session-backpressure",
-                    }),
-                );
-            });
-            respondToClientClose(socket);
-        });
-        await listen(relay);
-
-        const auditDatabasePath = join(stateDirectory, "daemon.sqlite");
-        const seededOutbox = new SessionEventOutbox(auditDatabasePath);
-        seededOutbox.enqueue(
-            "backpressure-session",
-            JSON.stringify({ kind: "session.info.updated", title: "Long task" }),
-        );
-        seededOutbox.close();
-        const audit = new AuditStore(auditDatabasePath);
-        const cancellation = new AbortController();
-        const timer = new ControllableDaemonTimer();
-        const previousCodexPath = process.env["MOBIUS_CODEX_PATH"];
-        const previousClaudePath = process.env["MOBIUS_CLAUDE_PATH"];
-        const previousCopilotPath = process.env["MOBIUS_COPILOT_PATH"];
-        const previousHermesPath = process.env["MOBIUS_HERMES_PATH"];
-        const previousGeminiPath = process.env["MOBIUS_GEMINI_PATH"];
-        const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
-        const previousNoProxy = process.env["NO_PROXY"];
-        const previousLowerNoProxy = process.env["no_proxy"];
-        const previousPath = process.env["PATH"];
-        process.env["MOBIUS_CODEX_PATH"] = join(stateDirectory, "missing-codex");
-        process.env["MOBIUS_CLAUDE_PATH"] = join(stateDirectory, "missing-claude");
-        process.env["MOBIUS_COPILOT_PATH"] = join(stateDirectory, "missing-copilot");
-        process.env["MOBIUS_HERMES_PATH"] = join(stateDirectory, "missing-hermes");
-        process.env["MOBIUS_GEMINI_PATH"] = join(stateDirectory, "missing-gemini");
-        process.env["MOBIUS_STATE_DIRECTORY"] = stateDirectory;
-        process.env["NO_PROXY"] = "127.0.0.1,localhost";
-        process.env["no_proxy"] = "127.0.0.1,localhost";
-        process.env["PATH"] = "";
-        const config = createDaemonConfig({
-            defaultWorkspace,
-            auditDatabasePath,
-            channelId: "backpressure-channel",
-            relayUrl: new URL(
-                `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/backpressure-channel/daemon`,
-            ),
-        });
-        const daemon = runDaemon(config, audit, cancellation.signal, timer);
-
-        try {
-            await firstAttempt;
-            const retryTask = await timer.waitForTask(1_000);
-            expect(daemonSockets).toHaveLength(1);
-            retryTask.run();
-            await retry;
-            expect(observedEnvelopes).toHaveLength(2);
-            expect(observedEnvelopes[1]).toEqual(observedEnvelopes[0]);
-            expect(daemonSockets).toHaveLength(1);
-            expect(daemonSockets[0]?.destroyed).toBe(false);
-            const database = new DatabaseSync(auditDatabasePath, { readOnly: true });
-            try {
-                expect(
-                    database.prepare("SELECT COUNT(*) AS count FROM relay_session_event_outbox").get(),
-                ).toMatchObject({ count: 0 });
-            } finally {
-                database.close();
-            }
-        } finally {
-            cancellation.abort();
-            await daemon;
-            audit.close();
-            removeObserver();
-            for (const socket of sockets) {
-                socket.destroy();
-            }
-            await new Promise<void>((resolve, reject) => {
-                relay.close((error) => {
-                    if (error === undefined) {
-                        resolve();
-                        return;
-                    }
-                    reject(error);
-                });
-            });
-            restoreEnvironmentVariable("MOBIUS_CODEX_PATH", previousCodexPath);
-            restoreEnvironmentVariable("MOBIUS_CLAUDE_PATH", previousClaudePath);
-            restoreEnvironmentVariable("MOBIUS_COPILOT_PATH", previousCopilotPath);
-            restoreEnvironmentVariable("MOBIUS_HERMES_PATH", previousHermesPath);
-            restoreEnvironmentVariable("MOBIUS_GEMINI_PATH", previousGeminiPath);
-            restoreEnvironmentVariable("MOBIUS_STATE_DIRECTORY", previousStateDirectory);
-            restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
-            restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
-            restoreEnvironmentVariable("PATH", previousPath);
-            await rm(stateDirectory, { force: true, recursive: true });
-        }
-    });
-
-    it("Given a deleted Session event is durably queued, When the Relay rejects it and sends another command, Then the daemon quarantines the event and remains on the same connection", async () => {
-        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-rejected-event-"));
-        const defaultWorkspace = join(stateDirectory, "workspace");
-        await mkdir(defaultWorkspace);
-        const relay = createServer((request, response) => {
-            if (
-                request.method === "PUT" &&
-                request.url === `${MOBIUS_API_PREFIX}/channels/rejected-event-channel/catalog`
-            ) {
-                request.resume();
-                response.writeHead(204);
-                response.end();
-                return;
-            }
-            response.writeHead(426);
-            response.end();
-        });
-        const sockets = new Set<Duplex>();
-        const upgradeWaiters: Array<() => void> = [];
-        const daemonSockets: Duplex[] = [];
-        const clientFrames: Array<Promise<ClientWebSocketFrame>> = [];
-        let connectionCount = 0;
-        const waitForUpgrade = (): Promise<void> => new Promise((resolve) => upgradeWaiters.push(resolve));
-        relay.on("connection", (socket) => {
-            sockets.add(socket);
-            socket.once("close", () => sockets.delete(socket));
-            socket.on("error", () => undefined);
-        });
-        relay.on("upgrade", (request, socket) => {
-            const key = request.headers["sec-websocket-key"];
-            if (typeof key !== "string") {
-                socket.destroy();
-                return;
-            }
-            const accept = createHash("sha1").update(`${key}${WEBSOCKET_GUID}`).digest("base64");
-            socket.write(
-                "HTTP/1.1 101 Switching Protocols\r\n" +
-                    "Connection: Upgrade\r\n" +
-                    "Upgrade: websocket\r\n" +
-                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
-            );
-            daemonSockets.push(socket);
-            clientFrames.push(readClientFrame(socket));
-            respondToClientClose(socket);
-            connectionCount += 1;
-            upgradeWaiters.shift()?.();
-        });
-        await listen(relay);
-
-        const auditDatabasePath = join(stateDirectory, "daemon.sqlite");
-        const seededOutbox = new SessionEventOutbox(auditDatabasePath);
-        const encodedStaleEnvelope = seededOutbox.enqueue(
-            "deleted-session",
-            encodeSessionInfoUpdatedEvent({
-                kind: SESSION_INFO_UPDATED_KIND,
-                sessionId: "deleted-session",
-                title: "Stale title",
-                updatedAt: "2026-09-08T00:00:00.000Z",
-            }),
-        );
-        const staleEnvelope = decodeSessionEventEnvelope(encodedStaleEnvelope);
-        seededOutbox.close();
-        const audit = new AuditStore(auditDatabasePath);
-        const cancellation = new AbortController();
-        const previousCodexPath = process.env["MOBIUS_CODEX_PATH"];
-        const previousClaudePath = process.env["MOBIUS_CLAUDE_PATH"];
-        const previousCopilotPath = process.env["MOBIUS_COPILOT_PATH"];
-        const previousHermesPath = process.env["MOBIUS_HERMES_PATH"];
-        const previousGeminiPath = process.env["MOBIUS_GEMINI_PATH"];
-        const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
-        const previousNoProxy = process.env["NO_PROXY"];
-        const previousLowerNoProxy = process.env["no_proxy"];
-        const previousPath = process.env["PATH"];
-        process.env["MOBIUS_CODEX_PATH"] = join(stateDirectory, "missing-codex");
-        process.env["MOBIUS_CLAUDE_PATH"] = join(stateDirectory, "missing-claude");
-        process.env["MOBIUS_COPILOT_PATH"] = join(stateDirectory, "missing-copilot");
-        process.env["MOBIUS_HERMES_PATH"] = join(stateDirectory, "missing-hermes");
-        process.env["MOBIUS_GEMINI_PATH"] = join(stateDirectory, "missing-gemini");
-        process.env["MOBIUS_STATE_DIRECTORY"] = stateDirectory;
-        process.env["NO_PROXY"] = "127.0.0.1,localhost";
-        process.env["no_proxy"] = "127.0.0.1,localhost";
-        process.env["PATH"] = "";
-        const config = createDaemonConfig({
-            defaultWorkspace,
-            auditDatabasePath,
-            channelId: "rejected-event-channel",
-            relayUrl: new URL(
-                `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/rejected-event-channel/daemon`,
-            ),
-        });
-
-        vi.useFakeTimers({ toFake: ["Date"] });
-        vi.setSystemTime(new Date("2026-09-08T00:00:00.000Z"));
-        const firstConnection = waitForUpgrade();
-        const daemon = runDaemon(config, audit, cancellation.signal);
-
-        try {
-            await firstConnection;
-            const firstFrame = clientFrames[0];
-            const firstSocket = daemonSockets[0];
-            if (firstFrame === undefined || firstSocket === undefined) {
-                throw new Error("Test relay did not observe the daemon connection");
-            }
-            expect(decodeSessionEventEnvelope((await firstFrame).text)).toEqual(staleEnvelope);
-
-            const commandResponse = readClientFrame(firstSocket);
-            writeServerTextFrame(
-                firstSocket,
-                encodeSessionEventRejection({
-                    code: SessionEventRejectionCode.SessionDeleted,
-                    eventId: staleEnvelope.eventId,
-                    kind: SESSION_EVENT_REJECTED_KIND,
-                    sessionId: staleEnvelope.sessionId,
-                }),
-            );
-            writeServerTextFrame(
-                firstSocket,
-                encodeWorkspaceListCommand({
-                    bindingId: "workspace",
-                    directoryId: "default",
-                    kind: WORKSPACE_LIST_KIND,
-                    requestId: "after-event-rejection",
-                }),
-            );
-            const response = await commandResponse;
-            expect(response.opcode).toBe(1);
-            expect(decodeMessageKind(response.text)).toBe(WORKSPACE_ENTRIES_KIND);
-            expect(connectionCount).toBe(1);
-
-            const database = new DatabaseSync(auditDatabasePath, { readOnly: true });
-            try {
-                expect(
-                    database.prepare("SELECT COUNT(*) AS count FROM relay_session_event_outbox").get(),
-                ).toMatchObject({ count: 0 });
-                expect(
-                    database
-                        .prepare(
-                            `SELECT event_id, session_id, envelope_json, rejection_code
-                             FROM relay_session_event_dead_letters`,
-                        )
-                        .get(),
-                ).toMatchObject({
-                    event_id: staleEnvelope.eventId,
-                    envelope_json: encodedStaleEnvelope,
-                    rejection_code: SessionEventRejectionCode.SessionDeleted,
-                    session_id: staleEnvelope.sessionId,
-                });
-                expect(
-                    database
-                        .prepare(
-                            `SELECT command_id, event, session_id, details_json
-                             FROM audit_events WHERE event = 'session_event_rejected'`,
-                        )
-                        .get(),
-                ).toMatchObject({
-                    command_id: staleEnvelope.eventId,
-                    details_json: JSON.stringify({ code: SessionEventRejectionCode.SessionDeleted }),
-                    event: "session_event_rejected",
-                    session_id: staleEnvelope.sessionId,
-                });
-            } finally {
-                database.close();
-            }
-        } finally {
-            cancellation.abort();
-            await daemon;
-            audit.close();
-            for (const socket of sockets) {
-                socket.destroy();
-            }
-            await new Promise<void>((resolve, reject) => {
-                relay.close((error) => {
-                    if (error === undefined) {
-                        resolve();
-                        return;
-                    }
-                    reject(error);
-                });
-            });
-            restoreEnvironmentVariable("MOBIUS_CODEX_PATH", previousCodexPath);
-            restoreEnvironmentVariable("MOBIUS_CLAUDE_PATH", previousClaudePath);
-            restoreEnvironmentVariable("MOBIUS_COPILOT_PATH", previousCopilotPath);
-            restoreEnvironmentVariable("MOBIUS_HERMES_PATH", previousHermesPath);
-            restoreEnvironmentVariable("MOBIUS_GEMINI_PATH", previousGeminiPath);
-            restoreEnvironmentVariable("MOBIUS_STATE_DIRECTORY", previousStateDirectory);
-            restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
-            restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
-            restoreEnvironmentVariable("PATH", previousPath);
-            await rm(stateDirectory, { force: true, recursive: true });
-        }
-    });
-
     it("Given a liveness-capable relay stops acknowledging heartbeats, When the acknowledgement deadline expires, Then the daemon reconnects", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-heartbeat-"));
         const defaultWorkspace = join(stateDirectory, "workspace");
@@ -838,8 +272,7 @@ describe("daemon relay connection liveness", () => {
         });
         await listen(relay);
 
-        const auditDatabasePath = join(stateDirectory, "daemon.sqlite");
-        const audit = new AuditStore(auditDatabasePath);
+        const audit = new AuditStore();
         const cancellation = new AbortController();
         const previousCodexPath = process.env["MOBIUS_CODEX_PATH"];
         const previousClaudePath = process.env["MOBIUS_CLAUDE_PATH"];
@@ -861,7 +294,6 @@ describe("daemon relay connection liveness", () => {
         process.env["PATH"] = "";
         const config = createDaemonConfig({
             defaultWorkspace,
-            auditDatabasePath,
             channelId: "heartbeat-channel",
             relayUrl: new URL(
                 `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/heartbeat-channel/daemon`,
@@ -921,56 +353,6 @@ describe("daemon relay connection liveness", () => {
                 throw new Error("Test relay did not observe the refreshed connection");
             }
             expect((await refreshedFrame).opcode).toBe(1);
-
-            const database = new DatabaseSync(auditDatabasePath, { readOnly: true });
-            try {
-                const rows = database
-                    .prepare(
-                        `SELECT event, details_json
-                         FROM audit_events
-                         WHERE event IN (
-                           'relay_connection_opened',
-                           'relay_connection_closed',
-                           'relay_heartbeat_timed_out'
-                         )
-                         ORDER BY id`,
-                    )
-                    .all();
-                expect(
-                    rows.map((row) => ({
-                        details: JSON.parse(String(Reflect.get(row, "details_json"))),
-                        event: Reflect.get(row, "event"),
-                    })),
-                ).toEqual([
-                    {
-                        details: expect.objectContaining({ connectionEpoch: "1", proxyRoute: "direct" }),
-                        event: "relay_connection_opened",
-                    },
-                    {
-                        details: expect.objectContaining({
-                            connectionEpoch: "1",
-                            heartbeatId: secondHeartbeat.heartbeatId,
-                            timeoutMilliseconds: "10000",
-                        }),
-                        event: "relay_heartbeat_timed_out",
-                    },
-                    {
-                        details: expect.objectContaining({
-                            closeCode: "4001",
-                            closeReason: "Relay liveness check timed out",
-                            connectionEpoch: "1",
-                            source: "heartbeat_timeout",
-                        }),
-                        event: "relay_connection_closed",
-                    },
-                    {
-                        details: expect.objectContaining({ connectionEpoch: "2", proxyRoute: "direct" }),
-                        event: "relay_connection_opened",
-                    },
-                ]);
-            } finally {
-                database.close();
-            }
         } finally {
             cancellation.abort();
             await vi.runAllTimersAsync();
@@ -1067,8 +449,7 @@ describe("daemon relay connection liveness", () => {
         });
         await listen(relay);
 
-        const auditDatabasePath = join(stateDirectory, "daemon.sqlite");
-        const audit = new AuditStore(auditDatabasePath);
+        const audit = new AuditStore();
         const cancellation = new AbortController();
         const timer = new ControllableDaemonTimer();
         const previousCodexPath = process.env["MOBIUS_CODEX_PATH"];
@@ -1085,7 +466,6 @@ describe("daemon relay connection liveness", () => {
         process.env["PATH"] = "";
         const config = createDaemonConfig({
             defaultWorkspace,
-            auditDatabasePath,
             channelId: "delivery-receipt-channel",
             relayUrl: new URL(
                 `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/delivery-receipt-channel/daemon?token=daemon-secret`,
@@ -1142,14 +522,6 @@ describe("daemon relay connection liveness", () => {
             );
             expect(decodeMessageKind((await barrier).text)).toBe(WORKSPACE_ENTRIES_KIND);
 
-            const database = new DatabaseSync(auditDatabasePath, { readOnly: true });
-            try {
-                expect(database.prepare("SELECT COUNT(*) AS count FROM relay_runtime_deliveries").get()).toEqual({
-                    count: 0,
-                });
-            } finally {
-                database.close();
-            }
             expect(catalogAuthorization).toBe("Bearer daemon-secret");
             expect(upgradeAuthorizations).toEqual(["Bearer daemon-secret", "Bearer daemon-secret"]);
             expect(upgradeUrls).toEqual([
@@ -1174,183 +546,6 @@ describe("daemon relay connection liveness", () => {
             });
             restoreEnvironmentVariable("MOBIUS_CODEX_PATH", previousCodexPath);
             restoreEnvironmentVariable("MOBIUS_CLAUDE_PATH", previousClaudePath);
-            restoreEnvironmentVariable("MOBIUS_STATE_DIRECTORY", previousStateDirectory);
-            restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
-            restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
-            restoreEnvironmentVariable("PATH", previousPath);
-            await rm(stateDirectory, { force: true, recursive: true });
-        }
-    });
-
-    it("Given the Relay closes a daemon socket, When the daemon reconnects, Then the audit log preserves both connection epochs and the close code and reason", async () => {
-        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-close-audit-"));
-        const defaultWorkspace = join(stateDirectory, "workspace");
-        await mkdir(defaultWorkspace);
-        const relay = createServer((request, response) => {
-            if (
-                request.method === "PUT" &&
-                request.url === `${MOBIUS_API_PREFIX}/channels/close-audit-channel/catalog`
-            ) {
-                request.resume();
-                response.writeHead(204);
-                response.end();
-                return;
-            }
-            response.writeHead(426);
-            response.end();
-        });
-        const sockets = new Set<Duplex>();
-        const daemonSockets: Duplex[] = [];
-        const reconnectedFrames: Array<Promise<ClientWebSocketFrame>> = [];
-        const upgradeWaiters: Array<() => void> = [];
-        const waitForUpgrade = (): Promise<void> => new Promise((resolve) => upgradeWaiters.push(resolve));
-        relay.on("connection", (socket) => {
-            sockets.add(socket);
-            socket.once("close", () => sockets.delete(socket));
-            socket.on("error", () => undefined);
-        });
-        relay.on("upgrade", (request, socket) => {
-            const key = request.headers["sec-websocket-key"];
-            if (typeof key !== "string") {
-                socket.destroy();
-                return;
-            }
-            const accept = createHash("sha1").update(`${key}${WEBSOCKET_GUID}`).digest("base64");
-            socket.write(
-                "HTTP/1.1 101 Switching Protocols\r\n" +
-                    "Connection: Upgrade\r\n" +
-                    "Upgrade: websocket\r\n" +
-                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
-            );
-            daemonSockets.push(socket);
-            respondToClientClose(socket);
-            if (daemonSockets.length === 2) {
-                reconnectedFrames.push(readClientFrame(socket));
-                writeServerTextFrame(
-                    socket,
-                    encodeWorkspaceListCommand({
-                        bindingId: "workspace",
-                        directoryId: "default",
-                        kind: WORKSPACE_LIST_KIND,
-                        requestId: "after-relay-maintenance",
-                    }),
-                );
-            }
-            upgradeWaiters.shift()?.();
-        });
-        await listen(relay);
-
-        const auditDatabasePath = join(stateDirectory, "daemon.sqlite");
-        const audit = new AuditStore(auditDatabasePath);
-        const cancellation = new AbortController();
-        const timer = new ControllableDaemonTimer();
-        const previousCodexPath = process.env["MOBIUS_CODEX_PATH"];
-        const previousClaudePath = process.env["MOBIUS_CLAUDE_PATH"];
-        const previousCopilotPath = process.env["MOBIUS_COPILOT_PATH"];
-        const previousHermesPath = process.env["MOBIUS_HERMES_PATH"];
-        const previousGeminiPath = process.env["MOBIUS_GEMINI_PATH"];
-        const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
-        const previousNoProxy = process.env["NO_PROXY"];
-        const previousLowerNoProxy = process.env["no_proxy"];
-        const previousPath = process.env["PATH"];
-        process.env["MOBIUS_CODEX_PATH"] = join(stateDirectory, "missing-codex");
-        process.env["MOBIUS_CLAUDE_PATH"] = join(stateDirectory, "missing-claude");
-        process.env["MOBIUS_COPILOT_PATH"] = join(stateDirectory, "missing-copilot");
-        process.env["MOBIUS_HERMES_PATH"] = join(stateDirectory, "missing-hermes");
-        process.env["MOBIUS_GEMINI_PATH"] = join(stateDirectory, "missing-gemini");
-        process.env["MOBIUS_STATE_DIRECTORY"] = stateDirectory;
-        process.env["NO_PROXY"] = "127.0.0.1,localhost";
-        process.env["no_proxy"] = "127.0.0.1,localhost";
-        process.env["PATH"] = "";
-        const config = createDaemonConfig({
-            defaultWorkspace,
-            auditDatabasePath,
-            channelId: "close-audit-channel",
-            relayUrl: new URL(
-                `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/close-audit-channel/daemon`,
-            ),
-        });
-
-        vi.useFakeTimers({ toFake: ["Date"] });
-        vi.setSystemTime(new Date("2026-09-10T00:00:00.000Z"));
-        const firstConnection = waitForUpgrade();
-        const daemon = runDaemon(config, audit, cancellation.signal, timer);
-
-        try {
-            await firstConnection;
-            const firstSocket = daemonSockets[0];
-            if (firstSocket === undefined) {
-                throw new Error("Test relay did not retain the first daemon connection");
-            }
-
-            const secondConnection = waitForUpgrade();
-            writeServerCloseFrame(firstSocket, 1012, "Relay maintenance");
-            (await timer.waitForTask(500)).run();
-            await secondConnection;
-            const reconnectedFrame = reconnectedFrames[0];
-            if (reconnectedFrame === undefined) {
-                throw new Error("Test relay did not observe a response on the second daemon connection");
-            }
-            expect(decodeMessageKind((await reconnectedFrame).text)).toBe(WORKSPACE_ENTRIES_KIND);
-
-            const database = new DatabaseSync(auditDatabasePath, { readOnly: true });
-            try {
-                const rows = database
-                    .prepare(
-                        `SELECT event, details_json
-                         FROM audit_events
-                         WHERE event IN ('relay_connection_opened', 'relay_connection_closed')
-                         ORDER BY id`,
-                    )
-                    .all();
-                expect(
-                    rows.map((row) => ({
-                        details: JSON.parse(String(Reflect.get(row, "details_json"))),
-                        event: Reflect.get(row, "event"),
-                    })),
-                ).toEqual([
-                    {
-                        details: expect.objectContaining({ connectionEpoch: "1" }),
-                        event: "relay_connection_opened",
-                    },
-                    {
-                        details: expect.objectContaining({
-                            closeCode: "1012",
-                            closeReason: "Relay maintenance",
-                            connectionEpoch: "1",
-                            source: "relay",
-                        }),
-                        event: "relay_connection_closed",
-                    },
-                    {
-                        details: expect.objectContaining({ connectionEpoch: "2" }),
-                        event: "relay_connection_opened",
-                    },
-                ]);
-            } finally {
-                database.close();
-            }
-        } finally {
-            cancellation.abort();
-            await daemon;
-            audit.close();
-            for (const socket of sockets) {
-                socket.destroy();
-            }
-            await new Promise<void>((resolve, reject) => {
-                relay.close((error) => {
-                    if (error === undefined) {
-                        resolve();
-                        return;
-                    }
-                    reject(error);
-                });
-            });
-            restoreEnvironmentVariable("MOBIUS_CODEX_PATH", previousCodexPath);
-            restoreEnvironmentVariable("MOBIUS_CLAUDE_PATH", previousClaudePath);
-            restoreEnvironmentVariable("MOBIUS_COPILOT_PATH", previousCopilotPath);
-            restoreEnvironmentVariable("MOBIUS_HERMES_PATH", previousHermesPath);
-            restoreEnvironmentVariable("MOBIUS_GEMINI_PATH", previousGeminiPath);
             restoreEnvironmentVariable("MOBIUS_STATE_DIRECTORY", previousStateDirectory);
             restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
             restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
@@ -1406,8 +601,7 @@ describe("daemon relay connection liveness", () => {
         });
         await listen(relay);
 
-        const auditDatabasePath = join(stateDirectory, "daemon.sqlite");
-        const audit = new AuditStore(auditDatabasePath);
+        const audit = new AuditStore();
         const cancellation = new AbortController();
         const previousCodexPath = process.env["MOBIUS_CODEX_PATH"];
         const previousClaudePath = process.env["MOBIUS_CLAUDE_PATH"];
@@ -1429,7 +623,6 @@ describe("daemon relay connection liveness", () => {
         process.env["PATH"] = "";
         const config = createDaemonConfig({
             defaultWorkspace,
-            auditDatabasePath,
             channelId: "runtime-revoked-channel",
             relayUrl: new URL(
                 `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/runtime-revoked-channel/daemon`,
@@ -1572,8 +765,7 @@ describe("daemon relay connection liveness", () => {
         });
         await listen(relay);
 
-        const auditDatabasePath = join(stateDirectory, "daemon.sqlite");
-        const audit = new AuditStore(auditDatabasePath);
+        const audit = new AuditStore();
         const cancellation = new AbortController();
         const timer = new ControllableDaemonTimer();
         const previousFakeAcpStateDirectory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
@@ -1587,7 +779,6 @@ describe("daemon relay connection liveness", () => {
         const config = createDaemonConfig(
             {
                 defaultWorkspace,
-                auditDatabasePath,
                 channelId: "activity-coalescing-channel",
                 relayUrl: new URL(
                     `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/activity-coalescing-channel/daemon`,
@@ -1699,8 +890,7 @@ describe("daemon relay connection liveness", () => {
         });
         await listen(relay);
 
-        const auditDatabasePath = join(stateDirectory, "daemon.sqlite");
-        const audit = new AuditStore(auditDatabasePath);
+        const audit = new AuditStore();
         const cancellation = new AbortController();
         const previousCodexPath = process.env["MOBIUS_CODEX_PATH"];
         const previousClaudePath = process.env["MOBIUS_CLAUDE_PATH"];
@@ -1722,7 +912,6 @@ describe("daemon relay connection liveness", () => {
         process.env["PATH"] = "";
         const config = createDaemonConfig({
             defaultWorkspace,
-            auditDatabasePath,
             channelId: "liveness-channel",
             relayUrl: new URL(`ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/liveness-channel/daemon`),
         });
@@ -1886,8 +1075,7 @@ describe("daemon relay connection liveness", () => {
         });
         await listen(relay);
 
-        const auditDatabasePath = join(stateDirectory, "daemon.sqlite");
-        const audit = new AuditStore(auditDatabasePath);
+        const audit = new AuditStore();
         const cancellation = new AbortController();
         const timer = new ControllableDaemonTimer();
         const previousFakeAcpStateDirectory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
@@ -1901,7 +1089,6 @@ describe("daemon relay connection liveness", () => {
         const config = createDaemonConfig(
             {
                 defaultWorkspace,
-                auditDatabasePath,
                 channelId: "reconciliation-channel",
                 relayUrl: new URL(
                     `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/reconciliation-channel/daemon?token=reconciliation-secret`,
@@ -2063,8 +1250,7 @@ describe("daemon relay connection liveness", () => {
         });
         await listen(relay);
 
-        const auditDatabasePath = join(stateDirectory, "daemon.sqlite");
-        const audit = new AuditStore(auditDatabasePath);
+        const audit = new AuditStore();
         const cancellation = new AbortController();
         const timer = new ControllableDaemonTimer();
         const previousFakeAcpStateDirectory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
@@ -2078,7 +1264,6 @@ describe("daemon relay connection liveness", () => {
         const config = createDaemonConfig(
             {
                 defaultWorkspace,
-                auditDatabasePath,
                 channelId: "reconciliation-channel",
                 relayUrl: new URL(
                     `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/reconciliation-channel/daemon?token=reconciliation-secret`,
@@ -2116,194 +1301,6 @@ describe("daemon relay connection liveness", () => {
             await abandonmentSettled;
             expect(reconciliationRequestCount).toBe(1);
             expect(daemonSockets).toHaveLength(2);
-
-            const diagnostics = new DatabaseSync(auditDatabasePath, { readOnly: true });
-            try {
-                const abandoned = diagnostics
-                    .prepare("SELECT details_json FROM audit_events WHERE event = 'relay_reconciliation_abandoned'")
-                    .all()
-                    .map((row) => String(row["details_json"]))
-                    .join("\n");
-                expect(abandoned).toContain("session_conflict");
-                const closed = diagnostics
-                    .prepare("SELECT details_json FROM audit_events WHERE event = 'relay_connection_closed'")
-                    .all()
-                    .map((row) => String(row["details_json"]))
-                    .join("\n");
-                expect(closed).not.toContain("4009");
-            } finally {
-                diagnostics.close();
-            }
-        } finally {
-            cancellation.abort();
-            await daemon;
-            audit.close();
-            for (const socket of sockets) {
-                socket.destroy();
-            }
-            await new Promise<void>((resolve, reject) => {
-                relay.close((error) => {
-                    if (error === undefined) {
-                        resolve();
-                        return;
-                    }
-                    reject(error);
-                });
-            });
-            restoreEnvironmentVariable("MOBIUS_FAKE_ACP_STATE_DIRECTORY", previousFakeAcpStateDirectory);
-            restoreEnvironmentVariable("MOBIUS_STATE_DIRECTORY", previousStateDirectory);
-            restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
-            restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
-            await rm(stateDirectory, { force: true, recursive: true });
-        }
-    });
-
-    it("Given a Runtime restarted while a Turn was running, When the Relay delivers that Turn's cancellation, Then the daemon settles the abandoned Attempt instead of dropping the cancellation", async () => {
-        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-abandoned-cancel-"));
-        const defaultWorkspace = join(stateDirectory, "workspace");
-        await mkdir(defaultWorkspace);
-        const auditDatabasePath = join(stateDirectory, "daemon.sqlite");
-        const commandId = "abandoned-command";
-        const sessionId = "abandoned-session";
-        const promptCommand = encodeSessionPromptCommand({
-            additionalDirectoryIds: [],
-            agentId: "codex",
-            bindingId: "workspace",
-            commandId,
-            directoryId: "default",
-            disposition: "reject",
-            images: [],
-            kind: SESSION_PROMPT_KIND,
-            prompt: "wait until cancelled",
-            resources: [],
-            sessionId,
-            targetCommandId: "",
-        });
-
-        // A Runtime that was executing this Turn before it restarted keeps only its durable receipt. The
-        // restarted process has no in-flight Turn to cancel, while the Relay still counts the Turn as the
-        // Session's active one, so the owning Runtime has to settle the Attempt it abandoned.
-        const priorOutbox = new SessionEventOutbox(auditDatabasePath);
-        const abandoned = priorOutbox.claimExecution(commandId, sessionId, promptCommand);
-        priorOutbox.transitionExecution(commandId, "running");
-        priorOutbox.close();
-
-        const relay = createServer((request, response) => {
-            const url = new URL(request.url ?? "/", "http://127.0.0.1");
-            if (
-                request.method === "PUT" &&
-                url.pathname === `${MOBIUS_API_PREFIX}/channels/abandoned-channel/catalog`
-            ) {
-                request.resume();
-                response.writeHead(204);
-                response.end();
-                return;
-            }
-            response.writeHead(426);
-            response.end();
-        });
-        const sockets = new Set<Duplex>();
-        const upgradeWaiters: Array<() => void> = [];
-        const daemonSockets: Duplex[] = [];
-        const waitForUpgrade = (): Promise<void> => new Promise((resolve) => upgradeWaiters.push(resolve));
-        let observeSettlement = (_encoded: string): void => undefined;
-        const settled = new Promise<string>((resolve) => {
-            observeSettlement = resolve;
-        });
-        relay.on("connection", (socket) => {
-            sockets.add(socket);
-            socket.once("close", () => sockets.delete(socket));
-            socket.on("error", () => undefined);
-        });
-        relay.on("upgrade", (request, socket) => {
-            const key = request.headers["sec-websocket-key"];
-            if (typeof key !== "string") {
-                socket.destroy();
-                return;
-            }
-            const accept = createHash("sha1").update(`${key}${WEBSOCKET_GUID}`).digest("base64");
-            socket.write(
-                "HTTP/1.1 101 Switching Protocols\r\n" +
-                    "Connection: Upgrade\r\n" +
-                    "Upgrade: websocket\r\n" +
-                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
-            );
-            daemonSockets.push(socket);
-            respondToClientClose(socket);
-            observeClientFrames(socket, (frame) => {
-                if (frame.opcode === 1 && decodeMessageKind(frame.text) === SESSION_EVENT_KIND) {
-                    observeSettlement(frame.text);
-                }
-            });
-            if (daemonSockets.length === 1) {
-                writeServerTextFrame(
-                    socket,
-                    encodeSessionCancelCommand({
-                        commandId,
-                        kind: "session.cancel",
-                        sessionId,
-                    }),
-                );
-            }
-            upgradeWaiters.shift()?.();
-        });
-        await listen(relay);
-
-        const audit = new AuditStore(auditDatabasePath);
-        const cancellation = new AbortController();
-        const timer = new ControllableDaemonTimer();
-        const previousFakeAcpStateDirectory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
-        const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
-        const previousNoProxy = process.env["NO_PROXY"];
-        const previousLowerNoProxy = process.env["no_proxy"];
-        process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = join(stateDirectory, "native");
-        process.env["MOBIUS_STATE_DIRECTORY"] = stateDirectory;
-        process.env["NO_PROXY"] = "127.0.0.1,localhost";
-        process.env["no_proxy"] = "127.0.0.1,localhost";
-        const config = createDaemonConfig(
-            {
-                defaultWorkspace,
-                auditDatabasePath,
-                channelId: "abandoned-channel",
-                relayUrl: new URL(
-                    `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/abandoned-channel/daemon?token=abandoned-secret`,
-                ),
-            },
-            [new LocalAgentDefinition("codex", "Codex", process.execPath, [fakeAgentPath])],
-        );
-
-        vi.useFakeTimers({ toFake: ["Date"] });
-        vi.setSystemTime(new Date("2026-09-21T00:00:00.000Z"));
-        const firstConnection = waitForUpgrade();
-        const daemon = runDaemon(config, audit, cancellation.signal, timer);
-
-        try {
-            await firstConnection;
-            const settlement = decodeSessionEventEnvelope(await settled);
-            expect(settlement.sessionId).toBe(sessionId);
-            expect(decodeMessageKind(settlement.payload)).toBe(SESSION_FAILED_KIND);
-            // The Relay only accepts a terminal event on the Attempt source it recorded, so the settlement
-            // has to carry the Attempt the restarted Runtime recovered from its durable receipt.
-            expect(settlement.source).toEqual({
-                attemptId: abandoned.attemptId,
-                kind: "attempt",
-                sourceSeq: "1",
-            });
-            const failure = decodeSessionFailedEvent(settlement.payload);
-            expect(failure).toMatchObject({
-                code: "agent_execution_abandoned",
-                commandId,
-                sessionId,
-            });
-
-            // The receipt is terminal afterwards, so a repeated cancellation cannot settle it twice.
-            const settledOutbox = new SessionEventOutbox(auditDatabasePath);
-            try {
-                expect(settledOutbox.isTerminalExecution(commandId, sessionId)).toBe(true);
-                expect(settledOutbox.findUnsettledAttemptId(commandId, sessionId)).toBeNull();
-            } finally {
-                settledOutbox.close();
-            }
         } finally {
             cancellation.abort();
             await daemon;

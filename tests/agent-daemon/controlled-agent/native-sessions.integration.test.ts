@@ -5,7 +5,7 @@ import type { NativeSessionCommand, NativeSessionEntry } from "@moxt-ai/mobius-p
 import { describe, expect, it, vi } from "vitest";
 import { CodexAcpAgent } from "../../../packages/cli/src/acp/codex/agent.ts";
 import { AcpSessionManager, NullAcpSessionObserver } from "../../../packages/cli/src/acp/session-manager.ts";
-import { SqliteAcpSessionStore } from "../../../packages/cli/src/acp/session-store.ts";
+import { MemoryAcpSessionStore } from "../../../packages/cli/src/acp/session-store.ts";
 import { InProcessAcpAgentDefinition } from "../../../packages/cli/src/agent-catalog/local-agent.ts";
 import { AuditStore } from "../../../packages/cli/src/audit/audit-store.ts";
 import { WorkspaceDirectoryService } from "../../../packages/cli/src/authorization/workspace-directory.ts";
@@ -26,7 +26,13 @@ class NativeSessionObserver extends NullAcpSessionObserver {
 
 async function fixture(
     label: string,
-    profile: "supported" | "unsupported" | "invalid-fork" | "exclusive-writer" = "supported",
+    profile:
+        | "supported"
+        | "unsupported"
+        | "invalid-fork"
+        | "exclusive-writer"
+        | "persist-after-first-prompt" = "supported",
+    sessionIdentity: "assigned" | "native" = "assigned",
 ) {
     const temporary = await realpath(await mkdtemp(join(tmpdir(), "mobius-native-boundary-")));
     const workspace = join(temporary, "workspace");
@@ -53,17 +59,17 @@ async function fixture(
               ? ["--reuse-session-on-fork"]
               : profile === "exclusive-writer"
                 ? ["--exclusive-writer"]
-                : []),
+                : profile === "persist-after-first-prompt"
+                  ? ["--persist-after-first-prompt"]
+                  : []),
     ]);
-    const storePath = join(temporary, "sessions.sqlite");
-    const store = new SqliteAcpSessionStore(storePath);
+    const store = new MemoryAcpSessionStore();
     const observer = new NativeSessionObserver();
-    const sessions = new AcpSessionManager(observer, store);
-    const audit = new AuditStore(join(temporary, "audit.sqlite"));
+    const sessions = new AcpSessionManager(observer, store, null, sessionIdentity);
+    const audit = new AuditStore();
     const config = createDaemonConfig(
         {
             defaultWorkspace: workspace,
-            auditDatabasePath: join(temporary, "audit.sqlite"),
             channelId: "test-channel",
             relayUrl: new URL("ws://localhost/"),
         },
@@ -120,7 +126,6 @@ async function fixture(
     };
     const close = async (): Promise<void> => {
         await sessions.close();
-        store.close();
         audit.close();
         if (previous === undefined) {
             delete process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
@@ -132,6 +137,7 @@ async function fixture(
     return {
         agent,
         audit,
+        config,
         observer,
         directories,
         identity,
@@ -140,7 +146,6 @@ async function fixture(
         seed,
         service,
         sessions,
-        storePath,
         temporary,
         workspace,
         close,
@@ -148,6 +153,44 @@ async function fixture(
 }
 
 describe("native Agent session boundary", () => {
+    it("Given a locally linked Chat session, When its history is requested by Session ID, Then the Runtime returns its native conversation without listing every thread", async () => {
+        const f = await fixture("Claude");
+        try {
+            const missing = await f.service.execute(
+                { ...f.identity, action: "linked-history", targetSessionId: "chat-linked" },
+                new AbortController().signal,
+            );
+            expect(missing.action).toBe("unlinked-history");
+            await f.sessions.runPrompt({
+                agent: f.agent,
+                additionalDirectories: [],
+                cwd: f.workspace,
+                sessionId: "chat-linked",
+                commandId: "first-prompt",
+                prompt: "A saved local message",
+                images: [],
+                resources: [],
+                onText: async () => {},
+                onActivity: async () => {},
+                signal: new AbortController().signal,
+            });
+            const linked = await f.service.execute(
+                { ...f.identity, action: "linked-history", targetSessionId: "chat-linked" },
+                new AbortController().signal,
+            );
+            expect(linked.action).toBe("linked-history");
+            if (linked.action === "linked-history") {
+                expect(linked.history.status).toBe("available");
+                if (linked.history.status === "available") {
+                    expect(linked.history.messages).toContainEqual(
+                        expect.objectContaining({ role: "user", text: "A saved local message" }),
+                    );
+                }
+            }
+        } finally {
+            await f.close();
+        }
+    });
     // The restored Codex listing path: Mobius hosts the ACP Agent in-process and drives
     // `codex app-server` directly, so the fixture plays that protocol against the real adapter.
     async function codexFixture() {
@@ -169,13 +212,12 @@ describe("native Agent session boundary", () => {
             executable,
             (options) => new CodexAcpAgent(options),
         );
-        const store = new SqliteAcpSessionStore(join(temporary, "sessions.sqlite"));
+        const store = new MemoryAcpSessionStore();
         const sessions = new AcpSessionManager(new NullAcpSessionObserver(), store);
-        const audit = new AuditStore(join(temporary, "audit.sqlite"));
+        const audit = new AuditStore();
         const config = createDaemonConfig(
             {
                 defaultWorkspace: workspace,
-                auditDatabasePath: join(temporary, "audit.sqlite"),
                 channelId: "test-channel",
                 relayUrl: new URL("ws://localhost/"),
             },
@@ -207,7 +249,6 @@ describe("native Agent session boundary", () => {
         };
         const close = async (): Promise<void> => {
             await sessions.close();
-            store.close();
             audit.close();
             if (previous === undefined) {
                 delete process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
@@ -218,6 +259,93 @@ describe("native Agent session boundary", () => {
         };
         return { identity, list, native, seed, service, workspace, close };
     }
+
+    it("Given a new Codex chat, When the Runtime restarts, Then its native ID resumes the saved thread and history", async () => {
+        const f = await fixture("Codex", "supported", "native");
+        const signal = new AbortController().signal;
+        const created = await f.service.execute({ ...f.identity, action: "create" }, signal);
+        if (created.action !== "create") {
+            throw new Error("Expected a native Codex session");
+        }
+        const restarted = new AcpSessionManager(
+            new NullAcpSessionObserver(),
+            new MemoryAcpSessionStore(),
+            null,
+            "native",
+        );
+        try {
+            await restarted.runPrompt({
+                agent: f.agent,
+                additionalDirectories: [],
+                cwd: f.workspace,
+                signal,
+                sessionId: created.nativeSessionId,
+                commandId: crypto.randomUUID(),
+                prompt: "Continue this chat",
+                images: [],
+                resources: [],
+                onText: async () => {},
+                onActivity: async () => {},
+            });
+            const service = new NativeSessionService(f.config, f.directories, restarted, f.audit);
+            const history = await service.execute(
+                { ...f.identity, action: "linked-history", targetSessionId: created.nativeSessionId },
+                signal,
+            );
+            expect(history).toMatchObject({
+                action: "linked-history",
+                history: {
+                    status: "available",
+                    messages: expect.arrayContaining([{ role: "user", text: "Continue this chat" }]),
+                },
+            });
+        } finally {
+            await restarted.close();
+            await f.close();
+        }
+    });
+
+    it("Given a new empty Codex chat, When its first prompt arrives, Then the native ID runs that prompt and history becomes available", async () => {
+        const f = await fixture("Codex", "persist-after-first-prompt", "native");
+        const signal = new AbortController().signal;
+        try {
+            const created = await f.service.execute({ ...f.identity, action: "create" }, signal);
+            if (created.action !== "create") {
+                throw new Error("Expected a native Codex session");
+            }
+            const empty = await f.service.execute(
+                { ...f.identity, action: "linked-history", targetSessionId: created.nativeSessionId },
+                signal,
+            );
+            expect(empty).toMatchObject({ action: "linked-history", history: { status: "available", messages: [] } });
+            await f.sessions.runPrompt({
+                agent: f.agent,
+                additionalDirectories: [],
+                cwd: f.workspace,
+                signal,
+                sessionId: created.nativeSessionId,
+                commandId: crypto.randomUUID(),
+                prompt: "First message",
+                images: [],
+                resources: [],
+                onText: async () => {},
+                onActivity: async () => {},
+            });
+            const history = await f.service.execute(
+                { ...f.identity, action: "linked-history", targetSessionId: created.nativeSessionId },
+                signal,
+            );
+            expect(history).toMatchObject({
+                action: "linked-history",
+                history: {
+                    status: "available",
+                    messages: expect.arrayContaining([{ role: "user", text: "First message" }]),
+                },
+            });
+        } finally {
+            await f.close();
+        }
+    });
 
     it("Given saved Codex threads, When its directory is listed through the in-process Agent, Then every thread becomes an authorized entry whose history previews", async () => {
         const f = await codexFixture();
@@ -584,7 +712,7 @@ describe("native Agent session boundary", () => {
         },
     );
 
-    it("Given paginated native sessions, When one is found by its native ID, Then only an opaque authorized entry is returned and can be imported", async () => {
+    it("Given paginated native sessions, When one is found by its native ID, Then its authorized entry exposes the ID for direct Chat ownership", async () => {
         const f = await fixture("Codex");
         try {
             await f.seed("Earlier conversation");
@@ -598,9 +726,9 @@ describe("native Agent session boundary", () => {
                 action: "find",
                 entry: { title: "Current handoff conversation" },
             });
-            expect(JSON.stringify(found)).not.toContain(nativeSessionId);
+            expect(found).toMatchObject({ entry: { nativeSessionId } });
             if (found.action !== "find") {
-                throw new Error("Expected an opaque native session lookup");
+                throw new Error("Expected a native session lookup");
             }
             await expect(
                 f.service.execute(
@@ -728,65 +856,6 @@ describe("native Agent session boundary", () => {
             await expect(f.list()).rejects.toMatchObject({
                 code: "native_session_unsupported",
             });
-        } finally {
-            await f.close();
-        }
-    });
-
-    it("Given a paired machine without a terminal confirmation, When the current native session is deleted and the daemon restarts, Then deletion succeeds and the former conversation cannot create a replacement", async () => {
-        const f = await fixture("Codex");
-        try {
-            await f.seed("Delete persistently");
-            const entry = (await f.list()).entries[0];
-            if (entry === undefined) {
-                throw new Error("Missing native conversation");
-            }
-            await f.service.execute(
-                {
-                    ...f.identity,
-                    action: "import",
-                    entryId: entry.entryId,
-                    targetSessionId: "deleted-chat",
-                },
-                new AbortController().signal,
-            );
-            const currentIdentity = { ...f.identity, sessionId: "deleted-chat" };
-            const currentList = await f.service.execute(
-                { ...currentIdentity, action: "list", cursor: null },
-                new AbortController().signal,
-            );
-            if (currentList.action !== "list" || currentList.entries[0] === undefined) {
-                throw new Error("Missing current conversation");
-            }
-            expect(
-                await f.service.execute(
-                    {
-                        ...currentIdentity,
-                        action: "delete",
-                        entryId: currentList.entries[0].entryId,
-                    },
-                    new AbortController().signal,
-                ),
-            ).toMatchObject({ deletedSessionIds: ["deleted-chat"] });
-            expect((await readdir(f.native)).filter((name) => name.endsWith(".json"))).toHaveLength(0);
-            await f.sessions.close();
-            const reopenedStore = new SqliteAcpSessionStore(f.storePath);
-            const restarted = new AcpSessionManager(undefined, reopenedStore);
-            try {
-                await expect(
-                    restarted.prepareSession({
-                        agent: f.agent,
-                        additionalDirectories: [],
-                        cwd: f.workspace,
-                        sessionId: "deleted-chat",
-                        signal: new AbortController().signal,
-                    }),
-                ).rejects.toMatchObject({ code: "native_session_deleted" });
-            } finally {
-                await restarted.close();
-                reopenedStore.close();
-            }
-            expect((await f.list()).entries).toEqual([]);
         } finally {
             await f.close();
         }

@@ -78,6 +78,13 @@ Pairing starts or reuses one detached Mobius manager for the current user. If th
 installed CLI version changes, the next `mobius pair` or `mobius start` command
 stops the old manager and launches the matching version.
 
+The daemon saves pairing credentials and connection preferences. Current turns,
+delivery receipts, and pending events stay in process memory and disappear on a
+restart. Codex owns its native conversation files; Mobius Chat saves which native
+session IDs belong to each Bot. Bounded connection diagnostics remain in
+`logs/daemon.log` under the Mobius state directory. Prompt text and session
+history are not written to that log.
+
 Manage saved Runtime pairings by their local Connection ID:
 
 ```bash
@@ -93,9 +100,7 @@ Stopping preserves the pairing and its `stopped` status across manager restarts.
 Starting resumes the same Connection ID, while removing deletes its local
 credential. `mobius pair list` shows the Connection ID, Platform App ID, Runtime
 ID, workspace, and current status. Channel IDs remain internal Relay routing
-identities and are not accepted as local lifecycle selectors. Older records that
-predate persisted Platform App IDs display `unknown`; remove and pair them again
-to record the App ID.
+identities and are not accepted as local lifecycle selectors.
 
 The JSON form writes the same list as an array with `connection_id`, `app_id`,
 `runtime_id`, `workspace`, and `status` fields. Its target must already exist; the

@@ -10,7 +10,6 @@ it("Given an opaque relay-issued credential, When an embedding host creates a Ru
         await expect(
             createMobiusRuntimeEngine(
                 {
-                    auditDatabasePath: join(directory, "audit.sqlite"),
                     channelId: "channel-1",
                     defaultWorkspace: join(directory, "workspace"),
                     relayUrl: "wss://relay.example.com/mobius/api/v1/runtimes/connect",
@@ -32,7 +31,6 @@ it("Given a credential outside the Runtime token format, When an embedding host 
         await expect(
             createMobiusRuntimeEngine(
                 {
-                    auditDatabasePath: join(directory, "audit.sqlite"),
                     channelId: "channel-1",
                     defaultWorkspace: join(directory, "workspace"),
                     relayUrl: "wss://relay.example.com/mobius/api/v1/runtimes/connect",

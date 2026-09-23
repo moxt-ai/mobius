@@ -239,7 +239,6 @@ describe("daemon Agent catalog refresh boundary", () => {
         });
         const config = createDaemonConfig(
             {
-                auditDatabasePath: join(stateDirectory, "audit", "catalog-rejection.sqlite"),
                 channelId: "catalog_rejection",
                 defaultWorkspace: workspace,
                 relayUrl: relay.daemonUrl("catalog_rejection"),
@@ -266,7 +265,6 @@ describe("daemon Agent catalog refresh boundary", () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-catalog-refresh-"));
         const workspace = join(stateDirectory, "workspace");
         const executableDirectory = join(stateDirectory, "external");
-        const auditDatabasePath = join(stateDirectory, "audit", "channel_refresh.sqlite");
         await Promise.all([mkdir(workspace), mkdir(executableDirectory)]);
         await writeFakeHarnessAgent(join(executableDirectory, "dsh"));
 
@@ -290,7 +288,6 @@ describe("daemon Agent catalog refresh boundary", () => {
         let refreshEnvironment: Readonly<NodeJS.ProcessEnv> = pairedEnvironment;
         const config = createDaemonConfig(
             {
-                auditDatabasePath,
                 channelId: "channel_refresh",
                 defaultWorkspace: workspace,
                 relayUrl: relay.daemonUrl("channel_refresh"),
@@ -299,7 +296,7 @@ describe("daemon Agent catalog refresh boundary", () => {
             verifiedInventory.installable,
             new DaemonLocalContext(stateDirectory),
         );
-        const audit = new AuditStore(auditDatabasePath);
+        const audit = new AuditStore();
         const daemon = runDaemon(config, audit, cancellation.signal, undefined, {
             resolveAgentCatalogEnvironment: async () => refreshEnvironment,
         });
@@ -333,7 +330,6 @@ describe("daemon Agent catalog refresh boundary", () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-catalog-uninstall-"));
         const workspace = join(stateDirectory, "workspace");
         const executableDirectory = join(stateDirectory, "external");
-        const auditDatabasePath = join(stateDirectory, "audit", "channel_uninstall.sqlite");
         await Promise.all([mkdir(workspace), mkdir(executableDirectory)]);
         const executablePath = join(executableDirectory, "dsh");
         await writeFakeHarnessAgent(executablePath);
@@ -353,7 +349,6 @@ describe("daemon Agent catalog refresh boundary", () => {
 
         const config = createDaemonConfig(
             {
-                auditDatabasePath,
                 channelId: "channel_uninstall",
                 defaultWorkspace: workspace,
                 relayUrl: relay.daemonUrl("channel_uninstall"),
@@ -362,7 +357,7 @@ describe("daemon Agent catalog refresh boundary", () => {
             verifiedInventory.installable,
             new DaemonLocalContext(stateDirectory),
         );
-        const audit = new AuditStore(auditDatabasePath);
+        const audit = new AuditStore();
         const daemon = runDaemon(config, audit, cancellation.signal, undefined, {
             resolveAgentCatalogEnvironment: async () => pairedEnvironment,
         });

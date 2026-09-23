@@ -5,11 +5,10 @@ import { join } from "node:path";
 import { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
-import { encodeSessionLiveHistoryLoaded } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it, vi } from "vitest";
 
 import { AcpSessionManager, createWritableAcpStream } from "../../../packages/cli/src/acp/session-manager.ts";
-import { FoundAcpStoredSession, SqliteAcpSessionStore } from "../../../packages/cli/src/acp/session-store.ts";
+import { FoundAcpStoredSession, MemoryAcpSessionStore } from "../../../packages/cli/src/acp/session-store.ts";
 import { LocalAgentDefinition } from "../../../packages/cli/src/config.ts";
 import { AccumulatingOperationMetrics } from "../../../packages/cli/src/infra/operation-metrics.ts";
 
@@ -43,71 +42,6 @@ function processExists(pid: number): boolean {
 }
 
 describe("ACP conversation sessions", () => {
-    it("Given ACP history contains large tool activities, When Mobius reloads it for a non-cloud Session, Then the live-history response remains protocol-encodable", async () => {
-        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-large-history-"));
-        const databasePath = join(temporaryDirectory, "sessions.sqlite");
-        const agent = new LocalAgentDefinition(
-            "claude",
-            "Claude Code",
-            process.execPath,
-            [fakeAgentPath, "--agent-name", "Claude Code", "--large-replay-activity"],
-            { MOBIUS_FAKE_ACP_STATE_DIRECTORY: temporaryDirectory },
-        );
-        const sessionId = "large-activity-conversation";
-        const signal = new AbortController().signal;
-
-        try {
-            const firstStore = new SqliteAcpSessionStore(databasePath);
-            const first = new AcpSessionManager(undefined, firstStore);
-            try {
-                for (const prompt of ["first activity", "second activity", "third activity"]) {
-                    await first.runPrompt({
-                        additionalDirectories: [],
-                        agent,
-                        commandId: `command-${prompt.replace(" ", "-")}`,
-                        cwd: temporaryDirectory,
-                        images: [],
-                        onActivity: () => Promise.resolve(),
-                        onText: () => Promise.resolve(),
-                        prompt,
-                        resources: [],
-                        sessionId,
-                        signal,
-                    });
-                }
-            } finally {
-                await first.close();
-                firstStore.close();
-            }
-
-            const secondStore = new SqliteAcpSessionStore(databasePath);
-            const second = new AcpSessionManager(undefined, secondStore);
-            try {
-                const history = await second.loadSessionHistory({
-                    additionalDirectories: [],
-                    agent,
-                    cwd: temporaryDirectory,
-                    sessionId,
-                    signal,
-                });
-                expect(() =>
-                    encodeSessionLiveHistoryLoaded({
-                        history,
-                        kind: "session.live-history.loaded",
-                        requestId: "large-history-request",
-                        sessionId,
-                    }),
-                ).not.toThrow();
-                expect(history).toMatchObject({ status: "available", truncated: true });
-            } finally {
-                await second.close();
-                secondStore.close();
-            }
-        } finally {
-            await rm(temporaryDirectory, { force: true, recursive: true });
-        }
-    });
-
     it.skipIf(process.platform === "win32")(
         "Given an ACP Turn keeps running, When days elapse, Then Mobius keeps it active until cancellation and releases the process tree",
         async () => {
@@ -199,93 +133,6 @@ child.once("exit", (code) => process.exit(code ?? 84));
         },
     );
 
-    it("Given a persisted Pi session and a restarted load-only adapter, When the conversation is prepared again, Then Mobius explicitly loads the native session before continuing", async () => {
-        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-pi-load-session-"));
-        const databasePath = join(temporaryDirectory, "sessions.sqlite");
-        const agent = new LocalAgentDefinition(
-            "pi",
-            "Pi",
-            process.execPath,
-            [fakeAgentPath, "--agent-name", "Pi", "--load-only"],
-            { MOBIUS_FAKE_ACP_STATE_DIRECTORY: temporaryDirectory },
-            "0.0.33",
-            "0.85.0",
-        );
-        const signal = new AbortController().signal;
-
-        try {
-            const firstStore = new SqliteAcpSessionStore(databasePath);
-            const first = new AcpSessionManager(undefined, firstStore);
-            const firstText: string[] = [];
-            await first.runPrompt({
-                additionalDirectories: [],
-                agent,
-                commandId: "pi-first-command",
-                cwd: temporaryDirectory,
-                images: [],
-                onActivity: () => Promise.resolve(),
-                onText: (text) => {
-                    firstText.push(text);
-                    return Promise.resolve();
-                },
-                prompt: "first",
-                resources: [],
-                sessionId: "persisted-pi-conversation",
-                signal,
-            });
-            await first.close();
-            firstStore.close();
-
-            const secondStore = new SqliteAcpSessionStore(databasePath);
-            const second = new AcpSessionManager(undefined, secondStore);
-            try {
-                const metrics = new AccumulatingOperationMetrics();
-                await expect(
-                    second.prepareSession(
-                        {
-                            additionalDirectories: [],
-                            agent,
-                            cwd: temporaryDirectory,
-                            sessionId: "persisted-pi-conversation",
-                            signal,
-                        },
-                        metrics,
-                    ),
-                ).resolves.toMatchObject({ restored: true });
-                expect(metrics.snapshot()).toEqual(
-                    expect.arrayContaining([
-                        expect.objectContaining({ name: "session-state-read" }),
-                        expect.objectContaining({ name: "session-load" }),
-                    ]),
-                );
-                const secondText: string[] = [];
-                await second.runPrompt({
-                    additionalDirectories: [],
-                    agent,
-                    commandId: "pi-second-command",
-                    cwd: temporaryDirectory,
-                    images: [],
-                    onActivity: () => Promise.resolve(),
-                    onText: (text) => {
-                        secondText.push(text);
-                        return Promise.resolve();
-                    },
-                    prompt: "second",
-                    resources: [],
-                    sessionId: "persisted-pi-conversation",
-                    signal,
-                });
-                expect(firstText.join("")).toBe("Pi turn 1: first");
-                expect(secondText.join("")).toBe("Pi turn 2: second");
-            } finally {
-                await second.close();
-                secondStore.close();
-            }
-        } finally {
-            await rm(temporaryDirectory, { force: true, recursive: true });
-        }
-    });
-
     it("Given a prepared conversation has no turns, When its agent selection changes, Then the same Mobius session is rebound before the first prompt", async () => {
         const manager = new AcpSessionManager();
         const codex = new LocalAgentDefinition("codex", "Codex", process.execPath, [
@@ -347,144 +194,6 @@ child.once("exit", (code) => process.exit(code ?? 84));
             expect(chunks.join("")).toBe("Claude Code turn 1: selected agent");
         } finally {
             await manager.close();
-        }
-    });
-
-    it("Given an unprompted ACP session survived a daemon restart, When its agent selection changes, Then the local runtime safely rebinds it", async () => {
-        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-empty-rebind-"));
-        const databasePath = join(temporaryDirectory, "sessions.sqlite");
-        const codex = new LocalAgentDefinition("codex", "Codex", process.execPath, [
-            fakeAgentPath,
-            "--agent-name",
-            "Codex",
-        ]);
-        const claude = new LocalAgentDefinition("claude", "Claude Code", process.execPath, [
-            fakeAgentPath,
-            "--agent-name",
-            "Claude Code",
-        ]);
-        const signal = new AbortController().signal;
-
-        try {
-            const firstStore = new SqliteAcpSessionStore(databasePath);
-            const first = new AcpSessionManager(undefined, firstStore);
-            await first.prepareSession({
-                additionalDirectories: [],
-                agent: codex,
-                cwd: temporaryDirectory,
-                sessionId: "persisted-empty-conversation",
-                signal,
-            });
-            await first.close();
-            firstStore.close();
-
-            const secondStore = new SqliteAcpSessionStore(databasePath);
-            const second = new AcpSessionManager(undefined, secondStore);
-            try {
-                await expect(
-                    second.prepareSession({
-                        additionalDirectories: [],
-                        agent: claude,
-                        cwd: temporaryDirectory,
-                        sessionId: "persisted-empty-conversation",
-                        signal,
-                    }),
-                ).resolves.toMatchObject({ restored: false });
-                const chunks: string[] = [];
-                await second.runPrompt({
-                    additionalDirectories: [],
-                    agent: claude,
-                    commandId: "command-after-restart-rebind",
-                    cwd: temporaryDirectory,
-                    images: [],
-                    onActivity: () => Promise.resolve(),
-                    onText: (text) => {
-                        chunks.push(text);
-                        return Promise.resolve();
-                    },
-                    prompt: "selected after restart",
-                    resources: [],
-                    sessionId: "persisted-empty-conversation",
-                    signal,
-                });
-                expect(chunks.join("")).toBe("Claude Code turn 1: selected after restart");
-            } finally {
-                await second.close();
-                secondStore.close();
-            }
-        } finally {
-            await rm(temporaryDirectory, { force: true, recursive: true });
-        }
-    });
-
-    it("Given an Agent only persists a conversation after its first prompt, When an unprompted Mobius conversation prepares after a daemon restart, Then the local runtime replaces the empty native session without an agent toggle", async () => {
-        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-empty-restart-"));
-        const databasePath = join(temporaryDirectory, "sessions.sqlite");
-        const nativeStateDirectory = join(temporaryDirectory, "native");
-        const previousState = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
-        process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = nativeStateDirectory;
-        const codex = new LocalAgentDefinition("codex", "Codex", process.execPath, [
-            fakeAgentPath,
-            "--agent-name",
-            "Codex",
-            "--persist-after-first-prompt",
-        ]);
-        const signal = new AbortController().signal;
-
-        try {
-            const firstStore = new SqliteAcpSessionStore(databasePath);
-            const first = new AcpSessionManager(undefined, firstStore);
-            await first.prepareSession({
-                additionalDirectories: [],
-                agent: codex,
-                cwd: temporaryDirectory,
-                sessionId: "empty-codex-conversation",
-                signal,
-            });
-            await first.close();
-            firstStore.close();
-
-            const secondStore = new SqliteAcpSessionStore(databasePath);
-            const second = new AcpSessionManager(undefined, secondStore);
-            try {
-                await expect(
-                    second.prepareSession({
-                        additionalDirectories: [],
-                        agent: codex,
-                        cwd: temporaryDirectory,
-                        sessionId: "empty-codex-conversation",
-                        signal,
-                    }),
-                ).resolves.toMatchObject({ restored: false });
-                const chunks: string[] = [];
-                await second.runPrompt({
-                    additionalDirectories: [],
-                    agent: codex,
-                    commandId: "first-command-after-restart",
-                    cwd: temporaryDirectory,
-                    images: [],
-                    onActivity: () => Promise.resolve(),
-                    onText: (text) => {
-                        chunks.push(text);
-                        return Promise.resolve();
-                    },
-                    prompt: "continue without switching agents",
-                    resources: [],
-                    sessionId: "empty-codex-conversation",
-                    signal,
-                });
-                expect(chunks.join("")).toBe("Codex turn 1: continue without switching agents");
-            } finally {
-                await second.close();
-                secondStore.close();
-            }
-        } finally {
-            if (previousState === undefined) {
-                delete process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
-            } else {
-                process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = previousState;
-            }
-            await rm(temporaryDirectory, { force: true, recursive: true });
         }
     });
 
@@ -597,8 +306,7 @@ child.once("exit", (code) => process.exit(code ?? 84));
 
     it("Given ten retained Agent conversations, When an eleventh starts, Then the least recently used process is released and its conversation can resume", async () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-process-lru-"));
-        const databasePath = join(temporaryDirectory, "sessions.sqlite");
-        const store = new SqliteAcpSessionStore(databasePath);
+        const store = new MemoryAcpSessionStore();
         const manager = new AcpSessionManager(undefined, store);
         const agent = new LocalAgentDefinition(
             "codex",
@@ -658,14 +366,13 @@ child.once("exit", (code) => process.exit(code ?? 84));
             await expect(activeWriterNames()).resolves.toHaveLength(10);
         } finally {
             await manager.close();
-            store.close();
             await rm(temporaryDirectory, { force: true, recursive: true });
         }
     });
 
     it("Given the least recently used conversation has an active turn, When an eleventh conversation starts, Then the active process is retained and the oldest idle process is released", async () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-active-process-lru-"));
-        const store = new SqliteAcpSessionStore(join(temporaryDirectory, "sessions.sqlite"));
+        const store = new MemoryAcpSessionStore();
         const manager = new AcpSessionManager(undefined, store);
         const agent = new LocalAgentDefinition(
             "codex",
@@ -735,7 +442,6 @@ child.once("exit", (code) => process.exit(code ?? 84));
             await manager.cancelPrompt("conversation-1");
             await activeTurn.catch(() => undefined);
             await manager.close();
-            store.close();
             await rm(temporaryDirectory, { force: true, recursive: true });
         }
     });

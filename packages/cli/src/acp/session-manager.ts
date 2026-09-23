@@ -92,6 +92,7 @@ import {
     DeletedAcpStoredSession,
     FoundAcpStoredSession,
     MemoryAcpSessionStore,
+    MissingAcpStoredSession,
 } from "./session-store.ts";
 
 const PROCESS_STOP_TIMEOUT_MILLISECONDS = 1_000;
@@ -818,7 +819,7 @@ class AcpProcessSession implements AcpClientHandler {
     readonly #environment: Readonly<Record<string, string>>;
     readonly #getObserver: () => AcpSessionObserver;
     readonly #inProcessAgent: InProcessAcpEndpoint | null;
-    readonly #mobiusSessionId: string;
+    #mobiusSessionId: string;
     readonly #pendingElicitations = new Map<string, PendingElicitation>();
     readonly #pendingPermissions = new Map<string, PendingPermission>();
     readonly #preSessionUpdates: SessionNotification[] = [];
@@ -1521,6 +1522,18 @@ class AcpProcessSession implements AcpClientHandler {
     };
 
     readonly nativeSessionId = (): string => this.#nativeSessionId;
+
+    readonly adoptNativeSessionId = (sessionId: string): void => {
+        if (this.#prompted || this.#nativeSessionId !== sessionId) {
+            throw new AcpExecutionError("The new Codex Session cannot be adopted", {}, "session_identity_mismatch");
+        }
+        const previousSessionId = this.#mobiusSessionId;
+        this.#store.write(
+            new AcpStoredSession(sessionId, this.#agentId, sessionId, this.#cwd, this.#additionalDirectories, false),
+        );
+        this.#store.remove(previousSessionId);
+        this.#mobiusSessionId = sessionId;
+    };
 
     readonly configure = async (options: AcpConfigureOptions): Promise<readonly SessionConfigOption[]> => {
         const existing = this.#configOptions.find((option) => option.id === options.configId);
@@ -2339,16 +2352,19 @@ export class AcpSessionManager {
     #transientProcessCount = 0;
     readonly #store: AcpSessionStore;
     readonly #nativeHistoryReader: AcpNativeHistoryReader | null;
+    readonly #sessionIdentity: "assigned" | "native";
     #observer: AcpSessionObserver;
 
     constructor(
         observer: AcpSessionObserver = new NullAcpSessionObserver(),
         store: AcpSessionStore = new MemoryAcpSessionStore(),
         nativeHistoryReader: AcpNativeHistoryReader | null = null,
+        sessionIdentity: "assigned" | "native" = "assigned",
     ) {
         this.#observer = observer;
         this.#store = store;
         this.#nativeHistoryReader = nativeHistoryReader;
+        this.#sessionIdentity = sessionIdentity;
     }
 
     readonly setObserver = (observer: AcpSessionObserver): void => {
@@ -2501,7 +2517,13 @@ export class AcpSessionManager {
         if (retained) {
             this.#sessions.delete(sessionId);
         }
-        await this.#retireProcess(runtime, retained, close);
+        try {
+            await this.#retireProcess(runtime, retained, close);
+        } finally {
+            if (retained && this.#sessionIdentity === "native") {
+                this.#store.remove(sessionId);
+            }
+        }
     }
 
     async #retireNativeBrowserProcess(
@@ -2679,7 +2701,20 @@ export class AcpSessionManager {
             try {
                 return await this.#startRetainedSessionProcess(
                     options,
-                    async () => await AcpProcessSession.start(options, () => this.#observer, this.#store, metrics),
+                    async () =>
+                        await AcpProcessSession.start(
+                            this.#sessionIdentity === "native" &&
+                                options.agent.id === "codex" &&
+                                /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(
+                                    options.sessionId,
+                                ) &&
+                                this.#store.read(options.sessionId) instanceof MissingAcpStoredSession
+                                ? { ...options, origin: { kind: "import", nativeSessionId: options.sessionId } }
+                                : options,
+                            () => this.#observer,
+                            this.#store,
+                            metrics,
+                        ),
                 );
             } finally {
                 this.#preparing.delete(options.sessionId);
@@ -3162,6 +3197,50 @@ export class AcpSessionManager {
         additionalDirectories: readonly string[],
     ): boolean => this.#sessions.get(sessionId)?.belongsTo(agentId, cwd, additionalDirectories) === true;
 
+    readonly createNativeSession = async (options: AcpPrepareOptions): Promise<string> => {
+        const temporarySessionId = `new-${crypto.randomUUID()}`;
+        const temporaryOptions = { ...options, sessionId: temporarySessionId };
+        this.#beginSessionUse(temporarySessionId);
+        try {
+            const runtime = await this.#startPreparation(temporaryOptions);
+            let adopted = false;
+            try {
+                const nativeSessionId = runtime.nativeSessionId();
+                if (
+                    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(nativeSessionId) ||
+                    this.#sessions.has(nativeSessionId) ||
+                    !(this.#store.read(nativeSessionId) instanceof MissingAcpStoredSession)
+                ) {
+                    throw new AcpExecutionError(
+                        "Codex returned an invalid new Session ID",
+                        {},
+                        "invalid_native_session_response",
+                    );
+                }
+                runtime.adoptNativeSessionId(nativeSessionId);
+                this.#sessions.delete(temporarySessionId);
+                this.#sessions.set(nativeSessionId, runtime);
+                this.#retainedProcesses.set(
+                    runtime,
+                    new FoundAcpSessionProcessEvictionCandidate(nativeSessionId, runtime),
+                );
+                adopted = true;
+                return nativeSessionId;
+            } finally {
+                if (!adopted) {
+                    await this.#retireSessionProcess(
+                        temporarySessionId,
+                        runtime,
+                        async () => await runtime.closeProcess(),
+                    );
+                }
+            }
+        } finally {
+            this.#store.remove(temporarySessionId);
+            this.#endSessionUse(temporarySessionId);
+        }
+    };
+
     readonly ensureSession = async (options: AcpPrepareOptions): Promise<AcpProcessSession> => {
         const existing = this.#sessions.get(options.sessionId);
         if (existing !== undefined) {
@@ -3268,6 +3347,31 @@ export class AcpSessionManager {
         } finally {
             this.#endSessionUse(options.sessionId);
         }
+    };
+
+    readonly loadLinkedSessionHistory = async (options: AcpPrepareOptions): Promise<NativeSessionHistory | null> => {
+        options.signal.throwIfAborted();
+        const stored = this.#store.read(options.sessionId);
+        if (!(stored instanceof FoundAcpStoredSession) || !stored.session.prompted) {
+            return null;
+        }
+        const linked = stored.session;
+        if (
+            linked.agentId !== options.agent.id ||
+            linked.cwd !== options.cwd ||
+            linked.additionalDirectories.length !== options.additionalDirectories.length ||
+            linked.additionalDirectories.some((directory, index) => directory !== options.additionalDirectories[index])
+        ) {
+            throw new AcpExecutionError(
+                "The session belongs to another Agent or workspace",
+                {},
+                "session_identity_mismatch",
+            );
+        }
+        if (this.#nativeHistoryReader === null) {
+            return await this.loadSessionHistory(options);
+        }
+        return await this.#nativeHistoryReader.read(options, linked.nativeSessionId);
     };
 
     readonly openNativeSession = async (

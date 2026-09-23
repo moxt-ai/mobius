@@ -104,9 +104,6 @@ describe("Runtime installation storage", () => {
             expect(await readdir(join(moxt.stateDirectory, "channels"))).toEqual([
                 expect.stringMatching(/^mci_[a-f0-9]{64}\.json$/),
             ]);
-            expect(mobius.auditDatabasePath(mobiusConnection.connectionId)).not.toBe(
-                moxt.auditDatabasePath(moxtConnection.connectionId),
-            );
             await expect(mobius.readConnection(moxtConnection.connectionId, signal)).rejects.toMatchObject({
                 code: "connection_not_found",
             } satisfies Pick<RuntimeInstallationStoreError, "code">);

@@ -814,6 +814,10 @@ export class MobiusRuntimeResources {
     readonly nativeSessions = async (
         runtimeId: string,
         request:
+            | Omit<
+                  Extract<NativeSessionRequest, { readonly action: "create" }>,
+                  "kind" | "requestId" | "sessionId" | "bindingId"
+              >
             | (Omit<
                   Extract<NativeSessionRequest, { readonly action: "list" }>,
                   "kind" | "requestId" | "sessionId" | "bindingId"

@@ -1,9 +1,8 @@
 import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 
@@ -32,13 +31,11 @@ import {
     SESSION_EVENT_KIND,
     SESSION_FAILED_KIND,
     SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
-    type SessionConfigurationSelection,
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it } from "vitest";
 import { AcpSessionManager } from "../../../packages/cli/src/acp/session-manager.ts";
-import { SqliteAcpSessionStore } from "../../../packages/cli/src/acp/session-store.ts";
 import { AvailableAgent } from "../../../packages/cli/src/agent-catalog/agent-discovery.ts";
 import { CodexAgentSpecification } from "../../../packages/cli/src/agent-catalog/agents/codex-agent.ts";
 import { discoverLocalAgentInventory } from "../../../packages/cli/src/agent-catalog/discover-local-agents.ts";
@@ -296,7 +293,6 @@ describe("daemon session configuration boundary", () => {
         );
         const config = createDaemonConfig(
             {
-                auditDatabasePath,
                 channelId: "channel_alpha",
                 defaultWorkspace: workspace,
                 relayUrl,
@@ -306,7 +302,7 @@ describe("daemon session configuration boundary", () => {
             new DaemonLocalContext(stateDirectory),
         );
         const cancellation = new AbortController();
-        const audit = new AuditStore(auditDatabasePath);
+        const audit = new AuditStore();
         const daemon = runDaemon(config, audit, cancellation.signal);
 
         try {
@@ -325,6 +321,7 @@ describe("daemon session configuration boundary", () => {
             expect(model?.values).toEqual(
                 expect.arrayContaining([expect.objectContaining({ value: "custom-provider/custom-model" })]),
             );
+            await expect(stat(auditDatabasePath)).rejects.toMatchObject({ code: "ENOENT" });
         } finally {
             cancellation.abort();
             for (const socket of relaySockets) {
@@ -341,7 +338,6 @@ describe("daemon session configuration boundary", () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-changing-model-catalog-"));
         const workspace = join(stateDirectory, "workspace");
         const nativeStateDirectory = join(stateDirectory, "native");
-        const auditDatabasePath = join(stateDirectory, "audit", "channel_alpha.sqlite");
         await Promise.all([mkdir(workspace), mkdir(nativeStateDirectory)]);
 
         const socketReady = Promise.withResolvers<Duplex>();
@@ -387,7 +383,6 @@ describe("daemon session configuration boundary", () => {
         );
         const config = createDaemonConfig(
             {
-                auditDatabasePath,
                 channelId: "channel_alpha",
                 defaultWorkspace: workspace,
                 relayUrl,
@@ -397,7 +392,7 @@ describe("daemon session configuration boundary", () => {
             new DaemonLocalContext(stateDirectory),
         );
         const cancellation = new AbortController();
-        const audit = new AuditStore(auditDatabasePath);
+        const audit = new AuditStore();
         const daemon = runDaemon(config, audit, cancellation.signal);
 
         try {
@@ -419,23 +414,6 @@ describe("daemon session configuration boundary", () => {
             });
             const model = discovered.settings.find((setting) => setting.id === "model");
             expect(model?.values.map((value) => value.value)).toEqual(["test-small"]);
-
-            const database = new DatabaseSync(auditDatabasePath, { readOnly: true });
-            try {
-                const event = database
-                    .prepare("SELECT details_json FROM audit_events WHERE command_id = ? AND event = ?")
-                    .get(requestId, "agent_settings_model_unsupported");
-                expect(JSON.parse(readStringField(event, "details_json"))).toEqual({
-                    agentId: "codex",
-                    code: "invalid_session_configuration",
-                    configId: "model",
-                    offeredValueCount: "2",
-                    offeredValues: '["test-small","test-medium"]',
-                    requestedValue: "test-large",
-                });
-            } finally {
-                database.close();
-            }
         } finally {
             cancellation.abort();
             for (const socket of relaySockets) {
@@ -453,7 +431,6 @@ describe("daemon session configuration boundary", () => {
         const workspace = join(stateDirectory, "workspace");
         const executableDirectory = join(stateDirectory, "external");
         const nativeStateDirectory = join(stateDirectory, "native");
-        const auditDatabasePath = join(stateDirectory, "audit", "channel_alpha.sqlite");
         const codexPath = join(executableDirectory, "codex");
         await Promise.all([
             mkdir(workspace, { recursive: true }),
@@ -522,7 +499,6 @@ if (process.argv.includes("--version")) {
         expect(inventory.readyAgents().map((agent) => agent.id)).toEqual(["codex"]);
         const config = createDaemonConfig(
             {
-                auditDatabasePath,
                 channelId: "channel_alpha",
                 defaultWorkspace: workspace,
                 relayUrl,
@@ -532,7 +508,7 @@ if (process.argv.includes("--version")) {
             new DaemonLocalContext(stateDirectory),
         );
         const cancellation = new AbortController();
-        const audit = new AuditStore(auditDatabasePath);
+        const audit = new AuditStore();
         const daemon = runDaemon(config, audit, cancellation.signal);
 
         try {
@@ -855,122 +831,10 @@ if (process.argv.includes("--version")) {
         }
     });
 
-    it("Given a Codex conversation ran before a daemon restart, When the daemon reopens it, Then the in-process Agent resumes the native thread", async () => {
-        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-codex-restart-"));
-        const executableDirectory = join(temporaryDirectory, "external");
-        const nativeStateDirectory = join(temporaryDirectory, "native");
-        const codexPath = join(executableDirectory, "codex");
-        await Promise.all([
-            mkdir(executableDirectory, { mode: 0o700, recursive: true }),
-            mkdir(nativeStateDirectory, { recursive: true }),
-        ]);
-        await writeFile(
-            codexPath,
-            executableSource(`
-if (process.argv.includes("--version")) {
-  process.stdout.write("codex 0.153.0\\n");
-} else if (process.argv.includes("app-server")) {
-  await import(${JSON.stringify(turnAppServerUrl)});
-} else {
-  process.exit(80);
-}
-`),
-            { mode: 0o700 },
-        );
-        await chmod(codexPath, 0o700);
-
-        // The in-process Agent and every app-server it starts inherit their environment from this
-        // process, and discovery does not forward this fixture variable, so it is set here for the
-        // duration of the test.
-        const previousState = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
-        process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = nativeStateDirectory;
-        const inventory = await discoverLocalAgentInventory({
-            defaultWorkspace: temporaryDirectory,
-            environment: { MOBIUS_STATE_DIRECTORY: temporaryDirectory, PATH: executableDirectory },
-            signal: new AbortController().signal,
-            specifications: [new CodexAgentSpecification()],
-        });
-        const discovered = inventory.available[0];
-        if (!(discovered instanceof AvailableAgent)) {
-            throw new Error("Codex was not discovered");
-        }
-        const run = async (sessionId: string, prompt: string): Promise<string> => {
-            const chunks: string[] = [];
-            await manager.runPrompt({
-                additionalDirectories: [],
-                agent: discovered.agent,
-                commandId: `${sessionId}-${prompt}`,
-                cwd: temporaryDirectory,
-                images: [],
-                onActivity: () => Promise.resolve(),
-                onText: (text) => {
-                    chunks.push(text);
-                    return Promise.resolve();
-                },
-                prompt,
-                resources: [],
-                sessionId,
-                signal: new AbortController().signal,
-            });
-            return chunks.join("");
-        };
-
-        // The store is what survives a daemon restart; the manager and its app-server do not. Two
-        // managers over one store are two daemons, which is the only way to reach the restore path.
-        const databasePath = join(temporaryDirectory, "sessions.sqlite");
-        const firstStore = new SqliteAcpSessionStore(databasePath);
-        const manager = new AcpSessionManager(undefined, firstStore);
-        try {
-            await run("restart_conversation", "before restart");
-            await manager.close();
-            firstStore.close();
-
-            const secondStore = new SqliteAcpSessionStore(databasePath);
-            const restarted = new AcpSessionManager(undefined, secondStore);
-            try {
-                const prepared = await restarted.prepareSession({
-                    additionalDirectories: [],
-                    agent: discovered.agent,
-                    cwd: temporaryDirectory,
-                    sessionId: "restart_conversation",
-                    signal: new AbortController().signal,
-                });
-                expect(prepared.configOptions.map((option) => option.id)).toEqual(
-                    expect.arrayContaining(["model", "reasoning_effort", "fast-mode", "collaboration_mode"]),
-                );
-                const reply = await restarted.runPrompt({
-                    additionalDirectories: [],
-                    agent: discovered.agent,
-                    commandId: "restart_conversation-after",
-                    cwd: temporaryDirectory,
-                    images: [],
-                    onActivity: () => Promise.resolve(),
-                    onText: () => Promise.resolve(),
-                    prompt: "after restart",
-                    resources: [],
-                    sessionId: "restart_conversation",
-                    signal: new AbortController().signal,
-                });
-                expect(reply).toMatchObject({ stopReason: "end_turn" });
-            } finally {
-                await restarted.close();
-                secondStore.close();
-            }
-        } finally {
-            if (previousState === undefined) {
-                delete process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
-            } else {
-                process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = previousState;
-            }
-            await rm(temporaryDirectory, { force: true, recursive: true });
-        }
-    });
-
     it("Given a cloud-disabled Codex Session uses an application binding, When Mobius reloads its native history, Then the daemon reads rich history without acquiring another writer", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-live-history-"));
         const workspace = join(stateDirectory, "workspace");
         const nativeStateDirectory = join(stateDirectory, "native");
-        const auditDatabasePath = join(stateDirectory, "audit", "channel_alpha.sqlite");
         await Promise.all([mkdir(workspace), mkdir(nativeStateDirectory)]);
         const executable = join(stateDirectory, "codex.mjs");
         await writeFile(
@@ -1020,7 +884,6 @@ if (process.argv.includes("--version")) {
         });
         const config = createDaemonConfig(
             {
-                auditDatabasePath,
                 channelId: "channel_alpha",
                 defaultWorkspace: workspace,
                 relayUrl,
@@ -1030,7 +893,7 @@ if (process.argv.includes("--version")) {
             new DaemonLocalContext(stateDirectory),
         );
         const cancellation = new AbortController();
-        const audit = new AuditStore(auditDatabasePath);
+        const audit = new AuditStore();
         const daemon = runDaemon(config, audit, cancellation.signal);
 
         try {
@@ -1117,7 +980,6 @@ if (process.argv.includes("--version")) {
         const workspace = join(stateDirectory, "workspace");
         const nativeStateDirectory = join(stateDirectory, "native");
         const executableDirectory = join(stateDirectory, "external");
-        const auditDatabasePath = join(stateDirectory, "audit", "channel_alpha.sqlite");
         const codexPath = join(executableDirectory, "codex");
         await Promise.all([
             mkdir(workspace, { recursive: true }),
@@ -1187,7 +1049,6 @@ if (process.argv.includes("--version")) {
         };
         const config = createDaemonConfig(
             {
-                auditDatabasePath,
                 channelId: "channel_alpha",
                 defaultWorkspace: workspace,
                 relayUrl,
@@ -1197,7 +1058,7 @@ if (process.argv.includes("--version")) {
             new DaemonLocalContext(stateDirectory, contextEnvironment),
         );
         const cancellation = new AbortController();
-        const audit = new AuditStore(auditDatabasePath);
+        const audit = new AuditStore();
         const daemon = runDaemon(config, audit, cancellation.signal, undefined, {
             resolveAgentCatalogEnvironment: async (signal: AbortSignal): Promise<Readonly<NodeJS.ProcessEnv>> => {
                 signal.throwIfAborted();
@@ -1242,7 +1103,6 @@ if (process.argv.includes("--version")) {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-default-effort-"));
         const workspace = join(stateDirectory, "workspace");
         const nativeStateDirectory = join(stateDirectory, "native");
-        const auditDatabasePath = join(stateDirectory, "audit", "channel_alpha.sqlite");
         await Promise.all([mkdir(workspace), mkdir(nativeStateDirectory)]);
 
         const socketReady = Promise.withResolvers<Duplex>();
@@ -1293,7 +1153,6 @@ if (process.argv.includes("--version")) {
         );
         const config = createDaemonConfig(
             {
-                auditDatabasePath,
                 channelId: "channel_alpha",
                 defaultWorkspace: workspace,
                 relayUrl,
@@ -1303,7 +1162,7 @@ if (process.argv.includes("--version")) {
             new DaemonLocalContext(stateDirectory),
         );
         const cancellation = new AbortController();
-        const audit = new AuditStore(auditDatabasePath);
+        const audit = new AuditStore();
         const daemon = runDaemon(config, audit, cancellation.signal);
 
         try {
@@ -1344,7 +1203,6 @@ if (process.argv.includes("--version")) {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-default-effort-offered-"));
         const workspace = join(stateDirectory, "workspace");
         const nativeStateDirectory = join(stateDirectory, "native");
-        const auditDatabasePath = join(stateDirectory, "audit", "channel_alpha.sqlite");
         await Promise.all([mkdir(workspace), mkdir(nativeStateDirectory)]);
 
         const socketReady = Promise.withResolvers<Duplex>();
@@ -1392,7 +1250,6 @@ if (process.argv.includes("--version")) {
         );
         const config = createDaemonConfig(
             {
-                auditDatabasePath,
                 channelId: "channel_alpha",
                 defaultWorkspace: workspace,
                 relayUrl,
@@ -1402,7 +1259,7 @@ if (process.argv.includes("--version")) {
             new DaemonLocalContext(stateDirectory),
         );
         const cancellation = new AbortController();
-        const audit = new AuditStore(auditDatabasePath);
+        const audit = new AuditStore();
         const daemon = runDaemon(config, audit, cancellation.signal);
 
         try {
@@ -1446,222 +1303,10 @@ if (process.argv.includes("--version")) {
         }
     });
 
-    it("Given a conversation changes its DeepSeek access mode, When the next configured turn runs, Then Mobius resumes the conversation in the selected environment", async () => {
-        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-session-configuration-"));
-        const workspace = join(stateDirectory, "workspace");
-        const nativeStateDirectory = join(stateDirectory, "native");
-        const auditDatabasePath = join(stateDirectory, "audit", "channel_alpha.sqlite");
-        await Promise.all([mkdir(workspace), mkdir(nativeStateDirectory)]);
-
-        const socketReady = Promise.withResolvers<Duplex>();
-        const relaySockets = new Set<Duplex>();
-        const relay = createServer((request, response) => {
-            if (request.method === "PUT" && request.url?.includes("/catalog") === true) {
-                request.resume();
-                response.writeHead(204);
-                response.end();
-                return;
-            }
-            response.writeHead(404);
-            response.end();
-        });
-        relay.on("connection", (socket) => {
-            relaySockets.add(socket);
-            socket.once("close", () => relaySockets.delete(socket));
-            socket.on("error", () => undefined);
-        });
-        relay.on("upgrade", (request, socket) => {
-            const key = request.headers["sec-websocket-key"];
-            if (typeof key !== "string") {
-                socket.destroy();
-                return;
-            }
-            const accept = createHash("sha1").update(`${key}${websocketGuid}`).digest("base64");
-            socket.write(
-                "HTTP/1.1 101 Switching Protocols\r\n" +
-                    "Connection: Upgrade\r\n" +
-                    "Upgrade: websocket\r\n" +
-                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
-            );
-            socketReady.resolve(socket);
-        });
-        await listen(relay);
-
-        const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
-        relayUrl.searchParams.set("token", "d".repeat(43));
-        const agent = new LocalAgentDefinition(
-            "deepseek-harness",
-            "DeepSeek Harness",
-            process.execPath,
-            [fakeAgentPath, "--agent-name", "DeepSeek Harness", "--reasoning-effort-for-test-large-only"],
-            {
-                MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory,
-            },
-        );
-        const config = createDaemonConfig(
-            {
-                auditDatabasePath,
-                channelId: "channel_alpha",
-                defaultWorkspace: workspace,
-                relayUrl,
-            },
-            [agent],
-            [],
-            new DaemonLocalContext(stateDirectory),
-        );
-        const cancellation = new AbortController();
-        const audit = new AuditStore(auditDatabasePath);
-        const daemon = runDaemon(config, audit, cancellation.signal);
-
-        try {
-            const frames = new ClientFrames(await socketReady.promise);
-            const discoveryRequestId = "deepseek-settings";
-            sendText(
-                await socketReady.promise,
-                encodeAgentSettingsDiscoverCommand({
-                    agentId: agent.id,
-                    kind: AGENT_SETTINGS_DISCOVER_KIND,
-                    requestId: discoveryRequestId,
-                }),
-            );
-            const discovered = await readAgentSettings(frames, discoveryRequestId);
-            expect(discovered.modelEffort).toEqual({
-                effortSettingId: "",
-                modelSettingId: "model",
-                resolution: "on_model_selection",
-                unsupportedModelIds: [],
-                valuesByModel: { "test-small": [] },
-            });
-            expect(discovered.settings).toEqual(
-                expect.arrayContaining([
-                    expect.objectContaining({ id: "dsh_access_mode" }),
-                    expect.objectContaining({ id: "model" }),
-                ]),
-            );
-            expect(discovered.settings).not.toEqual(
-                expect.arrayContaining([expect.objectContaining({ id: "reasoning_effort" })]),
-            );
-            const selectedDiscoveryRequestId = "deepseek-large-model-settings";
-            sendText(
-                await socketReady.promise,
-                encodeAgentSettingsDiscoverCommand({
-                    agentId: agent.id,
-                    kind: AGENT_SETTINGS_DISCOVER_KIND,
-                    model: "test-large",
-                    requestId: selectedDiscoveryRequestId,
-                }),
-            );
-            const selectedModelSettings = await readAgentSettings(frames, selectedDiscoveryRequestId);
-            expect(selectedModelSettings.modelEffort).toEqual({
-                effortSettingId: "reasoning_effort",
-                modelSettingId: "model",
-                resolution: "on_model_selection",
-                unsupportedModelIds: [],
-                valuesByModel: {
-                    "test-large": expect.arrayContaining([expect.objectContaining({ value: "high" })]),
-                },
-            });
-            expect(selectedModelSettings.settings).toEqual(
-                expect.arrayContaining([expect.objectContaining({ id: "reasoning_effort" })]),
-            );
-            const firstSessionConfigurations: readonly SessionConfigurationSelection[] = [
-                {
-                    booleanValue: false,
-                    configId: "dsh_access_mode",
-                    value: "read-only",
-                    valueType: "select",
-                },
-                {
-                    booleanValue: false,
-                    configId: "model",
-                    value: "test-large",
-                    valueType: "select",
-                },
-                {
-                    booleanValue: false,
-                    configId: "reasoning_effort",
-                    value: "high",
-                    valueType: "select",
-                },
-                {
-                    booleanValue: true,
-                    configId: "fast_mode",
-                    value: "",
-                    valueType: "boolean",
-                },
-                {
-                    booleanValue: false,
-                    configId: "mode",
-                    value: "code",
-                    valueType: "select",
-                },
-            ];
-            const firstPrompt: SessionPromptCommand = {
-                additionalDirectoryIds: [],
-                agentId: agent.id,
-                bindingId: config.bindingId,
-                commandId: "first_configured_turn",
-                directoryId: "default",
-                disposition: SessionPromptDisposition.Reject,
-                images: [],
-                kind: "session.prompt",
-                prompt: "first configured turn",
-                resources: [],
-                sessionConfigurations: firstSessionConfigurations,
-                sessionId: "configured_conversation",
-                targetCommandId: "",
-            };
-            sendText(await socketReady.promise, encodeSessionPromptCommand(firstPrompt));
-            const firstResult = await readTerminalSessionResult(frames, firstPrompt.sessionId);
-            expect(firstResult).toMatchObject({
-                kind: SESSION_COMPLETED_KIND,
-                text: "DeepSeek Harness turn 1: first configured turn",
-            });
-
-            const secondSessionConfigurations: SessionConfigurationSelection[] = [];
-            for (const selection of firstSessionConfigurations) {
-                if (selection.configId === "reasoning_effort") {
-                    continue;
-                }
-                if (selection.configId === "dsh_access_mode") {
-                    secondSessionConfigurations.push({ ...selection, value: "workspace-write" });
-                    continue;
-                }
-                if (selection.configId === "model") {
-                    secondSessionConfigurations.push({ ...selection, value: "test-small" });
-                    continue;
-                }
-                secondSessionConfigurations.push(selection);
-            }
-            const secondPrompt: SessionPromptCommand = {
-                ...firstPrompt,
-                commandId: "second_configured_turn",
-                prompt: "second configured turn",
-                sessionConfigurations: secondSessionConfigurations,
-            };
-            sendText(await socketReady.promise, encodeSessionPromptCommand(secondPrompt));
-            const secondResult = await readTerminalSessionResult(frames, secondPrompt.sessionId);
-            expect(secondResult).toMatchObject({
-                kind: SESSION_COMPLETED_KIND,
-                text: "DeepSeek Harness turn 2: second configured turn",
-            });
-        } finally {
-            cancellation.abort();
-            await daemon;
-            audit.close();
-            for (const socket of relaySockets) {
-                socket.destroy();
-            }
-            await new Promise<void>((resolve) => relay.close(() => resolve()));
-            await rm(stateDirectory, { force: true, recursive: true });
-        }
-    }, 30_000);
-
     it("Given a Turn is running with an Agent settings snapshot, When a steering prompt reuses that snapshot while the live Session exposes fewer settings, Then the Agent receives the steering prompt", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-steer-settings-"));
         const workspace = join(stateDirectory, "workspace");
         const nativeStateDirectory = join(stateDirectory, "native");
-        const auditDatabasePath = join(stateDirectory, "audit", "channel_alpha.sqlite");
         await Promise.all([mkdir(workspace), mkdir(nativeStateDirectory)]);
 
         const socketReady = Promise.withResolvers<Duplex>();
@@ -1705,7 +1350,6 @@ if (process.argv.includes("--version")) {
         );
         const config = createDaemonConfig(
             {
-                auditDatabasePath,
                 channelId: "channel_alpha",
                 defaultWorkspace: workspace,
                 relayUrl,
@@ -1715,7 +1359,7 @@ if (process.argv.includes("--version")) {
             new DaemonLocalContext(stateDirectory),
         );
         const cancellation = new AbortController();
-        const audit = new AuditStore(auditDatabasePath);
+        const audit = new AuditStore();
         const daemon = runDaemon(config, audit, cancellation.signal);
 
         try {

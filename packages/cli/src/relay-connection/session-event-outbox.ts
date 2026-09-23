@@ -1,5 +1,4 @@
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 
 import {
@@ -17,6 +16,7 @@ const DEFAULT_OUTBOX_LIMITS: SessionEventOutboxLimits = {
     runtimeDeliveryCount: 64,
     standardEventBytes: 128 * 1024 * 1024,
 };
+const MAX_TERMINAL_RECEIPTS = 1_024;
 
 export interface SessionEventOutboxLimits {
     readonly criticalEventBytes: number;
@@ -29,7 +29,7 @@ export class SessionEventOutboxCapacityError extends Error {
     readonly code = "session_event_outbox_full";
 
     constructor() {
-        super("The durable Session event outbox is full");
+        super("The in-memory Session event outbox is full");
         this.name = "SessionEventOutboxCapacityError";
     }
 }
@@ -38,7 +38,7 @@ export class RuntimeDeliveryInboxCapacityError extends Error {
     readonly code = "runtime_delivery_inbox_full";
 
     constructor() {
-        super("The durable Runtime delivery inbox is full");
+        super("The in-memory Runtime delivery inbox is full");
         this.name = "RuntimeDeliveryInboxCapacityError";
     }
 }
@@ -99,11 +99,10 @@ export class SessionEventOutbox {
     readonly #database: DatabaseSync;
     readonly #limits: SessionEventOutboxLimits;
 
-    constructor(path: string, limits: SessionEventOutboxLimits = DEFAULT_OUTBOX_LIMITS) {
+    constructor(limits: SessionEventOutboxLimits = DEFAULT_OUTBOX_LIMITS) {
         validateLimits(limits);
         this.#limits = limits;
-        mkdirSync(dirname(path), { recursive: true });
-        this.#database = new DatabaseSync(path);
+        this.#database = new DatabaseSync(":memory:");
         this.#database.exec(`
       CREATE TABLE IF NOT EXISTS relay_session_event_outbox (
         ordinal INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -131,7 +130,7 @@ export class SessionEventOutbox {
       CREATE TABLE IF NOT EXISTS relay_turn_receipts (
         command_id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL,
-        command_json TEXT NOT NULL,
+        command_hash TEXT NOT NULL,
         attempt_id TEXT NOT NULL,
         state TEXT NOT NULL CHECK (
           state IN ('dispatching', 'running', 'succeeded', 'failed', 'cancelled')
@@ -163,26 +162,27 @@ export class SessionEventOutbox {
     }
 
     readonly claimExecution = (commandId: string, sessionId: string, commandJson: string): DaemonExecutionReceipt => {
+        const commandHash = createHash("sha256").update(commandJson).digest("hex");
         this.#database.exec("BEGIN IMMEDIATE");
         try {
             const existing = this.#database
                 .prepare(
-                    `SELECT session_id, command_json, attempt_id, state
+                    `SELECT session_id, command_hash, attempt_id, state
            FROM relay_turn_receipts WHERE command_id = ?`,
                 )
                 .get(commandId);
             if (typeof existing === "object" && existing !== null) {
                 const storedSessionId = Reflect.get(existing, "session_id");
-                const storedCommand = Reflect.get(existing, "command_json");
+                const storedCommandHash = Reflect.get(existing, "command_hash");
                 const attemptId = Reflect.get(existing, "attempt_id");
                 const state = Reflect.get(existing, "state");
                 if (
                     storedSessionId !== sessionId ||
-                    storedCommand !== commandJson ||
+                    storedCommandHash !== commandHash ||
                     typeof attemptId !== "string" ||
                     !isDaemonExecutionState(state)
                 ) {
-                    throw new Error("The daemon command identity conflicts with its durable receipt");
+                    throw new Error("The daemon command identity conflicts with its in-memory receipt");
                 }
                 this.#database.exec("COMMIT");
                 return { attemptId, commandId, kind: "duplicate", state };
@@ -191,10 +191,10 @@ export class SessionEventOutbox {
             this.#database
                 .prepare(
                     `INSERT INTO relay_turn_receipts (
-             command_id, session_id, command_json, attempt_id, state
+             command_id, session_id, command_hash, attempt_id, state
            ) VALUES (?, ?, ?, ?, 'dispatching')`,
                 )
-                .run(commandId, sessionId, commandJson, attemptId);
+                .run(commandId, sessionId, commandHash, attemptId);
             this.#database.exec("COMMIT");
             return {
                 attemptId,
@@ -224,12 +224,24 @@ export class SessionEventOutbox {
             throw new Error("The daemon execution transition is invalid");
         }
         this.#database.prepare(`UPDATE relay_turn_receipts SET state = ? WHERE command_id = ?`).run(state, commandId);
+        if (state === "succeeded" || state === "failed" || state === "cancelled") {
+            this.#database
+                .prepare(
+                    `DELETE FROM relay_turn_receipts
+                     WHERE state IN ('succeeded', 'failed', 'cancelled')
+                     AND rowid NOT IN (
+                       SELECT rowid FROM relay_turn_receipts
+                       WHERE state IN ('succeeded', 'failed', 'cancelled')
+                       ORDER BY rowid DESC LIMIT ?
+                     )`,
+                )
+                .run(MAX_TERMINAL_RECEIPTS);
+        }
     };
 
     /**
-     * The Attempt this Runtime durably claimed for a command, when that Attempt never reached a
-     * terminal state. A restarted Runtime has no in-memory Turn for a command it was executing before
-     * the restart, so this is the only record of the Attempt identity the Relay is still waiting on.
+     * The Attempt this live Runtime claimed for a command that has not reached a terminal state.
+     * Receipts disappear when the daemon process exits.
      */
     readonly findUnsettledAttemptId = (commandId: string, sessionId: string): string | null => {
         const row = this.#database
@@ -292,7 +304,7 @@ export class SessionEventOutbox {
                 )
                 .run(rejection.eventId, rejection.sessionId);
             if (deletion.changes !== 1) {
-                throw new Error("The rejected session event could not be removed from the durable outbox");
+                throw new Error("The rejected session event could not be removed from the in-memory outbox");
             }
             this.#decrementEventState(byteLength);
             this.#database.exec("COMMIT");
@@ -316,7 +328,7 @@ export class SessionEventOutbox {
 
     /**
      * Bytes still available to standard Session events. The daemon uses this to shed
-     * superseded streaming events instead of filling the durable outbox, so a long Turn
+     * superseded streaming events instead of filling the in-memory outbox, so a long Turn
      * behind a slow Relay cannot make the next enqueue throw.
      */
     readonly standardCapacityRemaining = (): number => {
@@ -346,7 +358,7 @@ export class SessionEventOutbox {
                 const payload = rowString(existing, "payload_json");
                 const state = runtimeDeliveryState(existing);
                 if (sessionId !== delivery.sessionId || payload !== delivery.payload) {
-                    throw new Error("The Runtime delivery identity conflicts with its durable receipt");
+                    throw new Error("The Runtime delivery identity conflicts with its in-memory receipt");
                 }
                 this.#database.exec("COMMIT");
                 return new StoredRuntimeDelivery(delivery.deliveryId, sessionId, payload, state, true);
@@ -562,7 +574,7 @@ export class SessionEventOutbox {
                 )
                 .run(eventId, sessionId);
             if (deletion.changes !== 1) {
-                throw new Error("The acknowledged session event could not be removed from the durable outbox");
+                throw new Error("The acknowledged session event could not be removed from the in-memory outbox");
             }
             this.#decrementEventState(byteLength);
             this.#database.exec("COMMIT");

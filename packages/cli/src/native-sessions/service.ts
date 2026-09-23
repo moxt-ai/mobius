@@ -10,6 +10,7 @@ import type {
     WorkspaceEntry,
 } from "@moxt-ai/mobius-protocol";
 import type { NativeSessionInfo } from "../acp/native-session.ts";
+import { nativeSessionIdSchema } from "../acp/native-session.ts";
 import { AcpExecutionError, type AcpPrepareOptions, type AcpSessionManager } from "../acp/session-manager.ts";
 import type { AuditStore } from "../audit/audit-store.ts";
 import { LocalAuthorizationError } from "../authorization/local-authorization-error.ts";
@@ -72,6 +73,89 @@ export class NativeSessionService {
             sessionId: command.sessionId,
             signal,
         };
+        if (command.action === "linked-history") {
+            if (options.agent.id !== "codex") {
+                const history = await this.#sessions.loadLinkedSessionHistory({
+                    ...options,
+                    sessionId: command.targetSessionId,
+                });
+                this.record(command, "native_session_history_read");
+                return history === null
+                    ? {
+                          action: "unlinked-history",
+                          kind: "native.session.result",
+                          requestId: command.requestId,
+                          sessionId: command.sessionId,
+                          targetSessionId: command.targetSessionId,
+                      }
+                    : {
+                          action: "linked-history",
+                          history,
+                          kind: "native.session.result",
+                          requestId: command.requestId,
+                          sessionId: command.sessionId,
+                          targetSessionId: command.targetSessionId,
+                      };
+            }
+            const nativeSessionId = nativeSessionIdSchema.parse(command.targetSessionId);
+            if (
+                this.#sessions.hasPreparedSession(nativeSessionId, options.agent.id, cwd, additionalDirectories) &&
+                (await this.#sessions.loadLinkedSessionHistory({ ...options, sessionId: nativeSessionId })) === null
+            ) {
+                this.record(command, "native_session_history_read");
+                return {
+                    action: "linked-history",
+                    history: {
+                        status: "available",
+                        messages: [],
+                        truncated: false,
+                        coveredCommandIds: [],
+                        coveredMessageIds: [],
+                    },
+                    kind: "native.session.result",
+                    requestId: command.requestId,
+                    sessionId: command.sessionId,
+                    targetSessionId: command.targetSessionId,
+                };
+            }
+            const snapshot = await readCodexFullHistory(options.agent, cwd, nativeSessionId, signal);
+            const resolved = await this.#directories.identify(command.bindingId, snapshot.cwd, signal);
+            if (snapshot.nativeSessionId !== nativeSessionId || resolved.path !== cwd) {
+                throw new AcpExecutionError(
+                    "Codex returned history for a different session or workspace.",
+                    {},
+                    "invalid_native_session_response",
+                );
+            }
+            this.record(command, "native_session_history_read");
+            return {
+                action: "linked-history",
+                history: snapshot.history,
+                kind: "native.session.result",
+                requestId: command.requestId,
+                sessionId: command.sessionId,
+                targetSessionId: command.targetSessionId,
+            };
+        }
+        if (command.action === "create") {
+            if (options.agent.id !== "codex") {
+                throw new AcpExecutionError(
+                    "Native session creation is unavailable for this Agent",
+                    {},
+                    "native_session_unsupported",
+                );
+            }
+            const nativeSessionId = await this.#sessions.createNativeSession(options);
+            signal.throwIfAborted();
+            this.record(command, "native_session_created");
+            return {
+                action: "create",
+                kind: "native.session.result",
+                nativeSessionId,
+                requestId: command.requestId,
+                sessionId: command.sessionId,
+            };
+        }
         const prepared = await this.#sessions.prepareNativeSessionBrowser(options);
         if (!prepared.capabilities.listSessions) {
             throw new AcpExecutionError(
@@ -103,6 +187,7 @@ export class NativeSessionService {
                     .findLinkedSessions(command.agentId, info.sessionId)
                     .filter((session) => session.prompted && session.cwd === authorized.cwd)
                     .map((session) => session.sessionId),
+                nativeSessionId: info.sessionId,
                 title: info.title ?? "Untitled session",
                 directoryId: authorized.directoryId,
                 directoryLabel: authorized.directoryLabel,
