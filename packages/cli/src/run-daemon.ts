@@ -333,6 +333,18 @@ async function runRelayConnection(
 
             const processingDeliveryIds = new Set<string>();
 
+            const sessionAvailable = (command: SessionPromptCommand): boolean => {
+                if (command.disposition === SessionPromptDisposition.Steer) {
+                    return true;
+                }
+                const first = [...activeTurns.values()].find(
+                    (turn) =>
+                        turn.command.sessionId === command.sessionId &&
+                        turn.command.disposition !== SessionPromptDisposition.Steer,
+                );
+                return first === undefined || first.command.commandId === command.commandId;
+            };
+
             const processDeliveredPrompt = async (
                 delivery: RuntimeDelivery,
                 command: SessionPromptCommand,
@@ -368,21 +380,6 @@ async function runRelayConnection(
                     if (receipt.state !== "dispatching") {
                         return;
                     }
-                }
-
-                if (
-                    command.disposition !== SessionPromptDisposition.Steer &&
-                    [...activeTurns.values()].some((turn) => turn.command.sessionId === command.sessionId)
-                ) {
-                    reportFailure(
-                        publisher,
-                        command,
-                        "session_busy",
-                        "Another prompt is already running in this conversation",
-                        receipt.attemptId,
-                    );
-                    outbox.transitionExecution(command.commandId, "failed");
-                    return;
                 }
 
                 const turn = new ActiveDaemonTurn(command, receipt.attemptId);
@@ -497,6 +494,7 @@ async function runRelayConnection(
                                 sessions,
                                 attemptId,
                                 activateAttempt,
+                                () => sessionAvailable(command),
                                 timer,
                                 executionSignal,
                                 turn.recordText,
@@ -1285,21 +1283,6 @@ async function runRelayConnection(
                         return;
                     }
 
-                    if (
-                        command.disposition !== SessionPromptDisposition.Steer &&
-                        [...activeTurns.values()].some((turn) => turn.command.sessionId === command.sessionId)
-                    ) {
-                        reportFailure(
-                            publisher,
-                            command,
-                            "session_busy",
-                            "Another prompt is already running in this conversation",
-                            receipt.attemptId,
-                        );
-                        outbox.transitionExecution(command.commandId, "failed");
-                        return;
-                    }
-
                     const turn = new ActiveDaemonTurn(command, receipt.attemptId);
                     activeTurns.set(command.commandId, turn);
                     void executePrompt(
@@ -1318,6 +1301,7 @@ async function runRelayConnection(
                             }
                             return stream;
                         },
+                        () => sessionAvailable(command),
                         timer,
                         turn.signal,
                         turn.recordText,

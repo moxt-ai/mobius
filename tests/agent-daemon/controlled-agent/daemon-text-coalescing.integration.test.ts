@@ -388,6 +388,24 @@ describe("daemon assistant text coalescing", () => {
             });
             sendText(
                 socket,
+                encodeSessionPromptCommand({
+                    ...prompt,
+                    bindingId: "another_binding",
+                    commandId: "unauthorized_burst_turn",
+                }),
+            );
+            for (;;) {
+                rejected = await next();
+                if (
+                    decodeMessageKind(rejected) === SESSION_FAILED_KIND &&
+                    decodeSessionFailedEvent(rejected).commandId === "unauthorized_burst_turn"
+                ) {
+                    break;
+                }
+            }
+            expect(decodeSessionFailedEvent(rejected).code).not.toBe("session_busy");
+            sendText(
+                socket,
                 encodeSessionCancelCommand({ commandId: prompt.commandId, kind: SESSION_CANCEL_KIND, sessionId }),
             );
             do {
