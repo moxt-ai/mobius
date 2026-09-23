@@ -1031,6 +1031,33 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                 await waitForAbort(cancellation.signal);
                 return { stopReason: "cancelled" };
             }
+            if (prompt === "hold after first delta") {
+                await context.client.notify(acp.methods.client.session.update, {
+                    sessionId: context.params.sessionId,
+                    update: {
+                        content: { text: "Partial reply", type: "text" },
+                        messageId: `assistant-${turnNumber.toString()}`,
+                        sessionUpdate: "agent_message_chunk",
+                    },
+                });
+                await context.client.notify(acp.methods.client.session.update, {
+                    sessionId: context.params.sessionId,
+                    update: {
+                        content: {
+                            resource: {
+                                blob: "AQ==",
+                                mimeType: "application/octet-stream",
+                                uri: "file:///partial.bin",
+                            },
+                            type: "resource",
+                        },
+                        messageId: `assistant-${turnNumber.toString()}`,
+                        sessionUpdate: "agent_message_chunk",
+                    },
+                });
+                await waitForAbort(cancellation.signal);
+                return { stopReason: "cancelled" };
+            }
             if (prompt === "wait for steering") {
                 const instruction = await steering.promise;
                 const text = `Steered: ${instruction}`;

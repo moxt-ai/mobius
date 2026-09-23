@@ -6,6 +6,7 @@ export {
     connectMobiusClient as connectMobiusChannelClient,
     type ElicitationResponseRequest,
     type FileReadResult,
+    type LiveSessionMessage,
     MobiusClient as MobiusChannelClient,
     MobiusClientError as MobiusChannelError,
     type PermissionResponseRequest,
