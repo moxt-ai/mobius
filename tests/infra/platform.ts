@@ -43,8 +43,12 @@ export async function startTestPlatform(options: { readonly allowedOrigins?: Rea
             baseUrl: bindings.origin,
             developer,
             developerToken,
-            connectAgent: async (projectId: string) => {
+            connectAgent: async (
+                projectId: string,
+                behavior?: { readonly afterSessionStarted?: (signal: AbortSignal) => Promise<void> },
+            ) => {
                 const runtime = await createFakeAgentDaemonRuntime({
+                    ...(behavior === undefined ? {} : { behavior }),
                     credential,
                     origin: bindings.origin,
                     projectId,
