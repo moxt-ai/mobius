@@ -64,6 +64,8 @@ export class DeepSeekHarnessAgentSpecification extends DirectAcpAgentDefinition 
     readonly agentExecutable = "dsh";
     readonly id = "deepseek-harness";
     readonly label = "DeepSeek Harness";
+    override readonly minimumSupportedAgentVersion = "0.1.2-rc.1";
+    override readonly maximumTestedAgentVersion = DEEPSEEK_HARNESS_PACKAGE.version;
 
     constructor() {
         super(

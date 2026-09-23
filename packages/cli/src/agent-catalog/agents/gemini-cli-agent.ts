@@ -13,6 +13,8 @@ export class GeminiCliAgentSpecification extends DirectAcpAgentDefinition {
     readonly agentExecutable = "gemini";
     readonly id = "gemini-cli";
     readonly label = "Gemini CLI";
+    override readonly minimumSupportedAgentVersion = GEMINI_CLI_TESTED_VERSION;
+    override readonly maximumTestedAgentVersion = GEMINI_CLI_TESTED_VERSION;
     override readonly versionProbeTimeoutMilliseconds = 10_000;
 
     constructor() {

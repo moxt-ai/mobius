@@ -10,6 +10,8 @@ export class CodexAgentSpecification extends InProcessAcpAgentDefinition {
     readonly createEndpoint: InProcessAcpEndpointFactory = (options) => new CodexAcpAgent(options);
     readonly id = "codex";
     readonly label = "Codex";
+    override readonly minimumSupportedAgentVersion = "0.153.0";
+    override readonly maximumTestedAgentVersion = "0.154.0";
 
     constructor() {
         super("MOBIUS_CODEX_PATH", ["agents", "codex", "bin", "codex"]);

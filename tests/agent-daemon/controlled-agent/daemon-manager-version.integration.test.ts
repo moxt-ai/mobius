@@ -39,8 +39,8 @@ describe("Mobius manager version compatibility", () => {
 
                 expect(listed.code).toBe(0);
                 expect(listed.stderr).toBe("");
-                expect(listed.stdout).toContain("Starting mobius daemon 0.0.86\n");
-                expect(listed.stdout).toContain("Mobius daemon 0.0.86 started\n");
+                expect(listed.stdout).toContain("Starting mobius daemon 0.0.87\n");
+                expect(listed.stdout).toContain("Mobius daemon 0.0.87 started\n");
                 expect(listed.stdout).toContain("| connection_id");
                 await expect(oldManager).resolves.toBeUndefined();
             } finally {

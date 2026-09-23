@@ -12,6 +12,8 @@ export class CursorCliAgentSpecification extends DirectAcpAgentDefinition {
     readonly agentExecutable = "cursor-agent";
     readonly id = "cursor";
     readonly label = "Cursor CLI";
+    override readonly minimumSupportedAgentVersion = CURSOR_CLI_TESTED_VERSION;
+    override readonly maximumTestedAgentVersion = CURSOR_CLI_TESTED_VERSION;
 
     constructor() {
         super(

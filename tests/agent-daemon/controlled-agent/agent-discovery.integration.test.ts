@@ -40,6 +40,29 @@ describe("local Agent discovery", () => {
         vi.useRealTimers();
     });
 
+    it("Given an installed OpenCode below the supported version, When discovery runs, Then the Agent is unavailable", async () => {
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-old-opencode-"));
+        const executable = join(temporaryDirectory, "opencode");
+        try {
+            await writeFile(executable, executableSource('process.stdout.write("1.18.28\\n");'), { mode: 0o700 });
+            await chmod(executable, 0o700);
+
+            const inventory = await discoverLocalAgentInventory({
+                defaultWorkspace: temporaryDirectory,
+                environment: { PATH: temporaryDirectory },
+                signal: new AbortController().signal,
+                specifications: [new OpenCodeAgentSpecification()],
+            });
+
+            expect(inventory.available).toEqual([]);
+            expect(inventory.unavailable).toEqual([
+                expect.objectContaining({ code: "agent_not_found", status: "missing_agent" }),
+            ]);
+        } finally {
+            await rm(temporaryDirectory, { force: true, recursive: true });
+        }
+    });
+
     it("Given Oh My Pi is installed, When local discovery runs, Then its native ACP harness is available", async () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-oh-my-pi-"));
         const ompPath = join(temporaryDirectory, "omp");

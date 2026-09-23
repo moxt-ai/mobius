@@ -18,6 +18,8 @@ export class HermesAgentSpecification extends DirectAcpAgentDefinition {
     override readonly agentVersionArguments: readonly string[] = ["acp", "--version"];
     readonly id = "hermes";
     readonly label = "Hermes Agent";
+    override readonly minimumSupportedAgentVersion = HERMES_TESTED_VERSION;
+    override readonly maximumTestedAgentVersion = HERMES_TESTED_VERSION;
 
     constructor() {
         super("MOBIUS_HERMES_PATH", ["acp"], ["agents", "hermes", HERMES_TESTED_VERSION, "bin", "hermes"]);

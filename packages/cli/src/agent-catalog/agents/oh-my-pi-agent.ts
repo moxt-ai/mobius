@@ -20,6 +20,8 @@ export class OhMyPiAgentSpecification extends DirectAcpAgentDefinition {
     override readonly agentOverrideVariable = "MOBIUS_OH_MY_PI_PATH";
     readonly id = "oh-my-pi";
     readonly label = "Oh My Pi";
+    override readonly minimumSupportedAgentVersion = OH_MY_PI_TESTED_VERSION;
+    override readonly maximumTestedAgentVersion = OH_MY_PI_TESTED_VERSION;
 
     constructor() {
         super("MOBIUS_OH_MY_PI_PATH", ["acp"], ["agents", "oh-my-pi", OH_MY_PI_TESTED_VERSION, "bin", "omp"]);

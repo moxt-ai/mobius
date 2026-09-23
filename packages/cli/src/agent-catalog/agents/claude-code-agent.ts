@@ -13,6 +13,8 @@ export class ClaudeCodeAgentSpecification extends BridgedAcpAgentDefinition {
     readonly agentOverrideVariable = "MOBIUS_CLAUDE_PATH";
     readonly id = "claude";
     readonly label = "Claude Code";
+    override readonly minimumSupportedAgentVersion = "2.1.273";
+    override readonly maximumTestedAgentVersion = "2.1.273";
     readonly managedAdapterExecutablePath = [
         "adapters",
         "claude",
