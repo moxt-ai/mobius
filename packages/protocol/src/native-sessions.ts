@@ -56,6 +56,7 @@ const nativeSessionTurnForkCommandSchema = z
 export type NativeSessionTurnForkCommand = z.infer<typeof nativeSessionTurnForkCommandSchema>;
 
 const nativeSessionRequestSchema = z.discriminatedUnion("action", [
+    z.strictObject({ ...identity, action: z.literal("create") }).readonly(),
     z.strictObject({ ...identity, action: z.literal("linked-history"), targetSessionId: identifier }).readonly(),
     z.strictObject({ ...identity, action: z.literal("preview"), entryId: identifier }).readonly(),
     z.strictObject({ ...identity, action: z.literal("history"), entryId: identifier }).readonly(),
@@ -85,6 +86,7 @@ const nativeSessionRequestSchema = z.discriminatedUnion("action", [
 ]);
 export type NativeSessionRequest = z.infer<typeof nativeSessionRequestSchema>;
 const nativeSessionCommandSchema = z.discriminatedUnion("action", [
+    z.strictObject({ ...identity, action: z.literal("create") }).readonly(),
     z.strictObject({ ...identity, action: z.literal("linked-history"), targetSessionId: identifier }).readonly(),
     z.strictObject({ ...identity, action: z.literal("preview"), entryId: identifier }).readonly(),
     z.strictObject({ ...identity, action: z.literal("history"), entryId: identifier }).readonly(),
@@ -125,7 +127,7 @@ export type NativeSessionCommand = z.infer<typeof nativeSessionCommandSchema>;
 const nativeSessionEntrySchema = z
     .strictObject({
         entryId: identifier,
-        mobiusSessionIds: z.array(identifier).max(500).readonly(),
+        nativeSessionId: identifier,
         title: z.string().max(500),
         directoryId,
         directoryLabel: z.string().min(1).max(2_048),
@@ -143,6 +145,7 @@ const resultEnvelope = {
     kind: z.literal(NATIVE_SESSION_RESULT_KIND),
 };
 const nativeSessionResultSchema = z.discriminatedUnion("action", [
+    z.strictObject({ ...resultEnvelope, action: z.literal("create"), nativeSessionId: identifier }).readonly(),
     z
         .strictObject({
             ...resultEnvelope,

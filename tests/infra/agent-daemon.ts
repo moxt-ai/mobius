@@ -3,6 +3,7 @@ import {
     decodeAgentSettingsDiscoverCommand,
     decodeFileReadCommand,
     decodeMessageKind,
+    decodeNativeSessionCommand,
     decodeRuntimeDelivery,
     decodeRuntimeHeartbeatEvent,
     decodeSessionEventAcknowledgement,
@@ -22,16 +23,19 @@ import {
     encodeFileBeginEvent,
     encodeFileChunkEvent,
     encodeFileEndEvent,
+    encodeNativeSessionResult,
     encodeRuntimeDeliveryReceived,
     encodeRuntimeHeartbeatAckEvent,
     encodeSessionCompletedEvent,
     encodeSessionEventEnvelope,
     encodeSessionLiveHistoryLoaded,
     encodeSessionLiveHistoryPageLoaded,
+    encodeSessionOperationFailedEvent,
     encodeSessionReadyEvent,
     encodeSessionStartedEvent,
     encodeWorkspaceEntriesEvent,
     FILE_READ_KIND,
+    NATIVE_SESSION_REQUEST_KIND,
     RUNTIME_DELIVERY_KIND,
     RUNTIME_HEARTBEAT_KIND,
     SESSION_EVENT_ACK_KIND,
@@ -406,6 +410,7 @@ export interface FakeAgentDaemonBehavior {
     readonly agentName?: string;
     readonly afterSessionStarted?: (signal: AbortSignal) => Promise<void>;
     readonly directoryLabel?: string;
+    readonly nativeSessionIds?: ReadonlySet<string>;
 }
 
 export interface RunningFakeAgentDaemon extends AsyncDisposable {
@@ -533,6 +538,49 @@ async function processHappyPathCommand(
                 settingsRevision: "0".repeat(64),
             }),
         );
+        return;
+    }
+    if (kind === NATIVE_SESSION_REQUEST_KIND) {
+        const command = decodeNativeSessionCommand(encoded);
+        if (command.action === "create") {
+            daemon.send(
+                encodeNativeSessionResult({
+                    action: "create",
+                    kind: "native.session.result",
+                    nativeSessionId: crypto.randomUUID(),
+                    requestId: command.requestId,
+                    sessionId: command.sessionId,
+                }),
+            );
+        } else if (command.action === "find" && behavior.nativeSessionIds?.has(command.nativeSessionId)) {
+            daemon.send(
+                encodeNativeSessionResult({
+                    action: "find",
+                    entry: {
+                        entryId: command.nativeSessionId,
+                        nativeSessionId: command.nativeSessionId,
+                        directoryId: "default",
+                        directoryLabel: behavior.directoryLabel ?? "Fake workspace",
+                        additionalDirectories: [],
+                        title: "New chat",
+                        updatedAt: null,
+                    },
+                    kind: "native.session.result",
+                    requestId: command.requestId,
+                    sessionId: command.sessionId,
+                }),
+            );
+        } else {
+            daemon.send(
+                encodeSessionOperationFailedEvent({
+                    code: "native_session_not_found",
+                    kind: "session.operation.failed",
+                    message: "The native session was not found",
+                    requestId: command.requestId,
+                    sessionId: command.sessionId,
+                }),
+            );
+        }
         return;
     }
     if (kind === SESSION_PREPARE_KIND) {

@@ -94,7 +94,7 @@ import {
     AcpSessionManager,
     type AcpSessionObserver,
 } from "./acp/session-manager.ts";
-import { SqliteAcpSessionStore } from "./acp/session-store.ts";
+import { MemoryAcpSessionStore } from "./acp/session-store.ts";
 import { agentSettingsAdapterForAgent, applyAgentLaunchSettings } from "./agent-catalog/agent-settings-adapter.ts";
 import { discoverOpenCodeModelOptions } from "./agent-catalog/agents/opencode-agent.ts";
 import {
@@ -531,7 +531,7 @@ class ConnectedDaemonSessionEventState extends DaemonSessionEventConnectionState
             this.#socket.send(encodeDaemonToServiceMessage(message));
             return true;
         } catch {
-            // The durable outbox retains the event for the replacement connection.
+            // The in-memory outbox retains the event for the replacement connection.
             return false;
         }
     };
@@ -618,7 +618,7 @@ class DaemonSessionEventPublisher {
 
     /**
      * Enqueue a standard event, shedding it instead of ending the daemon when the
-     * durable outbox is full.
+     * in-memory outbox is full.
      *
      * A capacity error used to escape the coalescing timer that publishes activities,
      * so the process exited and every restart died on the same retained backlog. A full
@@ -663,7 +663,7 @@ class DaemonSessionEventPublisher {
             return;
         }
         this.#shedEventKinds.add(kind);
-        console.warn(`Mobius daemon is dropping durable "${kind}" events because the Session event outbox is full`);
+        console.warn(`Mobius daemon is dropping queued "${kind}" events because the Session event outbox is full`);
     };
 
     readonly acknowledge = (acknowledgement: Parameters<SessionEventOutbox["acknowledge"]>[0]): void => {
@@ -881,10 +881,9 @@ function reportFailure(
 }
 
 /**
- * Settles a Turn this Runtime durably claimed but can no longer execute. A Runtime that restarted
- * mid-Turn has no in-memory Turn to cancel, while the Relay still counts that Turn as the Session's
- * active one. Dropping the cancellation would leave the Session permanently unable to accept another
- * prompt, so the owning Runtime reports the abandoned Attempt as failed instead.
+ * Settles a Turn claimed by this live Runtime when its active process can no longer execute.
+ * A lost connection can deliver cancellation after the process has stopped; the in-memory
+ * receipt identifies the Attempt that should be reported as failed.
  */
 function settleAbandonedTurn(
     publisher: DaemonSessionEventPublisher,
@@ -2588,7 +2587,7 @@ async function runRelayConnection(
                         if (connectionController.signal.aborted) {
                             return;
                         }
-                        console.error("Mobius daemon could not process a durable Runtime delivery", error);
+                        console.error("Mobius daemon could not process a in-memory Runtime delivery", error);
                         failAndClose(
                             new Error("Runtime delivery processing failed", { cause: error }),
                             4008,
@@ -3439,8 +3438,8 @@ export async function runDaemon(
         publishCatalog: async (installationSignal) => await publishAgentCatalog(config, installationSignal),
         stateDirectory,
     });
-    const sessionStore = new SqliteAcpSessionStore(config.auditDatabasePath);
-    const outbox = new SessionEventOutbox(config.auditDatabasePath);
+    const sessionStore = new MemoryAcpSessionStore();
+    const outbox = new SessionEventOutbox();
     const publisher = new DaemonSessionEventPublisher(outbox, timer);
     const activeTurns = new Map<string, ActiveDaemonTurn>();
     const activeAttemptIds = new Map<string, string>();
@@ -3452,12 +3451,17 @@ export async function runDaemon(
         }
         publisher.recordAttempt(sessionId, event, attemptId);
     };
-    const sessions = new AcpSessionManager(new DaemonAcpObserver(recordSessionEvent), sessionStore, {
-        read: async (options, nativeSessionId) =>
-            options.agent.id === "codex"
-                ? (await readCodexFullHistory(options.agent, options.cwd, nativeSessionId, options.signal)).history
-                : null,
-    });
+    const sessions = new AcpSessionManager(
+        new DaemonAcpObserver(recordSessionEvent),
+        sessionStore,
+        {
+            read: async (options, nativeSessionId) =>
+                options.agent.id === "codex"
+                    ? (await readCodexFullHistory(options.agent, options.cwd, nativeSessionId, options.signal)).history
+                    : null,
+        },
+        "native",
+    );
     const directories = new WorkspaceDirectoryService(config.bindingId, config.defaultWorkspace);
     const installationObserver = new DaemonInstallationObserver();
     const diagnostics = new RelayConnectionDiagnostics(
@@ -3594,13 +3598,9 @@ export async function runDaemon(
                         await sessions.close();
                     } finally {
                         try {
-                            sessionStore.close();
+                            publisher.close();
                         } finally {
-                            try {
-                                publisher.close();
-                            } finally {
-                                outbox.close();
-                            }
+                            outbox.close();
                         }
                     }
                 }

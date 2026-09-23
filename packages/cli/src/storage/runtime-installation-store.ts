@@ -544,9 +544,6 @@ export class RuntimeInstallationStore {
     readonly connectionPath = (connectionId: string): string =>
         join(this.#connectionDirectory, `${validateConnectionId(connectionId)}.json`);
 
-    readonly auditDatabasePath = (connectionId: string): string =>
-        join(this.stateDirectory, "audit", `${validateConnectionId(connectionId)}.sqlite`);
-
     private readonly channelIndexPath = (channelId: string): string =>
         join(this.#channelDirectory, channelIndexFileName(validateIdentifier(channelId, "invalid_channel_id")));
 

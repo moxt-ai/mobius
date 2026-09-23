@@ -107,7 +107,6 @@ describe("daemon assistant text coalescing", () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-text-coalescing-"));
         const workspace = join(stateDirectory, "workspace");
         const nativeStateDirectory = join(stateDirectory, "native");
-        const auditDatabasePath = join(stateDirectory, "audit", "channel_alpha.sqlite");
         await Promise.all([mkdir(workspace), mkdir(nativeStateDirectory)]);
 
         const socketReady = Promise.withResolvers<Duplex>();
@@ -149,7 +148,6 @@ describe("daemon assistant text coalescing", () => {
         );
         const config = createDaemonConfig(
             {
-                auditDatabasePath,
                 channelId: "channel_alpha",
                 defaultWorkspace: workspace,
                 relayUrl,
@@ -159,7 +157,7 @@ describe("daemon assistant text coalescing", () => {
             new DaemonLocalContext(stateDirectory),
         );
         const cancellation = new AbortController();
-        const audit = new AuditStore(auditDatabasePath);
+        const audit = new AuditStore();
         const daemon = runDaemon(config, audit, cancellation.signal);
 
         try {

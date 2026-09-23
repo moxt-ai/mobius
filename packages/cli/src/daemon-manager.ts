@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { open, readFile, unlink, writeFile } from "node:fs/promises";
+import { readFile, unlink, writeFile } from "node:fs/promises";
 import { createConnection, createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -477,24 +477,19 @@ async function sendControlRequest(
     }
 }
 
-async function spawnManager(stateDirectory: string): Promise<ChildProcess> {
-    const log = await open(join(stateDirectory, "manager.log"), "a", 0o600);
-    try {
-        const child = spawn(process.execPath, [process.argv[1] ?? "", "__manager"], {
-            detached: true,
-            env: process.env,
-            stdio: ["ignore", log.fd, log.fd],
-        });
-        child.unref();
-        return child;
-    } finally {
-        await log.close();
-    }
+async function spawnManager(): Promise<ChildProcess> {
+    const child = spawn(process.execPath, [process.argv[1] ?? "", "__manager"], {
+        detached: true,
+        env: process.env,
+        stdio: "ignore",
+    });
+    child.unref();
+    return child;
 }
 
-async function launchManager(stateDirectory: string, managerVersion: string): Promise<void> {
+async function launchManager(managerVersion: string): Promise<void> {
     process.stdout.write(`Starting mobius daemon ${managerVersion}\n`);
-    await spawnManager(stateDirectory);
+    await spawnManager();
 }
 
 async function waitForManagerExit(stateDirectory: string, signal: AbortSignal): Promise<void> {
@@ -568,14 +563,14 @@ async function ensureMatchingManager(
                 throw new Error("The Mobius manager returned an unexpected response");
             }
             await stopManager(stateDirectory, signal);
-            await launchManager(stateDirectory, managerVersion);
+            await launchManager(managerVersion);
             managerStarted = true;
         } catch (cause) {
             if (!isNodeError(cause, "ENOENT") && !isNodeError(cause, "ECONNREFUSED")) {
                 throw cause;
             }
             if (!managerStarted) {
-                await launchManager(stateDirectory, managerVersion);
+                await launchManager(managerVersion);
                 managerStarted = true;
             }
             await new Promise<void>((resolve, reject) => {
