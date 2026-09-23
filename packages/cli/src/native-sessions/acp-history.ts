@@ -3,8 +3,8 @@ import type { AcpPrepareOptions, AcpSessionManager } from "../acp/session-manage
 import { AcpExecutionError } from "../acp/session-manager.ts";
 import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
 
-/** Claude Code exposes saved conversations through ACP session/list and session/load. */
-export async function readClaudeHistory(
+/** ACP session/list verifies ownership before session/load replays saved messages. */
+export async function readAcpHistory(
     sessions: AcpSessionManager,
     directories: WorkspaceDirectoryService,
     bindingId: string,

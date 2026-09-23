@@ -3,6 +3,7 @@ import { AcpExecutionError, type AcpPrepareOptions, type AcpSessionManager } fro
 import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
 import { claudeSessionAdapter } from "./claude-adapter.ts";
 import { codexSessionAdapter } from "./codex-adapter.ts";
+import { openCodeSessionAdapter } from "./opencode-adapter.ts";
 
 export interface NativeSessionAdapterContext {
     readonly sessions: AcpSessionManager;
@@ -35,6 +36,9 @@ export function nativeSessionAdapter(agentId: string): NativeSessionAdapter {
     }
     if (agentId === "claude") {
         return claudeSessionAdapter;
+    }
+    if (agentId === "opencode") {
+        return openCodeSessionAdapter;
     }
     return genericSessionAdapter;
 }
