@@ -79,7 +79,7 @@ async function fixture(
         [agent],
     );
     const directories = new WorkspaceDirectoryService("workspace", workspace);
-    const service = new NativeSessionService(config, directories, sessions, audit);
+    const service = new NativeSessionService(config, directories, sessions, audit, () => null);
     const identity = {
         additionalDirectoryIds: [],
         agentId: agent.id,
@@ -237,7 +237,7 @@ describe("native Agent session boundary", () => {
             [agent],
         );
         const directories = new WorkspaceDirectoryService("workspace", workspace);
-        const service = new NativeSessionService(config, directories, sessions, audit);
+        const service = new NativeSessionService(config, directories, sessions, audit, () => null);
         const identity = {
             additionalDirectoryIds: [],
             agentId: agent.id,
@@ -302,7 +302,7 @@ describe("native Agent session boundary", () => {
                     onText: async () => {},
                     onActivity: async () => {},
                 });
-                const service = new NativeSessionService(f.config, f.directories, restarted, f.audit);
+                const service = new NativeSessionService(f.config, f.directories, restarted, f.audit, () => null);
                 const history = await service.execute(
                     { ...f.identity, action: "linked-history", targetSessionId: created.nativeSessionId },
                     signal,
