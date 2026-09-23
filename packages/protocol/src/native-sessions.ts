@@ -121,6 +121,7 @@ export type NativeSessionCommand = z.infer<typeof nativeSessionCommandSchema>;
 const nativeSessionEntrySchema = z
     .strictObject({
         entryId: identifier,
+        mobiusSessionIds: z.array(identifier).max(500).readonly(),
         title: z.string().max(500),
         directoryId,
         directoryLabel: z.string().min(1).max(2_048),

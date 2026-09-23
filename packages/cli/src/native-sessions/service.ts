@@ -99,6 +99,10 @@ export class NativeSessionService {
             });
             return {
                 entryId,
+                mobiusSessionIds: this.#sessions
+                    .findLinkedSessions(command.agentId, info.sessionId)
+                    .filter((session) => session.cwd === authorized.cwd)
+                    .map((session) => session.sessionId),
                 title: info.title ?? "Untitled session",
                 directoryId: authorized.directoryId,
                 directoryLabel: authorized.directoryLabel,

@@ -422,21 +422,14 @@ describe.sequential("Platform Session-only boundary", () => {
                 });
             }
 
-            // The Session database cannot store transcript or uploaded image content.
+            // Session state belongs to the local Runtime, including execution receipts.
             await runInDurableObject(sessionStub, async (_instance, state) => {
-                const contentTables = [
+                const sessionTables = [
                     ...state.storage.sql.exec<{ name: string }>(
-                        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('session_events', 'session_messages', 'uploaded_artifacts')",
+                        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('sessions', 'session_bindings', 'session_configuration_snapshots', 'turns', 'attempts', 'interactions', 'pending_work', 'command_receipts', 'session_event_receipts')",
                     ),
                 ];
-                expect(contentTables).toEqual([]);
-                const receipts = [
-                    ...state.storage.sql.exec<{ event_id: string }>(
-                        "SELECT event_id FROM session_event_receipts WHERE session_id = ?",
-                        sessionId,
-                    ),
-                ];
-                expect(receipts.length).toBeGreaterThan(0);
+                expect(sessionTables).toEqual([]);
             });
 
             const readResource = async (path: string) =>

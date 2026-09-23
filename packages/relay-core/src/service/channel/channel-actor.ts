@@ -12,6 +12,7 @@ import {
     AGENT_SETTINGS_DISCOVER_KIND,
     AGENT_SETTINGS_DISCOVERED_KIND,
     AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
+    type CommittedSessionEvent,
     type DaemonToServiceMessage,
     decodeAgentCatalogRefreshCommand,
     decodeAgentInstallCancelCommand,
@@ -50,11 +51,9 @@ import {
     NATIVE_SESSION_RESULT_KIND,
     NATIVE_SESSION_TURN_FORK_REQUEST_KIND,
     type NativeSessionCommand,
-    type NativeSessionHistory,
     type NativeSessionTurnForkCommand,
     type NativeSessionTurnForkRequest,
     ProtocolMessageError,
-    type RecordedSessionEvent,
     RUNTIME_DELIVERY_COMMITTED_KIND,
     RUNTIME_DELIVERY_KIND,
     RUNTIME_DELIVERY_RECEIVED_KIND,
@@ -63,9 +62,8 @@ import {
     SESSION_CONFIGURE_KIND,
     SESSION_ELICITATION_RESPOND_KIND,
     SESSION_EVENT_ACK_KIND,
-    SESSION_EVENT_DEFERRED_KIND,
+    SESSION_EVENT_COMMITTED_KIND,
     SESSION_EVENT_KIND,
-    SESSION_EVENT_REJECTED_KIND,
     SESSION_FAILED_KIND,
     SESSION_LIVE_HISTORY_LOAD_KIND,
     SESSION_LIVE_HISTORY_LOADED_KIND,
@@ -77,16 +75,11 @@ import {
     SESSION_PROMPT_KIND,
     SESSION_READY_KIND,
     type ServiceToDaemonMessage,
-    type SessionEventEnvelope,
-    type SessionEventRejection,
-    SessionEventRejectionCode,
-    type SessionPrepareCommand,
     validateSessionEventEnvelope,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-protocol";
 import {
-    CreateSessionBindingRequest,
     CreateSessionRequest,
     type ProjectScope,
     SessionRecordingPolicy,
@@ -99,15 +92,8 @@ import type { RuntimeConnectionService } from "./runtime-connection-service.ts";
 const DEFAULT_RETENTION_MILLISECONDS = 30 * 24 * 60 * 60 * 1_000;
 const RUNTIME_DELIVERY_WINDOW = 16;
 const RUNTIME_DELIVERY_BYTE_LIMIT = 16 * 1024 * 1024;
-const SESSION_EVENT_BACKPRESSURE_RETRY_MILLISECONDS = 1_000;
+const _SESSION_EVENT_BACKPRESSURE_RETRY_MILLISECONDS = 1_000;
 const NATIVE_IMPORT_DEADLINE_MILLISECONDS = 5 * 60 * 1_000;
-const nonRetainedNativeHistory = (): NativeSessionHistory => ({
-    cause: {
-        code: "native_history_not_retained",
-        message: "Native message history is not retained in the cloud for this Session.",
-    },
-    status: "unavailable",
-});
 const MAX_PENDING_NATIVE_IMPORTS = 4;
 const AGENT_SETTINGS_DISCOVERY_DEADLINE_MILLISECONDS = 2 * 60 * 1_000;
 const AGENT_CATALOG_REFRESH_DEADLINE_MILLISECONDS = 2 * 60 * 1_000;
@@ -144,7 +130,7 @@ function sessionErrorCloseCode(error: SessionRuntimeError): 1008 | 1011 | 1013 {
     return 1008;
 }
 
-function isTerminalSessionEventError(error: SessionRuntimeError): boolean {
+function _isTerminalSessionEventError(error: SessionRuntimeError): boolean {
     return (
         error.code === "event_source_conflict" ||
         error.code === "session_access_denied" ||
@@ -153,7 +139,7 @@ function isTerminalSessionEventError(error: SessionRuntimeError): boolean {
     );
 }
 
-function isDeferredSessionEventError(error: SessionRuntimeError): boolean {
+function _isDeferredSessionEventError(error: SessionRuntimeError): boolean {
     return (
         error.code === "session_busy" ||
         error.code === "session_storage_timeout" ||
@@ -221,6 +207,7 @@ export class ChannelActor {
     readonly #inFlightDeliveries = new Map<string, number>();
     #inFlightDeliveryBytes = 0;
     #deliveryReceipts = false;
+    #liveEventSequence = 0n;
     #dispatchTail: Promise<void> = Promise.resolve();
 
     constructor(cx: {
@@ -244,16 +231,14 @@ export class ChannelActor {
         this.#scope = scope;
     }
 
-    readonly attachDaemon = async (replacedExistingConnection: boolean, signal: AbortSignal): Promise<void> => {
+    readonly attachDaemon = async (replacedExistingConnection: boolean, _signal: AbortSignal): Promise<void> => {
         this.#clearInFlightDeliveries();
         if (replacedExistingConnection) {
             this.failPendingAgentCatalogRefreshes();
             this.failPendingAgentSettingsDiscoveries();
             this.#pendingNativeImports.clear();
-            await this.#commands.markRuntimeDisconnected(this.#scope, this.#runtimeId, this.#clock.now(), signal);
         }
         this.broadcastRuntimeStatus(true);
-        await this.dispatchPending(signal);
     };
 
     readonly configureDaemonDelivery = (deliveryReceipts: boolean): void => {
@@ -299,7 +284,7 @@ export class ChannelActor {
         return Promise.resolve();
     };
 
-    readonly detachDaemon = async (socket: ChannelSocket, signal: AbortSignal): Promise<void> => {
+    readonly detachDaemon = async (socket: ChannelSocket, _signal: AbortSignal): Promise<void> => {
         const anotherDaemonOnline = this.#peers
             .daemons()
             .some((candidate) => !candidate.isSame(socket) && candidate.isOpen());
@@ -310,7 +295,6 @@ export class ChannelActor {
         this.failPendingAgentCatalogRefreshes();
         this.failPendingAgentSettingsDiscoveries();
         this.#pendingNativeImports.clear();
-        await this.#commands.markRuntimeDisconnected(this.#scope, this.#runtimeId, this.#clock.now(), signal);
         this.broadcastRuntimeStatus(false);
     };
 
@@ -357,80 +341,36 @@ export class ChannelActor {
             }
             if (kind === SESSION_EVENT_KIND) {
                 const envelope = message;
-                const sourceKey = this.sessionEventSourceKey(envelope);
-                const backpressuredEventId = this.#backpressuredEventBySource.get(sourceKey);
-                if (backpressuredEventId !== undefined && backpressuredEventId !== envelope.eventId) {
-                    this.deferSessionEvent(socket, envelope);
-                    return;
-                }
-                const event = validateSessionEventEnvelope(envelope);
-                let result: Awaited<ReturnType<SessionCommandRuntime["commitEvent"]>>;
-                try {
-                    result = await this.#commands.commitEvent(
-                        this.#scope,
-                        this.#runtimeId,
-                        envelope,
-                        this.#clock.now(),
-                        signal,
-                    );
-                } catch (error) {
-                    if (!signal.aborted && error instanceof SessionRuntimeError && isDeferredSessionEventError(error)) {
-                        this.#backpressuredEventBySource.set(sourceKey, envelope.eventId);
-                        this.deferSessionEvent(socket, envelope);
-                        return;
-                    }
-                    if (backpressuredEventId === envelope.eventId) {
-                        this.#backpressuredEventBySource.delete(sourceKey);
-                    }
-                    if (!signal.aborted && error instanceof SessionRuntimeError && error.code === "session_deleted") {
-                        this.rejectSessionEvent(socket, envelope, event, SessionEventRejectionCode.SessionDeleted);
-                        return;
-                    }
-                    if (!signal.aborted && error instanceof SessionRuntimeError && error.code === "session_not_found") {
-                        if (this.hasPendingNativeSessionRegistration(envelope.sessionId)) {
-                            this.#backpressuredEventBySource.set(sourceKey, envelope.eventId);
-                            this.deferSessionEvent(socket, envelope);
-                            return;
-                        }
-                        this.rejectSessionEvent(socket, envelope, event, SessionEventRejectionCode.SessionNotFound);
-                        return;
-                    }
-                    if (!signal.aborted && error instanceof SessionRuntimeError && isTerminalSessionEventError(error)) {
-                        this.rejectSessionEvent(socket, envelope, event, SessionEventRejectionCode.SessionRejected);
-                        return;
-                    }
-                    throw error;
-                }
-                if (backpressuredEventId === envelope.eventId) {
-                    this.#backpressuredEventBySource.delete(sourceKey);
-                }
+                validateSessionEventEnvelope(envelope);
+                const timeSequence = BigInt(this.#clock.now()) * 1_000_000n;
+                this.#liveEventSequence =
+                    this.#liveEventSequence >= timeSequence ? this.#liveEventSequence + 1n : timeSequence;
+                const sequence = String(this.#liveEventSequence);
+                const committed: CommittedSessionEvent = {
+                    cursor: envelope.eventId,
+                    eventId: envelope.eventId,
+                    kind: SESSION_EVENT_COMMITTED_KIND,
+                    payload: envelope.payload,
+                    recordedAt: new Date(this.#clock.now()).toISOString(),
+                    sequence,
+                    sessionId: envelope.sessionId,
+                    source: envelope.source,
+                };
+                this.broadcast(this.#peers.hosts(), encodeCommittedSessionEvent(committed));
                 socket.send(
                     encodeServiceToDaemonMessage({
-                        cursor: result.committed.cursor,
-                        duplicate: result.duplicate,
-                        eventId: result.committed.eventId,
+                        cursor: committed.cursor,
+                        duplicate: false,
+                        eventId: committed.eventId,
                         kind: SESSION_EVENT_ACK_KIND,
-                        sequence: result.committed.sequence,
-                        sessionId: result.committed.sessionId,
+                        sequence,
+                        sessionId: committed.sessionId,
                     }),
                 );
-                if (!result.duplicate) {
-                    this.broadcast(this.#peers.hosts(), encodeCommittedSessionEvent(result.committed));
-                }
-                if (
-                    !result.duplicate &&
-                    (decodeMessageKind(envelope.payload) === "session.completed" ||
-                        decodeMessageKind(envelope.payload) === "session.failed")
-                ) {
-                    // The Turn reached a terminal outcome, so this Session no longer holds Runtime work.
-                    this.clearActiveSession(envelope.sessionId);
-                    await this.dispatchPending(signal);
-                }
                 return;
             }
             if (kind === NATIVE_SESSION_RESULT_KIND) {
                 const result = message;
-                let forwardedMessage: DaemonToServiceMessage = message;
                 if (result.action === "import" || result.action === "fork") {
                     const pending = this.#pendingNativeImports.get(result.requestId);
                     if (
@@ -443,28 +383,9 @@ export class ChannelActor {
                     ) {
                         throw new ProtocolMessageError("The native session result does not match a pending import");
                     }
-                    await this.#commands.createSession(pending.scope, pending.request, this.#clock.now(), signal);
-                    const target = await this.#queries.readSession(pending.scope, result.targetSessionId, signal);
-                    if (
-                        target.runtimeId !== this.#runtimeId ||
-                        target.agentId !== result.ready.agentId ||
-                        target.defaultBinding.workspaceRef !== result.ready.directoryId
-                    ) {
+                    if (pending.request.directoryId !== result.ready.directoryId) {
                         throw new ProtocolMessageError("The native session result resolved to a different binding");
                     }
-                    if (result.ready.sessionId !== result.targetSessionId) {
-                        const existing = await this.#queries.readSession(pending.scope, result.ready.sessionId, signal);
-                        if (existing.runtimeId !== this.#runtimeId || existing.agentId !== result.ready.agentId) {
-                            throw new ProtocolMessageError("The native session result resolved to a different binding");
-                        }
-                        await this.#commands.deleteSession(
-                            pending.scope,
-                            result.targetSessionId,
-                            this.#clock.now(),
-                            signal,
-                        );
-                    }
-                    forwardedMessage = { ...result, history: nonRetainedNativeHistory() };
                 } else if (result.action === "preview") {
                     const pending = this.#pendingNativeImports.get(result.requestId);
                     if (
@@ -481,7 +402,7 @@ export class ChannelActor {
                         throw new ProtocolMessageError("The native preview does not match a pending import");
                     }
                 }
-                this.broadcast(this.#peers.hosts(), encodeDaemonToServiceMessage(forwardedMessage));
+                this.broadcast(this.#peers.hosts(), encodeDaemonToServiceMessage(message));
                 this.#pendingNativeImports.delete(result.requestId);
                 return;
             }
@@ -535,50 +456,6 @@ export class ChannelActor {
         }
     };
 
-    private readonly deferSessionEvent = (socket: ChannelSocket, envelope: SessionEventEnvelope): void => {
-        socket.send(
-            encodeServiceToDaemonMessage({
-                eventId: envelope.eventId,
-                kind: SESSION_EVENT_DEFERRED_KIND,
-                retryAfterMilliseconds: SESSION_EVENT_BACKPRESSURE_RETRY_MILLISECONDS,
-                sessionId: envelope.sessionId,
-            }),
-        );
-    };
-
-    private readonly sessionEventSourceKey = (envelope: SessionEventEnvelope): string =>
-        envelope.source.kind === "attempt"
-            ? `attempt:${envelope.sessionId}:${envelope.source.attemptId}`
-            : `runtime:${envelope.sessionId}`;
-
-    private readonly rejectSessionEvent = (
-        socket: ChannelSocket,
-        envelope: SessionEventEnvelope,
-        event: RecordedSessionEvent,
-        code: SessionEventRejection["code"],
-    ): void => {
-        socket.send(
-            encodeServiceToDaemonMessage({
-                code,
-                eventId: envelope.eventId,
-                kind: SESSION_EVENT_REJECTED_KIND,
-                sessionId: envelope.sessionId,
-            }),
-        );
-        if ("commandId" in event) {
-            this.broadcast(
-                this.#peers.hosts(),
-                encodeSessionFailedEvent({
-                    code: "session_event_rejected",
-                    commandId: event.commandId,
-                    kind: SESSION_FAILED_KIND,
-                    message: "The Runtime response was rejected by the Session",
-                    sessionId: envelope.sessionId,
-                }),
-            );
-        }
-    };
-
     readonly receiveHostMessage = async (
         scope: ProjectScope,
         socket: ChannelSocket,
@@ -593,92 +470,11 @@ export class ChannelActor {
             const kind = decodeMessageKind(message);
             if (kind === SESSION_PROMPT_KIND) {
                 const command = decodeSessionPromptCommand(message);
-                if (!this.hasOnlineDaemon()) {
-                    socket.send(
-                        encodeSessionFailedEvent({
-                            code: "runtime_offline",
-                            commandId: command.commandId,
-                            kind: SESSION_FAILED_KIND,
-                            message: "The local runtime is offline; the command was not accepted",
-                            sessionId: command.sessionId,
-                        }),
-                    );
-                    return;
-                }
-                let acceptance: Awaited<ReturnType<SessionCommandRuntime["acceptTurn"]>>;
-                try {
-                    acceptance = await this.#commands.acceptTurn(
-                        scope,
-                        this.#runtimeId,
-                        command,
-                        this.#clock.now(),
-                        signal,
-                    );
-                } catch (error) {
-                    if (error instanceof SessionRuntimeError) {
-                        socket.send(
-                            encodeSessionFailedEvent({
-                                code: error.code,
-                                commandId: command.commandId,
-                                kind: SESSION_FAILED_KIND,
-                                message: error.message,
-                                sessionId: command.sessionId,
-                            }),
-                        );
-                        return;
-                    }
-                    throw error;
-                }
-                if (acceptance.kind === "duplicate") {
-                    socket.send(
-                        encodeSessionFailedEvent({
-                            code: `duplicate_${acceptance.state}`,
-                            commandId: command.commandId,
-                            kind: SESSION_FAILED_KIND,
-                            message: "The command was already accepted and was not executed again",
-                            sessionId: command.sessionId,
-                        }),
-                    );
-                    return;
-                }
-                await this.dispatchPending(signal);
-                this.broadcast(this.#peers.hosts(), message);
+                this.forwardControl(socket, command, command.commandId, command.sessionId);
                 return;
             }
             if (kind === SESSION_PREPARE_KIND) {
                 const command = decodeSessionPrepareCommand(message);
-                if (command.transient === true) {
-                    this.forwardControl(socket, command, command.requestId, command.sessionId);
-                    return;
-                }
-                const now = this.#clock.now();
-                if (command.sessionState === "provisioned") {
-                    await this.reconcilePreparedSession(scope, command, now, signal);
-                    const { sessionState, ...daemonCommand } = command;
-                    void sessionState;
-                    this.forwardControl(socket, daemonCommand, command.requestId, command.sessionId);
-                    return;
-                }
-                try {
-                    await this.#commands.createSession(
-                        scope,
-                        new CreateSessionRequest(
-                            command.sessionId,
-                            this.#runtimeId,
-                            command.agentId,
-                            command.bindingId,
-                            command.directoryId,
-                            new SessionRecordingPolicy("full", DEFAULT_RETENTION_MILLISECONDS, 1_000, 6_000_000),
-                        ),
-                        now,
-                        signal,
-                    );
-                } catch (error) {
-                    if (!(error instanceof SessionRuntimeError) || error.code !== "session_conflict") {
-                        throw error;
-                    }
-                    await this.reconcilePreparedSession(scope, command, now, signal);
-                }
                 this.forwardControl(socket, command, command.requestId, command.sessionId);
                 return;
             }
@@ -841,54 +637,12 @@ export class ChannelActor {
             }
             if (kind === SESSION_PERMISSION_RESPOND_KIND) {
                 const command = decodeSessionPermissionRespondCommand(message);
-                try {
-                    await this.acceptAndDeliverInteractionResponse(
-                        scope,
-                        command.sessionId,
-                        command.interactionId,
-                        {
-                            content: JSON.stringify({
-                                optionId: command.optionId,
-                                outcome: command.outcome,
-                            }),
-                            kind: "permission",
-                        },
-                        message,
-                        signal,
-                    );
-                } catch (error) {
-                    if (this.sendInteractionFailure(socket, command.sessionId, command.interactionId, error)) {
-                        return;
-                    }
-                    throw error;
-                }
-                this.broadcast(this.#peers.hosts(), message);
+                this.forwardControl(socket, command, command.interactionId, command.sessionId);
                 return;
             }
             if (kind === SESSION_ELICITATION_RESPOND_KIND) {
                 const command = decodeSessionElicitationRespondCommand(message);
-                try {
-                    await this.acceptAndDeliverInteractionResponse(
-                        scope,
-                        command.sessionId,
-                        command.interactionId,
-                        {
-                            content: JSON.stringify({
-                                action: command.action,
-                                content: command.content,
-                            }),
-                            kind: "elicitation",
-                        },
-                        message,
-                        signal,
-                    );
-                } catch (error) {
-                    if (this.sendInteractionFailure(socket, command.sessionId, command.interactionId, error)) {
-                        return;
-                    }
-                    throw error;
-                }
-                this.broadcast(this.#peers.hosts(), message);
+                this.forwardControl(socket, command, command.interactionId, command.sessionId);
                 return;
             }
             const control = this.validateHostControl(kind, message);
@@ -1058,49 +812,12 @@ export class ChannelActor {
         }
     };
 
-    private readonly reconcilePreparedSession = async (
-        scope: ProjectScope,
-        command: SessionPrepareCommand,
-        now: number,
-        signal: AbortSignal,
-    ): Promise<void> => {
-        const existing = await this.#queries.readSession(scope, command.sessionId, signal);
-        if (
-            existing.defaultBinding.bindingId !== command.bindingId ||
-            existing.defaultBinding.runtimeId !== this.#runtimeId ||
-            existing.defaultBinding.agentRef !== command.agentId ||
-            existing.defaultBinding.workspaceRef !== command.directoryId
-        ) {
-            await this.#commands.setDefaultBinding(
-                scope,
-                command.sessionId,
-                new CreateSessionBindingRequest(
-                    command.bindingId,
-                    this.#runtimeId,
-                    command.agentId,
-                    command.directoryId,
-                ),
-                now,
-                signal,
-            );
-        }
-    };
-
     private readonly expireNativeImports = (now: number): void => {
         for (const [requestId, pending] of this.#pendingNativeImports) {
             if (pending.expiresAt <= now) {
                 this.#pendingNativeImports.delete(requestId);
             }
         }
-    };
-
-    private readonly hasPendingNativeSessionRegistration = (sessionId: string): boolean => {
-        for (const pending of this.#pendingNativeImports.values()) {
-            if (pending.action !== "preview" && pending.request.sessionId === sessionId) {
-                return true;
-            }
-        }
-        return false;
     };
 
     private readonly forwardControl = (
@@ -1325,54 +1042,6 @@ export class ChannelActor {
         } catch {
             return false;
         }
-    };
-
-    private readonly acceptAndDeliverInteractionResponse = async (
-        scope: ProjectScope,
-        sessionId: string,
-        interactionId: string,
-        response: Readonly<{
-            content: string;
-            kind: "elicitation" | "permission";
-        }>,
-        payload: string,
-        signal: AbortSignal,
-    ): Promise<void> => {
-        const accepted = await this.#commands.acceptInteractionResponse(
-            scope,
-            sessionId,
-            interactionId,
-            "project-client",
-            response,
-            payload,
-            this.#clock.now(),
-            signal,
-        );
-        if (accepted.pendingWork.state.kind === "completed") {
-            return;
-        }
-        await this.dispatchPending(signal);
-    };
-
-    private readonly sendInteractionFailure = (
-        socket: ChannelSocket,
-        sessionId: string,
-        interactionId: string,
-        error: unknown,
-    ): boolean => {
-        if (!(error instanceof SessionRuntimeError)) {
-            return false;
-        }
-        socket.send(
-            encodeSessionOperationFailedEvent({
-                code: error.code,
-                kind: SESSION_OPERATION_FAILED_KIND,
-                message: error.message,
-                requestId: interactionId,
-                sessionId,
-            }),
-        );
-        return true;
     };
 
     readonly dispatchPending = async (signal: AbortSignal): Promise<void> => {
