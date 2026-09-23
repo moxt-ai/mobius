@@ -19,7 +19,31 @@
     "migrations": [
         {
             "tag": "platform-initial",
-            "new_sqlite_classes": ["RuntimeRelay", "ProjectRelay"]
+            "new_sqlite_classes": ["RuntimeRelay", "PlatformSessionRelay", "BotConnectionActor"]
+        },
+        {
+            "tag": "platform-project-relay",
+            "new_sqlite_classes": ["ProjectRelay"]
+        },
+        {
+            "tag": "platform-remove-bot-connections",
+            "deleted_classes": ["BotConnectionActor"]
+        },
+        {
+            "tag": "platform-non-cloud-retention-session-relay",
+            "new_sqlite_classes": ["NonCloudRetentionSessionRelayDO"]
+        },
+        {
+            "tag": "platform-remove-non-cloud-retention-session-relay",
+            "deleted_classes": ["NonCloudRetentionSessionRelayDO"]
+        },
+        {
+            "tag": "platform-recreate-non-cloud-retention-session-relay",
+            "new_sqlite_classes": ["NonCloudRetentionSessionRelayDO"]
+        },
+        {
+            "tag": "platform-remove-legacy-session-relays",
+            "deleted_classes": ["PlatformSessionRelay", "NonCloudRetentionSessionRelayDO"]
         }
     ],
     "d1_databases": [
