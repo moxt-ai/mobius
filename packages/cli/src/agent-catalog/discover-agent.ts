@@ -21,6 +21,7 @@ import {
     InProcessAcpAgentDefinition,
     type LocalAgentSpecification,
 } from "./agent-specification.ts";
+import { isAgentVersionSupported } from "./agent-version.ts";
 import { probeVersion, resolveAdapterExecutables, resolveAgentExecutables } from "./executable-discovery.ts";
 
 import {
@@ -121,6 +122,18 @@ export async function discoverAgent(
                 context.signal.throwIfAborted();
             }
             lastFailure = agentProbeFailure(specification, error);
+            continue;
+        }
+        const supportedVersion = isAgentVersionSupported(agentVersion, specification.minimumSupportedAgentVersion);
+        if (supportedVersion === null) {
+            lastFailure = new AgentProbeFailed(
+                specification,
+                "agent_probe_failed",
+                "Agent reported an unrecognized version",
+            );
+            continue;
+        }
+        if (!supportedVersion) {
             continue;
         }
 

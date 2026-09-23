@@ -26,6 +26,8 @@ export abstract class LocalAgentSpecification {
     abstract readonly launchArguments: readonly string[];
     abstract readonly managedAdapterExecutablePath: readonly string[];
     abstract readonly managedAgentExecutablePath: readonly string[];
+    readonly minimumSupportedAgentVersion: string = "0.0.0";
+    readonly maximumTestedAgentVersion: string = "0.0.0";
     readonly acpProbeTimeoutMilliseconds: number = ACP_PROBE_TIMEOUT_MILLISECONDS;
     readonly authenticationCommand = (): string => "";
     readonly adapterVersionArguments: readonly string[] = ["--version"];

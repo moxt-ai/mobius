@@ -5,6 +5,7 @@ import {
     startProductionMobiusCli,
     startStandaloneDeployment,
 } from "../../../e2e/support/standalone.ts";
+import { supportedLocalAgentSpecifications } from "../../../packages/cli/src/agent-catalog/agents/supported-agent-specifications.ts";
 import {
     MobiusClient,
     MobiusPermissionResponseRequest,
@@ -65,6 +66,10 @@ export async function startAgentDaemonJourney(options: {
     readonly signal: AbortSignal;
     readonly title: string;
 }): Promise<AgentDaemonJourney> {
+    const specification = supportedLocalAgentSpecifications().find(({ id }) => id === options.agentId);
+    if (specification === undefined) {
+        throw new Error(`Unknown Agent ${options.agentId}`);
+    }
     const deployment = await startStandaloneDeployment();
     let daemon: ProductionMobiusCli | undefined;
     let client: MobiusClient | undefined;
@@ -87,7 +92,7 @@ export async function startAgentDaemonJourney(options: {
                     agents: [
                         expect.objectContaining({
                             agentPath: options.agentPath,
-                            agentVersion: expect.any(String),
+                            agentVersion: expect.stringContaining(specification.maximumTestedAgentVersion),
                             id: options.agentId,
                         }),
                     ],

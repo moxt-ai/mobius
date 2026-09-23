@@ -21,7 +21,7 @@ The fake provider replaces only the hosted model. The Agent executable, its
 normal configuration, its provider client, the ACP adapter, the daemon, and the
 server protocol path are real production code.
 
-## What a case proves
+## What a real Agent journey proves
 
 A case must show that:
 
@@ -33,6 +33,12 @@ A case must show that:
 4. the tool activity crosses ACP and is visible in persisted server history;
    and
 5. the prompt completes with the final provider response in that history.
+
+The discovery-only Oh My Pi case is intentionally narrower: it installs and
+executes the vendor package, verifies its reported version, and completes the
+production ACP readiness probe. Version boundaries remain in the centralized
+discovery policy suite; synthetic version input is used only for the below-minimum
+and future-version boundaries that one installed executable cannot provide.
 
 Do not drive the scenario by calling Agent discovery, `AcpSessionManager`, an
 ACP client, or the Agent executable from the test. Those are internal links in
@@ -67,7 +73,9 @@ tests/agent-daemon/
     acp-session-lifecycle.integration.test.ts
     acp-session-settings.integration.test.ts
     acp-session-features.integration.test.ts
-    agent-discovery.integration.test.ts
+    agent-discovery/
+      runtime.integration.test.ts
+      version-policy.integration.test.ts
     daemon-connection-liveness.integration.test.ts
     daemon-session-settings.integration.test.ts
     deepseek-harness.integration.test.ts
@@ -86,6 +94,7 @@ tests/agent-daemon/
     grok.integration.test.ts
     hermes.integration.test.ts
     opencode.integration.test.ts
+    oh-my-pi.integration.test.ts
     pi.integration.test.ts
     workbuddy.integration.test.ts
   infra/
@@ -115,6 +124,13 @@ vendor adapter. Shared behavior is named for that behavior; vendor-specific
 discovery, configuration, and compatibility are named for the concrete Agent.
 The files use the same controllable ACP executable from `fixtures/`; there is
 no command-shell suite or second fake Agent.
+
+`controlled-agent/agent-discovery/` is the one discovery control surface.
+`runtime.integration.test.ts` covers executable selection and readiness failure
+behavior. `version-policy.integration.test.ts` reads every production Agent
+specification and proves that versions below its declared minimum are treated
+as missing, its highest tested version is accepted, and newer versions remain
+eligible for the behavioral readiness probe.
 
 Each file in `real/` is the compatibility control surface: it names the real
 Agent, provider, and Agent-specific behavior. `infra/journey.ts` keeps the
@@ -153,11 +169,17 @@ The Claude, Codex, GitHub Copilot CLI, Cursor CLI, DeepSeek Harness, Gemini, Gro
 `MOBIUS_TEST_DEEPSEEK_HARNESS_PATH`,
 `MOBIUS_TEST_GROK_BUILD_PATH`,
 `MOBIUS_TEST_HERMES_PATH`,
+`MOBIUS_TEST_OH_MY_PI_PATH`,
 `MOBIUS_TEST_PI_PATH`, `MOBIUS_TEST_PI_ACP_PATH`, and `MOBIUS_TEST_WORKBUDDY_PATH`, with Gemini using
 `MOBIUS_TEST_GEMINI_PATH`. Without overrides, cases resolve their executables
 from `PATH`. CI installs the repository-tested versions and runs each Agent as
 an independent matrix job. Missing Agent software is a setup failure, not a
 skipped test.
+
+The real jobs assert the version reported by the installed executable before
+continuing through the Agent journey. Their install directories are cached by
+operating system, architecture, Node version, Agent, and exact package version;
+a cache hit skips installation but never skips discovery or execution.
 
 CI creates matrix jobs only for Agents affected by the Git diff. Agent-owned
 cases, fixtures, and specifications select one Agent; shared provider fixtures

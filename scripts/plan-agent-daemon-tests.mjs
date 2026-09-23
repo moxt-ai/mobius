@@ -2,17 +2,26 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 
 export const agentDaemonConfigurations = [
-    { agent: "opencode", packages: "opencode-ai@1.18.29" },
-    { agent: "codex", packages: "@openai/codex@0.154.0" },
-    { agent: "copilot", packages: "@github/copilot@1.0.83" },
-    { agent: "cursor", packages: "" },
-    { agent: "pi", packages: "@earendil-works/pi-coding-agent@0.85.0 pi-acp@0.0.33" },
-    { agent: "gemini", packages: "@google/gemini-cli@0.59.0" },
-    { agent: "claude", packages: "@anthropic-ai/claude-code@2.1.273 @agentclientprotocol/claude-agent-acp@0.73.0" },
-    { agent: "deepseek", packages: "@deepseek-ai/dsh@0.1.2-rc.1" },
-    { agent: "hermes", packages: "" },
-    { agent: "grok", packages: "@xai-official/grok@1.0.21" },
-    { agent: "workbuddy", packages: "@tencent-ai/codebuddy-code@2.146.0" },
+    { agent: "opencode", cacheKey: "opencode-1.18.29", packages: "opencode-ai@1.18.29" },
+    { agent: "codex", cacheKey: "codex-0.154.0", packages: "@openai/codex@0.154.0" },
+    { agent: "copilot", cacheKey: "copilot-1.0.83", packages: "@github/copilot@1.0.83" },
+    { agent: "cursor", cacheKey: "cursor-2026.09.15-d2fe57e", packages: "" },
+    { agent: "pi", cacheKey: "pi-0.85.0-acp-0.0.33", packages: "@earendil-works/pi-coding-agent@0.85.0 pi-acp@0.0.33" },
+    { agent: "gemini", cacheKey: "gemini-0.59.0", packages: "@google/gemini-cli@0.59.0" },
+    {
+        agent: "claude",
+        cacheKey: "claude-2.1.273-acp-0.73.0",
+        packages: "@anthropic-ai/claude-code@2.1.273 @agentclientprotocol/claude-agent-acp@0.73.0",
+    },
+    { agent: "deepseek", cacheKey: "deepseek-0.1.2-rc.1", packages: "@deepseek-ai/dsh@0.1.2-rc.1" },
+    { agent: "hermes", cacheKey: "hermes-2026.9.7", packages: "" },
+    { agent: "grok", cacheKey: "grok-1.0.21", packages: "@xai-official/grok@1.0.21" },
+    { agent: "workbuddy", cacheKey: "workbuddy-2.146.0", packages: "@tencent-ai/codebuddy-code@2.146.0" },
+    {
+        agent: "oh-my-pi",
+        cacheKey: "oh-my-pi-18.2.7-bun-1.4.2",
+        packages: "bun@1.4.2 @oh-my-pi/pi-coding-agent@18.2.7",
+    },
 ];
 
 const allAgents = agentDaemonConfigurations.map(({ agent }) => agent);
@@ -28,6 +37,7 @@ const agentFiles = new Map(
         ["hermes", "hermes-agent"],
         ["grok", "grok-build-agent"],
         ["opencode", "opencode-agent"],
+        ["oh-my-pi", "oh-my-pi-agent"],
         ["pi", "pi-agent"],
         ["workbuddy", "workbuddy-agent"],
     ].flatMap(([agent, specification]) => [

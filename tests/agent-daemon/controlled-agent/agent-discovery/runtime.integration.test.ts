@@ -6,8 +6,8 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { AcpSessionManager } from "../../../packages/cli/src/acp/session-manager.ts";
-import { formatAgentDiagnostics } from "../../../packages/cli/src/agent-catalog/agent-diagnostics.ts";
+import { AcpSessionManager } from "../../../../packages/cli/src/acp/session-manager.ts";
+import { formatAgentDiagnostics } from "../../../../packages/cli/src/agent-catalog/agent-diagnostics.ts";
 import {
     AvailableAgent,
     CodexAgentSpecification,
@@ -17,15 +17,15 @@ import {
     OpenCodeAgentSpecification,
     PiAgentSpecification,
     resolveAgentExecutable,
-} from "../../../packages/cli/src/agent-catalog/discover-local-agents.ts";
+} from "../../../../packages/cli/src/agent-catalog/discover-local-agents.ts";
 import {
     OPENCODE_MANAGED_VERSION,
     openCodeManagedArchive,
-} from "../../../packages/cli/src/agent-installation/opencode-managed-release.ts";
+} from "../../../../packages/cli/src/agent-installation/opencode-managed-release.ts";
 
-const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
-const fakeAgentPath = fileURLToPath(new URL("../fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
-const turnAppServerUrl = new URL("../fixtures/fake-acp-agent/src/turn-app-server.ts", import.meta.url).toString();
+const repositoryRoot = fileURLToPath(new URL("../../../../", import.meta.url));
+const fakeAgentPath = fileURLToPath(new URL("../../fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
+const turnAppServerUrl = new URL("../../fixtures/fake-acp-agent/src/turn-app-server.ts", import.meta.url).toString();
 
 function executableSource(source: string): string {
     return `#!${process.execPath}\n${source}`;

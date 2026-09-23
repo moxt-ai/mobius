@@ -1,13 +1,22 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { selectAgentDaemonTests } from "./plan-agent-daemon-tests.mjs";
+import { agentDaemonConfigurations, selectAgentDaemonTests } from "./plan-agent-daemon-tests.mjs";
 
 function selected(files) {
     return selectAgentDaemonTests(files).agents.map(({ agent }) => agent);
 }
 
 describe("agent and daemon test planning", () => {
+    it("gives every real Agent installation a unique versioned cache key", () => {
+        const keys = agentDaemonConfigurations.map(({ cacheKey }) => cacheKey);
+        assert.equal(
+            keys.every((key) => key.length > 0),
+            true,
+        );
+        assert.equal(new Set(keys).size, keys.length);
+    });
+
     it("skips documentation and unrelated UI changes", () => {
         assert.deepEqual(selected(["tests/agent-daemon/README.md", "packages/web/src/app.tsx"]), []);
     });
@@ -19,6 +28,7 @@ describe("agent and daemon test planning", () => {
         assert.deepEqual(selected(["tests/agent-daemon/real/hermes.integration.test.ts"]), ["hermes"]);
         assert.deepEqual(selected(["packages/cli/src/agent-catalog/agents/gemini-cli-agent.ts"]), ["gemini"]);
         assert.deepEqual(selected(["packages/cli/src/agent-catalog/agents/grok-build-agent.ts"]), ["grok"]);
+        assert.deepEqual(selected(["packages/cli/src/agent-catalog/agents/oh-my-pi-agent.ts"]), ["oh-my-pi"]);
     });
 
     it("selects one Agent for the in-process protocol it owns", () => {
@@ -52,6 +62,7 @@ describe("agent and daemon test planning", () => {
             "hermes",
             "grok",
             "workbuddy",
+            "oh-my-pi",
         ];
         assert.deepEqual(selected(["packages/cli/src/acp/session-manager.ts"]), all);
         assert.deepEqual(selected(["tests/agent-daemon/new-shared-helper.ts"]), all);
