@@ -91,35 +91,14 @@ describe("Standalone Relay", () => {
         if (typeof runtime !== "object" || runtime === null || typeof Reflect.get(runtime, "runtimeId") !== "string") {
             throw new Error("The Runtime response is invalid");
         }
-        for (const sessionId of ["standalone-first-session", "standalone-second-session"]) {
-            const session = await worker.fetch(
-                new Request("https://standalone.test/mobius/api/v1/projects/standalone/sessions", {
-                    method: "POST",
-                    headers: {
-                        authorization: `Bearer ${env.MOBIUS_STANDALONE_TOKEN}`,
-                        "content-type": "application/json",
-                    },
-                    body: JSON.stringify({
-                        agentId: "codex",
-                        bindingId: "workspace",
-                        directoryId: "root",
-                        policy: {
-                            contentLimitBytes: 2_000_000,
-                            hotEventLimit: 100,
-                            idempotencyRetentionMilliseconds: 86_400_000,
-                            level: "full",
-                            retentionMilliseconds: 86_400_000,
-                        },
-                        runtimeId: Reflect.get(runtime, "runtimeId"),
-                        sessionId,
-                        title: "Standalone Session",
-                    }),
-                }),
-                env,
-            );
-            expect(session.status).toBe(201);
-            expect(await session.json()).toMatchObject({ sessionId });
-        }
+        const retiredSession = await worker.fetch(
+            new Request("https://standalone.test/mobius/api/v1/projects/standalone/sessions/standalone-first-session", {
+                headers: { authorization: `Bearer ${env.MOBIUS_STANDALONE_TOKEN}` },
+            }),
+            env,
+        );
+        expect(retiredSession.status).toBe(410);
+        expect(await retiredSession.json()).toMatchObject({ error: { code: "session_unavailable" } });
 
         const transport = await worker.fetch(
             new Request("https://standalone.test/mobius/api/v1/transport", {
@@ -144,20 +123,7 @@ describe("Standalone Relay", () => {
                 requestId: "read-session",
             }),
         );
-        expect(await response).toMatchObject({ kind: "http.response", requestId: "read-session", status: 200 });
-        const subscribed = nextMessage(socket);
-        socket.send(
-            JSON.stringify({
-                headers: [["authorization", `Bearer ${env.MOBIUS_STANDALONE_TOKEN}`]],
-                kind: "session.events.subscribe",
-                path: "/mobius/api/v1/projects/standalone/sessions/standalone-first-session/events",
-                subscriptionId: "first-session-events",
-            }),
-        );
-        expect(await subscribed).toMatchObject({
-            kind: "session.events.ready",
-            subscriptionId: "first-session-events",
-        });
+        expect(await response).toMatchObject({ kind: "http.response", requestId: "read-session", status: 410 });
         socket.close();
     });
 });

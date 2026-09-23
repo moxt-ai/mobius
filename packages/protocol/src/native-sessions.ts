@@ -57,6 +57,7 @@ export type NativeSessionTurnForkCommand = z.infer<typeof nativeSessionTurnForkC
 
 const nativeSessionRequestSchema = z.discriminatedUnion("action", [
     z.strictObject({ ...identity, action: z.literal("preview"), entryId: identifier }).readonly(),
+    z.strictObject({ ...identity, action: z.literal("history"), entryId: identifier }).readonly(),
     z.strictObject({ ...identity, action: z.literal("find"), nativeSessionId: identifier }).readonly(),
     z
         .strictObject({
@@ -84,6 +85,7 @@ const nativeSessionRequestSchema = z.discriminatedUnion("action", [
 export type NativeSessionRequest = z.infer<typeof nativeSessionRequestSchema>;
 const nativeSessionCommandSchema = z.discriminatedUnion("action", [
     z.strictObject({ ...identity, action: z.literal("preview"), entryId: identifier }).readonly(),
+    z.strictObject({ ...identity, action: z.literal("history"), entryId: identifier }).readonly(),
     z.strictObject({ ...identity, action: z.literal("find"), nativeSessionId: identifier }).readonly(),
     z
         .strictObject({
@@ -121,6 +123,7 @@ export type NativeSessionCommand = z.infer<typeof nativeSessionCommandSchema>;
 const nativeSessionEntrySchema = z
     .strictObject({
         entryId: identifier,
+        mobiusSessionIds: z.array(identifier).max(500).readonly(),
         title: z.string().max(500),
         directoryId,
         directoryLabel: z.string().min(1).max(2_048),
@@ -171,6 +174,15 @@ const nativeSessionResultSchema = z.discriminatedUnion("action", [
             entryId: identifier,
             targetSessionId: identifier,
             reason: z.enum(["continuation_unavailable", "requested"]),
+            history: sessionHistorySchema,
+            title: z.string().max(500),
+        })
+        .readonly(),
+    z
+        .strictObject({
+            ...resultEnvelope,
+            action: z.literal("history"),
+            entryId: identifier,
             history: sessionHistorySchema,
             title: z.string().max(500),
         })

@@ -5,17 +5,10 @@ import {
     decodeCommittedSessionEvent,
     decodeServiceToDaemonMessage,
     decodeSessionPromptCommand,
-    encodeDaemonToServiceMessage,
     encodeSessionEventEnvelope,
+    encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
-    RUNTIME_DELIVERY_COMMITTED_KIND,
-    RUNTIME_DELIVERY_KIND,
-    RUNTIME_DELIVERY_RECEIVED_KIND,
-    SESSION_COMPLETED_KIND,
     SESSION_EVENT_ACK_KIND,
-    SESSION_FAILED_KIND,
-    SESSION_INFO_UPDATED_KIND,
-    SESSION_STARTED_KIND,
 } from "@moxt-ai/mobius-protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestMobiusPlatformApp } from "../../../tests/infra/app.ts";
@@ -192,7 +185,7 @@ describe.sequential("Platform Session-only boundary", () => {
         expect(retired).toMatchObject({ error: { code: "project_permission_invalid" } });
     });
 
-    it("Given a non-retained Session has hibernated, When it resumes, Then delivery remains contiguous and history comes from its Runtime", async () => {
+    it("Given a linked Codex Runtime, When Chat sends a prompt, Then the answer arrives without cloud Session storage", async () => {
         vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
@@ -275,714 +268,107 @@ describe.sequential("Platform Session-only boundary", () => {
         );
         expect(claimed["appId"]).toBe(appId);
         const runtimeId = text(claimed, "runtimeId");
-        const sessionId = "private-reconnect-session";
-        await responseJson(
-            await worker.fetch(
-                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions`, {
-                    body: JSON.stringify({
-                        agentId: "codex",
-                        bindingId: "workspace",
-                        directoryId: "root",
-                        policy: {
-                            contentLimitBytes: 2_000_000,
-                            hotEventLimit: 100,
-                            idempotencyRetentionMilliseconds: 86_400_000,
-                            level: "full",
-                            retentionMilliseconds: 86_400_000,
-                        },
-                        runtimeId,
-                        sessionId,
-                        title: "Private reconnect Session",
-                    }),
-                    headers: credentialHeaders(appCredential),
-                    method: "POST",
-                }),
-                environment,
-            ),
-            201,
-        );
-
-        const sessionStub = environment.RUNTIME_RELAY.getByName(runtimeId);
-        const response = await worker.fetch(
+        const sessionId = "local-codex-session";
+        const daemonResponse = await worker.fetch(
             new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect?deliveryReceipts=1&liveness=1`, {
-                headers: {
-                    authorization: `Bearer ${text(claimed, "runtimeCredential")}`,
-                    Upgrade: "websocket",
-                },
+                headers: { authorization: `Bearer ${text(claimed, "runtimeCredential")}`, Upgrade: "websocket" },
             }),
             environment,
         );
-        expect(response.status).toBe(101);
-        if (response.webSocket === null) {
-            throw new Error("Expected the Runtime WebSocket");
-        }
-        const socket = response.webSocket;
-        const messages = new SocketMessages(socket);
-        socket.accept();
-        try {
-            expect(decodeServiceToDaemonMessage(await messages.next())).toEqual({
-                kind: "runtime.liveness.ready",
-            });
-
-            const turnRequest = {
-                additionalDirectoryIds: [],
-                content: "private prompt must be scrubbed",
-                idempotencyKey: "private-reconnect-turn",
-                images: [
-                    {
-                        data: "cHJpdmF0ZSBpbWFnZSBtdXN0IGJlIHNjcnViYmVk",
-                        mimeType: "image/png",
-                        name: "private.png",
-                    },
-                ],
-                resources: [
-                    {
-                        mimeType: "text/plain",
-                        name: "private.txt",
-                        text: "private resource must be scrubbed",
-                        type: "embedded",
-                        uri: "file:///private.txt",
-                    },
-                ],
-                sessionConfigurations: [
-                    {
-                        booleanValue: false,
-                        configId: "model",
-                        value: "gpt-5.6-terra",
-                        valueType: "select",
-                    },
-                ],
-            };
-            const acceptedTurn = await responseJson(
-                await worker.fetch(
-                    new Request(
-                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/turns`,
-                        {
-                            body: JSON.stringify(turnRequest),
-                            headers: credentialHeaders(appCredential),
-                            method: "POST",
-                        },
-                    ),
-                    environment,
-                ),
-                202,
-            );
-            const turnId = text(acceptedTurn, "turnId");
-            const delivery = decodeServiceToDaemonMessage(await messages.next());
-            if (delivery.kind !== RUNTIME_DELIVERY_KIND) {
-                throw new Error("Expected the private Session prompt delivery");
-            }
-            socket.send(
-                encodeDaemonToServiceMessage({
-                    deliveryId: delivery.deliveryId,
-                    kind: RUNTIME_DELIVERY_RECEIVED_KIND,
-                    sessionId,
-                }),
-            );
-            expect(decodeServiceToDaemonMessage(await messages.next())).toMatchObject({
-                deliveryId: delivery.deliveryId,
-                kind: RUNTIME_DELIVERY_COMMITTED_KIND,
-                sessionId,
-            });
-            const command = decodeSessionPromptCommand(delivery.payload);
-            const attemptId = "private-reconnect-attempt";
-            for (const [eventIndex, event] of [
+        const hostResponse = await worker.fetch(
+            new Request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtimes/${runtimeId}/host?token=${appCredential}`,
                 {
-                    attemptId,
-                    commandId: command.commandId,
-                    kind: SESSION_STARTED_KIND,
-                    sessionId,
-                },
-                {
-                    commandId: command.commandId,
-                    kind: AGENT_MESSAGE_DELTA_KIND,
-                    messageId: "private-reconnect-message",
-                    sessionId,
-                    text: "private response must be scrubbed",
-                },
-                {
-                    commandId: command.commandId,
-                    kind: SESSION_COMPLETED_KIND,
-                    sessionId,
-                    stopReason: "end_turn",
-                },
-            ].entries()) {
-                socket.send(
-                    encodeSessionEventEnvelope({
-                        eventId: `private-reconnect-${event.kind}`,
-                        kind: "session.event",
-                        payload: JSON.stringify(event),
-                        sessionId,
-                        source: { attemptId, kind: "attempt", sourceSeq: (eventIndex + 1).toString() },
-                    }),
-                );
-                expect(decodeServiceToDaemonMessage(await messages.next())).toMatchObject({
-                    eventId: `private-reconnect-${event.kind}`,
-                    kind: SESSION_EVENT_ACK_KIND,
-                    sessionId,
-                });
-            }
-
-            // The Session database cannot store transcript or uploaded image content.
-            await runInDurableObject(sessionStub, async (_instance, state) => {
-                const contentTables = [
-                    ...state.storage.sql.exec<{ name: string }>(
-                        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('session_events', 'session_messages', 'uploaded_artifacts')",
-                    ),
-                ];
-                expect(contentTables).toEqual([]);
-                const receipts = [
-                    ...state.storage.sql.exec<{ event_id: string }>(
-                        "SELECT event_id FROM session_event_receipts WHERE session_id = ?",
-                        sessionId,
-                    ),
-                ];
-                expect(receipts.length).toBeGreaterThan(0);
-            });
-
-            const readResource = async (path: string) =>
-                responseJson(
-                    await worker.fetch(
-                        new Request(
-                            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/${path}`,
-                            { headers: credentialHeaders(appCredential) },
-                        ),
-                        environment,
-                    ),
-                    200,
-                );
-            const additionalTurns = new Map<
-                string,
-                { readonly turnId: string; readonly attemptId: string; readonly commandId: string }
-            >();
-            for (const outcome of ["failed", "running", "steering"]) {
-                const accepted = await responseJson(
-                    await worker.fetch(
-                        new Request(
-                            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/turns`,
-                            {
-                                body: JSON.stringify({
-                                    ...turnRequest,
-                                    content: `private ${outcome} prompt`,
-                                    idempotencyKey: `private-${outcome}-turn`,
-                                    ...(outcome === "steering"
-                                        ? {
-                                              disposition: "steer",
-                                              targetCommandId: additionalTurns.get("running")?.commandId,
-                                          }
-                                        : {}),
-                                }),
-                                headers: credentialHeaders(appCredential),
-                                method: "POST",
-                            },
-                        ),
-                        environment,
-                    ),
-                    202,
-                );
-                const delivered = decodeServiceToDaemonMessage(await messages.next());
-                if (delivered.kind !== RUNTIME_DELIVERY_KIND) {
-                    throw new Error("Expected the additional private Session prompt delivery");
-                }
-                socket.send(
-                    encodeDaemonToServiceMessage({
-                        deliveryId: delivered.deliveryId,
-                        kind: RUNTIME_DELIVERY_RECEIVED_KIND,
-                        sessionId,
-                    }),
-                );
-                expect(decodeServiceToDaemonMessage(await messages.next())).toMatchObject({
-                    deliveryId: delivered.deliveryId,
-                    kind: RUNTIME_DELIVERY_COMMITTED_KIND,
-                });
-                const deliveredCommand = decodeSessionPromptCommand(delivered.payload);
-                const additionalAttemptId = `private-${outcome}-attempt`;
-                const events = [
-                    {
-                        attemptId: additionalAttemptId,
-                        commandId: deliveredCommand.commandId,
-                        kind: SESSION_STARTED_KIND,
-                        sessionId,
-                    },
-                    ...(outcome === "failed"
-                        ? [
-                              {
-                                  code: "agent_failed",
-                                  commandId: deliveredCommand.commandId,
-                                  kind: SESSION_FAILED_KIND,
-                                  message: "private error must be scrubbed",
-                                  sessionId,
-                              },
-                          ]
-                        : outcome === "steering"
-                          ? [
-                                {
-                                    commandId: deliveredCommand.commandId,
-                                    kind: SESSION_COMPLETED_KIND,
-                                    sessionId,
-                                    stopReason: "end_turn",
-                                },
-                            ]
-                          : []),
-                ];
-                for (const [eventIndex, event] of events.entries()) {
-                    const eventId = `private-${outcome}-${eventIndex}`;
-                    socket.send(
-                        encodeSessionEventEnvelope({
-                            eventId,
-                            kind: "session.event",
-                            payload: JSON.stringify(event),
-                            sessionId,
-                            source: {
-                                attemptId: additionalAttemptId,
-                                kind: "attempt",
-                                sourceSeq: (eventIndex + 1).toString(),
-                            },
-                        }),
-                    );
-                    expect(decodeServiceToDaemonMessage(await messages.next())).toMatchObject({
-                        eventId,
-                        kind: SESSION_EVENT_ACK_KIND,
-                    });
-                }
-                const additionalTurnId = text(accepted, "turnId");
-                additionalTurns.set(outcome, {
-                    turnId: additionalTurnId,
-                    attemptId: additionalAttemptId,
-                    commandId: deliveredCommand.commandId,
-                });
-                expect(await readResource(`turns/${additionalTurnId}`)).toMatchObject({
-                    request:
-                        outcome === "running"
-                            ? { content: `private ${outcome} prompt`, kind: "prompt" }
-                            : { kind: "not_retained" },
-                    state: { kind: outcome === "steering" ? "succeeded" : outcome },
-                });
-                if (outcome === "failed") {
-                    expect(await readResource(`attempts/${additionalAttemptId}`)).toMatchObject({
-                        state: { error: { code: "agent_failed" }, kind: "failed" },
-                    });
-                }
-            }
-
-            socket.send(
-                encodeSessionEventEnvelope({
-                    eventId: "private-reconnect-before-eviction",
-                    kind: "session.event",
-                    payload: JSON.stringify({
-                        kind: SESSION_INFO_UPDATED_KIND,
-                        sessionId,
-                        title: "private content must be scrubbed",
-                        updatedAt: "2030-01-01T00:00:00.000Z",
-                    }),
-                    sessionId,
-                    source: { kind: "runtime", sourceSeq: "1" },
-                }),
-            );
-            const beforeEviction = decodeServiceToDaemonMessage(await messages.next());
-            expect(beforeEviction).toMatchObject({
-                eventId: "private-reconnect-before-eviction",
-                kind: SESSION_EVENT_ACK_KIND,
-                sessionId,
-            });
-
-            await runInDurableObject(sessionStub, async (instance, state) => {
-                if (instance.alarm === undefined) {
-                    throw new Error("Expected the non-retained Session alarm handler");
-                }
-                await state.storage.deleteAlarm();
-                await instance.alarm();
-            });
-            expect(await readResource(`turns/${turnId}`)).toMatchObject({
-                request: { kind: "not_retained" },
-                state: { kind: "succeeded" },
-            });
-            vi.setSystemTime(new Date("2030-01-01T00:05:00.000Z"));
-            await runInDurableObject(sessionStub, async (instance, state) => {
-                if (instance.alarm === undefined) {
-                    throw new Error("Expected the non-retained Session alarm handler");
-                }
-                await state.storage.deleteAlarm();
-                await instance.alarm();
-            });
-
-            const scrubbedTurnResponse = await worker.fetch(
-                new Request(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/turns/${turnId}`,
-                    { headers: credentialHeaders(appCredential) },
-                ),
-                environment,
-            );
-            const scrubbedTurn = await responseJson(scrubbedTurnResponse, 200);
-            expect(scrubbedTurn).toMatchObject({
-                request: { kind: "not_retained" },
-                state: { kind: "succeeded" },
-                turnId,
-            });
-            expect(JSON.stringify(scrubbedTurn)).not.toContain("private prompt");
-            expect(JSON.stringify(scrubbedTurn)).not.toContain("private resource");
-            expect(JSON.stringify(scrubbedTurn)).not.toContain("private response");
-            expect(JSON.stringify(scrubbedTurn)).not.toContain("cHJpdmF0ZSBpbWFnZSBtdXN0IGJlIHNjcnViYmVk");
-
-            expect(scrubbedTurn["request"]).toEqual({ kind: "not_retained" });
-            for (const [outcome, resource] of additionalTurns) {
-                const turn = await readResource(`turns/${resource.turnId}`);
-                expect(turn).toMatchObject({
-                    state: { kind: outcome === "steering" ? "succeeded" : outcome },
-                    turnId: resource.turnId,
-                });
-                if (outcome === "failed") {
-                    expect(turn["request"]).toEqual({ kind: "not_retained" });
-                    const attempt = await readResource(`attempts/${resource.attemptId}`);
-                    expect(attempt).toMatchObject({
-                        attemptId: resource.attemptId,
-                        state: { error: { code: "agent_failed" }, kind: "failed" },
-                    });
-                    expect(JSON.stringify({ turn, attempt })).not.toContain("private error");
-                    const retriedFailure = await responseJson(
-                        await worker.fetch(
-                            new Request(
-                                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/turns`,
-                                {
-                                    body: JSON.stringify({
-                                        ...turnRequest,
-                                        content: "private failed prompt",
-                                        idempotencyKey: "private-failed-turn",
-                                    }),
-                                    headers: credentialHeaders(appCredential),
-                                    method: "POST",
-                                },
-                            ),
-                            environment,
-                        ),
-                        202,
-                    );
-                    expect(retriedFailure).toEqual(turn);
-                } else if (outcome === "steering") {
-                    expect(turn["request"]).toEqual({ kind: "not_retained" });
-                } else {
-                    expect(turn["request"]).toMatchObject({ content: "private running prompt", kind: "prompt" });
-                }
-            }
-            const retriedTurn = await responseJson(
-                await worker.fetch(
-                    new Request(
-                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/turns`,
-                        {
-                            body: JSON.stringify(turnRequest),
-                            headers: credentialHeaders(appCredential),
-                            method: "POST",
-                        },
-                    ),
-                    environment,
-                ),
-                202,
-            );
-            expect(retriedTurn).toEqual(scrubbedTurn);
-            vi.setSystemTime(new Date("2030-01-01T00:10:00.000Z"));
-            await runInDurableObject(sessionStub, async (instance, state) => {
-                if (instance.alarm === undefined) {
-                    throw new Error("Expected the non-retained Session alarm handler");
-                }
-                await state.storage.deleteAlarm();
-                await instance.alarm();
-            });
-            expect(await readResource(`turns/${turnId}`)).toEqual(scrubbedTurn);
-
-            for (const [outcome, resource] of additionalTurns) {
-                const turn = await readResource(`turns/${resource.turnId}`);
-                expect(turn).toMatchObject({
-                    state: { kind: outcome === "steering" ? "succeeded" : outcome },
-                    turnId: resource.turnId,
-                });
-                expect(turn["request"]).toMatchObject(
-                    outcome !== "running"
-                        ? { kind: "not_retained" }
-                        : { content: "private running prompt", kind: "prompt" },
-                );
-            }
-            const queuedAfterScrub = await responseJson(
-                await worker.fetch(
-                    new Request(
-                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/turns`,
-                        {
-                            body: JSON.stringify({
-                                ...turnRequest,
-                                content: "Queue after a completed steering Turn was scrubbed",
-                                disposition: "queue",
-                                idempotencyKey: "private-queue-after-scrub",
-                                targetCommandId: additionalTurns.get("running")?.commandId,
-                            }),
-                            headers: credentialHeaders(appCredential),
-                            method: "POST",
-                        },
-                    ),
-                    environment,
-                ),
-                202,
-            );
-            expect(queuedAfterScrub).toMatchObject({ state: { kind: "queued" } });
-            expect(
-                await responseJson(
-                    await worker.fetch(
-                        new Request(
-                            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/export`,
-                            { headers: credentialHeaders(appCredential) },
-                        ),
-                        environment,
-                    ),
-                    409,
-                ),
-            ).toMatchObject({ error: { code: "session_history_not_retained" } });
-
-            const sessionAccess = await responseJson(
-                await worker.fetch(
-                    new Request(
-                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/access-credentials`,
-                        {
-                            body: JSON.stringify({ expiresInSeconds: 3_600 }),
-                            headers: credentialHeaders(appCredential),
-                            method: "POST",
-                        },
-                    ),
-                    environment,
-                ),
-                201,
-            );
-            const sessionAccessCredential = text(sessionAccess, "credential");
-            const transportResponse = await worker.fetch(
-                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/transport`, {
                     headers: { Upgrade: "websocket" },
-                }),
-                environment,
-            );
-            if (transportResponse.webSocket === null) {
-                throw new Error("Expected the browser transport WebSocket");
-            }
-            const transportSocket = transportResponse.webSocket;
-            const transportMessages = new SocketMessages(transportSocket);
-            transportSocket.accept();
-            transportSocket.send(
-                JSON.stringify({
-                    headers: Array.from(credentialHeaders(sessionAccessCredential).entries()),
-                    kind: "session.events.subscribe",
-                    path: `${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/events`,
-                    subscriptionId: "private-live-events",
-                }),
-            );
-            expect(JSON.parse(await transportMessages.next())).toEqual({
-                kind: "session.events.ready",
-                subscriptionId: "private-live-events",
-            });
-
-            socket.send(
-                encodeSessionEventEnvelope({
-                    eventId: "private-reconnect-after-eviction",
-                    kind: "session.event",
-                    payload: JSON.stringify({
-                        kind: SESSION_INFO_UPDATED_KIND,
-                        sessionId,
-                        title: "After eviction",
-                        updatedAt: "2030-01-01T00:00:01.000Z",
-                    }),
+                },
+            ),
+            environment,
+        );
+        expect(daemonResponse.status).toBe(101);
+        expect(hostResponse.status).toBe(101);
+        if (daemonResponse.webSocket === null || hostResponse.webSocket === null) {
+            throw new Error("Expected both channel sockets");
+        }
+        const daemon = daemonResponse.webSocket;
+        const host = hostResponse.webSocket;
+        const daemonMessages = new SocketMessages(daemon);
+        const hostMessages = new SocketMessages(host);
+        daemon.accept();
+        host.accept();
+        try {
+            expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("runtime.liveness.ready");
+            expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "runtime.status", online: true });
+            host.send(
+                encodeSessionPromptCommand({
+                    additionalDirectoryIds: [],
+                    agentId: "codex",
+                    bindingId: "workspace",
+                    commandId: "local-codex-command",
+                    directoryId: "root",
+                    disposition: "reject",
+                    images: [],
+                    kind: "session.prompt",
+                    prompt: "show the local answer",
+                    resources: [],
                     sessionId,
-                    source: { kind: "runtime", sourceSeq: "2" },
+                    targetCommandId: "",
                 }),
             );
-            const committed = decodeServiceToDaemonMessage(await messages.next());
-            expect(committed).toMatchObject({
-                eventId: "private-reconnect-after-eviction",
+            const prompt = decodeServiceToDaemonMessage(await daemonMessages.next());
+            expect(prompt.kind).toBe("session.prompt");
+            if (prompt.kind !== "session.prompt") {
+                throw new Error("Expected the prompt to reach the local Runtime");
+            }
+            expect(decodeSessionPromptCommand(JSON.stringify(prompt)).prompt).toBe("show the local answer");
+            const answer = encodeSessionEventEnvelope({
+                eventId: "local-codex-event",
+                kind: "session.event",
+                payload: JSON.stringify({
+                    commandId: prompt.commandId,
+                    kind: AGENT_MESSAGE_DELTA_KIND,
+                    messageId: "local-codex-message",
+                    sessionId,
+                    text: "local answer",
+                }),
+                sessionId,
+                source: { attemptId: "local-codex-attempt", kind: "attempt", sourceSeq: "1" },
+            });
+            daemon.send(answer);
+            const firstHostMessage = await hostMessages.next();
+            const committedMessage =
+                JSON.parse(firstHostMessage).kind === "session.prompt" ? await hostMessages.next() : firstHostMessage;
+            expect(decodeCommittedSessionEvent(committedMessage).payload).toContain("local answer");
+            expect(decodeServiceToDaemonMessage(await daemonMessages.next())).toMatchObject({
+                eventId: "local-codex-event",
                 kind: SESSION_EVENT_ACK_KIND,
                 sessionId,
             });
-            const liveFrame = record(JSON.parse(await transportMessages.next()));
-            expect(liveFrame).toMatchObject({
-                kind: "session.events.event",
-                subscriptionId: "private-live-events",
-            });
-            const liveEvent = decodeCommittedSessionEvent(text(liveFrame, "data"));
-            expect(text(liveFrame, "eventId")).toBe(liveEvent.cursor);
-            expect(liveEvent).toMatchObject({
-                eventId: "private-reconnect-after-eviction",
+            daemon.send(answer);
+            expect(decodeServiceToDaemonMessage(await daemonMessages.next())).toMatchObject({
+                duplicate: true,
+                eventId: "local-codex-event",
+                kind: SESSION_EVENT_ACK_KIND,
                 sessionId,
             });
-            transportSocket.close();
-
-            const retainedMessagesResponse = await worker.fetch(
-                new Request(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/messages`,
-                    { headers: credentialHeaders(appCredential) },
-                ),
-                environment,
-            );
-            expect(await responseJson(retainedMessagesResponse, 409)).toEqual({
-                error: {
-                    code: "session_history_not_retained",
-                    message: "This Session does not retain Platform message history",
-                },
+            await runInDurableObject(environment.RUNTIME_RELAY.getByName(runtimeId), async (_instance, state) => {
+                const sessionTables = [
+                    ...state.storage.sql.exec<{ name: string }>(
+                        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('sessions', 'session_bindings', 'session_configuration_snapshots', 'turns', 'attempts', 'interactions', 'pending_work', 'command_receipts', 'session_event_receipts', 'runtime_active_sessions')",
+                    ),
+                ];
+                expect(sessionTables).toEqual([]);
             });
-
-            const retainedEventsResponse = await worker.fetch(
-                new Request(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/events`,
-                    {
-                        headers: credentialHeaders(appCredential),
-                    },
-                ),
-                environment,
-            );
-            expect(await responseJson(retainedEventsResponse, 409)).toEqual({
-                error: {
-                    code: "session_history_not_retained",
-                    message: "Cursor-based Session events are unavailable",
-                },
-            });
-
-            const nativeHistoryResponse = worker.fetch(
-                new Request(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/native-messages?limit=2`,
-                    { headers: credentialHeaders(appCredential) },
-                ),
-                environment,
-            );
-            const load = decodeServiceToDaemonMessage(await messages.next());
-            expect(load).toMatchObject({
-                cursor: null,
-                kind: "session.live-history.page.load",
-                limit: 2,
-                sessionId,
-            });
-            if (load.kind !== "session.live-history.page.load") {
-                throw new Error("Expected the live-history page request");
-            }
-            socket.send(
-                encodeDaemonToServiceMessage({
-                    page: {
-                        coveredCommandIds: [],
-                        coveredMessageIds: ["daemon-message:agent"],
-                        messages: [
-                            {
-                                role: "user",
-                                text: "Recent daemon prompt",
-                            },
-                            {
-                                activities: [
-                                    {
-                                        activityId: "reasoning-1",
-                                        activityType: "reasoning",
-                                        content: [],
-                                        input: "",
-                                        locations: [],
-                                        name: "",
-                                        output: "Inspecting the workspace",
-                                        sequence: 0,
-                                        status: "completed",
-                                        title: "Reasoning",
-                                        toolKind: "think",
-                                    },
-                                    {
-                                        activityId: "tool-1",
-                                        activityType: "tool",
-                                        content: [],
-                                        input: '{"path":"package.json"}',
-                                        locations: ["/workspace/package.json"],
-                                        name: "read_file",
-                                        output: '{"name":"workspace"}',
-                                        sequence: 1,
-                                        status: "completed",
-                                        title: "Read package metadata",
-                                        toolKind: "read",
-                                    },
-                                    {
-                                        activityId: "error-1",
-                                        activityType: "tool",
-                                        content: [],
-                                        input: "{}",
-                                        locations: [],
-                                        name: "agent_error",
-                                        output: "Agent could not inspect the optional workspace file",
-                                        sequence: 2,
-                                        status: "failed",
-                                        title: "Agent error",
-                                        toolKind: "other",
-                                    },
-                                ],
-                                content: [],
-                                role: "assistant",
-                                text: "History owned by the daemon",
-                            },
-                        ],
-                        nextCursor: "daemon-page-2",
-                        status: "available",
-                        truncated: false,
-                    },
-                    kind: "session.live-history.page.loaded",
-                    requestId: load.requestId,
-                    sessionId,
+            const oldSession = await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}`, {
+                    headers: credentialHeaders(appCredential),
                 }),
-            );
-            const firstPage = await responseJson(await nativeHistoryResponse, 200);
-            expect(firstPage).toMatchObject({
-                messages: [
-                    { role: "user", text: "Recent daemon prompt" },
-                    {
-                        activities: expect.arrayContaining([
-                            expect.objectContaining({ activityType: "reasoning", output: "Inspecting the workspace" }),
-                            expect.objectContaining({ activityType: "tool", title: "Read package metadata" }),
-                            expect.objectContaining({
-                                activityType: "tool",
-                                output: "Agent could not inspect the optional workspace file",
-                                status: "failed",
-                                title: "Agent error",
-                            }),
-                        ]),
-                        role: "assistant",
-                        text: "History owned by the daemon",
-                    },
-                ],
-                status: "available",
-            });
-            expect(firstPage).toHaveProperty("nextCursor", "daemon-page-2");
-
-            const olderHistoryResponse = worker.fetch(
-                new Request(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/native-messages?limit=2&cursor=${encodeURIComponent(String(firstPage["nextCursor"]))}`,
-                    { headers: credentialHeaders(appCredential) },
-                ),
                 environment,
             );
-            const olderLoad = decodeServiceToDaemonMessage(await messages.next());
-            expect(olderLoad).toMatchObject({
-                cursor: "daemon-page-2",
-                kind: "session.live-history.page.load",
-                limit: 2,
-                sessionId,
-            });
-            if (olderLoad.kind !== "session.live-history.page.load") {
-                throw new Error("Expected the older live-history page request");
-            }
-            socket.send(
-                encodeDaemonToServiceMessage({
-                    page: {
-                        coveredCommandIds: [],
-                        coveredMessageIds: ["daemon-message:agent"],
-                        messages: [{ activities: [], content: [], role: "assistant", text: "Oldest daemon history" }],
-                        nextCursor: null,
-                        status: "available",
-                        truncated: false,
-                    },
-                    kind: "session.live-history.page.loaded",
-                    requestId: olderLoad.requestId,
-                    sessionId,
-                }),
-            );
-            expect(await responseJson(await olderHistoryResponse, 200)).toMatchObject({
-                messages: [{ role: "assistant", text: "Oldest daemon history" }],
-                nextCursor: null,
-                status: "available",
-            });
+            expect(oldSession.status).toBe(410);
+            expect(await oldSession.json()).toMatchObject({ error: { code: "session_unavailable" } });
         } finally {
-            socket.close(1000, "Private reconnect test complete");
+            daemon.close(1000, "Test complete");
+            host.close(1000, "Test complete");
         }
     });
 });

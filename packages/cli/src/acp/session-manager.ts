@@ -2355,6 +2355,9 @@ export class AcpSessionManager {
         this.#observer = observer;
     };
 
+    readonly findLinkedSessions = (agentId: string, nativeSessionId: string): readonly AcpStoredSession[] =>
+        this.#store.findNative(agentId, nativeSessionId);
+
     #notifyProcessCapacityChanged(): void {
         const changed = this.#processCapacityChanged;
         this.#processCapacityChanged = Promise.withResolvers<void>();

@@ -59,8 +59,7 @@
     "vars": {
         "MOBIUS_PLATFORM_ALLOWED_ORIGINS": "[\"*\"]",
         "MOBIUS_PLATFORM_OIDC_PROVIDERS": "[]",
-        "MOBIUS_PLATFORM_OPERATOR_SUBJECTS": "[]",
-        "SESSION_ACTIVE_SESSIONS_PER_PROJECT": "1000"
+        "MOBIUS_PLATFORM_OPERATOR_SUBJECTS": "[]"
     },
     "observability": {
         "enabled": true

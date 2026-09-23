@@ -80,28 +80,6 @@ export class CloudflareChannelRuntime implements ChannelGateway {
         }
     };
 
-    readonly dispatchPending = async (access: VerifiedChannelAccess, signal: AbortSignal): Promise<void> => {
-        signal.throwIfAborted();
-        const headers = new Headers();
-        headers.set(INTERNAL_CHANNEL_ID_HEADER, access.channelId);
-        headers.set(INTERNAL_RUNTIME_ID_HEADER, access.runtimeId);
-        const objectId = this.#namespace.idFromName(access.runtimeId);
-        const response = await this.#namespace.get(objectId).fetch(
-            new Request(
-                `https://runtime.internal/projects/${encodeURIComponent(access.projectId)}/pending-daemon-deliveries`,
-                {
-                    headers,
-                    method: "POST",
-                    signal,
-                },
-            ),
-        );
-        signal.throwIfAborted();
-        if (response.status !== 204) {
-            throw new Error("The pending Runtime work could not be dispatched");
-        }
-    };
-
     readonly readRuntimeStatus = async (access: VerifiedChannelAccess, signal: AbortSignal): Promise<RuntimeStatus> => {
         const response = await this.forward(
             access,

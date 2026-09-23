@@ -9,5 +9,3 @@ export { platformProjectAppRevocation } from "./platform-project-app-revocation.
 export { platformProjectAuthorization } from "./platform-project-authorization.ts";
 export { projectBrowserCredential } from "./project-browser-credential.ts";
 export { runtimePairingAuditEvent } from "./runtime-pairing-audit-event.ts";
-export { sessionDirectory } from "./session-directory.ts";
-export { sessionQuotaReservation } from "./session-quota-reservation.ts";

@@ -12,8 +12,6 @@ import {
     ProjectAuthenticationError,
     type ProjectPermission,
     ProjectScope,
-    SessionQuotaPolicy,
-    type SessionQuotaPolicyProvider,
     type VerifiedExternalIdentity,
     validateIdentifier,
 } from "@moxt-ai/mobius-relay-core";
@@ -80,25 +78,20 @@ const PLATFORM_SERVER_PROJECT_PERMISSIONS: readonly ProjectPermission[] = Object
 class TenantQuotas {
     readonly activeApps: number;
     readonly activeProjects: number;
-    readonly activeSessions: number;
 
-    constructor(activeApps: number, activeProjects: number, activeSessions: number) {
+    constructor(activeApps: number, activeProjects: number) {
         if (
             !Number.isSafeInteger(activeApps) ||
             activeApps < 1 ||
             activeApps > 10_000 ||
             !Number.isSafeInteger(activeProjects) ||
             activeProjects < 1 ||
-            activeProjects > 100_000 ||
-            !Number.isSafeInteger(activeSessions) ||
-            activeSessions < 1 ||
-            activeSessions > 10_000_000
+            activeProjects > 100_000
         ) {
             throw new PlatformControlPlaneError("tenant_quota_invalid", "The Tenant quotas are invalid", 400);
         }
         this.activeApps = activeApps;
         this.activeProjects = activeProjects;
-        this.activeSessions = activeSessions;
     }
 }
 
@@ -233,25 +226,20 @@ function tenantResource(row: TenantRow): object {
 
 function tenantQuotas(value: unknown): TenantQuotas {
     if (value === undefined) {
-        return new TenantQuotas(100, 1_000, 10_000);
+        return new TenantQuotas(100, 1_000);
     }
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
         throw new PlatformControlPlaneError("tenant_quota_invalid", "The Tenant quotas are invalid", 400);
     }
     const quota = Object.freeze(Object.fromEntries(Object.entries(value)));
     if (
-        Object.keys(quota).length !== 3 ||
+        Object.keys(quota).length !== 2 ||
         !Object.hasOwn(quota, "activeApps") ||
-        !Object.hasOwn(quota, "activeProjects") ||
-        !Object.hasOwn(quota, "activeSessions")
+        !Object.hasOwn(quota, "activeProjects")
     ) {
         throw new PlatformControlPlaneError("tenant_quota_invalid", "The Tenant quotas are invalid", 400);
     }
-    return new TenantQuotas(
-        quotaValue(quota, "activeApps"),
-        quotaValue(quota, "activeProjects"),
-        quotaValue(quota, "activeSessions"),
-    );
+    return new TenantQuotas(quotaValue(quota, "activeApps"), quotaValue(quota, "activeProjects"));
 }
 
 function quotaValue(value: Readonly<Record<string, unknown>>, key: string): number {
@@ -329,9 +317,7 @@ async function requestDigest(display: string, clientReference: string, locationH
     return await hashSecret(JSON.stringify({ clientReference, displayName: display, locationHint }));
 }
 
-export class PlatformControlPlaneService
-    implements ProjectAccessAuthorizer, ProjectApplicationResolver, SessionQuotaPolicyProvider
-{
+export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
     readonly #authentication: PlatformAuthenticationConfiguration;
     readonly #storage: PlatformControlPlaneStorage;
     readonly #placements: PlatformProjectPlacementRegistry;
@@ -480,47 +466,6 @@ export class PlatformControlPlaneService
             );
         }
         return { location: projectBucketLocation(placement.locationHint) };
-    };
-
-    readonly resolveSessionQuota = async (scope: ProjectScope, signal: AbortSignal): Promise<SessionQuotaPolicy> => {
-        const project = await this.#storage.readActiveProjectScope(scope.projectId, signal);
-        if (project === null) {
-            throw new PlatformControlPlaneError("project_not_found", "The Project was not found", 404);
-        }
-        const tenant = await this.readTenant(project.tenant_id, signal);
-        const quota = quotasFromRow(tenant);
-        return new SessionQuotaPolicy(quota.activeSessions);
-    };
-
-    readonly recordSessionQuotaDenial = async (
-        scope: ProjectScope,
-        sessionId: string,
-        policy: SessionQuotaPolicy,
-        signal: AbortSignal,
-    ): Promise<void> => {
-        const project = await this.#storage.readActiveProjectScope(scope.projectId, signal);
-        if (project === null) {
-            throw new PlatformControlPlaneError("project_not_found", "The Project was not found", 404);
-        }
-        const recorded = await this.#storage.recordAudit(
-            this.auditRecord(
-                project.tenant_id,
-                project.app_id,
-                scope.projectId,
-                "platform_system",
-                "session-quota",
-                "",
-                "quota.denied",
-                sessionId,
-                "denied",
-                { limit: policy.activeSessionsPerProject, resource: "session" },
-                Date.now(),
-            ),
-            signal,
-        );
-        if (!recorded) {
-            throw new PlatformControlPlaneError("platform_write_failed", "The quota denial could not be audited", 503);
-        }
     };
 
     readonly requireAppDeveloper = async (

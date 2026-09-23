@@ -4,6 +4,7 @@ import {
     type NativeMessageActivity,
     type NativeSessionHistory,
     SESSION_HISTORY_CHARACTER_LIMIT,
+    SESSION_HISTORY_MESSAGE_LIMIT,
     SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT,
 } from "@moxt-ai/mobius-protocol";
 import { z } from "zod";
@@ -39,7 +40,7 @@ const turnsSchema = z.object({
                 items: z.array(z.unknown()).max(100_000),
             }),
         )
-        .max(SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT),
+        .max(SESSION_HISTORY_MESSAGE_LIMIT),
     nextCursor: z.string().nullish(),
 });
 const itemTypeSchema = z.object({ type: z.string().min(1).max(80) });
@@ -261,7 +262,8 @@ function decodeHistory(
             characters += messageSize(message);
         }
         while (
-            messages.length > SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT ||
+            messages.length >
+                (options.detail === "rich" ? SESSION_HISTORY_MESSAGE_LIMIT : SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT) ||
             characters > SESSION_HISTORY_CHARACTER_LIMIT
         ) {
             const removed = messages.shift();
@@ -315,10 +317,12 @@ async function readCodexHistoryWithOptions(
         | { readonly kind: "metadata"; readonly requestId: 2 }
         | {
               readonly kind: "turns";
-              readonly requestId: 3;
+              readonly requestId: number;
               readonly thread: z.infer<typeof threadSchema>["thread"];
+              readonly pages: z.infer<typeof turnsSchema>["data"];
           };
     let state: ReadState = { kind: "initializing", requestId: 1 };
+    const seenCursors = new Set<string>();
     let pending = "";
     let receivedBytes = 0;
     const fail = (cause: unknown): void =>
@@ -387,7 +391,7 @@ async function readCodexHistoryWithOptions(
                         break;
                     case "metadata": {
                         const { thread } = threadSchema.parse(message.result);
-                        state = { kind: "turns", requestId: 3, thread };
+                        state = { kind: "turns", requestId: 3, thread, pages: [] };
                         send({
                             id: state.requestId,
                             method: "thread/turns/list",
@@ -400,9 +404,48 @@ async function readCodexHistoryWithOptions(
                         });
                         break;
                     }
-                    case "turns":
-                        response.resolve(decodeHistory(state.thread, message.result, options));
-                        return;
+                    case "turns": {
+                        const page = turnsSchema.parse(message.result);
+                        const pages = [...state.pages, ...page.data];
+                        const maxTurns =
+                            options.detail === "rich"
+                                ? SESSION_HISTORY_MESSAGE_LIMIT
+                                : SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT;
+                        if (page.nextCursor == null || pages.length >= maxTurns) {
+                            response.resolve(
+                                decodeHistory(
+                                    state.thread,
+                                    {
+                                        data: pages.slice(0, maxTurns),
+                                        nextCursor: page.nextCursor,
+                                    },
+                                    options,
+                                ),
+                            );
+                            return;
+                        }
+                        if (page.data.length === 0 || seenCursors.has(page.nextCursor)) {
+                            throw new AcpExecutionError(
+                                "Codex repeated a history page cursor.",
+                                {},
+                                "invalid_native_session_response",
+                            );
+                        }
+                        seenCursors.add(page.nextCursor);
+                        state = { kind: "turns", requestId: state.requestId + 1, thread: state.thread, pages };
+                        send({
+                            id: state.requestId,
+                            method: "thread/turns/list",
+                            params: {
+                                threadId: nativeSessionId,
+                                cursor: page.nextCursor,
+                                limit: Math.min(SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT, maxTurns - pages.length),
+                                sortDirection: "desc",
+                                itemsView: options.detail === "rich" ? "full" : "summary",
+                            },
+                        });
+                        break;
+                    }
                     default: {
                         const unhandled: never = state;
                         throw new Error(`Unknown history read state: ${String(unhandled)}`);
@@ -424,7 +467,7 @@ async function readCodexHistoryWithOptions(
         );
     const timeout = setTimeout(
         () => fail(new AcpExecutionError("Reading saved Codex history timed out.", {}, "native_history_timeout")),
-        15_000,
+        options.detail === "rich" ? 60_000 : 15_000,
     );
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", onData);

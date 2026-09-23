@@ -1,14 +1,16 @@
 import { DurableObject } from "cloudflare:workers";
-import { DurableObjectSqlDatabase, RuntimeRelay as RuntimeRelayImplementation } from "@moxt-ai/mobius-relay-core";
+import {
+    DurableObjectSqlDatabase,
+    RuntimeRelay as RuntimeRelayImplementation,
+    type SessionEventReceiver,
+} from "@moxt-ai/mobius-relay-core";
 import {
     createPlatformDurableObjectContext,
     type PlatformDurableObjectEnvironment,
 } from "./platform-durable-object-context.ts";
-import { PlatformSessionHost } from "./platform-session-host.ts";
 
 export class RuntimeRelay extends DurableObject<PlatformDurableObjectEnvironment> {
     readonly #runtime: RuntimeRelayImplementation;
-    readonly #sessions: PlatformSessionHost;
 
     constructor(state: DurableObjectState, environment: PlatformDurableObjectEnvironment) {
         super(state, environment);
@@ -17,30 +19,20 @@ export class RuntimeRelay extends DurableObject<PlatformDurableObjectEnvironment
                 database: new DurableObjectSqlDatabase(state.storage),
             }),
         );
-        this.#sessions = new PlatformSessionHost(state, environment);
     }
 
     override async fetch(request: Request): Promise<Response> {
-        return new URL(request.url).pathname.startsWith("/internal/projects/")
-            ? await this.#sessions.fetch(request)
-            : await this.#runtime.fetch(request);
+        if (new URL(request.url).pathname.startsWith("/internal/projects/")) {
+            return Response.json(
+                { error: { code: "session_unavailable", message: "Cloud Sessions are unavailable." } },
+                { status: 410 },
+            );
+        }
+        return await this.#runtime.fetch(request);
     }
 
     override async alarm(): Promise<void> {
-        const failures: unknown[] = [];
-        try {
-            await this.#runtime.alarm();
-        } catch (cause) {
-            failures.push(cause);
-        }
-        try {
-            await this.#sessions.alarm();
-        } catch (cause) {
-            failures.push(cause);
-        }
-        if (failures.length > 0) {
-            throw new AggregateError(failures, "The Runtime relay could not recover");
-        }
+        await this.#runtime.alarm();
     }
 
     override async webSocketMessage(socket: WebSocket, message: unknown): Promise<void> {
@@ -56,16 +48,16 @@ export class RuntimeRelay extends DurableObject<PlatformDurableObjectEnvironment
     }
 
     async subscribeToLiveSessionEvents(
-        subscriptionId: string,
-        projectId: string,
-        runtimeId: string,
-        sessionId: string,
-        receive: Parameters<PlatformSessionHost["subscribeToLiveSessionEvents"]>[4],
+        _subscriptionId: string,
+        _projectId: string,
+        _runtimeId: string,
+        _sessionId: string,
+        _receive: SessionEventReceiver,
     ): Promise<void> {
-        await this.#sessions.subscribeToLiveSessionEvents(subscriptionId, projectId, runtimeId, sessionId, receive);
+        throw new Error("Cloud Session subscriptions are unavailable.");
     }
 
-    unsubscribeFromLiveSessionEvents(subscriptionId: string): void {
-        this.#sessions.unsubscribeFromLiveSessionEvents(subscriptionId);
+    unsubscribeFromLiveSessionEvents(_subscriptionId: string): void {
+        return;
     }
 }

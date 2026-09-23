@@ -2,12 +2,10 @@ import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import {
     acceptWebSocketHttpTransport,
     CloudflareChannelRuntime,
-    CloudflareSessionTransport,
     createMobiusApplication,
     createWorkerContext,
     type HttpError,
     instrumentD1Database,
-    type LiteSessionConfigurationEnvironment,
     type RelayContext,
     RequestAccessMetrics,
     requestTimeoutMiddleware,
@@ -29,18 +27,12 @@ import {
 } from "./gateway/project-durable-object-routing.ts";
 import { createPlatformControlApplication } from "./http/platform-routes.ts";
 import { createProjectApplication } from "./http/project-routes.ts";
-import { createSessionCredentialRoutes } from "./http/session-credential-routes.ts";
 import { ClerkOrganizationGateway } from "./infra/clerk-organization-gateway.ts";
 import type { OrganizationMembershipGateway } from "./infra/organization-membership-gateway.ts";
 import { PlatformProjectStorageDirectory } from "./infra/platform-project-storage-directory.ts";
-import {
-    initializeSessionAccessTargetMiddleware,
-    sessionAccessTargetMiddleware,
-} from "./middleware/session-access-target.ts";
 import { AppCredentialAuthenticationService } from "./service/app-credential-authentication-service.ts";
 import { OrganizationInviteService } from "./service/organization-invite-service.ts";
 import { PlatformControlPlaneService } from "./service/platform-control-plane-service.ts";
-import { SessionAccessService, type SessionAccessTarget } from "./service/session-access-service.ts";
 import { AppCredentialCacheStorage } from "./storage/app-credential-cache-storage.ts";
 import { OrganizationInviteStorage } from "./storage/organization-invite-storage.ts";
 import { PlatformControlPlaneStorage } from "./storage/platform-control-plane-storage.ts";
@@ -50,12 +42,8 @@ import {
     PlatformStorageRegistry,
 } from "./storage/platform-database-resolver.ts";
 import { PlatformProjectAuthorizationStorage } from "./storage/platform-project-authorization-storage.ts";
-import { SessionAccessStorage } from "./storage/session-access-storage.ts";
 
-export interface PlatformRelayBindings
-    extends LiteSessionConfigurationEnvironment,
-        PlatformStorageBindings,
-        ProjectWorkerRoutingBindings {
+export interface PlatformRelayBindings extends PlatformStorageBindings, ProjectWorkerRoutingBindings {
     readonly CLERK_SECRET_KEY?: string;
     readonly APP_CREDENTIAL_CACHE: KVNamespace;
     readonly PLATFORM_DIRECTORY_DATABASE: D1Database;
@@ -248,8 +236,6 @@ type DispatchEnvironment = {
         readonly storageRegistry: PlatformStorageRegistry;
         readonly projectDatabases: import("@moxt-ai/mobius-relay-core/database").SqlDatabase[];
         readonly relay: RelayContext;
-        readonly sessionAccess: SessionAccessService;
-        readonly sessionAccessTarget: SessionAccessTarget;
         readonly signal: AbortSignal;
     };
 };
@@ -294,31 +280,10 @@ export function createPlatformApplication(
                         .all("/audit-events/", controlHandler),
                 ),
         );
-    const sessionRoutes = new Hono<DispatchEnvironment>()
-        .route("/", createSessionCredentialRoutes(authentication.allowedOrigins))
-        .get("/:sessionId", sessionAccessTargetMiddleware, projectHandler)
-        .get("/:sessionId/messages", sessionAccessTargetMiddleware, projectHandler)
-        .get("/:sessionId/files/content", sessionAccessTargetMiddleware, projectHandler)
-        .get("/:sessionId/native-messages", sessionAccessTargetMiddleware, projectHandler)
-        .get("/:sessionId/events", sessionAccessTargetMiddleware, projectHandler)
-        .get("/:sessionId/live-event-subscription-target", sessionAccessTargetMiddleware, projectHandler)
-        .get("/:sessionId/interactions", sessionAccessTargetMiddleware, projectHandler)
-        .get("/:sessionId/interactions/:interactionId", sessionAccessTargetMiddleware, projectHandler)
-        .get("/:sessionId/turns/:turnId", sessionAccessTargetMiddleware, projectHandler)
-        .get("/:sessionId/artifacts/:artifactId", sessionAccessTargetMiddleware, projectHandler)
-        .get("/:sessionId/artifacts/:artifactId/content", sessionAccessTargetMiddleware, projectHandler)
-        .post("/:sessionId/turns", sessionAccessTargetMiddleware, projectHandler)
-        .post("/:sessionId/prepare", sessionAccessTargetMiddleware, projectHandler)
-        .post("/:sessionId/configuration", sessionAccessTargetMiddleware, projectHandler)
-        .post("/:sessionId/turns/:turnId/cancel", sessionAccessTargetMiddleware, projectHandler)
-        .post("/:sessionId/interactions/:interactionId/responses", sessionAccessTargetMiddleware, projectHandler)
-        .all("/*", projectHandler);
     const projectRoutes = new Hono<DispatchEnvironment>()
-        .route("/sessions", sessionRoutes)
         .all("/browser-credentials/*", projectHandler)
         .all("/runtime-pairings/*", projectHandler)
         .all("/runtimes/*", projectHandler)
-        .all("/session-imports/*", projectHandler)
         .all("/*", projectHandler);
     const versionedRoutes = new Hono<DispatchEnvironment>()
         .route("/projects/:projectId", projectRoutes)
@@ -328,6 +293,16 @@ export function createPlatformApplication(
 
     const application = new Hono<DispatchEnvironment>()
         .use("*", requestTimeoutMiddleware<DispatchEnvironment>(PLATFORM_REQUEST_TIMEOUT_MILLISECONDS))
+        .use("*", async (context, next) => {
+            const path = new URL(context.req.url).pathname;
+            if (/\/v1\/projects\/[^/]+\/sessions(?:\/|$)/u.test(path)) {
+                return context.json(
+                    { error: { code: "session_unavailable", message: "Cloud Sessions are unavailable." } },
+                    410,
+                );
+            }
+            return await next();
+        })
         .use("*", async (context, next) => {
             const routed = await routeProjectDurableObject(context.req.raw, context.env, authentication.allowedOrigins);
             if (routed !== null) {
@@ -367,27 +342,20 @@ export function createPlatformApplication(
             await next();
         })
         .route(`${MOBIUS_API_PREFIX}/dashboard`, controlRoutes)
-        .use("*", initializeSessionAccessTargetMiddleware)
         .use("*", async (context, next) => {
             const environment = context.env;
             const { control, databases, storageRegistry, projectDatabases } = context.var;
             const projects = new PlatformProjectStorageDirectory(storageRegistry);
-            const sessionAccess = new SessionAccessService(
-                new SessionAccessStorage(environment.PLATFORM_DIRECTORY_DATABASE, databases),
-                control,
-            );
             const cx = createWorkerContext({
                 applications: control,
                 gateways: gateways(environment),
-                authorization: sessionAccess.authorizer(() => context.var.sessionAccessTarget),
+                authorization: control,
                 databases,
                 identityDatabases: projectDatabases,
                 projects,
                 apiPrefix: MOBIUS_API_PREFIX,
-                quotaPolicy: control,
             });
             context.set("relay", cx);
-            context.set("sessionAccess", sessionAccess);
             await next();
         })
         .route(MOBIUS_API_PREFIX, new Hono<DispatchEnvironment>().route("/v1", versionedRoutes))
@@ -438,10 +406,6 @@ function instrumentPlatformDatabases(
 export function createPlatformGateways(environment: PlatformRelayBindings): WorkerRuntimeGateways {
     return {
         channel: new CloudflareChannelRuntime({ gateways: { runtimeRelay: environment.RUNTIME_RELAY } }),
-        sessions: new CloudflareSessionTransport(
-            environment.RUNTIME_RELAY,
-            (projectId) => decodePlatformProjectPlacement(projectId)?.locationHint,
-        ),
     };
 }
 

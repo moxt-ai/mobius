@@ -2,15 +2,11 @@ import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import {
     acceptWebSocketHttpTransport,
     CloudflareChannelRuntime,
-    CloudflareSessionTransport,
     createMobiusApplication,
     createWorkerContext,
     D1DatabaseAdapter,
     instrumentD1Database,
-    type LiteSessionConfigurationEnvironment,
     RequestAccessMetrics,
-    StaticSessionQuotaPolicyProvider,
-    sessionQuotaFromEnvironment,
 } from "@moxt-ai/mobius-relay-core";
 import { StandaloneDatabaseResolver } from "./standalone-database-resolver.ts";
 import { RuntimeRelay } from "./standalone-durable-objects.ts";
@@ -18,7 +14,7 @@ import { directLiveSessionEventReceiverFactory, subscribeToLiveEvents } from "./
 import { StandaloneProjectAuthentication } from "./standalone-project-authentication.ts";
 import { StandaloneProjectStorageDirectory } from "./standalone-project-storage-directory.ts";
 
-export interface StandaloneRelayBindings extends LiteSessionConfigurationEnvironment {
+export interface StandaloneRelayBindings {
     readonly DIRECTORY_DATABASE: D1Database;
     readonly MOBIUS_STANDALONE_TOKEN: string;
     readonly RUNTIME_RELAY: DurableObjectNamespace<RuntimeRelay>;
@@ -33,6 +29,12 @@ const application = createMobiusApplication();
 export function createStandaloneWorker(): StandaloneWorker {
     const standalone: StandaloneWorker = {
         fetch: async (request, environment) => {
+            if (/\/v1\/projects\/[^/]+\/sessions(?:\/|$)/u.test(new URL(request.url).pathname)) {
+                return Response.json(
+                    { error: { code: "session_unavailable", message: "Cloud Sessions are unavailable." } },
+                    { status: 410 },
+                );
+            }
             if (new URL(request.url).pathname === `${MOBIUS_API_PREFIX}/v1/transport`) {
                 const dispatch = async (forwarded: Request): Promise<Response> =>
                     await standalone.fetch(forwarded, environment);
@@ -60,10 +62,8 @@ export function createStandaloneWorker(): StandaloneWorker {
                 identityDatabases: [D1DatabaseAdapter.from(database)],
                 projects: new StandaloneProjectStorageDirectory(),
                 apiPrefix: MOBIUS_API_PREFIX,
-                quotaPolicy: new StaticSessionQuotaPolicyProvider(sessionQuotaFromEnvironment(environment)),
                 gateways: {
                     channel: new CloudflareChannelRuntime({ gateways: { runtimeRelay: environment.RUNTIME_RELAY } }),
-                    sessions: new CloudflareSessionTransport(environment.RUNTIME_RELAY),
                 },
             });
             return metrics.appendServerTiming(await application.fetch(request, context));

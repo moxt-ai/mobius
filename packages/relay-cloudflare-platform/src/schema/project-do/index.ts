@@ -12,6 +12,3 @@ export { platformProjectAuthorization } from "./platform-project-authorization.t
 export { projectBrowserCredential } from "./project-browser-credential.ts";
 export { projectObjectIdentity } from "./project-object-identity.ts";
 export { runtimePairingAuditEvent } from "./runtime-pairing-audit-event.ts";
-export { sessionAccessCredential } from "./session-access-credential.ts";
-export { sessionDirectory } from "./session-directory.ts";
-export { sessionQuotaReservation } from "./session-quota-reservation.ts";
