@@ -47,7 +47,7 @@
     "devDependencies": {
         "@moxt-ai/mobius-protocol": "workspace:*",
         "@types/mdast": "4.0.4",
-        "@types/node": "^24.13.5",
+        "@types/node": "^24.13.6",
         "esbuild": "0.28.2"
     },
     "main": "dist/index.js",
