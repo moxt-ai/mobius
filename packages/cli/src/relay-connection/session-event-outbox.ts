@@ -11,10 +11,10 @@ import {
 } from "@moxt-ai/mobius-protocol";
 
 const DEFAULT_OUTBOX_LIMITS: SessionEventOutboxLimits = {
-    criticalEventBytes: 136 * 1024 * 1024,
-    runtimeDeliveryBytes: 64 * 1024 * 1024,
+    criticalEventBytes: 40 * 1024 * 1024,
+    runtimeDeliveryBytes: 32 * 1024 * 1024,
     runtimeDeliveryCount: 64,
-    standardEventBytes: 128 * 1024 * 1024,
+    standardEventBytes: 32 * 1024 * 1024,
 };
 const MAX_TERMINAL_RECEIPTS = 1_024;
 
