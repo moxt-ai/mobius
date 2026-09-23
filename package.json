@@ -9,7 +9,6 @@
         "pnpm": ">=11.25.0 <12"
     },
     "scripts": {
-        "db:generate:session-relay-do": "drizzle-kit generate --config drizzle/drizzle.session-relay-do.config.ts && pnpm db:codegen",
         "db:generate:platform-d1": "drizzle-kit generate --config drizzle/drizzle.platform-d1.config.ts",
         "db:generate:project-do": "drizzle-kit generate --config drizzle/drizzle.project-do.config.ts && pnpm db:codegen",
         "db:generate:runtime-connection-do": "drizzle-kit generate --config drizzle/drizzle.runtime-connection-do.config.ts && pnpm db:codegen",

@@ -6,7 +6,7 @@ Mobius serves Mobius Chat through the Platform Worker and SDK. The Standalone Wo
 
 The project starts from new databases and has no old-data import path. Authoritative Drizzle schemas live in each package's `src/schema/<target>` directory. Generate migrations with the pinned Drizzle CLI through the `db:generate:*` scripts. Do not edit generated migration SQL. `pnpm db:codegen` prepares ignored SQL modules for targets that cannot import `.sql` directly.
 
-Sessions use one Session Relay binding per hosting profile. Session content is not retained in cloud storage. Do not add a retained-content mode or a migration path for previous Mobius deployments.
+Sessions are handled in the corresponding Runtime Relay. Session content is not retained in cloud storage. Do not add a retained-content mode or a migration path for previous Mobius deployments.
 
 ## Boundaries
 

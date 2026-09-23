@@ -85,7 +85,7 @@ import { validateCreateSessionRequest } from "./session-records.ts";
 const SESSION_OPERATION_TIMEOUT_MILLISECONDS = 20_000;
 
 /**
- * A Project owns one Session Durable Object per Session, and asking one for its pending delivery work
+ * A Runtime relay handles its Sessions, and asking it for pending delivery work
  * costs a nested round trip. Probing them one at a time made a Runtime attach scale with the Project's
  * Session count and exceed the daemon's connection deadline, which left the Channel unable to reconnect.
  * Bound the probes so attach latency tracks this concurrency instead of the Session count, matching the
@@ -682,10 +682,7 @@ function runtimeErrorCode(value: string): SessionRuntimeError["code"] {
 async function readResponseBytes(response: Response): Promise<Uint8Array> {
     const bytes = new Uint8Array(await response.arrayBuffer());
     if (bytes.byteLength === 0 || bytes.byteLength > MAX_INTERNAL_RESPONSE_LENGTH) {
-        throw new SessionRuntimeError(
-            "session_storage_unavailable",
-            "The Session Durable Object returned an invalid response",
-        );
+        throw new SessionRuntimeError("session_storage_unavailable", "The Runtime relay returned an invalid response");
     }
     return bytes;
 }
@@ -698,7 +695,7 @@ async function decodeResponseBytes(response: Response, bytes: Uint8Array): Promi
         } catch (cause) {
             throw new SessionRuntimeError(
                 "session_storage_unavailable",
-                "The Session Durable Object returned an invalid response",
+                "The Runtime relay returned an invalid response",
                 { cause },
             );
         }
@@ -706,11 +703,9 @@ async function decodeResponseBytes(response: Response, bytes: Uint8Array): Promi
         try {
             value = JSON.parse(new TextDecoder().decode(bytes));
         } catch (cause) {
-            throw new SessionRuntimeError(
-                "session_storage_unavailable",
-                "The Session Durable Object returned invalid JSON",
-                { cause },
-            );
+            throw new SessionRuntimeError("session_storage_unavailable", "The Runtime relay returned invalid JSON", {
+                cause,
+            });
         }
     }
     return rejectFailedResponse(response, value);
@@ -728,7 +723,7 @@ function rejectFailedResponse(response: Response, value: unknown): unknown {
             throw new SessionRuntimeError(runtimeErrorCode(code), message);
         }
     }
-    throw new SessionRuntimeError("session_storage_unavailable", "The Session Durable Object rejected the operation");
+    throw new SessionRuntimeError("session_storage_unavailable", "The Runtime relay rejected the operation");
 }
 
 function encodeDirectoryCursor(scope: ProjectScope, updatedAt: number, sessionId: string): string {
@@ -1654,7 +1649,7 @@ export class RemoteSessionRuntime
         try {
             response = await timing.measure(
                 `${operation}-transport`,
-                `Session Durable Object ${operation} round trip`,
+                `Runtime relay ${operation} round trip`,
                 async () =>
                     await this.#transport.fetch(
                         { runtimeId, scope, sessionId },
@@ -1672,9 +1667,7 @@ export class RemoteSessionRuntime
             }
             throw new SessionRuntimeError(
                 timeout.aborted ? "session_storage_timeout" : "session_storage_unavailable",
-                timeout.aborted
-                    ? "The session storage operation timed out"
-                    : "The Session Durable Object is unavailable",
+                timeout.aborted ? "The session storage operation timed out" : "The Runtime relay is unavailable",
                 { cause },
             );
         }
@@ -1684,7 +1677,7 @@ export class RemoteSessionRuntime
         for (const segment of decodeOperationTiming(response.headers.get(DO_TIMING_HEADER))) {
             timing.record(
                 `${DO_TIMING_NAME_PREFIX}${segment.name}`,
-                `Session Durable Object ${segment.description}`,
+                `Runtime relay ${segment.description}`,
                 segment.durationMilliseconds,
             );
         }
@@ -1693,12 +1686,12 @@ export class RemoteSessionRuntime
         // the read tracks the transferred size, the parse tracks the object graph.
         const bytes = await timing.measure(
             `${operation}-body`,
-            `Session Durable Object ${operation} response body transfer`,
+            `Runtime relay ${operation} response body transfer`,
             async () => await readResponseBytes(response),
         );
         return await timing.measure(
             `${operation}-decode`,
-            `Session Durable Object ${operation} response decoding`,
+            `Runtime relay ${operation} response decoding`,
             async () => await decodeResponseBytes(response, bytes),
         );
     };

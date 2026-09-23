@@ -4,12 +4,9 @@
     "main": "src/worker.ts",
     "compatibility_date": "2026-09-03",
     "durable_objects": {
-        "bindings": [
-            { "name": "RUNTIME_RELAY", "class_name": "RuntimeRelay" },
-            { "name": "SESSION_RELAY", "class_name": "StandaloneSessionRelay" }
-        ]
+        "bindings": [{ "name": "RUNTIME_RELAY", "class_name": "RuntimeRelay" }]
     },
-    "migrations": [{ "tag": "standalone-initial", "new_sqlite_classes": ["RuntimeRelay", "StandaloneSessionRelay"] }],
+    "migrations": [{ "tag": "standalone-initial", "new_sqlite_classes": ["RuntimeRelay"] }],
     "d1_databases": [{ "binding": "DIRECTORY_DATABASE", "migrations_dir": "../relay-core/migrations/d1" }],
     "vars": {
         "SESSION_ACTIVE_SESSIONS_PER_PROJECT": "1000",

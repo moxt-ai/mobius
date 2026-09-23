@@ -1,6 +1,4 @@
-import { DurableObject } from "cloudflare:workers";
 import {
-    D1DatabaseAdapter,
     DurableObjectSqlDatabase,
     type SessionEventReceiver,
     SessionLiveHistoryClient,
@@ -8,16 +6,17 @@ import {
     SessionRuntimeError,
 } from "@moxt-ai/mobius-relay-core";
 import { Hono } from "hono";
+import { PlatformDatabaseResolver, projectSqlDatabase } from "../storage/platform-database-resolver.ts";
 import {
-    createStandaloneDurableObjectContext,
-    type StandaloneDurableObjectEnvironment,
-} from "./standalone-durable-objects.ts";
+    createPlatformDurableObjectContext,
+    type PlatformDurableObjectEnvironment,
+} from "./platform-durable-object-context.ts";
 
 const HIBERNATION_DELAY_MILLISECONDS = 5 * 60_000;
 const HIBERNATION_DEADLINE_KEY = "session-hibernation-at";
 
-export class StandaloneSessionRelay extends DurableObject<StandaloneDurableObjectEnvironment> {
-    readonly #environment: StandaloneDurableObjectEnvironment;
+export class PlatformSessionHost {
+    readonly #environment: PlatformDurableObjectEnvironment;
     #lifecycle:
         | { readonly kind: "active" }
         | { readonly kind: "hibernating"; readonly completion: PromiseWithResolvers<void> } = { kind: "active" };
@@ -35,11 +34,12 @@ export class StandaloneSessionRelay extends DurableObject<StandaloneDurableObjec
     readonly #liveHistory: SessionLiveHistoryClient;
     readonly #state: DurableObjectState;
 
-    constructor(state: DurableObjectState, environment: StandaloneDurableObjectEnvironment) {
-        super(state, environment);
+    constructor(state: DurableObjectState, environment: PlatformDurableObjectEnvironment) {
         this.#environment = environment;
-        const database = D1DatabaseAdapter.from(environment.DIRECTORY_DATABASE);
-        this.#liveHistory = new SessionLiveHistoryClient(environment.RUNTIME_RELAY, () => database);
+        const databases = new PlatformDatabaseResolver(environment);
+        this.#liveHistory = new SessionLiveHistoryClient(environment.RUNTIME_RELAY, (projectId) =>
+            projectSqlDatabase(databases, projectId),
+        );
         this.#state = state;
         this.#routes = new Hono().all(
             "/internal/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/:operation",
@@ -53,7 +53,7 @@ export class StandaloneSessionRelay extends DurableObject<StandaloneDurableObjec
         );
     }
 
-    override readonly fetch = async (request: Request): Promise<Response> => await this.#routes.fetch(request);
+    readonly fetch = async (request: Request): Promise<Response> => await this.#routes.fetch(request);
 
     async subscribeToLiveSessionEvents(
         subscriptionId: string,
@@ -139,9 +139,12 @@ export class StandaloneSessionRelay extends DurableObject<StandaloneDurableObjec
         return await operation;
     };
 
-    override readonly alarm = async (): Promise<void> => {
+    readonly alarm = async (): Promise<void> => {
         if (this.#lifecycle.kind === "hibernating") {
             await this.#lifecycle.completion.promise;
+            return;
+        }
+        if (this.#sessions.size === 0 && (await this.#state.storage.get(HIBERNATION_DEADLINE_KEY)) === undefined) {
             return;
         }
         const completion = Promise.withResolvers<void>();
@@ -178,7 +181,6 @@ export class StandaloneSessionRelay extends DurableObject<StandaloneDurableObjec
                 try {
                     this.createRelay(new DurableObjectSqlDatabase(this.#state.storage)).scrubNonRetainedContent();
                     await this.#state.storage.delete(HIBERNATION_DEADLINE_KEY);
-                    await this.#state.storage.deleteAlarm();
                 } catch (cause) {
                     failures.push(cause);
                 }
@@ -202,7 +204,12 @@ export class StandaloneSessionRelay extends DurableObject<StandaloneDurableObjec
     };
 
     private readonly createRelay = (database: DurableObjectSqlDatabase): SessionRelayImplementation =>
-        new SessionRelayImplementation(createStandaloneDurableObjectContext(this.#state, this.#environment, database));
+        new SessionRelayImplementation(
+            createPlatformDurableObjectContext(this.#state, this.#environment, {
+                content: { kind: "sqlite" },
+                database,
+            }),
+        );
 
     private readonly session = async (
         identity: SessionRequestIdentity,

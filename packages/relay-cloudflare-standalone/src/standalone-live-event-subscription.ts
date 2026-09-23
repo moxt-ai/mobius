@@ -90,8 +90,8 @@ export async function subscribeToLiveEvents(
     }
     const target = await decodeLiveEventTarget(await dispatch(request));
     signal.throwIfAborted();
-    const id = environment.SESSION_RELAY.idFromName(`standalone:${target.projectId}:${sessionId}`);
-    const stub = environment.SESSION_RELAY.get(id);
+    const id = environment.RUNTIME_RELAY.idFromName(target.runtimeId);
+    const stub = environment.RUNTIME_RELAY.get(id);
     const subscriptionId = crypto.randomUUID();
     let resolveReady = (): void => undefined;
     let rejectReady = (_cause: unknown): void => undefined;

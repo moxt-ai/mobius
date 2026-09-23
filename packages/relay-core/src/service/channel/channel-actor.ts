@@ -267,8 +267,8 @@ export class ChannelActor {
     /**
      * Remember that this Runtime now has work for a Session.
      *
-     * A Session holds its own Attempt state, so settling a Runtime disconnect means asking each affected
-     * Session Durable Object to mark its in-flight Attempts indeterminate. Recording the Sessions the Relay
+     * A Session holds its own Attempt state, so settling a Runtime disconnect means marking each affected
+     * Session's in-flight Attempts indeterminate. Recording the Sessions the Relay
      * hands work to is what lets a disconnect settle only those Sessions instead of every ready Session in the
      * Project, so a Session whose Turn already finished is never revisited.
      */

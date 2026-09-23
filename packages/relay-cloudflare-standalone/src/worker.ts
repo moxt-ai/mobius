@@ -17,13 +17,11 @@ import { RuntimeRelay } from "./standalone-durable-objects.ts";
 import { directLiveSessionEventReceiverFactory, subscribeToLiveEvents } from "./standalone-live-event-subscription.ts";
 import { StandaloneProjectAuthentication } from "./standalone-project-authentication.ts";
 import { StandaloneProjectStorageDirectory } from "./standalone-project-storage-directory.ts";
-import { StandaloneSessionRelay } from "./standalone-session-relay.ts";
 
 export interface StandaloneRelayBindings extends LiteSessionConfigurationEnvironment {
     readonly DIRECTORY_DATABASE: D1Database;
     readonly MOBIUS_STANDALONE_TOKEN: string;
-    readonly RUNTIME_RELAY: DurableObjectNamespace;
-    readonly SESSION_RELAY: DurableObjectNamespace<StandaloneSessionRelay>;
+    readonly RUNTIME_RELAY: DurableObjectNamespace<RuntimeRelay>;
 }
 
 export interface StandaloneWorker {
@@ -63,7 +61,7 @@ export function createStandaloneWorker(): StandaloneWorker {
                 quotaPolicy: new StaticSessionQuotaPolicyProvider(sessionQuotaFromEnvironment(environment)),
                 gateways: {
                     channel: new CloudflareChannelRuntime({ gateways: { runtimeRelay: environment.RUNTIME_RELAY } }),
-                    sessions: new CloudflareSessionTransport(environment.SESSION_RELAY, "standalone"),
+                    sessions: new CloudflareSessionTransport(environment.RUNTIME_RELAY),
                 },
             });
             return metrics.appendServerTiming(await application.fetch(request, context));
@@ -74,5 +72,5 @@ export function createStandaloneWorker(): StandaloneWorker {
 
 const worker: ExportedHandler<StandaloneRelayBindings> = createStandaloneWorker();
 
-export { RuntimeRelay, StandaloneSessionRelay };
+export { RuntimeRelay };
 export default worker;

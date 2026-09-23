@@ -19,7 +19,6 @@ import {
     type PlatformAuthenticationEnvironment,
     platformAuthenticationFromEnvironment,
 } from "./composition/platform-authentication-environment.ts";
-import { PlatformSessionRelay } from "./durable-objects/platform-session-relay.ts";
 import { RuntimeRelay } from "./durable-objects/runtime-relay.ts";
 import type { PlatformAuthenticationConfiguration } from "./entity/platform-control-plane.ts";
 import { decodePlatformProjectPlacement } from "./entity/platform-project-id.ts";
@@ -61,8 +60,7 @@ export interface PlatformRelayBindings
     readonly APP_CREDENTIAL_CACHE: KVNamespace;
     readonly PLATFORM_DIRECTORY_DATABASE: D1Database;
     readonly R2_BUCKET_APAC: R2Bucket;
-    readonly RUNTIME_RELAY: DurableObjectNamespace;
-    readonly SESSION_RELAY: DurableObjectNamespace<PlatformSessionRelay>;
+    readonly RUNTIME_RELAY: DurableObjectNamespace<RuntimeRelay>;
 }
 
 export interface ProjectPlatformRelayBindings extends PlatformRelayBindings, ProjectDurableObjectExecutionBindings {}
@@ -159,12 +157,12 @@ async function subscribeToLiveEvents(
     }
     const target = await decodeLiveEventTarget(await dispatch(request));
     signal.throwIfAborted();
-    const id = environment.SESSION_RELAY.idFromName(`platform:${target.projectId}:${sessionId}`);
+    const id = environment.RUNTIME_RELAY.idFromName(target.runtimeId);
     const locationHint = decodePlatformProjectPlacement(target.projectId)?.locationHint;
     const stub =
         locationHint === undefined
-            ? environment.SESSION_RELAY.get(id)
-            : environment.SESSION_RELAY.get(id, { locationHint });
+            ? environment.RUNTIME_RELAY.get(id)
+            : environment.RUNTIME_RELAY.get(id, { locationHint });
     const subscriptionId = crypto.randomUUID();
     let resolveReady = (): void => undefined;
     let rejectReady = (_cause: unknown): void => undefined;
@@ -440,8 +438,7 @@ export function createPlatformGateways(environment: PlatformRelayBindings): Work
     return {
         channel: new CloudflareChannelRuntime({ gateways: { runtimeRelay: environment.RUNTIME_RELAY } }),
         sessions: new CloudflareSessionTransport(
-            environment.SESSION_RELAY,
-            "platform",
+            environment.RUNTIME_RELAY,
             (projectId) => decodePlatformProjectPlacement(projectId)?.locationHint,
         ),
     };
@@ -474,5 +471,5 @@ const worker = createPlatformWorker();
 
 export { platformAuthenticationFromEnvironment } from "./composition/platform-authentication-environment.ts";
 export { PlatformAuthenticationConfiguration } from "./entity/platform-control-plane.ts";
-export { PlatformSessionRelay, RuntimeRelay };
+export { RuntimeRelay };
 export default worker;

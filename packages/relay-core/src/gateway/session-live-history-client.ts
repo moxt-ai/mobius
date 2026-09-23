@@ -117,7 +117,7 @@ export class SessionLiveHistoryClient {
         const headers = new Headers({ Upgrade: "websocket" });
         headers.set(INTERNAL_CHANNEL_ID_HEADER, route.channelId);
         headers.set(INTERNAL_RUNTIME_ID_HEADER, route.runtimeId);
-        const response = await this.#runtimeRelay.get(this.#runtimeRelay.idFromName(route.channelId)).fetch(
+        const response = await this.#runtimeRelay.get(this.#runtimeRelay.idFromName(route.runtimeId)).fetch(
             new Request(`https://runtime.internal/projects/${encodeURIComponent(route.projectId)}/live-history`, {
                 headers,
                 signal: deadline,
@@ -188,7 +188,7 @@ export class SessionLiveHistoryClient {
         const headers = new Headers({ Upgrade: "websocket" });
         headers.set(INTERNAL_CHANNEL_ID_HEADER, route.channelId);
         headers.set(INTERNAL_RUNTIME_ID_HEADER, route.runtimeId);
-        const response = await this.#runtimeRelay.get(this.#runtimeRelay.idFromName(route.channelId)).fetch(
+        const response = await this.#runtimeRelay.get(this.#runtimeRelay.idFromName(route.runtimeId)).fetch(
             new Request(`https://runtime.internal/projects/${encodeURIComponent(route.projectId)}/live-history`, {
                 headers,
                 signal: deadline,
