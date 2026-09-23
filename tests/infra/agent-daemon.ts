@@ -62,6 +62,7 @@ export interface AgentDaemonSocket {
     removeEventListener(type: string, listener: (event: SocketEvent) => void): void;
     send(data: string): void;
     readonly sendBatch?: (data: readonly string[]) => Promise<void>;
+    readonly terminate?: () => void;
 }
 
 interface PendingMessage {
@@ -382,7 +383,11 @@ export class FakeAgentDaemon implements AsyncDisposable {
     };
 
     async [Symbol.asyncDispose](): Promise<void> {
-        this.close();
+        if (this.#socket.terminate === undefined) {
+            this.close();
+        } else {
+            this.#socket.terminate();
+        }
         await this.#closed;
     }
 }

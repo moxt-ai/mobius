@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 import { check, index, integer, sqliteTable, text, unique } from "drizzle-orm/sqlite-core";
 
-const locationHints = ["wnam", "enam", "sam", "weur", "eeur", "apac", "oc", "afr", "me"] as const;
+const locationHints = ["wnam", "enam", "sam", "weur", "eeur", "apac", "apac-ne", "apac-se", "oc", "afr", "me"] as const;
 
 export const platformProject = sqliteTable(
     "platform_projects",
@@ -24,7 +24,7 @@ export const platformProject = sqliteTable(
         check("platform_projects_lifecycle_check", sql`${table.lifecycle} in ('active', 'suspended', 'deleted')`),
         check(
             "platform_projects_location_hint_check",
-            sql`${table.locationHint} in ('wnam', 'enam', 'sam', 'weur', 'eeur', 'apac', 'oc', 'afr', 'me')`,
+            sql`${table.locationHint} in ('wnam', 'enam', 'sam', 'weur', 'eeur', 'apac', 'apac-ne', 'apac-se', 'oc', 'afr', 'me')`,
         ),
         unique().on(table.appId, table.idempotencyKey),
         unique().on(table.appId, table.clientReference),
