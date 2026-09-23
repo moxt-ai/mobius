@@ -206,7 +206,6 @@ export class PlatformSessionHost {
     private readonly createRelay = (database: DurableObjectSqlDatabase): SessionRelayImplementation =>
         new SessionRelayImplementation(
             createPlatformDurableObjectContext(this.#state, this.#environment, {
-                content: { kind: "sqlite" },
                 database,
             }),
         );

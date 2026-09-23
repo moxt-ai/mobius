@@ -9,20 +9,13 @@ export {
     type AcceptedTurn,
     type ActivityDetail,
     ARTIFACT_UPLOAD_LIFETIME_MILLISECONDS,
-    ArtifactContent,
-    ArtifactDescriptor,
-    ArtifactUploadAuthorization,
-    ArtifactUploadLease,
     type AttemptReconciliationOutcome,
     type AttemptSummary,
-    AvailableArtifactDescriptor,
     type CommittedEventResult,
-    CreateArtifactUploadRequest,
     CreateSessionBindingRequest,
     CreateSessionRequest,
     DEFAULT_SESSION_QUOTA_POLICY,
     type DuplicateTurn,
-    ExpiredArtifactDescriptor,
     type InteractionResponseAcceptance,
     isSessionDirectoryIdentifier,
     type PendingDaemonDelivery,
@@ -43,7 +36,6 @@ export {
     StaticSessionQuotaPolicyProvider,
     type TurnAcceptance,
     type TurnCancellationAcceptance,
-    UploadingArtifactDescriptor,
 } from "./entity/do/session.ts";
 export { type HttpError, type HttpErrorJson, isHttpError, toHttpError } from "./entity/http-error.ts";
 export {
@@ -105,17 +97,6 @@ export {
     readBoundedBytesBody,
     readBoundedUtf8Body,
 } from "./infra/bounded-request-body.ts";
-export type { BucketResolver } from "./infra/bucket-resolver.ts";
-export {
-    type ContentInspection,
-    type ContentPersistence,
-    ContentQuotaExceededError,
-    ContentStorageError,
-    ContentTarget,
-    type ContentWriteResult,
-    type ImmutableContent,
-    type ImmutableContentStore,
-} from "./infra/content-store.ts";
 export { D1DatabaseAdapter } from "./infra/d1-database.ts";
 export type { DoSqlDatabase } from "./infra/do-sql-database.ts";
 export {
@@ -139,7 +120,6 @@ export {
 } from "./infra/session-configuration.ts";
 export type { LiveSessionEvent, SessionEventReceiver } from "./infra/session-event-receiver.ts";
 export type {
-    SessionArtifactRuntime,
     SessionCommandRuntime,
     SessionEventStreamRuntime,
     SessionQueryRuntime,

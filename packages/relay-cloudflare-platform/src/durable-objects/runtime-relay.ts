@@ -1,6 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
 import { DurableObjectSqlDatabase, RuntimeRelay as RuntimeRelayImplementation } from "@moxt-ai/mobius-relay-core";
-import { PlatformBucketResolver } from "../storage/platform-bucket-resolver.ts";
 import {
     createPlatformDurableObjectContext,
     type PlatformDurableObjectEnvironment,
@@ -16,7 +15,6 @@ export class RuntimeRelay extends DurableObject<PlatformDurableObjectEnvironment
         this.#runtime = new RuntimeRelayImplementation(
             createPlatformDurableObjectContext(state, environment, {
                 database: new DurableObjectSqlDatabase(state.storage),
-                content: { kind: "r2", buckets: new PlatformBucketResolver(environment) },
             }),
         );
         this.#sessions = new PlatformSessionHost(state, environment);

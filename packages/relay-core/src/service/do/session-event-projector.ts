@@ -3,8 +3,6 @@ import {
     AGENT_ACTIVITY_NARRATION_KIND,
     AGENT_CONTENT_KIND,
     AGENT_MESSAGE_DELTA_KIND,
-    type AgentActivityEvent,
-    encodeAgentActivityEvent,
     type Interaction,
     type RecordedSessionEvent,
     SESSION_COMPLETED_KIND,
@@ -32,7 +30,7 @@ export class SessionEventProjector {
         this.#storage = cx.storages.eventProjector;
     }
     readonly prepareEvent = (
-        session: SessionRecord,
+        _session: SessionRecord,
         envelope: SessionEventEnvelope,
         event: RecordedSessionEvent,
     ): PreparedEvent => {
@@ -42,54 +40,10 @@ export class SessionEventProjector {
         if (event.detail.kind === "available") {
             throw new SessionRuntimeError("session_conflict", "A daemon cannot submit an archive reference");
         }
-        if (event.detail.kind === "recorded") {
-            const detailPayload = JSON.stringify({
-                content: event.detail.content,
-                input: event.detail.input,
-                output: event.detail.output,
-            });
-            const originalBytes = new TextEncoder().encode(detailPayload).byteLength;
-            if (rowString(session, "recording_level") === "summary") {
-                const summarized: AgentActivityEvent = {
-                    ...event,
-                    detail: { kind: "unrecorded" },
-                };
-                return {
-                    activityDetail: null,
-                    event: summarized,
-                    payload: encodeAgentActivityEvent(summarized),
-                };
-            }
-            if (originalBytes > rowNumber(session, "content_limit_bytes")) {
-                const summarized: AgentActivityEvent = {
-                    ...event,
-                    detail: { capturedBytes: 0, kind: "truncated", originalBytes },
-                };
-                return {
-                    activityDetail: null,
-                    event: summarized,
-                    payload: encodeAgentActivityEvent(summarized),
-                };
-            }
-            const artifactId = `activity-${envelope.eventId}`;
-            const summarized: AgentActivityEvent = {
-                ...event,
-                detail: { artifactId, kind: "available" },
-            };
-            return {
-                activityDetail: {
-                    activityId: event.activityId,
-                    artifactId,
-                    payload: detailPayload,
-                },
-                event: summarized,
-                payload: encodeAgentActivityEvent(summarized),
-            };
-        }
         return {
             activityDetail: null,
             event,
-            payload: encodeAgentActivityEvent(event),
+            payload: envelope.payload,
         };
     };
 

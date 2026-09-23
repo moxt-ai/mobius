@@ -7,7 +7,6 @@ import {
 } from "@moxt-ai/mobius-relay-core";
 import { decodePlatformProjectPlacement } from "../entity/platform-project-id.ts";
 import { PlatformProjectStorageDirectory } from "../infra/platform-project-storage-directory.ts";
-import type { PlatformBucketResolver } from "../storage/platform-bucket-resolver.ts";
 import {
     PlatformDatabaseResolver,
     type PlatformStorageBindings,
@@ -15,7 +14,6 @@ import {
 } from "../storage/platform-database-resolver.ts";
 
 export interface PlatformDurableObjectEnvironment extends LiteSessionConfigurationEnvironment, PlatformStorageBindings {
-    readonly R2_BUCKET_APAC: R2Bucket;
     readonly RUNTIME_RELAY: DurableObjectNamespace;
 }
 
@@ -25,11 +23,9 @@ export function createPlatformDurableObjectContext(
     storage:
         | {
               readonly database: DurableObjectSqlDatabase;
-              readonly content: { readonly kind: "r2"; readonly buckets: PlatformBucketResolver };
           }
         | {
               readonly database: DurableObjectSqlDatabase;
-              readonly content: { readonly kind: "sqlite" };
               readonly initializeSessionSchema?: (database: DoSqlDatabase) => void;
           },
 ) {
@@ -45,7 +41,6 @@ export function createPlatformDurableObjectContext(
         ),
         databases,
         projects,
-        content: storage.content,
         doDatabase: storage.database,
         ...("initializeSessionSchema" in storage && storage.initializeSessionSchema !== undefined
             ? { initializeSessionSchema: storage.initializeSessionSchema }

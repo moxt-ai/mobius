@@ -32,10 +32,7 @@ import {
     type CancelMobiusTurnRequest,
     type ConfigureMobiusSessionRequest,
     type CreateMobiusSessionRequest,
-    decodeMobiusArtifact,
-    decodeMobiusArtifactUpload,
     decodeMobiusAttempt,
-    decodeMobiusAvailableArtifact,
     decodeMobiusBrowserCredential,
     decodeMobiusEventPage,
     decodeMobiusInteraction,
@@ -52,11 +49,6 @@ import {
     decodeMobiusSessionState,
     decodeMobiusToolCallDetail,
     decodeMobiusTurn,
-    type MobiusArtifact,
-    MobiusArtifactDownload,
-    type MobiusArtifactUpload,
-    type MobiusArtifactUploadRequest,
-    MobiusAvailableArtifact,
     type MobiusBrowserCredential,
     type MobiusBrowserCredentialRequest,
     type MobiusEventPage,
@@ -492,78 +484,6 @@ export class MobiusRequestExecutor {
         return await this.request(path, "PUT", encoded, true, signal);
     };
 
-    readonly putBytes = async (
-        path: string,
-        bytes: Uint8Array,
-        mediaType: string,
-        uploadToken: string,
-        signal: AbortSignal,
-    ): Promise<unknown> => {
-        const deadline = new RequestDeadline(signal, this.#operationTimeoutMilliseconds);
-        try {
-            const credential = validateCredential(await this.#credentialProvider.credential(deadline.signal));
-            const headers = this.authenticationHeaders(credential, "application/json");
-            headers.set("content-type", mediaType);
-            headers.set("x-mobius-upload-token", validateCredential(uploadToken));
-            const response = await this.#transport.fetch(
-                new Request(requestUrl(this.#endpoint, path), {
-                    body: Uint8Array.from(bytes),
-                    headers,
-                    method: "PUT",
-                    signal: deadline.signal,
-                }),
-            );
-            this.#observeResponse?.({
-                serverTiming: response.headers.get("server-timing"),
-                status: response.status,
-            });
-            if (!response.ok) {
-                await throwApiError(response);
-            }
-            return await responseValue(response);
-        } catch (cause) {
-            return deadline.translate(cause);
-        } finally {
-            deadline.finish();
-        }
-    };
-
-    readonly getBytes = async (
-        path: string,
-        artifact: MobiusAvailableArtifact,
-        signal: AbortSignal,
-    ): Promise<Uint8Array> => {
-        const deadline = new RequestDeadline(signal, this.#operationTimeoutMilliseconds);
-        try {
-            const credential = validateCredential(await this.#credentialProvider.credential(deadline.signal));
-            const response = await this.#transport.fetch(
-                new Request(requestUrl(this.#endpoint, path), {
-                    headers: this.authenticationHeaders(credential, artifact.mediaType),
-                    signal: deadline.signal,
-                }),
-            );
-            this.#observeResponse?.({
-                serverTiming: response.headers.get("server-timing"),
-                status: response.status,
-            });
-            if (!response.ok) {
-                await throwApiError(response);
-            }
-            if (
-                response.headers.get("content-type") !== artifact.mediaType ||
-                response.headers.get("x-mobius-artifact-id") !== artifact.artifactId ||
-                response.headers.get("x-mobius-sha256") !== artifact.sha256
-            ) {
-                throw new MobiusProtocolError("The service returned invalid artifact metadata");
-            }
-            return await readExactResponseBytes(response, artifact.byteLength, deadline.signal);
-        } catch (cause) {
-            return deadline.translate(cause);
-        } finally {
-            deadline.finish();
-        }
-    };
-
     readonly delete = async (path: string, signal: AbortSignal): Promise<unknown> =>
         await this.request(path, "DELETE", "", false, signal);
 
@@ -815,70 +735,6 @@ export class MobiusCapabilityResources {
 
     readonly read = async (signal: AbortSignal): Promise<MobiusServiceCapabilities> =>
         decodeMobiusServiceCapabilities(await this.#executor.get("capabilities", signal));
-}
-
-export class MobiusArtifactResources {
-    readonly #executor: MobiusRequestExecutor;
-    readonly #projectId: string;
-
-    constructor(executor: MobiusRequestExecutor, projectId: string) {
-        this.#executor = executor;
-        this.#projectId = projectId;
-    }
-
-    readonly createUpload = async (
-        sessionId: string,
-        request: MobiusArtifactUploadRequest,
-        signal: AbortSignal,
-    ): Promise<MobiusArtifactUpload> =>
-        decodeMobiusArtifactUpload(
-            await this.#executor.post(sessionPath(this.#projectId, sessionId, "artifacts/uploads"), request, signal),
-        );
-
-    readonly uploadContent = async (
-        sessionId: string,
-        upload: MobiusArtifactUpload,
-        bytes: Uint8Array,
-        signal: AbortSignal,
-    ): Promise<MobiusAvailableArtifact> => {
-        if (upload.sessionId !== sessionId || bytes.byteLength !== upload.byteLength) {
-            throw new MobiusValidationError("The artifact content does not match its upload authorization");
-        }
-        return decodeMobiusAvailableArtifact(
-            await this.#executor.putBytes(
-                sessionPath(this.#projectId, sessionId, `artifacts/${encodeURIComponent(upload.artifactId)}/content`),
-                bytes,
-                upload.mediaType,
-                upload.uploadToken,
-                signal,
-            ),
-        );
-    };
-
-    readonly read = async (sessionId: string, artifactId: string, signal: AbortSignal): Promise<MobiusArtifact> =>
-        decodeMobiusArtifact(
-            await this.#executor.get(
-                sessionPath(this.#projectId, sessionId, `artifacts/${encodeURIComponent(artifactId)}`),
-                signal,
-            ),
-        );
-
-    readonly download = async (
-        sessionId: string,
-        artifactId: string,
-        signal: AbortSignal,
-    ): Promise<MobiusArtifactDownload> => {
-        const artifact = await this.read(sessionId, artifactId, signal);
-        if (!(artifact instanceof MobiusAvailableArtifact)) {
-            throw new MobiusApiError("artifact_not_ready", "The artifact content is not available", 409);
-        }
-        const bytes = await this.#executor.getBytes(
-            sessionPath(this.#projectId, sessionId, `artifacts/${encodeURIComponent(artifactId)}/content`),
-            artifact,
-            signal,
-        );
-        return new MobiusArtifactDownload(artifact, bytes);
-    };
 }
 
 export class MobiusCredentialResources {
@@ -1910,7 +1766,6 @@ export class MobiusEventResources {
 }
 
 export class MobiusClient {
-    readonly artifacts: MobiusArtifactResources;
     readonly attempts: MobiusAttemptResources;
     readonly capabilities: MobiusCapabilityResources;
     readonly credentials: MobiusCredentialResources;
@@ -1928,7 +1783,6 @@ export class MobiusClient {
             options.maxStreamReconnectAttempts ?? DEFAULT_STREAM_RECONNECT_ATTEMPTS,
             "stream reconnect attempt limit",
         );
-        this.artifacts = new MobiusArtifactResources(executor, options.projectId);
         this.attempts = new MobiusAttemptResources(executor, options.projectId);
         this.capabilities = new MobiusCapabilityResources(executor);
         this.credentials = new MobiusCredentialResources(executor, options.projectId);

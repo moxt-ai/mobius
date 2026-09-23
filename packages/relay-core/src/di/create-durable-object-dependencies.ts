@@ -7,7 +7,6 @@ import {
 import type { SessionTransport } from "../gateway/session-transport.ts";
 import { createDoRoutes } from "../http/do/do-routes.ts";
 import { createRuntimeRoutes } from "../http/do/runtime-routes.ts";
-import type { ContentPersistence, ImmutableContentStore } from "../infra/content-store.ts";
 import type { DatabaseResolver } from "../infra/database-resolver.ts";
 import type { DoSqlDatabase } from "../infra/do-sql-database.ts";
 import type { ProjectStorageDirectory } from "../infra/project-storage-directory.ts";
@@ -16,11 +15,8 @@ import { ChannelActor } from "../service/channel/channel-actor.ts";
 import { ChannelCredentialService } from "../service/channel/channel-credential-service.ts";
 import { RuntimeConnectionService } from "../service/channel/runtime-connection-service.ts";
 import { type RuntimePeers, RuntimeService } from "../service/channel/runtime-service.ts";
-import { ContentService } from "../service/do/content-service.ts";
 import { DoService } from "../service/do/do-service.ts";
 import { RemoteSessionRuntime } from "../service/do/remote-session-runtime.ts";
-import { SessionArchiveService } from "../service/do/session-archive-service.ts";
-import { SessionArtifactService } from "../service/do/session-artifact-service.ts";
 import { SessionCommandService } from "../service/do/session-command-service.ts";
 import { SessionEventProjector } from "../service/do/session-event-projector.ts";
 import { SessionEventStreams } from "../service/do/session-event-stream.ts";
@@ -30,11 +26,8 @@ import { SessionQueryService } from "../service/do/session-query-service.ts";
 import { SessionRecoveryService } from "../service/do/session-recovery-service.ts";
 import { SessionRetentionService } from "../service/do/session-retention-service.ts";
 import { SessionStateService } from "../service/do/session-state-service.ts";
-import { SessionTransferService } from "../service/do/session-transfer-service.ts";
 import { SqliteSessionRuntime } from "../service/do/sqlite-session-runtime.ts";
 import { ChannelCredentialStorage } from "../storage/channel-credential-storage.ts";
-import { SessionArchiveStorage } from "../storage/do/session-archive-storage.ts";
-import { SessionArtifactStorage } from "../storage/do/session-artifact-storage.ts";
 import { SessionCommandsStorage } from "../storage/do/session-commands-storage.ts";
 import { SessionDeletionStorage } from "../storage/do/session-deletion-storage.ts";
 import { SessionEventProjectorStorage } from "../storage/do/session-event-projector-storage.ts";
@@ -44,35 +37,24 @@ import { SessionQueriesStorage } from "../storage/do/session-queries-storage.ts"
 import { SessionRecoveryStorage } from "../storage/do/session-recovery-storage.ts";
 import { SessionRetentionStorage } from "../storage/do/session-retention-storage.ts";
 import { SessionStateStorage } from "../storage/do/session-state-storage.ts";
-import { SessionTransferStorage } from "../storage/do/session-transfer-storage.ts";
-import { SqliteContentStore } from "../storage/do/sqlite-content-store.ts";
 import { initializeSessionSchema } from "../storage/do/sqlite-session-schema.ts";
 import { RuntimeConnectionStorage } from "../storage/runtime-connection-storage.ts";
 import { SessionDirectoryStorage } from "../storage/session-directory-storage.ts";
 
-export type SessionContentConfiguration =
-    | { readonly kind: "sqlite"; readonly archiveByteLimit: number }
-    | { readonly kind: "external"; readonly content: ContentPersistence };
-
 interface DoInfrastructure {
     readonly doDatabase: DoSqlDatabase;
-    readonly storages: { readonly content: ImmutableContentStore };
     readonly config: { readonly quota?: SessionQuotaPolicy };
     readonly initializeSessionSchema: (database: DoSqlDatabase) => void;
 }
 
 function createDoContext(infrastructure: DoInfrastructure) {
     infrastructure.initializeSessionSchema(infrastructure.doDatabase);
-    const archiveStorage = new SessionArchiveStorage(infrastructure);
     const eventProjectorStorage = new SessionEventProjectorStorage(infrastructure);
     const storages = Object.freeze({
-        ...infrastructure.storages,
         recovery: new SessionRecoveryStorage(infrastructure.doDatabase),
-        archive: archiveStorage,
-        artifacts: new SessionArtifactStorage(infrastructure),
         commands: new SessionCommandsStorage({
             ...infrastructure,
-            storages: { archive: archiveStorage, eventProjector: eventProjectorStorage },
+            storages: { eventProjector: eventProjectorStorage },
         }),
         deletions: new SessionDeletionStorage(infrastructure),
         eventProjector: eventProjectorStorage,
@@ -80,33 +62,26 @@ function createDoContext(infrastructure: DoInfrastructure) {
         lifecycle: new SessionLifecycleStorage(infrastructure),
         queries: new SessionQueriesStorage(infrastructure),
         state: new SessionStateStorage(infrastructure),
-        transfers: new SessionTransferStorage({ ...infrastructure, storages: { archive: archiveStorage } }),
     });
     const config = Object.freeze({ quota: infrastructure.config.quota ?? DEFAULT_SESSION_QUOTA_POLICY });
     const cx = { ...infrastructure, config, storages };
-    const archive = new SessionArchiveService(cx);
     const eventProjector = new SessionEventProjector(cx);
     const state = new SessionStateService(cx);
-    const artifacts = new SessionArtifactService({ ...cx, services: { state } });
-    const lifecycle = new SessionLifecycleService({ ...cx, services: { archive, state } });
-    const queries = new SessionQueryService({ ...cx, services: { archive, state } });
+    const lifecycle = new SessionLifecycleService({ ...cx, services: { state } });
+    const queries = new SessionQueryService({ ...cx, services: { state } });
     const eventStreams = new SessionEventStreams({ runtimes: { queries } });
     const interactions = new SessionInteractionService({ ...cx, services: { queries, state } });
-    const commands = new SessionCommandService({ ...cx, services: { archive, eventProjector, lifecycle, state } });
-    const transfers = new SessionTransferService({ ...cx, services: { archive, artifacts, state } });
+    const commands = new SessionCommandService({ ...cx, services: { eventProjector, lifecycle, state } });
     return Object.freeze({
         ...cx,
         services: Object.freeze({
-            archive,
             eventProjector,
             state,
-            artifacts,
             lifecycle,
             queries,
             eventStreams,
             interactions,
             commands,
-            transfers,
         }),
     });
 }
@@ -114,17 +89,11 @@ function createDoContext(infrastructure: DoInfrastructure) {
 function createSessionRuntime(cx: {
     readonly database: DoSqlDatabase;
     readonly quota: SessionQuotaPolicy;
-    readonly content: SessionContentConfiguration;
     readonly initializeSessionSchema: (database: DoSqlDatabase) => void;
 }) {
-    const content =
-        cx.content.kind === "sqlite"
-            ? new ContentService(new SqliteContentStore(cx.database), cx.content.archiveByteLimit)
-            : new ContentService(cx.content.content, null);
     return new SqliteSessionRuntime(
         createDoContext({
             doDatabase: cx.database,
-            storages: { content },
             config: { quota: cx.quota },
             initializeSessionSchema: cx.initializeSessionSchema,
         }),
@@ -133,7 +102,6 @@ function createSessionRuntime(cx: {
 
 function createSessionRelayDependencies(cx: {
     readonly database: DoSqlDatabase;
-    readonly content: SessionContentConfiguration;
     readonly quota: SessionQuotaPolicy;
     readonly initializeSessionSchema: (database: DoSqlDatabase) => void;
     readonly schedule: (timestamp: number, signal: AbortSignal) => Promise<void>;
@@ -215,7 +183,6 @@ export type DurableObjectContext = ReturnType<typeof createDurableObjectDependen
 
 export function createDurableObjectDependencies(cx: {
     readonly doDatabase: DoSqlDatabase;
-    readonly content: SessionContentConfiguration;
     readonly quota: SessionQuotaPolicy;
     readonly initializeSessionSchema?: (database: DoSqlDatabase) => void;
     readonly storages: {
@@ -251,7 +218,6 @@ export function createDurableObjectDependencies(cx: {
     });
     const session = createSessionRelayDependencies({
         database: cx.doDatabase,
-        content: cx.content,
         initializeSessionSchema: cx.initializeSessionSchema ?? initializeSessionSchema,
         quota: cx.quota,
         schedule: cx.utilities.schedule,

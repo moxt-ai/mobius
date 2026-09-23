@@ -4,16 +4,14 @@ import type {
     SessionExport,
     SessionSummary,
 } from "../../entity/do/session.ts";
+import { SessionRuntimeError } from "../../entity/do/session.ts";
 import type {
-    SessionArtifactRuntime,
     SessionCommandRuntime,
     SessionEventStreamRuntime,
     SessionQueryRuntime,
     SessionTransferRuntime,
 } from "../../infra/session-runtime.ts";
 import type { SessionRecoveryStorage } from "../../storage/do/session-recovery-storage.ts";
-import type { SessionArchiveService } from "./session-archive-service.ts";
-import type { SessionArtifactService } from "./session-artifact-service.ts";
 import type { SessionCommandService } from "./session-command-service.ts";
 import type { SessionEventProjector } from "./session-event-projector.ts";
 import type { SessionEventStreams } from "./session-event-stream.ts";
@@ -21,33 +19,21 @@ import type { SessionInteractionService } from "./session-interaction-service.ts
 import type { SessionLifecycleService } from "./session-lifecycle-service.ts";
 import type { SessionQueryService } from "./session-query-service.ts";
 import type { SessionStateService } from "./session-state-service.ts";
-import type { SessionTransferService } from "./session-transfer-service.ts";
 
 export class SqliteSessionRuntime
-    implements
-        SessionCommandRuntime,
-        SessionQueryRuntime,
-        SessionArtifactRuntime,
-        SessionEventStreamRuntime,
-        SessionTransferRuntime
+    implements SessionCommandRuntime, SessionQueryRuntime, SessionEventStreamRuntime, SessionTransferRuntime
 {
-    readonly #archive: SessionArchiveService;
     readonly #recovery: SessionRecoveryStorage;
-    readonly #artifacts: SessionArtifactService;
     readonly #commands: SessionCommandService;
     readonly #eventProjector: SessionEventProjector;
     readonly #eventStreams: SessionEventStreams;
     readonly #interactions: SessionInteractionService;
     readonly #lifecycle: SessionLifecycleService;
     readonly #queries: SessionQueryService;
-    readonly #store: SessionStateService;
-    readonly #transfer: SessionTransferService;
 
     constructor(cx: {
         readonly storages: { readonly recovery: SessionRecoveryStorage };
         readonly services: {
-            readonly archive: SessionArchiveService;
-            readonly artifacts: SessionArtifactService;
             readonly commands: SessionCommandService;
             readonly eventProjector: SessionEventProjector;
             readonly eventStreams: SessionEventStreams;
@@ -55,20 +41,15 @@ export class SqliteSessionRuntime
             readonly lifecycle: SessionLifecycleService;
             readonly queries: SessionQueryService;
             readonly state: SessionStateService;
-            readonly transfers: SessionTransferService;
         };
     }) {
-        this.#archive = cx.services.archive;
         this.#recovery = cx.storages.recovery;
         this.#eventProjector = cx.services.eventProjector;
-        this.#store = cx.services.state;
-        this.#artifacts = cx.services.artifacts;
         this.#lifecycle = cx.services.lifecycle;
         this.#queries = cx.services.queries;
         this.#eventStreams = cx.services.eventStreams;
         this.#interactions = cx.services.interactions;
         this.#commands = cx.services.commands;
-        this.#transfer = cx.services.transfers;
     }
 
     readonly createSession: SessionCommandRuntime["createSession"] = (...parameters) =>
@@ -163,24 +144,6 @@ export class SqliteSessionRuntime
     readonly readToolCallDetail: SessionQueryRuntime["readToolCallDetail"] = (...parameters) =>
         this.#queries.readToolCallDetail(...parameters);
 
-    readonly createArtifactUpload: SessionArtifactRuntime["createArtifactUpload"] = (...parameters) =>
-        this.#artifacts.createUpload(...parameters);
-
-    readonly authorizeArtifactUpload: SessionArtifactRuntime["authorizeArtifactUpload"] = (...parameters) =>
-        this.#artifacts.authorizeUpload(...parameters);
-
-    readonly completeArtifactUpload: SessionArtifactRuntime["completeArtifactUpload"] = (...parameters) =>
-        this.#artifacts.completeUpload(...parameters);
-
-    readonly readArtifact: SessionArtifactRuntime["readArtifact"] = (...parameters) =>
-        this.#artifacts.read(...parameters);
-
-    readonly readArtifactContent: SessionArtifactRuntime["readArtifactContent"] = (...parameters) =>
-        this.#artifacts.readContent(...parameters);
-
-    readonly resolveArtifactResources: SessionArtifactRuntime["resolveArtifactResources"] = (...parameters) =>
-        this.#artifacts.resolveResources(...parameters);
-
     readonly openEventStream: SessionEventStreamRuntime["openEventStream"] = (...parameters) =>
         this.#eventStreams.open(...parameters);
 
@@ -198,27 +161,23 @@ export class SqliteSessionRuntime
         this.#eventStreams.close();
     };
 
-    readonly runArchiveWork = async (scope: ProjectScope, sessionId: string, signal: AbortSignal): Promise<number> => {
+    readonly exportSession = async (
+        _scope: ProjectScope,
+        _sessionId: string,
+        signal: AbortSignal,
+    ): Promise<SessionExport> => {
         signal.throwIfAborted();
-        this.#store.requireSessionRow(scope, sessionId, false);
-        return await this.#archive.runWork(scope, sessionId, signal);
+        throw new SessionRuntimeError("session_history_not_retained", "This Session has no cloud export");
     };
 
-    readonly exportSession = async (
-        scope: ProjectScope,
-        sessionId: string,
-        signal: AbortSignal,
-    ): Promise<SessionExport> => await this.#transfer.exportSession(scope, sessionId, signal, this.readNativeHistory);
-
     readonly importSession = async (
-        scope: ProjectScope,
-        exported: unknown,
-        targetBinding: CreateSessionBindingRequest,
-        now: number,
+        _scope: ProjectScope,
+        _exported: unknown,
+        _targetBinding: CreateSessionBindingRequest,
+        _now: number,
         signal: AbortSignal,
-    ): Promise<SessionSummary> =>
-        await this.#transfer.importSession(scope, exported, targetBinding, now, signal, this.createSession);
-
-    readonly hasPendingArchiveWork = (scope: ProjectScope, sessionId: string): boolean =>
-        this.#archive.hasPendingWork(scope, sessionId);
+    ): Promise<SessionSummary> => {
+        signal.throwIfAborted();
+        throw new SessionRuntimeError("session_history_not_retained", "Cloud Session import is unavailable");
+    };
 }

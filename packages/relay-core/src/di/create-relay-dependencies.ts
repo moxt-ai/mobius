@@ -75,7 +75,6 @@ function createHttpContext(infrastructure: RelayInfrastructure, pairings: Pairin
             sessionCommands: sessions,
             sessionQueries: sessions,
             sessionTransfers: sessions,
-            sessionArtifacts: sessions,
             sessionEventStreams: sessions,
         },
     };
