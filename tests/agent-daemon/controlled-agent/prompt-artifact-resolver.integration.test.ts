@@ -72,7 +72,6 @@ describe("daemon prompt artifact resolution", () => {
         );
         relayUrl.searchParams.set("token", "daemon-secret");
         const config = createDaemonConfig({
-            auditDatabasePath: "/tmp/mobius-artifact-test.sqlite",
             channelId: "channel-artifact",
             defaultWorkspace: "/tmp",
             relayUrl,
@@ -155,7 +154,6 @@ describe("daemon prompt artifact resolution", () => {
             `ws://127.0.0.1:${port(server).toString()}${MOBIUS_API_PREFIX}/channels/channel-artifact/daemon?token=daemon-secret`,
         );
         const config = createDaemonConfig({
-            auditDatabasePath: "/tmp/mobius-artifact-test.sqlite",
             channelId: "channel-artifact",
             defaultWorkspace: "/tmp",
             relayUrl,
@@ -213,7 +211,6 @@ describe("daemon prompt artifact resolution", () => {
             `ws://127.0.0.1:${port(server).toString()}${MOBIUS_API_PREFIX}/channels/channel-artifact/daemon?token=daemon-secret`,
         );
         const config = createDaemonConfig({
-            auditDatabasePath: "/tmp/mobius-artifact-test.sqlite",
             channelId: "channel-artifact",
             defaultWorkspace: "/tmp",
             relayUrl,

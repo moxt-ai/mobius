@@ -25,7 +25,6 @@ import { describe, expect, it } from "vitest";
 import { LocalAgentDefinition } from "../../../packages/cli/src/agent-catalog/local-agent.ts";
 import { AuditStore } from "../../../packages/cli/src/audit/audit-store.ts";
 import { createDaemonConfig, DaemonLocalContext } from "../../../packages/cli/src/config.ts";
-import { SessionEventOutbox } from "../../../packages/cli/src/relay-connection/session-event-outbox.ts";
 import { runDaemon } from "../../../packages/cli/src/run-daemon.ts";
 import { listen, port, sendText } from "../../../tests/infra/websocket.ts";
 
@@ -115,7 +114,6 @@ describe("daemon narration delivery", () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-narration-delta-"));
         const workspace = join(stateDirectory, "workspace");
         const nativeStateDirectory = join(stateDirectory, "native");
-        const auditDatabasePath = join(stateDirectory, "audit", "channel_beta.sqlite");
         await Promise.all([mkdir(workspace), mkdir(nativeStateDirectory)]);
 
         const socketReady = Promise.withResolvers<Duplex>();
@@ -157,7 +155,6 @@ describe("daemon narration delivery", () => {
         );
         const config = createDaemonConfig(
             {
-                auditDatabasePath,
                 channelId: "channel_beta",
                 defaultWorkspace: workspace,
                 relayUrl,
@@ -167,7 +164,7 @@ describe("daemon narration delivery", () => {
             new DaemonLocalContext(stateDirectory),
         );
         const cancellation = new AbortController();
-        const audit = new AuditStore(auditDatabasePath);
+        const audit = new AuditStore();
         const daemon = runDaemon(config, audit, cancellation.signal);
 
         try {
@@ -264,187 +261,6 @@ describe("daemon narration delivery", () => {
             expect(streamed.length).toBeGreaterThan(0);
             expect(completedSnapshot).toContain(streamed);
             expect(activityCount).toBeGreaterThan(0);
-        } finally {
-            cancellation.abort();
-            await daemon;
-            audit.close();
-            for (const socket of relaySockets) {
-                socket.destroy();
-            }
-            await new Promise<void>((resolve) => relay.close(() => resolve()));
-            await rm(stateDirectory, { force: true, recursive: true });
-        }
-    }, 30_000);
-
-    it("Given a daemon restarts with a durable outbox already at capacity, When a turn streams narration, Then the process keeps running and the turn still settles", async () => {
-        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-narration-outbox-recovery-"));
-        const workspace = join(stateDirectory, "workspace");
-        const nativeStateDirectory = join(stateDirectory, "native");
-        const auditDatabasePath = join(stateDirectory, "audit", "channel_gamma.sqlite");
-        await Promise.all([mkdir(workspace), mkdir(nativeStateDirectory)]);
-
-        // The previous process died with these events still unacknowledged. Filling the
-        // same durable capacity is what made every restart fail on its first enqueue;
-        // the outbox recomputes its byte accounting from the rows, so the backlog has to
-        // be real events rather than a synthetic counter. The test deliberately never
-        // acknowledges them, so the outbox stays at capacity, exactly as it did after the
-        // crash that made every restart fail.
-        const seeded = new SessionEventOutbox(auditDatabasePath);
-        // Fill to within a few KB of the standard capacity, which is below the size of any
-        // narration increment, so the next increment cannot be stored. The loop sizes each
-        // filler from the capacity that is actually left rather than assuming a fixed one.
-        let backlogSequence = 0;
-        for (let guard = 0; guard < 1_000; guard += 1) {
-            const remaining = seeded.standardCapacityRemaining();
-            if (remaining <= 2_000) {
-                break;
-            }
-            // One event is capped at 8 MiB by the protocol, so a filler takes the smaller
-            // of the remaining capacity and that cap.
-            seeded.enqueue(
-                "restart_conversation",
-                JSON.stringify({
-                    activityId: "restart-activity",
-                    activityType: "reasoning",
-                    commandId: "restart-command",
-                    kind: AGENT_ACTIVITY_NARRATION_KIND,
-                    sequence: backlogSequence,
-                    sessionId: "restart_conversation",
-                    text: "x".repeat(Math.min(remaining - 1_500, 7_900_000)),
-                }),
-                "restart-attempt",
-            );
-            backlogSequence += 1;
-        }
-        seeded.close();
-        const backlogProbe = new SessionEventOutbox(auditDatabasePath);
-        // Guard the precondition: without a full outbox the case would prove nothing.
-        expect(backlogProbe.standardCapacityRemaining()).toBeLessThan(8_000);
-        backlogProbe.close();
-
-        const socketReady = Promise.withResolvers<Duplex>();
-        const relaySockets = new Set<Duplex>();
-        const relay = createServer((_request, response) => {
-            response.writeHead(404);
-            response.end();
-        });
-        relay.on("connection", (socket) => {
-            relaySockets.add(socket);
-            socket.once("close", () => relaySockets.delete(socket));
-            socket.on("error", () => undefined);
-        });
-        relay.on("upgrade", (request, socket) => {
-            const key = request.headers["sec-websocket-key"];
-            if (typeof key !== "string") {
-                socket.destroy();
-                return;
-            }
-            const accept = createHash("sha1").update(`${key}${websocketGuid}`).digest("base64");
-            socket.write(
-                "HTTP/1.1 101 Switching Protocols\r\n" +
-                    "Connection: Upgrade\r\n" +
-                    "Upgrade: websocket\r\n" +
-                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
-            );
-            socketReady.resolve(socket);
-        });
-        await listen(relay);
-
-        const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/channel_gamma/daemon`);
-        relayUrl.searchParams.set("token", "f".repeat(43));
-        const agent = new LocalAgentDefinition(
-            "deepseek-harness",
-            "DeepSeek Harness",
-            process.execPath,
-            [fakeAgentPath, "--agent-name", "DeepSeek Harness"],
-            { MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory },
-        );
-        const config = createDaemonConfig(
-            {
-                auditDatabasePath,
-                channelId: "channel_gamma",
-                defaultWorkspace: workspace,
-                relayUrl,
-            },
-            [agent],
-            [],
-            new DaemonLocalContext(stateDirectory),
-        );
-        const cancellation = new AbortController();
-        const audit = new AuditStore(auditDatabasePath);
-        const daemon = runDaemon(config, audit, cancellation.signal);
-
-        try {
-            const socket = await socketReady.promise;
-            const frames = new ClientFrames(socket);
-
-            // Ack only what the Turn itself produces so the seeded backlog stays put; the
-            // point is that a full outbox must not terminate the process.
-            const prompt: SessionPromptCommand = {
-                additionalDirectoryIds: [],
-                agentId: agent.id,
-                bindingId: config.bindingId,
-                commandId: "recovery_turn",
-                directoryId: "default",
-                disposition: SessionPromptDisposition.Reject,
-                images: [],
-                kind: "session.prompt",
-                prompt: "stream verbose activity",
-                resources: [],
-                sessionId: "restart_conversation",
-                targetCommandId: "",
-            };
-            sendText(socket, encodeSessionPromptCommand(prompt));
-
-            let completedSnapshot = "";
-            let completed = false;
-            let eventSequence = 0;
-            while (!completed) {
-                const message = await frames.next();
-                if (decodeMessageKind(message) !== SESSION_EVENT_KIND) {
-                    continue;
-                }
-                const envelope = decodeSessionEventEnvelope(message);
-                // The seeded backlog is never acknowledged, so the outbox stays at the
-                // capacity the crashed process left it with, while the live Turn's own
-                // events drain so the Turn can still settle.
-                const seededBacklog =
-                    envelope.source.kind === "attempt" && envelope.source.attemptId === "restart-attempt";
-                if (!seededBacklog) {
-                    eventSequence += 1;
-                    sendText(
-                        socket,
-                        encodeSessionEventAcknowledgement({
-                            cursor: `cursor-${eventSequence.toString()}`,
-                            duplicate: false,
-                            eventId: envelope.eventId,
-                            kind: SESSION_EVENT_ACK_KIND,
-                            sequence: eventSequence.toString(),
-                            sessionId: envelope.sessionId,
-                        }),
-                    );
-                }
-                const kind = decodeMessageKind(envelope.payload);
-                if (kind === AGENT_ACTIVITY_KIND) {
-                    const payload: unknown = JSON.parse(envelope.payload);
-                    if (
-                        typeof payload === "object" &&
-                        payload !== null &&
-                        Reflect.get(payload, "status") === "completed" &&
-                        Reflect.get(payload, "activityType") === "reasoning"
-                    ) {
-                        completedSnapshot = String(Reflect.get(payload, "output"));
-                    }
-                }
-                if (kind === SESSION_COMPLETED_KIND || kind === SESSION_FAILED_KIND) {
-                    completed = true;
-                }
-            }
-
-            // The process survived a full outbox, and the turn settled with its whole
-            // narration even though its increments were shed.
-            expect(completedSnapshot).toContain("step-63");
-            expect(cancellation.signal.aborted).toBe(false);
         } finally {
             cancellation.abort();
             await daemon;

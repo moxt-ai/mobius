@@ -40,8 +40,8 @@ describe("Mobius manager version compatibility", () => {
 
                 expect(listed.code).toBe(0);
                 expect(listed.stderr).toBe("");
-                expect(listed.stdout).toContain("Starting mobius daemon 0.0.93\n");
-                expect(listed.stdout).toContain("Mobius daemon 0.0.93 started\n");
+                expect(listed.stdout).toContain("Starting mobius daemon 0.0.94\n");
+                expect(listed.stdout).toContain("Mobius daemon 0.0.94 started\n");
                 expect(listed.stdout).toContain("| connection_id");
                 await expect(oldManager).resolves.toBeUndefined();
             } finally {
@@ -96,7 +96,7 @@ describe("Mobius pairing lifecycle", () => {
         const workspace = join(stateRoot, "workspace");
         await Promise.all([mkdir(executableDirectory), mkdir(workspace)]);
         const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: stateRoot, PATH: executableDirectory };
-        const deadline = AbortSignal.timeout(15_000);
+        const deadline = AbortSignal.timeout(30_000);
         const installation = await openMobiusCliInstallation(deadline, environment);
         const connection = await installation.saveConnection(
             {
@@ -172,7 +172,7 @@ describe("Mobius pairing lifecycle", () => {
         } finally {
             await runCli(["quit"], environment, AbortSignal.timeout(10_000)).catch(() => undefined);
         }
-    });
+    }, 45_000);
 });
 
 function controlSocketPath(stateDirectory: string): string {

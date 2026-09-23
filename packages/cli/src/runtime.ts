@@ -1,5 +1,5 @@
 import { mkdir, realpath, stat } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { resolve } from "node:path";
 
 import { discoverLocalAgentInventory } from "./agent-catalog/discover-local-agents.ts";
 import { AuditStore } from "./audit/audit-store.ts";
@@ -11,7 +11,6 @@ const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const RUNTIME_CREDENTIAL_PATTERN = /^[a-zA-Z0-9_-]{32,256}$/;
 
 export interface MobiusRuntimeConnection {
-    readonly auditDatabasePath: string;
     readonly channelId: string;
     readonly defaultWorkspace: string;
     readonly relayUrl: string;
@@ -80,9 +79,6 @@ export function loadMobiusRuntimeConnection(
         throw new MobiusRuntimeConfigurationError("MOBIUS_CHANNEL_ID is invalid");
     }
     return Object.freeze({
-        auditDatabasePath:
-            environment["MOBIUS_AUDIT_DATABASE"]?.trim() ||
-            join(readStateDirectory(environment), "audit", `${channelId}.sqlite`),
         channelId,
         defaultWorkspace: loadDefaultWorkspace(environment),
         relayUrl: requiredEnvironmentValue(environment, "MOBIUS_RELAY_URL"),
@@ -117,8 +113,6 @@ export async function createMobiusRuntimeEngine(
     const localContext = new DaemonLocalContext(readStateDirectory(environment), environment);
     const relayUrl = relayUrlFromConnection(connection);
     const defaultWorkspace = await resolveWorkspace(connection.defaultWorkspace);
-    const auditDatabasePath = resolve(connection.auditDatabasePath);
-    await mkdir(dirname(auditDatabasePath), { recursive: true, mode: 0o700 });
     const inventory = await discoverLocalAgentInventory({
         defaultWorkspace,
         environment: localContext.environment,
@@ -130,7 +124,6 @@ export async function createMobiusRuntimeEngine(
     return new MobiusRuntimeEngine(
         createDaemonConfig(
             {
-                auditDatabasePath,
                 channelId: connection.channelId,
                 defaultWorkspace,
                 relayUrl,
@@ -159,7 +152,7 @@ export class MobiusRuntimeEngine {
         }
         signal.throwIfAborted();
         this.#state = new RunningMobiusRuntimeState();
-        const audit = new AuditStore(this.#config.auditDatabasePath);
+        const audit = new AuditStore();
         try {
             await runDaemon(this.#config, audit, signal, undefined, {
                 ...(this.#options.onConnectionStatus === undefined

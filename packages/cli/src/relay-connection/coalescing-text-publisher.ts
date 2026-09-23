@@ -5,7 +5,7 @@ import type { DaemonScheduledTask, DaemonTimer } from "./timer.ts";
  *
  * Token-level Agents (Claude Code enables `includePartialMessages`) emit one
  * update per streamed token, so a single final answer can arrive as hundreds or
- * thousands of chunks. Forwarding each chunk as its own durable Session event
+ * thousands of chunks. Forwarding each chunk as its own queued Session event
  * floods the owning Attempt's replay window and stalls the turn's text behind
  * the relay round trip. Buffering the text and flushing on a short timer bounds
  * the event rate without splitting or reordering the answer.

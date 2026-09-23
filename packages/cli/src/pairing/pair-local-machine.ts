@@ -314,7 +314,6 @@ function buildPairedDaemon(
         config: createDaemonConfig(
             {
                 defaultWorkspace,
-                auditDatabasePath: installation.auditDatabasePath(connection.connectionId),
                 channelId: connection.channelId,
                 relayUrl,
             },

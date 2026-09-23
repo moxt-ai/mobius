@@ -1,5 +1,4 @@
 import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { mobiusApiPath } from "@moxt-ai/mobius-protocol";
 import {
     type AcpAgentDefinition,
@@ -57,7 +56,6 @@ export class OpaqueDaemonReconnectTarget extends DaemonReconnectTarget {
 export interface DaemonConfig {
     readonly agents: readonly AcpAgentDefinition[];
     readonly defaultWorkspace: string;
-    readonly auditDatabasePath: string;
     readonly bindingId: string;
     readonly catalog: LocalAgentCatalog;
     readonly channelId: string;
@@ -69,7 +67,6 @@ export interface DaemonConfig {
 
 export interface DaemonConnectionConfig {
     readonly defaultWorkspace: string;
-    readonly auditDatabasePath: string;
     readonly channelId: string;
     readonly relayUrl: URL;
 }
@@ -85,7 +82,6 @@ export function createDaemonConfig(
     return {
         agents: daemonAgents,
         defaultWorkspace: connection.defaultWorkspace,
-        auditDatabasePath: connection.auditDatabasePath,
         bindingId: "workspace",
         catalog: new LocalAgentCatalog(daemonAgents, installableAgents),
         channelId: connection.channelId,
@@ -109,9 +105,6 @@ export function loadDaemonConfig(): DaemonConfig {
     return createDaemonConfig(
         {
             defaultWorkspace: loadDefaultWorkspace(),
-            auditDatabasePath:
-                process.env["MOBIUS_AUDIT_DATABASE"] ??
-                fileURLToPath(new URL("../../../.mobius/daemon.sqlite", import.meta.url)),
             channelId: process.env["MOBIUS_CHANNEL_ID"] ?? "local",
             relayUrl,
         },

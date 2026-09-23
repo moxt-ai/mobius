@@ -77,6 +77,7 @@ export function createProjectRuntimeRoutes() {
             async (context) => {
                 const body = context.req.valid("json");
                 if (
+                    body["action"] !== "create" &&
                     body["action"] !== "list" &&
                     body["action"] !== "find" &&
                     body["action"] !== "import" &&
@@ -87,15 +88,19 @@ export function createProjectRuntimeRoutes() {
                 }
                 assertExactKeys(
                     body,
-                    body["action"] === "list"
-                        ? ["action", "agentId", "directoryId", "additionalDirectoryIds", "cursor", "discoveryId"]
-                        : body["action"] === "find"
-                          ? ["action", "agentId", "directoryId", "additionalDirectoryIds", "nativeSessionId"]
-                          : ["action", "agentId", "directoryId", "additionalDirectoryIds", "entryId", "discoveryId"],
+                    body["action"] === "create"
+                        ? ["action", "agentId", "directoryId", "additionalDirectoryIds"]
+                        : body["action"] === "list"
+                          ? ["action", "agentId", "directoryId", "additionalDirectoryIds", "cursor", "discoveryId"]
+                          : body["action"] === "find"
+                            ? ["action", "agentId", "directoryId", "additionalDirectoryIds", "nativeSessionId"]
+                            : ["action", "agentId", "directoryId", "additionalDirectoryIds", "entryId", "discoveryId"],
                 );
                 const { discoveryId, ...input } = body;
                 const sessionId =
-                    (input["action"] === "list" && discoveryId === null) || input["action"] === "find"
+                    input["action"] === "create" ||
+                    (input["action"] === "list" && discoveryId === null) ||
+                    input["action"] === "find"
                         ? crypto.randomUUID()
                         : validateIdentifier(readString(body, "discoveryId"), "discovery_id");
                 const command = decodeNativeSessionRequest(

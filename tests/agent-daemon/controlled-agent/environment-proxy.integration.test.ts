@@ -184,7 +184,6 @@ describe("daemon environment proxy", () => {
                 AbortSignal.timeout(2_000),
             );
             expect(paired.connectionPath).toBe(installation.connectionPath(paired.connectionId));
-            expect(paired.config.auditDatabasePath).toBe(installation.auditDatabasePath(paired.connectionId));
             expect(paired.config.localContext.stateDirectory).toBe(installation.stateDirectory);
             expect((await installation.readConnection(paired.connectionId, AbortSignal.timeout(2_000))).appId).toBe(
                 "app_proxy",

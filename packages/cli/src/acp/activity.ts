@@ -488,7 +488,7 @@ export class AcpActivityTracker {
         const identity = this.#identity(key);
         // A narration streams: the activity is announced once, then each chunk travels
         // as its own increment and the accumulated text is materialized exactly once,
-        // on completion. Sending the accumulated text per chunk made the durable event
+        // on completion. Sending the accumulated text per chunk made the queued event
         // stream quadratic in the length of the narration.
         const previous = this.#narrations.get(key);
         this.#narrations.set(key, {

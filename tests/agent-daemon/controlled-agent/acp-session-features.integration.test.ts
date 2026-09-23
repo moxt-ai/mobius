@@ -18,7 +18,7 @@ import type {
 import { describe, expect, it } from "vitest";
 import type { AcpActivity } from "../../../packages/cli/src/acp/activity.ts";
 import { AcpSessionManager, type AcpSessionObserver } from "../../../packages/cli/src/acp/session-manager.ts";
-import { SqliteAcpSessionStore } from "../../../packages/cli/src/acp/session-store.ts";
+import { MemoryAcpSessionStore } from "../../../packages/cli/src/acp/session-store.ts";
 import { createDaemonConfig, DaemonLocalContext, LocalAgentDefinition } from "../../../packages/cli/src/config.ts";
 
 const fakeAgentPath = fileURLToPath(new URL("../fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
@@ -109,7 +109,6 @@ describe("ACP session features", () => {
         });
         const config = createDaemonConfig(
             {
-                auditDatabasePath: join(workspace, "audit.sqlite"),
                 channelId: "login-shell-environment",
                 defaultWorkspace: workspace,
                 relayUrl: new URL("ws://127.0.0.1:8787/v1/runtimes/connect?token=test"),
@@ -596,7 +595,7 @@ describe("ACP session features", () => {
         process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = temporaryDirectory;
         await mkdir(join(temporaryDirectory, "shared"));
         const observer = new RecordingObserver();
-        const store = new SqliteAcpSessionStore(join(temporaryDirectory, "sessions.sqlite"));
+        const store = new MemoryAcpSessionStore();
         const manager = new AcpSessionManager(observer, store);
         const signal = new AbortController().signal;
 
@@ -779,88 +778,6 @@ describe("ACP session features", () => {
             expect(activityContent).toContain("resource");
         } finally {
             await manager.close();
-            store.close();
-            if (previousState === undefined) {
-                delete process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
-            } else {
-                process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = previousState;
-            }
-            await rm(temporaryDirectory, { force: true, recursive: true });
-        }
-    });
-
-    it("Given a persisted native ACP session, When the daemon session manager restarts, Then it resumes the same agent context", async () => {
-        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-resume-"));
-        const previousState = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
-        process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = temporaryDirectory;
-        const databasePath = join(temporaryDirectory, "sessions.sqlite");
-        const signal = new AbortController().signal;
-
-        try {
-            const firstStore = new SqliteAcpSessionStore(databasePath);
-            const first = new AcpSessionManager(new RecordingObserver(), firstStore);
-            await first.prepareSession({
-                additionalDirectories: [],
-                agent: fakeAgent(),
-                cwd: temporaryDirectory,
-                sessionId: "resumable-browser-session",
-                signal,
-            });
-            const firstText: string[] = [];
-            await first.runPrompt({
-                additionalDirectories: [],
-                agent: fakeAgent(),
-                commandId: "first-command",
-                cwd: temporaryDirectory,
-                images: [],
-                onActivity: () => Promise.resolve(),
-                onText: (chunk) => {
-                    firstText.push(chunk);
-                    return Promise.resolve();
-                },
-                prompt: "first",
-                resources: [],
-                sessionId: "resumable-browser-session",
-                signal,
-            });
-            await first.close();
-            firstStore.close();
-
-            const secondStore = new SqliteAcpSessionStore(databasePath);
-            const second = new AcpSessionManager(new RecordingObserver(), secondStore);
-            try {
-                const prepared = await second.prepareSession({
-                    additionalDirectories: [],
-                    agent: fakeAgent(),
-                    cwd: temporaryDirectory,
-                    sessionId: "resumable-browser-session",
-                    signal,
-                });
-                expect(prepared.restored).toBe(true);
-                const secondText: string[] = [];
-                await second.runPrompt({
-                    additionalDirectories: [],
-                    agent: fakeAgent(),
-                    commandId: "second-command",
-                    cwd: temporaryDirectory,
-                    images: [],
-                    onActivity: () => Promise.resolve(),
-                    onText: (chunk) => {
-                        secondText.push(chunk);
-                        return Promise.resolve();
-                    },
-                    prompt: "second",
-                    resources: [],
-                    sessionId: "resumable-browser-session",
-                    signal,
-                });
-                expect(firstText.join("")).toBe("Codex turn 1: first");
-                expect(secondText.join("")).toBe("Codex turn 2: second");
-            } finally {
-                await second.close();
-                secondStore.close();
-            }
-        } finally {
             if (previousState === undefined) {
                 delete process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
             } else {
@@ -874,7 +791,7 @@ describe("ACP session features", () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-turn-fork-"));
         const previousState = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
         process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = temporaryDirectory;
-        const store = new SqliteAcpSessionStore(join(temporaryDirectory, "sessions.sqlite"));
+        const store = new MemoryAcpSessionStore();
         const manager = new AcpSessionManager(new RecordingObserver(), store);
         const signal = new AbortController().signal;
         const prompt = async (sessionId: string, commandId: string, text: string): Promise<string> => {
@@ -929,7 +846,6 @@ describe("ACP session features", () => {
             expect(await prompt("forked-session", "forked-command", "after fork")).toBe("Codex turn 2: after fork");
         } finally {
             await manager.close();
-            store.close();
             if (previousState === undefined) {
                 delete process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
             } else {
