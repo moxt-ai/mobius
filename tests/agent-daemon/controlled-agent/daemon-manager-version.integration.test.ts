@@ -39,8 +39,8 @@ describe("Mobius manager version compatibility", () => {
 
                 expect(listed.code).toBe(0);
                 expect(listed.stderr).toBe("");
-                expect(listed.stdout).toContain("Starting mobius daemon 0.0.88\n");
-                expect(listed.stdout).toContain("Mobius daemon 0.0.88 started\n");
+                expect(listed.stdout).toContain("Starting mobius daemon 0.0.89\n");
+                expect(listed.stdout).toContain("Mobius daemon 0.0.89 started\n");
                 expect(listed.stdout).toContain("| connection_id");
                 await expect(oldManager).resolves.toBeUndefined();
             } finally {
@@ -53,7 +53,7 @@ describe("Mobius manager version compatibility", () => {
 });
 
 describe("Mobius pairing lifecycle", () => {
-    it("Given a saved pairing, When it is stopped and removed by connection ID, Then list shows it stopped before removing it", async () => {
+    it("Given a standalone saved pairing, When it is stopped and removed by connection ID, Then list shows it stopped before removing it", async () => {
         const stateRoot = await mkdtemp(join(tmpdir(), "mobius-manager-pairing-lifecycle-"));
         temporaryDirectories.push(stateRoot);
         const executableDirectory = join(stateRoot, "empty-path");
@@ -67,7 +67,7 @@ describe("Mobius pairing lifecycle", () => {
                 appId: "app_test",
                 channelId: "channel_test",
                 defaultWorkspace: workspace,
-                pairingId: "pairing_test",
+                pairingId: "",
                 relayOrigin: new URL("http://127.0.0.1:1"),
                 runtimeCredential: "a".repeat(43),
                 runtimeId: "runtime_test",
