@@ -1,0 +1,73 @@
+{
+    "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+    "vcs": {
+        "enabled": true,
+        "clientKind": "git",
+        "defaultBranch": "main",
+        "useIgnoreFile": true
+    },
+    "files": {
+        "includes": ["**", "!!**/dist", "!!**/coverage", "!!**/worker-configuration.d.ts", "!!**/.claude"]
+    },
+    "linter": {
+        "enabled": true,
+        "domains": {
+            "project": "recommended",
+            "types": "recommended",
+            "test": "recommended"
+        },
+        "rules": {
+            "preset": "recommended",
+            "complexity": {
+                "useLiteralKeys": "off",
+                "noUselessConstructor": "error"
+            },
+            "style": {
+                "useBlockStatements": "error"
+            },
+            "nursery": {
+                "noFloatingPromises": "error",
+                "noMisusedPromises": "error",
+                "useExhaustiveSwitchCases": "error"
+            }
+        }
+    },
+    "overrides": [
+        {
+            "includes": ["packages/web/src/components/sidebar-resize-handle.tsx"],
+            "linter": {
+                "rules": {
+                    "a11y": {
+                        "useSemanticElements": "off"
+                    }
+                }
+            }
+        },
+        {
+            "includes": [
+                "packages/web/src/components/agent-activity-list.tsx",
+                "packages/web/src/components/agent-markdown.tsx",
+                "packages/web/src/components/agent-rich-content.tsx"
+            ],
+            "linter": {
+                "rules": {
+                    "a11y": {
+                        "noNoninteractiveTabindex": "off",
+                        "useSemanticElements": "off"
+                    }
+                }
+            }
+        }
+    ],
+    "formatter": {
+        "enabled": true,
+        "indentStyle": "space",
+        "indentWidth": 4,
+        "lineWidth": 120
+    },
+    "css": {
+        "parser": {
+            "tailwindDirectives": true
+        }
+    }
+}

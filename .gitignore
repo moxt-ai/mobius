@@ -1,0 +1,17 @@
+node_modules/
+dist/
+coverage/
+.vitest-reports/
+.wrangler/
+.vite/
+.mobius/
+.worktrees/
+.claude/worktrees/
+.env
+.env.*
+.dev.vars
+.dev.vars.*
+*.pem
+.DS_Store
+packages/relay-core/src/generated/
+packages/relay-cloudflare-platform/src/generated/

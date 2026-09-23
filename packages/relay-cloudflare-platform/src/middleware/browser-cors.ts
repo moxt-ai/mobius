@@ -1,0 +1,63 @@
+import { createMiddleware } from "hono/factory";
+import { PlatformControlPlaneError } from "../entity/platform-control-plane.ts";
+
+interface BrowserCorsEnvironment {
+    readonly Bindings: { readonly allowedOrigins?: ReadonlySet<string> };
+}
+
+function browserCorsHeaders(origin: string, methods: readonly string[], headers: readonly string[]): Headers {
+    return new Headers({
+        "access-control-allow-headers": headers.join(", "),
+        "access-control-allow-methods": [...methods, "OPTIONS"].join(", "),
+        "access-control-allow-origin": origin,
+        "access-control-expose-headers":
+            "content-length, content-type, x-mobius-artifact-id, x-mobius-byte-length, x-mobius-event-format, x-mobius-file-name, x-mobius-sha256",
+        "access-control-max-age": "600",
+        vary: "Origin, Access-Control-Request-Method, Access-Control-Request-Headers",
+    });
+}
+
+export function createBrowserCors(
+    methods: readonly string[],
+    headers: readonly string[],
+    configuredOrigins?: ReadonlySet<string>,
+) {
+    return createMiddleware<BrowserCorsEnvironment>(async (context, next) => {
+        const origin = context.req.header("origin") ?? "";
+        const allowedOrigins = configuredOrigins ?? context.env.allowedOrigins ?? new Set<string>();
+        if (origin.length > 0 && !allowedOrigins.has("*") && !allowedOrigins.has(origin)) {
+            throw new PlatformControlPlaneError("browser_origin_denied", "The browser origin is not allowed", 403);
+        }
+        if (context.req.method === "OPTIONS") {
+            if (origin.length === 0) {
+                throw new PlatformControlPlaneError("browser_origin_denied", "The browser origin is not allowed", 403);
+            }
+            const requestedMethod = context.req.header("access-control-request-method") ?? "";
+            const requestedHeaders = (context.req.header("access-control-request-headers") ?? "")
+                .split(",")
+                .map((header) => header.trim().toLowerCase())
+                .filter((header) => header.length > 0);
+            if (!methods.includes(requestedMethod) || requestedHeaders.some((header) => !headers.includes(header))) {
+                throw new PlatformControlPlaneError(
+                    "browser_preflight_denied",
+                    "The browser preflight request is not allowed",
+                    403,
+                );
+            }
+            return new Response(null, { headers: browserCorsHeaders(origin, methods, headers), status: 204 });
+        }
+        if (origin.length > 0) {
+            for (const [name, value] of browserCorsHeaders(origin, methods, headers)) {
+                context.header(name, value);
+            }
+        }
+        await next();
+        if (origin.length > 0) {
+            context.res = new Response(context.res.body, context.res);
+            for (const [name, value] of browserCorsHeaders(origin, methods, headers)) {
+                context.res.headers.set(name, value);
+            }
+        }
+        return context.res;
+    });
+}

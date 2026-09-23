@@ -1,0 +1,29 @@
+{
+    "name": "@moxt-ai/mobius-relay-core",
+    "version": "0.0.1",
+    "private": true,
+    "type": "module",
+    "exports": {
+        ".": "./src/index.ts",
+        "./contracts": "./src/contracts.ts",
+        "./gateway": "./src/gateway/index.ts",
+        "./database": "./src/infra/sql-database.ts",
+        "./schema": "./src/schema/d1/index.ts"
+    },
+    "scripts": {
+        "prebuild": "pnpm --dir ../.. db:codegen",
+        "pretypecheck": "pnpm --dir ../.. db:codegen",
+        "build": "tsc --project tsconfig.json",
+        "typecheck": "tsc --project tsconfig.json"
+    },
+    "devDependencies": {
+        "@cloudflare/workers-types": "^5.20260918.1"
+    },
+    "dependencies": {
+        "@moxt-ai/mobius-protocol": "workspace:*",
+        "drizzle-orm": "^0.45.2",
+        "hono": "^4.13.8",
+        "pino": "^10.3.1",
+        "valibot": "1.5.0"
+    }
+}

@@ -1,0 +1,2 @@
+packages/relay-core/migrations/d1/*.sql text eol=lf
+packages/relay-cloudflare-platform/migrations/d1/*.sql text eol=lf

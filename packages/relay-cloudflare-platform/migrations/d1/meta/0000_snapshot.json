@@ -1,0 +1,855 @@
+{
+    "version": "6",
+    "dialect": "sqlite",
+    "id": "3f99d617-b27f-4df0-9386-7b2eff3e56bf",
+    "prevId": "00000000-0000-0000-0000-000000000000",
+    "tables": {
+        "platform_apps": {
+            "name": "platform_apps",
+            "columns": {
+                "app_id": {
+                    "name": "app_id",
+                    "type": "text",
+                    "primaryKey": true,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "tenant_id": {
+                    "name": "tenant_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "display_name": {
+                    "name": "display_name",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "lifecycle": {
+                    "name": "lifecycle",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "default_credential_id": {
+                    "name": "default_credential_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "created_at": {
+                    "name": "created_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "updated_at": {
+                    "name": "updated_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "suspended_at": {
+                    "name": "suspended_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "deleted_at": {
+                    "name": "deleted_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {
+                "platform_apps_tenant": {
+                    "name": "platform_apps_tenant",
+                    "columns": ["tenant_id", "lifecycle", "created_at", "app_id"],
+                    "isUnique": false
+                },
+                "platform_apps_tenant_id_display_name_unique": {
+                    "name": "platform_apps_tenant_id_display_name_unique",
+                    "columns": ["tenant_id", "display_name"],
+                    "isUnique": true
+                }
+            },
+            "foreignKeys": {},
+            "compositePrimaryKeys": {},
+            "uniqueConstraints": {},
+            "checkConstraints": {
+                "platform_apps_lifecycle_check": {
+                    "name": "platform_apps_lifecycle_check",
+                    "value": "\"platform_apps\".\"lifecycle\" in ('active', 'suspended', 'deleted')"
+                }
+            }
+        },
+        "platform_app_credentials": {
+            "name": "platform_app_credentials",
+            "columns": {
+                "credential_id": {
+                    "name": "credential_id",
+                    "type": "text",
+                    "primaryKey": true,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "public_credential_id": {
+                    "name": "public_credential_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "app_id": {
+                    "name": "app_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "secret_digest": {
+                    "name": "secret_digest",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "permissions_json": {
+                    "name": "permissions_json",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "all_projects": {
+                    "name": "all_projects",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "revision": {
+                    "name": "revision",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "issued_at": {
+                    "name": "issued_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "last_used_at": {
+                    "name": "last_used_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "overlap_ends_at": {
+                    "name": "overlap_ends_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "replaced_by_credential_id": {
+                    "name": "replaced_by_credential_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "revoked_at": {
+                    "name": "revoked_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {
+                "platform_app_credentials_public_credential_id_unique": {
+                    "name": "platform_app_credentials_public_credential_id_unique",
+                    "columns": ["public_credential_id"],
+                    "isUnique": true
+                },
+                "platform_app_credentials_lookup": {
+                    "name": "platform_app_credentials_lookup",
+                    "columns": ["public_credential_id", "revoked_at", "overlap_ends_at"],
+                    "isUnique": false
+                },
+                "platform_app_credentials_app": {
+                    "name": "platform_app_credentials_app",
+                    "columns": ["app_id", "\"issued_at\" desc", "\"credential_id\" desc"],
+                    "isUnique": false
+                }
+            },
+            "foreignKeys": {},
+            "compositePrimaryKeys": {},
+            "uniqueConstraints": {},
+            "checkConstraints": {
+                "platform_app_credentials_all_projects_check": {
+                    "name": "platform_app_credentials_all_projects_check",
+                    "value": "\"platform_app_credentials\".\"all_projects\" in (0, 1)"
+                },
+                "platform_app_credentials_revision_check": {
+                    "name": "platform_app_credentials_revision_check",
+                    "value": "\"platform_app_credentials\".\"revision\" > 0"
+                }
+            }
+        },
+        "platform_app_credential_projects": {
+            "name": "platform_app_credential_projects",
+            "columns": {
+                "credential_id": {
+                    "name": "credential_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "project_id": {
+                    "name": "project_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "created_at": {
+                    "name": "created_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {
+                "platform_app_credential_projects_project": {
+                    "name": "platform_app_credential_projects_project",
+                    "columns": ["project_id", "credential_id"],
+                    "isUnique": false
+                }
+            },
+            "foreignKeys": {},
+            "compositePrimaryKeys": {
+                "platform_app_credential_projects_credential_id_project_id_pk": {
+                    "columns": ["credential_id", "project_id"],
+                    "name": "platform_app_credential_projects_credential_id_project_id_pk"
+                }
+            },
+            "uniqueConstraints": {},
+            "checkConstraints": {}
+        },
+        "platform_audit_events": {
+            "name": "platform_audit_events",
+            "columns": {
+                "audit_id": {
+                    "name": "audit_id",
+                    "type": "text",
+                    "primaryKey": true,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "app_id": {
+                    "name": "app_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "project_id": {
+                    "name": "project_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "actor_kind": {
+                    "name": "actor_kind",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "actor_id": {
+                    "name": "actor_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "actor_ref": {
+                    "name": "actor_ref",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "action": {
+                    "name": "action",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "subject_id": {
+                    "name": "subject_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "outcome": {
+                    "name": "outcome",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "details_json": {
+                    "name": "details_json",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "recorded_at": {
+                    "name": "recorded_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {
+                "platform_audit_events_project": {
+                    "name": "platform_audit_events_project",
+                    "columns": ["project_id", "\"recorded_at\" desc", "\"audit_id\" desc"],
+                    "isUnique": false
+                }
+            },
+            "foreignKeys": {},
+            "compositePrimaryKeys": {},
+            "uniqueConstraints": {},
+            "checkConstraints": {
+                "platform_audit_events_project_id_check": {
+                    "name": "platform_audit_events_project_id_check",
+                    "value": "\"platform_audit_events\".\"project_id\" != ''"
+                },
+                "platform_audit_events_outcome_check": {
+                    "name": "platform_audit_events_outcome_check",
+                    "value": "\"platform_audit_events\".\"outcome\" in ('succeeded', 'denied')"
+                }
+            }
+        },
+        "platform_dashboard_audit_events": {
+            "name": "platform_dashboard_audit_events",
+            "columns": {
+                "audit_id": {
+                    "name": "audit_id",
+                    "type": "text",
+                    "primaryKey": true,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "tenant_id": {
+                    "name": "tenant_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "app_id": {
+                    "name": "app_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "project_id": {
+                    "name": "project_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "actor_kind": {
+                    "name": "actor_kind",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "actor_id": {
+                    "name": "actor_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "actor_ref": {
+                    "name": "actor_ref",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "action": {
+                    "name": "action",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "subject_id": {
+                    "name": "subject_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "outcome": {
+                    "name": "outcome",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "details_json": {
+                    "name": "details_json",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "recorded_at": {
+                    "name": "recorded_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {
+                "platform_dashboard_audit_events_tenant": {
+                    "name": "platform_dashboard_audit_events_tenant",
+                    "columns": ["tenant_id", "\"recorded_at\" desc", "\"audit_id\" desc"],
+                    "isUnique": false
+                }
+            },
+            "foreignKeys": {},
+            "compositePrimaryKeys": {},
+            "uniqueConstraints": {},
+            "checkConstraints": {
+                "platform_dashboard_audit_events_project_id_check": {
+                    "name": "platform_dashboard_audit_events_project_id_check",
+                    "value": "\"platform_dashboard_audit_events\".\"project_id\" = ''"
+                },
+                "platform_dashboard_audit_events_outcome_check": {
+                    "name": "platform_dashboard_audit_events_outcome_check",
+                    "value": "\"platform_dashboard_audit_events\".\"outcome\" in ('succeeded', 'denied')"
+                }
+            }
+        },
+        "platform_organization_invite_links": {
+            "name": "platform_organization_invite_links",
+            "columns": {
+                "id": {
+                    "name": "id",
+                    "type": "text",
+                    "primaryKey": true,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "organization_id": {
+                    "name": "organization_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "token_hash": {
+                    "name": "token_hash",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "creator_id": {
+                    "name": "creator_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "created_at": {
+                    "name": "created_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "expires_at": {
+                    "name": "expires_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "revoked_at": {
+                    "name": "revoked_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {
+                "platform_organization_invite_links_token_hash_unique": {
+                    "name": "platform_organization_invite_links_token_hash_unique",
+                    "columns": ["token_hash"],
+                    "isUnique": true
+                },
+                "platform_organization_invite_links_organization": {
+                    "name": "platform_organization_invite_links_organization",
+                    "columns": ["organization_id", "revoked_at", "expires_at"],
+                    "isUnique": false
+                }
+            },
+            "foreignKeys": {},
+            "compositePrimaryKeys": {},
+            "uniqueConstraints": {},
+            "checkConstraints": {}
+        },
+        "platform_projects": {
+            "name": "platform_projects",
+            "columns": {
+                "project_id": {
+                    "name": "project_id",
+                    "type": "text",
+                    "primaryKey": true,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "tenant_id": {
+                    "name": "tenant_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "app_id": {
+                    "name": "app_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "display_name": {
+                    "name": "display_name",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "client_reference": {
+                    "name": "client_reference",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "idempotency_key": {
+                    "name": "idempotency_key",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "request_digest": {
+                    "name": "request_digest",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "lifecycle": {
+                    "name": "lifecycle",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "created_at": {
+                    "name": "created_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "updated_at": {
+                    "name": "updated_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "suspended_at": {
+                    "name": "suspended_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "deleted_at": {
+                    "name": "deleted_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "location_hint": {
+                    "name": "location_hint",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false,
+                    "default": "'apac'"
+                }
+            },
+            "indexes": {
+                "platform_projects_app": {
+                    "name": "platform_projects_app",
+                    "columns": ["app_id", "lifecycle", "created_at", "project_id"],
+                    "isUnique": false
+                },
+                "platform_projects_tenant": {
+                    "name": "platform_projects_tenant",
+                    "columns": ["tenant_id", "lifecycle", "created_at", "project_id"],
+                    "isUnique": false
+                },
+                "platform_projects_app_id_idempotency_key_unique": {
+                    "name": "platform_projects_app_id_idempotency_key_unique",
+                    "columns": ["app_id", "idempotency_key"],
+                    "isUnique": true
+                },
+                "platform_projects_app_id_client_reference_unique": {
+                    "name": "platform_projects_app_id_client_reference_unique",
+                    "columns": ["app_id", "client_reference"],
+                    "isUnique": true
+                }
+            },
+            "foreignKeys": {},
+            "compositePrimaryKeys": {},
+            "uniqueConstraints": {},
+            "checkConstraints": {
+                "platform_projects_lifecycle_check": {
+                    "name": "platform_projects_lifecycle_check",
+                    "value": "\"platform_projects\".\"lifecycle\" in ('active', 'suspended', 'deleted')"
+                },
+                "platform_projects_location_hint_check": {
+                    "name": "platform_projects_location_hint_check",
+                    "value": "\"platform_projects\".\"location_hint\" in ('wnam', 'enam', 'sam', 'weur', 'eeur', 'apac', 'oc', 'afr', 'me')"
+                }
+            }
+        },
+        "platform_tenants": {
+            "name": "platform_tenants",
+            "columns": {
+                "tenant_id": {
+                    "name": "tenant_id",
+                    "type": "text",
+                    "primaryKey": true,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "display_name": {
+                    "name": "display_name",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "lifecycle": {
+                    "name": "lifecycle",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "quotas_json": {
+                    "name": "quotas_json",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "created_at": {
+                    "name": "created_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "updated_at": {
+                    "name": "updated_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "suspended_at": {
+                    "name": "suspended_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "deleted_at": {
+                    "name": "deleted_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {},
+            "foreignKeys": {},
+            "compositePrimaryKeys": {},
+            "uniqueConstraints": {},
+            "checkConstraints": {
+                "platform_tenants_lifecycle_check": {
+                    "name": "platform_tenants_lifecycle_check",
+                    "value": "\"platform_tenants\".\"lifecycle\" in ('active', 'suspended', 'deleted')"
+                }
+            }
+        },
+        "session_access_credentials": {
+            "name": "session_access_credentials",
+            "columns": {
+                "credential_id": {
+                    "name": "credential_id",
+                    "type": "text",
+                    "primaryKey": true,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "secret_digest": {
+                    "name": "secret_digest",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "project_id": {
+                    "name": "project_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "session_id": {
+                    "name": "session_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "parent_credential_id": {
+                    "name": "parent_credential_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "parent_revision": {
+                    "name": "parent_revision",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "expires_at": {
+                    "name": "expires_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "revoked_at": {
+                    "name": "revoked_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {
+                "session_access_parent": {
+                    "name": "session_access_parent",
+                    "columns": ["parent_credential_id"],
+                    "isUnique": false
+                }
+            },
+            "foreignKeys": {},
+            "compositePrimaryKeys": {},
+            "uniqueConstraints": {},
+            "checkConstraints": {}
+        }
+    },
+    "views": {},
+    "enums": {},
+    "_meta": {
+        "schemas": {},
+        "tables": {},
+        "columns": {}
+    },
+    "internal": {
+        "indexes": {
+            "platform_app_credentials_app": {
+                "columns": {
+                    "\"issued_at\" desc": {
+                        "isExpression": true
+                    },
+                    "\"credential_id\" desc": {
+                        "isExpression": true
+                    }
+                }
+            },
+            "platform_audit_events_project": {
+                "columns": {
+                    "\"recorded_at\" desc": {
+                        "isExpression": true
+                    },
+                    "\"audit_id\" desc": {
+                        "isExpression": true
+                    }
+                }
+            },
+            "platform_dashboard_audit_events_tenant": {
+                "columns": {
+                    "\"recorded_at\" desc": {
+                        "isExpression": true
+                    },
+                    "\"audit_id\" desc": {
+                        "isExpression": true
+                    }
+                }
+            }
+        }
+    }
+}

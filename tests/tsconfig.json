@@ -1,0 +1,11 @@
+{
+    "extends": "../tsconfig.base.json",
+    "compilerOptions": {
+        "noEmit": true,
+        "skipLibCheck": true,
+        "lib": ["ESNext", "DOM", "DOM.Iterable"],
+        "types": ["node", "@cloudflare/workers-types"]
+    },
+    "include": ["./**/*.ts"],
+    "exclude": ["agent-daemon/**"]
+}

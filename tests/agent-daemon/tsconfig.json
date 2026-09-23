@@ -1,0 +1,12 @@
+{
+    "extends": "../../tsconfig.base.json",
+    "compilerOptions": {
+        "lib": ["ESNext", "DOM", "DOM.Iterable"],
+        "noEmit": true,
+        "resolveJsonModule": true,
+        "skipLibCheck": true,
+        "types": ["node"]
+    },
+    "include": ["controlled-agent/**/*.ts", "infra/**/*.ts", "providers/**/*.ts"],
+    "exclude": ["fixtures/**"]
+}

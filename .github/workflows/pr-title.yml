@@ -1,0 +1,31 @@
+name: PR Title
+
+on:
+  pull_request_target:
+    types: [opened, reopened, edited, synchronize]
+  merge_group:
+    types: [checks_requested]
+
+concurrency:
+  group: pr-title-${{ github.event.pull_request.number || github.event.merge_group.head_sha }}
+  cancel-in-progress: true
+
+jobs:
+  title:
+    name: title
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      pull-requests: read
+    steps:
+      - name: Validate pull request title
+        if: github.event_name == 'pull_request_target'
+        uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Preserve the validated title gate for the merge group
+        if: github.event_name == 'merge_group'
+        # Queue admission already requires the pull-request title check, while
+        # the synthetic merge-group SHA still needs the same required context.
+        run: echo "Pull request titles were validated before entering the merge queue."

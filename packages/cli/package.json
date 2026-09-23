@@ -1,0 +1,61 @@
+{
+    "name": "@moxt-ai/mobius",
+    "version": "0.0.83",
+    "description": "Mobius CLI for pairing and running local AI agent services.",
+    "type": "module",
+    "bin": {
+        "mobius": "dist/cli.js"
+    },
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.js"
+        },
+        "./runtime": {
+            "types": "./dist/runtime.d.ts",
+            "import": "./dist/runtime.js"
+        }
+    },
+    "files": [
+        "dist"
+    ],
+    "engines": {
+        "node": ">=22.13.0"
+    },
+    "publishConfig": {
+        "access": "public"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/moxt-ai/mobius.git",
+        "directory": "packages/cli"
+    },
+    "scripts": {
+        "build": "tsc --project tsconfig.build.json && esbuild src/cli.ts src/index.ts src/runtime.ts --bundle --platform=node --format=esm --sourcemap --outdir=dist --external:@agentclientprotocol/* --external:undici",
+        "dev": "node --watch src/cli.ts",
+        "prepack": "pnpm build",
+        "start": "node dist/cli.js",
+        "typecheck": "tsc --project tsconfig.json"
+    },
+    "dependencies": {
+        "@agentclientprotocol/sdk": "^1.4.0",
+        "mdast-util-from-markdown": "2.0.3",
+        "undici": "8.10.2",
+        "unist-util-visit": "5.1.0",
+        "zod": "^4.6.5"
+    },
+    "devDependencies": {
+        "@moxt-ai/mobius-protocol": "workspace:*",
+        "@types/mdast": "4.0.4",
+        "@types/node": "^24.13.5",
+        "esbuild": "0.28.2"
+    },
+    "main": "dist/index.js",
+    "keywords": [],
+    "author": "",
+    "license": "ISC",
+    "bugs": {
+        "url": "https://github.com/moxt-ai/mobius/issues"
+    },
+    "homepage": "https://github.com/moxt-ai/mobius#readme"
+}

@@ -1,0 +1,205 @@
+import { Hono } from "hono";
+import { CreateArtifactUploadRequest, SessionRuntimeError } from "../../entity/do/session.ts";
+import {
+    validateAgentCatalog,
+    validateAgents,
+    validateIdentifier,
+    validateInstallableAgents,
+} from "../../entity/pairing/pairing.ts";
+import { RequestBodyError, readBoundedBytesBody } from "../../infra/bounded-request-body.ts";
+import { bearerToken, readInteger, readString } from "../../infra/relay-http.ts";
+import { bodyParser } from "../middleware/body-parser.ts";
+import { errorMiddleware, rethrowHonoError } from "../middleware/error-middleware.ts";
+import type { RelayHttpEnvironment } from "../relay-http-environment.ts";
+
+export function createChannelRoutes() {
+    return new Hono<RelayHttpEnvironment>()
+        .onError(rethrowHonoError)
+        .use("*", errorMiddleware)
+        .put(
+            "/:channelId/catalog",
+            bodyParser<RelayHttpEnvironment>(["agents", "installableAgents"]),
+            async (context) => {
+                const useCases = context.env.services.channels;
+                const body = context.req.valid("json");
+                const agents = validateAgents(body["agents"]);
+                const installableAgents = validateInstallableAgents(body["installableAgents"]);
+                validateAgentCatalog(agents, installableAgents);
+                await useCases.updateAgentCatalog(
+                    validateIdentifier(context.req.param("channelId"), "channel_id"),
+                    context.req.query("token") ?? bearerToken(context.req.raw),
+                    agents,
+                    installableAgents,
+                    context.req.raw.signal,
+                );
+                return new Response(null, { status: 204 });
+            },
+        )
+        .post("/:channelId/access-grants", async (context) => {
+            const useCases = context.env.services.channels;
+            return context.json(
+                await useCases.createAccessGrant(
+                    validateIdentifier(context.req.param("channelId"), "channel_id"),
+                    bearerToken(context.req.raw),
+                    context.req.raw.signal,
+                ),
+                201,
+            );
+        })
+        .post(
+            "/:channelId/access-grants/:grantId/redeem",
+            bodyParser<RelayHttpEnvironment>(["grantSecret"]),
+            async (context) => {
+                const useCases = context.env.services.channels;
+                const body = context.req.valid("json");
+                return context.json(
+                    await useCases.redeemAccessGrant(
+                        validateIdentifier(context.req.param("channelId"), "channel_id"),
+                        validateIdentifier(context.req.param("grantId"), "grant_id"),
+                        readString(body, "grantSecret", 256),
+                        context.req.raw.signal,
+                    ),
+                );
+            },
+        )
+        .get("/:channelId/linked-devices", async (context) => {
+            const useCases = context.env.services.channels;
+            return context.json({
+                devices: await useCases.listLinkedDevices(
+                    validateIdentifier(context.req.param("channelId"), "channel_id"),
+                    bearerToken(context.req.raw),
+                    context.req.raw.signal,
+                ),
+            });
+        })
+        .delete("/:channelId/linked-devices/:credentialId", async (context) => {
+            const useCases = context.env.services.channels;
+            await useCases.revokeLinkedDevice(
+                validateIdentifier(context.req.param("channelId"), "channel_id"),
+                validateIdentifier(context.req.param("credentialId"), "credential_id"),
+                bearerToken(context.req.raw),
+                context.req.raw.signal,
+            );
+            return new Response(null, { status: 204 });
+        })
+        .get("/:channelId", async (context) => {
+            const useCases = context.env.services.channels;
+            return context.json(
+                await useCases.readChannel(
+                    validateIdentifier(context.req.param("channelId"), "channel_id"),
+                    context.req.query("token") ?? bearerToken(context.req.raw),
+                    context.req.raw.signal,
+                ),
+            );
+        })
+        .get("/:channelId/host", async (context) => {
+            const useCases = context.env.services.channels;
+            const request = context.req.raw;
+            const access = await useCases.authorizeHost(
+                validateIdentifier(context.req.param("channelId"), "channel_id"),
+                context.req.query("token") ?? "",
+                request.signal,
+            );
+            return await context.env.gateways.channelGateway.acceptHost(access, request, request.signal);
+        })
+        .post(
+            "/:channelId/sessions/:sessionId/artifacts/uploads",
+            bodyParser<RelayHttpEnvironment>(["byteLength", "mediaType", "name", "sha256"]),
+            async (context) => {
+                const useCases = context.env.services.channels;
+                const body = context.req.valid("json");
+                return context.json(
+                    await useCases.createRuntimeArtifactUpload(
+                        validateIdentifier(context.req.param("channelId"), "channel_id"),
+                        bearerToken(context.req.raw),
+                        validateIdentifier(context.req.param("sessionId"), "session_id"),
+                        new CreateArtifactUploadRequest(
+                            readString(body, "name", 500),
+                            readString(body, "mediaType", 255),
+                            readInteger(body, "byteLength"),
+                            readString(body, "sha256", 64),
+                        ),
+                        context.env.gateways.nowEpochMilliseconds(),
+                        context.req.raw.signal,
+                    ),
+                    201,
+                );
+            },
+        )
+        .put("/:channelId/sessions/:sessionId/artifacts/:artifactId/content", async (context) => {
+            const useCases = context.env.services.channels;
+            const channelId = validateIdentifier(context.req.param("channelId"), "channel_id");
+            const sessionId = validateIdentifier(context.req.param("sessionId"), "session_id");
+            const artifactId = validateIdentifier(context.req.param("artifactId"), "artifact_id");
+            const token = bearerToken(context.req.raw);
+            const now = context.env.gateways.nowEpochMilliseconds();
+            const lease = await useCases.authorizeRuntimeArtifactUpload(
+                channelId,
+                token,
+                sessionId,
+                artifactId,
+                context.req.header("x-mobius-upload-token") ?? "",
+                now,
+                context.req.raw.signal,
+            );
+            if (context.req.header("content-type") !== lease.artifact.mediaType) {
+                throw new SessionRuntimeError(
+                    "artifact_content_mismatch",
+                    "The artifact media type does not match its authorization",
+                );
+            }
+            let bytes: Uint8Array;
+            try {
+                bytes = await readBoundedBytesBody(context.req.raw, lease.artifact.byteLength);
+            } catch (cause) {
+                if (cause instanceof RequestBodyError) {
+                    throw new SessionRuntimeError(
+                        "artifact_content_mismatch",
+                        "The artifact body does not match its authorization",
+                        { cause },
+                    );
+                }
+                throw cause;
+            }
+            return context.json(
+                await useCases.completeRuntimeArtifactUpload(
+                    channelId,
+                    token,
+                    sessionId,
+                    lease,
+                    bytes,
+                    now,
+                    context.req.raw.signal,
+                ),
+            );
+        })
+        .get("/:channelId/sessions/:sessionId/commands/:commandId/artifacts/:artifactId/content", async (context) => {
+            const useCases = context.env.services.channels;
+            const content = await useCases.readArtifactContent(
+                validateIdentifier(context.req.param("channelId"), "channel_id"),
+                bearerToken(context.req.raw),
+                validateIdentifier(context.req.param("sessionId"), "session_id"),
+                validateIdentifier(context.req.param("commandId"), "command_id"),
+                validateIdentifier(context.req.param("artifactId"), "artifact_id"),
+                context.req.raw.signal,
+            );
+            return new Response(Uint8Array.from(content.bytes), {
+                headers: {
+                    "content-length": content.bytes.byteLength.toString(),
+                    "content-type": content.artifact.mediaType,
+                    "x-mobius-artifact-id": content.artifact.artifactId,
+                    "x-mobius-sha256": content.artifact.sha256,
+                },
+            });
+        })
+        .get("/:channelId/daemon", async (context) => {
+            const useCases = context.env.services.channels;
+            const request = context.req.raw;
+            const access = await useCases.authorizeDaemon(
+                validateIdentifier(context.req.param("channelId"), "channel_id"),
+                context.req.query("token") ?? bearerToken(request),
+                request.signal,
+            );
+            return await context.env.gateways.channelGateway.acceptDaemon(access, request, request.signal);
+        });
+}

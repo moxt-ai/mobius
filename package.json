@@ -1,0 +1,60 @@
+{
+    "name": "mobius-workspace",
+    "version": "0.0.1",
+    "private": true,
+    "type": "module",
+    "packageManager": "pnpm@11.25.0",
+    "engines": {
+        "node": ">=24.15.0 <25",
+        "pnpm": ">=11.25.0 <12"
+    },
+    "scripts": {
+        "db:generate:session-relay-do": "drizzle-kit generate --config drizzle/drizzle.session-relay-do.config.ts && pnpm db:codegen",
+        "db:generate:platform-d1": "drizzle-kit generate --config drizzle/drizzle.platform-d1.config.ts",
+        "db:generate:project-do": "drizzle-kit generate --config drizzle/drizzle.project-do.config.ts && pnpm db:codegen",
+        "db:generate:runtime-connection-do": "drizzle-kit generate --config drizzle/drizzle.runtime-connection-do.config.ts && pnpm db:codegen",
+        "db:generate:session-do": "drizzle-kit generate --config drizzle/drizzle.session-do.config.ts && pnpm db:codegen",
+        "db:codegen": "node scripts/generate-sql-modules.ts",
+        "prebuild": "pnpm db:codegen",
+        "pretypecheck": "pnpm db:codegen",
+        "pretest": "pnpm db:codegen",
+        "dev": "pnpm dev:cloudflare:platform",
+        "dev:agent": "node scripts/dev-agent.ts",
+        "dev:cli": "pnpm --filter @moxt-ai/mobius dev",
+        "dev:cloudflare:platform": "pnpm --filter @moxt-ai/mobius-relay-cloudflare-platform dev",
+        "mobius": "pnpm --filter @moxt-ai/mobius exec node src/cli.ts",
+        "build": "pnpm --recursive --workspace-concurrency=3 --if-present build",
+        "typecheck": "tsc --project tsconfig.json && pnpm --recursive --if-present typecheck",
+        "check:no-chinese": "node scripts/check-no-chinese.ts",
+        "lint": "biome ci --error-on-warnings && pnpm check:no-chinese && pnpm check:architecture",
+        "check:architecture": "node scripts/check-architecture.ts",
+        "lint:fix": "biome check --write --error-on-warnings && pnpm check:no-chinese",
+        "format": "biome format --write",
+        "build:e2e": "pnpm build",
+        "test": "pnpm test:ci:client && pnpm test:ci:hosting",
+        "test:agent-daemon": "pnpm test:agent-daemon:controlled",
+        "test:agent-daemon:controlled": "pnpm --filter @moxt-ai/mobius-fake-acp-agent build && vitest run --config vitest.agent-daemon.config.ts tests/agent-daemon/controlled-agent --maxWorkers=4",
+        "test:ci:client": "pnpm test:agent-daemon:controlled && vitest run packages/mobius-sdk/tests",
+        "test:ci:relay": "pnpm test:integration:platform",
+        "test:ci:hosting": "pnpm test:integration:platform",
+        "test:changed": "vitest run --changed=origin/main",
+        "test:integration:hosting": "pnpm test:integration:platform",
+        "test:integration:platform": "pnpm --filter @moxt-ai/mobius-relay-cloudflare-platform test:integration",
+        "test:watch": "vitest",
+        "ci:check": "pnpm lint && pnpm typecheck && pnpm test",
+        "postinstall": "pnpm db:codegen && simple-git-hooks"
+    },
+    "simple-git-hooks": {
+        "pre-commit": "pnpm biome check --staged --error-on-warnings --files-ignore-unknown=true --no-errors-on-unmatched && pnpm check:no-chinese && pnpm typecheck"
+    },
+    "devDependencies": {
+        "@biomejs/biome": "2.5.14",
+        "@types/node": "^24.13.5",
+        "dependency-cruiser": "18.3.1",
+        "drizzle-kit": "0.31.10",
+        "happy-dom": "20.14.5",
+        "simple-git-hooks": "^2.13.1",
+        "typescript": "^7.0.2",
+        "vitest": "^4.1.11"
+    }
+}

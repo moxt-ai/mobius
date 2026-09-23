@@ -1,0 +1,22 @@
+packages:
+  - packages/*
+  - tests/agent-daemon/fixtures/*
+  - tests
+
+engineStrict: true
+minimumReleaseAge: 1440
+
+# Keep the architecture parser's compiler API independent of TS7 across 18.x updates.
+packageExtensions:
+  dependency-cruiser@18:
+    dependencies:
+      typescript: 6.0.3
+
+overrides:
+  happy-dom: 20.14.3
+
+allowBuilds:
+  '@clerk/shared': true
+  esbuild: true
+  simple-git-hooks: true
+  workerd: true
