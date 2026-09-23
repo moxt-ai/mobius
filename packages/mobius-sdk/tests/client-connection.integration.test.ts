@@ -316,8 +316,10 @@ describe("browser relay connection", () => {
             const prompt = decodeSessionPromptCommand(frame.text);
             const deltaPayload = encodeAgentMessageDeltaEvent({
                 commandId: prompt.commandId,
+                epoch: "epoch-1",
                 kind: "agent.message.delta",
                 messageId: "agent-message-1",
+                sequence: 1,
                 sessionId: prompt.sessionId,
                 text: "Hello",
             });
@@ -500,8 +502,10 @@ describe("browser relay connection", () => {
                     kind: SESSION_EVENT_COMMITTED_KIND,
                     payload: encodeAgentMessageDeltaEvent({
                         commandId: "command-1",
+                        epoch: "epoch-1",
                         kind: "agent.message.delta",
                         messageId: "agent-message-1",
+                        sequence: 1,
                         sessionId: "session-1",
                         text: "History changed",
                     }),

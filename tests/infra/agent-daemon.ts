@@ -765,8 +765,10 @@ async function processHappyPathCommand(
         command.sessionId,
         encodeAgentMessageDeltaEvent({
             commandId: command.commandId,
+            epoch: command.commandId,
             kind: "agent.message.delta",
             messageId: `fake-message-${turn.toString()}`,
+            sequence: 1,
             sessionId: command.sessionId,
             text: `${behavior.agentName ?? "Fake Agent"} turn ${turn.toString()}: ${command.prompt}${
                 createsImage ? `\n\n[Generated source](<${sourcePath}:104>)` : ""

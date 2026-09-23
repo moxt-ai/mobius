@@ -148,6 +148,29 @@ function waitForAbort(signal: AbortSignal): Promise<void> {
     });
 }
 
+function waitForFile(directory: string, name: string, signal: AbortSignal): Promise<void> {
+    const path = join(directory, name);
+    if (existsSync(path) || signal.aborted) {
+        return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+        const watcher = watch(directory, () => {
+            if (existsSync(path)) {
+                finish();
+            }
+        });
+        const finish = () => {
+            watcher.close();
+            signal.removeEventListener("abort", finish);
+            resolve();
+        };
+        signal.addEventListener("abort", finish, { once: true });
+        if (existsSync(path) || signal.aborted) {
+            finish();
+        }
+    });
+}
+
 class FakeSessionState {
     readonly fastMode: boolean;
     readonly mode: string;
@@ -1031,7 +1054,7 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                 await waitForAbort(cancellation.signal);
                 return { stopReason: "cancelled" };
             }
-            if (prompt === "hold after first delta") {
+            if (prompt === "hold after first delta" || prompt === "release after first delta") {
                 await context.client.notify(acp.methods.client.session.update, {
                     sessionId: context.params.sessionId,
                     update: {
@@ -1055,8 +1078,33 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                         sessionUpdate: "agent_message_chunk",
                     },
                 });
-                await waitForAbort(cancellation.signal);
-                return { stopReason: "cancelled" };
+                if (prompt === "hold after first delta") {
+                    await waitForAbort(cancellation.signal);
+                    return { stopReason: "cancelled" };
+                }
+                const directory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+                if (directory === undefined) {
+                    throw new Error("The controlled Agent state directory is unavailable");
+                }
+                await waitForFile(directory, "resume-turn", cancellation.signal);
+                if (cancellation.signal.aborted) {
+                    return { stopReason: "cancelled" };
+                }
+                await context.client.notify(acp.methods.client.session.update, {
+                    sessionId: context.params.sessionId,
+                    update: {
+                        content: { text: " and more", type: "text" },
+                        messageId: `assistant-${turnNumber.toString()}`,
+                        sessionUpdate: "agent_message_chunk",
+                    },
+                });
+                transcript.push({
+                    messageId: `assistant-${turnNumber.toString()}`,
+                    role: "assistant",
+                    text: "Partial reply and more",
+                });
+                persistState(context.params.sessionId, state);
+                return { stopReason: "end_turn" };
             }
             if (prompt === "wait for steering") {
                 const instruction = await steering.promise;

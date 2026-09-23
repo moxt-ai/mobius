@@ -98,8 +98,10 @@ export interface SessionStartedEvent {
 
 export interface AgentMessageDeltaEvent {
     readonly commandId: string;
+    readonly epoch: string;
     readonly kind: typeof AGENT_MESSAGE_DELTA_KIND;
     readonly messageId: string;
+    readonly sequence: number;
     readonly sessionId: string;
     readonly text: string;
 }

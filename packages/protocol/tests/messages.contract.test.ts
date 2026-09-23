@@ -282,8 +282,10 @@ describe("agent message protocol", () => {
     it("Given an Agent emits a native message anchor, When its text crosses the durable event boundary, Then the anchor remains available for turn forking", () => {
         const event: AgentMessageDeltaEvent = {
             commandId: "command-1",
+            epoch: "epoch-1",
             kind: AGENT_MESSAGE_DELTA_KIND,
             messageId: "agent-message-1",
+            sequence: 1,
             sessionId: "session-1",
             text: "done",
         };

@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import {
     AGENT_MESSAGE_DELTA_KIND,
+    decodeAgentMessageDeltaEvent,
     decodeMessageKind,
     decodeNativeSessionResult,
     decodeSessionEventEnvelope,
@@ -209,6 +210,7 @@ describe("daemon assistant text coalescing", () => {
                 const kind = decodeMessageKind(envelope.payload);
                 if (kind === AGENT_MESSAGE_DELTA_KIND) {
                     const payload: unknown = JSON.parse(envelope.payload);
+                    expect(payload).toMatchObject({ epoch: expect.any(String), sequence: expect.any(Number) });
                     deltaCount += 1;
                     deltaText += typeof payload === "object" && payload !== null ? Reflect.get(payload, "text") : "";
                 }
@@ -331,6 +333,7 @@ describe("daemon assistant text coalescing", () => {
             do {
                 delta = await next();
             } while (decodeMessageKind(delta) !== AGENT_MESSAGE_DELTA_KIND);
+            const firstDelta = decodeAgentMessageDeltaEvent(delta);
             const request = (requestId: string) =>
                 encodeNativeSessionRequest({
                     action: "active-turn",
@@ -351,7 +354,14 @@ describe("daemon assistant text coalescing", () => {
             const active = decodeNativeSessionResult(result);
             expect(active).toMatchObject({
                 action: "active-turn",
-                turn: { commandId: prompt.commandId, prompt: prompt.prompt, text: "Partial reply", truncated: false },
+                turn: {
+                    commandId: prompt.commandId,
+                    epoch: firstDelta.epoch,
+                    prompt: prompt.prompt,
+                    sequence: firstDelta.sequence,
+                    text: "Partial reply",
+                    truncated: false,
+                },
             });
             sendText(
                 socket,
