@@ -210,26 +210,21 @@ function effortValues(model: CodexModel | undefined): ConfigValue[] {
 
 function modelSetting(models: readonly CodexModel[], currentValue: string): SessionConfigOption | null {
     const values = modelValues(models);
-    // The daemon drops any option whose current value is not one it offers, so a mismatch costs the
-    // user the whole selector rather than one entry. Codex may name a model its catalog omits, and
-    // may name none at all, so the offered list absorbs both cases.
-    const current =
-        currentValue.length > 0
-            ? currentValue
-            : (models.find((model) => model.isDefault === true)?.id ?? values[0]?.value ?? "");
+    // A model left in config.toml may be absent from the account's catalog. Offer a catalog model
+    // as the selection so a new Session can start with a model Codex actually supports.
+    const current = values.some((value) => value.value === currentValue)
+        ? currentValue
+        : (models.find((model) => model.isDefault === true)?.id ?? values[0]?.value ?? "");
     if (current.length === 0) {
         return null;
     }
-    const options = values.some((value) => value.value === current)
-        ? values
-        : [{ description: "", name: current, value: current }, ...values];
     return {
         category: "model",
         currentValue: current,
         description: "Model Codex uses for the session",
         id: MODEL_SETTING_ID,
         name: "Model",
-        options,
+        options: values,
         type: "select",
     };
 }
