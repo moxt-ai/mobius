@@ -153,44 +153,6 @@ async function fixture(
 }
 
 describe("native Agent session boundary", () => {
-    it("Given a locally linked Chat session, When its history is requested by Session ID, Then the Runtime returns its native conversation without listing every thread", async () => {
-        const f = await fixture("Claude");
-        try {
-            const missing = await f.service.execute(
-                { ...f.identity, action: "linked-history", targetSessionId: "chat-linked" },
-                new AbortController().signal,
-            );
-            expect(missing.action).toBe("unlinked-history");
-            await f.sessions.runPrompt({
-                agent: f.agent,
-                additionalDirectories: [],
-                cwd: f.workspace,
-                sessionId: "chat-linked",
-                commandId: "first-prompt",
-                prompt: "A saved local message",
-                images: [],
-                resources: [],
-                onText: async () => {},
-                onActivity: async () => {},
-                signal: new AbortController().signal,
-            });
-            const linked = await f.service.execute(
-                { ...f.identity, action: "linked-history", targetSessionId: "chat-linked" },
-                new AbortController().signal,
-            );
-            expect(linked.action).toBe("linked-history");
-            if (linked.action === "linked-history") {
-                expect(linked.history.status).toBe("available");
-                if (linked.history.status === "available") {
-                    expect(linked.history.messages).toContainEqual(
-                        expect.objectContaining({ role: "user", text: "A saved local message" }),
-                    );
-                }
-            }
-        } finally {
-            await f.close();
-        }
-    });
     // The restored Codex listing path: Mobius hosts the ACP Agent in-process and drives
     // `codex app-server` directly, so the fixture plays that protocol against the real adapter.
     async function codexFixture() {
@@ -260,86 +222,119 @@ describe("native Agent session boundary", () => {
         return { identity, list, native, seed, service, workspace, close };
     }
 
-    it("Given a new Codex chat, When the Runtime restarts, Then its native ID resumes the saved thread and history", async () => {
-        const f = await fixture("Codex", "supported", "native");
-        const signal = new AbortController().signal;
-        const created = await f.service.execute({ ...f.identity, action: "create" }, signal);
-        if (created.action !== "create") {
-            throw new Error("Expected a native Codex session");
-        }
-        const restarted = new AcpSessionManager(
-            new NullAcpSessionObserver(),
-            new MemoryAcpSessionStore(),
-            null,
-            "native",
-        );
-        try {
-            await restarted.runPrompt({
-                agent: f.agent,
-                additionalDirectories: [],
-                cwd: f.workspace,
-                signal,
-                sessionId: created.nativeSessionId,
-                commandId: crypto.randomUUID(),
-                prompt: "Continue this chat",
-                images: [],
-                resources: [],
-                onText: async () => {},
-                onActivity: async () => {},
-            });
-            const service = new NativeSessionService(f.config, f.directories, restarted, f.audit);
-            const history = await service.execute(
-                { ...f.identity, action: "linked-history", targetSessionId: created.nativeSessionId },
-                signal,
-            );
-            expect(history).toMatchObject({
-                action: "linked-history",
-                history: {
-                    status: "available",
-                    messages: expect.arrayContaining([{ role: "user", text: "Continue this chat" }]),
-                },
-            });
-        } finally {
-            await restarted.close();
-            await f.close();
-        }
-    });
-
-    it("Given a new empty Codex chat, When its first prompt arrives, Then the native ID runs that prompt and history becomes available", async () => {
-        const f = await fixture("Codex", "persist-after-first-prompt", "native");
-        const signal = new AbortController().signal;
-        try {
+    it.each(["Codex", "Claude Code"])(
+        "Given a new %s chat, When the Runtime restarts, Then its native ID resumes the saved thread and history",
+        async (agentName) => {
+            const f = await fixture(agentName, "supported", "native");
+            const signal = new AbortController().signal;
             const created = await f.service.execute({ ...f.identity, action: "create" }, signal);
             if (created.action !== "create") {
-                throw new Error("Expected a native Codex session");
+                throw new Error("Expected a native Agent session");
             }
-            const empty = await f.service.execute(
-                { ...f.identity, action: "linked-history", targetSessionId: created.nativeSessionId },
-                signal,
+            const restarted = new AcpSessionManager(
+                new NullAcpSessionObserver(),
+                new MemoryAcpSessionStore(),
+                null,
+                "native",
             );
-            expect(empty).toMatchObject({ action: "linked-history", history: { status: "available", messages: [] } });
-            await f.sessions.runPrompt({
-                agent: f.agent,
-                additionalDirectories: [],
-                cwd: f.workspace,
-                signal,
-                sessionId: created.nativeSessionId,
-                commandId: crypto.randomUUID(),
-                prompt: "First message",
-                images: [],
-                resources: [],
-                onText: async () => {},
-                onActivity: async () => {},
-            });
-            const history = await f.service.execute(
-                { ...f.identity, action: "linked-history", targetSessionId: created.nativeSessionId },
-                signal,
+            try {
+                await restarted.runPrompt({
+                    agent: f.agent,
+                    additionalDirectories: [],
+                    cwd: f.workspace,
+                    signal,
+                    sessionId: created.nativeSessionId,
+                    commandId: crypto.randomUUID(),
+                    prompt: "Continue this chat",
+                    images: [],
+                    resources: [],
+                    onText: async () => {},
+                    onActivity: async () => {},
+                });
+                const service = new NativeSessionService(f.config, f.directories, restarted, f.audit);
+                const history = await service.execute(
+                    { ...f.identity, action: "linked-history", targetSessionId: created.nativeSessionId },
+                    signal,
+                );
+                expect(history).toMatchObject({
+                    action: "linked-history",
+                    history: {
+                        status: "available",
+                        messages: expect.arrayContaining([{ role: "user", text: "Continue this chat" }]),
+                    },
+                });
+            } finally {
+                await restarted.close();
+                await f.close();
+            }
+        },
+    );
+
+    it.each(["Codex", "Claude Code"])(
+        "Given a new empty %s chat, When its first prompt arrives, Then the native ID runs that prompt and history becomes available",
+        async (agentName) => {
+            const f = await fixture(agentName, "persist-after-first-prompt", "native");
+            const signal = new AbortController().signal;
+            try {
+                const created = await f.service.execute({ ...f.identity, action: "create" }, signal);
+                if (created.action !== "create") {
+                    throw new Error("Expected a native Agent session");
+                }
+                const empty = await f.service.execute(
+                    { ...f.identity, action: "linked-history", targetSessionId: created.nativeSessionId },
+                    signal,
+                );
+                expect(empty).toMatchObject({
+                    action: "linked-history",
+                    history: { status: "available", messages: [] },
+                });
+                await f.sessions.runPrompt({
+                    agent: f.agent,
+                    additionalDirectories: [],
+                    cwd: f.workspace,
+                    signal,
+                    sessionId: created.nativeSessionId,
+                    commandId: crypto.randomUUID(),
+                    prompt: "First message",
+                    images: [],
+                    resources: [],
+                    onText: async () => {},
+                    onActivity: async () => {},
+                });
+                const history = await f.service.execute(
+                    { ...f.identity, action: "linked-history", targetSessionId: created.nativeSessionId },
+                    signal,
+                );
+                expect(history).toMatchObject({
+                    action: "linked-history",
+                    history: {
+                        status: "available",
+                        messages: expect.arrayContaining([{ role: "user", text: "First message" }]),
+                    },
+                });
+            } finally {
+                await f.close();
+            }
+        },
+    );
+
+    it("Given a saved Claude Code conversation, When Chat opens its history, Then Runtime returns the native messages", async () => {
+        const f = await fixture("Claude Code");
+        try {
+            await f.seed("Claude's earlier message");
+            const entry = (await f.list()).entries[0];
+            if (entry === undefined) {
+                throw new Error("Missing Claude Code conversation");
+            }
+            const result = await f.service.execute(
+                { ...f.identity, action: "history", entryId: entry.entryId },
+                new AbortController().signal,
             );
-            expect(history).toMatchObject({
-                action: "linked-history",
+            expect(result).toMatchObject({
+                action: "history",
                 history: {
                     status: "available",
-                    messages: expect.arrayContaining([{ role: "user", text: "First message" }]),
+                    messages: expect.arrayContaining([{ role: "user", text: "Claude's earlier message" }]),
                 },
             });
         } finally {

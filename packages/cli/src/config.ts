@@ -1,5 +1,5 @@
 import { join, resolve } from "node:path";
-import { mobiusApiPath } from "@moxt-ai/mobius-protocol";
+import { mobiusApiPath, RUNTIME_WORKSPACE_BINDING_ID } from "@moxt-ai/mobius-protocol";
 import {
     type AcpAgentDefinition,
     type InstallableAgentDefinition,
@@ -82,7 +82,7 @@ export function createDaemonConfig(
     return {
         agents: daemonAgents,
         defaultWorkspace: connection.defaultWorkspace,
-        bindingId: "workspace",
+        bindingId: RUNTIME_WORKSPACE_BINDING_ID,
         catalog: new LocalAgentCatalog(daemonAgents, installableAgents),
         channelId: connection.channelId,
         installableAgents,

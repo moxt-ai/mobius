@@ -3,7 +3,6 @@ import { basename } from "node:path";
 import type {
     NativeSessionCommand,
     NativeSessionEntry,
-    NativeSessionHistory,
     NativeSessionResult,
     NativeSessionTurnForkCommand,
     SessionReadyEvent,
@@ -16,7 +15,8 @@ import type { AuditStore } from "../audit/audit-store.ts";
 import { LocalAuthorizationError } from "../authorization/local-authorization-error.ts";
 import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
 import type { DaemonConfig } from "../config.ts";
-import { readCodexFullHistory, readCodexHistory } from "./codex-history.ts";
+import { nativeSessionAdapter } from "./agent-adapter.ts";
+import { supportsNativeChat } from "./chat-agent.ts";
 
 interface ListedTarget {
     readonly scope: string;
@@ -74,29 +74,6 @@ export class NativeSessionService {
             signal,
         };
         if (command.action === "linked-history") {
-            if (options.agent.id !== "codex") {
-                const history = await this.#sessions.loadLinkedSessionHistory({
-                    ...options,
-                    sessionId: command.targetSessionId,
-                });
-                this.record(command, "native_session_history_read");
-                return history === null
-                    ? {
-                          action: "unlinked-history",
-                          kind: "native.session.result",
-                          requestId: command.requestId,
-                          sessionId: command.sessionId,
-                          targetSessionId: command.targetSessionId,
-                      }
-                    : {
-                          action: "linked-history",
-                          history,
-                          kind: "native.session.result",
-                          requestId: command.requestId,
-                          sessionId: command.sessionId,
-                          targetSessionId: command.targetSessionId,
-                      };
-            }
             const nativeSessionId = nativeSessionIdSchema.parse(command.targetSessionId);
             if (
                 this.#sessions.hasPreparedSession(nativeSessionId, options.agent.id, cwd, additionalDirectories) &&
@@ -118,19 +95,17 @@ export class NativeSessionService {
                     targetSessionId: command.targetSessionId,
                 };
             }
-            const snapshot = await readCodexFullHistory(options.agent, cwd, nativeSessionId, signal);
-            const resolved = await this.#directories.identify(command.bindingId, snapshot.cwd, signal);
-            if (snapshot.nativeSessionId !== nativeSessionId || resolved.path !== cwd) {
-                throw new AcpExecutionError(
-                    "Codex returned history for a different session or workspace.",
-                    {},
-                    "invalid_native_session_response",
-                );
-            }
+            const history = await nativeSessionAdapter(options.agent.id).linkedHistory({
+                sessions: this.#sessions,
+                directories: this.#directories,
+                bindingId: command.bindingId,
+                options,
+                nativeSessionId,
+            });
             this.record(command, "native_session_history_read");
             return {
                 action: "linked-history",
-                history: snapshot.history,
+                history,
                 kind: "native.session.result",
                 requestId: command.requestId,
                 sessionId: command.sessionId,
@@ -138,7 +113,7 @@ export class NativeSessionService {
             };
         }
         if (command.action === "create") {
-            if (options.agent.id !== "codex") {
+            if (!supportsNativeChat(options.agent.id)) {
                 throw new AcpExecutionError(
                     "Native session creation is unavailable for this Agent",
                     {},
@@ -290,7 +265,13 @@ export class NativeSessionService {
         }
         const target = await this.resolveTarget(command, options, selected);
         if (command.action === "history") {
-            const history = await this.readHistory(command, options, target, signal);
+            const history = await nativeSessionAdapter(options.agent.id).history({
+                sessions: this.#sessions,
+                directories: this.#directories,
+                bindingId: command.bindingId,
+                options: { ...options, cwd: target.cwd, additionalDirectories: target.additionalDirectories },
+                nativeSessionId: target.info.sessionId,
+            });
             signal.throwIfAborted();
             this.record(command, "native_session_history_read");
             return {
@@ -302,7 +283,13 @@ export class NativeSessionService {
             };
         }
         if (command.action === "preview") {
-            const history = await this.previewHistory(command, options, target, signal);
+            const history = await nativeSessionAdapter(options.agent.id).preview({
+                sessions: this.#sessions,
+                directories: this.#directories,
+                bindingId: command.bindingId,
+                options: { ...options, cwd: target.cwd, additionalDirectories: target.additionalDirectories },
+                nativeSessionId: target.info.sessionId,
+            });
             signal.throwIfAborted();
             this.record(command, "native_session_previewed");
             return {
@@ -460,58 +447,6 @@ export class NativeSessionService {
             targetSessionId: command.targetSessionId,
             title: command.title,
         };
-    };
-
-    private readonly previewHistory = async (
-        command: NativeSessionCommand,
-        options: AcpPrepareOptions,
-        target: AuthorizedNativeSession,
-        signal: AbortSignal,
-    ): Promise<NativeSessionHistory> => {
-        if (options.agent.id !== "codex") {
-            return await this.#sessions.previewNativeSession(
-                { ...options, cwd: target.cwd, additionalDirectories: target.additionalDirectories },
-                target.info.sessionId,
-            );
-        }
-        // Codex enforces an exclusive writer per thread. Reading through raw
-        // thread/read + thread/turns/list, instead of ACP session/load, avoids
-        // acquiring that lock so an externally owned thread stays previewable.
-        const snapshot = await readCodexHistory(options.agent, target.cwd, target.info.sessionId, signal);
-        const resolved = await this.#directories.identify(command.bindingId, snapshot.cwd, signal);
-        if (snapshot.nativeSessionId !== target.info.sessionId || resolved.path !== target.cwd) {
-            throw new AcpExecutionError(
-                "Codex returned history for a different session or workspace.",
-                {},
-                "invalid_native_session_response",
-            );
-        }
-        return snapshot.history;
-    };
-
-    private readonly readHistory = async (
-        command: NativeSessionCommand,
-        options: AcpPrepareOptions,
-        target: AuthorizedNativeSession,
-        signal: AbortSignal,
-    ): Promise<NativeSessionHistory> => {
-        if (options.agent.id !== "codex") {
-            throw new AcpExecutionError(
-                "Native history is unavailable for this Agent",
-                {},
-                "native_session_unsupported",
-            );
-        }
-        const snapshot = await readCodexFullHistory(options.agent, target.cwd, target.info.sessionId, signal);
-        const resolved = await this.#directories.identify(command.bindingId, snapshot.cwd, signal);
-        if (snapshot.nativeSessionId !== target.info.sessionId || resolved.path !== target.cwd) {
-            throw new AcpExecutionError(
-                "Codex returned history for a different session or workspace.",
-                {},
-                "invalid_native_session_response",
-            );
-        }
-        return snapshot.history;
     };
 
     private readonly authorizeEntry = async (

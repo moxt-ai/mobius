@@ -1,6 +1,7 @@
 import type { SessionConfigurationSelection } from "./control-messages.ts";
 
 export const SESSION_PROMPT_KIND = "session.prompt";
+export const RUNTIME_WORKSPACE_BINDING_ID = "workspace";
 export const SESSION_CANCEL_KIND = "session.cancel";
 export const RUNTIME_STATUS_KIND = "runtime.status";
 export const RUNTIME_LIVENESS_READY_KIND = "runtime.liveness.ready";

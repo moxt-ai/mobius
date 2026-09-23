@@ -28,6 +28,7 @@ import {
     encodeRuntimeHeartbeatAckEvent,
     encodeSessionCompletedEvent,
     encodeSessionEventEnvelope,
+    encodeSessionFailedEvent,
     encodeSessionLiveHistoryLoaded,
     encodeSessionLiveHistoryPageLoaded,
     encodeSessionOperationFailedEvent,
@@ -407,10 +408,12 @@ const imageBytes = Uint8Array.from(
 const sourceBytes = new TextEncoder().encode("export const generated = true;\n");
 
 export interface FakeAgentDaemonBehavior {
+    readonly agentId?: "codex" | "claude";
     readonly agentName?: string;
     readonly afterSessionStarted?: (signal: AbortSignal) => Promise<void>;
     readonly directoryLabel?: string;
     readonly nativeSessionIds?: ReadonlySet<string>;
+    readonly requiredBindingId?: string;
 }
 
 export interface RunningFakeAgentDaemon extends AsyncDisposable {
@@ -671,6 +674,20 @@ async function processHappyPathCommand(
         return;
     }
     const command = decodeSessionPromptCommand(encoded);
+    if (behavior.requiredBindingId !== undefined && command.bindingId !== behavior.requiredBindingId) {
+        await daemon.sendSessionEvent(
+            command.sessionId,
+            encodeSessionFailedEvent({
+                code: "binding_mismatch",
+                commandId: command.commandId,
+                kind: "session.failed",
+                message: "The runtime binding is not authorized",
+                sessionId: command.sessionId,
+            }),
+            signal,
+        );
+        return;
+    }
     const turn = nextTurn();
     const createsImage = command.prompt.toLowerCase().includes("image");
     await daemon.sendSessionEvent(
