@@ -322,21 +322,8 @@ export class PlatformControlPlaneStorage {
     readonly readTenantUsage = async (
         tenantId: string,
         signal: AbortSignal,
-    ): Promise<{
-        readonly activeApps: number;
-        readonly activeProjects: number;
-        readonly activeSessions: number;
-    }> => {
-        const ownedProjects = await waitForD1(
-            () =>
-                this.#database
-                    .prepare("SELECT project_id FROM platform_projects WHERE tenant_id = ?")
-                    .bind(tenantId)
-                    .all(),
-            signal,
-        );
-        const projectIds = decodeStorageRecords(ProjectIdRowSchema, ownedProjects.results).map((row) => row.project_id);
-        const [apps, projects, ...sessions] = await waitForD1(
+    ): Promise<{ readonly activeApps: number; readonly activeProjects: number }> => {
+        const [apps, projects] = await waitForD1(
             () =>
                 Promise.all([
                     this.#database
@@ -351,27 +338,12 @@ export class PlatformControlPlaneStorage {
                         )
                         .bind(tenantId)
                         .first(),
-                    ...projectIds.map(
-                        async (projectId) =>
-                            await projectDatabase(this.#databases, projectId)
-                                .prepare(`SELECT COUNT(*) AS active_count FROM session_quota_reservations
-                                       WHERE project_id = ?`)
-                                .bind(projectId)
-                                .first(),
-                    ),
                 ]),
             signal,
         );
-        const appCount: ActiveCountRow = decodeStorageRecord(ActiveCountRowSchema, apps);
-        const projectCount: ActiveCountRow = decodeStorageRecord(ActiveCountRowSchema, projects);
-        const sessionCount = sessions.reduce(
-            (total, row) => total + decodeStorageRecord(ActiveCountRowSchema, row).active_count,
-            0,
-        );
         return {
-            activeApps: appCount.active_count,
-            activeProjects: projectCount.active_count,
-            activeSessions: sessionCount,
+            activeApps: decodeStorageRecord(ActiveCountRowSchema, apps).active_count,
+            activeProjects: decodeStorageRecord(ActiveCountRowSchema, projects).active_count,
         };
     };
 

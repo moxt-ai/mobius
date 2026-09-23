@@ -11,7 +11,6 @@ import {
     SESSION_EVENT_KIND,
 } from "@moxt-ai/mobius-protocol";
 import { ProjectScope } from "../../entity/do/session.ts";
-import type { RemoteSessionRuntime } from "../do/remote-session-runtime.ts";
 import type { ChannelActor, ChannelPeers, ChannelSocket } from "./channel-actor.ts";
 import type { ChannelCredentialService } from "./channel-credential-service.ts";
 import type { RuntimeConnectionService } from "./runtime-connection-service.ts";
@@ -24,7 +23,6 @@ const DAEMON_DISCONNECT_SETTLE_TIMEOUT_MILLISECONDS = 30_000;
 // A disconnect settles one Session at a time, so the working set is also the settle's step count. Report an
 // unusually wide set so an operator can see the Channel accumulating in-flight work before the sweep becomes
 // slow: a Channel is meant to carry many Sessions, so this warns rather than refuses.
-const DISCONNECT_SETTLE_WARNING_THRESHOLD = 64;
 
 export type RuntimeSocketIdentity =
     | {
@@ -69,9 +67,6 @@ interface RuntimeContext {
     };
     readonly gateways: {
         readonly peers: RuntimePeers;
-    };
-    readonly runtimes: {
-        readonly sessions: Pick<RemoteSessionRuntime, "disconnectSessions">;
     };
     readonly utilities: {
         readonly schedule: (timestamp: number, signal: AbortSignal) => Promise<void>;
@@ -384,22 +379,14 @@ export class RuntimeService {
         );
     };
 
-    readonly dispatchPending = async (runtimeId: string, scope: ProjectScope, signal: AbortSignal): Promise<void> => {
-        const deliveryReceipts = this.#currentDaemonDeliveryReceipts();
-        const channel = this.channel(runtimeId, scope);
-        channel.configureDaemonDelivery(deliveryReceipts);
-        await channel.dispatchPending(signal);
-    };
-
     readonly attachDaemon = async (
         runtimeId: string,
         scope: ProjectScope,
         replaced: boolean,
-        deliveryReceipts: boolean,
+        _deliveryReceipts: boolean,
         signal: AbortSignal,
     ): Promise<void> => {
         const channel = this.channel(runtimeId, scope);
-        channel.configureDaemonDelivery(deliveryReceipts);
         await channel.attachDaemon(replaced, signal);
     };
 
@@ -421,8 +408,7 @@ export class RuntimeService {
         if (identity.role === "host" || identity.role === "relay") {
             if (identity.role === "relay") {
                 const channel = this.channel(identity.runtimeId, scope);
-                channel.configureDaemonDelivery(this.#currentDaemonDeliveryReceipts());
-                await channel.receiveHostMessage(scope, socket, message, signal);
+                await channel.receiveHostMessage(socket, message, signal);
                 return;
             }
             if (!(await this.#cx.services.credentials.isActive(identity, signal))) {
@@ -430,8 +416,7 @@ export class RuntimeService {
                 return;
             }
             const channel = this.channel(identity.runtimeId, scope);
-            channel.configureDaemonDelivery(this.#currentDaemonDeliveryReceipts());
-            await channel.receiveHostMessage(scope, socket, message, signal);
+            await channel.receiveHostMessage(socket, message, signal);
             return;
         }
         if (typeof message !== "string" || message.length > 8 * 1024 * 1024) {
@@ -472,7 +457,6 @@ export class RuntimeService {
                     return;
                 }
                 const channel = this.channel(identity.runtimeId, scope);
-                channel.configureDaemonDelivery(identity.deliveryReceipts);
                 await channel.receiveDaemonMessage(socket, daemonMessage, signal);
             });
         } catch (error) {
@@ -504,13 +488,6 @@ export class RuntimeService {
         this.#channels.set(key, channel);
         return channel;
     };
-
-    readonly #currentDaemonDeliveryReceipts = (): boolean =>
-        this.#cx.gateways.peers
-            .sockets()
-            .some(({ identity, socket }) =>
-                identity.role === "daemon" && socket.isOpen() ? identity.deliveryReceipts : false,
-            );
 
     readonly detach = async (
         identity: RuntimeSocketIdentity,
@@ -551,34 +528,6 @@ export class RuntimeService {
             await this.#daemonMessages.idle(signal);
             signal.throwIfAborted();
             this.#cx.services.connections.disconnected(job, job.disconnectedAt);
-            const scope = new ProjectScope(job.projectId);
-            // Only the Sessions this Runtime still had work for can hold an in-flight Attempt. Settling that
-            // recorded set keeps the sweep proportional to the Runtime's outstanding work rather than to every
-            // Session the Project ever created, so a Session whose Turn already finished is never revisited.
-            // The recorded set is also the checkpoint: each Session is forgotten as it settles, so an
-            // interrupted sweep resumes exactly the Sessions still outstanding instead of replaying settled
-            // ones, which would regress an Attempt the daemon has since reconciled.
-            const remaining = this.#cx.services.connections
-                .listActiveSessions(job.runtimeId)
-                .filter((session) => session.connectionEpoch === job.connectionEpoch);
-            if (remaining.length > DISCONNECT_SETTLE_WARNING_THRESHOLD) {
-                console.warn(
-                    `Mobius relay is settling ${remaining.length.toString()} in-flight Sessions for Runtime ${job.runtimeId}; a Channel may carry any number of Sessions, so this is reported as a slow-disconnect signal.`,
-                );
-            }
-            await this.#cx.runtimes.sessions.disconnectSessions(
-                scope,
-                job.runtimeId,
-                remaining,
-                job.disconnectedAt,
-                signal,
-                (session) =>
-                    this.#cx.services.connections.clearActiveSession(
-                        job.runtimeId,
-                        session.sessionId,
-                        session.connectionEpoch,
-                    ),
-            );
             this.#cx.services.connections.completeDisconnect();
             if (announceOffline) {
                 for (const host of this.#cx.gateways.peers.hosts()) {

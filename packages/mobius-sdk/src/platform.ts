@@ -162,14 +162,12 @@ export class MobiusPlatformConfiguration {
 export class MobiusPlatformTenantUsage {
     readonly activeApps: number;
     readonly activeProjects: number;
-    readonly activeSessions: number;
     readonly quotas: Readonly<Record<string, unknown>>;
     readonly tenantId: string;
 
     constructor(value: Readonly<Record<string, unknown>>) {
         this.activeApps = integer(value, "activeApps");
         this.activeProjects = integer(value, "activeProjects");
-        this.activeSessions = integer(value, "activeSessions");
         this.quotas = record(value["quotas"], "Tenant quotas");
         this.tenantId = identifier(value, "tenantId");
     }

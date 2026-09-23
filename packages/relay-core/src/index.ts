@@ -3,40 +3,8 @@ export { createDurableObjectContext } from "./di/create-durable-object-context.t
 export type { RelayContext } from "./di/create-relay-dependencies.ts";
 export { createWorkerContext, type WorkerRuntimeGateways } from "./di/create-worker-context.ts";
 export { RuntimeRelay } from "./durable-objects/runtime-relay.ts";
-export { SessionRelay } from "./durable-objects/session-relay.ts";
 export * from "./entity/authentication/project-authentication.ts";
-export {
-    type AcceptedTurn,
-    type ActivityDetail,
-    ARTIFACT_UPLOAD_LIFETIME_MILLISECONDS,
-    type AttemptReconciliationOutcome,
-    type AttemptSummary,
-    type CommittedEventResult,
-    CreateSessionBindingRequest,
-    CreateSessionRequest,
-    DEFAULT_SESSION_QUOTA_POLICY,
-    type DuplicateTurn,
-    type InteractionResponseAcceptance,
-    isSessionDirectoryIdentifier,
-    type PendingDaemonDelivery,
-    ProjectScope,
-    SESSION_DIRECTORY_IDENTIFIER_MAX_LENGTH,
-    type SessionDirectoryPage,
-    type SessionEventPage,
-    type SessionExport,
-    type SessionLifecycle,
-    type SessionMessage,
-    type SessionMessagePage,
-    SessionQuotaPolicy,
-    type SessionQuotaPolicyProvider,
-    SessionRecordingPolicy,
-    SessionRuntimeError,
-    type SessionSummary,
-    type SessionUploadedArtifactExport,
-    StaticSessionQuotaPolicyProvider,
-    type TurnAcceptance,
-    type TurnCancellationAcceptance,
-} from "./entity/do/session.ts";
+export { ProjectScope, SessionRuntimeError } from "./entity/do/session.ts";
 export { type HttpError, type HttpErrorJson, isHttpError, toHttpError } from "./entity/http-error.ts";
 export {
     ACCESS_GRANT_LIFETIME_MILLISECONDS,
@@ -80,11 +48,8 @@ export {
     validateToken,
 } from "./entity/pairing/pairing.ts";
 export { CloudflareChannelRuntime } from "./gateway/cloudflare-channel-runtime.ts";
-export { CloudflareSessionTransport } from "./gateway/cloudflare-session-transport.ts";
 export type { ChannelGateway } from "./gateway/index.ts";
 export type { ProjectAccessAuthorizer } from "./gateway/project-access-authorizer.ts";
-export { SessionLiveHistoryClient } from "./gateway/session-live-history-client.ts";
-export type { SessionTransport } from "./gateway/session-transport.ts";
 export { errorMiddleware, rethrowHonoError } from "./http/middleware/error-middleware.ts";
 export { requestTimeoutMiddleware } from "./http/middleware/request-timeout-middleware.ts";
 export {
@@ -112,18 +77,7 @@ export type {
     ProjectStoragePlacement,
 } from "./infra/project-storage-directory.ts";
 export { instrumentD1Database, RequestAccessMetrics } from "./infra/request-access-metrics.ts";
-export {
-    type LiteSessionConfigurationEnvironment,
-    type SessionConfigurationEnvironment,
-    sessionQuotaFromEnvironment,
-} from "./infra/session-configuration.ts";
 export type { LiveSessionEvent, SessionEventReceiver } from "./infra/session-event-receiver.ts";
-export type {
-    SessionCommandRuntime,
-    SessionEventStreamRuntime,
-    SessionQueryRuntime,
-    SessionTransferRuntime,
-} from "./infra/session-runtime.ts";
 export * from "./service/authentication/oidc-authentication.ts";
 export { RuntimeDescriptor, RuntimeStatus } from "./service/channel/channel.ts";
 export {
@@ -133,5 +87,3 @@ export {
     SystemRelayClock,
 } from "./service/channel/channel-actor.ts";
 export type { RuntimePeers, RuntimeSocket, RuntimeSocketIdentity } from "./service/channel/runtime-service.ts";
-export { paginateNativeSessionHistory } from "./service/do/native-history-pagination.ts";
-export { validateCreateSessionRequest } from "./service/do/session-records.ts";

@@ -51,11 +51,7 @@ import {
     NATIVE_SESSION_RESULT_KIND,
     NATIVE_SESSION_TURN_FORK_REQUEST_KIND,
     type NativeSessionCommand,
-    type NativeSessionTurnForkCommand,
-    type NativeSessionTurnForkRequest,
     ProtocolMessageError,
-    RUNTIME_DELIVERY_COMMITTED_KIND,
-    RUNTIME_DELIVERY_KIND,
     RUNTIME_DELIVERY_RECEIVED_KIND,
     RUNTIME_STATUS_KIND,
     SESSION_CANCEL_KIND,
@@ -79,19 +75,8 @@ import {
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-protocol";
-import {
-    CreateSessionRequest,
-    type ProjectScope,
-    SessionRecordingPolicy,
-    SessionRuntimeError,
-} from "../../entity/do/session.ts";
-import type { SessionCommandRuntime, SessionQueryRuntime } from "../../infra/session-runtime.ts";
-import { sha256 } from "../do/session-archive-codec.ts";
-import type { RuntimeConnectionService } from "./runtime-connection-service.ts";
+import { SessionRuntimeError } from "../../entity/do/session.ts";
 
-const DEFAULT_RETENTION_MILLISECONDS = 30 * 24 * 60 * 60 * 1_000;
-const RUNTIME_DELIVERY_WINDOW = 16;
-const RUNTIME_DELIVERY_BYTE_LIMIT = 16 * 1024 * 1024;
 const _SESSION_EVENT_BACKPRESSURE_RETRY_MILLISECONDS = 1_000;
 const NATIVE_IMPORT_DEADLINE_MILLISECONDS = 5 * 60 * 1_000;
 const MAX_PENDING_NATIVE_IMPORTS = 4;
@@ -184,94 +169,46 @@ export class ChannelActor {
         string,
         | {
               readonly action: "import" | "fork";
-              readonly request: CreateSessionRequest;
+              readonly sessionId: string;
+              readonly agentId: string;
+              readonly directoryId: string;
               readonly expiresAt: number;
-              readonly scope: ProjectScope;
           }
         | {
               readonly action: "preview";
               readonly sessionId: string;
               readonly entryId: string;
               readonly expiresAt: number;
-              readonly scope: ProjectScope;
           }
     >();
     readonly #backpressuredEventBySource = new Map<string, string>();
     readonly #clock: RelayClock;
-    readonly #commands: SessionCommandRuntime;
-    readonly #connections: Pick<RuntimeConnectionService, "clearActiveSession" | "current" | "recordActiveSession">;
     readonly #peers: ChannelPeers;
-    readonly #queries: SessionQueryRuntime;
     readonly #runtimeId: string;
-    readonly #scope: ProjectScope;
-    readonly #inFlightDeliveries = new Map<string, number>();
-    #inFlightDeliveryBytes = 0;
-    #deliveryReceipts = false;
     #liveEventSequence = 0n;
     readonly #liveEventReceipts = new Map<string, { readonly payload: string; readonly sequence: string }>();
-    #dispatchTail: Promise<void> = Promise.resolve();
 
     constructor(cx: {
-        readonly config: { readonly runtimeId: string; readonly scope: ProjectScope };
-        readonly connections: Pick<RuntimeConnectionService, "clearActiveSession" | "current" | "recordActiveSession">;
+        readonly config: { readonly runtimeId: string };
         readonly gateways: {
             readonly peers: ChannelPeers;
             readonly clock?: RelayClock;
         };
-        readonly runtimes: { readonly commands: SessionCommandRuntime; readonly queries: SessionQueryRuntime };
     }) {
-        const { runtimeId, scope } = cx.config;
+        const { runtimeId } = cx.config;
         const { peers, clock = new SystemRelayClock() } = cx.gateways;
-        const { commands, queries } = cx.runtimes;
         this.#clock = clock;
-        this.#commands = commands;
-        this.#connections = cx.connections;
         this.#peers = peers;
-        this.#queries = queries;
         this.#runtimeId = runtimeId;
-        this.#scope = scope;
     }
 
     readonly attachDaemon = async (replacedExistingConnection: boolean, _signal: AbortSignal): Promise<void> => {
-        this.#clearInFlightDeliveries();
         if (replacedExistingConnection) {
             this.failPendingAgentCatalogRefreshes();
             this.failPendingAgentSettingsDiscoveries();
             this.#pendingNativeImports.clear();
         }
         this.broadcastRuntimeStatus(true);
-    };
-
-    readonly configureDaemonDelivery = (deliveryReceipts: boolean): void => {
-        if (this.#deliveryReceipts === deliveryReceipts) {
-            return;
-        }
-        this.#deliveryReceipts = deliveryReceipts;
-        this.#clearInFlightDeliveries();
-    };
-
-    /**
-     * Remember that this Runtime now has work for a Session.
-     *
-     * A Session holds its own Attempt state, so settling a Runtime disconnect means marking each affected
-     * Session's in-flight Attempts indeterminate. Recording the Sessions the Relay
-     * hands work to is what lets a disconnect settle only those Sessions instead of every ready Session in the
-     * Project, so a Session whose Turn already finished is never revisited.
-     */
-    readonly recordActiveSession = (sessionId: string): void => {
-        const current = this.#connections.current();
-        if (current === null || current.runtimeId !== this.#runtimeId) {
-            return;
-        }
-        this.#connections.recordActiveSession(this.#runtimeId, sessionId, current.connectionEpoch, this.#clock.now());
-    };
-
-    readonly clearActiveSession = (sessionId: string): void => {
-        const current = this.#connections.current();
-        if (current === null || current.runtimeId !== this.#runtimeId) {
-            return;
-        }
-        this.#connections.clearActiveSession(this.#runtimeId, sessionId, current.connectionEpoch);
     };
 
     readonly attachHost = (socket: ChannelSocket, _signal: AbortSignal): Promise<void> => {
@@ -307,38 +244,7 @@ export class ChannelActor {
         try {
             const kind = message.kind;
             if (kind === RUNTIME_DELIVERY_RECEIVED_KIND) {
-                if (!this.#deliveryReceipts) {
-                    throw new ProtocolMessageError("Runtime delivery receipts were not negotiated");
-                }
-                const receipt = message;
-                try {
-                    await this.#commands.markPendingWorkCompleted(
-                        this.#scope,
-                        receipt.sessionId,
-                        receipt.deliveryId,
-                        this.#clock.now(),
-                        signal,
-                    );
-                } catch (error) {
-                    if (
-                        !(error instanceof SessionRuntimeError) ||
-                        (error.code !== "pending_work_not_found" &&
-                            error.code !== "session_not_found" &&
-                            error.code !== "session_deleted")
-                    ) {
-                        throw error;
-                    }
-                }
-                this.#removeInFlightDelivery(receipt.deliveryId);
-                socket.send(
-                    encodeServiceToDaemonMessage({
-                        deliveryId: receipt.deliveryId,
-                        kind: RUNTIME_DELIVERY_COMMITTED_KIND,
-                        sessionId: receipt.sessionId,
-                    }),
-                );
-                await this.dispatchPending(signal);
-                return;
+                throw new ProtocolMessageError("Cloud Session delivery is unavailable");
             }
             if (kind === SESSION_EVENT_KIND) {
                 const envelope = message;
@@ -404,12 +310,12 @@ export class ChannelActor {
                         pending.expiresAt <= this.#clock.now() ||
                         pending.action === "preview" ||
                         pending.action !== result.action ||
-                        pending.request.sessionId !== result.targetSessionId ||
-                        pending.request.agentId !== result.ready.agentId
+                        pending.sessionId !== result.targetSessionId ||
+                        pending.agentId !== result.ready.agentId
                     ) {
                         throw new ProtocolMessageError("The native session result does not match a pending import");
                     }
-                    if (pending.request.directoryId !== result.ready.directoryId) {
+                    if (pending.directoryId !== result.ready.directoryId) {
                         throw new ProtocolMessageError("The native session result resolved to a different binding");
                     }
                 } else if (result.action === "preview") {
@@ -423,7 +329,7 @@ export class ChannelActor {
                               pending.sessionId !== result.targetSessionId ||
                               pending.entryId !== result.entryId
                             : result.reason !== "continuation_unavailable" ||
-                              pending.request.sessionId !== result.targetSessionId)
+                              pending.sessionId !== result.targetSessionId)
                     ) {
                         throw new ProtocolMessageError("The native preview does not match a pending import");
                     }
@@ -483,7 +389,6 @@ export class ChannelActor {
     };
 
     readonly receiveHostMessage = async (
-        scope: ProjectScope,
         socket: ChannelSocket,
         message: unknown,
         signal: AbortSignal,
@@ -535,7 +440,6 @@ export class ChannelActor {
                             sessionId: command.sessionId,
                             entryId: command.entryId,
                             expiresAt: now + NATIVE_IMPORT_DEADLINE_MILLISECONDS,
-                            scope,
                         });
                     }
                 }
@@ -551,16 +455,10 @@ export class ChannelActor {
                     if (this.hasOnlineDaemon()) {
                         this.#pendingNativeImports.set(command.requestId, {
                             action: request.action,
-                            request: new CreateSessionRequest(
-                                request.targetSessionId,
-                                this.#runtimeId,
-                                request.agentId,
-                                request.bindingId,
-                                request.directoryId,
-                                new SessionRecordingPolicy("full", DEFAULT_RETENTION_MILLISECONDS, 1_000, 6_000_000),
-                            ),
+                            sessionId: request.targetSessionId,
+                            agentId: request.agentId,
+                            directoryId: request.directoryId,
                             expiresAt: now + NATIVE_IMPORT_DEADLINE_MILLISECONDS,
-                            scope,
                         });
                     }
                 }
@@ -569,68 +467,15 @@ export class ChannelActor {
             }
             if (kind === NATIVE_SESSION_TURN_FORK_REQUEST_KIND) {
                 const command = decodeNativeSessionTurnForkRequest(message);
-                try {
-                    if (!this.hasOnlineDaemon()) {
-                        throw new SessionRuntimeError("runtime_offline", "The local runtime is offline");
-                    }
-                    const source = await this.#queries.readSession(scope, command.sessionId, signal);
-                    if (
-                        source.runtimeId !== this.#runtimeId ||
-                        source.agentId !== command.agentId ||
-                        source.defaultBinding.bindingId !== command.bindingId ||
-                        source.defaultBinding.workspaceRef !== command.directoryId
-                    ) {
-                        throw new SessionRuntimeError(
-                            "session_binding_mismatch",
-                            "The source Session binding changed before it could be forked",
-                        );
-                    }
-                    const authorized = await this.resolveTurnForkCommand(scope, command, signal);
-                    this.expireNativeImports(this.#clock.now());
-                    if (
-                        this.#pendingNativeImports.has(command.requestId) ||
-                        this.#pendingNativeImports.size >= MAX_PENDING_NATIVE_IMPORTS
-                    ) {
-                        throw new ProtocolMessageError("Another native session import is pending");
-                    }
-                    this.#pendingNativeImports.set(command.requestId, {
-                        action: "fork",
-                        request: new CreateSessionRequest(
-                            command.targetSessionId,
-                            this.#runtimeId,
-                            command.agentId,
-                            command.bindingId,
-                            command.directoryId,
-                            new SessionRecordingPolicy(
-                                source.policy.level,
-                                source.policy.retentionMilliseconds,
-                                source.policy.hotEventLimit,
-                                source.policy.contentLimitBytes,
-                                source.policy.idempotencyRetentionMilliseconds,
-                            ),
-                            source.title,
-                        ),
-                        expiresAt: this.#clock.now() + NATIVE_IMPORT_DEADLINE_MILLISECONDS,
-                        scope,
-                    });
-                    if (!this.sendToDaemon(authorized)) {
-                        this.#pendingNativeImports.delete(command.requestId);
-                        throw new SessionRuntimeError("runtime_offline", "The local runtime went offline");
-                    }
-                } catch (error) {
-                    if (!(error instanceof SessionRuntimeError)) {
-                        throw error;
-                    }
-                    socket.send(
-                        encodeSessionOperationFailedEvent({
-                            code: error.code,
-                            kind: SESSION_OPERATION_FAILED_KIND,
-                            message: error.message,
-                            requestId: command.requestId,
-                            sessionId: command.sessionId,
-                        }),
-                    );
-                }
+                socket.send(
+                    encodeSessionOperationFailedEvent({
+                        code: "session_unavailable",
+                        kind: SESSION_OPERATION_FAILED_KIND,
+                        message: "Cloud Session turn forks are unavailable",
+                        requestId: command.requestId,
+                        sessionId: command.sessionId,
+                    }),
+                );
                 return;
             }
             if (kind === SESSION_LIVE_HISTORY_LOAD_KIND || kind === SESSION_LIVE_HISTORY_PAGE_LOAD_KIND) {
@@ -724,55 +569,6 @@ export class ChannelActor {
             default:
                 throw new ProtocolMessageError("Unsupported daemon message");
         }
-    };
-
-    private readonly resolveTurnForkCommand = async (
-        scope: ProjectScope,
-        command: NativeSessionTurnForkRequest,
-        signal: AbortSignal,
-    ): Promise<NativeSessionTurnForkCommand> => {
-        const source = await this.#queries.readSession(scope, command.sessionId, signal);
-        let cursor: Parameters<SessionQueryRuntime["readMessages"]>[2] = null;
-        let found = false;
-        let messageId = "";
-        let response = "";
-        let occurrence = 0;
-        do {
-            const page = await this.#queries.readMessages(scope, command.sessionId, cursor, 100, signal);
-            for (const message of page.messages) {
-                if (!found && message.commandId === command.sourceCommandId) {
-                    if (
-                        message.disposition === "steer" ||
-                        (message.attempt?.kind !== "succeeded" && message.attempt?.kind !== "cancelled")
-                    ) {
-                        throw new SessionRuntimeError(
-                            "fork_point_unavailable",
-                            "Only a completed Agent turn can be used as a fork point",
-                        );
-                    }
-                    found = true;
-                    messageId = message.messageId;
-                    response = message.response;
-                    occurrence = 1;
-                    continue;
-                }
-                if (found && message.response === response && message.disposition !== "steer") {
-                    occurrence += 1;
-                }
-            }
-            cursor = page.nextCursor;
-        } while (cursor !== null);
-        if (!found) {
-            throw new SessionRuntimeError("fork_point_not_found", "The selected fork point does not exist");
-        }
-        return {
-            ...command,
-            kind: "native.session.turn-fork",
-            messageFingerprint: `sha256:${await sha256(new TextEncoder().encode(response))}`,
-            messageId: messageId.length > 0 ? messageId : `mobius-${command.sourceCommandId}`,
-            messageOccurrence: occurrence,
-            title: source.title,
-        };
     };
 
     private readonly validateHostControl = (
@@ -1068,65 +864,6 @@ export class ChannelActor {
         } catch {
             return false;
         }
-    };
-
-    readonly dispatchPending = async (signal: AbortSignal): Promise<void> => {
-        const operation = this.#dispatchTail.then(() => this.#dispatchReliablePending(signal));
-        this.#dispatchTail = operation.catch(() => undefined);
-        await operation;
-    };
-
-    readonly #dispatchReliablePending = async (signal: AbortSignal): Promise<void> => {
-        while (this.#inFlightDeliveries.size < RUNTIME_DELIVERY_WINDOW) {
-            const batch = await this.#commands.listPendingDaemonDeliveries(this.#scope, this.#runtimeId, 100, signal);
-            let sent = 0;
-            for (const delivery of batch) {
-                signal.throwIfAborted();
-                if (this.#inFlightDeliveries.has(delivery.pendingWork.workId)) {
-                    continue;
-                }
-                const daemonMessage = {
-                    deliveryId: delivery.pendingWork.workId,
-                    kind: RUNTIME_DELIVERY_KIND,
-                    payload: delivery.payload,
-                    sessionId: delivery.pendingWork.sessionId,
-                } as const;
-                const encoded = encodeServiceToDaemonMessage(daemonMessage);
-                const byteLength = new TextEncoder().encode(encoded).byteLength;
-                if (this.#inFlightDeliveryBytes + byteLength > RUNTIME_DELIVERY_BYTE_LIMIT) {
-                    continue;
-                }
-                // Record before handing off: a disconnect may run before the Runtime answers, and an extra
-                // recorded Session only costs one idempotent settle while a missed one strands the Attempt.
-                this.recordActiveSession(delivery.pendingWork.sessionId);
-                if (!this.sendToDaemon(daemonMessage)) {
-                    return;
-                }
-                this.#inFlightDeliveries.set(delivery.pendingWork.workId, byteLength);
-                this.#inFlightDeliveryBytes += byteLength;
-                sent += 1;
-                if (this.#inFlightDeliveries.size >= RUNTIME_DELIVERY_WINDOW) {
-                    return;
-                }
-            }
-            if (sent === 0 || batch.length < 100) {
-                return;
-            }
-        }
-    };
-
-    readonly #removeInFlightDelivery = (deliveryId: string): void => {
-        const byteLength = this.#inFlightDeliveries.get(deliveryId);
-        if (byteLength === undefined) {
-            return;
-        }
-        this.#inFlightDeliveries.delete(deliveryId);
-        this.#inFlightDeliveryBytes -= byteLength;
-    };
-
-    readonly #clearInFlightDeliveries = (): void => {
-        this.#inFlightDeliveries.clear();
-        this.#inFlightDeliveryBytes = 0;
     };
 
     private readonly hasOnlineDaemon = (): boolean => this.#peers.daemons().some((socket) => socket.isOpen());

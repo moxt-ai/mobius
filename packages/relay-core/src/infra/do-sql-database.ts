@@ -1,10 +1,10 @@
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
-import type * as sessionDoSchema from "../schema/session-do/index.ts";
+import type * as runtimeConnectionSchema from "../schema/runtime-connection-do/index.ts";
 
 export type DoSqlValue = null | number | string | ArrayBuffer;
 export type DoSqlRow = Readonly<Record<string, DoSqlValue>>;
 
-export type DoDrizzleDatabase = DrizzleSqliteDODatabase<typeof sessionDoSchema>;
+export type DoDrizzleDatabase = DrizzleSqliteDODatabase<typeof runtimeConnectionSchema>;
 
 export interface DoSqlDatabase {
     readonly query: (sql: string, values?: readonly DoSqlValue[]) => readonly DoSqlRow[];

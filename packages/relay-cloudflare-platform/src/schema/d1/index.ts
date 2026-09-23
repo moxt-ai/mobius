@@ -6,4 +6,3 @@ export { platformDashboardAuditEvent } from "./platform-dashboard-audit-event.ts
 export { platformOrganizationInviteLink } from "./platform-organization-invite-link.ts";
 export { platformProject } from "./platform-project.ts";
 export { platformTenant } from "./platform-tenant.ts";
-export { sessionAccessCredential } from "./session-access-credential.ts";

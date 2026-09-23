@@ -38,11 +38,6 @@ const relayCore = join(root, "packages/relay-core");
 const platform = join(root, "packages/relay-cloudflare-platform");
 
 await writeMigrationModule(
-    join(relayCore, "src/generated/session-do-migrations.ts"),
-    "sessionDurableObjectMigrations",
-    await sqlFiles(join(relayCore, "migrations/session-do")),
-);
-await writeMigrationModule(
     join(relayCore, "src/generated/runtime-connection-do-migrations.ts"),
     "runtimeConnectionDurableObjectMigrations",
     await sqlFiles(join(relayCore, "migrations/runtime-connection-do")),

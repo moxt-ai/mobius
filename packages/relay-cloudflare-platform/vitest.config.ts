@@ -21,7 +21,6 @@ export default defineConfig(async (): Promise<ViteUserConfig> => {
                         MOBIUS_PLATFORM_ALLOWED_ORIGINS: '["*"]',
                         MOBIUS_PLATFORM_OIDC_PROVIDERS: "[]",
                         MOBIUS_PLATFORM_OPERATOR_SUBJECTS: "[]",
-                        SESSION_ACTIVE_SESSIONS_PER_PROJECT: "8",
                         TEST_PLATFORM_MIGRATIONS: platformMigrations,
                     },
                 },

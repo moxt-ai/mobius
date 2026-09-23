@@ -352,11 +352,19 @@ describe.sequential("Platform Session-only boundary", () => {
             await runInDurableObject(environment.RUNTIME_RELAY.getByName(runtimeId), async (_instance, state) => {
                 const sessionTables = [
                     ...state.storage.sql.exec<{ name: string }>(
-                        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('sessions', 'session_bindings', 'session_configuration_snapshots', 'turns', 'attempts', 'interactions', 'pending_work', 'command_receipts', 'session_event_receipts')",
+                        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('sessions', 'session_bindings', 'session_configuration_snapshots', 'turns', 'attempts', 'interactions', 'pending_work', 'command_receipts', 'session_event_receipts', 'runtime_active_sessions')",
                     ),
                 ];
                 expect(sessionTables).toEqual([]);
             });
+            const oldSession = await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}`, {
+                    headers: credentialHeaders(appCredential),
+                }),
+                environment,
+            );
+            expect(oldSession.status).toBe(410);
+            expect(await oldSession.json()).toMatchObject({ error: { code: "session_unavailable" } });
         } finally {
             daemon.close(1000, "Test complete");
             host.close(1000, "Test complete");
