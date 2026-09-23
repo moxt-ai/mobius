@@ -1,4 +1,5 @@
 import { MobiusOidcCredentialProvider, MobiusPlatformDeveloperClient } from "@moxt-ai/mobius-sdk/platform";
+import type { FakeAgentDaemonBehavior } from "./agent-daemon.ts";
 import { FakeClerk } from "./clerk.ts";
 import { createTestMobiusPlatformBindings } from "./cloudflare.ts";
 import { createFakeAgentDaemonRuntime } from "./platform-agent-daemon.ts";
@@ -43,8 +44,9 @@ export async function startTestPlatform(options: { readonly allowedOrigins?: Rea
             baseUrl: bindings.origin,
             developer,
             developerToken,
-            connectAgent: async (projectId: string) => {
+            connectAgent: async (projectId: string, behavior?: FakeAgentDaemonBehavior) => {
                 const runtime = await createFakeAgentDaemonRuntime({
+                    ...(behavior === undefined ? {} : { behavior }),
                     credential,
                     origin: bindings.origin,
                     projectId,

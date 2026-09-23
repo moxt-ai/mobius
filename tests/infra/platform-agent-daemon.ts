@@ -1,7 +1,12 @@
 import { MobiusClient, StaticMobiusCredentialProvider } from "@moxt-ai/mobius-sdk/server";
 import * as v from "valibot";
 import WebSocket from "ws";
-import { type AgentDaemonSocket, FakeAgentDaemon, serveFakeAgentDaemon } from "./agent-daemon.ts";
+import {
+    type AgentDaemonSocket,
+    FakeAgentDaemon,
+    type FakeAgentDaemonBehavior,
+    serveFakeAgentDaemon,
+} from "./agent-daemon.ts";
 import type { TestServerApp } from "./server.ts";
 
 const runtimePairingSchema = v.object({
@@ -15,6 +20,7 @@ const runtimePairingSchema = v.object({
 /** Connects the shared fake through the production Platform Runtime protocol. */
 export async function createFakeAgentDaemonRuntime(options: {
     readonly credential: string;
+    readonly behavior?: FakeAgentDaemonBehavior;
     readonly origin: string;
     readonly projectId: string;
     readonly server: TestServerApp;
@@ -114,7 +120,7 @@ export async function createFakeAgentDaemonRuntime(options: {
                 signal,
             ),
         );
-        const behavior = resources.use(serveFakeAgentDaemon(daemon, { agentName: "Codex" }));
+        const behavior = resources.use(serveFakeAgentDaemon(daemon, { ...options.behavior, agentName: "Codex" }));
         const client = new MobiusClient({
             endpoint: options.origin,
             projectId: pairing.projectId,

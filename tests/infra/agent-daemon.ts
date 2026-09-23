@@ -404,6 +404,7 @@ const sourceBytes = new TextEncoder().encode("export const generated = true;\n")
 
 export interface FakeAgentDaemonBehavior {
     readonly agentName?: string;
+    readonly afterSessionStarted?: (signal: AbortSignal) => Promise<void>;
     readonly directoryLabel?: string;
 }
 
@@ -634,6 +635,7 @@ async function processHappyPathCommand(
         }),
         signal,
     );
+    await behavior.afterSessionStarted?.(signal);
     const imageContent = createsImage
         ? {
               artifactId: "",
