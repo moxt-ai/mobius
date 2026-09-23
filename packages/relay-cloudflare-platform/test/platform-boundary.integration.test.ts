@@ -170,6 +170,8 @@ describe.sequential("Platform Session schema boundary", () => {
                 state.storage.sql.exec(`DROP TABLE IF EXISTS "${table}"`);
             }
             database.run(baseline.sql);
+            database.run("DROP TABLE immutable_content");
+            database.run("DROP TABLE tool_call_narrations");
 
             initializeSessionSchema(database);
 
