@@ -5,8 +5,6 @@ import {
     type CommandIdentity,
     CommandIdentitySchema,
     CommandResultReceiptRecordSchema,
-    type CommittedEventRecord,
-    CommittedEventRecordSchema,
     type EventReceiptRecord,
     EventReceiptRecordSchema,
     type PendingWorkRecord,
@@ -26,19 +24,12 @@ import {
     type TurnRuntimeRecord,
     TurnRuntimeRecordSchema,
 } from "../../entity/do/session-records.ts";
+import { redactTurnCommand } from "../../entity/do/session-retention.ts";
 import type { DoSqlDatabase } from "../../infra/do-sql-database.ts";
 import { DatabaseError } from "../../infra/sql-database.ts";
 import { decodeStorageRows } from "./decode-storage-rows.ts";
-import type { SessionArchiveStorage } from "./session-archive-storage.ts";
 import type { SessionEventProjectorStorage } from "./session-event-projector-storage.ts";
-import {
-    appendStreamBlock,
-    decodeStreamBlock,
-    SESSION_STREAM_BLOCK_BYTE_LIMIT,
-    sessionDeltaText,
-} from "./session-stream-codec.ts";
-import { SESSION_TEXT_CHUNK_BYTE_LIMIT, splitUtf8Text, utf8ByteLength } from "./session-text-chunks.ts";
-import { rowNumber, rowString } from "./sqlite-row.ts";
+import { rowString } from "./sqlite-row.ts";
 
 export class SessionCommandsStorage {
     readonly commitEvent = (plan: SessionEventCommit): boolean =>
@@ -65,57 +56,9 @@ export class SessionCommandsStorage {
                 messageId: plan.messageId,
                 projection: plan.projection,
             });
-            if (plan.projection.kind === "response") {
-                this.appendStreamMessageDelta({
-                    ...scope,
-                    commandId: plan.projection.commandId,
-                    payload: plan.payload,
-                    recordedAt: plan.recordedAt,
-                    sequenceNumber: plan.sequenceNumber,
-                });
-            }
-            if (plan.activityDetail !== null) {
-                this.#archive.retainHotArtifact({
-                    ...scope,
-                    artifactId: plan.activityDetail.artifactId,
-                    ownerId: plan.activityDetail.activityId,
-                    mediaType: "application/json",
-                    hotPayload: plan.activityDetail.payload,
-                });
-            }
-            if (plan.projection.kind === "activity") {
-                this.#archive.discardUnreferencedHotArtifacts(scope);
-            }
-            this.insertHotEvent({
-                ...plan,
-                payload: plan.projection.kind === "response" ? null : plan.payload,
-            });
-            if (
-                plan.projection.kind === "activity" &&
-                (plan.projection.event.status === "completed" || plan.projection.event.status === "failed") &&
-                plan.activityDetail !== null
-            ) {
-                this.#archive.stageArtifact({
-                    ...scope,
-                    artifactId: plan.activityDetail.artifactId,
-                    ownerId: plan.activityDetail.activityId,
-                    mediaType: "application/json",
-                });
-            }
+            this.upsertEventReceipt(plan);
             if (plan.projection.kind === "complete" || plan.projection.kind === "fail") {
-                this.materializeTerminalAssistantMessage({
-                    ...scope,
-                    commandId: plan.projection.commandId,
-                    completedAt: plan.recordedAt,
-                });
-                this.#projections.foldTurnNarrations({
-                    ...scope,
-                    commandId: plan.projection.commandId,
-                });
-                this.#archive.stageTurnActivityDetails({ ...scope, commandId: plan.projection.commandId });
-            }
-            if (!this.hasActiveTurn(plan.scopeKey, plan.sessionId)) {
-                this.#archive.discardEventsThrough({ ...scope, throughSequence: plan.sequenceNumber });
+                this.redactTerminalTurn({ ...scope, commandId: plan.projection.commandId });
             }
             this.advanceEventSequence({
                 ...scope,
@@ -124,6 +67,62 @@ export class SessionCommandsStorage {
             });
             return true;
         });
+
+    private readonly redactTerminalTurn = (input: {
+        readonly scopeKey: string;
+        readonly sessionId: string;
+        readonly commandId: string;
+    }): void => {
+        const row = this.#database.query(
+            `SELECT command_json FROM turns WHERE scope_key = ? AND session_id = ? AND command_id = ?`,
+            [input.scopeKey, input.sessionId, input.commandId],
+        )[0];
+        if (row === undefined) {
+            throw new DatabaseError("database_unavailable", "The terminal Turn is unavailable");
+        }
+        this.#database.run(
+            `UPDATE turns SET command_json = ?, response = '', error_message = NULL
+             WHERE scope_key = ? AND session_id = ? AND command_id = ?`,
+            [redactTurnCommand(rowString(row, "command_json")), input.scopeKey, input.sessionId, input.commandId],
+        );
+        this.#database.run(
+            `UPDATE attempts SET error_message = NULL
+             WHERE scope_key = ? AND session_id = ? AND turn_id IN
+               (SELECT turn_id FROM turns WHERE scope_key = ? AND session_id = ? AND command_id = ?)`,
+            [input.scopeKey, input.sessionId, input.scopeKey, input.sessionId, input.commandId],
+        );
+        this.#database.run(
+            `UPDATE pending_work SET delivery_payload = NULL, error_message = NULL
+             WHERE scope_key = ? AND session_id = ? AND state IN ('completed', 'failed')`,
+            [input.scopeKey, input.sessionId],
+        );
+    };
+
+    private readonly upsertEventReceipt = (plan: SessionEventCommit): void => {
+        this.#database.run(
+            `INSERT INTO session_event_receipts (
+               scope_key, session_id, source_kind, source_id, event_id,
+               payload_hash, source_seq, sequence_number, recorded_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(scope_key, session_id, source_kind, source_id) DO UPDATE SET
+               event_id = excluded.event_id,
+               payload_hash = excluded.payload_hash,
+               source_seq = excluded.source_seq,
+               sequence_number = excluded.sequence_number,
+               recorded_at = excluded.recorded_at`,
+            [
+                plan.scopeKey,
+                plan.sessionId,
+                plan.sourceKind,
+                plan.sourceId,
+                plan.eventId,
+                plan.payloadHash,
+                plan.sourceSeq,
+                plan.sequenceNumber,
+                plan.recordedAt,
+            ],
+        );
+    };
     readonly writeDefaultBinding = (input: {
         readonly kind: "insert" | "replace" | "select";
         readonly binding: Parameters<SessionCommandsStorage["insertBinding"]>[0];
@@ -208,15 +207,6 @@ export class SessionCommandsStorage {
                 return { kind: "busy" };
             }
             this.insertQueuedTurn(input.turn);
-            this.writeCanonicalMessage({
-                ...input.turn,
-                commandId: input.turn.commandId,
-                completedAt: input.turn.createdAt,
-                content: input.prompt,
-                messageId: `user-${input.turn.commandId}`,
-                parentId: null,
-                role: "user",
-            });
             this.insertCommandReceipt(input.receipt);
             this.insertDispatch(input.dispatch);
             if (input.initialTitle.length > 0) {
@@ -282,328 +272,16 @@ export class SessionCommandsStorage {
     };
     readonly #database: DoSqlDatabase;
     readonly #projections: SessionEventProjectorStorage;
-    readonly #archive: SessionArchiveStorage;
     constructor(cx: {
         readonly doDatabase: DoSqlDatabase;
         readonly storages: {
-            readonly archive: SessionArchiveStorage;
             readonly eventProjector: SessionEventProjectorStorage;
         };
     }) {
         const { doDatabase: database } = cx;
         this.#database = database;
-        this.#archive = cx.storages.archive;
         this.#projections = cx.storages.eventProjector;
     }
-
-    readonly readActiveEventPayload = (input: {
-        readonly scopeKey: string;
-        readonly sessionId: string;
-        readonly sequenceNumber: number;
-    }): string | undefined => {
-        const row = this.#database.query(
-            `SELECT block.payload, reference.event_index
-               FROM session_stream_event_refs reference
-               INNER JOIN session_stream_blocks block
-                 ON block.scope_key = reference.scope_key
-                AND block.session_id = reference.session_id
-                AND block.stream_id = reference.stream_id
-                AND block.block_index = reference.block_index
-              WHERE reference.scope_key = ? AND reference.session_id = ?
-                AND reference.sequence_number = ?`,
-            [input.scopeKey, input.sessionId, input.sequenceNumber],
-        )[0];
-        if (row === undefined) {
-            return undefined;
-        }
-        const eventIndex = rowNumber(row, "event_index");
-        const event = decodeStreamBlock(rowString(row, "payload"))[eventIndex];
-        if (event === undefined || event.sequence !== input.sequenceNumber) {
-            throw new DatabaseError("database_statement_invalid", "The session stream event reference is invalid");
-        }
-        return event.payload;
-    };
-
-    private readonly materializeTerminalAssistantMessage = (input: {
-        readonly scopeKey: string;
-        readonly sessionId: string;
-        readonly commandId: string;
-        readonly completedAt: number;
-    }): void => {
-        const turn = this.#projections.findTurnByCommand(input.scopeKey, input.sessionId, input.commandId);
-        if (turn === undefined) {
-            throw new DatabaseError("database_unavailable", "The terminal Turn is unavailable");
-        }
-        const response = `${rowString(turn, "response")}${this.readStreamResponse(input)}`;
-        this.writeCanonicalMessage({
-            ...input,
-            content: response,
-            createdAt: rowNumber(turn, "created_at"),
-            messageId: `assistant-${input.commandId}`,
-            parentId: `user-${input.commandId}`,
-            role: "assistant",
-        });
-        this.#database.run(
-            `UPDATE turns
-                SET response = ?, updated_at = ?
-              WHERE scope_key = ? AND session_id = ? AND command_id = ?`,
-            [response, input.completedAt, input.scopeKey, input.sessionId, input.commandId],
-        );
-    };
-
-    private readonly readStreamResponse = (input: {
-        readonly scopeKey: string;
-        readonly sessionId: string;
-        readonly commandId: string;
-    }): string => {
-        const rows = this.#database.query(
-            `SELECT block.payload
-               FROM session_streams stream
-               INNER JOIN session_stream_blocks block
-                 ON block.scope_key = stream.scope_key
-                AND block.session_id = stream.session_id
-                AND block.stream_id = stream.stream_id
-              WHERE stream.scope_key = ? AND stream.session_id = ? AND stream.command_id = ?
-              ORDER BY block.block_index`,
-            [input.scopeKey, input.sessionId, input.commandId],
-        );
-        let response = "";
-        for (const row of rows) {
-            for (const event of decodeStreamBlock(rowString(row, "payload"))) {
-                response += sessionDeltaText(event.payload);
-            }
-        }
-        return response;
-    };
-
-    private readonly appendStreamMessageDelta = (input: {
-        readonly scopeKey: string;
-        readonly sessionId: string;
-        readonly commandId: string;
-        readonly payload: string;
-        readonly recordedAt: number;
-        readonly sequenceNumber: number;
-    }): void => {
-        const streamId = `stream-${input.commandId}`;
-        const stream = this.#database.query(
-            `SELECT state, next_block_index
-               FROM session_streams
-              WHERE scope_key = ? AND session_id = ? AND stream_id = ?`,
-            [input.scopeKey, input.sessionId, streamId],
-        )[0];
-        let nextBlockIndex: number;
-        if (stream === undefined) {
-            nextBlockIndex = 0;
-            this.#database.run(
-                `INSERT INTO session_streams (
-                   scope_key, session_id, stream_id, command_id, message_id, state,
-                   first_sequence, last_sequence, next_block_index, created_at, updated_at
-                 ) VALUES (?, ?, ?, ?, ?, 'streaming', ?, ?, ?, ?, ?)`,
-                [
-                    input.scopeKey,
-                    input.sessionId,
-                    streamId,
-                    input.commandId,
-                    `assistant-${input.commandId}`,
-                    input.sequenceNumber,
-                    input.sequenceNumber,
-                    nextBlockIndex,
-                    input.recordedAt,
-                    input.recordedAt,
-                ],
-            );
-        } else {
-            if (rowString(stream, "state") !== "streaming") {
-                throw new DatabaseError("database_statement_invalid", "The session stream is not active");
-            }
-            nextBlockIndex = rowNumber(stream, "next_block_index");
-        }
-
-        const last = this.#database.query(
-            `SELECT block_index, payload
-               FROM session_stream_blocks
-              WHERE scope_key = ? AND session_id = ? AND stream_id = ?
-              ORDER BY block_index DESC
-              LIMIT 1`,
-            [input.scopeKey, input.sessionId, streamId],
-        )[0];
-        let blockIndex: number;
-        let eventIndex: number;
-        if (last !== undefined) {
-            const entries = decodeStreamBlock(rowString(last, "payload"));
-            const appended = appendStreamBlock(entries, { payload: input.payload, sequence: input.sequenceNumber });
-            if (utf8ByteLength(appended.payload) <= SESSION_STREAM_BLOCK_BYTE_LIMIT) {
-                blockIndex = rowNumber(last, "block_index");
-                eventIndex = appended.entryIndex;
-                this.#database.run(
-                    `UPDATE session_stream_blocks
-                        SET sequence_to = ?, payload = ?, byte_length = ?, updated_at = ?
-                      WHERE scope_key = ? AND session_id = ? AND stream_id = ? AND block_index = ?`,
-                    [
-                        input.sequenceNumber,
-                        appended.payload,
-                        utf8ByteLength(appended.payload),
-                        input.recordedAt,
-                        input.scopeKey,
-                        input.sessionId,
-                        streamId,
-                        blockIndex,
-                    ],
-                );
-            } else {
-                ({ blockIndex, eventIndex } = this.insertStreamBlock({
-                    ...input,
-                    streamId,
-                    blockIndex: nextBlockIndex,
-                }));
-                nextBlockIndex += 1;
-            }
-        } else {
-            ({ blockIndex, eventIndex } = this.insertStreamBlock({
-                ...input,
-                streamId,
-                blockIndex: nextBlockIndex,
-            }));
-            nextBlockIndex += 1;
-        }
-        this.#database.run(
-            `INSERT INTO session_stream_event_refs (
-               scope_key, session_id, sequence_number, stream_id, block_index, event_index
-             ) VALUES (?, ?, ?, ?, ?, ?)`,
-            [input.scopeKey, input.sessionId, input.sequenceNumber, streamId, blockIndex, eventIndex],
-        );
-        this.#database.run(
-            `UPDATE session_streams
-                SET last_sequence = ?, next_block_index = ?, updated_at = ?
-              WHERE scope_key = ? AND session_id = ? AND stream_id = ?`,
-            [input.sequenceNumber, nextBlockIndex, input.recordedAt, input.scopeKey, input.sessionId, streamId],
-        );
-    };
-
-    private readonly insertStreamBlock = (input: {
-        readonly scopeKey: string;
-        readonly sessionId: string;
-        readonly streamId: string;
-        readonly blockIndex: number;
-        readonly payload: string;
-        readonly recordedAt: number;
-        readonly sequenceNumber: number;
-    }): { readonly blockIndex: number; readonly eventIndex: number } => {
-        const appended = appendStreamBlock([], { payload: input.payload, sequence: input.sequenceNumber });
-        const byteLength = utf8ByteLength(appended.payload);
-        if (byteLength > SESSION_TEXT_CHUNK_BYTE_LIMIT) {
-            throw new DatabaseError(
-                "database_statement_invalid",
-                "The session stream event exceeds the Durable Object row limit",
-            );
-        }
-        this.#database.run(
-            `INSERT INTO session_stream_blocks (
-               scope_key, session_id, stream_id, block_index, sequence_from, sequence_to,
-               payload, byte_length, created_at, updated_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-                input.scopeKey,
-                input.sessionId,
-                input.streamId,
-                input.blockIndex,
-                input.sequenceNumber,
-                input.sequenceNumber,
-                appended.payload,
-                byteLength,
-                input.recordedAt,
-                input.recordedAt,
-            ],
-        );
-        return { blockIndex: input.blockIndex, eventIndex: appended.entryIndex };
-    };
-
-    private readonly writeCanonicalMessage = (input: {
-        readonly scopeKey: string;
-        readonly sessionId: string;
-        readonly commandId: string;
-        readonly messageId: string;
-        readonly role: string;
-        readonly parentId: string | null;
-        readonly content: string;
-        readonly createdAt: number;
-        readonly completedAt: number | null;
-    }): void => {
-        const chunks = splitUtf8Text(input.content);
-        const initial = chunks[0];
-        if (initial === undefined) {
-            throw new DatabaseError("database_statement_invalid", "The canonical Session message is empty");
-        }
-        this.#database.run(
-            `DELETE FROM session_message_chunks
-              WHERE scope_key = ? AND session_id = ?
-                AND message_id IN (
-                    SELECT message_id FROM session_messages
-                     WHERE scope_key = ? AND session_id = ? AND command_id = ? AND role = ?
-                    UNION ALL SELECT ?
-                )`,
-            [
-                input.scopeKey,
-                input.sessionId,
-                input.scopeKey,
-                input.sessionId,
-                input.commandId,
-                input.role,
-                input.messageId,
-            ],
-        );
-        this.#database.run(
-            `INSERT INTO session_messages (
-               scope_key, session_id, message_id, command_id, role, parent_id,
-               content, content_chunks, token_estimate, created_at, completed_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(scope_key, session_id, command_id, role) DO UPDATE SET
-               message_id = excluded.message_id,
-               parent_id = excluded.parent_id,
-               content = excluded.content,
-               content_chunks = excluded.content_chunks,
-               token_estimate = excluded.token_estimate,
-               created_at = excluded.created_at,
-               completed_at = excluded.completed_at`,
-            [
-                input.scopeKey,
-                input.sessionId,
-                input.messageId,
-                input.commandId,
-                input.role,
-                input.parentId,
-                initial,
-                chunks.length - 1,
-                Math.ceil(utf8ByteLength(input.content) / 4),
-                input.createdAt,
-                input.completedAt,
-            ],
-        );
-        for (let index = 1; index < chunks.length; index += 1) {
-            const content = chunks[index];
-            if (content === undefined) {
-                throw new DatabaseError("database_statement_invalid", "The canonical Session message chunk is missing");
-            }
-            this.#database.run(
-                `INSERT INTO session_message_chunks (
-                   scope_key, session_id, message_id, chunk_index, content, byte_length
-                 ) VALUES (?, ?, ?, ?, ?, ?)`,
-                [input.scopeKey, input.sessionId, input.messageId, index, content, utf8ByteLength(content)],
-            );
-        }
-    };
-
-    private readonly hasActiveTurn = (scopeKey: string, sessionId: string): boolean =>
-        decodeStorageRows(
-            RecordPresenceSchema,
-            this.#database.query(
-                `SELECT 1 FROM turns
-                  WHERE scope_key = ? AND session_id = ?
-                    AND state IN ('running', 'indeterminate')
-                  LIMIT 1`,
-                [scopeKey, sessionId],
-            ),
-        )[0] !== undefined;
 
     readonly findMatchingBinding = (input: {
         readonly scopeKey: string;
@@ -843,27 +521,6 @@ export class SessionCommandsStorage {
             ),
         )[0];
 
-    readonly findDuplicateEvent = (input: {
-        readonly scopeKey: string;
-        readonly sessionId: string;
-        readonly eventId: string;
-        readonly sourceKind: string;
-        readonly sourceId: string;
-        readonly sourceSeq: string;
-    }): CommittedEventRecord | undefined =>
-        decodeStorageRows(
-            CommittedEventRecordSchema,
-            this.#database.query(
-                `SELECT sequence_number, event_id, payload_hash, source_kind, source_id,
-              source_seq, payload, recorded_at
-       FROM session_events
-       WHERE scope_key = ? AND session_id = ?
-         AND (event_id = ? OR
-              (source_kind = ? AND source_id = ? AND source_seq = ?))`,
-                [input.scopeKey, input.sessionId, input.eventId, input.sourceKind, input.sourceId, input.sourceSeq],
-            ),
-        )[0];
-
     readonly findEventReceipt = (input: {
         readonly scopeKey: string;
         readonly sessionId: string;
@@ -899,54 +556,11 @@ export class SessionCommandsStorage {
         decodeStorageRows(
             SourceSequenceRecordSchema,
             this.#database.query(
-                `SELECT source_seq
-                   FROM (
-                       SELECT source_seq
-                         FROM session_events
-                        WHERE scope_key = ? AND session_id = ? AND source_kind = ? AND source_id = ?
-                       UNION ALL
-                       SELECT source_seq
-                         FROM session_event_receipts
-                        WHERE scope_key = ? AND session_id = ? AND source_kind = ? AND source_id = ?
-                   )
-                  ORDER BY length(source_seq) DESC, source_seq DESC
-                  LIMIT 1`,
-                [scopeKey, sessionId, sourceKind, sourceId, scopeKey, sessionId, sourceKind, sourceId],
+                `SELECT source_seq FROM session_event_receipts
+                  WHERE scope_key = ? AND session_id = ? AND source_kind = ? AND source_id = ?`,
+                [scopeKey, sessionId, sourceKind, sourceId],
             ),
         )[0];
-
-    readonly insertHotEvent = (input: {
-        readonly scopeKey: string;
-        readonly sessionId: string;
-        readonly sequenceNumber: number;
-        readonly eventId: string;
-        readonly payloadHash: string;
-        readonly sourceKind: string;
-        readonly sourceId: string;
-        readonly sourceSeq: string;
-        readonly payload: string | null;
-        readonly recordedAt: number;
-    }): { readonly changes: number } =>
-        this.#database.run(
-            `INSERT INTO session_events (
-           scope_key, session_id, sequence_number, event_id, payload_hash,
-           source_kind, source_id, source_seq, payload, archive_segment_id,
-           recorded_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-                input.scopeKey,
-                input.sessionId,
-                input.sequenceNumber,
-                input.eventId,
-                input.payloadHash,
-                input.sourceKind,
-                input.sourceId,
-                input.sourceSeq,
-                input.payload,
-                "",
-                input.recordedAt,
-            ],
-        );
 
     /**
      * Advances the stored event sequence, and records the Session's activity time only when the event

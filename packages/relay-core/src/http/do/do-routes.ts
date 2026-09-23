@@ -7,15 +7,12 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { Hono } from "hono";
 import {
-    ArtifactUploadLease,
     type AttemptReconciliationOutcome,
-    CreateArtifactUploadRequest,
     CreateSessionBindingRequest,
     CreateSessionRequest,
     ProjectScope,
     SESSION_DIRECTORY_IDENTIFIER_MAX_LENGTH,
     SessionRecordingPolicy,
-    UploadingArtifactDescriptor,
 } from "../../entity/do/session.ts";
 import { type HttpError, isHttpError } from "../../entity/http-error.ts";
 import { RequestBodyError, readBoundedUtf8Body } from "../../infra/bounded-request-body.ts";
@@ -83,62 +80,6 @@ function readString(
         throw new InternalRequestError("invalid_session_operation", `The ${key} field is invalid`);
     }
     return field;
-}
-
-function readCreateArtifactUploadRequest(value: Readonly<Record<string, unknown>>): CreateArtifactUploadRequest {
-    const request = value["request"];
-    if (!isRecord(request)) {
-        throw new InternalRequestError("invalid_session_operation", "The artifact upload request is invalid");
-    }
-    assertExactKeys(request, ["byteLength", "mediaType", "name", "sha256"]);
-    return new CreateArtifactUploadRequest(
-        readString(request, "name", 500),
-        readString(request, "mediaType", 255),
-        readInteger(request, "byteLength"),
-        readString(request, "sha256", 64),
-    );
-}
-
-function readArtifactUploadLease(value: Readonly<Record<string, unknown>>): ArtifactUploadLease {
-    const lease = value["lease"];
-    if (!isRecord(lease) || !isRecord(lease["artifact"])) {
-        throw new InternalRequestError("invalid_session_operation", "The artifact upload lease is invalid");
-    }
-    const artifact = lease["artifact"];
-    if (artifact["state"] !== "uploading") {
-        throw new InternalRequestError("invalid_session_operation", "The artifact upload lease is invalid");
-    }
-    return new ArtifactUploadLease(
-        new UploadingArtifactDescriptor(
-            readString(artifact, "sessionId"),
-            readString(artifact, "artifactId"),
-            readString(artifact, "name", 500),
-            readString(artifact, "mediaType", 255),
-            readInteger(artifact, "byteLength"),
-            readString(artifact, "sha256", 64),
-            readString(artifact, "createdAt"),
-            readString(artifact, "expiresAt"),
-        ),
-        readString(lease, "contentTargetId"),
-    );
-}
-
-function decodeBase64(value: string): Uint8Array {
-    let binary: string;
-    try {
-        binary = atob(value);
-    } catch (cause) {
-        throw new InternalRequestError("invalid_session_operation", "The artifact content is invalid", 400, { cause });
-    }
-    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
-}
-
-function encodeBase64(bytes: Uint8Array): string {
-    let binary = "";
-    for (let offset = 0; offset < bytes.byteLength; offset += 32_768) {
-        binary += String.fromCharCode(...bytes.subarray(offset, offset + 32_768));
-    }
-    return btoa(binary);
 }
 
 function readInteger(value: Readonly<Record<string, unknown>>, key: string): number {
@@ -405,83 +346,6 @@ class DoRoutes {
                         readString(body, "sessionId"),
                         readString(body, "turnId"),
                         readInteger(body, "now"),
-                        request.signal,
-                    ),
-                );
-            }
-            if (operation === "artifact-create-upload") {
-                assertExactKeys(body, ["now", "request", "scope", "sessionId"]);
-                return Response.json(
-                    await this.#runtime.createArtifactUpload(
-                        scope,
-                        readString(body, "sessionId"),
-                        readCreateArtifactUploadRequest(body),
-                        readInteger(body, "now"),
-                        request.signal,
-                    ),
-                );
-            }
-            if (operation === "artifact-authorize-upload") {
-                assertExactKeys(body, ["artifactId", "now", "scope", "sessionId", "uploadToken"]);
-                return Response.json(
-                    await this.#runtime.authorizeArtifactUpload(
-                        scope,
-                        readString(body, "sessionId"),
-                        readString(body, "artifactId"),
-                        readString(body, "uploadToken", 256),
-                        readInteger(body, "now"),
-                        request.signal,
-                    ),
-                );
-            }
-            if (operation === "artifact-complete-upload") {
-                assertExactKeys(body, ["contentBase64", "lease", "now", "scope"]);
-                return Response.json(
-                    await this.#runtime.completeArtifactUpload(
-                        scope,
-                        readArtifactUploadLease(body),
-                        decodeBase64(readString(body, "contentBase64", 94 * 1024 * 1024)),
-                        readInteger(body, "now"),
-                        request.signal,
-                    ),
-                );
-            }
-            if (operation === "artifact-read") {
-                assertExactKeys(body, ["artifactId", "now", "scope", "sessionId"]);
-                return Response.json(
-                    await this.#runtime.readArtifact(
-                        scope,
-                        readString(body, "sessionId"),
-                        readString(body, "artifactId"),
-                        readInteger(body, "now"),
-                        request.signal,
-                    ),
-                );
-            }
-            if (operation === "artifact-content") {
-                assertExactKeys(body, ["artifactId", "scope", "sessionId"]);
-                const content = await this.#runtime.readArtifactContent(
-                    scope,
-                    readString(body, "sessionId"),
-                    readString(body, "artifactId"),
-                    request.signal,
-                );
-                return Response.json({
-                    artifact: content.artifact,
-                    contentBase64: encodeBase64(content.bytes),
-                });
-            }
-            if (operation === "artifact-resources") {
-                assertExactKeys(body, ["artifactIds", "scope", "sessionId"]);
-                const artifactIds = body["artifactIds"];
-                if (!Array.isArray(artifactIds) || artifactIds.some((artifactId) => typeof artifactId !== "string")) {
-                    throw new InternalRequestError("invalid_session_operation", "The artifact references are invalid");
-                }
-                return Response.json(
-                    await this.#runtime.resolveArtifactResources(
-                        scope,
-                        readString(body, "sessionId"),
-                        artifactIds.filter((artifactId) => typeof artifactId === "string"),
                         request.signal,
                     ),
                 );
@@ -786,12 +650,6 @@ class DoRoutes {
                         request.signal,
                     ),
                 );
-            }
-            if (operation === "archive") {
-                assertExactKeys(body, ["scope", "sessionId"]);
-                return Response.json({
-                    completed: await this.#runtime.runArchiveWork(scope, readString(body, "sessionId"), request.signal),
-                });
             }
             throw new InternalRequestError("session_not_found", "The session operation does not exist", 404);
         } catch (error) {

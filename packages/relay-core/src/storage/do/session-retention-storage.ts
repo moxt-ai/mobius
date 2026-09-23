@@ -1,34 +1,7 @@
-import { and, eq, gte, lt } from "drizzle-orm";
-import type {
-    SessionRetentionReceipt,
-    SessionRetentionScope,
-    SessionRetentionScrub,
-} from "../../entity/do/session-retention-records.ts";
+import { and, eq } from "drizzle-orm";
+import type { SessionRetentionScope, SessionRetentionScrub } from "../../entity/do/session-retention-records.ts";
 import type { DoSqlDatabase } from "../../infra/do-sql-database.ts";
-import {
-    archiveSegments,
-    archiveWork,
-    artifacts,
-    attempts,
-    immutableContent,
-    interactions,
-    pendingWork,
-    sessionContentChunks,
-    sessionEventReceipts,
-    sessionEvents,
-    sessionMessageChunks,
-    sessionMessages,
-    sessionStreamBlocks,
-    sessionStreamEventRefs,
-    sessionStreams,
-    sessions,
-    toolCallNarrations,
-    toolCallViews,
-    turnContentViews,
-    turnMessageAnchors,
-    turns,
-    uploadedArtifacts,
-} from "../../schema/session-do/index.ts";
+import { attempts, interactions, pendingWork, sessions, turns } from "../../schema/session-do/index.ts";
 
 export class SessionRetentionStorage {
     readonly #database: DoSqlDatabase;
@@ -65,31 +38,6 @@ export class SessionRetentionStorage {
     readonly readContent = (scope: SessionRetentionScope) => {
         const database = this.#database.orm;
         return {
-            events: database
-                .select({
-                    scopeKey: sessionEvents.scopeKey,
-                    sessionId: sessionEvents.sessionId,
-                    eventId: sessionEvents.eventId,
-                    payloadHash: sessionEvents.payloadHash,
-                    recordedAt: sessionEvents.recordedAt,
-                    sequenceNumber: sessionEvents.sequenceNumber,
-                    sourceId: sessionEvents.sourceId,
-                    sourceKind: sessionEvents.sourceKind,
-                    sourceSeq: sessionEvents.sourceSeq,
-                })
-                .from(sessionEvents)
-                .where(and(eq(sessionEvents.scopeKey, scope.scopeKey), eq(sessionEvents.sessionId, scope.sessionId)))
-                .all(),
-            receipts: database
-                .select()
-                .from(sessionEventReceipts)
-                .where(
-                    and(
-                        eq(sessionEventReceipts.scopeKey, scope.scopeKey),
-                        eq(sessionEventReceipts.sessionId, scope.sessionId),
-                    ),
-                )
-                .all(),
             turns: this.readTurns(scope),
             attempts: this.readAttempts(scope),
             interactions: database
@@ -111,38 +59,6 @@ export class SessionRetentionStorage {
             if (!this.isNonRetained(scope)) {
                 return;
             }
-            for (const receipt of scrub.receipts) {
-                this.writeReceipt(scope, receipt);
-            }
-            for (const table of [
-                archiveSegments,
-                archiveWork,
-                artifacts,
-                sessionContentChunks,
-                sessionEvents,
-                sessionMessageChunks,
-                sessionMessages,
-                sessionStreamBlocks,
-                sessionStreamEventRefs,
-                sessionStreams,
-                toolCallViews,
-                toolCallNarrations,
-                turnContentViews,
-                turnMessageAnchors,
-                uploadedArtifacts,
-            ]) {
-                database
-                    .delete(table)
-                    .where(and(eq(table.scopeKey, scope.scopeKey), eq(table.sessionId, scope.sessionId)))
-                    .run();
-            }
-            // SQLite content keys are project/session/artifact. A lexical prefix range keeps
-            // underscores in identifiers literal, unlike a SQL LIKE pattern.
-            const prefix = `${scope.projectId}/${scope.sessionId}/`;
-            database
-                .delete(immutableContent)
-                .where(and(gte(immutableContent.objectKey, prefix), lt(immutableContent.objectKey, `${prefix}\uffff`)))
-                .run();
             this.replaceTurnContent(scope, scrub.turns, scrub.attemptIds);
             for (const id of scrub.interactionIds) {
                 database
@@ -171,7 +87,7 @@ export class SessionRetentionStorage {
             }
             database
                 .update(sessions)
-                .set({ native_history_json: null, title: "" })
+                .set({ title: "" })
                 .where(and(eq(sessions.scope_key, scope.scopeKey), eq(sessions.session_id, scope.sessionId)))
                 .run();
         });
@@ -222,27 +138,5 @@ export class SessionRetentionStorage {
                 )
                 .run();
         }
-    };
-
-    private readonly writeReceipt = (scope: SessionRetentionScope, receipt: SessionRetentionReceipt): void => {
-        this.#database.orm
-            .insert(sessionEventReceipts)
-            .values({ ...receipt, scopeKey: scope.scopeKey, sessionId: scope.sessionId })
-            .onConflictDoUpdate({
-                target: [
-                    sessionEventReceipts.scopeKey,
-                    sessionEventReceipts.sessionId,
-                    sessionEventReceipts.sourceKind,
-                    sessionEventReceipts.sourceId,
-                ],
-                set: {
-                    eventId: receipt.eventId,
-                    payloadHash: receipt.payloadHash,
-                    recordedAt: receipt.recordedAt,
-                    sequenceNumber: receipt.sequenceNumber,
-                    sourceSeq: receipt.sourceSeq,
-                },
-            })
-            .run();
     };
 }

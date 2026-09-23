@@ -63,10 +63,10 @@ export class SessionLifecycleStorage {
             `INSERT INTO sessions (
          scope_key, project_id, session_id, created_by, runtime_id,
          agent_id, binding_id, directory_id, config_revision,
-         binding_created_at, title, native_history_json, recording_level, retention_milliseconds,
+         binding_created_at, title, recording_level, retention_milliseconds,
          idempotency_retention_milliseconds, hot_event_limit,
          content_limit_bytes, lifecycle, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, 'ready', ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?)`,
             [
                 input.scopeKey,
                 input.projectId,
@@ -114,20 +114,6 @@ export class SessionLifecycleStorage {
                 input.configRevision,
                 input.createdAt,
             ],
-        );
-
-    readonly updateNativeHistory = (input: {
-        readonly nativeHistoryJson: string | null;
-        readonly title: string;
-        readonly updatedAt: number;
-        readonly scopeKey: string;
-        readonly sessionId: string;
-    }): { readonly changes: number } =>
-        this.#database.run(
-            `UPDATE sessions
-       SET native_history_json = ?, title = ?, updated_at = ?
-       WHERE scope_key = ? AND session_id = ? AND lifecycle = 'ready'`,
-            [input.nativeHistoryJson, input.title, input.updatedAt, input.scopeKey, input.sessionId],
         );
 
     readonly markSessionDeleting = (input: {

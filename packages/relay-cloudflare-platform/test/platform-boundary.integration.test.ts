@@ -60,7 +60,6 @@ function bindings(): PlatformRelayBindings {
         R2_BUCKET_APAC: env.R2_BUCKET_APAC,
         R2_BUCKET_WNAM: env.R2_BUCKET_WNAM,
         RUNTIME_RELAY: env.RUNTIME_RELAY,
-        SESSION_ARCHIVE_BYTES_PER_SESSION: "16384",
     };
 }
 
@@ -326,7 +325,6 @@ describe.sequential("Platform Session-only boundary", () => {
 
             const turnRequest = {
                 additionalDirectoryIds: [],
-                artifactIds: [],
                 content: "private prompt must be scrubbed",
                 idempotencyKey: "private-reconnect-turn",
                 images: [
@@ -423,6 +421,23 @@ describe.sequential("Platform Session-only boundary", () => {
                     sessionId,
                 });
             }
+
+            // The Session database cannot store transcript or uploaded image content.
+            await runInDurableObject(sessionStub, async (_instance, state) => {
+                const contentTables = [
+                    ...state.storage.sql.exec<{ name: string }>(
+                        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('session_events', 'session_messages', 'uploaded_artifacts')",
+                    ),
+                ];
+                expect(contentTables).toEqual([]);
+                const receipts = [
+                    ...state.storage.sql.exec<{ event_id: string }>(
+                        "SELECT event_id FROM session_event_receipts WHERE session_id = ?",
+                        sessionId,
+                    ),
+                ];
+                expect(receipts.length).toBeGreaterThan(0);
+            });
 
             const readResource = async (path: string) =>
                 responseJson(
@@ -536,12 +551,15 @@ describe.sequential("Platform Session-only boundary", () => {
                     commandId: deliveredCommand.commandId,
                 });
                 expect(await readResource(`turns/${additionalTurnId}`)).toMatchObject({
-                    request: { content: `private ${outcome} prompt`, kind: "prompt" },
+                    request:
+                        outcome === "running"
+                            ? { content: `private ${outcome} prompt`, kind: "prompt" }
+                            : { kind: "not_retained" },
                     state: { kind: outcome === "steering" ? "succeeded" : outcome },
                 });
                 if (outcome === "failed") {
                     expect(await readResource(`attempts/${additionalAttemptId}`)).toMatchObject({
-                        state: { error: { message: "private error must be scrubbed" }, kind: "failed" },
+                        state: { error: { code: "agent_failed" }, kind: "failed" },
                     });
                 }
             }
@@ -575,7 +593,7 @@ describe.sequential("Platform Session-only boundary", () => {
                 await instance.alarm();
             });
             expect(await readResource(`turns/${turnId}`)).toMatchObject({
-                request: { content: turnRequest.content, kind: "prompt" },
+                request: { kind: "not_retained" },
                 state: { kind: "succeeded" },
             });
             vi.setSystemTime(new Date("2030-01-01T00:05:00.000Z"));

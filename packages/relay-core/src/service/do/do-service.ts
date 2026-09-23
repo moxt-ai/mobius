@@ -43,21 +43,8 @@ export class DoService {
         now: number,
         signal: AbortSignal,
     ) => {
-        let result: Awaited<ReturnType<SqliteSessionRuntime["commitEvent"]>>;
-        try {
-            result = await this.#services.runtime.commitEvent(scope, runtimeId, envelope, now, signal);
-        } catch (error) {
-            if (!signal.aborted && error instanceof SessionRuntimeError && error.code === "session_busy") {
-                await this.#services.recovery.schedule(signal);
-            }
-            throw error;
-        }
+        const result = await this.#services.runtime.commitEvent(scope, runtimeId, envelope, now, signal);
         const kind = decodeMessageKind(envelope.payload);
-        if (isTerminalSessionEvent(kind)) {
-            await this.#services.recovery.schedule(signal);
-        } else {
-            await this.#services.recovery.deferStreamingArchive(signal);
-        }
         if (!requiresDirectoryUpdate(kind)) {
             return result;
         }
@@ -72,9 +59,7 @@ export class DoService {
         now: number,
         signal: AbortSignal,
     ) => {
-        const summary = await this.#services.runtime.importSession(scope, exported, binding, now, signal);
-        await this.#services.recovery.schedule(signal);
-        return summary;
+        return await this.#services.runtime.importSession(scope, exported, binding, now, signal);
     };
 
     readonly recoverFromFailure = async (error: unknown, signal: AbortSignal): Promise<void> => {

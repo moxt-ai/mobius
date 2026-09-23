@@ -23,7 +23,6 @@ export function createStandaloneDurableObjectContext(
         runtimeRelay: environment.RUNTIME_RELAY,
         databases: new StandaloneDatabaseResolver(environment.DIRECTORY_DATABASE),
         projects: new StandaloneProjectStorageDirectory(),
-        content: { kind: "sqlite" },
         ...(doDatabase === undefined ? {} : { doDatabase }),
     });
 }

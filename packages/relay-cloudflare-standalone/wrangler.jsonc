@@ -9,7 +9,6 @@
     "migrations": [{ "tag": "standalone-initial", "new_sqlite_classes": ["RuntimeRelay"] }],
     "d1_databases": [{ "binding": "DIRECTORY_DATABASE", "migrations_dir": "../relay-core/migrations/d1" }],
     "vars": {
-        "SESSION_ACTIVE_SESSIONS_PER_PROJECT": "1000",
-        "SESSION_ARCHIVE_BYTES_PER_SESSION": "268435456"
+        "SESSION_ACTIVE_SESSIONS_PER_PROJECT": "1000"
     }
 }
