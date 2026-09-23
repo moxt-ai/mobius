@@ -56,6 +56,7 @@ const nativeSessionTurnForkCommandSchema = z
 export type NativeSessionTurnForkCommand = z.infer<typeof nativeSessionTurnForkCommandSchema>;
 
 const nativeSessionRequestSchema = z.discriminatedUnion("action", [
+    z.strictObject({ ...identity, action: z.literal("linked-history"), targetSessionId: identifier }).readonly(),
     z.strictObject({ ...identity, action: z.literal("preview"), entryId: identifier }).readonly(),
     z.strictObject({ ...identity, action: z.literal("history"), entryId: identifier }).readonly(),
     z.strictObject({ ...identity, action: z.literal("find"), nativeSessionId: identifier }).readonly(),
@@ -84,6 +85,7 @@ const nativeSessionRequestSchema = z.discriminatedUnion("action", [
 ]);
 export type NativeSessionRequest = z.infer<typeof nativeSessionRequestSchema>;
 const nativeSessionCommandSchema = z.discriminatedUnion("action", [
+    z.strictObject({ ...identity, action: z.literal("linked-history"), targetSessionId: identifier }).readonly(),
     z.strictObject({ ...identity, action: z.literal("preview"), entryId: identifier }).readonly(),
     z.strictObject({ ...identity, action: z.literal("history"), entryId: identifier }).readonly(),
     z.strictObject({ ...identity, action: z.literal("find"), nativeSessionId: identifier }).readonly(),
@@ -141,6 +143,21 @@ const resultEnvelope = {
     kind: z.literal(NATIVE_SESSION_RESULT_KIND),
 };
 const nativeSessionResultSchema = z.discriminatedUnion("action", [
+    z
+        .strictObject({
+            ...resultEnvelope,
+            action: z.literal("linked-history"),
+            targetSessionId: identifier,
+            history: sessionHistorySchema,
+        })
+        .readonly(),
+    z
+        .strictObject({
+            ...resultEnvelope,
+            action: z.literal("unlinked-history"),
+            targetSessionId: identifier,
+        })
+        .readonly(),
     z
         .strictObject({
             ...resultEnvelope,

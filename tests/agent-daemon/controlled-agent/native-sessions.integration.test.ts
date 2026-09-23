@@ -148,6 +148,44 @@ async function fixture(
 }
 
 describe("native Agent session boundary", () => {
+    it("Given a locally linked Chat session, When its history is requested by Session ID, Then the Runtime returns its native conversation without listing every thread", async () => {
+        const f = await fixture("Claude");
+        try {
+            const missing = await f.service.execute(
+                { ...f.identity, action: "linked-history", targetSessionId: "chat-linked" },
+                new AbortController().signal,
+            );
+            expect(missing.action).toBe("unlinked-history");
+            await f.sessions.runPrompt({
+                agent: f.agent,
+                additionalDirectories: [],
+                cwd: f.workspace,
+                sessionId: "chat-linked",
+                commandId: "first-prompt",
+                prompt: "A saved local message",
+                images: [],
+                resources: [],
+                onText: async () => {},
+                onActivity: async () => {},
+                signal: new AbortController().signal,
+            });
+            const linked = await f.service.execute(
+                { ...f.identity, action: "linked-history", targetSessionId: "chat-linked" },
+                new AbortController().signal,
+            );
+            expect(linked.action).toBe("linked-history");
+            if (linked.action === "linked-history") {
+                expect(linked.history.status).toBe("available");
+                if (linked.history.status === "available") {
+                    expect(linked.history.messages).toContainEqual(
+                        expect.objectContaining({ role: "user", text: "A saved local message" }),
+                    );
+                }
+            }
+        } finally {
+            await f.close();
+        }
+    });
     // The restored Codex listing path: Mobius hosts the ACP Agent in-process and drives
     // `codex app-server` directly, so the fixture plays that protocol against the real adapter.
     async function codexFixture() {

@@ -150,6 +150,7 @@ const HISTORY_CHANGING_MESSAGE_KINDS: ReadonlySet<string> = new Set([
 ]);
 
 export interface ConnectMobiusClientOptions {
+    readonly protocols?: readonly string[];
     readonly onNativeSessionResult?: (event: NativeSessionResult) => void;
     readonly onActivity?: () => void;
     readonly onCommands?: (event: SessionCommandsUpdatedEvent) => void;
@@ -1180,7 +1181,7 @@ export class MobiusClient {
 }
 
 export async function connectMobiusClient(options: ConnectMobiusClientOptions): Promise<MobiusClient> {
-    const socket = new ReconnectingWebSocket(options.relayUrl, [], {
+    const socket = new ReconnectingWebSocket(options.relayUrl, [...(options.protocols ?? [])], {
         connectionTimeout: CONNECTION_TIMEOUT_MILLISECONDS,
         maxEnqueuedMessages: 0,
         maxReconnectionDelay: MAX_RECONNECTION_DELAY_MILLISECONDS,

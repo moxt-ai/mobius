@@ -72,6 +72,29 @@ export class NativeSessionService {
             sessionId: command.sessionId,
             signal,
         };
+        if (command.action === "linked-history") {
+            const history = await this.#sessions.loadLinkedSessionHistory({
+                ...options,
+                sessionId: command.targetSessionId,
+            });
+            this.record(command, "native_session_history_read");
+            return history === null
+                ? {
+                      action: "unlinked-history",
+                      kind: "native.session.result",
+                      requestId: command.requestId,
+                      sessionId: command.sessionId,
+                      targetSessionId: command.targetSessionId,
+                  }
+                : {
+                      action: "linked-history",
+                      history,
+                      kind: "native.session.result",
+                      requestId: command.requestId,
+                      sessionId: command.sessionId,
+                      targetSessionId: command.targetSessionId,
+                  };
+        }
         const prepared = await this.#sessions.prepareNativeSessionBrowser(options);
         if (!prepared.capabilities.listSessions) {
             throw new AcpExecutionError(
