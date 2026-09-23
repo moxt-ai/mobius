@@ -989,6 +989,17 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
             steeringWaiters.set(context.params.sessionId, steering);
         }
         try {
+            if (prompt === "release before first delta") {
+                const directory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+                if (directory === undefined) {
+                    throw new Error("The controlled Agent state directory is unavailable");
+                }
+                writeFileSync(join(directory, "prompt-paused"), context.params.sessionId);
+                await waitForFile(directory, "resume-turn", cancellation.signal);
+                if (cancellation.signal.aborted) {
+                    return { stopReason: "cancelled" };
+                }
+            }
             await context.client.notify(acp.methods.client.session.update, {
                 sessionId: context.params.sessionId,
                 update: {
