@@ -52,8 +52,10 @@ export function createStandaloneWorker(): StandaloneWorker {
             }
             const metrics = new RequestAccessMetrics();
             const database = instrumentD1Database(environment.DIRECTORY_DATABASE, metrics);
+            const authentication = new StandaloneProjectAuthentication(environment.MOBIUS_STANDALONE_TOKEN);
             const context = createWorkerContext({
-                authorization: new StandaloneProjectAuthentication(environment.MOBIUS_STANDALONE_TOKEN),
+                applications: authentication,
+                authorization: authentication,
                 databases: new StandaloneDatabaseResolver(database),
                 identityDatabases: [D1DatabaseAdapter.from(database)],
                 projects: new StandaloneProjectStorageDirectory(),

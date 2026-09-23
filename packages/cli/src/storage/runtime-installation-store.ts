@@ -34,6 +34,7 @@ const VERIFIED_CONNECTION_KEYS: readonly string[] = [
 const VERSION_THREE_VERIFIED_CONNECTION_KEYS: readonly string[] = VERIFIED_CONNECTION_KEYS.filter(
     (key) => key !== "activation",
 );
+const VERSION_FOUR_VERIFIED_CONNECTION_KEYS: readonly string[] = VERIFIED_CONNECTION_KEYS;
 const VERSION_TWO_VERIFIED_CONNECTION_KEYS: readonly string[] = VERSION_THREE_VERIFIED_CONNECTION_KEYS.filter(
     (key) => key !== "pairingId",
 );
@@ -320,16 +321,17 @@ function decodeChannelIndex(value: unknown): ChannelIndex {
 }
 
 function decodeVerifiedConnection(value: Readonly<Record<string, unknown>>): VerifiedRuntimeConnection {
-    const current = hasExactKeys(value, VERIFIED_CONNECTION_KEYS) && value["version"] === 4;
+    const current = hasExactKeys(value, VERIFIED_CONNECTION_KEYS) && value["version"] === 5;
+    const versionFour = hasExactKeys(value, VERSION_FOUR_VERIFIED_CONNECTION_KEYS) && value["version"] === 4;
     const versionThree = hasExactKeys(value, VERSION_THREE_VERIFIED_CONNECTION_KEYS) && value["version"] === 3;
     const versionTwo = hasExactKeys(value, VERSION_TWO_VERIFIED_CONNECTION_KEYS) && value["version"] === 2;
     const legacy = hasExactKeys(value, LEGACY_VERIFIED_CONNECTION_KEYS) && value["version"] === 1;
-    if ((!current && !versionThree && !versionTwo && !legacy) || value["kind"] !== "verified") {
+    if ((!current && !versionFour && !versionThree && !versionTwo && !legacy) || value["kind"] !== "verified") {
         throw new RuntimeInstallationStoreError("invalid_connection", "The saved Runtime connection is invalid");
     }
     const applicationId = value["applicationId"];
-    const activation = current ? value["activation"] : "active";
-    const appId = typeof value["appId"] === "string" ? value["appId"] : "unknown";
+    const activation = current || versionFour ? value["activation"] : "active";
+    const appId = current && typeof value["appId"] === "string" ? value["appId"] : "unknown";
     const channelId = value["channelId"];
     const connectionId = value["connectionId"];
     const defaultWorkspace = value["defaultWorkspace"];
@@ -342,12 +344,12 @@ function decodeVerifiedConnection(value: Readonly<Record<string, unknown>>): Ver
     if (
         typeof applicationId !== "string" ||
         (activation !== "active" && activation !== "stopped") ||
-        ((current || versionThree || versionTwo) && typeof value["appId"] !== "string") ||
+        ((current || versionFour || versionThree || versionTwo) && typeof value["appId"] !== "string") ||
         typeof channelId !== "string" ||
         typeof connectionId !== "string" ||
         typeof defaultWorkspace !== "string" ||
         typeof storedInstallationId !== "string" ||
-        ((current || versionThree) && typeof pairingId !== "string") ||
+        ((current || versionFour || versionThree) && typeof pairingId !== "string") ||
         typeof relayOrigin !== "string" ||
         typeof runtimeCredential !== "string" ||
         typeof runtimeId !== "string"
@@ -362,7 +364,7 @@ function decodeVerifiedConnection(value: Readonly<Record<string, unknown>>): Ver
         validateConnectionId(connectionId),
         validateIdentifier(channelId, "invalid_connection"),
         defaultWorkspace,
-        (current || versionThree) && savedPairingId.length > 0
+        (current || versionFour || versionThree) && savedPairingId.length > 0
             ? validateIdentifier(savedPairingId, "invalid_connection")
             : "",
         parseRelayOrigin(relayOrigin),
@@ -743,7 +745,7 @@ export class RuntimeInstallationStore {
                     relayOrigin: connection.relayOrigin.toString(),
                     runtimeCredential: connection.runtimeCredential,
                     runtimeId: connection.runtimeId,
-                    version: 4,
+                    version: 5,
                 },
                 signal,
             );

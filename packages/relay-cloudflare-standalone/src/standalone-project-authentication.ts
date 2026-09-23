@@ -6,6 +6,7 @@ import {
     PROJECT_PERMISSIONS,
     type ProjectAccessAuthorizer,
     ProjectAccessContext,
+    type ProjectApplicationResolver,
     ProjectAuthenticationError,
     ProjectCredential,
     ProjectScope,
@@ -13,12 +14,20 @@ import {
 } from "@moxt-ai/mobius-relay-core";
 import { STANDALONE_PROJECT_ID } from "./standalone-project-storage-directory.ts";
 
-export class StandaloneProjectAuthentication implements ProjectAccessAuthorizer {
+export class StandaloneProjectAuthentication implements ProjectAccessAuthorizer, ProjectApplicationResolver {
     readonly #credentialHash: Promise<string>;
 
     constructor(configuredCredential: string) {
         this.#credentialHash = hashSecret(ProjectCredential.decode(configuredCredential).value);
     }
+
+    readonly resolveApplicationId: ProjectApplicationResolver["resolveApplicationId"] = async (projectId, signal) => {
+        signal.throwIfAborted();
+        if (validateIdentifier(projectId, "project_id") !== STANDALONE_PROJECT_ID) {
+            throw new ProjectAuthenticationError("project_access_denied", "The Project is unavailable");
+        }
+        return "standalone";
+    };
 
     readonly authorizeProject: ProjectAccessAuthorizer["authorizeProject"] = async (
         projectId,

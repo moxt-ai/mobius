@@ -19,7 +19,7 @@ const USAGE = `Mobius CLI
 
 Usage:
   mobius --version
-  mobius pair --url <relay-url> --pairing <runtime-pairing-id> --code <pairing-code> [--app-id <app-id>] [--workspace <directory>]
+  mobius pair --url <relay-url> --pairing <runtime-pairing-id> --code <pairing-code> [--workspace <directory>]
   mobius pair list [--output-json=<existing-file.json>]
   mobius pair stop --connection <connection-id>
   mobius pair remove --connection <connection-id>
