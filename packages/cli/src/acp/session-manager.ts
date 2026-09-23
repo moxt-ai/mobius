@@ -1,6 +1,6 @@
 import type { NativeSessionHistory, SessionConfigOption } from "@moxt-ai/mobius-protocol";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
-import { supportsNativeChat } from "../native-sessions/chat-agent.ts";
+import { isNativeChatSessionId } from "../native-sessions/chat-agent.ts";
 import { AcpExecutionError } from "./acp-error.ts";
 import type { NativeSessionOrigin, NativeSessionPage } from "./native-session.ts";
 import { AcpProcessCapacityLock, waitForAcpProcessCapacity } from "./process-capacity.ts";
@@ -456,10 +456,7 @@ export class AcpSessionManager {
                     async () =>
                         await AcpProcessSession.start(
                             this.#sessionIdentity === "native" &&
-                                supportsNativeChat(options.agent.id) &&
-                                /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(
-                                    options.sessionId,
-                                ) &&
+                                isNativeChatSessionId(options.agent.id, options.sessionId) &&
                                 this.#store.read(options.sessionId) instanceof MissingAcpStoredSession
                                 ? { ...options, origin: { kind: "import", nativeSessionId: options.sessionId } }
                                 : options,
@@ -959,7 +956,7 @@ export class AcpSessionManager {
             try {
                 const nativeSessionId = runtime.nativeSessionId();
                 if (
-                    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(nativeSessionId) ||
+                    !isNativeChatSessionId(options.agent.id, nativeSessionId) ||
                     this.#sessions.has(nativeSessionId) ||
                     !(this.#store.read(nativeSessionId) instanceof MissingAcpStoredSession)
                 ) {
@@ -1123,7 +1120,10 @@ export class AcpSessionManager {
         if (this.#nativeHistoryReader === null) {
             return await this.loadSessionHistory(options);
         }
-        return await this.#nativeHistoryReader.read(options, linked.nativeSessionId);
+        return (
+            (await this.#nativeHistoryReader.read(options, linked.nativeSessionId)) ??
+            (await this.loadSessionHistory(options))
+        );
     };
 
     readonly openNativeSession = async (

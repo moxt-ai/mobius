@@ -162,7 +162,10 @@ input.on("line", (line) => {
         // A real app-server reports the model and effort it resolved from Codex's own configuration;
         // Mobius reads them back as the current settings values.
         reply(id, {
-            model: "scripted-small",
+            model:
+                process.env["MOBIUS_FAKE_CODEX_REPORT_UNAVAILABLE_MODEL"] === "1"
+                    ? "unavailable-model"
+                    : "scripted-small",
             reasoningEffort: "medium",
             thread: { cwd: readParam("cwd"), id: threadId },
         });
@@ -189,6 +192,13 @@ input.on("line", (line) => {
         return;
     }
     if (method === "turn/start") {
+        if (
+            process.env["MOBIUS_FAKE_CODEX_REPORT_UNAVAILABLE_MODEL"] === "1" &&
+            !MODELS.some((model) => model.id === readParam("model"))
+        ) {
+            process.stdout.write(`${JSON.stringify({ id, error: { code: -32602, message: "Model unavailable" } })}\n`);
+            return;
+        }
         nextTurn += 1;
         const threadId = readParam("threadId");
         const turnId = `turn-${nextTurn.toString()}`;

@@ -408,7 +408,7 @@ const imageBytes = Uint8Array.from(
 const sourceBytes = new TextEncoder().encode("export const generated = true;\n");
 
 export interface FakeAgentDaemonBehavior {
-    readonly agentId?: "codex" | "claude";
+    readonly agentId?: "codex" | "claude" | "opencode";
     readonly agentName?: string;
     readonly afterSessionStarted?: (signal: AbortSignal) => Promise<void>;
     readonly directoryLabel?: string;
@@ -550,7 +550,10 @@ async function processHappyPathCommand(
                 encodeNativeSessionResult({
                     action: "create",
                     kind: "native.session.result",
-                    nativeSessionId: crypto.randomUUID(),
+                    nativeSessionId:
+                        behavior.agentId === "opencode"
+                            ? `ses_${crypto.randomUUID().replaceAll("-", "")}`
+                            : crypto.randomUUID(),
                     requestId: command.requestId,
                     sessionId: command.sessionId,
                 }),

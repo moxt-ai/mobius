@@ -582,7 +582,9 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
         if (process.argv.includes("--authentication-required")) {
             throw acp.RequestError.authRequired();
         }
-        const sessionId = crypto.randomUUID();
+        const sessionId = process.argv.includes("--opencode-native-id")
+            ? `ses_${crypto.randomUUID().replaceAll("-", "")}`
+            : crypto.randomUUID();
         acquireWriter(sessionId);
         const state = new FakeSessionState(0);
         nativeMetadata.set(sessionId, {
