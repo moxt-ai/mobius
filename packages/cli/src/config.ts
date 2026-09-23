@@ -54,17 +54,6 @@ export class OpaqueDaemonReconnectTarget extends DaemonReconnectTarget {
     }
 }
 
-export class ChannelDaemonReconnectTarget extends DaemonReconnectTarget {
-    readonly channelId: string;
-    readonly commandArgument: string;
-
-    constructor(channelId: string) {
-        super();
-        this.channelId = channelId;
-        this.commandArgument = `--channel ${channelId}`;
-    }
-}
-
 export interface DaemonConfig {
     readonly agents: readonly AcpAgentDefinition[];
     readonly defaultWorkspace: string;
@@ -74,7 +63,7 @@ export interface DaemonConfig {
     readonly channelId: string;
     readonly installableAgents: readonly InstallableAgentDefinition[];
     readonly localContext: DaemonLocalContext;
-    readonly reconnectTarget: DaemonReconnectTarget;
+    readonly reconnectTarget: DaemonReconnectTarget | null;
     readonly relayUrl: URL;
 }
 
@@ -90,7 +79,7 @@ export function createDaemonConfig(
     agents: readonly AcpAgentDefinition[] = [],
     installableAgents: readonly InstallableAgentDefinition[] = [],
     localContext: DaemonLocalContext = new DaemonLocalContext(readStateDirectory(), process.env),
-    reconnectTarget: DaemonReconnectTarget = new ChannelDaemonReconnectTarget(connection.channelId),
+    reconnectTarget: DaemonReconnectTarget | null = null,
 ): DaemonConfig {
     const daemonAgents = agents.map((agent) => withDaemonEnvironment(agent, localContext.environment));
     return {

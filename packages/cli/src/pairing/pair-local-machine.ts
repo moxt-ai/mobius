@@ -31,6 +31,7 @@ const REDEEM_RESPONSE_KEYS: readonly string[] = ["channelId", "runtimeCredential
 const MOBIUS_CLI_APPLICATION_ID = "dev.mobius.cli";
 
 interface PairCommandOptions {
+    readonly appId: string;
     readonly code: string;
     readonly pairingId: string;
     readonly relayOrigin: URL;
@@ -98,7 +99,13 @@ function readSingleOption(arguments_: readonly string[], option: string): string
 function assertKnownArguments(arguments_: readonly string[]): void {
     for (let index = 0; index < arguments_.length; index += 2) {
         const option = arguments_[index];
-        if (option !== "--url" && option !== "--code" && option !== "--pairing" && option !== "--workspace") {
+        if (
+            option !== "--url" &&
+            option !== "--code" &&
+            option !== "--pairing" &&
+            option !== "--workspace" &&
+            option !== "--app-id"
+        ) {
             throw new PairingClientError("invalid_arguments", `Unknown pairing option: ${option ?? "missing option"}`);
         }
     }
@@ -140,6 +147,9 @@ function parsePairingCode(value: string): string {
 function parsePairCommand(arguments_: readonly string[], defaultWorkspace: string): PairCommandOptions {
     assertKnownArguments(arguments_);
     return {
+        appId: arguments_.includes("--app-id")
+            ? validatePairingId(readSingleOption(arguments_, "--app-id"))
+            : "standalone",
         code: parsePairingCode(readSingleOption(arguments_, "--code")),
         pairingId: arguments_.includes("--pairing") ? validatePairingId(readSingleOption(arguments_, "--pairing")) : "",
         relayOrigin: parseRelayOrigin(readSingleOption(arguments_, "--url")),
@@ -154,41 +164,15 @@ function validatePairingId(value: string): string {
     return value;
 }
 
-abstract class ResumeCommandTarget {
-    abstract readonly resume: (
-        installation: RuntimeInstallationStore,
-        signal: AbortSignal,
-        environment: Readonly<NodeJS.ProcessEnv>,
-    ) => Promise<PairedDaemon>;
-}
-
-class ConnectionResumeCommandTarget extends ResumeCommandTarget {
-    readonly connectionId: string;
-
-    constructor(connectionId: string) {
-        super();
-        this.connectionId = connectionId;
-    }
-
-    readonly resume = async (
-        installation: RuntimeInstallationStore,
-        signal: AbortSignal,
-        environment: Readonly<NodeJS.ProcessEnv>,
-    ): Promise<PairedDaemon> => await resumeMobiusRuntime(installation, this.connectionId, signal, environment);
-}
-
-function parseResumeArgument(arguments_: readonly string[]): ResumeCommandTarget {
-    if (arguments_.length !== 2) {
+function parseResumeConnectionId(arguments_: readonly string[]): string {
+    if (arguments_.length !== 2 || arguments_[0] !== "--connection") {
         throw new PairingClientError("invalid_arguments", "Usage: mobius start --connection <connection-id>");
     }
     const value = arguments_[1] ?? "";
-    if (arguments_[0] === "--connection") {
-        if (!/^mcn_[a-f0-9]{32}$/.test(value)) {
-            throw new PairingClientError("invalid_connection_id", "The saved Runtime connection ID is invalid");
-        }
-        return new ConnectionResumeCommandTarget(value);
+    if (!/^mcn_[a-f0-9]{32}$/.test(value)) {
+        throw new PairingClientError("invalid_connection_id", "The saved Runtime connection ID is invalid");
     }
-    throw new PairingClientError("invalid_arguments", "Usage: mobius start --connection <connection-id>");
+    return value;
 }
 
 async function resolveDefaultWorkspace(path: string): Promise<string> {
@@ -367,8 +351,10 @@ async function pairRuntime(
     const claim = await claimPairing(options, defaultWorkspace, agents, inventory.installable, signal);
     const connection = await installation.saveConnection(
         {
+            appId: options.appId,
             channelId: claim.channelId,
             defaultWorkspace,
+            pairingId: options.pairingId,
             relayOrigin: options.relayOrigin,
             runtimeCredential: claim.runtimeCredential,
             runtimeId: claim.runtimeId,
@@ -387,6 +373,7 @@ export async function pairMobiusRuntime(
     return await pairRuntime(
         installation,
         {
+            appId: "embedded",
             code: parsePairingCode(options.pairingCode),
             pairingId: validatePairingId(options.pairingId),
             relayOrigin: parseRelayOrigin(options.relayOrigin),
@@ -443,9 +430,16 @@ export async function pairLocalMachine(
     const requested = parsePairCommand(arguments_, "");
     const installation = await openMobiusCliInstallation(signal, process.env);
     const localContext = new DaemonLocalContext(installation.stateDirectory, process.env);
+    if (requested.pairingId.length > 0) {
+        const existing = await installation.readConnectionForPairing(requested.pairingId, signal);
+        if (existing !== null) {
+            return await resumeRuntimeConnection(installation, existing, signal, process.env);
+        }
+    }
     return await pairRuntime(
         installation,
         {
+            appId: requested.appId,
             code: requested.code,
             pairingId: requested.pairingId,
             relayOrigin: requested.relayOrigin,
@@ -462,7 +456,7 @@ export async function resumeLocalMachine(
     arguments_: readonly string[],
     signal: AbortSignal = new AbortController().signal,
 ): Promise<PairedDaemon> {
-    const target = parseResumeArgument(arguments_);
+    const connectionId = parseResumeConnectionId(arguments_);
     const installation = await openMobiusCliInstallation(signal, process.env);
-    return await target.resume(installation, signal, process.env);
+    return await resumeMobiusRuntime(installation, connectionId, signal, process.env);
 }

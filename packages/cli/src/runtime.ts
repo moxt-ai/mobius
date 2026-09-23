@@ -162,6 +162,9 @@ export class MobiusRuntimeEngine {
         const audit = new AuditStore(this.#config.auditDatabasePath);
         try {
             await runDaemon(this.#config, audit, signal, undefined, {
+                ...(this.#options.onConnectionStatus === undefined
+                    ? {}
+                    : { onConnectionStatus: this.#options.onConnectionStatus }),
                 ...(this.#options.resolveAgentCatalogEnvironment === undefined
                     ? {}
                     : { resolveAgentCatalogEnvironment: this.#options.resolveAgentCatalogEnvironment }),
@@ -174,12 +177,12 @@ export class MobiusRuntimeEngine {
 }
 
 export interface MobiusRuntimeEngineOptions {
+    readonly onConnectionStatus?: (status: "online" | "reconnecting") => void;
     readonly resolveAgentCatalogEnvironment?: (signal: AbortSignal) => Promise<Readonly<NodeJS.ProcessEnv>>;
 }
 
 export type { DaemonConfig, DaemonConnectionConfig } from "./config.ts";
 export {
-    ChannelDaemonReconnectTarget,
     createDaemonConfig,
     DaemonLocalContext,
     DaemonReconnectTarget,

@@ -2264,6 +2264,7 @@ async function installDetectedAgentIntegrations(
 }
 
 export interface RunDaemonOptions {
+    readonly onConnectionStatus?: (status: "online" | "reconnecting") => void;
     readonly resolveAgentCatalogEnvironment?: (signal: AbortSignal) => Promise<Readonly<NodeJS.ProcessEnv>>;
 }
 
@@ -3498,7 +3499,11 @@ export async function runDaemon(
         );
     };
     const announceReadiness = (): void => {
-        if (!connectionAnnounced || !catalogPublished || readinessAnnounced) {
+        if (!connectionAnnounced || !catalogPublished) {
+            return;
+        }
+        options.onConnectionStatus?.("online");
+        if (readinessAnnounced) {
             return;
         }
         readinessAnnounced = true;
@@ -3509,11 +3514,13 @@ export async function runDaemon(
             return;
         }
         connectionAnnounced = true;
-        const reconnectCommand = `npx --yes @moxt-ai/mobius start ${config.reconnectTarget.commandArgument}`;
         process.stdout.write("Mobius daemon connected to the relay.\n\n");
-        process.stdout.write(
-            `${styleText(["bold", "yellow"], `Reconnect this local connection later:\n  ${reconnectCommand}`)}\n\n`,
-        );
+        if (config.reconnectTarget !== null) {
+            const reconnectCommand = `mobius start ${config.reconnectTarget.commandArgument}`;
+            process.stdout.write(
+                `${styleText(["bold", "yellow"], `Reconnect this local connection later:\n  ${reconnectCommand}`)}\n\n`,
+            );
+        }
         announceReadiness();
         startAutomaticIntegrationProvisioning();
     };
@@ -3545,7 +3552,12 @@ export async function runDaemon(
                     activeAttemptIds,
                     connectionEpoch,
                     diagnostics,
-                    announceConnection,
+                    () => {
+                        if (catalogPublished) {
+                            options.onConnectionStatus?.("online");
+                        }
+                        announceConnection();
+                    },
                     signal,
                     timer,
                     resolveAgentCatalogEnvironment,
@@ -3560,6 +3572,7 @@ export async function runDaemon(
                 diagnostics.connectionFailed(connectionEpoch, error, "connection");
             }
 
+            options.onConnectionStatus?.("reconnecting");
             await waitForRelayRetry(signal, timer);
         }
     } finally {
