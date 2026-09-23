@@ -990,6 +990,18 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                     });
                 }
             }
+            if (prompt === "stream oversized reasoning") {
+                for (let index = 0; index < 8; index += 1) {
+                    await context.client.notify(acp.methods.client.session.update, {
+                        sessionId: context.params.sessionId,
+                        update: {
+                            content: { text: "r".repeat(100_000), type: "text" },
+                            messageId: `reasoning-${turnNumber.toString()}`,
+                            sessionUpdate: "agent_thought_chunk",
+                        },
+                    });
+                }
+            }
             if (prompt === "wait until cancelled") {
                 await waitForAbort(cancellation.signal);
                 return { stopReason: "cancelled" };
@@ -1009,7 +1021,10 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                 persistState(context.params.sessionId, state);
                 return { stopReason: "end_turn" };
             }
-            const toolCallId = `tool-${turnNumber.toString()}`;
+            const toolCallId =
+                prompt === "generate inline image with reused tool id"
+                    ? "reused-image-tool"
+                    : `tool-${turnNumber.toString()}`;
 
             if (prompt === "report Codex usage" || prompt === "report Claude usage") {
                 await context.client.notify(acp.methods.client.session.update, {
@@ -1147,7 +1162,8 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                                         },
                                     ];
                                 })()
-                              : prompt === "generate inline image"
+                              : prompt === "generate inline image" ||
+                                  prompt === "generate inline image with reused tool id"
                                 ? [
                                       {
                                           content: {

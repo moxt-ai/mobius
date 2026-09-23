@@ -12,7 +12,6 @@ import {
     type RequestPermissionRequest,
     type RequestPermissionResponse,
     type SessionNotification,
-    type ToolCallUpdate,
 } from "@agentclientprotocol/sdk";
 import {
     AGENT_CONTENT_KIND,
@@ -71,7 +70,6 @@ import {
     acpEndpointTerminationError,
     type InProcessAcpEndpoint,
 } from "./in-process/acp-endpoint.ts";
-import { emitMarkdownChunksWithLocalImages } from "./markdown-images.ts";
 import {
     type NativeSessionOrigin,
     type NativeSessionPage,
@@ -362,7 +360,6 @@ export class AcpProcessSession implements AcpClientHandler {
     readonly #metrics: OperationMetrics;
     readonly #sessionConfigProtocol: SessionConfigProtocol;
     readonly #store: AcpSessionStore;
-    readonly #emittedToolImages = new Set<string>();
     readonly #verifiedAgentVersion: string;
     #preSessionUpdateBytes = 0;
     #agentName = "";
@@ -619,13 +616,9 @@ export class AcpProcessSession implements AcpClientHandler {
     };
 
     private readonly emitAgentMessage = async (chunks: readonly string[], messageId: string): Promise<void> => {
-        const signal = AbortSignal.timeout(20_000);
-        await emitMarkdownChunksWithLocalImages({
-            chunks,
-            onImage: async (image) => await this.emitRaster(image, messageId, signal),
-            onText: async (content) => await this.#turn.onText(content, messageId),
-            signal,
-        });
+        for (const chunk of chunks) {
+            await this.#turn.onText(chunk, messageId);
+        }
     };
 
     private readonly bufferAgentText = async (text: string, messageId: string): Promise<void> => {
@@ -687,39 +680,6 @@ export class AcpProcessSession implements AcpClientHandler {
         await this.#getObserver().onContent({
             commandId: this.#turn.commandId,
             content: prepared,
-            contentId: `content-${crypto.randomUUID()}`,
-            kind: AGENT_CONTENT_KIND,
-            messageId,
-            sessionId: this.#mobiusSessionId,
-        });
-    };
-
-    private readonly emitToolImages = async (update: ToolCallUpdate): Promise<void> => {
-        if (update.status !== "completed") {
-            return;
-        }
-        for (const [index, item] of (update.content ?? []).entries()) {
-            if (item.type !== "content" || item.content.type !== "image") {
-                continue;
-            }
-            const key = `${update.toolCallId}:${index.toString()}`;
-            if (this.#emittedToolImages.has(key)) {
-                continue;
-            }
-            this.#emittedToolImages.add(key);
-            await this.emitAgentContent(normalizeContentBlock(item.content), `tool-${key}`);
-        }
-    };
-
-    private readonly emitRaster = async (
-        raster: LocalRasterImage,
-        messageId: string,
-        signal: AbortSignal,
-    ): Promise<void> => {
-        const content = await this.importRaster(raster, signal);
-        await this.#getObserver().onContent({
-            commandId: this.#turn.commandId,
-            content,
             contentId: `content-${crypto.randomUUID()}`,
             kind: AGENT_CONTENT_KIND,
             messageId,
@@ -1613,7 +1573,6 @@ export class AcpProcessSession implements AcpClientHandler {
         }
         if (update.sessionUpdate === "tool_call_update") {
             await this.#turn.activities.recordToolCallUpdate(update);
-            await this.emitToolImages(update);
             return;
         }
         if (update.sessionUpdate === "plan") {

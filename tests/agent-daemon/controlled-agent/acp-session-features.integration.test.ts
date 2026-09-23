@@ -103,6 +103,7 @@ describe("ACP session features", () => {
         const generatedImages = await mkdtemp(join(tmpdir(), "mobius-login-shell-images-"));
         const observer = new RecordingObserver();
         const manager = new AcpSessionManager(observer);
+        let answer = "";
         const localContext = new DaemonLocalContext(join(workspace, "state"), {
             FAKE_ACP_IMAGE_DIRECTORY: generatedImages,
             PATH: process.env["PATH"] ?? "",
@@ -125,20 +126,18 @@ describe("ACP session features", () => {
                 cwd: workspace,
                 images: [],
                 onActivity: () => Promise.resolve(),
-                onText: () => Promise.resolve(),
+                onText: (text) => {
+                    answer += text;
+                    return Promise.resolve();
+                },
                 prompt: "generate markdown image",
                 resources: [],
                 sessionId: "login-shell-session",
                 signal: new AbortController().signal,
             });
 
-            expect(observer.content).toContainEqual(
-                expect.objectContaining({
-                    content: expect.objectContaining({
-                        uri: await realpath(join(generatedImages, "generated-image.png")),
-                    }),
-                }),
-            );
+            expect(answer).toContain(join(generatedImages, "generated-image.png"));
+            expect(observer.content).toHaveLength(0);
         } finally {
             await manager.close();
             await Promise.all([
@@ -182,6 +181,38 @@ describe("ACP session features", () => {
         }
     });
 
+    it("Given two Turns reuse a tool ID, When each Turn produces an image, Then the image stays in each tool activity without a separate content event", async () => {
+        const observer = new RecordingObserver();
+        const manager = new AcpSessionManager(observer);
+        const activities: AcpActivity[] = [];
+        try {
+            for (const commandId of ["first-image-turn", "second-image-turn"]) {
+                await manager.runPrompt({
+                    additionalDirectories: [],
+                    agent: fakeAgent(),
+                    commandId,
+                    cwd: process.cwd(),
+                    images: [],
+                    onActivity: (activity) => {
+                        activities.push(activity);
+                        return Promise.resolve();
+                    },
+                    onText: () => Promise.resolve(),
+                    prompt: "generate inline image with reused tool id",
+                    resources: [],
+                    sessionId: "reused-image-session",
+                    signal: new AbortController().signal,
+                });
+            }
+            expect(
+                activities.filter((activity) => activity.content.some((content) => content.type === "image")),
+            ).toHaveLength(2);
+            expect(observer.content).toHaveLength(0);
+        } finally {
+            await manager.close();
+        }
+    });
+
     it("Given an ACP tool returns more than 500,000 characters, When Mobius records the tool update, Then it truncates the visible output at 500,000 characters", async () => {
         const observer = new RecordingObserver();
         const manager = new AcpSessionManager(observer);
@@ -214,6 +245,36 @@ describe("ACP session features", () => {
         }
     });
 
+    it("Given an Agent streams a long reasoning Turn, When it completes, Then the Runtime receives a bounded snapshot", async () => {
+        const manager = new AcpSessionManager(new RecordingObserver());
+        const activities: AcpActivity[] = [];
+        try {
+            await manager.runPrompt({
+                additionalDirectories: [],
+                agent: fakeAgent(),
+                commandId: "oversized-reasoning-command",
+                cwd: process.cwd(),
+                images: [],
+                onActivity: (activity) => {
+                    activities.push(activity);
+                    return Promise.resolve();
+                },
+                onText: () => Promise.resolve(),
+                prompt: "stream oversized reasoning",
+                resources: [],
+                sessionId: "oversized-reasoning-session",
+                signal: new AbortController().signal,
+            });
+            const completed = activities.findLast(
+                (activity) => activity.activityType === "reasoning" && activity.status === "completed",
+            );
+            expect(completed?.output.length).toBeLessThanOrEqual(500_000);
+            expect(completed?.detail.kind).toBe("truncated");
+        } finally {
+            await manager.close();
+        }
+    });
+
     it("Given an ACP agent links a local image in Markdown, When Mobius records the reply, Then it preserves the original path for on-demand reading", async () => {
         const directory = await mkdtemp(join(tmpdir(), "mobius-markdown-image-"));
         const observer = new RecordingObserver();
@@ -237,17 +298,10 @@ describe("ACP session features", () => {
                 signal: new AbortController().signal,
             });
 
-            expect(output.join("")).not.toContain("![Generated image]");
-            expect(observer.content).toContainEqual(
-                expect.objectContaining({
-                    content: expect.objectContaining({
-                        artifactId: "",
-                        name: "generated-image.png",
-                        type: "image",
-                        uri: await realpath(join(directory, "generated-image.png")),
-                    }),
-                }),
+            expect(output.join("")).toContain(
+                `![Generated image](<${await realpath(join(directory, "generated-image.png"))}>`,
             );
+            expect(observer.content).toEqual([]);
         } finally {
             await manager.close();
             await rm(directory, { force: true, recursive: true });
@@ -278,17 +332,8 @@ describe("ACP session features", () => {
                 signal: new AbortController().signal,
             });
 
-            expect(output.join("")).not.toContain("Image unavailable");
-            expect(observer.content).toContainEqual(
-                expect.objectContaining({
-                    content: expect.objectContaining({
-                        artifactId: "",
-                        name: "generated-image.png",
-                        type: "image",
-                        uri: await realpath(join(generatedImages, "generated-image.png")),
-                    }),
-                }),
-            );
+            expect(output.join("")).toContain(`![Generated image](<${join(generatedImages, "generated-image.png")}>`);
+            expect(observer.content).toEqual([]);
         } finally {
             await manager.close();
             await Promise.all([
@@ -302,6 +347,7 @@ describe("ACP session features", () => {
         const directory = await mkdtemp(join(tmpdir(), "mobius-media-output-"));
         const observer = new RecordingObserver();
         const manager = new AcpSessionManager(observer);
+        const output: string[] = [];
         try {
             await manager.runPrompt({
                 additionalDirectories: [],
@@ -310,23 +356,18 @@ describe("ACP session features", () => {
                 cwd: directory,
                 images: [],
                 onActivity: () => Promise.resolve(),
-                onText: () => Promise.resolve(),
+                onText: (text) => {
+                    output.push(text);
+                    return Promise.resolve();
+                },
                 prompt: "generate media artifacts",
                 resources: [],
                 sessionId: "media-session",
                 signal: new AbortController().signal,
             });
 
-            expect(observer.content).toContainEqual(
-                expect.objectContaining({
-                    content: expect.objectContaining({
-                        artifactId: "",
-                        mimeType: "image/png",
-                        name: "generated-image.png",
-                        type: "image",
-                        uri: await realpath(join(directory, "generated-image.png")),
-                    }),
-                }),
+            expect(output.join("")).toContain(
+                `![Generated image](<${await realpath(join(directory, "generated-image.png"))}>`,
             );
             expect(observer.content).toContainEqual(
                 expect.objectContaining({

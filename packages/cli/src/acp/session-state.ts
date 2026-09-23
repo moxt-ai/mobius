@@ -46,7 +46,8 @@ export class RunningAcpTurn extends AcpTurnState {
 }
 
 export class PendingPermission {
-    readonly completion = Promise.withResolvers<RequestPermissionResponse>();
+    readonly completion: PromiseWithResolvers<RequestPermissionResponse> =
+        Promise.withResolvers<RequestPermissionResponse>();
     readonly interactionId: string;
     readonly optionIds: ReadonlySet<string>;
     #settled = false;
@@ -78,7 +79,8 @@ export class PendingPermission {
 }
 
 export class PendingElicitation {
-    readonly completion = Promise.withResolvers<CreateElicitationResponse>();
+    readonly completion: PromiseWithResolvers<CreateElicitationResponse> =
+        Promise.withResolvers<CreateElicitationResponse>();
     readonly elicitationId: string;
     readonly interactionId: string;
     readonly requestedSchema: unknown;

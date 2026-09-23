@@ -1,10 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { basename } from "node:path";
 import { styleText } from "node:util";
 
 import {
-    AGENT_ACTIVITY_KIND,
-    AGENT_ACTIVITY_NARRATION_KIND,
     AGENT_CATALOG_REFRESH_FAILED_KIND,
     AGENT_CATALOG_REFRESH_KIND,
     AGENT_CATALOG_REFRESHED_KIND,
@@ -15,17 +12,14 @@ import {
     AGENT_INSTALL_PROGRESS_KIND,
     AGENT_INSTALL_REQUEST_KIND,
     AGENT_INSTALL_STARTED_KIND,
-    AGENT_MESSAGE_DELTA_KIND,
     AGENT_SETTINGS_DISCOVER_KIND,
     AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
-    type AgentActivityEvent,
     type AgentCatalogRefreshCommand,
     type AgentContentEvent,
     type DaemonToServiceMessage,
     decodeServiceToDaemonMessage,
     decodeSessionLiveHistoryLoad,
     decodeSessionLiveHistoryPageLoad,
-    encodeDaemonToServiceMessage,
     FILE_FAILED_KIND,
     FILE_READ_KIND,
     NATIVE_SESSION_CANCEL_KIND,
@@ -39,44 +33,30 @@ import {
     RUNTIME_LIVENESS_READY_KIND,
     type RuntimeDelivery,
     SESSION_CANCEL_KIND,
-    SESSION_COMPLETED_KIND,
     SESSION_CONFIGURE_KIND,
     SESSION_ELICITATION_RESPOND_KIND,
     SESSION_EVENT_ACK_KIND,
     SESSION_EVENT_DEFERRED_KIND,
     SESSION_EVENT_REJECTED_KIND,
-    SESSION_FAILED_KIND,
     SESSION_LIVE_HISTORY_LOAD_KIND,
     SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
     SESSION_PERMISSION_RESPOND_KIND,
     SESSION_PREPARE_KIND,
     SESSION_PROMPT_KIND,
-    SESSION_STARTED_KIND,
     type SessionCancelCommand,
     type SessionCommandsUpdatedEvent,
     type SessionConfigUpdatedEvent,
-    type SessionConfigureCommand,
     type SessionElicitationRequestedEvent,
     type SessionElicitationResolvedEvent,
     type SessionInfoUpdatedEvent,
     type SessionPermissionRequestedEvent,
     type SessionPermissionResolvedEvent,
-    type SessionPrepareCommand,
-    type SessionPromptCommand,
     SessionPromptDisposition,
-    type SessionReadyEvent,
     type SessionUsageUpdatedEvent,
     WORKSPACE_LIST_KIND,
-    type WorkspaceListCommand,
 } from "@moxt-ai/mobius-protocol";
 import { fetch, type MessageEvent, WebSocket } from "undici";
 
-import type { AcpActivity } from "./acp/activity.ts";
-import {
-    agentForSessionConfiguration,
-    applyCompleteSessionConfiguration,
-    assertAppliedSessionConfiguration,
-} from "./acp/session-config/apply-session-configuration.ts";
 import {
     AcpConfigurationValueUnavailableError,
     AcpExecutionError,
@@ -89,11 +69,7 @@ import {
     discoverLocalAgentInventory,
     supportedLocalAgentSpecifications,
 } from "./agent-catalog/discover-local-agents.ts";
-import {
-    type AcpAgentDefinition,
-    AgentIntegrationDefinition,
-    LocalAgentCatalogError,
-} from "./agent-catalog/local-agent.ts";
+import { type AcpAgentDefinition, AgentIntegrationDefinition } from "./agent-catalog/local-agent.ts";
 import { publishAgentCatalog } from "./agent-catalog/publish-agent-catalog.ts";
 import {
     type AgentInstallation,
@@ -109,23 +85,29 @@ import {
 import { FixedInstallationExecutor } from "./agent-installation/fixed-installation-executor.ts";
 import { streamLocalFile } from "./artifacts/local-file-streamer.ts";
 import type { AuditStore } from "./audit/audit-store.ts";
-import { LocalAuthorizationError } from "./authorization/local-authorization-error.ts";
 import { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
 import { type DaemonConfig, DaemonLocalContext, withDaemonEnvironment } from "./config.ts";
 import { DaemonDiagnosticLog } from "./daemon-diagnostic-log.ts";
-import { AccumulatingOperationMetrics, type DurationMetric } from "./infra/operation-metrics.ts";
+import {
+    agentSettingsFailureDetails,
+    type DaemonTurnCommand,
+    executePrompt,
+    executeSessionConfigure,
+    executeSessionLiveHistoryLoad,
+    executeSessionLiveHistoryPageLoad,
+    executeSessionPrepare,
+    executeWorkspaceList,
+    operationErrorCode,
+    operationErrorMessage,
+    reportFailure,
+    reportOperationFailure,
+    send,
+    settleAbandonedTurn,
+} from "./daemon-session-commands.ts";
 import { readCodexFullHistory } from "./native-sessions/codex-history.ts";
-import { paginateLiveSessionHistory } from "./native-sessions/live-history-page.ts";
 import { NativeSessionService } from "./native-sessions/service.ts";
 import { environmentProxyDispatcher } from "./network/environment-proxy.ts";
 import { revalidateExecutable } from "./process/executable.ts";
-import { PromptArtifactError, resolvePromptArtifacts } from "./prompt-artifact-resolver.ts";
-import {
-    AGENT_ACTIVITY_COALESCING_MILLISECONDS,
-    CoalescingDaemonActivityPublisher,
-} from "./relay-connection/coalescing-activity-publisher.ts";
-import { CoalescingNarrationPublisher } from "./relay-connection/coalescing-narration-publisher.ts";
-import { CoalescingTextPublisher } from "./relay-connection/coalescing-text-publisher.ts";
 import { connectRelay } from "./relay-connection/connect.ts";
 import { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
 import { RelayConnectionLiveness } from "./relay-connection/liveness.ts";
@@ -136,10 +118,6 @@ import { DaemonSessionEventPublisher } from "./relay-connection/session-event-pu
 import { type DaemonTimer, systemDaemonTimer } from "./relay-connection/timer.ts";
 
 const RELAY_RECONNECT_DELAY_MILLISECONDS = 500;
-const AGENT_TEXT_COALESCING_MILLISECONDS = 100;
-// Mirrors the protocol's per-event text limit; a delta larger than this is
-// rejected by the Session event codec rather than truncated.
-const AGENT_TEXT_MAXIMUM_LENGTH = 100_000;
 const ACTIVE_TURN_RECONCILIATION_TIMEOUT_MILLISECONDS = 20_000;
 const ACTIVE_TURN_RECONCILIATION_CLOSE_CODE = 4009;
 
@@ -298,33 +276,6 @@ class DaemonInstallationObserver implements InstallationObserver {
     };
 }
 
-class ResolvedSessionDirectories {
-    readonly additionalDirectories: readonly string[];
-    readonly additionalDirectoryEntries: readonly {
-        readonly directoryId: string;
-        readonly name: string;
-    }[];
-    readonly cwd: string;
-
-    constructor(
-        cwd: string,
-        additionalDirectories: readonly string[],
-        additionalDirectoryEntries: readonly {
-            readonly directoryId: string;
-            readonly name: string;
-        }[],
-    ) {
-        this.additionalDirectories = additionalDirectories;
-        this.additionalDirectoryEntries = additionalDirectoryEntries;
-        this.cwd = cwd;
-    }
-}
-
-interface DaemonTurnCommand {
-    readonly commandId: string;
-    readonly sessionId: string;
-}
-
 class ActiveDaemonTurn {
     readonly attemptId: string;
     readonly command: DaemonTurnCommand;
@@ -467,13 +418,6 @@ async function reconcileActiveTurns(
     await Promise.all(turns.map(async (turn) => await reconcileActiveTurn(config, turn, signal)));
 }
 
-function send(socket: WebSocket, message: DaemonToServiceMessage): void {
-    if (socket.readyState !== WebSocket.OPEN) {
-        throw new Error("Relay connection is not open");
-    }
-    socket.send(encodeDaemonToServiceMessage(message));
-}
-
 function closeRelaySocket(socket: WebSocket, code: number, reason: string): void {
     try {
         socket.close(code, reason);
@@ -484,687 +428,6 @@ function closeRelaySocket(socket: WebSocket, code: number, reason: string): void
         } catch (fallbackError) {
             console.error("Mobius daemon could not release the Relay WebSocket", fallbackError);
         }
-    }
-}
-
-function daemonActivity(command: DaemonTurnCommand, activity: AcpActivity): AgentActivityEvent {
-    return {
-        activityId: activity.activityId,
-        activityType: activity.activityType,
-        commandId: command.commandId,
-        content: activity.content,
-        detail: activity.detail,
-        input: activity.input,
-        kind: AGENT_ACTIVITY_KIND,
-        locations: activity.locations,
-        name: activity.name,
-        output: activity.output,
-        sequence: activity.sequence,
-        sessionId: command.sessionId,
-        status: activity.status,
-        title: activity.title,
-        toolKind: activity.toolKind,
-    };
-}
-
-function reportFailure(
-    publisher: DaemonSessionEventPublisher,
-    command: DaemonTurnCommand,
-    code: string,
-    message: string,
-    attemptId: string,
-): void {
-    publisher.recordAttempt(
-        command.sessionId,
-        {
-            code,
-            commandId: command.commandId,
-            kind: SESSION_FAILED_KIND,
-            message,
-            sessionId: command.sessionId,
-        },
-        attemptId,
-    );
-}
-
-/**
- * Settles a Turn claimed by this live Runtime when its active process can no longer execute.
- * A lost connection can deliver cancellation after the process has stopped; the in-memory
- * receipt identifies the Attempt that should be reported as failed.
- */
-function settleAbandonedTurn(
-    publisher: DaemonSessionEventPublisher,
-    outbox: SessionEventOutbox,
-    audit: AuditStore,
-    cancellation: SessionCancelCommand,
-): void {
-    const attemptId = outbox.findUnsettledAttemptId(cancellation.commandId, cancellation.sessionId);
-    if (attemptId === null) {
-        console.warn("Mobius daemon ignored cancellation for an inactive turn");
-        return;
-    }
-    audit.record({
-        commandId: cancellation.commandId,
-        event: "session_abandoned_turn_settled",
-        sessionId: cancellation.sessionId,
-    });
-    reportFailure(
-        publisher,
-        cancellation,
-        "agent_execution_abandoned",
-        "The local Agent execution was abandoned before it completed",
-        attemptId,
-    );
-    outbox.transitionExecution(cancellation.commandId, "failed");
-}
-
-function operationErrorCode(error: unknown): string {
-    if (
-        error instanceof AcpExecutionError ||
-        error instanceof LocalAuthorizationError ||
-        error instanceof LocalAgentCatalogError ||
-        error instanceof PromptArtifactError
-    ) {
-        return error.code;
-    }
-    return "session_operation_failed";
-}
-
-function operationErrorMessage(error: unknown): string {
-    if (
-        error instanceof AcpExecutionError ||
-        error instanceof LocalAuthorizationError ||
-        error instanceof LocalAgentCatalogError ||
-        error instanceof PromptArtifactError
-    ) {
-        return error.message;
-    }
-    return "The local agent operation could not be completed";
-}
-
-function agentSettingsFailureDetails(agentId: string, failure: unknown): Readonly<Record<string, string>> {
-    const details = { agentId, code: operationErrorCode(failure) };
-    if (!(failure instanceof AcpConfigurationValueUnavailableError)) {
-        return details;
-    }
-    return {
-        ...details,
-        configId: failure.configId,
-        offeredValueCount: failure.offeredValueCount.toString(),
-        offeredValues: JSON.stringify(failure.offeredValues),
-        requestedValue: failure.requestedValue,
-    };
-}
-
-function reportOperationFailure(
-    socket: WebSocket,
-    requestId: string,
-    sessionId: string,
-    error: unknown,
-    runtimeTimings: readonly DurationMetric[] = [],
-): void {
-    if (socket.readyState !== WebSocket.OPEN) {
-        return;
-    }
-    send(socket, {
-        code: operationErrorCode(error),
-        kind: "session.operation.failed",
-        message: operationErrorMessage(error),
-        requestId,
-        ...(runtimeTimings.length === 0 ? {} : { runtimeTimings }),
-        sessionId,
-    });
-}
-
-async function resolveSessionDirectories(
-    directories: WorkspaceDirectoryService,
-    bindingId: string,
-    directoryId: string,
-    additionalDirectoryIds: readonly string[],
-    signal: AbortSignal,
-): Promise<ResolvedSessionDirectories> {
-    const cwd = await directories.resolve(bindingId, directoryId, signal);
-    const additionalDirectories: string[] = [];
-    const additionalDirectoryEntries: {
-        readonly directoryId: string;
-        readonly name: string;
-    }[] = [];
-    const unique = new Set<string>([cwd]);
-    for (const additionalDirectoryId of additionalDirectoryIds) {
-        const directory = await directories.resolve(bindingId, additionalDirectoryId, signal);
-        if (unique.has(directory)) {
-            throw new LocalAuthorizationError("Workspace directories must resolve to distinct locations");
-        }
-        unique.add(directory);
-        additionalDirectories.push(directory);
-        additionalDirectoryEntries.push({
-            directoryId: additionalDirectoryId,
-            name: basename(directory),
-        });
-    }
-    return new ResolvedSessionDirectories(cwd, additionalDirectories, additionalDirectoryEntries);
-}
-
-async function executeWorkspaceList(
-    socket: WebSocket,
-    command: WorkspaceListCommand,
-    directories: WorkspaceDirectoryService,
-    audit: AuditStore,
-    signal: AbortSignal,
-): Promise<void> {
-    try {
-        const listing = await directories.list(command.bindingId, command.directoryId, signal);
-        audit.record({
-            commandId: command.requestId,
-            event: "workspace_list_authorized",
-            sessionId: "workspace-browser",
-        });
-        send(socket, {
-            bindingId: command.bindingId,
-            directoryId: listing.directoryId,
-            directoryLabel: listing.directoryLabel,
-            entries: listing.entries,
-            kind: "workspace.entries",
-            parentDirectoryId: listing.parentDirectoryId,
-            requestId: command.requestId,
-        });
-    } catch (error) {
-        reportOperationFailure(socket, command.requestId, "", error);
-    }
-}
-
-async function executeSessionPrepare(
-    publisher: DaemonSessionEventPublisher,
-    socket: WebSocket,
-    command: SessionPrepareCommand,
-    config: DaemonConfig,
-    directories: WorkspaceDirectoryService,
-    audit: AuditStore,
-    sessions: AcpSessionManager,
-    signal: AbortSignal,
-): Promise<void> {
-    const metrics = new AccumulatingOperationMetrics();
-    try {
-        const readyEvent = await metrics.measure("prepare-total", async () => {
-            const resolved = await metrics.measure(
-                "workspace-resolve",
-                async () =>
-                    await resolveSessionDirectories(
-                        directories,
-                        config.bindingId,
-                        command.directoryId,
-                        command.additionalDirectoryIds,
-                        signal,
-                    ),
-            );
-            const agent = config.catalog.find(command.agentId);
-            const preparation = {
-                additionalDirectories: resolved.additionalDirectories,
-                agent,
-                cwd: resolved.cwd,
-                sessionId: command.sessionId,
-                signal,
-            };
-            const prepared =
-                command.transient === true
-                    ? await sessions.inspectSession(preparation, metrics)
-                    : await sessions.prepareSession(preparation, metrics);
-            const configuration = command.configuration;
-            const configOptions =
-                configuration === undefined
-                    ? prepared.configOptions
-                    : await metrics.measure(
-                          "configuration",
-                          async () =>
-                              await sessions.configureSession({
-                                  ...preparation,
-                                  booleanValue: configuration.booleanValue,
-                                  configId: configuration.configId,
-                                  requestId: command.requestId,
-                                  value: configuration.value,
-                                  valueType: configuration.valueType,
-                              }),
-                      );
-            const listing = await metrics.measure(
-                "workspace-list",
-                async () => await directories.list(config.bindingId, command.directoryId, signal),
-            );
-            audit.record({
-                commandId: command.requestId,
-                event: "session_prepared",
-                sessionId: command.sessionId,
-            });
-            if (command.configuration !== undefined) {
-                audit.record({
-                    commandId: command.requestId,
-                    event: "session_configured",
-                    sessionId: command.sessionId,
-                });
-                publisher.recordRuntime(command.sessionId, {
-                    configOptions,
-                    kind: "session.config.updated",
-                    requestId: command.requestId,
-                    sessionId: command.sessionId,
-                });
-            }
-            const event: SessionReadyEvent = {
-                additionalDirectories: resolved.additionalDirectoryEntries,
-                agentId: command.agentId,
-                agentName: prepared.agentName,
-                agentVersion: prepared.agentVersion,
-                capabilities: prepared.capabilities,
-                commands: prepared.commands,
-                configOptions,
-                directoryId: command.directoryId,
-                directoryLabel: listing.directoryLabel,
-                kind: "session.ready",
-                requestId: command.requestId,
-                restored: prepared.restored,
-                sessionId: command.sessionId,
-                runtimeTimings: metrics.snapshot(),
-            };
-            // An inspection-only preparation has no Session on the Relay, so this readiness is a reply
-            // rather than a record: committing it would be rejected as an unknown Session and quarantine
-            // an event that can never be replayed. The direct send below still delivers it.
-            if (command.transient !== true) {
-                metrics.measureSync("readiness-commit", () => {
-                    publisher.recordRuntime(command.sessionId, event);
-                });
-            }
-            return event;
-        });
-        send(socket, {
-            ...readyEvent,
-            runtimeTimings: metrics.snapshot(),
-        });
-    } catch (error) {
-        audit.record({
-            commandId: command.requestId,
-            details: {
-                agentId: command.agentId,
-                code: operationErrorCode(error),
-            },
-            event: "session_prepare_failed",
-            sessionId: command.sessionId,
-        });
-        reportOperationFailure(socket, command.requestId, command.sessionId, error, metrics.snapshot());
-    }
-}
-
-async function executeSessionLiveHistoryLoad(
-    socket: WebSocket,
-    command: ReturnType<typeof decodeSessionLiveHistoryLoad>,
-    config: DaemonConfig,
-    directories: WorkspaceDirectoryService,
-    audit: AuditStore,
-    sessions: AcpSessionManager,
-    signal: AbortSignal,
-): Promise<void> {
-    try {
-        const resolved = await resolveSessionDirectories(
-            directories,
-            config.bindingId,
-            command.directoryId,
-            command.additionalDirectoryIds,
-            signal,
-        );
-        const history = await sessions.loadSessionHistory({
-            additionalDirectories: resolved.additionalDirectories,
-            agent: config.catalog.find(command.agentId),
-            cwd: resolved.cwd,
-            sessionId: command.sessionId,
-            signal,
-        });
-        signal.throwIfAborted();
-        audit.record({
-            commandId: command.requestId,
-            event: "session_history_loaded",
-            sessionId: command.sessionId,
-        });
-        send(socket, {
-            history,
-            kind: "session.live-history.loaded",
-            requestId: command.requestId,
-            sessionId: command.sessionId,
-        });
-    } catch (error) {
-        if (signal.aborted) {
-            return;
-        }
-        audit.record({
-            commandId: command.requestId,
-            details: { code: operationErrorCode(error) },
-            event: "session_history_unavailable",
-            sessionId: command.sessionId,
-        });
-        send(socket, {
-            history: {
-                status: "unavailable",
-                cause: { code: operationErrorCode(error), message: operationErrorMessage(error) },
-            },
-            kind: "session.live-history.loaded",
-            requestId: command.requestId,
-            sessionId: command.sessionId,
-        });
-    }
-}
-
-async function executeSessionLiveHistoryPageLoad(
-    socket: WebSocket,
-    command: ReturnType<typeof decodeSessionLiveHistoryPageLoad>,
-    config: DaemonConfig,
-    directories: WorkspaceDirectoryService,
-    audit: AuditStore,
-    sessions: AcpSessionManager,
-    signal: AbortSignal,
-): Promise<void> {
-    try {
-        const resolved = await resolveSessionDirectories(
-            directories,
-            config.bindingId,
-            command.directoryId,
-            command.additionalDirectoryIds,
-            signal,
-        );
-        const history = await sessions.loadSessionHistory({
-            additionalDirectories: resolved.additionalDirectories,
-            agent: config.catalog.find(command.agentId),
-            cwd: resolved.cwd,
-            sessionId: command.sessionId,
-            signal,
-        });
-        signal.throwIfAborted();
-        const page = paginateLiveSessionHistory(history, command.sessionId, command.cursor, command.limit);
-        audit.record({
-            commandId: command.requestId,
-            event: "session_history_loaded",
-            sessionId: command.sessionId,
-        });
-        send(socket, {
-            kind: "session.live-history.page.loaded",
-            page,
-            requestId: command.requestId,
-            sessionId: command.sessionId,
-        });
-    } catch (error) {
-        if (signal.aborted) {
-            return;
-        }
-        audit.record({
-            commandId: command.requestId,
-            details: { code: operationErrorCode(error) },
-            event: "session_history_unavailable",
-            sessionId: command.sessionId,
-        });
-        send(socket, {
-            kind: "session.live-history.page.loaded",
-            page: {
-                status: "unavailable",
-                cause: { code: operationErrorCode(error), message: operationErrorMessage(error) },
-                nextCursor: null,
-            },
-            requestId: command.requestId,
-            sessionId: command.sessionId,
-        });
-    }
-}
-
-async function executeSessionConfigure(
-    publisher: DaemonSessionEventPublisher,
-    socket: WebSocket,
-    command: SessionConfigureCommand,
-    config: DaemonConfig,
-    directories: WorkspaceDirectoryService,
-    audit: AuditStore,
-    sessions: AcpSessionManager,
-    signal: AbortSignal,
-): Promise<void> {
-    try {
-        const resolved = await resolveSessionDirectories(
-            directories,
-            config.bindingId,
-            command.directoryId,
-            command.additionalDirectoryIds,
-            signal,
-        );
-        const configOptions = await sessions.configureSession({
-            additionalDirectories: resolved.additionalDirectories,
-            agent: config.catalog.find(command.agentId),
-            booleanValue: command.booleanValue,
-            configId: command.configId,
-            cwd: resolved.cwd,
-            requestId: command.requestId,
-            sessionId: command.sessionId,
-            signal,
-            value: command.value,
-            valueType: command.valueType,
-        });
-        audit.record({
-            commandId: command.requestId,
-            event: "session_configured",
-            sessionId: command.sessionId,
-        });
-        publisher.recordRuntime(command.sessionId, {
-            configOptions,
-            kind: "session.config.updated",
-            requestId: command.requestId,
-            sessionId: command.sessionId,
-        });
-    } catch (error) {
-        if (signal.aborted) {
-            signal.throwIfAborted();
-        }
-        reportOperationFailure(socket, command.requestId, command.sessionId, error);
-    }
-}
-
-async function executePrompt(
-    outbox: SessionEventOutbox,
-    publisher: DaemonSessionEventPublisher,
-    command: SessionPromptCommand,
-    config: DaemonConfig,
-    directories: WorkspaceDirectoryService,
-    audit: AuditStore,
-    sessions: AcpSessionManager,
-    attemptId: string,
-    activateAttempt: () => void,
-    timer: DaemonTimer,
-    signal: AbortSignal,
-): Promise<void> {
-    const activities = new CoalescingDaemonActivityPublisher(timer, (activity) => {
-        publisher.recordAttempt(command.sessionId, daemonActivity(command, activity), attemptId);
-    });
-    const narration = new CoalescingNarrationPublisher(
-        timer,
-        (increment) => {
-            publisher.recordAttempt(
-                command.sessionId,
-                {
-                    activityId: increment.activityId,
-                    activityType: increment.activityType,
-                    commandId: command.commandId,
-                    kind: AGENT_ACTIVITY_NARRATION_KIND,
-                    sequence: increment.sequence,
-                    sessionId: command.sessionId,
-                    text: increment.text,
-                },
-                attemptId,
-            );
-        },
-        AGENT_ACTIVITY_COALESCING_MILLISECONDS,
-        AGENT_TEXT_MAXIMUM_LENGTH,
-    );
-    const text = new CoalescingTextPublisher(
-        timer,
-        (messageId, delta) => {
-            publisher.recordAttempt(
-                command.sessionId,
-                {
-                    commandId: command.commandId,
-                    kind: AGENT_MESSAGE_DELTA_KIND,
-                    messageId,
-                    sessionId: command.sessionId,
-                    text: delta,
-                },
-                attemptId,
-            );
-        },
-        AGENT_TEXT_COALESCING_MILLISECONDS,
-        AGENT_TEXT_MAXIMUM_LENGTH,
-    );
-    try {
-        const resolved = await resolveSessionDirectories(
-            directories,
-            config.bindingId,
-            command.directoryId,
-            command.additionalDirectoryIds,
-            signal,
-        );
-        const agent = config.catalog.find(command.agentId);
-        if (
-            command.disposition === SessionPromptDisposition.Queue &&
-            !outbox.isTerminalExecution(command.targetCommandId, command.sessionId)
-        ) {
-            throw new AcpExecutionError(
-                "The queued prompt target is unavailable",
-                {},
-                "prompt_queue_target_unavailable",
-            );
-        }
-        const appliedSettings =
-            command.sessionConfigurations === undefined
-                ? undefined
-                : agentForSessionConfiguration(agent, command.sessionConfigurations);
-        const executionAgent = appliedSettings?.agent ?? agent;
-        const sessionConfigurations = appliedSettings?.sessionConfigurations;
-        if (command.sessionConfigurations !== undefined) {
-            const prepared = await sessions.prepareExecutionSession({
-                additionalDirectories: resolved.additionalDirectories,
-                agent: executionAgent,
-                cwd: resolved.cwd,
-                sessionId: command.sessionId,
-                signal,
-            });
-            if (command.disposition === SessionPromptDisposition.Steer) {
-                // Steering cannot reconfigure a running Agent, so the Turn snapshot
-                // only has to agree with the settings this live Session exposes. The
-                // snapshot comes from Agent settings discovery, so it may name options
-                // that the running Session does not expose at all.
-                assertAppliedSessionConfiguration(prepared.configOptions, sessionConfigurations ?? []);
-            } else {
-                await applyCompleteSessionConfiguration(
-                    sessions,
-                    audit,
-                    prepared.configOptions,
-                    sessionConfigurations ?? [],
-                    executionAgent,
-                    resolved.cwd,
-                    resolved.additionalDirectories,
-                    command.commandId,
-                    command.sessionId,
-                    signal,
-                );
-            }
-        }
-        audit.record({
-            commandId: command.commandId,
-            event: "session_authorized",
-            sessionId: command.sessionId,
-        });
-        outbox.transitionExecution(command.commandId, "running");
-        publisher.recordAttempt(
-            command.sessionId,
-            {
-                commandId: command.commandId,
-                kind: SESSION_STARTED_KIND,
-                attemptId,
-                sessionId: command.sessionId,
-            },
-            attemptId,
-        );
-        activateAttempt();
-        const attachments = await resolvePromptArtifacts(config, command, signal);
-        let stopReason: string;
-        if (command.disposition === SessionPromptDisposition.Steer) {
-            await sessions.steerPrompt({
-                additionalDirectories: resolved.additionalDirectories,
-                agent: executionAgent,
-                commandId: command.commandId,
-                cwd: resolved.cwd,
-                images: attachments.images,
-                prompt: command.prompt,
-                resources: attachments.resources,
-                sessionId: command.sessionId,
-                signal,
-                targetCommandId: command.targetCommandId,
-            });
-            stopReason = "steered";
-        } else {
-            const result = await sessions.runPrompt({
-                additionalDirectories: resolved.additionalDirectories,
-                agent: executionAgent,
-                commandId: command.commandId,
-                cwd: resolved.cwd,
-                disposition: command.disposition,
-                images: attachments.images,
-                onActivity: activities.record,
-                onNarration: (increment) => {
-                    narration.record(increment);
-                    return Promise.resolve();
-                },
-                onText: (delta, messageId) => {
-                    text.record(messageId, delta);
-                    return Promise.resolve();
-                },
-                prompt: command.prompt,
-                resources: attachments.resources,
-                sessionId: command.sessionId,
-                signal,
-                targetCommandId: command.targetCommandId,
-            });
-            stopReason = result.stopReason;
-        }
-
-        text.flush();
-        narration.flush();
-        activities.flush();
-        publisher.recordAttempt(
-            command.sessionId,
-            {
-                commandId: command.commandId,
-                kind: SESSION_COMPLETED_KIND,
-                sessionId: command.sessionId,
-                stopReason,
-            },
-            attemptId,
-        );
-        outbox.transitionExecution(command.commandId, stopReason === "cancelled" ? "cancelled" : "succeeded");
-        audit.record({
-            commandId: command.commandId,
-            event: stopReason === "cancelled" ? "session_cancelled" : "session_completed",
-            sessionId: command.sessionId,
-        });
-    } catch (error) {
-        text.flush();
-        narration.flush();
-        activities.flush();
-        audit.record({
-            commandId: command.commandId,
-            event: "session_failed",
-            sessionId: command.sessionId,
-        });
-        const code = operationErrorCode(error);
-        reportFailure(
-            publisher,
-            command,
-            code === "session_operation_failed" ? "agent_execution_failed" : code,
-            code === "session_operation_failed"
-                ? "The local agent could not complete the request"
-                : operationErrorMessage(error),
-            attemptId,
-        );
-        outbox.transitionExecution(command.commandId, "failed");
-        console.error("Mobius daemon command failed", error);
     }
 }
 

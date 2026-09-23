@@ -114,19 +114,6 @@ export class SessionEventOutbox {
       ) STRICT;
       CREATE INDEX IF NOT EXISTS relay_session_event_outbox_order
         ON relay_session_event_outbox(ordinal);
-      CREATE TABLE IF NOT EXISTS relay_session_event_dead_letters (
-        ordinal INTEGER PRIMARY KEY,
-        event_id TEXT NOT NULL UNIQUE,
-        session_id TEXT NOT NULL,
-        envelope_json TEXT NOT NULL,
-        rejection_code TEXT NOT NULL CHECK (
-          rejection_code IN ('session_deleted', 'session_not_found', 'session_rejected')
-        )
-      ) STRICT;
-      CREATE TABLE IF NOT EXISTS relay_session_event_sources (
-        source_key TEXT PRIMARY KEY,
-        next_source_seq INTEGER NOT NULL
-      ) STRICT;
       CREATE TABLE IF NOT EXISTS relay_turn_receipts (
         command_id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL,
@@ -139,11 +126,12 @@ export class SessionEventOutbox {
       CREATE TABLE IF NOT EXISTS relay_session_event_outbox_state (
         singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
         event_count INTEGER NOT NULL,
-        total_bytes INTEGER NOT NULL
+        total_bytes INTEGER NOT NULL,
+        next_source_seq INTEGER NOT NULL
       ) STRICT;
       INSERT OR IGNORE INTO relay_session_event_outbox_state (
-        singleton, event_count, total_bytes
-      ) VALUES (1, 0, 0);
+        singleton, event_count, total_bytes, next_source_seq
+      ) VALUES (1, 0, 0, 1);
       CREATE TABLE IF NOT EXISTS relay_runtime_deliveries (
         delivery_id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL,
@@ -283,20 +271,6 @@ export class SessionEventOutbox {
                 return false;
             }
             const byteLength = rowNumber(stored, "byte_length");
-            const insertion = this.#database
-                .prepare(
-                    `INSERT INTO relay_session_event_dead_letters (
-             ordinal, event_id, session_id, envelope_json, rejection_code
-           )
-           SELECT ordinal, event_id, session_id, envelope_json, ?
-           FROM relay_session_event_outbox
-           WHERE event_id = ? AND session_id = ?`,
-                )
-                .run(rejection.code, rejection.eventId, rejection.sessionId);
-            if (insertion.changes !== 1) {
-                this.#database.exec("COMMIT");
-                return false;
-            }
             const deletion = this.#database
                 .prepare(
                     `DELETE FROM relay_session_event_outbox
@@ -483,16 +457,15 @@ export class SessionEventOutbox {
         const sourceKey = attemptId.length === 0 ? `runtime:${sessionId}` : `attempt:${sessionId}:${attemptId}`;
         this.#database.exec("BEGIN IMMEDIATE");
         try {
-            const row = this.#database
+            const state = this.#database
                 .prepare(
-                    `SELECT next_source_seq FROM relay_session_event_sources
-           WHERE source_key = ?`,
+                    `SELECT total_bytes, next_source_seq
+                     FROM relay_session_event_outbox_state
+                     WHERE singleton = 1`,
                 )
-                .get(sourceKey);
-            const storedSourceSeq =
-                typeof row === "object" && row !== null ? Reflect.get(row, "next_source_seq") : undefined;
-            const nextSourceSeq = typeof storedSourceSeq === "number" ? storedSourceSeq : 1;
-            if (!Number.isSafeInteger(nextSourceSeq) || nextSourceSeq < 1) {
+                .get();
+            const nextSourceSeq = rowNumber(state, "next_source_seq");
+            if (nextSourceSeq < 1 || !Number.isSafeInteger(nextSourceSeq + 1)) {
                 throw new Error("SQLite returned an invalid event source sequence");
             }
             const envelope: SessionEventEnvelope = {
@@ -511,25 +484,9 @@ export class SessionEventOutbox {
             };
             const encoded = encodeSessionEventEnvelope(envelope);
             const byteLength = new TextEncoder().encode(encoded).byteLength;
-            const state = this.#database
-                .prepare(
-                    `SELECT total_bytes
-                     FROM relay_session_event_outbox_state
-                     WHERE singleton = 1`,
-                )
-                .get();
             if (rowNumber(state, "total_bytes") + byteLength > maximumEventBytes) {
                 throw new SessionEventOutboxCapacityError();
             }
-            this.#database
-                .prepare(
-                    `INSERT INTO relay_session_event_sources (
-             source_key, next_source_seq
-           ) VALUES (?, ?)
-           ON CONFLICT(source_key) DO UPDATE SET
-             next_source_seq = excluded.next_source_seq`,
-                )
-                .run(sourceKey, nextSourceSeq + 1);
             this.#database
                 .prepare(
                     `INSERT INTO relay_session_event_outbox (
@@ -541,7 +498,8 @@ export class SessionEventOutbox {
                 .prepare(
                     `UPDATE relay_session_event_outbox_state
                      SET event_count = event_count + 1,
-                         total_bytes = total_bytes + ?
+                         total_bytes = total_bytes + ?,
+                         next_source_seq = next_source_seq + 1
                      WHERE singleton = 1`,
                 )
                 .run(byteLength);
