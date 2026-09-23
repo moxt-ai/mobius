@@ -1,14 +1,10 @@
 import { DEFAULT_SESSION_QUOTA_POLICY, SessionQuotaPolicy } from "../entity/do/session.ts";
 
-const DEFAULT_SESSION_ARCHIVE_BYTES_PER_SESSION = 256 * 1024 * 1024;
-
 export interface SessionConfigurationEnvironment {
     readonly SESSION_ACTIVE_SESSIONS_PER_PROJECT?: string;
 }
 
-export interface LiteSessionConfigurationEnvironment extends SessionConfigurationEnvironment {
-    readonly SESSION_ARCHIVE_BYTES_PER_SESSION: string;
-}
+export type LiteSessionConfigurationEnvironment = SessionConfigurationEnvironment;
 
 function readLimit(value: string | undefined, fallback: number, name: string): number {
     if (value === undefined) {
@@ -31,13 +27,5 @@ export function sessionQuotaFromEnvironment(environment: SessionConfigurationEnv
             DEFAULT_SESSION_QUOTA_POLICY.activeSessionsPerProject,
             "SESSION_ACTIVE_SESSIONS_PER_PROJECT",
         ),
-    );
-}
-
-export function sessionArchiveByteLimitFromEnvironment(environment: LiteSessionConfigurationEnvironment): number {
-    return readLimit(
-        environment.SESSION_ARCHIVE_BYTES_PER_SESSION,
-        DEFAULT_SESSION_ARCHIVE_BYTES_PER_SESSION,
-        "SESSION_ARCHIVE_BYTES_PER_SESSION",
     );
 }

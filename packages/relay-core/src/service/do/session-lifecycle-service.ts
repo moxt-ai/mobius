@@ -10,7 +10,6 @@ import {
 import type { SessionDeletionStorage } from "../../storage/do/session-deletion-storage.ts";
 import type { SessionLifecycleStorage } from "../../storage/do/session-lifecycle-storage.ts";
 import { rowNumber, rowString } from "../../storage/do/sqlite-row.ts";
-import type { SessionArchiveService } from "./session-archive-service.ts";
 import {
     lifecycleFromRow,
     scopeKey,
@@ -22,7 +21,6 @@ import {
 import type { SessionStateService } from "./session-state-service.ts";
 
 export class SessionLifecycleService {
-    readonly #archive: SessionArchiveService;
     readonly #storage: SessionLifecycleStorage;
     readonly #deletions: SessionDeletionStorage;
     readonly #quota: SessionQuotaPolicy;
@@ -31,10 +29,9 @@ export class SessionLifecycleService {
     constructor(cx: {
         readonly config: { readonly quota: SessionQuotaPolicy };
         readonly storages: { readonly lifecycle: SessionLifecycleStorage; readonly deletions: SessionDeletionStorage };
-        readonly services: { readonly archive: SessionArchiveService; readonly state: SessionStateService };
+        readonly services: { readonly state: SessionStateService };
     }) {
-        const { archive, state: store } = cx.services;
-        this.#archive = archive;
+        const { state: store } = cx.services;
         this.#storage = cx.storages.lifecycle;
         this.#quota = cx.config.quota;
         this.#deletions = cx.storages.deletions;
@@ -123,25 +120,7 @@ export class SessionLifecycleService {
                 "The Runtime does not own the native Session history",
             );
         }
-        let encoded: string;
-        try {
-            encoded = JSON.stringify(decodeNativeSessionHistory(history));
-        } catch (cause) {
-            throw new SessionRuntimeError("session_conflict", "The native Session history is invalid", { cause });
-        }
-        if (new TextEncoder().encode(encoded).byteLength > rowNumber(session, "content_limit_bytes")) {
-            throw new SessionRuntimeError(
-                "content_too_large",
-                "The native Session history exceeds the recording limit",
-            );
-        }
-        this.#storage.updateNativeHistory({
-            nativeHistoryJson: encoded,
-            title: title,
-            updatedAt: now,
-            scopeKey: scopeKey(scope),
-            sessionId: sessionId,
-        });
+        decodeNativeSessionHistory(history);
         signal.throwIfAborted();
         return summaryFromRow(this.#store.requireSessionRow(scope, sessionId, true));
     };
@@ -167,7 +146,6 @@ export class SessionLifecycleService {
                 sessionId: sessionId,
             });
         }
-        await this.#archive.deleteArchivedContent(scope, sessionId, signal);
         this.#deletions.completeDeletion({ scopeKey: scopeKey(scope), sessionId, completedAt: now });
         signal.throwIfAborted();
         return { completedAt: new Date(now).toISOString(), kind: "deleted" };

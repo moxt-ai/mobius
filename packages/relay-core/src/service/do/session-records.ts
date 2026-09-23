@@ -209,7 +209,7 @@ export function summaryFromRow(row: SessionRecord): SessionSummary {
             sessionId: rowString(row, "session_id"),
             workspaceRef: rowString(row, "directory_id"),
         },
-        hasNativeHistory: rowNullableString(row, "native_history_json") !== null,
+        hasNativeHistory: false,
         lastCommittedSeq: (rowNumber(row, "next_sequence") - 1).toString(),
         lifecycle: lifecycleFromRow(row),
         policy: {

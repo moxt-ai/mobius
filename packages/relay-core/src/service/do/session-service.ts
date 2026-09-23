@@ -13,9 +13,7 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { ProjectPermission } from "../../entity/authentication/project-authentication.ts";
 import {
-    type ArtifactUploadLease,
     type AttemptReconciliationOutcome,
-    type CreateArtifactUploadRequest,
     type CreateSessionBindingRequest,
     type CreateSessionRequest,
     ProjectScope,
@@ -25,7 +23,6 @@ import { PairingDirectoryError, VerifiedChannelAccess } from "../../entity/pairi
 import type { ChannelGateway } from "../../gateway/channel-gateway.ts";
 import { type OperationTiming, unmeasuredOperationTiming } from "../../infra/operation-timing.ts";
 import type {
-    SessionArtifactRuntime,
     SessionCommandRuntime,
     SessionQueryRuntime,
     SessionTransferRuntime,
@@ -36,7 +33,6 @@ export class SessionService {
     readonly #sessionCommands: SessionCommandRuntime;
     readonly #sessionQueries: SessionQueryRuntime;
     readonly #sessionTransfers: SessionTransferRuntime;
-    readonly #sessionArtifacts: SessionArtifactRuntime;
     readonly #channelGateway: ChannelGateway;
     constructor(cx: {
         readonly services: { readonly pairings: PairingOperations };
@@ -45,15 +41,13 @@ export class SessionService {
             readonly sessionCommands: SessionCommandRuntime;
             readonly sessionQueries: SessionQueryRuntime;
             readonly sessionTransfers: SessionTransferRuntime;
-            readonly sessionArtifacts: SessionArtifactRuntime;
         };
     }) {
-        const { sessionCommands, sessionQueries, sessionTransfers, sessionArtifacts } = cx.runtimes;
+        const { sessionCommands, sessionQueries, sessionTransfers } = cx.runtimes;
         this.#pairings = cx.services.pairings;
         this.#sessionCommands = sessionCommands;
         this.#sessionQueries = sessionQueries;
         this.#sessionTransfers = sessionTransfers;
-        this.#sessionArtifacts = sessionArtifacts;
         this.#channelGateway = cx.gateways.channelGateway;
     }
     readonly createSession = async (
@@ -199,7 +193,6 @@ export class SessionService {
         additionalDirectoryIds: readonly string[],
         images: readonly PromptImage[],
         resources: readonly PromptResource[],
-        artifactIds: readonly string[],
         now: number,
         signal: AbortSignal,
         sessionConfigurations?: readonly SessionConfigurationSelection[],
@@ -225,12 +218,6 @@ export class SessionService {
         const normalizedSessionConfigurations = sessionConfigurations?.toSorted((left, right) =>
             left.configId.localeCompare(right.configId),
         );
-        const artifactResources = await this.#sessionArtifacts.resolveArtifactResources(
-            scope,
-            sessionId,
-            artifactIds,
-            signal,
-        );
         const acceptance = await this.#sessionCommands.acceptTurn(
             scope,
             access.runtimeId,
@@ -244,7 +231,7 @@ export class SessionService {
                 images,
                 kind: SESSION_PROMPT_KIND,
                 prompt: content,
-                resources: [...resources, ...artifactResources],
+                resources,
                 ...(normalizedSessionConfigurations === undefined
                     ? {}
                     : { sessionConfigurations: normalizedSessionConfigurations }),
@@ -257,86 +244,6 @@ export class SessionService {
         await this.#channelGateway.dispatchPending(access, signal);
         return acceptance.turn;
     };
-
-    readonly createArtifactUpload = async (
-        projectId: string,
-        token: string,
-        sessionId: string,
-        request: CreateArtifactUploadRequest,
-        now: number,
-        signal: AbortSignal,
-    ) =>
-        await this.#sessionArtifacts.createArtifactUpload(
-            await this.projectScope(projectId, token, ProjectPermission.ArtifactWrite, signal),
-            sessionId,
-            request,
-            now,
-            signal,
-        );
-
-    readonly authorizeArtifactUpload = async (
-        projectId: string,
-        token: string,
-        sessionId: string,
-        artifactId: string,
-        uploadToken: string,
-        now: number,
-        signal: AbortSignal,
-    ): Promise<ArtifactUploadLease> =>
-        await this.#sessionArtifacts.authorizeArtifactUpload(
-            await this.projectScope(projectId, token, ProjectPermission.ArtifactWrite, signal),
-            sessionId,
-            artifactId,
-            uploadToken,
-            now,
-            signal,
-        );
-
-    readonly completeArtifactUpload = async (
-        projectId: string,
-        token: string,
-        lease: ArtifactUploadLease,
-        bytes: Uint8Array,
-        now: number,
-        signal: AbortSignal,
-    ) =>
-        await this.#sessionArtifacts.completeArtifactUpload(
-            await this.projectScope(projectId, token, ProjectPermission.ArtifactWrite, signal),
-            lease,
-            bytes,
-            now,
-            signal,
-        );
-
-    readonly readArtifact = async (
-        projectId: string,
-        token: string,
-        sessionId: string,
-        artifactId: string,
-        now: number,
-        signal: AbortSignal,
-    ) =>
-        await this.#sessionArtifacts.readArtifact(
-            await this.projectScope(projectId, token, ProjectPermission.ArtifactRead, signal),
-            sessionId,
-            artifactId,
-            now,
-            signal,
-        );
-
-    readonly readArtifactContent = async (
-        projectId: string,
-        token: string,
-        sessionId: string,
-        artifactId: string,
-        signal: AbortSignal,
-    ) =>
-        await this.#sessionArtifacts.readArtifactContent(
-            await this.projectScope(projectId, token, ProjectPermission.ArtifactRead, signal),
-            sessionId,
-            artifactId,
-            signal,
-        );
 
     readonly openEventStream = async (
         projectId: string,

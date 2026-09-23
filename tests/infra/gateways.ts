@@ -30,7 +30,6 @@ export function createTestGateways(options: {
         const context = createDurableObjectDependencies({
             doDatabase: database,
             quota: DEFAULT_SESSION_QUOTA_POLICY,
-            content: { kind: "sqlite", archiveByteLimit: 100_000_000 },
             storages: {
                 databaseResolver: options.databases,
                 projectDirectory: options.projects,

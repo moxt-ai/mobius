@@ -1,36 +1,5 @@
 import * as v from "valibot";
 
-const UploadedArtifactRecordSchema = v.object({
-    scope_key: v.string(),
-    session_id: v.string(),
-    artifact_id: v.string(),
-    file_name: v.string(),
-    media_type: v.string(),
-    state: v.picklist(["uploading", "available", "expired"]),
-    byte_length: v.pipe(v.number(), v.safeInteger()),
-    sha256: v.string(),
-    content_target_id: v.string(),
-    upload_token_hash: v.string(),
-    upload_expires_at: v.pipe(v.number(), v.safeInteger()),
-    created_at: v.pipe(v.number(), v.safeInteger()),
-    available_at: v.nullable(v.pipe(v.number(), v.safeInteger())),
-});
-
-export const UploadedArtifactRowSchema = v.object({
-    ...v.omit(UploadedArtifactRecordSchema, ["scope_key", "available_at"]).entries,
-    available_at: v.nullable(v.string()),
-});
-export type UploadedArtifactRow = Readonly<v.InferOutput<typeof UploadedArtifactRowSchema>>;
-
-export const UploadedArtifactIdentitySchema = v.pick(UploadedArtifactRecordSchema, ["artifact_id"]);
-export type UploadedArtifactIdentity = Readonly<v.InferOutput<typeof UploadedArtifactIdentitySchema>>;
-
-export const UploadedContentTargetSchema = v.pick(UploadedArtifactRecordSchema, ["content_target_id"]);
-export type UploadedContentTarget = Readonly<v.InferOutput<typeof UploadedContentTargetSchema>>;
-
-export const ArtifactCountRecordSchema = v.object({ artifact_count: v.pipe(v.number(), v.safeInteger()) });
-export type ArtifactCountRecord = Readonly<v.InferOutput<typeof ArtifactCountRecordSchema>>;
-
 const TurnStateSchema = v.picklist(["queued", "running", "succeeded", "failed", "cancelled", "indeterminate"]);
 export type TurnState = v.InferOutput<typeof TurnStateSchema>;
 
@@ -46,7 +15,6 @@ export const SessionRecordSchema = v.object({
     config_revision: v.pipe(v.number(), v.safeInteger()),
     binding_created_at: v.pipe(v.number(), v.safeInteger()),
     title: v.string(),
-    native_history_json: v.nullable(v.string()),
     recording_level: v.picklist(["full", "summary"]),
     retention_milliseconds: v.pipe(v.number(), v.safeInteger()),
     idempotency_retention_milliseconds: v.pipe(v.number(), v.safeInteger()),

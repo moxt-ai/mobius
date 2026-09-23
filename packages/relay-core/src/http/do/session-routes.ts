@@ -18,18 +18,13 @@ import {
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { Hono } from "hono";
-import {
-    CreateArtifactUploadRequest,
-    CreateSessionBindingRequest,
-    SessionRuntimeError,
-} from "../../entity/do/session.ts";
+import { CreateSessionBindingRequest } from "../../entity/do/session.ts";
 import {
     MAX_BROWSER_CREDENTIAL_LIFETIME_MILLISECONDS,
     MIN_BROWSER_CREDENTIAL_LIFETIME_MILLISECONDS,
     PairingDirectoryError,
     validateIdentifier,
 } from "../../entity/pairing/pairing.ts";
-import { RequestBodyError, readBoundedBytesBody } from "../../infra/bounded-request-body.ts";
 import {
     assertExactKeys,
     bearerToken,
@@ -75,7 +70,7 @@ function readIdentifierArray(
     return identifiers;
 }
 
-function readSha256(value: Readonly<Record<string, unknown>>, key: string): string {
+function _readSha256(value: Readonly<Record<string, unknown>>, key: string): string {
     const digest = readString(value, key, 64);
     if (!/^[a-f0-9]{64}$/.test(digest)) {
         throw new PairingDirectoryError("invalid_request", `The ${key} field is invalid`);
@@ -477,14 +472,7 @@ export function createSessionRoutes() {
         .post("/projects/:projectId/sessions/:sessionId/turns", turnBodyParser, async (context) => {
             const useCases = context.env.services.sessions;
             const body = context.req.valid("json");
-            const unsupportedFields = [
-                "additionalDirectoryIds",
-                "artifactIds",
-                "content",
-                "idempotencyKey",
-                "images",
-                "resources",
-            ];
+            const unsupportedFields = ["additionalDirectoryIds", "content", "idempotencyKey", "images", "resources"];
             const hasDisposition = body["disposition"] !== undefined;
             const hasTargetCommandId = body["targetCommandId"] !== undefined;
             const hasSessionConfigurations = Object.hasOwn(body, "sessionConfigurations");
@@ -500,7 +488,6 @@ export function createSessionRoutes() {
             }
             assertExactKeys(body, fields);
             const additionalDirectoryIds = readIdentifierArray(body, "additionalDirectoryIds", 16, "directory_id");
-            const artifactIds = readIdentifierArray(body, "artifactIds", 16, "artifact_id");
             const disposition = readPromptDisposition(body);
             const targetCommandId = readTargetCommandId(body, disposition);
             return context.json(
@@ -515,7 +502,6 @@ export function createSessionRoutes() {
                     additionalDirectoryIds,
                     decodePromptImagesValue(body["images"]),
                     decodePromptResourcesValue(body["resources"]),
-                    artifactIds,
                     context.env.gateways.nowEpochMilliseconds(),
                     context.req.raw.signal,
                     hasSessionConfigurations
@@ -524,103 +510,6 @@ export function createSessionRoutes() {
                 ),
                 202,
             );
-        })
-        .post(
-            "/projects/:projectId/sessions/:sessionId/artifacts/uploads",
-            bodyParser<RelayHttpEnvironment>(["byteLength", "mediaType", "name", "sha256"]),
-            async (context) => {
-                const useCases = context.env.services.sessions;
-                const body = context.req.valid("json");
-                return context.json(
-                    await useCases.createArtifactUpload(
-                        validateIdentifier(context.req.param("projectId"), "project_id"),
-                        bearerToken(context.req.raw),
-                        validateIdentifier(context.req.param("sessionId"), "session_id"),
-                        new CreateArtifactUploadRequest(
-                            readString(body, "name", 500),
-                            readString(body, "mediaType", 255),
-                            readInteger(body, "byteLength"),
-                            readSha256(body, "sha256"),
-                        ),
-                        context.env.gateways.nowEpochMilliseconds(),
-                        context.req.raw.signal,
-                    ),
-                    201,
-                );
-            },
-        )
-        .put("/projects/:projectId/sessions/:sessionId/artifacts/:artifactId/content", async (context) => {
-            const useCases = context.env.services.sessions;
-            const projectId = validateIdentifier(context.req.param("projectId"), "project_id");
-            const lease = await useCases.authorizeArtifactUpload(
-                projectId,
-                bearerToken(context.req.raw),
-                validateIdentifier(context.req.param("sessionId"), "session_id"),
-                validateIdentifier(context.req.param("artifactId"), "artifact_id"),
-                context.req.header("x-mobius-upload-token") ?? "",
-                context.env.gateways.nowEpochMilliseconds(),
-                context.req.raw.signal,
-            );
-            if (context.req.header("content-type") !== lease.artifact.mediaType) {
-                throw new SessionRuntimeError(
-                    "artifact_content_mismatch",
-                    "The artifact media type does not match its authorization",
-                );
-            }
-            let bytes: Uint8Array;
-            try {
-                bytes = await readBoundedBytesBody(context.req.raw, lease.artifact.byteLength);
-            } catch (cause) {
-                if (cause instanceof RequestBodyError) {
-                    throw new SessionRuntimeError(
-                        "artifact_content_mismatch",
-                        "The artifact body does not match its authorization",
-                        { cause },
-                    );
-                }
-                throw cause;
-            }
-            return context.json(
-                await useCases.completeArtifactUpload(
-                    projectId,
-                    bearerToken(context.req.raw),
-                    lease,
-                    bytes,
-                    context.env.gateways.nowEpochMilliseconds(),
-                    context.req.raw.signal,
-                ),
-            );
-        })
-        .get("/projects/:projectId/sessions/:sessionId/artifacts/:artifactId", async (context) => {
-            const useCases = context.env.services.sessions;
-            return context.json(
-                await useCases.readArtifact(
-                    validateIdentifier(context.req.param("projectId"), "project_id"),
-                    bearerToken(context.req.raw),
-                    validateIdentifier(context.req.param("sessionId"), "session_id"),
-                    validateIdentifier(context.req.param("artifactId"), "artifact_id"),
-                    context.env.gateways.nowEpochMilliseconds(),
-                    context.req.raw.signal,
-                ),
-            );
-        })
-        .get("/projects/:projectId/sessions/:sessionId/artifacts/:artifactId/content", async (context) => {
-            const useCases = context.env.services.sessions;
-            const content = await useCases.readArtifactContent(
-                validateIdentifier(context.req.param("projectId"), "project_id"),
-                bearerToken(context.req.raw),
-                validateIdentifier(context.req.param("sessionId"), "session_id"),
-                validateIdentifier(context.req.param("artifactId"), "artifact_id"),
-                context.req.raw.signal,
-            );
-            return new Response(Uint8Array.from(content.bytes), {
-                headers: {
-                    "content-length": content.bytes.byteLength.toString(),
-                    "content-type": content.artifact.mediaType,
-                    "x-mobius-artifact-id": content.artifact.artifactId,
-                    "x-mobius-sha256": content.artifact.sha256,
-                },
-            });
         })
         .post(
             "/projects/:projectId/sessions/:sessionId/turns/:turnId/cancel",

@@ -153,16 +153,6 @@ export class MobiusSessionEventCapabilities {
     }
 }
 
-export class MobiusArtifactCapabilities {
-    readonly downloadTransport: string;
-    readonly uploadProtocol: string;
-
-    constructor(downloadTransport: string, uploadProtocol: string) {
-        this.downloadTransport = downloadTransport;
-        this.uploadProtocol = uploadProtocol;
-    }
-}
-
 export class MobiusAuthenticationCapabilities {
     readonly browserCredentials: boolean;
     readonly maximumBrowserCredentialLifetimeSeconds: number;
@@ -192,7 +182,6 @@ export class MobiusPortabilityCapabilities {
 }
 
 export class MobiusResourceCapabilities {
-    readonly artifacts: boolean;
     readonly attempts: boolean;
     readonly browserCredentials: boolean;
     readonly events: boolean;
@@ -206,7 +195,6 @@ export class MobiusResourceCapabilities {
     readonly turns: boolean;
 
     constructor(resources: Readonly<Record<string, unknown>>) {
-        this.artifacts = booleanField(resources, "artifacts");
         this.attempts = booleanField(resources, "attempts");
         this.browserCredentials = booleanField(resources, "browserCredentials");
         this.events = booleanField(resources, "events");
@@ -223,7 +211,6 @@ export class MobiusResourceCapabilities {
 
 export class MobiusServiceCapabilities {
     readonly apiVersion: string;
-    readonly artifacts: MobiusArtifactCapabilities;
     readonly authentication: MobiusAuthenticationCapabilities;
     readonly portability: MobiusPortabilityCapabilities;
     readonly resources: MobiusResourceCapabilities;
@@ -231,14 +218,12 @@ export class MobiusServiceCapabilities {
 
     constructor(
         apiVersion: string,
-        artifacts: MobiusArtifactCapabilities,
         authentication: MobiusAuthenticationCapabilities,
         portability: MobiusPortabilityCapabilities,
         resources: MobiusResourceCapabilities,
         sessionEvents: MobiusSessionEventCapabilities,
     ) {
         this.apiVersion = apiVersion;
-        this.artifacts = artifacts;
         this.authentication = authentication;
         this.portability = portability;
         this.resources = resources;
@@ -249,7 +234,6 @@ export class MobiusServiceCapabilities {
 export function decodeMobiusServiceCapabilities(value: unknown): MobiusServiceCapabilities {
     const capabilities = record(value, "service capabilities");
     const resources = record(capabilities["resources"], "resource capabilities");
-    const artifacts = record(capabilities["artifacts"], "artifact capabilities");
     const authentication = record(capabilities["authentication"], "authentication capabilities");
     const portability = record(capabilities["portability"], "portability capabilities");
     const sessionEvents = record(capabilities["sessionEvents"], "Session event capabilities");
@@ -258,8 +242,6 @@ export function decodeMobiusServiceCapabilities(value: unknown): MobiusServiceCa
     const formatVersion = stringField(sessionEvents, "formatVersion", 32);
     const mediaType = stringField(sessionEvents, "mediaType", 128);
     const transport = stringField(sessionEvents, "transport", 32);
-    const downloadTransport = stringField(artifacts, "downloadTransport", 32);
-    const uploadProtocol = stringField(artifacts, "uploadProtocol", 32);
     const exportFormatVersion = stringField(portability, "exportFormatVersion", 32);
     if (
         apiVersion !== MOBIUS_API_VERSION ||
@@ -267,15 +249,12 @@ export function decodeMobiusServiceCapabilities(value: unknown): MobiusServiceCa
         formatVersion !== MOBIUS_EVENT_FORMAT_VERSION ||
         mediaType !== MOBIUS_SESSION_EVENT_STREAM_MEDIA_TYPE ||
         transport !== MOBIUS_SESSION_EVENT_STREAM_TRANSPORT ||
-        downloadTransport !== "authorized-stream" ||
-        uploadProtocol !== "two-stage" ||
         exportFormatVersion !== MOBIUS_SESSION_EXPORT_FORMAT_VERSION
     ) {
         throw invalidResponse("The service returned unsupported Mobius API capabilities");
     }
     return new MobiusServiceCapabilities(
         apiVersion,
-        new MobiusArtifactCapabilities(downloadTransport, uploadProtocol),
         new MobiusAuthenticationCapabilities(
             booleanField(authentication, "browserCredentials"),
             integerField(authentication, "maximumBrowserCredentialLifetimeSeconds"),
@@ -413,7 +392,6 @@ export class MobiusSessionImportBinding {
 
 export interface SubmitMobiusTurnRequest {
     readonly additionalDirectoryIds: readonly string[];
-    readonly artifactIds: readonly string[];
     readonly content: string;
     readonly disposition?: string;
     readonly idempotencyKey: string;
@@ -446,233 +424,6 @@ export class MobiusRuntimePairingRequest {
             throw new MobiusValidationError("The Runtime pairing idempotency key is invalid");
         }
         this.idempotencyKey = idempotencyKey;
-    }
-}
-
-export class MobiusArtifactUploadRequest {
-    readonly byteLength: number;
-    readonly mediaType: string;
-    readonly name: string;
-    readonly sha256: string;
-
-    constructor(name: string, mediaType: string, byteLength: number, sha256: string) {
-        if (
-            name.length < 1 ||
-            name.length > 500 ||
-            name.includes("\0") ||
-            mediaType.length < 1 ||
-            mediaType.length > 255 ||
-            mediaType.includes("\r") ||
-            mediaType.includes("\n") ||
-            !Number.isSafeInteger(byteLength) ||
-            byteLength < 1 ||
-            !/^[a-f0-9]{64}$/.test(sha256)
-        ) {
-            throw new MobiusValidationError("The artifact upload request is invalid");
-        }
-        this.byteLength = byteLength;
-        this.mediaType = mediaType;
-        this.name = name;
-        this.sha256 = sha256;
-    }
-}
-
-export abstract class MobiusArtifact {
-    readonly artifactId: string;
-    readonly byteLength: number;
-    readonly createdAt: string;
-    readonly mediaType: string;
-    readonly name: string;
-    readonly sessionId: string;
-    readonly sha256: string;
-    abstract readonly state: string;
-
-    constructor(
-        sessionId: string,
-        artifactId: string,
-        name: string,
-        mediaType: string,
-        byteLength: number,
-        sha256: string,
-        createdAt: string,
-    ) {
-        this.artifactId = artifactId;
-        this.byteLength = byteLength;
-        this.createdAt = createdAt;
-        this.mediaType = mediaType;
-        this.name = name;
-        this.sessionId = sessionId;
-        this.sha256 = sha256;
-    }
-}
-
-export class MobiusUploadingArtifact extends MobiusArtifact {
-    readonly expiresAt: string;
-    readonly state = "uploading";
-
-    constructor(
-        sessionId: string,
-        artifactId: string,
-        name: string,
-        mediaType: string,
-        byteLength: number,
-        sha256: string,
-        createdAt: string,
-        expiresAt: string,
-    ) {
-        super(sessionId, artifactId, name, mediaType, byteLength, sha256, createdAt);
-        this.expiresAt = expiresAt;
-    }
-}
-
-export class MobiusArtifactUpload extends MobiusUploadingArtifact {
-    readonly uploadToken: string;
-
-    constructor(artifact: MobiusUploadingArtifact, uploadToken: string) {
-        super(
-            artifact.sessionId,
-            artifact.artifactId,
-            artifact.name,
-            artifact.mediaType,
-            artifact.byteLength,
-            artifact.sha256,
-            artifact.createdAt,
-            artifact.expiresAt,
-        );
-        this.uploadToken = uploadToken;
-    }
-}
-
-export class MobiusAvailableArtifact extends MobiusArtifact {
-    readonly availableAt: string;
-    readonly state = "available";
-
-    constructor(
-        sessionId: string,
-        artifactId: string,
-        name: string,
-        mediaType: string,
-        byteLength: number,
-        sha256: string,
-        createdAt: string,
-        availableAt: string,
-    ) {
-        super(sessionId, artifactId, name, mediaType, byteLength, sha256, createdAt);
-        this.availableAt = availableAt;
-    }
-}
-
-export class MobiusExpiredArtifact extends MobiusArtifact {
-    readonly expiredAt: string;
-    readonly state = "expired";
-
-    constructor(
-        sessionId: string,
-        artifactId: string,
-        name: string,
-        mediaType: string,
-        byteLength: number,
-        sha256: string,
-        createdAt: string,
-        expiredAt: string,
-    ) {
-        super(sessionId, artifactId, name, mediaType, byteLength, sha256, createdAt);
-        this.expiredAt = expiredAt;
-    }
-}
-
-function artifactFields(value: Readonly<Record<string, unknown>>): {
-    readonly artifactId: string;
-    readonly byteLength: number;
-    readonly createdAt: string;
-    readonly mediaType: string;
-    readonly name: string;
-    readonly sessionId: string;
-    readonly sha256: string;
-} {
-    const sha256 = stringField(value, "sha256", 64);
-    if (!/^[a-f0-9]{64}$/.test(sha256)) {
-        throw invalidResponse("The service returned an invalid artifact digest");
-    }
-    return {
-        artifactId: identifierField(value, "artifactId"),
-        byteLength: integerField(value, "byteLength"),
-        createdAt: validateTimestamp(stringField(value, "createdAt", 128), "createdAt"),
-        mediaType: stringField(value, "mediaType", 255),
-        name: stringField(value, "name", 500),
-        sessionId: identifierField(value, "sessionId"),
-        sha256,
-    };
-}
-
-function uploadingArtifact(value: Readonly<Record<string, unknown>>): MobiusUploadingArtifact {
-    const fields = artifactFields(value);
-    return new MobiusUploadingArtifact(
-        fields.sessionId,
-        fields.artifactId,
-        fields.name,
-        fields.mediaType,
-        fields.byteLength,
-        fields.sha256,
-        fields.createdAt,
-        validateTimestamp(stringField(value, "expiresAt", 128), "expiresAt"),
-    );
-}
-
-export function decodeMobiusArtifactUpload(value: unknown): MobiusArtifactUpload {
-    const artifact = record(value, "artifact upload authorization");
-    return new MobiusArtifactUpload(uploadingArtifact(artifact), stringField(artifact, "uploadToken", 256));
-}
-
-export function decodeMobiusArtifact(value: unknown): MobiusArtifact {
-    const artifact = record(value, "artifact");
-    const state = stringField(artifact, "state", 32);
-    if (state === "uploading") {
-        return uploadingArtifact(artifact);
-    }
-    const fields = artifactFields(artifact);
-    if (state === "available") {
-        return new MobiusAvailableArtifact(
-            fields.sessionId,
-            fields.artifactId,
-            fields.name,
-            fields.mediaType,
-            fields.byteLength,
-            fields.sha256,
-            fields.createdAt,
-            validateTimestamp(stringField(artifact, "availableAt", 128), "availableAt"),
-        );
-    }
-    if (state === "expired") {
-        return new MobiusExpiredArtifact(
-            fields.sessionId,
-            fields.artifactId,
-            fields.name,
-            fields.mediaType,
-            fields.byteLength,
-            fields.sha256,
-            fields.createdAt,
-            validateTimestamp(stringField(artifact, "expiredAt", 128), "expiredAt"),
-        );
-    }
-    throw invalidResponse("The service returned an invalid artifact state");
-}
-
-export function decodeMobiusAvailableArtifact(value: unknown): MobiusAvailableArtifact {
-    const artifact = decodeMobiusArtifact(value);
-    if (!(artifact instanceof MobiusAvailableArtifact)) {
-        throw invalidResponse("The service did not make the artifact available");
-    }
-    return artifact;
-}
-
-export class MobiusArtifactDownload {
-    readonly artifact: MobiusAvailableArtifact;
-    readonly bytes: Uint8Array;
-
-    constructor(artifact: MobiusAvailableArtifact, bytes: Uint8Array) {
-        this.artifact = artifact;
-        this.bytes = bytes;
     }
 }
 

@@ -38,11 +38,9 @@ import {
 import type { SessionCommandsStorage } from "../../storage/do/session-commands-storage.ts";
 import { rowNullableString, rowNumber, rowString } from "../../storage/do/sqlite-row.ts";
 import { sha256 } from "./session-archive-codec.ts";
-import type { SessionArchiveService } from "./session-archive-service.ts";
 import type { SessionEventProjector } from "./session-event-projector.ts";
 import type { SessionLifecycleService } from "./session-lifecycle-service.ts";
 import {
-    committedFromRow,
     DEFAULT_CONTENT_LIMIT_BYTES,
     DEFAULT_HOT_EVENT_LIMIT,
     DEFAULT_RETENTION_MILLISECONDS,
@@ -58,7 +56,6 @@ import type { SessionStateService } from "./session-state-service.ts";
 import { storedTurnContent } from "./session-turn-content.ts";
 
 export class SessionCommandService {
-    readonly #archive: SessionArchiveService;
     readonly #storage: SessionCommandsStorage;
     readonly #eventProjector: SessionEventProjector;
     readonly #lifecycle: SessionLifecycleService;
@@ -67,14 +64,12 @@ export class SessionCommandService {
     constructor(cx: {
         readonly storages: { readonly commands: SessionCommandsStorage };
         readonly services: {
-            readonly archive: SessionArchiveService;
             readonly eventProjector: SessionEventProjector;
             readonly lifecycle: SessionLifecycleService;
             readonly state: SessionStateService;
         };
     }) {
-        const { archive, eventProjector, lifecycle, state: store } = cx.services;
-        this.#archive = archive;
+        const { eventProjector, lifecycle, state: store } = cx.services;
         this.#storage = cx.storages.commands;
         this.#eventProjector = eventProjector;
         this.#lifecycle = lifecycle;
@@ -554,42 +549,6 @@ export class SessionCommandService {
                 }
             }
         }
-        const duplicate = this.#storage.findDuplicateEvent({
-            scopeKey: key,
-            sessionId: validatedEnvelope.sessionId,
-            eventId: validatedEnvelope.eventId,
-            sourceKind: sourceKind,
-            sourceId: sourceId,
-            sourceSeq: sourceSeq,
-        });
-        if (duplicate !== undefined) {
-            if (
-                rowString(duplicate, "event_id") !== validatedEnvelope.eventId ||
-                rowString(duplicate, "payload_hash") !== payloadHash ||
-                rowString(duplicate, "source_kind") !== sourceKind ||
-                rowString(duplicate, "source_id") !== sourceId ||
-                rowString(duplicate, "source_seq") !== sourceSeq
-            ) {
-                throw new SessionRuntimeError(
-                    "event_source_conflict",
-                    "A persisted event identity was reused with different content",
-                );
-            }
-            const payload =
-                rowNullableString(duplicate, "payload") ??
-                this.#storage.readActiveEventPayload({
-                    scopeKey: key,
-                    sessionId: validatedEnvelope.sessionId,
-                    sequenceNumber: rowNumber(duplicate, "sequence_number"),
-                });
-            if (payload === null || payload === undefined) {
-                throw new SessionRuntimeError("session_storage_unavailable", "The active event payload is unavailable");
-            }
-            return {
-                committed: committedFromRow(duplicate, scope, validatedEnvelope.sessionId, payload),
-                duplicate: true,
-            };
-        }
         const receipt = this.#storage.findEventReceipt({
             scopeKey: key,
             sessionId: validatedEnvelope.sessionId,
@@ -642,7 +601,6 @@ export class SessionCommandService {
         if (sourceSeq !== expectedSourceSeq) {
             throw new SessionRuntimeError("event_source_conflict", "The event source sequence is not contiguous");
         }
-        this.#archive.assertArchiveCapacity(key, validatedEnvelope.sessionId, freshSession, prepared);
         const sequence = rowNumber(freshSession, "next_sequence");
         const projection = this.#eventProjector.planEventProjection(
             key,

@@ -25,14 +25,6 @@ function tombstone(value: Readonly<Record<string, unknown>>): NotRetainedTurnCon
     return { kind: "not_retained", disposition, targetCommandId };
 }
 
-export function redactTurnCommand(encoded: string): string {
-    try {
-        return JSON.stringify(tombstone(commandRecord(encoded)));
-    } catch (cause) {
-        throw new SessionRuntimeError("session_storage_unavailable", "The stored Turn request is invalid", { cause });
-    }
-}
-
 export function storedTurnContent(row: TurnRecord): StoredTurnContent {
     try {
         const value = commandRecord(row.command_json);

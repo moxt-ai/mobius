@@ -36,8 +36,7 @@
         "MOBIUS_PLATFORM_ALLOWED_ORIGINS": "[\"*\"]",
         "MOBIUS_PLATFORM_OIDC_PROVIDERS": "[]",
         "MOBIUS_PLATFORM_OPERATOR_SUBJECTS": "[]",
-        "SESSION_ACTIVE_SESSIONS_PER_PROJECT": "1000",
-        "SESSION_ARCHIVE_BYTES_PER_SESSION": "268435456"
+        "SESSION_ACTIVE_SESSIONS_PER_PROJECT": "1000"
     },
     "observability": {
         "enabled": true

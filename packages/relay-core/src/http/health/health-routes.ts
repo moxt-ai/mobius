@@ -28,10 +28,6 @@ export function createHealthRoutes() {
         .get("/capabilities", (context) =>
             context.json({
                 apiVersion: MOBIUS_API_VERSION,
-                artifacts: {
-                    downloadTransport: "authorized-stream",
-                    uploadProtocol: "two-stage",
-                },
                 authentication: {
                     browserCredentials: true,
                     maximumBrowserCredentialLifetimeSeconds: MAX_BROWSER_CREDENTIAL_LIFETIME_MILLISECONDS / 1_000,
@@ -43,7 +39,6 @@ export function createHealthRoutes() {
                     targetBindingRequired: true,
                 },
                 resources: {
-                    artifacts: true,
                     attempts: true,
                     browserCredentials: true,
                     events: true,

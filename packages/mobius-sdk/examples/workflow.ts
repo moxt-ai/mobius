@@ -94,7 +94,6 @@ export async function runMobiusExample(
             session.sessionId,
             {
                 additionalDirectoryIds: [],
-                artifactIds: [],
                 content: "Inspect this workspace and summarize its architecture.",
                 idempotencyKey: crypto.randomUUID(),
                 images: [],

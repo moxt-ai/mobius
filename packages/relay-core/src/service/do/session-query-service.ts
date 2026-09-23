@@ -1,11 +1,5 @@
 import {
-    AGENT_ACTIVITY_KIND,
-    AGENT_CONTENT_KIND,
     type Attempt,
-    type CommittedSessionEvent,
-    decodeAgentContentEvent,
-    decodeNativeSessionHistory,
-    decodeRecordedSessionEvent,
     decodeSessionConfigUpdatedEvent,
     type Interaction,
     type NativeMessagePage,
@@ -18,25 +12,17 @@ import {
     SessionConfigurationSnapshot,
     type SessionDirectoryPage,
     type SessionEventPage,
-    type SessionMessage,
     type SessionMessagePage,
     SessionRuntimeError,
     type SessionSummary,
 } from "../../entity/do/session.ts";
-import type { TurnActivityRecord, TurnRecord } from "../../entity/do/session-records.ts";
 import type { SessionQueriesStorage } from "../../storage/do/session-queries-storage.ts";
-import { rowNullableString, rowNumber, rowString } from "../../storage/do/sqlite-row.ts";
+import { rowNumber, rowString } from "../../storage/do/sqlite-row.ts";
 import { paginateNativeSessionHistory } from "./native-history-pagination.ts";
-import type { SessionArchiveService } from "./session-archive-service.ts";
-import { decodeDirectoryCursor, decodeEventCursor, decodeMessageCursor, encodeCursor } from "./session-cursors.ts";
+import { decodeDirectoryCursor, encodeCursor } from "./session-cursors.ts";
 import {
     attemptFromResourceRow,
-    attemptSummaryFromRow,
-    committedFromRow,
-    decodeActivityDetailPayload,
-    eventCursor,
     interactionFromRow,
-    lifecycleFromRow,
     scopeKey,
     summaryFromRow,
     turnFromRow,
@@ -44,19 +30,16 @@ import {
     validateLimit,
 } from "./session-records.ts";
 import type { SessionStateService } from "./session-state-service.ts";
-import { storedTurnContent } from "./session-turn-content.ts";
 
 export class SessionQueryService {
-    readonly #archive: SessionArchiveService;
     readonly #storage: SessionQueriesStorage;
     readonly #store: SessionStateService;
 
     constructor(cx: {
         readonly storages: { readonly queries: SessionQueriesStorage };
-        readonly services: { readonly archive: SessionArchiveService; readonly state: SessionStateService };
+        readonly services: { readonly state: SessionStateService };
     }) {
-        const { archive, state: store } = cx.services;
-        this.#archive = archive;
+        const { state: store } = cx.services;
         this.#storage = cx.storages.queries;
         this.#store = store;
     }
@@ -113,20 +96,8 @@ export class SessionQueryService {
         signal: AbortSignal,
     ): Promise<NativeSessionHistory | null> => {
         signal.throwIfAborted();
-        const row = this.#store.requireActiveSessionRow(scope, sessionId, Date.now());
-        const encoded = rowNullableString(row, "native_history_json");
-        if (encoded === null) {
-            return null;
-        }
-        try {
-            return decodeNativeSessionHistory(JSON.parse(encoded));
-        } catch (cause) {
-            throw new SessionRuntimeError(
-                "session_storage_unavailable",
-                "The stored native Session history is invalid",
-                { cause },
-            );
-        }
+        this.#store.requireActiveSessionRow(scope, sessionId, Date.now());
+        return null;
     };
 
     readonly queryNativeMessages = async (
@@ -314,268 +285,36 @@ export class SessionQueryService {
         signal: AbortSignal,
     ): Promise<SessionEventPage> => {
         signal.throwIfAborted();
-        validateLimit(limit);
-        const session = this.#store.requireActiveSessionRow(scope, sessionId, Date.now());
-        const minimum = rowNumber(session, "minimum_sequence");
-        const decoded = cursor === null ? null : decodeEventCursor(cursor, scope, sessionId);
-        const sequence = decoded?.sequence ?? minimum - 1;
-        if (decoded !== null && sequence < minimum - 1) {
-            throw new SessionRuntimeError("cursor_expired", "The event cursor has expired");
-        }
-        const rows = this.#storage.listEventsAfter({
-            scopeKey: scopeKey(scope),
-            sessionId: sessionId,
-            sequenceNumber: sequence,
-            limit: limit + 1,
-        });
-        const pageRows = rows.slice(0, limit);
-        const events: CommittedSessionEvent[] = [];
-        for (const row of pageRows) {
-            const payload =
-                rowNullableString(row, "payload") ??
-                this.#storage.readActiveEventPayload({
-                    scopeKey: scopeKey(scope),
-                    sessionId,
-                    sequenceNumber: rowNumber(row, "sequence_number"),
-                });
-            if (payload === null || payload === undefined) {
-                throw new SessionRuntimeError("session_storage_unavailable", "The active event payload is unavailable");
-            }
-            events.push(committedFromRow(row, scope, sessionId, payload));
-        }
-        const last = pageRows.at(-1);
-        const nextSequence = last === undefined ? sequence : rowNumber(last, "sequence_number");
-        return {
-            cursor: eventCursor(scope, sessionId, nextSequence),
-            events,
-            hasMore: rows.length > limit,
-        };
+        this.#store.requireActiveSessionRow(scope, sessionId, Date.now());
+        void cursor;
+        void limit;
+        throw new SessionRuntimeError("session_history_not_retained", "Cursor-based Session events are unavailable");
     };
 
     readonly readMessages = async (
         scope: ProjectScope,
         sessionId: string,
-        cursor: string | null,
-        limit: number,
+        _cursor: string | null,
+        _limit: number,
         signal: AbortSignal,
     ): Promise<SessionMessagePage> => {
         signal.throwIfAborted();
-        validateLimit(limit);
-        const session = this.#store.requireActiveSessionRow(scope, sessionId, Date.now());
-        const decoded = cursor === null ? null : decodeMessageCursor(cursor, scope, sessionId);
-        const rows = this.#storage.listTurns({
-            scopeKey: scopeKey(scope),
-            sessionId,
-            cursor: decoded,
-            limit: limit + 1,
-        });
-        const pageRows = rows.slice(0, limit);
-        const messages = this.messagesFromRows(scope, sessionId, pageRows);
-        const last = pageRows.at(-1);
-        const lastCommittedSequence = rowNumber(session, "next_sequence") - 1;
-        return {
-            lastCommittedSeq: lastCommittedSequence.toString(),
-            messages,
-            nextCursor:
-                rows.length > limit && last !== undefined
-                    ? encodeCursor({
-                          commandId: rowString(last, "command_id"),
-                          createdAt: rowNumber(last, "created_at"),
-                          projectId: scope.projectId,
-                          sessionId,
-                      })
-                    : null,
-            tailEventCursor: eventCursor(scope, sessionId, lastCommittedSequence),
-        };
+        this.#store.requireActiveSessionRow(scope, sessionId, Date.now());
+        throw new SessionRuntimeError("session_history_not_retained", "This Session does not retain cloud messages");
     };
 
     readonly readToolCallDetail = async (
         scope: ProjectScope,
         sessionId: string,
-        attemptId: string,
-        toolCallId: string,
+        _attemptId: string,
+        _toolCallId: string,
         signal: AbortSignal,
     ): Promise<ActivityDetail> => {
         signal.throwIfAborted();
-        validateDomainIdentifier(attemptId, "attempt");
-        validateDomainIdentifier(toolCallId, "tool call");
-        const session = this.#store.sessionRow(scope, sessionId);
-        if (session === null) {
-            throw new SessionRuntimeError("session_not_found", "The session does not exist");
-        }
-        const lifecycle = lifecycleFromRow(session);
-        if (lifecycle.kind === "deleted") {
-            return { deletedAt: lifecycle.completedAt, kind: "deleted" };
-        }
-        if (lifecycle.kind === "deleting") {
-            throw new SessionRuntimeError("session_deleted", "The session is being deleted");
-        }
-        const row = this.#storage.findActivityDetail(scopeKey(scope), sessionId, attemptId, toolCallId);
-        if (row === undefined) {
-            throw new SessionRuntimeError("artifact_not_found", "The activity detail does not exist");
-        }
-        const kind = rowString(row, "detail_kind");
-        if (kind === "unrecorded") {
-            return { kind: "unrecorded" };
-        }
-        if (kind === "truncated") {
-            return {
-                capturedBytes: rowNumber(row, "captured_bytes"),
-                kind: "truncated",
-                originalBytes: rowNumber(row, "original_bytes"),
-            };
-        }
-        if (kind !== "available") {
-            throw new SessionRuntimeError("session_storage_unavailable", "The activity detail state is invalid");
-        }
-        const artifactId = rowNullableString(row, "detail_artifact_id");
-        if (artifactId === null) {
-            throw new SessionRuntimeError("session_storage_unavailable", "The activity archive reference is missing");
-        }
-        const hot = rowNullableString(row, "hot_detail");
-        const hotStored = hot !== null || this.#archive.hasHotArtifact(scope, sessionId, artifactId);
-        const encoded = hot ?? (await this.#archive.readArtifact(scope, sessionId, artifactId, signal));
-        const detail = decodeActivityDetailPayload(
-            encoded,
-            "session_storage_unavailable",
-            "The activity detail is invalid",
+        this.#store.requireActiveSessionRow(scope, sessionId, Date.now());
+        throw new SessionRuntimeError(
+            "session_history_not_retained",
+            "This Session does not retain cloud tool details",
         );
-        return {
-            artifactId,
-            content: detail.content,
-            input: detail.input,
-            kind: "available",
-            output: detail.output,
-            storage: hotStored ? "hot" : "archive",
-        };
-    };
-
-    private readonly messagesFromRows = (
-        scope: ProjectScope,
-        sessionId: string,
-        rows: readonly TurnRecord[],
-    ): readonly SessionMessage[] => {
-        const commands = rows.flatMap((row) => {
-            const content = storedTurnContent(row);
-            return content.kind === "retained" ? [{ command: content.command, row }] : [];
-        });
-        const commandIds = commands.map(({ command }) => command.commandId);
-        const key = { commandIds, scopeKey: scopeKey(scope), sessionId };
-
-        const activitiesByCommand = groupByCommandId(this.#storage.listTurnActivities(key));
-        const contentsByCommand = groupByCommandId(this.#storage.listTurnContents(key));
-        const canonicalByCommand = new Map(
-            this.#storage.listCanonicalAssistantMessages(key).map((message) => [message.command_id, message]),
-        );
-        const anchoredMessageIdByCommand = new Map(
-            this.#storage.listTurnMessageIds(key).map((anchor) => [anchor.command_id, anchor.message_id]),
-        );
-        const activeResponseByCommand = this.#storage.listActiveTurnResponses({
-            ...key,
-            commandIds: commandIds.filter((commandId) => !canonicalByCommand.has(commandId)),
-        });
-
-        return commands.map(({ command, row }) => {
-            const canonical = canonicalByCommand.get(command.commandId);
-            const activeResponse =
-                canonical === undefined ? (activeResponseByCommand.get(command.commandId) ?? "") : "";
-            const contents = (contentsByCommand.get(command.commandId) ?? []).flatMap((contentRow) => {
-                let event: ReturnType<typeof decodeAgentContentEvent>;
-                try {
-                    event = decodeAgentContentEvent(rowString(contentRow, "content_json"));
-                } catch (cause) {
-                    console.error("Stored Agent content could not be decoded", cause);
-                    return [];
-                }
-                if (event.kind !== AGENT_CONTENT_KIND || event.commandId !== command.commandId) {
-                    console.error("Stored Agent content holds an unexpected event");
-                    return [];
-                }
-                return [event.content];
-            });
-            return {
-                activities: (activitiesByCommand.get(command.commandId) ?? []).flatMap((activityRow) => {
-                    const activity = activityFromRow(activityRow);
-                    if (activity === null) {
-                        return [];
-                    }
-                    // A running narration keeps its text in increments; fold them onto
-                    // the snapshot so a reader that arrives mid-Turn sees the full text.
-                    const narration = this.#storage.readActivityNarration({
-                        activityId: activity.activityId,
-                        attemptId: activityRow.attempt_id,
-                        scopeKey: scopeKey(scope),
-                        sessionId,
-                    });
-                    return narration.length === 0
-                        ? [activity]
-                        : [{ ...activity, output: `${activity.output}${narration}` }];
-                }),
-                additionalDirectoryIds: command.additionalDirectoryIds,
-                agentId: command.agentId,
-                attempt: attemptSummaryFromRow(row),
-                commandId: command.commandId,
-                contents,
-                createdAt: new Date(rowNumber(row, "created_at")).toISOString(),
-                disposition: command.disposition,
-                images: command.images,
-                messageId: anchoredMessageIdByCommand.get(command.commandId) || canonical?.message_id || "",
-                prompt: command.prompt,
-                resources: command.resources,
-                response: canonical?.content ?? `${rowString(row, "response")}${activeResponse}`,
-                sessionId,
-                targetCommandId: command.targetCommandId,
-                turnId: rowString(row, "turn_id"),
-            };
-        });
-    };
-}
-
-function groupByCommandId<TRow extends { readonly command_id: string }>(rows: readonly TRow[]): Map<string, TRow[]> {
-    const grouped = new Map<string, TRow[]>();
-    for (const row of rows) {
-        const forCommand = grouped.get(row.command_id);
-        if (forCommand === undefined) {
-            grouped.set(row.command_id, [row]);
-        } else {
-            forCommand.push(row);
-        }
-    }
-    return grouped;
-}
-
-/**
- * A stored step whose recorded summary a later protocol revision can no longer decode must cost only that
- * step. Failing the read would hide every other Turn in the Session, so an unreadable step is dropped and
- * reported instead of failing the page.
- */
-function activityFromRow(activityRow: TurnActivityRecord): SessionMessage["activities"][number] | null {
-    let event: ReturnType<typeof decodeRecordedSessionEvent>;
-    try {
-        event = decodeRecordedSessionEvent(activityRow.summary_json);
-    } catch (cause) {
-        console.error("A stored Agent activity could not be decoded", cause);
-        return null;
-    }
-    if (event.kind !== AGENT_ACTIVITY_KIND) {
-        console.error("A stored Agent activity summary holds an unexpected event kind");
-        return null;
-    }
-    const detailKind = activityRow.detail_kind;
-    const detailAvailability: SessionMessage["activities"][number]["detailAvailability"] = detailKind;
-    return {
-        activityId: event.activityId,
-        attemptId: activityRow.attempt_id,
-        activityType: event.activityType,
-        detailAvailability,
-        input: event.input,
-        locations: event.locations,
-        name: event.name,
-        output: event.output,
-        sequence: event.sequence,
-        status: event.status,
-        title: event.title,
-        toolCallId: event.activityId,
-        toolKind: event.toolKind,
     };
 }

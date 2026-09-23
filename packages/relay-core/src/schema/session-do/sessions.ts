@@ -15,7 +15,6 @@ export const sessions = sqliteTable(
         config_revision: integer("config_revision").notNull(),
         binding_created_at: integer("binding_created_at").notNull(),
         title: text("title").notNull(),
-        native_history_json: text("native_history_json"),
         recording_level: text("recording_level", { enum: ["full", "summary"] }).notNull(),
         retention_milliseconds: integer("retention_milliseconds").notNull(),
         idempotency_retention_milliseconds: integer("idempotency_retention_milliseconds").notNull(),
