@@ -9,20 +9,12 @@ import {
     type SessionLiveHistoryLoaded,
     type SessionLiveHistoryPageLoaded,
 } from "@moxt-ai/mobius-protocol";
-import { CreateSessionRequest, SessionRecordingPolicy } from "@moxt-ai/mobius-relay-core";
-import {
-    PlatformDatabaseResolver,
-    type PlatformStorageBindings,
-    projectDatabase,
-} from "../storage/platform-database-resolver.ts";
+import { CreateSessionRequest, SessionRecordingPolicy } from "../entity/do/session.ts";
+import type { SqlDatabase } from "../infra/sql-database.ts";
 
 const LIVE_HISTORY_TIMEOUT_MILLISECONDS = 15_000;
 const INTERNAL_CHANNEL_ID_HEADER = "x-mobius-channel-id";
 const INTERNAL_RUNTIME_ID_HEADER = "x-mobius-runtime-id";
-
-interface SessionLiveHistoryEnvironment extends PlatformStorageBindings {
-    readonly RUNTIME_RELAY: DurableObjectNamespace;
-}
 
 interface SessionRoute {
     readonly agentId: string;
@@ -56,13 +48,13 @@ function integerField(value: Readonly<Record<string, unknown>>, key: string): nu
     return field;
 }
 
-export class PlatformSessionLiveHistoryClient {
-    readonly #environment: SessionLiveHistoryEnvironment;
-    readonly #databases: PlatformDatabaseResolver;
+export class SessionLiveHistoryClient {
+    readonly #runtimeRelay: DurableObjectNamespace;
+    readonly #database: (projectId: string) => SqlDatabase;
 
-    constructor(environment: SessionLiveHistoryEnvironment) {
-        this.#environment = environment;
-        this.#databases = new PlatformDatabaseResolver(environment);
+    constructor(runtimeRelay: DurableObjectNamespace, database: (projectId: string) => SqlDatabase) {
+        this.#runtimeRelay = runtimeRelay;
+        this.#database = database;
     }
 
     readonly restore = async (
@@ -125,9 +117,7 @@ export class PlatformSessionLiveHistoryClient {
         const headers = new Headers({ Upgrade: "websocket" });
         headers.set(INTERNAL_CHANNEL_ID_HEADER, route.channelId);
         headers.set(INTERNAL_RUNTIME_ID_HEADER, route.runtimeId);
-        const response = await this.#environment.RUNTIME_RELAY.get(
-            this.#environment.RUNTIME_RELAY.idFromName(route.channelId),
-        ).fetch(
+        const response = await this.#runtimeRelay.get(this.#runtimeRelay.idFromName(route.channelId)).fetch(
             new Request(`https://runtime.internal/projects/${encodeURIComponent(route.projectId)}/live-history`, {
                 headers,
                 signal: deadline,
@@ -198,9 +188,7 @@ export class PlatformSessionLiveHistoryClient {
         const headers = new Headers({ Upgrade: "websocket" });
         headers.set(INTERNAL_CHANNEL_ID_HEADER, route.channelId);
         headers.set(INTERNAL_RUNTIME_ID_HEADER, route.runtimeId);
-        const response = await this.#environment.RUNTIME_RELAY.get(
-            this.#environment.RUNTIME_RELAY.idFromName(route.channelId),
-        ).fetch(
+        const response = await this.#runtimeRelay.get(this.#runtimeRelay.idFromName(route.channelId)).fetch(
             new Request(`https://runtime.internal/projects/${encodeURIComponent(route.projectId)}/live-history`, {
                 headers,
                 signal: deadline,
@@ -269,7 +257,7 @@ export class PlatformSessionLiveHistoryClient {
         signal: AbortSignal,
     ): Promise<SessionRoute> => {
         signal.throwIfAborted();
-        const row = await projectDatabase(this.#databases, projectId)
+        const row = await this.#database(projectId)
             .prepare(
                 `SELECT d.summary_json, p.channel_id
                  FROM session_directory d
@@ -279,7 +267,7 @@ export class PlatformSessionLiveHistoryClient {
                    AND d.lifecycle != 'deleted' AND p.status = 'paired'`,
             )
             .bind(projectId, sessionId, runtimeId)
-            .first();
+            .first(signal);
         signal.throwIfAborted();
         const routeRow = record(row);
         if (routeRow === null || typeof routeRow["summary_json"] !== "string") {

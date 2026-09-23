@@ -4,12 +4,13 @@ import {
     type DoSqlDatabase,
     DurableObjectSqlDatabase,
     type SessionEventReceiver,
+    SessionLiveHistoryClient,
     SessionRelay as SessionRelayImplementation,
     SessionRuntimeError,
 } from "@moxt-ai/mobius-relay-core";
 import { Hono } from "hono";
-import { PlatformSessionLiveHistoryClient } from "../gateway/platform-session-live-history-client.ts";
 import { sessionRelayDurableObjectMigrations } from "../generated/session-relay-do-migrations.ts";
+import { PlatformDatabaseResolver, projectSqlDatabase } from "../storage/platform-database-resolver.ts";
 import {
     createPlatformDurableObjectContext,
     type PlatformDurableObjectEnvironment,
@@ -34,13 +35,16 @@ export class PlatformSessionRelay extends DurableObject<PlatformDurableObjectEnv
     >();
     readonly #operations = new Map<string, Promise<void>>();
     readonly #routes: Hono;
-    readonly #liveHistory: PlatformSessionLiveHistoryClient;
+    readonly #liveHistory: SessionLiveHistoryClient;
     readonly #state: DurableObjectState;
 
     constructor(state: DurableObjectState, environment: PlatformDurableObjectEnvironment) {
         super(state, environment);
         this.#environment = environment;
-        this.#liveHistory = new PlatformSessionLiveHistoryClient(environment);
+        const databases = new PlatformDatabaseResolver(environment);
+        this.#liveHistory = new SessionLiveHistoryClient(environment.RUNTIME_RELAY, (projectId) =>
+            projectSqlDatabase(databases, projectId),
+        );
         this.#state = state;
         this.#routes = new Hono().all(
             "/internal/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/:operation",

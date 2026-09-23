@@ -1,6 +1,8 @@
 import { encodeCommittedSessionEvent, MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
-import { type HttpError, logger, type SessionEventReceiver, toHttpError } from "@moxt-ai/mobius-relay-core";
 import { fromByteArray, toByteArray } from "base64-js";
+import { type HttpError, toHttpError } from "../../entity/http-error.ts";
+import { logger } from "../../infra/logger.ts";
+import type { SessionEventReceiver } from "../../infra/session-event-receiver.ts";
 
 const REQUEST_KIND = "http.request";
 const RESPONSE_KIND = "http.response";
