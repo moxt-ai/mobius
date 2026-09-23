@@ -501,22 +501,22 @@ async function waitForManagerExit(stateDirectory: string, signal: AbortSignal): 
     const deadline = AbortSignal.any([signal, AbortSignal.timeout(10_000)]);
     while (!deadline.aborted) {
         try {
-            await sendControlRequest(stateDirectory, { kind: "list" }, AbortSignal.timeout(200));
+            await readFile(join(stateDirectory, "manager.lock"), "utf8");
         } catch (cause) {
-            if (isNodeError(cause, "ENOENT") || isNodeError(cause, "ECONNREFUSED")) {
+            if (isNodeError(cause, "ENOENT")) {
                 return;
             }
+            throw cause;
         }
         await new Promise<void>((resolve, reject) => {
-            const timeout = setTimeout(resolve, 20);
-            deadline.addEventListener(
-                "abort",
-                () => {
-                    clearTimeout(timeout);
-                    reject(deadline.reason);
-                },
-                { once: true },
-            );
+            const timeout = setTimeout(finish, 20);
+            const abort = (): void => finish(deadline.reason);
+            function finish(cause?: unknown): void {
+                clearTimeout(timeout);
+                deadline.removeEventListener("abort", abort);
+                cause === undefined ? resolve() : reject(cause);
+            }
+            deadline.addEventListener("abort", abort, { once: true });
         });
     }
     throw deadline.reason;
@@ -629,6 +629,7 @@ export async function runManager(
     const shutdown = new AbortController();
     const combined = AbortSignal.any([signal, shutdown.signal]);
     const supervisor = new RuntimeSupervisor(installation);
+    const sockets = new Set<Socket>();
     try {
         await supervisor.restore(combined);
     } catch (cause) {
@@ -636,6 +637,8 @@ export async function runManager(
         process.stderr.write(`Could not restore saved Runtime connections: ${errorMessage(cause)}\n`);
     }
     const server = createServer((socket) => {
+        sockets.add(socket);
+        socket.once("close", () => sockets.delete(socket));
         void (async () => {
             try {
                 const request = decodeCommand(await readSocketMessage(socket, combined), token);
@@ -659,8 +662,11 @@ export async function runManager(
                         kind: "pair-removed",
                     };
                 } else {
-                    response = { kind: "stopped" };
-                    shutdown.abort();
+                    const beginShutdown = (): void => shutdown.abort();
+                    socket.once("close", beginShutdown);
+                    socket.once("error", beginShutdown);
+                    socket.end(`${JSON.stringify({ kind: "stopped" })}\n`, beginShutdown);
+                    return;
                 }
                 socket.end(`${JSON.stringify(response)}\n`);
             } catch (cause) {
@@ -687,7 +693,11 @@ export async function runManager(
     }
     try {
         await new Promise<void>((resolve) => combined.addEventListener("abort", () => resolve(), { once: true }));
-        await new Promise<void>((resolve) => server.close(() => resolve()));
+        const serverClosed = new Promise<void>((resolve) => server.close(() => resolve()));
+        for (const socket of sockets) {
+            socket.destroy();
+        }
+        await serverClosed;
         await supervisor.close();
     } finally {
         if (process.platform !== "win32") {
