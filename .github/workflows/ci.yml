@@ -66,7 +66,7 @@ jobs:
       needs.validate-worker-config.result == 'success' &&
       github.repository == 'moxt-ai/mobius' &&
       github.ref == 'refs/heads/main' &&
-      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      github.event_name == 'workflow_dispatch'
     needs: [validate, validate-worker-config]
     runs-on: ubuntu-latest
     timeout-minutes: 20
