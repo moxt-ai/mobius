@@ -37,6 +37,9 @@ export class PairingService {
         signal: AbortSignal,
     ) => this.#pairings.createProjectRuntimePairing(projectId, token, idempotencyKey, signal);
 
+    readonly listProjectRuntimes = (projectId: string, token: string, signal: AbortSignal) =>
+        this.#pairings.listProjectRuntimes(projectId, token, signal);
+
     readonly requestControl = async (
         projectId: string,
         runtimeId: string,
