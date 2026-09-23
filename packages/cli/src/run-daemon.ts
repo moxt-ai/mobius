@@ -269,6 +269,8 @@ async function runRelayConnection(
         string,
         {
             readonly agentId: string;
+            readonly model: string | undefined;
+            readonly requestIds: Set<string>;
             readonly controller: AbortController;
             readonly completion: Promise<void>;
         }
@@ -690,7 +692,30 @@ async function runRelayConnection(
                         const existing = [...agentSettingsDiscoveries.values()].find(
                             (request) => request.agentId === command.agentId && !request.controller.signal.aborted,
                         );
-                        if (agentSettingsDiscoveries.has(command.requestId) || existing !== undefined) {
+                        if (
+                            [...agentSettingsDiscoveries.values()].some((request) =>
+                                request.requestIds.has(command.requestId),
+                            )
+                        ) {
+                            if (socket.readyState === WebSocket.OPEN) {
+                                send(socket, {
+                                    code: "agent_settings_discovery_busy",
+                                    kind: AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
+                                    message: "This settings discovery request is already running",
+                                    requestId: command.requestId,
+                                });
+                            }
+                            return;
+                        }
+                        if (
+                            existing !== undefined &&
+                            existing.model === command.model &&
+                            existing.requestIds.size < 16
+                        ) {
+                            existing.requestIds.add(command.requestId);
+                            return;
+                        }
+                        if (existing !== undefined) {
                             if (socket.readyState === WebSocket.OPEN) {
                                 send(socket, {
                                     code: "agent_settings_discovery_busy",
@@ -713,6 +738,7 @@ async function runRelayConnection(
                             return;
                         }
                         const controller = new AbortController();
+                        const requestIds = new Set([command.requestId]);
                         const operationSignal = AbortSignal.any([connectionController.signal, controller.signal]);
                         const timeout = timer.schedule(
                             () =>
@@ -751,17 +777,19 @@ async function runRelayConnection(
                                         `Mobius daemon diagnostic ${JSON.stringify({ event: "agent_settings_model_unsupported", requestId: command.requestId, ...details })}\n`,
                                     );
                                 }
-                                audit.record({
-                                    commandId: command.requestId,
-                                    details: {
-                                        agentId: command.agentId,
-                                        unsupportedModelCount: result.unsupportedModels.length.toString(),
-                                    },
-                                    event: "agent_settings_discovered",
-                                    sessionId: `agent-settings:${command.agentId}`,
-                                });
-                                if (socket.readyState === WebSocket.OPEN) {
-                                    send(socket, result.event);
+                                for (const requestId of requestIds) {
+                                    audit.record({
+                                        commandId: requestId,
+                                        details: {
+                                            agentId: command.agentId,
+                                            unsupportedModelCount: result.unsupportedModels.length.toString(),
+                                        },
+                                        event: "agent_settings_discovered",
+                                        sessionId: `agent-settings:${command.agentId}`,
+                                    });
+                                    if (socket.readyState === WebSocket.OPEN) {
+                                        send(socket, { ...result.event, requestId });
+                                    }
                                 }
                             } catch (error) {
                                 const failure: unknown = operationSignal.aborted
@@ -773,12 +801,14 @@ async function runRelayConnection(
                                       ))
                                     : error;
                                 const details = agentSettingsFailureDetails(command.agentId, failure);
-                                audit.record({
-                                    commandId: command.requestId,
-                                    details,
-                                    event: "agent_settings_discovery_failed",
-                                    sessionId: `agent-settings:${command.agentId}`,
-                                });
+                                for (const requestId of requestIds) {
+                                    audit.record({
+                                        commandId: requestId,
+                                        details,
+                                        event: "agent_settings_discovery_failed",
+                                        sessionId: `agent-settings:${command.agentId}`,
+                                    });
+                                }
                                 diagnostics.daemonDiagnostic(
                                     "agent_settings_discovery_failed",
                                     command.requestId,
@@ -791,12 +821,14 @@ async function runRelayConnection(
                                     );
                                 }
                                 if (socket.readyState === WebSocket.OPEN) {
-                                    send(socket, {
-                                        code: operationErrorCode(failure),
-                                        kind: AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
-                                        message: operationErrorMessage(failure),
-                                        requestId: command.requestId,
-                                    });
+                                    for (const requestId of requestIds) {
+                                        send(socket, {
+                                            code: operationErrorCode(failure),
+                                            kind: AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
+                                            message: operationErrorMessage(failure),
+                                            requestId,
+                                        });
+                                    }
                                 }
                             } finally {
                                 timeout.cancel();
@@ -805,6 +837,8 @@ async function runRelayConnection(
                         })();
                         agentSettingsDiscoveries.set(command.requestId, {
                             agentId: command.agentId,
+                            model: command.model,
+                            requestIds,
                             completion,
                             controller,
                         });
@@ -895,7 +929,8 @@ async function runRelayConnection(
                         if (
                             nativeRequests.has(command.requestId) ||
                             nativeRequests.size >= 4 ||
-                            previous.some((request) => !request.controller.signal.aborted)
+                            (command.action !== "linked-history" &&
+                                previous.some((request) => !request.controller.signal.aborted))
                         ) {
                             reportOperationFailure(
                                 socket,
