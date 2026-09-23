@@ -18,6 +18,7 @@ import {
     type AgentInstallFailedEvent,
     type AgentInstallProgressEvent,
     type AgentInstallStartedEvent,
+    type AgentMessageDeltaEvent,
     decodeAgentActivityEvent,
     decodeAgentActivityNarrationEvent,
     decodeAgentContentEvent,
@@ -111,14 +112,17 @@ import {
     SESSION_STARTED_KIND,
     SESSION_USAGE_UPDATED_KIND,
     type SessionCommandsUpdatedEvent,
+    type SessionCompletedEvent,
     type SessionConfigUpdatedEvent,
     type SessionConfigurationSelection,
     type SessionElicitationRequestedEvent,
     type SessionElicitationResolvedEvent,
     type SessionElicitationRespondCommand,
+    type SessionFailedEvent,
     type SessionInfoUpdatedEvent,
     type SessionPermissionRequestedEvent,
     type SessionPermissionResolvedEvent,
+    type SessionPromptCommand,
     SessionPromptDisposition,
     type SessionReadyEvent,
     type SessionUsageUpdatedEvent,
@@ -149,6 +153,12 @@ const HISTORY_CHANGING_MESSAGE_KINDS: ReadonlySet<string> = new Set([
     SESSION_STARTED_KIND,
 ]);
 
+export type LiveSessionMessage =
+    | SessionPromptCommand
+    | AgentMessageDeltaEvent
+    | SessionCompletedEvent
+    | SessionFailedEvent;
+
 export interface ConnectMobiusClientOptions {
     readonly protocols?: readonly string[];
     readonly onNativeSessionResult?: (event: NativeSessionResult) => void;
@@ -164,6 +174,7 @@ export interface ConnectMobiusClientOptions {
     readonly onElicitation?: (event: SessionElicitationRequestedEvent) => void;
     readonly onElicitationResolved?: (event: SessionElicitationResolvedEvent) => void;
     readonly onHistoryChanged?: () => void;
+    readonly onLiveMessage?: (message: LiveSessionMessage) => void;
     readonly onInfo?: (event: SessionInfoUpdatedEvent) => void;
     readonly onPermission?: (event: SessionPermissionRequestedEvent) => void;
     readonly onPermissionResolved?: (event: SessionPermissionResolvedEvent) => void;
@@ -1082,7 +1093,7 @@ export class MobiusClient {
                 return;
             }
             if (kind === SESSION_PROMPT_KIND) {
-                decodeSessionPromptCommand(encoded);
+                this.#options.onLiveMessage?.(decodeSessionPromptCommand(encoded));
             } else if (kind === NATIVE_SESSION_REQUEST_KIND) {
                 decodeNativeSessionCommand(encoded);
             } else if (kind === NATIVE_SESSION_TURN_FORK_REQUEST_KIND) {
@@ -1136,7 +1147,7 @@ export class MobiusClient {
             } else if (kind === SESSION_STARTED_KIND) {
                 decodeSessionStartedEvent(encoded);
             } else if (kind === AGENT_MESSAGE_DELTA_KIND) {
-                decodeAgentMessageDeltaEvent(encoded);
+                this.#options.onLiveMessage?.(decodeAgentMessageDeltaEvent(encoded));
             } else if (kind === AGENT_ACTIVITY_KIND) {
                 decodeAgentActivityEvent(encoded);
             } else if (kind === AGENT_ACTIVITY_NARRATION_KIND) {
@@ -1158,9 +1169,9 @@ export class MobiusClient {
             } else if (kind === AGENT_INSTALL_CANCELLED_KIND) {
                 this.#options.onInstallCancelled?.(decodeAgentInstallCancelledEvent(encoded));
             } else if (kind === SESSION_COMPLETED_KIND) {
-                decodeSessionCompletedEvent(encoded);
+                this.#options.onLiveMessage?.(decodeSessionCompletedEvent(encoded));
             } else if (kind === SESSION_FAILED_KIND) {
-                decodeSessionFailedEvent(encoded);
+                this.#options.onLiveMessage?.(decodeSessionFailedEvent(encoded));
             } else if (kind === SESSION_OPERATION_FAILED_KIND) {
                 decodeSessionOperationFailedEvent(encoded);
             } else {
