@@ -18,7 +18,7 @@ import { environmentProxyDispatcher } from "../network/environment-proxy.ts";
 import {
     openRuntimeInstallationStore,
     type RuntimeInstallationStore,
-    type StoredRuntimeConnection,
+    type VerifiedRuntimeConnection,
 } from "../storage/runtime-installation-store.ts";
 import { readStateDirectory } from "../storage/state-directory.ts";
 
@@ -298,7 +298,7 @@ function assertInventoryUsable(inventory: LocalAgentInventory): void {
 
 function buildPairedDaemon(
     installation: RuntimeInstallationStore,
-    connection: StoredRuntimeConnection,
+    connection: VerifiedRuntimeConnection,
     defaultWorkspace: string,
     inventory: LocalAgentInventory,
     localContext: DaemonLocalContext,
@@ -378,7 +378,7 @@ export async function pairMobiusRuntime(
 
 async function resumeRuntimeConnection(
     installation: RuntimeInstallationStore,
-    connection: StoredRuntimeConnection,
+    connection: VerifiedRuntimeConnection,
     signal: AbortSignal,
     environment: Readonly<NodeJS.ProcessEnv>,
 ): Promise<PairedDaemon> {

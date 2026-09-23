@@ -129,7 +129,6 @@ export async function createFakeAgentDaemonRuntime(options: {
             credentialProvider: new StaticMobiusCredentialProvider(options.credential),
             transport: { fetch: async (request: Request) => await options.server.request(request) },
         });
-        resources.defer(() => client.close());
         resources.defer(() => cancellation.abort(new Error("Fake Platform Runtime stopped")));
         const owned = resources.move();
         return {

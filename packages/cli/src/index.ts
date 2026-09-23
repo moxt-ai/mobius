@@ -32,6 +32,5 @@ export {
     RuntimeInstallationStore,
     RuntimeInstallationStoreError,
     type RuntimeInstallationStoreOptions,
-    StoredRuntimeConnection,
     VerifiedRuntimeConnection,
 } from "./storage/runtime-installation-store.ts";
