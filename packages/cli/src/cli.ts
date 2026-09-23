@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
-import { mkdir } from "node:fs/promises";
+import { constants } from "node:fs";
+import { type FileHandle, mkdir, open } from "node:fs/promises";
+import { resolve } from "node:path";
 import packageMetadata from "../package.json" with { type: "json" };
 
 import { formatAgentDiagnostics } from "./agent-catalog/agent-diagnostics.ts";
@@ -18,7 +20,7 @@ const USAGE = `Mobius CLI
 Usage:
   mobius --version
   mobius pair --url <relay-url> --pairing <runtime-pairing-id> --code <pairing-code> [--app-id <app-id>] [--workspace <directory>]
-  mobius pair list
+  mobius pair list [--output-json=<existing-file.json>]
   mobius pair stop --connection <connection-id>
   mobius pair remove --connection <connection-id>
   mobius start --connection <connection-id>
@@ -46,6 +48,49 @@ function formatPairTable(pairs: readonly ManagedRuntimeSummary[]): string {
         `| ${row.map((value, index) => value.padEnd(widths[index] ?? value.length)).join(" | ")} |`;
     const divider = `|-${widths.map((width) => "-".repeat(width)).join("-|-")}-|`;
     return `${line(headers)}\n${divider}\n${rows.map(line).join("\n")}${rows.length === 0 ? "" : "\n"}`;
+}
+
+function pairListOutputPath(arguments_: readonly string[]): string | null {
+    if (arguments_.length === 0) {
+        return null;
+    }
+    const prefix = "--output-json=";
+    const option = arguments_.length === 1 ? arguments_[0] : undefined;
+    if (option === undefined || !option.startsWith(prefix) || option.length === prefix.length) {
+        throw new Error("Usage: mobius pair list [--output-json=<existing-file.json>]");
+    }
+    return resolve(option.slice(prefix.length));
+}
+
+async function writePairList(path: string, pairs: readonly ManagedRuntimeSummary[]): Promise<void> {
+    shutdown.signal.throwIfAborted();
+    let file: FileHandle;
+    try {
+        file = await open(path, constants.O_WRONLY | constants.O_NOFOLLOW);
+    } catch (cause) {
+        if (typeof cause === "object" && cause !== null && "code" in cause && cause.code === "ENOENT") {
+            throw new Error("The JSON output file does not exist", { cause });
+        }
+        throw new Error("The JSON output file cannot be written", { cause });
+    }
+    try {
+        const metadata = await file.stat();
+        if (!metadata.isFile()) {
+            throw new Error("The JSON output path is not a regular file");
+        }
+        const output = pairs.map((pair) => ({
+            app_id: pair.appId,
+            connection_id: pair.connectionId,
+            runtime_id: pair.runtimeId,
+            status: pair.status,
+            workspace: pair.workspace,
+        }));
+        shutdown.signal.throwIfAborted();
+        await file.truncate(0);
+        await file.writeFile(`${JSON.stringify(output, null, 2)}\n`, "utf8");
+    } finally {
+        await file.close();
+    }
 }
 
 async function main(): Promise<void> {
@@ -86,9 +131,7 @@ async function main(): Promise<void> {
 
     if (command === "pair") {
         if (process.argv[3] === "list") {
-            if (process.argv.length !== 4) {
-                throw new Error("Usage: mobius pair list");
-            }
+            const outputPath = pairListOutputPath(process.argv.slice(4));
             const response = await requestManager(
                 installation,
                 packageMetadata.version,
@@ -101,7 +144,11 @@ async function main(): Promise<void> {
             if (response.kind !== "listed") {
                 throw new Error("The Mobius manager returned an unexpected response");
             }
-            process.stdout.write(formatPairTable(response.pairs));
+            if (outputPath === null) {
+                process.stdout.write(formatPairTable(response.pairs));
+            } else {
+                await writePairList(outputPath, response.pairs);
+            }
             return;
         }
         const pairAction = process.argv[3];

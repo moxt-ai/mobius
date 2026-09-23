@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { watch } from "node:fs";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 
@@ -39,8 +39,8 @@ describe("Mobius manager version compatibility", () => {
 
                 expect(listed.code).toBe(0);
                 expect(listed.stderr).toBe("");
-                expect(listed.stdout).toContain("Starting mobius daemon 0.0.85\n");
-                expect(listed.stdout).toContain("Mobius daemon 0.0.85 started\n");
+                expect(listed.stdout).toContain("Starting mobius daemon 0.0.86\n");
+                expect(listed.stdout).toContain("Mobius daemon 0.0.86 started\n");
                 expect(listed.stdout).toContain("| connection_id");
                 await expect(oldManager).resolves.toBeUndefined();
             } finally {
@@ -82,6 +82,28 @@ describe("Mobius pairing lifecycle", () => {
             expect(initiallyListed.stdout).not.toContain("channel_id");
             expect(initiallyListed.stdout).toContain(connection.connectionId);
             expect(initiallyListed.stdout).toContain("app_test");
+
+            const outputPath = join(stateRoot, "pairings.json");
+            await writeFile(outputPath, "", { mode: 0o600 });
+            const listedAsJson = await runCli(["pair", "list", `--output-json=${outputPath}`], environment, deadline);
+            expect(listedAsJson).toEqual({ code: 0, stderr: "", stdout: "" });
+            expect(JSON.parse(await readFile(outputPath, "utf8"))).toEqual([
+                {
+                    app_id: "app_test",
+                    connection_id: connection.connectionId,
+                    runtime_id: "runtime_test",
+                    status: "reconnecting",
+                    workspace,
+                },
+            ]);
+
+            const missingOutput = await runCli(
+                ["pair", "list", `--output-json=${join(stateRoot, "missing.json")}`],
+                environment,
+                deadline,
+            );
+            expect(missingOutput.code).toBe(1);
+            expect(missingOutput.stderr).toContain("The JSON output file does not exist");
 
             const stopped = await runCli(
                 ["pair", "stop", "--connection", connection.connectionId],
