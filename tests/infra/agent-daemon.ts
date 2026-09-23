@@ -37,6 +37,7 @@ import {
     encodeWorkspaceEntriesEvent,
     FILE_READ_KIND,
     NATIVE_SESSION_REQUEST_KIND,
+    type NativeSessionHistory,
     RUNTIME_DELIVERY_KIND,
     RUNTIME_HEARTBEAT_KIND,
     SESSION_EVENT_ACK_KIND,
@@ -413,6 +414,7 @@ export interface FakeAgentDaemonBehavior {
     readonly afterSessionStarted?: (signal: AbortSignal) => Promise<void>;
     readonly directoryLabel?: string;
     readonly nativeSessionIds?: ReadonlySet<string>;
+    readonly loadNativeHistory?: (sessionId: string, signal: AbortSignal) => Promise<NativeSessionHistory>;
     readonly requiredBindingId?: string;
 }
 
@@ -574,6 +576,19 @@ async function processHappyPathCommand(
                     kind: "native.session.result",
                     requestId: command.requestId,
                     sessionId: command.sessionId,
+                }),
+            );
+        } else if (command.action === "linked-history" && behavior.loadNativeHistory !== undefined) {
+            const history = await behavior.loadNativeHistory(command.targetSessionId, signal);
+            signal.throwIfAborted();
+            daemon.send(
+                encodeNativeSessionResult({
+                    action: "linked-history",
+                    history,
+                    kind: "native.session.result",
+                    requestId: command.requestId,
+                    sessionId: command.sessionId,
+                    targetSessionId: command.targetSessionId,
                 }),
             );
         } else {
