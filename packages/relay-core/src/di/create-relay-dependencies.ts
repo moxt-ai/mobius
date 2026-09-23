@@ -4,6 +4,7 @@ import type { ChannelGateway } from "../gateway/channel-gateway.ts";
 import type { ProjectAccessAuthorizer } from "../gateway/project-access-authorizer.ts";
 import type { SessionTransport } from "../gateway/session-transport.ts";
 import type { DatabaseResolver } from "../infra/database-resolver.ts";
+import type { ProjectApplicationResolver } from "../infra/project-application-resolver.ts";
 import type { ProjectStorageDirectory } from "../infra/project-storage-directory.ts";
 import type { SqlDatabase } from "../infra/sql-database.ts";
 import { ChannelService } from "../service/channel/channel-service.ts";
@@ -18,6 +19,7 @@ import { SessionDirectoryStorage } from "../storage/session-directory-storage.ts
 
 interface PairingInfrastructure {
     readonly authentication: { readonly projects: ProjectAccessAuthorizer };
+    readonly projectApplications: ProjectApplicationResolver;
     readonly databases: DatabaseResolver;
     readonly projects: ProjectStorageDirectory;
     readonly identityDatabases: readonly SqlDatabase[];
@@ -42,6 +44,7 @@ function createPairings(cx: PairingInfrastructure) {
     const sources = cx.identityDatabases.map((database, index) => ({ sourceId: String(index), database }));
     const identities = new PairingIdentityService(new PairingIdentityStorage(sources, cx.databases), cx.projects);
     return new PairingDirectoryService({
+        gateways: { projectApplications: cx.projectApplications },
         storages: {
             forProject: (project) => new PairingStorage(project, cx.databases),
             projectDirectory: cx.projects,

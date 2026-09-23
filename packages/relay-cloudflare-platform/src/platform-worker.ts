@@ -377,6 +377,7 @@ export function createPlatformApplication(
                 control,
             );
             const cx = createWorkerContext({
+                applications: control,
                 gateways: gateways(environment),
                 authorization: sessionAccess.authorizer(() => context.var.sessionAccessTarget),
                 databases,

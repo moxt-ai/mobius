@@ -273,6 +273,7 @@ describe.sequential("Platform Session-only boundary", () => {
             ),
             200,
         );
+        expect(claimed["appId"]).toBe(appId);
         const runtimeId = text(claimed, "runtimeId");
         const sessionId = "private-reconnect-session";
         await responseJson(

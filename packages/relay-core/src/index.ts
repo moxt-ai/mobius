@@ -105,6 +105,7 @@ export {
 } from "./infra/durable-object-migrations.ts";
 export { DurableObjectDatabaseAdapter, DurableObjectSqlDatabase } from "./infra/durable-object-sql-database.ts";
 export { logger } from "./infra/logger.ts";
+export type { ProjectApplicationResolver } from "./infra/project-application-resolver.ts";
 export type { ProjectDatabaseBindings } from "./infra/project-database-bindings.ts";
 export type {
     ProjectStorageContext,

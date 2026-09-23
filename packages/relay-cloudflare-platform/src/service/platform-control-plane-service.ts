@@ -8,6 +8,7 @@ import {
     PerpetualProjectAccessLifetime,
     type ProjectAccessAuthorizer,
     ProjectAccessContext,
+    type ProjectApplicationResolver,
     ProjectAuthenticationError,
     type ProjectPermission,
     ProjectScope,
@@ -328,7 +329,9 @@ async function requestDigest(display: string, clientReference: string, locationH
     return await hashSecret(JSON.stringify({ clientReference, displayName: display, locationHint }));
 }
 
-export class PlatformControlPlaneService implements ProjectAccessAuthorizer, SessionQuotaPolicyProvider {
+export class PlatformControlPlaneService
+    implements ProjectAccessAuthorizer, ProjectApplicationResolver, SessionQuotaPolicyProvider
+{
     readonly #authentication: PlatformAuthenticationConfiguration;
     readonly #storage: PlatformControlPlaneStorage;
     readonly #placements: PlatformProjectPlacementRegistry;
@@ -1182,6 +1185,14 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
             actorReference(actorRef),
             signal,
         );
+    };
+
+    readonly resolveApplicationId: ProjectApplicationResolver["resolveApplicationId"] = async (projectId, signal) => {
+        const project = await this.#projectAuthorization.read(validateIdentifier(projectId, "project_id"), signal);
+        if (project === null || project.lifecycle !== "active") {
+            throw new ProjectAuthenticationError("project_access_denied", "The Project is unavailable");
+        }
+        return project.app_id;
     };
 
     readonly authorizePlatformCredential = async (

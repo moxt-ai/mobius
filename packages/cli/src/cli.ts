@@ -17,7 +17,6 @@ process.once("SIGINT", () => shutdown.abort());
 process.once("SIGTERM", () => shutdown.abort());
 
 interface ParsedPairOptions {
-    readonly appId?: string;
     readonly code?: string;
     readonly pairing?: string;
     readonly url?: string;
@@ -79,7 +78,6 @@ function pairArguments(options: PairOptions): readonly string[] {
         "--code",
         options.code,
         ...(options.pairing === undefined ? [] : ["--pairing", options.pairing]),
-        ...(options.appId === undefined ? [] : ["--app-id", options.appId]),
         ...(options.workspace === undefined ? [] : ["--workspace", options.workspace]),
     ];
 }
@@ -161,7 +159,6 @@ function createProgram(): Command {
     pair.addOption(valueOption("--url <relay-url>", "relay HTTP or HTTPS URL"))
         .addOption(valueOption("--code <pairing-code>", "pairing code shown in the browser"))
         .addOption(valueOption("--pairing <runtime-pairing-id>", "Runtime pairing identifier"))
-        .addOption(valueOption("--app-id <app-id>", "application identifier"))
         .addOption(valueOption("--workspace <directory>", "default workspace directory"))
         .action(async (options: ParsedPairOptions) => {
             const requested: PairOptions = {
