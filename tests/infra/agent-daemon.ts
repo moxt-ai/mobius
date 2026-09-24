@@ -1,4 +1,5 @@
 import {
+    ACTIVE_TURN_TEXT_LIMIT,
     AGENT_SETTINGS_DISCOVER_KIND,
     decodeAgentSettingsDiscoverCommand,
     decodeFileReadCommand,
@@ -337,6 +338,7 @@ export interface FakeAgentDaemonBehavior {
     }[];
     readonly afterSessionStarted?: (command: SessionPromptCommand, signal: AbortSignal) => Promise<void>;
     readonly afterFirstDelta?: (command: SessionPromptCommand, signal: AbortSignal) => Promise<void>;
+    readonly afterLastDelta?: (command: SessionPromptCommand, signal: AbortSignal) => Promise<void>;
     readonly directoryLabel?: string;
     readonly nativeSessionIds?: ReadonlySet<string>;
     readonly nativeSessionTitle?: (sessionId: string) => string;
@@ -737,8 +739,8 @@ async function processHappyPathCommand(
             activeTurns.set(command.sessionId, {
                 ...current,
                 sequence: index + 1,
-                text: `${current.text}${text}`.slice(-100_000),
-                truncated: current.truncated || current.text.length + text.length > 100_000,
+                text: `${current.text}${text}`.slice(-ACTIVE_TURN_TEXT_LIMIT),
+                truncated: current.truncated || current.text.length + text.length > ACTIVE_TURN_TEXT_LIMIT,
             });
         }
         await daemon.sendSessionEvent(
@@ -758,6 +760,7 @@ async function processHappyPathCommand(
             await behavior.afterFirstDelta?.(command, signal);
         }
     }
+    await behavior.afterLastDelta?.(command, signal);
     if (imageContent !== null) {
         await daemon.sendSessionEvent(
             command.sessionId,
