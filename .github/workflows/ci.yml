@@ -99,6 +99,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Deploy Mobius Platform
         env:
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
@@ -110,6 +111,7 @@ jobs:
         shell: bash
         run: |
           node scripts/validate-worker-config.ts
+          pnpm --filter @moxt-ai/mobius-platform-app build --mode "$DEPLOY_ENVIRONMENT"
           umask 077
           secrets_file="$(mktemp "$RUNNER_TEMP/worker-secrets.XXXXXX.json")"
           trap 'rm -f "$secrets_file"' EXIT
@@ -148,4 +150,25 @@ jobs:
             fi
           done
           echo "Unexpected Platform health response after deployment propagation: $actual" >&2
+          exit 1
+      - name: Verify Platform page
+        env:
+          PLATFORM_ORIGIN: https://${{ matrix.domain }}
+        shell: bash
+        run: |
+          for attempt in {1..6}; do
+            if curl \
+              --fail \
+              --show-error \
+              --silent \
+              --connect-timeout 5 \
+              --max-time 15 \
+              "$PLATFORM_ORIGIN/" | grep -Fq '<title>Mobius Platform</title>'; then
+              exit 0
+            fi
+            if [[ "$attempt" -lt 6 ]]; then
+              sleep 5
+            fi
+          done
+          echo "The Platform page was unavailable after deployment propagation" >&2
           exit 1
