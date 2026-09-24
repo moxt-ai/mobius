@@ -5,7 +5,6 @@ import {
     decodeCommittedSessionEvent,
     decodeServiceToDaemonMessage,
     decodeSessionPromptCommand,
-    encodeAgentCatalogDiscoveredEvent,
     encodeSessionEventEnvelope,
     encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
@@ -25,7 +24,6 @@ const readyAgents = [
     {
         agentPath: "/usr/local/bin/codex",
         agentVersion: "codex 1.0.0",
-        agentSettingsDiscovery: true,
         capabilities: {
             additionalDirectories: true,
             audioPrompt: false,
@@ -219,7 +217,7 @@ describe.sequential("Platform Session-only boundary", () => {
         expect(retired).toMatchObject({ error: { code: "project_permission_invalid" } });
     });
 
-    it("Given a linked Codex Runtime, When Chat discovers its Agents, sends a prompt, and the Runtime reconnects, Then the Runtime-scoped Agents, answer, and connection status arrive without cloud Session storage", async () => {
+    it("Given a linked Codex Runtime, When Chat sends a prompt and the Runtime reconnects, Then the answer and connection status arrive without cloud Session storage", async () => {
         vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
@@ -332,33 +330,6 @@ describe.sequential("Platform Session-only boundary", () => {
         try {
             expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("runtime.liveness.ready");
             expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "runtime.status", online: true });
-            const agentDiscoveryResponse = worker.fetch(
-                new Request(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtimes/${runtimeId}/agents/discover`,
-                    {
-                        body: JSON.stringify({}),
-                        headers: credentialHeaders(appCredential),
-                        method: "POST",
-                    },
-                ),
-                environment,
-            );
-            const discovery = decodeServiceToDaemonMessage(await daemonMessages.next());
-            expect(discovery.kind).toBe("agent.catalog.discover");
-            if (discovery.kind !== "agent.catalog.discover") {
-                throw new Error("Expected Agent discovery to reach the selected Runtime");
-            }
-            daemon.send(
-                encodeAgentCatalogDiscoveredEvent({
-                    agents: readyAgents,
-                    kind: "agent.catalog.discovered",
-                    requestId: discovery.requestId,
-                }),
-            );
-            expect(await responseJson(await agentDiscoveryResponse, 200)).toMatchObject({
-                agents: [{ id: "codex", label: "Codex" }],
-                runtimeId,
-            });
             host.send(
                 encodeSessionPromptCommand({
                     additionalDirectoryIds: [],

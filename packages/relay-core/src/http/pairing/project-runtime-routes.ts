@@ -1,5 +1,4 @@
 import {
-    decodeAgentCatalogDiscoverCommand,
     decodeAgentCatalogRefreshCommand,
     decodeAgentSettingsDiscoverCommand,
     decodeNativeSessionRequest,
@@ -255,26 +254,6 @@ export function createProjectRuntimeRoutes() {
                 }
                 context.header("Cache-Control", "no-store");
                 return context.json({ turnId: result.commandId });
-            },
-        )
-        .post(
-            "/projects/:projectId/runtimes/:runtimeId/agents/discover",
-            bodyParser<RelayHttpEnvironment>(),
-            async (context) => {
-                assertExactKeys(context.req.valid("json"), []);
-                const runtimeId = validateIdentifier(context.req.param("runtimeId"), "runtime_id");
-                const command = decodeAgentCatalogDiscoverCommand(
-                    JSON.stringify({ kind: "agent.catalog.discover", requestId: crypto.randomUUID() }),
-                );
-                const result = await context.env.services.runtimePairings.discoverAgentCatalog(
-                    validateIdentifier(context.req.param("projectId"), "project_id"),
-                    runtimeId,
-                    bearerToken(context.req.raw),
-                    command,
-                    context.req.raw.signal,
-                );
-                context.header("Cache-Control", "no-store");
-                return context.json(result);
             },
         )
         .post(

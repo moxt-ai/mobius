@@ -1,7 +1,4 @@
 import {
-    AGENT_CATALOG_DISCOVER_KIND,
-    AGENT_CATALOG_DISCOVERED_KIND,
-    AGENT_CATALOG_DISCOVERY_FAILED_KIND,
     AGENT_CATALOG_REFRESH_FAILED_KIND,
     AGENT_CATALOG_REFRESH_KIND,
     AGENT_CATALOG_REFRESHED_KIND,
@@ -16,7 +13,6 @@ import {
     AGENT_SETTINGS_DISCOVERED_KIND,
     AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
     type DaemonToServiceMessage,
-    decodeAgentCatalogDiscoverCommand,
     decodeAgentCatalogRefreshCommand,
     decodeAgentInstallCancelCommand,
     decodeAgentInstallRequestCommand,
@@ -37,7 +33,6 @@ import {
     decodeSessionPromptDispositionCommand,
     decodeSessionQueryCommand,
     decodeWorkspaceListCommand,
-    encodeAgentCatalogDiscoveryFailedEvent,
     encodeAgentCatalogRefreshFailedEvent,
     encodeAgentSettingsDiscoveryFailedEvent,
     encodeDaemonToServiceMessage,
@@ -100,12 +95,10 @@ class PendingAgentSettingsDiscovery {
 
 class PendingAgentCatalogRefresh {
     readonly expiresAt: number;
-    readonly operation: "discover" | "refresh";
     readonly socket: ChannelSocket;
 
-    constructor(operation: "discover" | "refresh", expiresAt: number, socket: ChannelSocket) {
+    constructor(expiresAt: number, socket: ChannelSocket) {
         this.expiresAt = expiresAt;
-        this.operation = operation;
         this.socket = socket;
     }
 }
@@ -279,11 +272,11 @@ export class ChannelActor {
                 this.returnAgentSettingsDiscoveryFailure(message.requestId, encodeDaemonToServiceMessage(message));
                 return;
             }
-            if (kind === AGENT_CATALOG_REFRESHED_KIND || kind === AGENT_CATALOG_DISCOVERED_KIND) {
+            if (kind === AGENT_CATALOG_REFRESHED_KIND) {
                 this.returnAgentCatalogRefreshResult(message.requestId, encodeDaemonToServiceMessage(message));
                 return;
             }
-            if (kind === AGENT_CATALOG_REFRESH_FAILED_KIND || kind === AGENT_CATALOG_DISCOVERY_FAILED_KIND) {
+            if (kind === AGENT_CATALOG_REFRESH_FAILED_KIND) {
                 this.returnAgentCatalogRefreshResult(message.requestId, encodeDaemonToServiceMessage(message));
                 return;
             }
@@ -343,14 +336,9 @@ export class ChannelActor {
                 this.forwardAgentSettingsDiscovery(socket, command, command.requestId, command.agentId);
                 return;
             }
-            if (kind === AGENT_CATALOG_DISCOVER_KIND) {
-                const command = decodeAgentCatalogDiscoverCommand(message);
-                this.forwardAgentCatalogRefresh(socket, command, command.requestId, "discover");
-                return;
-            }
             if (kind === AGENT_CATALOG_REFRESH_KIND) {
                 const command = decodeAgentCatalogRefreshCommand(message);
-                this.forwardAgentCatalogRefresh(socket, command, command.requestId, "refresh");
+                this.forwardAgentCatalogRefresh(socket, command, command.requestId);
                 return;
             }
             if (kind === NATIVE_SESSION_REQUEST_KIND) {
@@ -612,7 +600,6 @@ export class ChannelActor {
         socket: ChannelSocket,
         message: ServiceToDaemonMessage,
         requestId: string,
-        operation: "discover" | "refresh",
     ): void => {
         const now = this.#clock.now();
         const expiresAt = now + AGENT_CATALOG_REFRESH_DEADLINE_MILLISECONDS;
@@ -621,11 +608,18 @@ export class ChannelActor {
             throw new ProtocolMessageError("Another local Agent catalog refresh is pending");
         }
         socket.trackAgentCatalogRefresh(requestId, expiresAt);
-        this.#pendingAgentCatalogRefreshes.set(requestId, new PendingAgentCatalogRefresh(operation, expiresAt, socket));
+        this.#pendingAgentCatalogRefreshes.set(requestId, new PendingAgentCatalogRefresh(expiresAt, socket));
         if (!this.sendToDaemon(message)) {
             this.#pendingAgentCatalogRefreshes.delete(requestId);
             socket.consumeAgentCatalogRefresh(requestId, now);
-            socket.send(this.agentCatalogFailure(operation, requestId));
+            socket.send(
+                encodeAgentCatalogRefreshFailedEvent({
+                    code: "runtime_offline",
+                    kind: AGENT_CATALOG_REFRESH_FAILED_KIND,
+                    message: "The local runtime is offline",
+                    requestId,
+                }),
+            );
         }
     };
 
@@ -665,26 +659,18 @@ export class ChannelActor {
         for (const [requestId, pending] of this.#pendingAgentCatalogRefreshes) {
             pending.socket.consumeAgentCatalogRefresh(requestId, now);
             if (pending.socket.isOpen()) {
-                pending.socket.send(this.agentCatalogFailure(pending.operation, requestId));
+                pending.socket.send(
+                    encodeAgentCatalogRefreshFailedEvent({
+                        code: "runtime_offline",
+                        kind: AGENT_CATALOG_REFRESH_FAILED_KIND,
+                        message: "The local runtime is offline",
+                        requestId,
+                    }),
+                );
             }
         }
         this.#pendingAgentCatalogRefreshes.clear();
     };
-
-    private readonly agentCatalogFailure = (operation: "discover" | "refresh", requestId: string): string =>
-        operation === "discover"
-            ? encodeAgentCatalogDiscoveryFailedEvent({
-                  code: "runtime_offline",
-                  kind: AGENT_CATALOG_DISCOVERY_FAILED_KIND,
-                  message: "The local runtime is offline",
-                  requestId,
-              })
-            : encodeAgentCatalogRefreshFailedEvent({
-                  code: "runtime_offline",
-                  kind: AGENT_CATALOG_REFRESH_FAILED_KIND,
-                  message: "The local runtime is offline",
-                  requestId,
-              });
 
     private readonly forwardAgentSettingsDiscovery = (
         socket: ChannelSocket,

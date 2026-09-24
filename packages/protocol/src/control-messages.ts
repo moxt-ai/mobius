@@ -33,9 +33,6 @@ export const AGENT_INSTALL_CANCELLED_KIND = "agent.integration.install.cancelled
 export const AGENT_SETTINGS_DISCOVER_KIND = "agent.settings.discover";
 export const AGENT_SETTINGS_DISCOVERED_KIND = "agent.settings.discovered";
 export const AGENT_SETTINGS_DISCOVERY_FAILED_KIND = "agent.settings.discovery.failed";
-export const AGENT_CATALOG_DISCOVER_KIND = "agent.catalog.discover";
-export const AGENT_CATALOG_DISCOVERED_KIND = "agent.catalog.discovered";
-export const AGENT_CATALOG_DISCOVERY_FAILED_KIND = "agent.catalog.discovery.failed";
 export const AGENT_CATALOG_REFRESH_KIND = "agent.catalog.refresh";
 export const AGENT_CATALOG_REFRESHED_KIND = "agent.catalog.refreshed";
 export const AGENT_CATALOG_REFRESH_FAILED_KIND = "agent.catalog.refresh.failed";
@@ -406,50 +403,6 @@ export const sessionCapabilitiesSchema = z
     .readonly();
 
 export type SessionCapabilities = z.infer<typeof sessionCapabilitiesSchema>;
-
-const agentCatalogEntrySchema = z
-    .strictObject({
-        agentPath: z.string().min(1).max(4_096),
-        agentVersion: z.string().min(1).max(128),
-        agentSettingsDiscovery: z.boolean().default(false),
-        capabilities: sessionCapabilitiesSchema,
-        id: IDENTIFIER,
-        label: z.string().min(1).max(255),
-        sessionTurnConfiguration: z.boolean().default(false),
-    })
-    .readonly();
-
-export type AgentCatalogEntry = z.infer<typeof agentCatalogEntrySchema>;
-
-const agentCatalogDiscoverCommandSchema = z
-    .strictObject({
-        kind: z.literal(AGENT_CATALOG_DISCOVER_KIND),
-        requestId: IDENTIFIER,
-    })
-    .readonly();
-
-export type AgentCatalogDiscoverCommand = z.infer<typeof agentCatalogDiscoverCommandSchema>;
-
-const agentCatalogDiscoveredEventSchema = z
-    .strictObject({
-        agents: z.array(agentCatalogEntrySchema).max(100).readonly(),
-        kind: z.literal(AGENT_CATALOG_DISCOVERED_KIND),
-        requestId: IDENTIFIER,
-    })
-    .readonly();
-
-export type AgentCatalogDiscoveredEvent = z.infer<typeof agentCatalogDiscoveredEventSchema>;
-
-const agentCatalogDiscoveryFailedEventSchema = z
-    .strictObject({
-        code: IDENTIFIER,
-        kind: z.literal(AGENT_CATALOG_DISCOVERY_FAILED_KIND),
-        message: z.string().min(1).max(500),
-        requestId: IDENTIFIER,
-    })
-    .readonly();
-
-export type AgentCatalogDiscoveryFailedEvent = z.infer<typeof agentCatalogDiscoveryFailedEventSchema>;
 
 const sessionCommandSchema = z
     .strictObject({
@@ -992,18 +945,6 @@ export const decodeAgentSettingsDiscoveryFailedEvent = (encoded: string): AgentS
     decode(encoded, agentSettingsDiscoveryFailedEventSchema);
 export const encodeAgentSettingsDiscoveryFailedEvent = (message: AgentSettingsDiscoveryFailedEvent): string =>
     encode(message, agentSettingsDiscoveryFailedEventSchema);
-export const decodeAgentCatalogDiscoverCommand = (encoded: string): AgentCatalogDiscoverCommand =>
-    decode(encoded, agentCatalogDiscoverCommandSchema);
-export const encodeAgentCatalogDiscoverCommand = (message: AgentCatalogDiscoverCommand): string =>
-    encode(message, agentCatalogDiscoverCommandSchema);
-export const decodeAgentCatalogDiscoveredEvent = (encoded: string): AgentCatalogDiscoveredEvent =>
-    decode(encoded, agentCatalogDiscoveredEventSchema);
-export const encodeAgentCatalogDiscoveredEvent = (message: AgentCatalogDiscoveredEvent): string =>
-    encode(message, agentCatalogDiscoveredEventSchema);
-export const decodeAgentCatalogDiscoveryFailedEvent = (encoded: string): AgentCatalogDiscoveryFailedEvent =>
-    decode(encoded, agentCatalogDiscoveryFailedEventSchema);
-export const encodeAgentCatalogDiscoveryFailedEvent = (message: AgentCatalogDiscoveryFailedEvent): string =>
-    encode(message, agentCatalogDiscoveryFailedEventSchema);
 export const decodeAgentCatalogRefreshCommand = (encoded: string): AgentCatalogRefreshCommand =>
     decode(encoded, agentCatalogRefreshCommandSchema);
 export const encodeAgentCatalogRefreshCommand = (message: AgentCatalogRefreshCommand): string =>

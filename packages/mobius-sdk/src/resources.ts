@@ -641,7 +641,7 @@ export class MobiusRuntimeDescriptor {
     }
 }
 
-export function decodeRuntimeDescriptor(value: unknown): MobiusRuntimeDescriptor {
+function decodeRuntimeDescriptor(value: unknown): MobiusRuntimeDescriptor {
     const runtime = record(value, "Runtime descriptor");
     return new MobiusRuntimeDescriptor(
         arrayField(runtime, "agents", 100).map(decodeAgentDescriptor),

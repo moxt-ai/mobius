@@ -17,9 +17,6 @@ import {
     ProtocolMessageError,
 } from "./codecs/messages.ts";
 import {
-    AGENT_CATALOG_DISCOVER_KIND,
-    AGENT_CATALOG_DISCOVERED_KIND,
-    AGENT_CATALOG_DISCOVERY_FAILED_KIND,
     AGENT_CATALOG_REFRESH_FAILED_KIND,
     AGENT_CATALOG_REFRESH_KIND,
     AGENT_CATALOG_REFRESHED_KIND,
@@ -33,9 +30,6 @@ import {
     AGENT_SETTINGS_DISCOVER_KIND,
     AGENT_SETTINGS_DISCOVERED_KIND,
     AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
-    decodeAgentCatalogDiscoverCommand,
-    decodeAgentCatalogDiscoveredEvent,
-    decodeAgentCatalogDiscoveryFailedEvent,
     decodeAgentCatalogRefreshCommand,
     decodeAgentCatalogRefreshedEvent,
     decodeAgentCatalogRefreshFailedEvent,
@@ -64,9 +58,6 @@ import {
     decodeSessionsQueriedEvent,
     decodeWorkspaceEntriesEvent,
     decodeWorkspaceListCommand,
-    encodeAgentCatalogDiscoverCommand,
-    encodeAgentCatalogDiscoveredEvent,
-    encodeAgentCatalogDiscoveryFailedEvent,
     encodeAgentCatalogRefreshCommand,
     encodeAgentCatalogRefreshedEvent,
     encodeAgentCatalogRefreshFailedEvent,
@@ -169,11 +160,6 @@ function defineMessageSignature<TMessage extends { readonly kind: string }>(
 }
 
 const serviceToDaemonSignatures = {
-    [AGENT_CATALOG_DISCOVER_KIND]: defineMessageSignature(
-        AGENT_CATALOG_DISCOVER_KIND,
-        encodeAgentCatalogDiscoverCommand,
-        decodeAgentCatalogDiscoverCommand,
-    ),
     [AGENT_CATALOG_REFRESH_KIND]: defineMessageSignature(
         AGENT_CATALOG_REFRESH_KIND,
         encodeAgentCatalogRefreshCommand,
@@ -293,16 +279,6 @@ export function encodeServiceToDaemonMessage(message: ServiceToDaemonMessage): s
 }
 
 const daemonToServiceSignatures = {
-    [AGENT_CATALOG_DISCOVERED_KIND]: defineMessageSignature(
-        AGENT_CATALOG_DISCOVERED_KIND,
-        encodeAgentCatalogDiscoveredEvent,
-        decodeAgentCatalogDiscoveredEvent,
-    ),
-    [AGENT_CATALOG_DISCOVERY_FAILED_KIND]: defineMessageSignature(
-        AGENT_CATALOG_DISCOVERY_FAILED_KIND,
-        encodeAgentCatalogDiscoveryFailedEvent,
-        decodeAgentCatalogDiscoveryFailedEvent,
-    ),
     [AGENT_CATALOG_REFRESHED_KIND]: defineMessageSignature(
         AGENT_CATALOG_REFRESHED_KIND,
         encodeAgentCatalogRefreshedEvent,
