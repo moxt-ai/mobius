@@ -42,6 +42,7 @@ import {
     type SessionReadyEvent,
     type SessionUsageUpdatedEvent,
 } from "./control-messages.ts";
+import { identifierStringSchema } from "./identifier.ts";
 import {
     AGENT_ACTIVITY_KIND,
     AGENT_ACTIVITY_NARRATION_KIND,
@@ -59,14 +60,13 @@ import {
 export const SESSION_EVENT_KIND = "session.event";
 export const SESSION_EVENT_COMMITTED_KIND = "session.event.committed";
 
-const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const MAX_RECORDED_EVENT_LENGTH = 8 * 1024 * 1024;
 
 const eventEnvelopeSchema = z
     .strictObject({
         kind: z.literal(SESSION_EVENT_KIND),
         payload: z.string().min(2).max(MAX_RECORDED_EVENT_LENGTH),
-        sessionId: z.string().min(1).max(128).regex(IDENTIFIER_PATTERN),
+        sessionId: identifierStringSchema,
     })
     .readonly();
 
@@ -74,7 +74,7 @@ const committedEventSchema = z
     .strictObject({
         kind: z.literal(SESSION_EVENT_COMMITTED_KIND),
         payload: z.string().min(2).max(MAX_RECORDED_EVENT_LENGTH),
-        sessionId: z.string().min(1).max(128).regex(IDENTIFIER_PATTERN),
+        sessionId: identifierStringSchema,
     })
     .readonly();
 

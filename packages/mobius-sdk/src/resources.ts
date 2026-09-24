@@ -10,12 +10,15 @@ import {
     decodeAgentDisplayContentValue,
     decodeAttempt,
     decodeCommittedSessionEvent,
+    decodeIdentifier,
     decodeInteraction,
     decodePromptImagesValue,
     decodePromptResourcesValue,
     decodeRecordedSessionEvent,
     decodeTurn,
+    type Identifier,
     type Interaction,
+    isIdentifier,
     MOBIUS_API_VERSION,
     type PromptImage,
     type PromptResource,
@@ -36,7 +39,6 @@ const MOBIUS_SESSION_EVENT_STREAM_MEDIA_TYPE = "text/event-stream";
 const MOBIUS_SESSION_EVENT_STREAM_TRANSPORT = "sse";
 const MOBIUS_SESSION_EXPORT_FORMAT_VERSION = "1";
 
-const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const SESSION_CAPABILITY_FIELDS: readonly string[] = [
     "additionalDirectories",
     "audioPrompt",
@@ -75,12 +77,12 @@ function stringField(value: Readonly<Record<string, unknown>>, field: string, ma
     return candidate;
 }
 
-function identifierField(value: Readonly<Record<string, unknown>>, field: string): string {
-    const candidate = stringField(value, field, 128);
-    if (!IDENTIFIER_PATTERN.test(candidate)) {
+function identifierField(value: Readonly<Record<string, unknown>>, field: string): Identifier {
+    try {
+        return decodeIdentifier(value[field]);
+    } catch {
         throw invalidResponse(`The service returned an invalid ${field}`);
     }
-    return candidate;
 }
 
 function integerField(value: Readonly<Record<string, unknown>>, field: string): number {
@@ -422,7 +424,7 @@ export class MobiusRuntimePairingRequest {
     readonly idempotencyKey: string;
 
     constructor(idempotencyKey: string) {
-        if (!IDENTIFIER_PATTERN.test(idempotencyKey)) {
+        if (!isIdentifier(idempotencyKey)) {
             throw new MobiusValidationError("The Runtime pairing idempotency key is invalid");
         }
         this.idempotencyKey = idempotencyKey;

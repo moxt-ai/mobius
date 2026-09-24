@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
-import type {
-    NativeSessionCommand,
-    NativeSessionEntry,
-    NativeSessionResult,
-    SessionMetadata,
-    SessionReadyEvent,
-    WorkspaceEntry,
+import {
+    decodeIdentifier,
+    type Identifier,
+    type NativeSessionCommand,
+    type NativeSessionEntry,
+    type NativeSessionResult,
+    type SessionMetadata,
+    type SessionReadyEvent,
+    type WorkspaceEntry,
 } from "@moxt-ai/mobius-protocol";
 import type { NativeSessionInfo } from "../acp/native-session.ts";
 import { nativeSessionIdSchema } from "../acp/native-session.ts";
@@ -105,7 +107,7 @@ export class NativeSessionService {
             return {
                 action: "create",
                 kind: "native.session.result",
-                nativeSessionId,
+                nativeSessionId: decodeIdentifier(nativeSessionId),
                 requestId: command.requestId,
                 sessionId: command.sessionId,
             };
@@ -125,7 +127,7 @@ export class NativeSessionService {
             if (authorized === null) {
                 return null;
             }
-            const entryId = randomUUID();
+            const entryId = decodeIdentifier(randomUUID());
             if (this.#entries.size >= 5_000) {
                 this.#entries.clear();
             }
@@ -140,8 +142,8 @@ export class NativeSessionService {
                 mobiusSessionIds: this.#sessions
                     .findLinkedSessions(command.agentId, info.sessionId)
                     .filter((session) => session.prompted && session.cwd === authorized.cwd)
-                    .map((session) => session.sessionId),
-                nativeSessionId: info.sessionId,
+                    .map((session) => decodeIdentifier(session.sessionId)),
+                nativeSessionId: decodeIdentifier(info.sessionId),
                 title: info.title ?? "Untitled session",
                 directoryId: authorized.directoryId,
                 directoryLabel: authorized.directoryLabel,
@@ -175,7 +177,7 @@ export class NativeSessionService {
                     entries.push(entry);
                 }
             }
-            let nextCursor: string | null = null;
+            let nextCursor: Identifier | null = null;
             if (page.nextCursor != null) {
                 if (page.nextCursor === cursor) {
                     throw new AcpExecutionError(
@@ -184,7 +186,7 @@ export class NativeSessionService {
                         "invalid_native_session_response",
                     );
                 }
-                nextCursor = randomUUID();
+                nextCursor = decodeIdentifier(randomUUID());
                 if (this.#cursors.size >= 500) {
                     this.#cursors.clear();
                 }
@@ -301,7 +303,7 @@ export class NativeSessionService {
                 ...envelope,
                 action: "delete",
                 entryId: command.entryId,
-                deletedSessionIds,
+                deletedSessionIds: deletedSessionIds.map(decodeIdentifier),
             };
         }
         const action = command.action;

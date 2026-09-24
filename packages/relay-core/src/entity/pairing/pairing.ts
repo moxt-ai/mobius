@@ -1,4 +1,5 @@
 import {
+    isIdentifier,
     MAX_LOCAL_AGENT_DIRECTORY_ENTRIES,
     type SessionCapabilities,
     sessionCapabilitiesSchema,
@@ -13,7 +14,6 @@ export const MAX_RUNTIMES_PER_PROJECT = 8;
 
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const PAIRING_CODE_PATTERN = /^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){4}$/;
-const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const TOKEN_PATTERN = /^[a-zA-Z0-9_-]{32,256}$/;
 const SESSION_CAPABILITY_FIELDS: readonly string[] = [
     "additionalDirectories",
@@ -542,7 +542,7 @@ export function validateAgents(value: unknown): readonly AgentDescriptor[] {
             agentVersion.trim().length === 0 ||
             agentVersion.length > 128 ||
             typeof id !== "string" ||
-            !IDENTIFIER_PATTERN.test(id) ||
+            !isIdentifier(id) ||
             typeof label !== "string" ||
             label.trim().length === 0 ||
             label.length > 80 ||
@@ -578,7 +578,7 @@ export function validateInstallableAgents(value: unknown): readonly InstallableA
         const label = candidate["label"];
         if (
             typeof id !== "string" ||
-            !IDENTIFIER_PATTERN.test(id) ||
+            !isIdentifier(id) ||
             typeof label !== "string" ||
             label.trim().length === 0 ||
             label.length > 80 ||
@@ -663,7 +663,7 @@ export function validatePairingCode(value: unknown): string {
 }
 
 export function validateIdentifier(value: string, field: string): string {
-    if (!IDENTIFIER_PATTERN.test(value)) {
+    if (!isIdentifier(value)) {
         throw new PairingDirectoryError(`invalid_${field}`, `The ${field.replaceAll("_", " ")} is invalid`);
     }
     return value;

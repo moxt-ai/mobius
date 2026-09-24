@@ -2,7 +2,7 @@ import { mkdir, realpath, stat } from "node:fs/promises";
 import { hostname } from "node:os";
 import { basename, resolve } from "node:path";
 
-import { mobiusApiUrl } from "@moxt-ai/mobius-protocol";
+import { isIdentifier, mobiusApiUrl } from "@moxt-ai/mobius-protocol";
 import { fetch, type Response } from "undici";
 import { discoverLocalAgentInventory, type LocalAgentInventory } from "../agent-catalog/discover-local-agents.ts";
 import type { InstallableAgentDefinition } from "../agent-catalog/local-agent.ts";
@@ -24,7 +24,6 @@ import { readStateDirectory } from "../storage/state-directory.ts";
 
 const PAIRING_TIMEOUT_MILLISECONDS = 20_000;
 const PAIRING_CODE_PATTERN = /^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){4}$/;
-const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const TOKEN_PATTERN = /^[a-zA-Z0-9_-]{32,256}$/;
 const CLAIM_RESPONSE_KEYS: readonly string[] = ["appId", "channelId", "daemonToken", "runtimeId"];
 const REDEEM_RESPONSE_KEYS: readonly string[] = ["appId", "channelId", "runtimeCredential", "runtimeId"];
@@ -149,7 +148,7 @@ function parsePairCommand(arguments_: readonly string[], defaultWorkspace: strin
 }
 
 function validatePairingId(value: string): string {
-    if (!IDENTIFIER_PATTERN.test(value)) {
+    if (!isIdentifier(value)) {
         throw new PairingClientError("invalid_pairing_id", "The Runtime pairing ID is invalid");
     }
     return value;
@@ -229,13 +228,13 @@ function decodePairingResponse(
     const runtimeId = value["runtimeId"];
     if (
         typeof appId !== "string" ||
-        !IDENTIFIER_PATTERN.test(appId) ||
+        !isIdentifier(appId) ||
         typeof channelId !== "string" ||
-        !IDENTIFIER_PATTERN.test(channelId) ||
+        !isIdentifier(channelId) ||
         typeof runtimeCredential !== "string" ||
         !TOKEN_PATTERN.test(runtimeCredential) ||
         typeof runtimeId !== "string" ||
-        !IDENTIFIER_PATTERN.test(runtimeId)
+        !isIdentifier(runtimeId)
     ) {
         throw new PairingClientError("invalid_relay_response", "The relay returned an invalid pairing response");
     }

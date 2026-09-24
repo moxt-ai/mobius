@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ProtocolMessageError } from "./codecs/messages.ts";
+import { identifierStringSchema as identifier } from "./identifier.ts";
 import { nativeMessagePageSchema, sessionHistorySchema } from "./session-history.ts";
 
 export const SESSION_LIVE_HISTORY_LOAD_KIND = "session.live-history.load";
@@ -7,7 +8,6 @@ export const SESSION_LIVE_HISTORY_LOADED_KIND = "session.live-history.loaded";
 export const SESSION_LIVE_HISTORY_PAGE_LOAD_KIND = "session.live-history.page.load";
 export const SESSION_LIVE_HISTORY_PAGE_LOADED_KIND = "session.live-history.page.loaded";
 
-const identifier = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/);
 const directoryIdentifier = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/);
 
 const sessionLiveHistoryLoadSchema = z

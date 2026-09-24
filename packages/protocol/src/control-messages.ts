@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { ProtocolMessageError } from "./codecs/messages.ts";
+import { identifierStringSchema as IDENTIFIER } from "./identifier.ts";
 import { promptMetadataSchema, promptUsageSchema } from "./prompt-usage.ts";
 
 export const WORKSPACE_LIST_KIND = "workspace.list";
@@ -41,9 +42,7 @@ export const FILE_CHUNK_KIND = "file.chunk";
 export const FILE_END_KIND = "file.end";
 export const FILE_FAILED_KIND = "file.failed";
 
-const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const DIRECTORY_IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/;
-const IDENTIFIER = z.string().min(1).max(128).regex(IDENTIFIER_PATTERN);
 const DIRECTORY_IDENTIFIER = z.string().min(1).max(2_048).regex(DIRECTORY_IDENTIFIER_PATTERN);
 const SHORT_TEXT = z.string().max(500);
 const LONG_TEXT = z.string().max(100_000);
