@@ -134,6 +134,7 @@ test("Given real Codex and a local model provider, When a queued follow-up is ca
                     expect(result.turn).toMatchObject({
                         commandId,
                         epoch: expect.any(String),
+                        interaction: null,
                         prompt: "Reply briefly using the configured model",
                         sequence: 0,
                         state: "running",
