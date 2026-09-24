@@ -1,6 +1,8 @@
 import {
     ACTIVE_TURN_TEXT_LIMIT,
+    AGENT_CATALOG_DISCOVER_KIND,
     AGENT_SETTINGS_DISCOVER_KIND,
+    decodeAgentCatalogDiscoverCommand,
     decodeAgentSettingsDiscoverCommand,
     decodeFileReadCommand,
     decodeIdentifier,
@@ -15,6 +17,7 @@ import {
     decodeSessionQueryCommand,
     decodeWorkspaceListCommand,
     encodeAgentActivityEvent,
+    encodeAgentCatalogDiscoveredEvent,
     encodeAgentContentEvent,
     encodeAgentMessageDeltaEvent,
     encodeAgentSettingsDiscoveredEvent,
@@ -500,6 +503,40 @@ async function processHappyPathCommand(
                     },
                 ],
                 settingsRevision: "0".repeat(64),
+            }),
+        );
+        return;
+    }
+    if (kind === AGENT_CATALOG_DISCOVER_KIND) {
+        const command = decodeAgentCatalogDiscoverCommand(encoded);
+        daemon.send(
+            encodeAgentCatalogDiscoveredEvent({
+                agents: [
+                    {
+                        agentPath: "/fake/agent",
+                        agentVersion: "fake-agent-daemon",
+                        agentSettingsDiscovery: true,
+                        capabilities: {
+                            additionalDirectories: true,
+                            audioPrompt: false,
+                            closeSession: true,
+                            deleteSession: true,
+                            embeddedContextPrompt: true,
+                            imagePrompt: true,
+                            listSessions: true,
+                            loadSession: true,
+                            promptQueueing: behavior.steering ?? false,
+                            resumeSession: true,
+                            steering: behavior.steering ?? false,
+                            unstableForkSession: false,
+                        },
+                        id: behavior.agentId ?? "codex",
+                        label: behavior.agentName ?? "Fake Agent",
+                        sessionTurnConfiguration: true,
+                    },
+                ],
+                kind: "agent.catalog.discovered",
+                requestId: command.requestId,
             }),
         );
         return;

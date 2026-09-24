@@ -95,6 +95,12 @@ export interface PairingOperations {
         token: string,
         signal: AbortSignal,
     ) => Promise<readonly ChannelDescriptor[]>;
+    readonly readProjectRuntime: (
+        projectId: string,
+        runtimeId: string,
+        token: string,
+        signal: AbortSignal,
+    ) => Promise<ChannelDescriptor>;
     readonly readChannel: (channelId: string, token: string, signal: AbortSignal) => Promise<ChannelDescriptor>;
     readonly readProjectRuntimePairing: (
         projectId: string,

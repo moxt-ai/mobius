@@ -7,10 +7,14 @@ import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import {
+    AGENT_CATALOG_DISCOVER_KIND,
+    AGENT_CATALOG_DISCOVERED_KIND,
     AGENT_CATALOG_REFRESH_KIND,
     AGENT_CATALOG_REFRESHED_KIND,
+    decodeAgentCatalogDiscoveredEvent,
     decodeAgentCatalogRefreshedEvent,
     decodeMessageKind,
+    encodeAgentCatalogDiscoverCommand,
     encodeAgentCatalogRefreshCommand,
     MOBIUS_API_PREFIX,
 } from "@moxt-ai/mobius-protocol";
@@ -195,6 +199,19 @@ async function readRefreshed(frames: ClientFrames, requestId: string): Promise<v
     }
 }
 
+async function readDiscovered(frames: ClientFrames, requestId: string) {
+    for (;;) {
+        const message = await frames.next();
+        if (decodeMessageKind(message) !== AGENT_CATALOG_DISCOVERED_KIND) {
+            continue;
+        }
+        const discovered = decodeAgentCatalogDiscoveredEvent(message);
+        if (discovered.requestId === requestId) {
+            return discovered;
+        }
+    }
+}
+
 function executableSource(source: string): string {
     return `#!${process.execPath}\n${source}`;
 }
@@ -305,6 +322,17 @@ describe("daemon Agent catalog refresh boundary", () => {
             const frames = new ClientFrames(await relay.socket());
             const initial = await relay.catalog(1);
             expect(initial.agents.map((agent) => agent.id)).toEqual(["deepseek-harness"]);
+
+            const discoveryRequestId = "discover-runtime-agents";
+            sendText(
+                await relay.socket(),
+                encodeAgentCatalogDiscoverCommand({
+                    kind: AGENT_CATALOG_DISCOVER_KIND,
+                    requestId: discoveryRequestId,
+                }),
+            );
+            const discovered = await readDiscovered(frames, discoveryRequestId);
+            expect(discovered.agents.map((agent) => agent.id)).toEqual(["deepseek-harness"]);
 
             refreshEnvironment = { MOBIUS_STATE_DIRECTORY: stateDirectory, PATH: join(stateDirectory, "empty") };
             const requestId = "refresh-with-degraded-environment";

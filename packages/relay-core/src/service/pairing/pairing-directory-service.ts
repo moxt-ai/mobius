@@ -98,7 +98,7 @@ export class PairingDirectoryService implements PairingOperations {
             throw cause;
         }
         if (created === null) {
-            await this.readProjectRuntime(storage, scope, normalizedRuntimeId, signal);
+            await this.readProjectRuntimeAccess(storage, scope, normalizedRuntimeId, signal);
             throw new PairingDirectoryError("runtime_unavailable", "The selected Runtime is unavailable");
         }
         return new ChannelHostCredential(created.channel_id, normalizedRuntimeId, scope.projectId, credentialId);
@@ -207,7 +207,7 @@ export class PairingDirectoryService implements PairingOperations {
     ) => {
         const access = await this.authorizeProject(projectId, token, permission, signal);
         const storage = await this.projectStorage(access.scope, signal);
-        return await this.readProjectRuntime(storage, access.scope, runtimeId, signal);
+        return await this.readProjectRuntimeAccess(storage, access.scope, runtimeId, signal);
     };
 
     readonly authorizeProjectScopeRuntime: PairingOperations["authorizeProjectScopeRuntime"] = async (
@@ -216,10 +216,10 @@ export class PairingDirectoryService implements PairingOperations {
         signal,
     ) => {
         const storage = await this.projectStorage(scope, signal);
-        return await this.readProjectRuntime(storage, scope, runtimeId, signal);
+        return await this.readProjectRuntimeAccess(storage, scope, runtimeId, signal);
     };
 
-    private readonly readProjectRuntime = async (
+    private readonly readProjectRuntimeAccess = async (
         storage: PairingStorage,
         scope: ProjectScope,
         runtimeId: string,
@@ -236,6 +236,35 @@ export class PairingDirectoryService implements PairingOperations {
             throw new PairingDirectoryError("runtime_unavailable", "The selected Runtime is unavailable");
         }
         return new VerifiedChannelAccess(row.channel_id, row.runtime_id, row.project_id, parseAgents(row.agents_json));
+    };
+
+    readonly readProjectRuntime: PairingOperations["readProjectRuntime"] = async (
+        projectId,
+        runtimeId,
+        token,
+        signal,
+    ) => {
+        const access = await this.authorizeProject(projectId, token, ProjectPermission.RuntimeRead, signal);
+        const storage = await this.projectStorage(access.scope, signal);
+        const page = await storage.listRuntimes(access.projectId, signal);
+        const row = page.results.find(
+            (candidate) => candidate.runtime_id === validateIdentifier(runtimeId, "runtime_id"),
+        );
+        if (row === undefined) {
+            throw new PairingDirectoryError(
+                "runtime_access_denied",
+                "The project credential cannot access this Runtime",
+            );
+        }
+        return new ChannelDescriptor(
+            parseAgents(row.agents_json),
+            row.channel_id,
+            row.machine_name,
+            row.workspace_name,
+            row.project_id,
+            row.runtime_id,
+            parseInstallableAgents(row.installable_agents_json),
+        );
     };
 
     private readonly decodeCreatedRuntimePairing = async (

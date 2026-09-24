@@ -3,6 +3,8 @@ import { join } from "node:path";
 import { styleText } from "node:util";
 
 import {
+    AGENT_CATALOG_DISCOVER_KIND,
+    AGENT_CATALOG_DISCOVERED_KIND,
     AGENT_CATALOG_REFRESH_KIND,
     AGENT_INSTALL_CANCEL_KIND,
     AGENT_INSTALL_REQUEST_KIND,
@@ -435,6 +437,23 @@ async function runRelayConnection(
                     }
                     if (kind === AGENT_SETTINGS_DISCOVER_KIND) {
                         handleSettingsDiscovery.handle(message);
+                        return;
+                    }
+                    if (kind === AGENT_CATALOG_DISCOVER_KIND) {
+                        const catalog = config.catalog.read();
+                        send(socket, {
+                            agents: catalog.agents.map((agent) => ({
+                                agentPath: agent.agentIdentity.requestedPath,
+                                agentVersion: agent.agentVersion,
+                                agentSettingsDiscovery: true,
+                                capabilities: agent.capabilities,
+                                id: agent.id,
+                                label: agent.label,
+                                sessionTurnConfiguration: true,
+                            })),
+                            kind: AGENT_CATALOG_DISCOVERED_KIND,
+                            requestId: message.requestId,
+                        });
                         return;
                     }
                     if (kind === AGENT_CATALOG_REFRESH_KIND) {
