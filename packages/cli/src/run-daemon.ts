@@ -412,6 +412,18 @@ async function runRelayConnection(
                             directories,
                             audit,
                             sessions,
+                            (sessionId) => {
+                                for (const turn of activeTurns.values()) {
+                                    if (turn.command.sessionId !== sessionId) {
+                                        continue;
+                                    }
+                                    const snapshot = turn.snapshot();
+                                    if (snapshot !== null) {
+                                        return snapshot;
+                                    }
+                                }
+                                return null;
+                            },
                             connectionController.signal,
                         );
                         return;
