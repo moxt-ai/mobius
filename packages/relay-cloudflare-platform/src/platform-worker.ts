@@ -1,16 +1,34 @@
-import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
+import {
+    decodeCommittedSessionEvent,
+    decodeFileReadCommand,
+    decodeMessageKind,
+    decodeNativeSessionRequest,
+    decodeRuntimeStatusEvent,
+    decodeSessionCancelCommand,
+    decodeSessionConfigureCommand,
+    decodeSessionElicitationRespondCommand,
+    decodeSessionLiveHistoryPageLoad,
+    decodeSessionPermissionRespondCommand,
+    decodeSessionPromptCommand,
+    decodeSessionQueryCommand,
+    MOBIUS_API_PREFIX,
+} from "@moxt-ai/mobius-protocol";
 import {
     acceptWebSocketHttpTransport,
     CloudflareChannelRuntime,
     createMobiusApplication,
     createWorkerContext,
     instrumentD1Database,
+    PairingDirectoryError,
+    ProjectPermission,
+    ProjectScope,
     type RelayContext,
     RequestAccessMetrics,
     requestTimeoutMiddleware,
     type WorkerRuntimeGateways,
 } from "@moxt-ai/mobius-relay-core";
 import { type Handler, Hono } from "hono";
+import * as v from "valibot";
 import {
     type PlatformAuthenticationEnvironment,
     platformAuthenticationFromEnvironment,
@@ -63,6 +81,42 @@ const projectApplication = createMobiusApplication();
 const scopedProjectApplication = createProjectApplication();
 const controlApplication = createPlatformControlApplication();
 const PLATFORM_REQUEST_TIMEOUT_MILLISECONDS = 30_000;
+const sessionIdentifier = v.pipe(v.string(), v.regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/u));
+const sessionPromptBody = v.strictObject({
+    additionalDirectoryIds: v.pipe(v.array(v.string()), v.maxLength(16)),
+    agentId: v.optional(sessionIdentifier),
+    content: v.pipe(v.string(), v.maxLength(100000)),
+    disposition: v.optional(v.picklist(["reject", "queue", "steer"]), "reject"),
+    directoryId: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(2048))),
+    idempotencyKey: sessionIdentifier,
+    images: v.pipe(v.array(v.unknown()), v.maxLength(8)),
+    resources: v.pipe(v.array(v.unknown()), v.maxLength(32)),
+    sessionConfigurations: v.optional(v.pipe(v.array(v.unknown()), v.maxLength(100)), []),
+    targetCommandId: v.optional(v.string(), ""),
+});
+const sessionConfigurationBody = v.strictObject({
+    additionalDirectoryIds: v.pipe(v.array(v.pipe(v.string(), v.minLength(1), v.maxLength(2048))), v.maxLength(16)),
+    agentId: sessionIdentifier,
+    booleanValue: v.boolean(),
+    configId: sessionIdentifier,
+    directoryId: v.pipe(v.string(), v.minLength(1), v.maxLength(2048)),
+    value: v.pipe(v.string(), v.maxLength(500)),
+    valueType: v.picklist(["select", "boolean"]),
+});
+const sessionInteractionResponseBody = v.variant("kind", [
+    v.strictObject({
+        kind: v.literal("permission"),
+        optionId: v.pipe(v.string(), v.maxLength(255)),
+        outcome: v.picklist(["cancelled", "selected"]),
+        responderId: sessionIdentifier,
+    }),
+    v.strictObject({
+        action: v.picklist(["accept", "cancel", "decline"]),
+        content: v.pipe(v.string(), v.maxLength(100000)),
+        kind: v.literal("elicitation"),
+        responderId: sessionIdentifier,
+    }),
+]);
 
 type DispatchEnvironment = {
     readonly Bindings: PlatformApplicationBindings;
@@ -78,6 +132,29 @@ type DispatchEnvironment = {
         readonly signal: AbortSignal;
     };
 };
+
+async function runtimeSessionIdentity(
+    relay: RelayContext,
+    target: { readonly projectId: string; readonly runtimeId: string; readonly sessionId: string },
+    signal: AbortSignal,
+) {
+    const queried = await relay.services.runtimePairings.requestProjectScopeControl(
+        new ProjectScope(target.projectId),
+        target.runtimeId,
+        decodeSessionQueryCommand(
+            JSON.stringify({ kind: "session.query", requestId: crypto.randomUUID(), sessionIds: [target.sessionId] }),
+        ),
+        signal,
+    );
+    if (queried.kind !== "session.queried") {
+        throw new PairingDirectoryError("invalid_request", "The Runtime returned an invalid Session query");
+    }
+    const session = queried.entries.find((entry) => entry.sessionId === target.sessionId);
+    if (session === undefined) {
+        throw new PairingDirectoryError("session_not_found", "The selected Session is unavailable");
+    }
+    return session;
+}
 
 export function createPlatformApplication(
     authentication: PlatformAuthenticationConfiguration,
@@ -118,10 +195,35 @@ export function createPlatformApplication(
                         .all("/audit-events/", controlHandler),
                 ),
         );
-    const sessionRoutes = new Hono<DispatchEnvironment>().get(
-        "/:sessionId/live-event-subscription-target",
-        sessionAccessTargetMiddleware,
-        async (context) => {
+    const sessionRoutes = new Hono<DispatchEnvironment>()
+        .post("/:sessionId/access-credentials", sessionAccessTargetMiddleware, async (context) => {
+            const authorization = context.req.header("authorization") ?? "";
+            const credential = authorization.match(/^Bearer ([^\s]+)$/u)?.[1];
+            if (credential === undefined) {
+                return context.json(
+                    { error: { code: "project_credential_required", message: "An App credential is required" } },
+                    401,
+                );
+            }
+            const body: unknown = await context.req.json();
+            const input = v.parse(
+                v.strictObject({
+                    expiresInSeconds: v.pipe(v.number(), v.safeInteger(), v.minValue(60), v.maxValue(900)),
+                    runtimeId: v.pipe(v.string(), v.regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/u)),
+                }),
+                body,
+            );
+            const access = await context.var.sessionAccess.issue(
+                context.var.sessionAccessTarget,
+                input.runtimeId,
+                credential,
+                input.expiresInSeconds,
+                context.req.raw.signal,
+            );
+            context.header("Cache-Control", "no-store");
+            return context.json(access, 201);
+        })
+        .get("/:sessionId/live-event-subscription-target", sessionAccessTargetMiddleware, async (context) => {
             const authorization = context.req.header("authorization") ?? "";
             const credential = authorization.match(/^Bearer ([^\s]+)$/u)?.[1];
             if (credential === undefined) {
@@ -142,8 +244,393 @@ export function createPlatformApplication(
             );
             context.header("Cache-Control", "no-store");
             return context.json({ ...target, kind: "expiring" });
-        },
-    );
+        })
+        .get("/:sessionId/native-messages", sessionAccessTargetMiddleware, async (context) => {
+            const credential = (context.req.header("authorization") ?? "").match(/^Bearer ([^\s]+)$/u)?.[1];
+            if (credential === undefined) {
+                return context.json(
+                    { error: { code: "session_access_required", message: "A Session credential is required" } },
+                    401,
+                );
+            }
+            const access = await context.var.sessionAccess.authorizeSession(
+                context.var.sessionAccessTarget,
+                credential,
+                ProjectPermission.SessionRead,
+                context.req.raw.signal,
+            );
+            const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
+            const identity = {
+                additionalDirectoryIds: v.parse(
+                    v.pipe(v.array(v.pipe(v.string(), v.minLength(1), v.maxLength(2048))), v.maxLength(16)),
+                    context.req.queries("additionalDirectoryId") ?? [],
+                ),
+                agentId: v.parse(sessionIdentifier, context.req.query("agentId")),
+                directoryId: v.parse(
+                    v.pipe(v.string(), v.minLength(1), v.maxLength(2048)),
+                    context.req.query("directoryId"),
+                ),
+            };
+            const limit = v.parse(
+                v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(200)),
+                Number(context.req.query("limit") ?? "50"),
+            );
+            const result = await context.var.relay.services.runtimePairings.requestProjectScopeControl(
+                new ProjectScope(access.projectId),
+                access.runtimeId,
+                decodeSessionLiveHistoryPageLoad(
+                    JSON.stringify({
+                        additionalDirectoryIds: identity.additionalDirectoryIds,
+                        agentId: identity.agentId,
+                        bindingId: "workspace",
+                        cursor: context.req.query("cursor") ?? null,
+                        directoryId: identity.directoryId,
+                        kind: "session.live-history.page.load",
+                        limit,
+                        requestId: crypto.randomUUID(),
+                        sessionId,
+                    }),
+                ),
+                context.req.raw.signal,
+            );
+            if (result.kind !== "session.live-history.page.loaded") {
+                throw new PairingDirectoryError("invalid_request", "The Runtime returned invalid Session history");
+            }
+            context.header("Cache-Control", "no-store");
+            return context.json(result.page);
+        })
+        .get("/:sessionId/active-turn", sessionAccessTargetMiddleware, async (context) => {
+            const credential = (context.req.header("authorization") ?? "").match(/^Bearer ([^\s]+)$/u)?.[1];
+            if (credential === undefined) {
+                return context.json(
+                    { error: { code: "session_access_required", message: "A Session credential is required" } },
+                    401,
+                );
+            }
+            const access = await context.var.sessionAccess.authorizeLiveEvents(
+                context.var.sessionAccessTarget,
+                credential,
+                context.req.raw.signal,
+            );
+            const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
+            const additionalDirectoryIds = v.parse(
+                v.pipe(v.array(v.pipe(v.string(), v.minLength(1), v.maxLength(2048))), v.maxLength(16)),
+                context.req.queries("additionalDirectoryId") ?? [],
+            );
+            const agentId = v.parse(sessionIdentifier, context.req.query("agentId"));
+            const directoryId = v.parse(
+                v.pipe(v.string(), v.minLength(1), v.maxLength(2048)),
+                context.req.query("directoryId"),
+            );
+            const result = await context.var.relay.services.runtimePairings.requestProjectScopeControl(
+                new ProjectScope(access.projectId),
+                access.runtimeId,
+                decodeNativeSessionRequest(
+                    JSON.stringify({
+                        action: "active-turn",
+                        additionalDirectoryIds,
+                        agentId,
+                        bindingId: "workspace",
+                        directoryId,
+                        kind: "native.session.request",
+                        requestId: crypto.randomUUID(),
+                        sessionId,
+                        targetSessionId: sessionId,
+                    }),
+                ),
+                context.req.raw.signal,
+            );
+            if (result.kind !== "native.session.result" || result.action !== "active-turn") {
+                throw new PairingDirectoryError("invalid_request", "The Runtime returned an invalid active Turn");
+            }
+            context.header("Cache-Control", "no-store");
+            return context.json(result);
+        })
+        .post("/:sessionId/turns", sessionAccessTargetMiddleware, async (context) => {
+            const credential = (context.req.header("authorization") ?? "").match(/^Bearer ([^\s]+)$/u)?.[1];
+            if (credential === undefined) {
+                return context.json(
+                    { error: { code: "session_access_required", message: "A Session credential is required" } },
+                    401,
+                );
+            }
+            const access = await context.var.sessionAccess.authorizeSession(
+                context.var.sessionAccessTarget,
+                credential,
+                ProjectPermission.SessionWrite,
+                context.req.raw.signal,
+            );
+            const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
+            const body = v.parse(sessionPromptBody, await context.req.json());
+            const identity =
+                body.agentId === undefined || body.directoryId === undefined
+                    ? await runtimeSessionIdentity(
+                          context.var.relay,
+                          { projectId: access.projectId, runtimeId: access.runtimeId, sessionId },
+                          context.req.raw.signal,
+                      )
+                    : { agentId: body.agentId, directoryId: body.directoryId };
+            const started = await context.var.relay.services.runtimePairings.requestProjectScopeControl(
+                new ProjectScope(access.projectId),
+                access.runtimeId,
+                decodeSessionPromptCommand(
+                    JSON.stringify({
+                        additionalDirectoryIds: body.additionalDirectoryIds,
+                        agentId: identity.agentId,
+                        bindingId: "workspace",
+                        commandId: body.idempotencyKey,
+                        directoryId: identity.directoryId,
+                        disposition: body.disposition,
+                        images: body.images,
+                        kind: "session.prompt",
+                        prompt: body.content,
+                        resources: body.resources,
+                        sessionConfigurations: body.sessionConfigurations,
+                        sessionId,
+                        targetCommandId: body.targetCommandId,
+                    }),
+                ),
+                context.req.raw.signal,
+            );
+            if (started.kind !== "session.started") {
+                throw new PairingDirectoryError("invalid_request", "The Runtime returned an invalid Turn");
+            }
+            const acceptedAt = new Date().toISOString();
+            context.header("Cache-Control", "no-store");
+            return context.json({
+                acceptedAt,
+                bindingId: "workspace",
+                idempotencyKey: body.idempotencyKey,
+                request: {
+                    content: body.content,
+                    kind: "prompt",
+                    sessionConfigurations: body.sessionConfigurations,
+                },
+                sessionId,
+                state: { kind: "running", startedAt: acceptedAt },
+                turnId: started.commandId,
+            });
+        })
+        .get("/:sessionId/files/content", sessionAccessTargetMiddleware, async (context) => {
+            const credential = (context.req.header("authorization") ?? "").match(/^Bearer ([^\s]+)$/u)?.[1];
+            if (credential === undefined) {
+                return context.json(
+                    { error: { code: "session_access_required", message: "A Session credential is required" } },
+                    401,
+                );
+            }
+            const access = await context.var.sessionAccess.authorizeLiveEvents(
+                context.var.sessionAccessTarget,
+                credential,
+                context.req.raw.signal,
+            );
+            const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
+            const path = v.parse(v.pipe(v.string(), v.minLength(1), v.maxLength(4096)), context.req.query("path"));
+            const maxBytes = v.parse(
+                v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(128 * 1024 * 1024)),
+                Number(context.req.query("maxBytes") ?? String(32 * 1024 * 1024)),
+            );
+            return await context.var.relay.services.runtimePairings.readProjectSessionFile(
+                new ProjectScope(access.projectId),
+                access.runtimeId,
+                decodeFileReadCommand(
+                    JSON.stringify({ kind: "file.read", maxBytes, path, requestId: crypto.randomUUID(), sessionId }),
+                ),
+                context.req.raw.signal,
+            );
+        })
+        .post("/:sessionId/configuration", sessionAccessTargetMiddleware, async (context) => {
+            const credential = (context.req.header("authorization") ?? "").match(/^Bearer ([^\s]+)$/u)?.[1];
+            if (credential === undefined) {
+                return context.json(
+                    { error: { code: "session_access_required", message: "A Session credential is required" } },
+                    401,
+                );
+            }
+            const access = await context.var.sessionAccess.authorizeSession(
+                context.var.sessionAccessTarget,
+                credential,
+                ProjectPermission.SessionWrite,
+                context.req.raw.signal,
+            );
+            const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
+            const body = v.parse(sessionConfigurationBody, await context.req.json());
+            const result = await context.var.relay.services.runtimePairings.requestProjectScopeControl(
+                new ProjectScope(access.projectId),
+                access.runtimeId,
+                decodeSessionConfigureCommand(
+                    JSON.stringify({
+                        ...body,
+                        additionalDirectoryIds: body.additionalDirectoryIds,
+                        agentId: body.agentId,
+                        bindingId: "workspace",
+                        directoryId: body.directoryId,
+                        kind: "session.configure",
+                        requestId: crypto.randomUUID(),
+                        sessionId,
+                    }),
+                ),
+                context.req.raw.signal,
+            );
+            context.header("Cache-Control", "no-store");
+            return context.json(result);
+        })
+        .post("/:sessionId/turns/:turnId/cancel", sessionAccessTargetMiddleware, async (context) => {
+            const credential = (context.req.header("authorization") ?? "").match(/^Bearer ([^\s]+)$/u)?.[1];
+            if (credential === undefined) {
+                return context.json(
+                    { error: { code: "session_access_required", message: "A Session credential is required" } },
+                    401,
+                );
+            }
+            const access = await context.var.sessionAccess.authorizeLiveEvents(
+                context.var.sessionAccessTarget,
+                credential,
+                context.req.raw.signal,
+            );
+            const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
+            const turnId = v.parse(sessionIdentifier, context.req.param("turnId"));
+            const body = v.parse(v.strictObject({ idempotencyKey: sessionIdentifier }), await context.req.json());
+            const completed = await context.var.relay.services.runtimePairings.requestProjectScopeControl(
+                new ProjectScope(access.projectId),
+                access.runtimeId,
+                decodeSessionCancelCommand(JSON.stringify({ commandId: turnId, kind: "session.cancel", sessionId })),
+                context.req.raw.signal,
+            );
+            if (completed.kind !== "session.completed") {
+                throw new PairingDirectoryError("invalid_request", "The Runtime returned an invalid cancellation");
+            }
+            const cancelledAt = new Date().toISOString();
+            context.header("Cache-Control", "no-store");
+            return context.json({
+                acceptedAt: cancelledAt,
+                bindingId: "workspace",
+                idempotencyKey: body.idempotencyKey,
+                request: { content: "", kind: "prompt", sessionConfigurations: [] },
+                sessionId,
+                state: { cancelledAt, kind: "cancelled" },
+                turnId,
+            });
+        })
+        .post("/:sessionId/interactions/:interactionId/responses", sessionAccessTargetMiddleware, async (context) => {
+            const credential = (context.req.header("authorization") ?? "").match(/^Bearer ([^\s]+)$/u)?.[1];
+            if (credential === undefined) {
+                return context.json(
+                    { error: { code: "session_access_required", message: "A Session credential is required" } },
+                    401,
+                );
+            }
+            const access = await context.var.sessionAccess.authorizeSession(
+                context.var.sessionAccessTarget,
+                credential,
+                ProjectPermission.SessionWrite,
+                context.req.raw.signal,
+            );
+            const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
+            const interactionId = v.parse(sessionIdentifier, context.req.param("interactionId"));
+            const body = v.parse(sessionInteractionResponseBody, await context.req.json());
+            const command =
+                body.kind === "permission"
+                    ? decodeSessionPermissionRespondCommand(
+                          JSON.stringify({
+                              interactionId,
+                              kind: "session.permission.respond",
+                              optionId: body.optionId,
+                              outcome: body.outcome,
+                              sessionId,
+                          }),
+                      )
+                    : decodeSessionElicitationRespondCommand(
+                          JSON.stringify({
+                              action: body.action,
+                              content: body.content,
+                              interactionId,
+                              kind: "session.elicitation.respond",
+                              sessionId,
+                          }),
+                      );
+            await context.var.relay.services.runtimePairings.requestProjectScopeControl(
+                new ProjectScope(access.projectId),
+                access.runtimeId,
+                command,
+                context.req.raw.signal,
+            );
+            context.header("Cache-Control", "no-store");
+            return context.json({ accepted: true });
+        })
+        .get("/:sessionId/events", sessionAccessTargetMiddleware, async (context) => {
+            if (context.req.header("upgrade")?.toLowerCase() !== "websocket") {
+                return context.json(
+                    { error: { code: "websocket_upgrade_required", message: "A WebSocket upgrade is required" } },
+                    426,
+                );
+            }
+            const authorization = context.req.header("authorization") ?? "";
+            const credential = authorization.match(/^Bearer ([^\s]+)$/u)?.[1];
+            if (credential === undefined) {
+                return context.json(
+                    { error: { code: "session_access_required", message: "A Session credential is required" } },
+                    401,
+                );
+            }
+            const target = await context.var.sessionAccess.authorizeLiveEvents(
+                context.var.sessionAccessTarget,
+                credential,
+                context.req.raw.signal,
+            );
+            const host = await context.var.relay.services.runtimePairings.openProjectSessionEventHost(
+                new ProjectScope(target.projectId),
+                target.runtimeId,
+                context.req.raw.signal,
+            );
+            const pair = new WebSocketPair();
+            const client = pair[0];
+            const server = pair[1];
+            let closed = false;
+            const expirationTimeout = setTimeout(
+                () => close(),
+                Math.max(0, target.expiresAtEpochMilliseconds - Date.now()),
+            );
+            const close = (): void => {
+                if (closed) {
+                    return;
+                }
+                closed = true;
+                clearTimeout(expirationTimeout);
+                server.close(1000, "Session event subscription closed");
+                void host.close();
+            };
+            server.accept();
+            host.socket.addEventListener("message", (event) => {
+                if (closed || typeof event.data !== "string") {
+                    return;
+                }
+                try {
+                    const kind = decodeMessageKind(event.data);
+                    if (kind === "runtime.status") {
+                        if (!decodeRuntimeStatusEvent(event.data).online) {
+                            close();
+                        }
+                        return;
+                    }
+                    if (kind === "session.event.committed") {
+                        const committed = decodeCommittedSessionEvent(event.data);
+                        if (committed.sessionId === context.req.param("sessionId")) {
+                            server.send(event.data);
+                        }
+                    }
+                } catch {
+                    server.close(1007, "Invalid Runtime event");
+                    void host.close();
+                }
+            });
+            host.socket.addEventListener("close", close, { once: true });
+            host.socket.addEventListener("error", close, { once: true });
+            server.addEventListener("close", close, { once: true });
+            server.addEventListener("error", close, { once: true });
+            host.socket.accept();
+            return new Response(null, { status: 101, webSocket: client });
+        });
     const projectRoutes = new Hono<DispatchEnvironment>()
         .route("/sessions", sessionRoutes)
         .all("/runtime-pairings/*", projectHandler)

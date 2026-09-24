@@ -340,6 +340,52 @@ describe.sequential("Platform Session-only boundary", () => {
             // A retransmission remains a live event; the viewer uses the Runtime's epoch and sequence.
             daemon.send(answer);
             expect(decodeCommittedSessionEvent(await hostMessages.next()).payload).toContain("local answer");
+            const browserAccess = await responseJson(
+                await worker.fetch(
+                    new Request(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/access-credentials`,
+                        {
+                            body: JSON.stringify({ expiresInSeconds: 900, runtimeId }),
+                            headers: credentialHeaders(appCredential),
+                            method: "POST",
+                        },
+                    ),
+                    environment,
+                ),
+                201,
+            );
+            const transportResponse = await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/transport`, { headers: { Upgrade: "websocket" } }),
+                environment,
+            );
+            expect(transportResponse.status).toBe(101);
+            if (transportResponse.webSocket === null) {
+                throw new Error("Expected the browser transport socket");
+            }
+            const transport = transportResponse.webSocket;
+            const transportMessages = new SocketMessages(transport);
+            transport.accept();
+            transport.send(
+                JSON.stringify({
+                    headers: [["authorization", `Bearer ${text(browserAccess, "credential")}`]],
+                    kind: "session.events.subscribe",
+                    path: `${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/events`,
+                    subscriptionId: "subscription-1",
+                }),
+            );
+            expect(JSON.parse(await transportMessages.next())).toMatchObject({
+                kind: "session.events.ready",
+                subscriptionId: "subscription-1",
+            });
+            daemon.send(answer);
+            expect(decodeCommittedSessionEvent(await hostMessages.next()).payload).toContain("local answer");
+            expect(JSON.parse(await transportMessages.next())).toMatchObject({
+                data: expect.stringContaining("local answer"),
+                eventId: "",
+                kind: "session.events.event",
+                subscriptionId: "subscription-1",
+            });
+            transport.close(1000, "Browser test complete");
             daemon.close(1000, "Reconnect Runtime");
             expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "runtime.status", online: false });
             const reconnectResponse = await worker.fetch(
@@ -367,6 +413,31 @@ describe.sequential("Platform Session-only boundary", () => {
                 ];
                 expect(sessionTables).toEqual([]);
             });
+            const sessionAccess = await responseJson(
+                await worker.fetch(
+                    new Request(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/access-credentials`,
+                        {
+                            body: JSON.stringify({ expiresInSeconds: 900, runtimeId }),
+                            headers: credentialHeaders(appCredential),
+                            method: "POST",
+                        },
+                    ),
+                    environment,
+                ),
+                201,
+            );
+            const liveTarget = await responseJson(
+                await worker.fetch(
+                    new Request(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/live-event-subscription-target`,
+                        { headers: credentialHeaders(text(sessionAccess, "credential")) },
+                    ),
+                    environment,
+                ),
+                200,
+            );
+            expect(liveTarget).toMatchObject({ kind: "expiring", projectId, runtimeId });
         } finally {
             daemon.close(1000, "Test complete");
             host.close(1000, "Test complete");
