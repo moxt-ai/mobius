@@ -2,13 +2,10 @@ import { randomUUID } from "node:crypto";
 import { styleText } from "node:util";
 
 import {
-    AGENT_CATALOG_REFRESH_FAILED_KIND,
     AGENT_CATALOG_REFRESH_KIND,
-    AGENT_CATALOG_REFRESHED_KIND,
     AGENT_INSTALL_CANCEL_KIND,
     AGENT_INSTALL_REQUEST_KIND,
     AGENT_SETTINGS_DISCOVER_KIND,
-    type AgentCatalogRefreshCommand,
     decodeServiceToDaemonMessage,
     decodeSessionLiveHistoryLoad,
     decodeSessionLiveHistoryPageLoad,
@@ -36,19 +33,17 @@ import { type MessageEvent, WebSocket } from "undici";
 
 import { AcpExecutionError, AcpSessionManager } from "./acp/session-manager.ts";
 import { MemoryAcpSessionStore } from "./acp/session-store.ts";
-import {
-    discoverLocalAgentInventory,
-    supportedLocalAgentSpecifications,
-} from "./agent-catalog/discover-local-agents.ts";
+import { supportedLocalAgentSpecifications } from "./agent-catalog/discover-local-agents.ts";
+import { createAgentCatalogRefreshHandler } from "./agent-catalog/handle-agent-catalog-refresh.ts";
 import { createAgentSettingsDiscoveryHandler } from "./agent-catalog/handle-agent-settings-discovery.ts";
-import { type AcpAgentDefinition, AgentIntegrationDefinition } from "./agent-catalog/local-agent.ts";
+import { AgentIntegrationDefinition } from "./agent-catalog/local-agent.ts";
 import { publishAgentCatalog } from "./agent-catalog/publish-agent-catalog.ts";
 import { AgentInstallationManager } from "./agent-installation/agent-installation-manager.ts";
 import { FixedInstallationExecutor } from "./agent-installation/fixed-installation-executor.ts";
 import { streamLocalFile } from "./artifacts/local-file-streamer.ts";
 import type { AuditStore } from "./audit/audit-store.ts";
 import { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
-import { type DaemonConfig, DaemonLocalContext, withDaemonEnvironment } from "./config.ts";
+import type { DaemonConfig } from "./config.ts";
 import { DaemonDiagnosticLog } from "./daemon-diagnostic-log.ts";
 import { AuditInstallationEvents, DaemonAcpObserver, DaemonInstallationObserver } from "./daemon-observers.ts";
 import {
@@ -59,7 +54,6 @@ import {
     executeSessionPrepare,
     executeWorkspaceList,
     operationErrorCode,
-    operationErrorMessage,
     reportOperationFailure,
     send,
     settleAbandonedTurn,
@@ -67,7 +61,6 @@ import {
 import { ActiveDaemonTurn, ActiveTurnReconciliationError, reconcileActiveTurns } from "./daemon-turn-reconciliation.ts";
 import { readCodexFullHistory } from "./native-sessions/codex-history.ts";
 import { NativeSessionService } from "./native-sessions/service.ts";
-import { revalidateExecutable } from "./process/executable.ts";
 import { connectRelay } from "./relay-connection/connect.ts";
 import { DaemonOperationState } from "./relay-connection/daemon-operation-state.ts";
 import { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
@@ -165,61 +158,6 @@ export interface RunDaemonOptions {
     readonly resolveAgentCatalogEnvironment?: (signal: AbortSignal) => Promise<Readonly<NodeJS.ProcessEnv>>;
 }
 
-// A refresh observes the machine through executable discovery, which depends on ambient state such
-// as PATH and the managed state directory. An Agent that was verified a moment ago is therefore not
-// necessarily uninstalled just because one discovery attempt failed to re-verify it. Keep the last
-// verified definition while the exact executable it was verified against still exists unchanged on
-// disk, so a transient probe failure cannot silently drop a working Agent. A genuine removal, or a
-// replaced executable, stops satisfying that check and is still reflected in the catalog.
-async function retainStillInstalledAgents(
-    previous: readonly AcpAgentDefinition[],
-    refreshed: readonly AcpAgentDefinition[],
-    signal: AbortSignal,
-): Promise<readonly AcpAgentDefinition[]> {
-    const refreshedIdentifiers = new Set(refreshed.map((agent) => agent.id));
-    const retained: AcpAgentDefinition[] = [];
-    for (const agent of previous) {
-        if (refreshedIdentifiers.has(agent.id)) {
-            continue;
-        }
-        signal.throwIfAborted();
-        if (await revalidateExecutable(agent.agentIdentity)) {
-            retained.push(agent);
-        }
-    }
-    return Object.freeze([...refreshed, ...retained]);
-}
-
-async function refreshAgentCatalog(
-    config: DaemonConfig,
-    resolveEnvironment: (signal: AbortSignal) => Promise<Readonly<NodeJS.ProcessEnv>>,
-    signal: AbortSignal,
-): Promise<void> {
-    signal.throwIfAborted();
-    const shellEnvironment = await resolveEnvironment(signal);
-    const environment = new DaemonLocalContext(config.localContext.stateDirectory, shellEnvironment).environment;
-    signal.throwIfAborted();
-    const inventory = await discoverLocalAgentInventory({
-        defaultWorkspace: config.defaultWorkspace,
-        environment,
-        signal,
-    });
-    const previousCatalog = config.catalog.read();
-    const refreshedAgents = inventory.readyAgents().map((agent) => withDaemonEnvironment(agent, environment));
-    const agents = await retainStillInstalledAgents(previousCatalog.agents, refreshedAgents, signal);
-    const verifiedIdentifiers = new Set(agents.map((agent) => agent.id));
-    config.catalog.transition(
-        agents,
-        inventory.installable.filter((agent) => !verifiedIdentifiers.has(agent.id)),
-    );
-    try {
-        await publishAgentCatalog(config, signal);
-    } catch (error) {
-        config.catalog.transition(previousCatalog.agents, previousCatalog.installableAgents);
-        throw error;
-    }
-}
-
 async function runRelayConnection(
     config: DaemonConfig,
     directories: WorkspaceDirectoryService,
@@ -253,13 +191,6 @@ async function runRelayConnection(
             readonly completion: Promise<void>;
         }
     >();
-    const agentCatalogRefreshes = new Map<
-        string,
-        {
-            readonly controller: AbortController;
-            readonly completion: Promise<void>;
-        }
-    >();
     const handleSettingsDiscovery = createAgentSettingsDiscoveryHandler({
         config,
         directories,
@@ -269,6 +200,15 @@ async function runRelayConnection(
         socket,
         signal: connectionController.signal,
         timer,
+    });
+    const handleCatalogRefresh = createAgentCatalogRefreshHandler({
+        config,
+        audit,
+        diagnostics,
+        socket,
+        signal: connectionController.signal,
+        timer,
+        resolveEnvironment: resolveAgentCatalogEnvironment,
     });
     installationObserver.connect(socket);
     onConnected();
@@ -478,80 +418,7 @@ async function runRelayConnection(
                         return;
                     }
                     if (kind === AGENT_CATALOG_REFRESH_KIND) {
-                        const command: AgentCatalogRefreshCommand = message;
-                        if (agentCatalogRefreshes.has(command.requestId) || agentCatalogRefreshes.size > 0) {
-                            if (socket.readyState === WebSocket.OPEN) {
-                                send(socket, {
-                                    code: "agent_catalog_refresh_busy",
-                                    kind: AGENT_CATALOG_REFRESH_FAILED_KIND,
-                                    message: "Another local Agent catalog refresh is already running",
-                                    requestId: command.requestId,
-                                });
-                            }
-                            return;
-                        }
-                        const controller = new AbortController();
-                        const operationSignal = AbortSignal.any([connectionController.signal, controller.signal]);
-                        const timeout = timer.schedule(
-                            () =>
-                                controller.abort(
-                                    new AcpExecutionError(
-                                        "The local Agent catalog refresh timed out",
-                                        {},
-                                        "agent_catalog_refresh_timeout",
-                                    ),
-                                ),
-                            90_000,
-                        );
-                        const completion = (async (): Promise<void> => {
-                            try {
-                                await refreshAgentCatalog(config, resolveAgentCatalogEnvironment, operationSignal);
-                                audit.record({
-                                    commandId: command.requestId,
-                                    event: "agent_catalog_refreshed",
-                                    sessionId: "agent-catalog",
-                                });
-                                if (socket.readyState === WebSocket.OPEN) {
-                                    send(socket, {
-                                        kind: AGENT_CATALOG_REFRESHED_KIND,
-                                        requestId: command.requestId,
-                                    });
-                                }
-                            } catch (error) {
-                                const failure: unknown = operationSignal.aborted
-                                    ? (controller.signal.reason ??
-                                      new AcpExecutionError(
-                                          "The local Agent catalog refresh was cancelled",
-                                          {},
-                                          "agent_catalog_refresh_cancelled",
-                                      ))
-                                    : error;
-                                audit.record({
-                                    commandId: command.requestId,
-                                    details: { code: operationErrorCode(failure) },
-                                    event: "agent_catalog_refresh_failed",
-                                    sessionId: "agent-catalog",
-                                });
-                                diagnostics.daemonDiagnostic(
-                                    "agent_catalog_refresh_failed",
-                                    command.requestId,
-                                    { code: operationErrorCode(failure) },
-                                    failure,
-                                );
-                                if (socket.readyState === WebSocket.OPEN) {
-                                    send(socket, {
-                                        code: operationErrorCode(failure),
-                                        kind: AGENT_CATALOG_REFRESH_FAILED_KIND,
-                                        message: operationErrorMessage(failure),
-                                        requestId: command.requestId,
-                                    });
-                                }
-                            } finally {
-                                timeout.cancel();
-                                agentCatalogRefreshes.delete(command.requestId);
-                            }
-                        })();
-                        agentCatalogRefreshes.set(command.requestId, { completion, controller });
+                        handleCatalogRefresh.handle(message);
                         return;
                     }
                     if (kind === NATIVE_SESSION_REQUEST_KIND) {
@@ -982,7 +849,7 @@ async function runRelayConnection(
         await Promise.all([
             ...[...nativeRequests.values()].map((request) => request.completion),
             handleSettingsDiscovery.settle(),
-            ...[...agentCatalogRefreshes.values()].map((request) => request.completion),
+            handleCatalogRefresh.settle(),
         ]);
     }
 }
