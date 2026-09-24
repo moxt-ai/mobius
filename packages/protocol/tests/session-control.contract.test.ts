@@ -15,7 +15,6 @@ import {
     decodeAgentSettingsDiscoverCommand,
     decodeAgentSettingsDiscoveredEvent,
     decodeNativeSessionHistory,
-    decodeNativeSessionTurnForkCommand,
     decodeSessionConfigOptions,
     decodeSessionConfigureCommand,
     decodeSessionElicitationRequestedEvent,
@@ -29,7 +28,6 @@ import {
     encodeAgentInstallRequestCommand,
     encodeAgentSettingsDiscoverCommand,
     encodeAgentSettingsDiscoveredEvent,
-    encodeNativeSessionTurnForkCommand,
     encodeSessionConfigureCommand,
     encodeSessionElicitationRequestedEvent,
     encodeSessionOperationFailedEvent,
@@ -71,25 +69,6 @@ it("Given local Session preparation fails after measurable work, When the Runtim
     } as const;
 
     expect(decodeSessionOperationFailedEvent(encodeSessionOperationFailedEvent(failure))).toEqual(failure);
-});
-
-it("Given a native Agent turn anchor, When the daemon receives a fork command, Then the validated command round-trips", () => {
-    const command = {
-        additionalDirectoryIds: [],
-        agentId: "codex",
-        bindingId: "workspace",
-        directoryId: "default",
-        kind: "native.session.turn-fork",
-        messageFingerprint: `sha256:${"a".repeat(64)}`,
-        messageId: "assistant-message-7",
-        messageOccurrence: 2,
-        requestId: "fork-request-1",
-        sessionId: "source-session",
-        sourceCommandId: "source-command",
-        targetSessionId: "target-session",
-        title: "Source session",
-    } as const;
-    expect(decodeNativeSessionTurnForkCommand(encodeNativeSessionTurnForkCommand(command))).toEqual(command);
 });
 
 const modelOption: SessionConfigOption = {

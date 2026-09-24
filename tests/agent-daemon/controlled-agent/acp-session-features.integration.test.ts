@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -817,74 +816,6 @@ describe("ACP session features", () => {
             });
             expect(activityContent).toContain("diff");
             expect(activityContent).toContain("resource");
-        } finally {
-            await manager.close();
-            if (previousState === undefined) {
-                delete process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
-            } else {
-                process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = previousState;
-            }
-            await rm(temporaryDirectory, { force: true, recursive: true });
-        }
-    });
-
-    it("Given a Mobius conversation has multiple completed turns, When it is forked at an earlier Agent message, Then the native fork contains exactly the selected history prefix", async () => {
-        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-turn-fork-"));
-        const previousState = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
-        process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = temporaryDirectory;
-        const store = new MemoryAcpSessionStore();
-        const manager = new AcpSessionManager(new RecordingObserver(), store);
-        const signal = new AbortController().signal;
-        const prompt = async (sessionId: string, commandId: string, text: string): Promise<string> => {
-            const output: string[] = [];
-            await manager.runPrompt({
-                additionalDirectories: [],
-                agent: fakeAgent(),
-                commandId,
-                cwd: temporaryDirectory,
-                images: [],
-                onActivity: () => Promise.resolve(),
-                onText: (chunk) => {
-                    output.push(chunk);
-                    return Promise.resolve();
-                },
-                prompt: text,
-                resources: [],
-                sessionId,
-                signal,
-            });
-            return output.join("");
-        };
-        try {
-            expect(await prompt("source-session", "source-command-1", "first")).toBe("Codex turn 1: first");
-            expect(await prompt("source-session", "source-command-2", "second")).toBe("Codex turn 2: second");
-
-            const selectedResponse = "Codex turn 1: first";
-            const forked = await manager.forkSessionAtTurn(
-                {
-                    additionalDirectories: [],
-                    agent: fakeAgent(),
-                    cwd: temporaryDirectory,
-                    sessionId: "forked-session",
-                    signal,
-                },
-                "source-session",
-                {
-                    messageFingerprint: `sha256:${createHash("sha256").update(selectedResponse).digest("hex")}`,
-                    messageId: "assistant-1",
-                    messageOccurrence: 1,
-                },
-            );
-
-            expect(forked.history).toMatchObject({
-                status: "available",
-                messages: [
-                    expect.objectContaining({ role: "user", text: "first" }),
-                    expect.objectContaining({ role: "assistant", text: selectedResponse }),
-                ],
-            });
-            expect(JSON.stringify(forked.history)).not.toContain("second");
-            expect(await prompt("forked-session", "forked-command", "after fork")).toBe("Codex turn 2: after fork");
         } finally {
             await manager.close();
             if (previousState === undefined) {

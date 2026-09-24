@@ -11,7 +11,6 @@ import { sessionHistorySchema } from "./session-history.ts";
 export const NATIVE_SESSION_REQUEST_KIND = "native.session.request";
 export const NATIVE_SESSION_RESULT_KIND = "native.session.result";
 export const NATIVE_SESSION_CANCEL_KIND = "native.session.cancel";
-export const NATIVE_SESSION_TURN_FORK_KIND = "native.session.turn-fork";
 export const ACTIVE_TURN_TEXT_LIMIT = 1_000_000;
 
 const identifier = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/);
@@ -28,29 +27,6 @@ const identity = {
     bindingId: identifier,
     directoryId,
 };
-
-const turnForkIdentity = {
-    additionalDirectoryIds: z.array(directoryId).max(16).readonly(),
-    agentId: identifier,
-    bindingId: identifier,
-    directoryId,
-    requestId: identifier,
-    sessionId: identifier,
-    sourceCommandId: identifier,
-    targetSessionId: identifier,
-};
-
-const nativeSessionTurnForkCommandSchema = z
-    .strictObject({
-        ...turnForkIdentity,
-        kind: z.literal(NATIVE_SESSION_TURN_FORK_KIND),
-        messageFingerprint: z.string().regex(/^sha256:[a-f0-9]{64}$/),
-        messageId: z.string().min(1).max(255),
-        messageOccurrence: z.number().int().positive(),
-        title: z.string().max(500),
-    })
-    .readonly();
-export type NativeSessionTurnForkCommand = z.infer<typeof nativeSessionTurnForkCommandSchema>;
 
 const nativeSessionRequestSchema = z.discriminatedUnion("action", [
     z.strictObject({ ...identity, action: z.literal("create") }).readonly(),
@@ -272,7 +248,3 @@ export const decodeNativeSessionCancel = (encoded: string): NativeSessionCancel 
     decode(nativeSessionCancelSchema, encoded);
 export const encodeNativeSessionCancel = (value: NativeSessionCancel): string =>
     JSON.stringify(nativeSessionCancelSchema.parse(value));
-export const decodeNativeSessionTurnForkCommand = (encoded: string): NativeSessionTurnForkCommand =>
-    decode(nativeSessionTurnForkCommandSchema, encoded);
-export const encodeNativeSessionTurnForkCommand = (value: NativeSessionTurnForkCommand): string =>
-    JSON.stringify(nativeSessionTurnForkCommandSchema.parse(value));

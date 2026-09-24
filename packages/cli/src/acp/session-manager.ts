@@ -26,7 +26,6 @@ export {
     AcpPreparedSession,
     type AcpPrepareOptions,
     type AcpPromptResult,
-    type AcpSessionForkPoint,
     type AcpSessionObserver,
     type AcpSteerOptions,
     type AcpTurnOptions,
@@ -45,11 +44,9 @@ import {
     type AcpPrepareOptions,
     AcpProcessSession,
     type AcpPromptResult,
-    type AcpSessionForkPoint,
     type AcpSessionObserver,
     type AcpSteerOptions,
     type AcpTurnOptions,
-    arraysEqual,
     NullAcpSessionObserver,
     nativeHistoryNotRetained,
 } from "./process-session.ts";
@@ -463,33 +460,6 @@ export class AcpSessionManager {
                             () => this.#observer,
                             this.#store,
                             metrics,
-                        ),
-                );
-            } finally {
-                this.#preparing.delete(options.sessionId);
-                this.#notifyProcessCapacityChanged();
-            }
-        })();
-        this.#preparing.set(options.sessionId, operation);
-        return await operation;
-    }
-
-    async #startSessionForkAtTurnPreparation(
-        options: AcpPrepareOptions,
-        sourceNativeSessionId: string,
-        forkPoint: AcpSessionForkPoint,
-    ): Promise<AcpProcessSession> {
-        const operation = (async () => {
-            try {
-                return await this.#startRetainedSessionProcess(
-                    options,
-                    async () =>
-                        await AcpProcessSession.startSessionForkAtTurn(
-                            options,
-                            sourceNativeSessionId,
-                            forkPoint,
-                            () => this.#observer,
-                            this.#store,
                         ),
                 );
             } finally {
@@ -1234,87 +1204,6 @@ export class AcpSessionManager {
                 await this.#retireSessionProcess(options.sessionId, runtime, async () => await runtime.closeProcess());
             }
             throw error;
-        } finally {
-            this.#nativeOperations.delete(key);
-            this.#endSessionUse(options.sessionId);
-        }
-    };
-
-    readonly forkSessionAtTurn = async (
-        options: AcpPrepareOptions,
-        sourceSessionId: string,
-        forkPoint: AcpSessionForkPoint,
-    ) => {
-        if (sourceSessionId === options.sessionId) {
-            throw new AcpExecutionError(
-                "The fork destination must be a new conversation",
-                {},
-                "session_identity_mismatch",
-            );
-        }
-        const source = this.#store.read(sourceSessionId);
-        if (!(source instanceof FoundAcpStoredSession) || !source.session.prompted) {
-            throw new AcpExecutionError(
-                "The source conversation has no resumable native Agent session",
-                {},
-                "native_session_not_found",
-            );
-        }
-        if (
-            source.session.agentId !== options.agent.id ||
-            source.session.cwd !== options.cwd ||
-            !arraysEqual(source.session.additionalDirectories, options.additionalDirectories)
-        ) {
-            throw new AcpExecutionError(
-                "The source conversation execution target does not match the fork request",
-                {},
-                "native_session_target_changed",
-            );
-        }
-        const key = `${options.agent.id}:${source.session.nativeSessionId}`;
-        const linked = this.#store.findNative(options.agent.id, source.session.nativeSessionId);
-        if (
-            this.#nativeOperations.has(key) ||
-            linked.some((entry) => this.#activeSessionIds.has(entry.sessionId) || this.#preparing.has(entry.sessionId))
-        ) {
-            throw new AcpExecutionError(
-                "Wait for the source conversation's running operation to finish",
-                {},
-                "session_busy",
-            );
-        }
-        if (
-            this.#sessions.has(options.sessionId) ||
-            this.#preparing.has(options.sessionId) ||
-            this.#store.read(options.sessionId) instanceof FoundAcpStoredSession ||
-            this.#store.read(options.sessionId) instanceof DeletedAcpStoredSession
-        ) {
-            throw new AcpExecutionError("The destination conversation already exists", {}, "session_identity_mismatch");
-        }
-        this.#beginSessionUse(options.sessionId);
-        this.#nativeOperations.add(key);
-        try {
-            const runtime = await this.#startSessionForkAtTurnPreparation(
-                options,
-                source.session.nativeSessionId,
-                forkPoint,
-            );
-            const openedKey = `${options.agent.id}:${runtime.nativeSessionId()}`;
-            this.#nativeOperations.add(openedKey);
-            try {
-                return {
-                    history: await runtime.loadHistory(options.signal),
-                    prepared: runtime.prepared(),
-                    sessionId: options.sessionId,
-                };
-            } catch (error) {
-                this.#store.remove(options.sessionId);
-                await this.#retireSessionProcess(options.sessionId, runtime, async () => await runtime.closeProcess());
-                throw error;
-            } finally {
-                this.#nativeOperations.delete(openedKey);
-                this.#notifyProcessCapacityChanged();
-            }
         } finally {
             this.#nativeOperations.delete(key);
             this.#endSessionUse(options.sessionId);
