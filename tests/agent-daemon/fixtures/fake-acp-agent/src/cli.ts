@@ -1065,7 +1065,40 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                 await waitForAbort(cancellation.signal);
                 return { stopReason: "cancelled" };
             }
-            if (prompt === "hold after first delta" || prompt === "release after first delta") {
+            if (
+                prompt === "hold after first delta" ||
+                prompt === "release after first delta" ||
+                prompt === "hold after large output"
+            ) {
+                if (prompt === "hold after large output") {
+                    for (let index = 0; index < 20; index += 1) {
+                        await context.client.notify(acp.methods.client.session.update, {
+                            sessionId: context.params.sessionId,
+                            update: {
+                                content: { text: "x".repeat(10_000), type: "text" },
+                                messageId: `assistant-${turnNumber.toString()}`,
+                                sessionUpdate: "agent_message_chunk",
+                            },
+                        });
+                    }
+                    await context.client.notify(acp.methods.client.session.update, {
+                        sessionId: context.params.sessionId,
+                        update: {
+                            content: {
+                                resource: {
+                                    blob: "AQ==",
+                                    mimeType: "application/octet-stream",
+                                    uri: "file:///long-output.bin",
+                                },
+                                type: "resource",
+                            },
+                            messageId: `assistant-${turnNumber.toString()}`,
+                            sessionUpdate: "agent_message_chunk",
+                        },
+                    });
+                    await waitForAbort(cancellation.signal);
+                    return { stopReason: "cancelled" };
+                }
                 await context.client.notify(acp.methods.client.session.update, {
                     sessionId: context.params.sessionId,
                     update: {

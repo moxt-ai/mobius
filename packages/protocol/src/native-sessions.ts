@@ -8,6 +8,7 @@ export const NATIVE_SESSION_RESULT_KIND = "native.session.result";
 export const NATIVE_SESSION_CANCEL_KIND = "native.session.cancel";
 export const NATIVE_SESSION_TURN_FORK_REQUEST_KIND = "native.session.turn-fork.request";
 export const NATIVE_SESSION_TURN_FORK_KIND = "native.session.turn-fork";
+export const ACTIVE_TURN_TEXT_LIMIT = 1_000_000;
 
 const identifier = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/);
 const directoryId = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/);
@@ -166,7 +167,7 @@ const nativeSessionResultSchema = z.discriminatedUnion("action", [
                 .strictObject({
                     commandId: identifier,
                     prompt: z.string().max(100_000),
-                    text: z.string().max(100_000),
+                    text: z.string().max(ACTIVE_TURN_TEXT_LIMIT),
                     truncated: z.boolean(),
                     epoch: identifier,
                     sequence: z.number().int().nonnegative(),

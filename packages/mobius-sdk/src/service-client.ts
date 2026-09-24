@@ -10,9 +10,6 @@ import {
     decodeWorkspaceEntriesEvent,
     type Interaction,
     MOBIUS_API_PREFIX,
-    MOBIUS_EVENT_FORMAT_VERSION,
-    MOBIUS_SESSION_EVENT_STREAM_EVENT,
-    MOBIUS_SESSION_EVENT_STREAM_MEDIA_TYPE,
     type NativeMessagePage,
     type NativeSessionRequest,
     type SessionConfigureCommand,
@@ -75,12 +72,17 @@ import {
     type MobiusTurn,
     type SubmitMobiusTurnRequest,
 } from "./resources.ts";
+
 import {
     HttpTransport,
     isMobiusLiveEventTransport,
     type MobiusHttpTransport,
     type MobiusTransportSessionEvent,
 } from "./transport/http-transport.ts";
+
+const MOBIUS_EVENT_FORMAT_VERSION = "1";
+const MOBIUS_SESSION_EVENT_STREAM_EVENT = "mobius.session-event.v1";
+const MOBIUS_SESSION_EVENT_STREAM_MEDIA_TYPE = "text/event-stream";
 
 const DEFAULT_OPERATION_TIMEOUT_MILLISECONDS = 20_000;
 const DEFAULT_STREAM_CONNECTION_TIMEOUT_MILLISECONDS = 15_000;

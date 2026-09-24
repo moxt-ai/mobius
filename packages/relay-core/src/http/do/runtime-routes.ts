@@ -54,7 +54,6 @@ export function createRuntimeRoutes(runtime: RuntimeService) {
                 runtimeId,
                 scope,
                 url.searchParams.get("liveness") === "1",
-                url.searchParams.get("deliveryReceipts") === "1",
                 request.signal,
             );
             switch (result.kind) {

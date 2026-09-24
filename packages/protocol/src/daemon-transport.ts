@@ -1,16 +1,10 @@
 import {
     decodeMessageKind,
-    decodeRuntimeDelivery,
-    decodeRuntimeDeliveryCommitted,
-    decodeRuntimeDeliveryReceived,
     decodeRuntimeHeartbeatAckEvent,
     decodeRuntimeHeartbeatEvent,
     decodeRuntimeLivenessReadyEvent,
     decodeSessionCancelCommand,
     decodeSessionPromptCommand,
-    encodeRuntimeDelivery,
-    encodeRuntimeDeliveryCommitted,
-    encodeRuntimeDeliveryReceived,
     encodeRuntimeHeartbeatAckEvent,
     encodeRuntimeHeartbeatEvent,
     encodeRuntimeLivenessReadyEvent,
@@ -105,9 +99,6 @@ import {
     WORKSPACE_LIST_KIND,
 } from "./control-messages.ts";
 import {
-    RUNTIME_DELIVERY_COMMITTED_KIND,
-    RUNTIME_DELIVERY_KIND,
-    RUNTIME_DELIVERY_RECEIVED_KIND,
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_HEARTBEAT_KIND,
     RUNTIME_LIVENESS_READY_KIND,
@@ -206,16 +197,6 @@ const serviceToDaemonSignatures = {
         NATIVE_SESSION_TURN_FORK_KIND,
         encodeNativeSessionTurnForkCommand,
         decodeNativeSessionTurnForkCommand,
-    ),
-    [RUNTIME_DELIVERY_KIND]: defineMessageSignature(
-        RUNTIME_DELIVERY_KIND,
-        encodeRuntimeDelivery,
-        decodeRuntimeDelivery,
-    ),
-    [RUNTIME_DELIVERY_COMMITTED_KIND]: defineMessageSignature(
-        RUNTIME_DELIVERY_COMMITTED_KIND,
-        encodeRuntimeDeliveryCommitted,
-        decodeRuntimeDeliveryCommitted,
     ),
     [RUNTIME_HEARTBEAT_ACK_KIND]: defineMessageSignature(
         RUNTIME_HEARTBEAT_ACK_KIND,
@@ -353,11 +334,6 @@ const daemonToServiceSignatures = {
         NATIVE_SESSION_RESULT_KIND,
         encodeNativeSessionResult,
         decodeNativeSessionResult,
-    ),
-    [RUNTIME_DELIVERY_RECEIVED_KIND]: defineMessageSignature(
-        RUNTIME_DELIVERY_RECEIVED_KIND,
-        encodeRuntimeDeliveryReceived,
-        decodeRuntimeDeliveryReceived,
     ),
     [RUNTIME_HEARTBEAT_KIND]: defineMessageSignature(
         RUNTIME_HEARTBEAT_KIND,

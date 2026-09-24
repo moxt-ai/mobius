@@ -1,12 +1,16 @@
 import { randomUUID } from "node:crypto";
-import type { NativeSessionResult, SessionCancelCommand, SessionPromptCommand } from "@moxt-ai/mobius-protocol";
+import {
+    ACTIVE_TURN_TEXT_LIMIT,
+    type NativeSessionResult,
+    type SessionCancelCommand,
+    type SessionPromptCommand,
+} from "@moxt-ai/mobius-protocol";
 import { fetch } from "undici";
 import type { DaemonConfig } from "./config.ts";
 import { environmentProxyDispatcher } from "./network/environment-proxy.ts";
 import { relayHttpEndpoint, runtimeAuthorization } from "./relay-connection/runtime-authentication.ts";
 
 const ACTIVE_TURN_RECONCILIATION_TIMEOUT_MILLISECONDS = 20_000;
-const ACTIVE_TURN_TEXT_LIMIT = 100_000;
 type ActiveTurnSnapshot = Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"];
 
 export class ActiveDaemonTurn {

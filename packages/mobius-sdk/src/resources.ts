@@ -17,11 +17,6 @@ import {
     decodeTurn,
     type Interaction,
     MOBIUS_API_VERSION,
-    MOBIUS_EVENT_FORMAT_VERSION,
-    MOBIUS_SESSION_EVENT_STREAM_EVENT,
-    MOBIUS_SESSION_EVENT_STREAM_MEDIA_TYPE,
-    MOBIUS_SESSION_EVENT_STREAM_TRANSPORT,
-    MOBIUS_SESSION_EXPORT_FORMAT_VERSION,
     type PromptImage,
     type PromptResource,
     SESSION_COMPLETED_KIND,
@@ -34,6 +29,12 @@ import {
 } from "@moxt-ai/mobius-protocol";
 
 import { MobiusProtocolError, MobiusValidationError } from "./errors.ts";
+
+const MOBIUS_EVENT_FORMAT_VERSION = "1";
+const MOBIUS_SESSION_EVENT_STREAM_EVENT = "mobius.session-event.v1";
+const MOBIUS_SESSION_EVENT_STREAM_MEDIA_TYPE = "text/event-stream";
+const MOBIUS_SESSION_EVENT_STREAM_TRANSPORT = "sse";
+const MOBIUS_SESSION_EXPORT_FORMAT_VERSION = "1";
 
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const SESSION_CAPABILITY_FIELDS: readonly string[] = [

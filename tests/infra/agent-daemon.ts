@@ -1,10 +1,10 @@
 import {
+    ACTIVE_TURN_TEXT_LIMIT,
     AGENT_SETTINGS_DISCOVER_KIND,
     decodeAgentSettingsDiscoverCommand,
     decodeFileReadCommand,
     decodeMessageKind,
     decodeNativeSessionCommand,
-    decodeRuntimeDelivery,
     decodeRuntimeHeartbeatEvent,
     decodeSessionLiveHistoryLoad,
     decodeSessionLiveHistoryPageLoad,
@@ -21,7 +21,6 @@ import {
     encodeFileChunkEvent,
     encodeFileEndEvent,
     encodeNativeSessionResult,
-    encodeRuntimeDeliveryReceived,
     encodeRuntimeHeartbeatAckEvent,
     encodeSessionCompletedEvent,
     encodeSessionEventEnvelope,
@@ -37,7 +36,6 @@ import {
     NATIVE_SESSION_REQUEST_KIND,
     type NativeSessionHistory,
     type NativeSessionResult,
-    RUNTIME_DELIVERY_KIND,
     RUNTIME_HEARTBEAT_KIND,
     SESSION_EVENT_KIND,
     SESSION_LIVE_HISTORY_LOAD_KIND,
@@ -341,6 +339,7 @@ export interface FakeAgentDaemonBehavior {
     }[];
     readonly afterSessionStarted?: (command: SessionPromptCommand, signal: AbortSignal) => Promise<void>;
     readonly afterFirstDelta?: (command: SessionPromptCommand, signal: AbortSignal) => Promise<void>;
+    readonly afterLastDelta?: (command: SessionPromptCommand, signal: AbortSignal) => Promise<void>;
     readonly directoryLabel?: string;
     readonly nativeSessionIds?: ReadonlySet<string>;
     readonly sessions?: readonly SessionMetadata[];
@@ -396,18 +395,6 @@ async function processHappyPathCommand(
     signal: AbortSignal,
 ): Promise<void> {
     const kind = decodeMessageKind(encoded);
-    if (kind === RUNTIME_DELIVERY_KIND) {
-        const delivery = decodeRuntimeDelivery(encoded);
-        daemon.send(
-            encodeRuntimeDeliveryReceived({
-                deliveryId: delivery.deliveryId,
-                kind: "runtime.delivery.received",
-                sessionId: delivery.sessionId,
-            }),
-        );
-        await processHappyPathCommand(daemon, delivery.payload, behavior, nextTurn, activeTurns, signal);
-        return;
-    }
     if (kind === RUNTIME_HEARTBEAT_KIND) {
         const heartbeat = decodeRuntimeHeartbeatEvent(encoded);
         daemon.send(
@@ -798,8 +785,8 @@ async function processHappyPathCommand(
             activeTurns.set(command.sessionId, {
                 ...current,
                 sequence: index + 1,
-                text: `${current.text}${text}`.slice(-100_000),
-                truncated: current.truncated || current.text.length + text.length > 100_000,
+                text: `${current.text}${text}`.slice(-ACTIVE_TURN_TEXT_LIMIT),
+                truncated: current.truncated || current.text.length + text.length > ACTIVE_TURN_TEXT_LIMIT,
             });
         }
         await daemon.sendSessionEvent(
@@ -819,6 +806,7 @@ async function processHappyPathCommand(
             await behavior.afterFirstDelta?.(command, signal);
         }
     }
+    await behavior.afterLastDelta?.(command, signal);
     if (imageContent !== null) {
         await daemon.sendSessionEvent(
             command.sessionId,

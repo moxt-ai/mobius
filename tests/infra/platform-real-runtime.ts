@@ -83,7 +83,6 @@ export async function createTestLocalRuntime(options: {
         const relayUrl = new URL("/mobius/api/v1/runtimes/connect", options.origin);
         relayUrl.protocol = "ws:";
         relayUrl.searchParams.set("token", claim.runtimeCredential);
-        relayUrl.searchParams.set("deliveryReceipts", "1");
         const ready = Promise.withResolvers<void>();
         running = runDaemon(
             createDaemonConfig(
