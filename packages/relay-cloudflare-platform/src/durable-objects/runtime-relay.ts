@@ -1,9 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import {
-    DurableObjectSqlDatabase,
-    RuntimeRelay as RuntimeRelayImplementation,
-    type SessionEventReceiver,
-} from "@moxt-ai/mobius-relay-core";
+import { DurableObjectSqlDatabase, RuntimeRelay as RuntimeRelayImplementation } from "@moxt-ai/mobius-relay-core";
 import {
     createPlatformDurableObjectContext,
     type PlatformDurableObjectEnvironment,
@@ -41,19 +37,5 @@ export class RuntimeRelay extends DurableObject<PlatformDurableObjectEnvironment
 
     override webSocketError(socket: WebSocket): void {
         this.#runtime.webSocketError(socket);
-    }
-
-    async subscribeToLiveSessionEvents(
-        _subscriptionId: string,
-        _projectId: string,
-        _runtimeId: string,
-        _sessionId: string,
-        _receive: SessionEventReceiver,
-    ): Promise<void> {
-        throw new Error("Cloud Session subscriptions are unavailable.");
-    }
-
-    unsubscribeFromLiveSessionEvents(_subscriptionId: string): void {
-        return;
     }
 }
