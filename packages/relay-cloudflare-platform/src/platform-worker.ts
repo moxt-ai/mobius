@@ -10,6 +10,7 @@ import {
     decodeSessionLiveHistoryPageLoad,
     decodeSessionPermissionRespondCommand,
     decodeSessionPromptCommand,
+    decodeSessionPromptDispositionCommand,
     decodeSessionQueryCommand,
     type Identifier,
     isIdentifier,
@@ -96,6 +97,7 @@ const sessionPromptBody = v.strictObject({
     sessionConfigurations: v.optional(v.pipe(v.array(v.unknown()), v.maxLength(100)), []),
     targetCommandId: v.optional(v.string(), ""),
 });
+const sessionPromptDispositionBody = v.strictObject({ disposition: v.literal("steer") });
 const sessionConfigurationBody = v.strictObject({
     additionalDirectoryIds: v.pipe(v.array(v.pipe(v.string(), v.minLength(1), v.maxLength(2048))), v.maxLength(16)),
     agentId: sessionIdentifier,
@@ -372,7 +374,7 @@ export function createPlatformApplication(
                           context.req.raw.signal,
                       )
                     : { agentId: body.agentId, directoryId: body.directoryId };
-            const started = await context.var.relay.services.runtimePairings.requestProjectScopeControl(
+            const accepted = await context.var.relay.services.runtimePairings.requestProjectScopeControl(
                 new ProjectScope(access.projectId),
                 access.runtimeId,
                 decodeSessionPromptCommand(
@@ -394,7 +396,7 @@ export function createPlatformApplication(
                 ),
                 context.req.raw.signal,
             );
-            if (started.kind !== "session.started") {
+            if (accepted.kind !== "session.started" && accepted.kind !== "session.queued") {
                 throw new PairingDirectoryError("invalid_request", "The Runtime returned an invalid Turn");
             }
             const acceptedAt = new Date().toISOString();
@@ -409,9 +411,48 @@ export function createPlatformApplication(
                     sessionConfigurations: body.sessionConfigurations,
                 },
                 sessionId,
-                state: { kind: "running", startedAt: acceptedAt },
-                turnId: started.commandId,
+                state:
+                    accepted.kind === "session.queued"
+                        ? { kind: "queued" as const }
+                        : { kind: "running" as const, startedAt: acceptedAt },
+                turnId: accepted.commandId,
             });
+        })
+        .put("/:sessionId/turns/:turnId/disposition", sessionAccessTargetMiddleware, async (context) => {
+            const credential = (context.req.header("authorization") ?? "").match(/^Bearer ([^\s]+)$/u)?.[1];
+            if (credential === undefined) {
+                return context.json(
+                    { error: { code: "session_access_required", message: "A Session credential is required" } },
+                    401,
+                );
+            }
+            const access = await context.var.sessionAccess.authorizeSession(
+                context.var.sessionAccessTarget,
+                credential,
+                ProjectPermission.SessionWrite,
+                context.req.raw.signal,
+            );
+            const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
+            const turnId = v.parse(sessionIdentifier, context.req.param("turnId"));
+            const body = v.parse(sessionPromptDispositionBody, await context.req.json());
+            const started = await context.var.relay.services.runtimePairings.requestProjectScopeControl(
+                new ProjectScope(access.projectId),
+                access.runtimeId,
+                decodeSessionPromptDispositionCommand(
+                    JSON.stringify({
+                        commandId: turnId,
+                        disposition: body.disposition,
+                        kind: "session.prompt.disposition",
+                        sessionId,
+                    }),
+                ),
+                context.req.raw.signal,
+            );
+            if (started.kind !== "session.started" || started.commandId !== turnId) {
+                throw new PairingDirectoryError("invalid_request", "The Runtime returned an invalid steered Turn");
+            }
+            context.header("Cache-Control", "no-store");
+            return context.json({ turnId });
         })
         .get("/:sessionId/files/content", sessionAccessTargetMiddleware, async (context) => {
             const credential = (context.req.header("authorization") ?? "").match(/^Bearer ([^\s]+)$/u)?.[1];

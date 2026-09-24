@@ -560,7 +560,14 @@ export async function executePrompt(
     sessions: AcpSessionManager,
     attemptId: string,
     activateAttempt: () => { readonly epoch: string; readonly sequence: 0 },
-    waitForSessionAvailability: (signal: AbortSignal) => Promise<"available" | "busy" | "queue-target-unavailable">,
+    acknowledgeQueued: () => void,
+    waitForSessionAvailability: (
+        signal: AbortSignal,
+    ) => Promise<
+        | { readonly kind: "available"; readonly disposition: string }
+        | { readonly kind: "busy" }
+        | { readonly kind: "queue-target-unavailable" }
+    >,
     timer: DaemonTimer,
     signal: AbortSignal,
     recordLiveText: (delta: string) => { readonly epoch: string; readonly sequence: number },
@@ -603,6 +610,9 @@ export async function executePrompt(
         AGENT_TEXT_MAXIMUM_LENGTH,
     );
     try {
+        if (command.disposition === SessionPromptDisposition.Queue) {
+            acknowledgeQueued();
+        }
         const resolved = await resolveSessionDirectories(
             directories,
             command.bindingId,
@@ -612,10 +622,10 @@ export async function executePrompt(
         );
         const agent = config.catalog.find(command.agentId);
         const availability = await waitForSessionAvailability(signal);
-        if (availability === "busy") {
+        if (availability.kind === "busy") {
             throw new AcpExecutionError("Another prompt is already running in this conversation", {}, "session_busy");
         }
-        if (availability === "queue-target-unavailable") {
+        if (availability.kind === "queue-target-unavailable") {
             throw new AcpExecutionError(
                 "The queued prompt target is unavailable",
                 {},
@@ -636,7 +646,7 @@ export async function executePrompt(
                 sessionId: command.sessionId,
                 signal,
             });
-            if (command.disposition === SessionPromptDisposition.Steer) {
+            if (availability.disposition === SessionPromptDisposition.Steer) {
                 // Steering cannot reconfigure a running Agent, so the Turn snapshot
                 // only has to agree with the settings this live Session exposes. The
                 // snapshot comes from Agent settings discovery, so it may name options
@@ -675,7 +685,7 @@ export async function executePrompt(
         });
         const attachments = await resolvePromptArtifacts(config, command, signal);
         let stopReason: string;
-        if (command.disposition === SessionPromptDisposition.Steer) {
+        if (availability.disposition === SessionPromptDisposition.Steer) {
             await sessions.steerPrompt({
                 additionalDirectories: resolved.additionalDirectories,
                 agent: executionAgent,
@@ -695,7 +705,7 @@ export async function executePrompt(
                 agent: executionAgent,
                 commandId: command.commandId,
                 cwd: resolved.cwd,
-                disposition: command.disposition,
+                disposition: availability.disposition,
                 images: attachments.images,
                 onActivity: activities.record,
                 onNarration: (increment) => {

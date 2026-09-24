@@ -144,6 +144,8 @@ export const turnSchema = z.object({
     status: turnStatusSchema,
 });
 
+export const turnSteerResponseSchema = z.object({ turnId: boundedText(256) });
+
 export const turnNotificationSchema = z.object({
     thread: z.object({ id: boundedText(256) }).nullish(),
     threadId: boundedText(256),

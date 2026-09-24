@@ -22,6 +22,7 @@ import {
     decodeSessionLiveHistoryPageLoaded,
     decodeSessionOperationFailedEvent,
     decodeSessionPermissionResolvedEvent,
+    decodeSessionQueuedEvent,
     decodeSessionReadyEvent,
     decodeSessionStartedEvent,
     decodeSessionsQueriedEvent,
@@ -47,7 +48,9 @@ import {
     type SessionPermissionRespondCommand,
     type SessionPrepareCommand,
     type SessionPromptCommand,
+    type SessionPromptDispositionCommand,
     type SessionQueryCommand,
+    type SessionQueuedEvent,
     type SessionReadyEvent,
     type SessionStartedEvent,
     type SessionsQueriedEvent,
@@ -61,6 +64,7 @@ export type RuntimeControlCommand =
     | SessionPrepareCommand
     | SessionConfigureCommand
     | SessionCancelCommand
+    | SessionPromptDispositionCommand
     | SessionPromptCommand
     | SessionLiveHistoryPageLoad
     | SessionElicitationRespondCommand
@@ -72,6 +76,7 @@ export type RuntimeControlResult =
     | SessionConfigUpdatedEvent
     | SessionCompletedEvent
     | SessionStartedEvent
+    | SessionQueuedEvent
     | SessionLiveHistoryPageLoaded
     | SessionElicitationResolvedEvent
     | SessionPermissionResolvedEvent
@@ -378,7 +383,9 @@ export async function requestRuntimeControl(
 ): Promise<RuntimeControlResult> {
     const deadline = AbortSignal.any([signal, AbortSignal.timeout(120000)]);
     const requestId =
-        command.kind === "session.prompt" || command.kind === "session.cancel"
+        command.kind === "session.prompt" ||
+        command.kind === "session.prompt.disposition" ||
+        command.kind === "session.cancel"
             ? command.commandId
             : command.kind === "session.permission.respond" || command.kind === "session.elicitation.respond"
               ? command.interactionId
@@ -449,17 +456,20 @@ export async function requestRuntimeControl(
                         (command.kind === "session.live-history.page.load" &&
                         kind === "session.live-history.page.loaded"
                             ? decodeSessionLiveHistoryPageLoaded(raw)
-                            : command.kind === "session.prompt" && kind === "session.started"
-                              ? decodeSessionStartedEvent(raw)
-                              : command.kind === "session.cancel" && kind === "session.completed"
-                                ? decodeSessionCompletedEvent(raw)
-                                : command.kind === "session.permission.respond" &&
-                                    kind === "session.permission.resolved"
-                                  ? decodeSessionPermissionResolvedEvent(raw)
-                                  : command.kind === "session.elicitation.respond" &&
-                                      kind === "session.elicitation.resolved"
-                                    ? decodeSessionElicitationResolvedEvent(raw)
-                                    : null);
+                            : command.kind === "session.prompt" && kind === "session.queued"
+                              ? decodeSessionQueuedEvent(raw)
+                              : (command.kind === "session.prompt" || command.kind === "session.prompt.disposition") &&
+                                  kind === "session.started"
+                                ? decodeSessionStartedEvent(raw)
+                                : command.kind === "session.cancel" && kind === "session.completed"
+                                  ? decodeSessionCompletedEvent(raw)
+                                  : command.kind === "session.permission.respond" &&
+                                      kind === "session.permission.resolved"
+                                    ? decodeSessionPermissionResolvedEvent(raw)
+                                    : command.kind === "session.elicitation.respond" &&
+                                        kind === "session.elicitation.resolved"
+                                      ? decodeSessionElicitationResolvedEvent(raw)
+                                      : null);
                     const resolvedRequestId =
                         resolved !== null && "requestId" in resolved
                             ? resolved.requestId

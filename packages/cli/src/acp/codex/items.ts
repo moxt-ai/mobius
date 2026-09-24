@@ -70,7 +70,10 @@ function presentToolItem(item: ThreadItem): ToolCallPresentation | null {
             kind: "execute",
             locations: [],
             rawInput: { command: item.command, cwd: item.cwd },
-            rawOutput: { exitCode: item.exitCode, output: truncate(output, TOOL_OUTPUT_CHARACTER_LIMIT) },
+            rawOutput: {
+                ...(item.exitCode == null ? {} : { exitCode: item.exitCode }),
+                output: truncate(output, TOOL_OUTPUT_CHARACTER_LIMIT),
+            },
             status: commandStatus(item.status),
             title: truncate(firstLine(item.command), TITLE_CHARACTER_LIMIT),
         };
@@ -129,7 +132,10 @@ function presentToolItem(item: ThreadItem): ToolCallPresentation | null {
 
 /** The ACP tool-call payload for one app-server item: `tool_call` when it opens, `tool_call_update`
  *  for every later snapshot. Both carry the same fields. */
-export function toolCallUpdate(item: ThreadItem): ToolCallUpdate | null {
+export function toolCallUpdate(
+    item: ThreadItem,
+    lifecycle: "snapshot" | "started" | "completed",
+): ToolCallUpdate | null {
     const presentation = presentToolItem(item);
     if (presentation === null) {
         return null;
@@ -140,7 +146,7 @@ export function toolCallUpdate(item: ThreadItem): ToolCallUpdate | null {
         locations: [...presentation.locations],
         rawInput: presentation.rawInput,
         rawOutput: presentation.rawOutput,
-        status: presentation.status,
+        status: lifecycle === "completed" && presentation.status === "in_progress" ? "completed" : presentation.status,
         title: presentation.title,
         toolCallId: item.id,
     };

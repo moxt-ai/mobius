@@ -1334,14 +1334,21 @@ export class MobiusTurnResources {
             ),
         );
 
-    readonly steer = async (sessionId: string, turnId: string, signal: AbortSignal): Promise<MobiusTurn> =>
-        decodeMobiusTurn(
-            await this.#executor.put(
-                sessionPath(this.#projectId, sessionId, `turns/${encodeURIComponent(turnId)}/disposition`),
-                { disposition: SessionPromptDisposition.Steer },
-                signal,
-            ),
+    readonly steer = async (
+        sessionId: string,
+        turnId: string,
+        signal: AbortSignal,
+    ): Promise<{ readonly turnId: string }> => {
+        const result = await this.#executor.put(
+            sessionPath(this.#projectId, sessionId, `turns/${encodeURIComponent(turnId)}/disposition`),
+            { disposition: SessionPromptDisposition.Steer },
+            signal,
         );
+        if (typeof result !== "object" || result === null || Reflect.get(result, "turnId") !== turnId) {
+            throw new MobiusProtocolError("The service returned an invalid steered Turn");
+        }
+        return { turnId };
+    };
 }
 
 export class MobiusAttemptResources {

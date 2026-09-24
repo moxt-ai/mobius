@@ -7,6 +7,7 @@ import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import {
+    AGENT_ACTIVITY_KIND,
     AGENT_MESSAGE_DELTA_KIND,
     decodeAgentMessageDeltaEvent,
     decodeMessageKind,
@@ -14,16 +15,20 @@ import {
     decodeSessionCompletedEvent,
     decodeSessionEventEnvelope,
     decodeSessionFailedEvent,
+    decodeSessionQueuedEvent,
     decodeSessionStartedEvent,
     encodeNativeSessionRequest,
     encodeSessionCancelCommand,
     encodeSessionPromptCommand,
+    encodeSessionPromptDispositionCommand,
     MOBIUS_API_PREFIX,
     NATIVE_SESSION_RESULT_KIND,
     SESSION_CANCEL_KIND,
     SESSION_COMPLETED_KIND,
     SESSION_EVENT_KIND,
     SESSION_FAILED_KIND,
+    SESSION_PROMPT_DISPOSITION_KIND,
+    SESSION_QUEUED_KIND,
     SESSION_STARTED_KIND,
     type SessionPromptCommand,
     SessionPromptDisposition,
@@ -433,7 +438,7 @@ describe("daemon assistant text coalescing", () => {
         }
     }, 30_000);
 
-    it("Given a native Agent Turn has emitted partial text, When a follow-up is queued behind it and the target settles, Then the daemon runs the queued Turn next", async () => {
+    it("Given a native Agent Turn is active, When a follow-up is queued and steered, Then the daemon acknowledges it immediately and injects it into the active Turn", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-active-turn-"));
         const workspace = join(stateDirectory, "workspace");
         const nativeStateDirectory = join(stateDirectory, "native");
@@ -496,7 +501,7 @@ describe("daemon assistant text coalescing", () => {
                 disposition: SessionPromptDisposition.Reject,
                 images: [],
                 kind: "session.prompt",
-                prompt: "hold after first delta",
+                prompt: "wait for steering",
                 resources: [],
                 sessionId,
                 targetCommandId: "",
@@ -512,11 +517,15 @@ describe("daemon assistant text coalescing", () => {
                 }
             };
             sendText(socket, encodeSessionPromptCommand(prompt));
-            let delta: string;
+            let started: string;
             do {
-                delta = await next();
-            } while (decodeMessageKind(delta) !== AGENT_MESSAGE_DELTA_KIND);
-            const firstDelta = decodeAgentMessageDeltaEvent(delta);
+                started = await next();
+            } while (decodeMessageKind(started) !== SESSION_STARTED_KIND);
+            const firstStarted = decodeSessionStartedEvent(started);
+            let activity: string;
+            do {
+                activity = await next();
+            } while (decodeMessageKind(activity) !== AGENT_ACTIVITY_KIND);
             const request = (requestId: string) =>
                 encodeNativeSessionRequest({
                     action: "active-turn",
@@ -539,50 +548,13 @@ describe("daemon assistant text coalescing", () => {
                 action: "active-turn",
                 turn: {
                     commandId: prompt.commandId,
-                    epoch: firstDelta.epoch,
+                    epoch: firstStarted.epoch,
                     prompt: prompt.prompt,
-                    sequence: firstDelta.sequence,
-                    text: "Partial reply",
+                    sequence: firstStarted.sequence,
+                    text: "",
                     truncated: false,
                 },
             });
-            sendText(socket, encodeSessionPromptCommand({ ...prompt, commandId: "second_burst_turn" }));
-            let rejected: string;
-            for (;;) {
-                rejected = await next();
-                const kind = decodeMessageKind(rejected);
-                if (kind === SESSION_STARTED_KIND) {
-                    expect(decodeSessionStartedEvent(rejected).commandId).not.toBe("second_burst_turn");
-                }
-                if (
-                    kind === SESSION_FAILED_KIND &&
-                    decodeSessionFailedEvent(rejected).commandId === "second_burst_turn"
-                ) {
-                    break;
-                }
-            }
-            expect(decodeSessionFailedEvent(rejected)).toMatchObject({
-                code: "session_busy",
-                commandId: "second_burst_turn",
-            });
-            sendText(
-                socket,
-                encodeSessionPromptCommand({
-                    ...prompt,
-                    bindingId: "another_binding",
-                    commandId: "unauthorized_burst_turn",
-                }),
-            );
-            for (;;) {
-                rejected = await next();
-                if (
-                    decodeMessageKind(rejected) === SESSION_FAILED_KIND &&
-                    decodeSessionFailedEvent(rejected).commandId === "unauthorized_burst_turn"
-                ) {
-                    break;
-                }
-            }
-            expect(decodeSessionFailedEvent(rejected).code).not.toBe("session_busy");
             const cancelledQueuedPrompt: SessionPromptCommand = {
                 ...prompt,
                 commandId: "cancelled_queued_follow_up",
@@ -591,6 +563,12 @@ describe("daemon assistant text coalescing", () => {
                 targetCommandId: prompt.commandId,
             };
             sendText(socket, encodeSessionPromptCommand(cancelledQueuedPrompt));
+            do {
+                result = await next();
+            } while (
+                decodeMessageKind(result) !== SESSION_QUEUED_KIND ||
+                decodeSessionQueuedEvent(result).commandId !== cancelledQueuedPrompt.commandId
+            );
             sendText(
                 socket,
                 encodeSessionCancelCommand({
@@ -605,24 +583,9 @@ describe("daemon assistant text coalescing", () => {
                 !(
                     decodeMessageKind(result) === SESSION_COMPLETED_KIND &&
                     decodeSessionCompletedEvent(result).commandId === cancelledQueuedPrompt.commandId
-                ) &&
-                !(
-                    decodeMessageKind(result) === SESSION_FAILED_KIND &&
-                    decodeSessionFailedEvent(result).commandId === cancelledQueuedPrompt.commandId
                 )
             );
-            expect(decodeSessionCompletedEvent(result)).toMatchObject({
-                commandId: cancelledQueuedPrompt.commandId,
-                stopReason: "cancelled",
-            });
-            sendText(socket, request("active_after_queued_cancellation"));
-            do {
-                result = await next();
-            } while (decodeMessageKind(result) !== NATIVE_SESSION_RESULT_KIND);
-            expect(decodeNativeSessionResult(result)).toMatchObject({
-                action: "active-turn",
-                turn: { commandId: prompt.commandId, state: "running" },
-            });
+            expect(decodeSessionCompletedEvent(result).stopReason).toBe("cancelled");
             const queuedPrompt: SessionPromptCommand = {
                 ...prompt,
                 commandId: "queued_follow_up",
@@ -631,6 +594,45 @@ describe("daemon assistant text coalescing", () => {
                 targetCommandId: prompt.commandId,
             };
             sendText(socket, encodeSessionPromptCommand(queuedPrompt));
+            do {
+                result = await next();
+            } while (
+                decodeMessageKind(result) !== SESSION_QUEUED_KIND ||
+                decodeSessionQueuedEvent(result).commandId !== queuedPrompt.commandId
+            );
+            sendText(
+                socket,
+                encodeSessionPromptDispositionCommand({
+                    commandId: queuedPrompt.commandId,
+                    disposition: SessionPromptDisposition.Steer,
+                    kind: SESSION_PROMPT_DISPOSITION_KIND,
+                    sessionId,
+                }),
+            );
+            do {
+                result = await next();
+            } while (
+                !(
+                    decodeMessageKind(result) === SESSION_STARTED_KIND &&
+                    decodeSessionStartedEvent(result).commandId === queuedPrompt.commandId
+                )
+            );
+            do {
+                result = await next();
+            } while (
+                !(
+                    decodeMessageKind(result) === SESSION_COMPLETED_KIND &&
+                    decodeSessionCompletedEvent(result).commandId === queuedPrompt.commandId
+                ) &&
+                !(
+                    decodeMessageKind(result) === SESSION_FAILED_KIND &&
+                    decodeSessionFailedEvent(result).commandId === queuedPrompt.commandId
+                )
+            );
+            expect(decodeSessionCompletedEvent(result)).toMatchObject({
+                commandId: queuedPrompt.commandId,
+                stopReason: "steered",
+            });
             sendText(
                 socket,
                 encodeSessionCancelCommand({ commandId: prompt.commandId, kind: SESSION_CANCEL_KIND, sessionId }),
@@ -647,19 +649,6 @@ describe("daemon assistant text coalescing", () => {
                     decodeSessionFailedEvent(result).commandId === prompt.commandId
                 )
             );
-            do {
-                result = await next();
-            } while (
-                !(
-                    decodeMessageKind(result) === SESSION_COMPLETED_KIND &&
-                    decodeSessionCompletedEvent(result).commandId === queuedPrompt.commandId
-                ) &&
-                !(
-                    decodeMessageKind(result) === SESSION_FAILED_KIND &&
-                    decodeSessionFailedEvent(result).commandId === queuedPrompt.commandId
-                )
-            );
-            expect(decodeMessageKind(result)).toBe(SESSION_COMPLETED_KIND);
             sendText(socket, request("active_two"));
             do {
                 result = await next();

@@ -1,6 +1,7 @@
 import type { SessionConfigurationSelection } from "./control-messages.ts";
 
 export const SESSION_PROMPT_KIND = "session.prompt";
+export const SESSION_PROMPT_DISPOSITION_KIND = "session.prompt.disposition";
 export const RUNTIME_WORKSPACE_BINDING_ID = "workspace";
 export const SESSION_CANCEL_KIND = "session.cancel";
 export const RUNTIME_STATUS_KIND = "runtime.status";
@@ -8,6 +9,7 @@ export const RUNTIME_LIVENESS_READY_KIND = "runtime.liveness.ready";
 export const RUNTIME_HEARTBEAT_KIND = "runtime.heartbeat";
 export const RUNTIME_HEARTBEAT_ACK_KIND = "runtime.heartbeat.ack";
 export const SESSION_STARTED_KIND = "session.started";
+export const SESSION_QUEUED_KIND = "session.queued";
 export const AGENT_MESSAGE_DELTA_KIND = "agent.message.delta";
 export const AGENT_ACTIVITY_KIND = "agent.activity";
 export const AGENT_ACTIVITY_NARRATION_KIND = "agent.activity.narration";
@@ -44,6 +46,19 @@ export interface SessionPromptCommand {
 export interface SessionCancelCommand {
     readonly commandId: string;
     readonly kind: typeof SESSION_CANCEL_KIND;
+    readonly sessionId: string;
+}
+
+export interface SessionPromptDispositionCommand {
+    readonly commandId: string;
+    readonly disposition: typeof SessionPromptDisposition.Steer;
+    readonly kind: typeof SESSION_PROMPT_DISPOSITION_KIND;
+    readonly sessionId: string;
+}
+
+export interface SessionQueuedEvent {
+    readonly commandId: string;
+    readonly kind: typeof SESSION_QUEUED_KIND;
     readonly sessionId: string;
 }
 
