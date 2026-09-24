@@ -19,12 +19,8 @@ import {
     NATIVE_SESSION_REQUEST_KIND,
     NATIVE_SESSION_TURN_FORK_KIND,
     type RecordedSessionEvent,
-    RUNTIME_DELIVERY_COMMITTED_KIND,
-    RUNTIME_DELIVERY_KIND,
-    RUNTIME_DELIVERY_RECEIVED_KIND,
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_LIVENESS_READY_KIND,
-    type RuntimeDelivery,
     SESSION_CANCEL_KIND,
     SESSION_CONFIGURE_KIND,
     SESSION_ELICITATION_RESPOND_KIND,
@@ -66,7 +62,6 @@ import {
     executeWorkspaceList,
     operationErrorCode,
     operationErrorMessage,
-    reportFailure,
     reportOperationFailure,
     send,
     settleAbandonedTurn,
@@ -76,7 +71,7 @@ import { readCodexFullHistory } from "./native-sessions/codex-history.ts";
 import { NativeSessionService } from "./native-sessions/service.ts";
 import { revalidateExecutable } from "./process/executable.ts";
 import { connectRelay } from "./relay-connection/connect.ts";
-import { DaemonOperationState, RuntimeDeliveryInboxCapacityError } from "./relay-connection/daemon-operation-state.ts";
+import { DaemonOperationState } from "./relay-connection/daemon-operation-state.ts";
 import { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
 import { RelayConnectionLiveness } from "./relay-connection/liveness.ts";
 import { isRuntimeRelayRevocation, RuntimeRelayRevokedError } from "./relay-connection/runtime-revocation.ts";
@@ -246,7 +241,6 @@ async function runRelayConnection(
     resolveAgentCatalogEnvironment: (signal: AbortSignal) => Promise<Readonly<NodeJS.ProcessEnv>>,
 ): Promise<void> {
     const relayUrl = new URL(config.relayUrl);
-    relayUrl.searchParams.set("deliveryReceipts", "1");
     relayUrl.searchParams.set("liveness", "1");
     const socket = await connectRelay(relayUrl, signal);
     const reconnectingTurns = [...activeTurns.values()];
@@ -327,8 +321,6 @@ async function runRelayConnection(
                 rejectConnection(failure);
             };
 
-            const processingDeliveryIds = new Set<string>();
-
             const sessionAvailable = (command: SessionPromptCommand): boolean => {
                 if (command.disposition === SessionPromptDisposition.Steer) {
                     return true;
@@ -339,225 +331,6 @@ async function runRelayConnection(
                         turn.command.disposition !== SessionPromptDisposition.Steer,
                 );
                 return first === undefined || first.command.commandId === command.commandId;
-            };
-
-            const processDeliveredPrompt = async (
-                delivery: RuntimeDelivery,
-                command: SessionPromptCommand,
-                execute: (
-                    attemptId: string,
-                    activateAttempt: () => { readonly epoch: string; readonly sequence: 0 },
-                    signal: AbortSignal,
-                    turn: ActiveDaemonTurn,
-                ) => Promise<void>,
-            ): Promise<void> => {
-                if (command.sessionId !== delivery.sessionId) {
-                    throw new Error("Runtime delivery Session identity does not match its payload");
-                }
-                const active = activeTurns.get(command.commandId);
-                if (active !== undefined) {
-                    await active.completion;
-                    return;
-                }
-                const receipt = operations.claimExecution(command.commandId, command.sessionId, delivery.payload);
-                if (receipt.kind === "duplicate") {
-                    if (receipt.state === "running") {
-                        reportFailure(
-                            publisher,
-                            command,
-                            "agent_execution_interrupted",
-                            "The local Agent execution was interrupted before it completed",
-                        );
-                        operations.transitionExecution(command.commandId, "failed");
-                        return;
-                    }
-                    if (receipt.state !== "dispatching") {
-                        return;
-                    }
-                }
-
-                const turn = new ActiveDaemonTurn(command, receipt.attemptId);
-                activeTurns.set(command.commandId, turn);
-                try {
-                    await execute(receipt.attemptId, turn.accept, turn.signal, turn);
-                } finally {
-                    activeTurns.delete(command.commandId);
-                    turn.finish();
-                }
-            };
-
-            const processDeliveredPayload = async (delivery: RuntimeDelivery): Promise<void> => {
-                const message = decodeServiceToDaemonMessage(delivery.payload);
-                const kind = message.kind;
-                if (kind === SESSION_CANCEL_KIND) {
-                    const cancellation = message;
-                    if (cancellation.sessionId !== delivery.sessionId) {
-                        throw new Error("Runtime delivery Session identity does not match its payload");
-                    }
-                    const turn = activeTurns.get(cancellation.commandId);
-                    if (turn === undefined || !turn.matches(cancellation)) {
-                        settleAbandonedTurn(publisher, operations, audit, cancellation);
-                        return;
-                    }
-                    if (!turn.requestCancellation()) {
-                        return;
-                    }
-                    audit.record({
-                        commandId: cancellation.commandId,
-                        event: "session_cancellation_requested",
-                        sessionId: cancellation.sessionId,
-                    });
-                    await sessions.cancelPrompt(cancellation.sessionId);
-                    return;
-                }
-                if (kind === SESSION_CONFIGURE_KIND) {
-                    const command = message;
-                    if (command.sessionId !== delivery.sessionId) {
-                        throw new Error("Runtime delivery Session identity does not match its payload");
-                    }
-                    await executeSessionConfigure(
-                        publisher,
-                        socket,
-                        command,
-                        config,
-                        directories,
-                        audit,
-                        sessions,
-                        connectionController.signal,
-                    );
-                    return;
-                }
-                if (kind === SESSION_PERMISSION_RESPOND_KIND) {
-                    const command = message;
-                    if (command.sessionId !== delivery.sessionId) {
-                        throw new Error("Runtime delivery Session identity does not match its payload");
-                    }
-                    try {
-                        await sessions.respondPermission(command);
-                        audit.record({
-                            commandId: command.interactionId,
-                            event: "session_permission_resolved",
-                            sessionId: command.sessionId,
-                        });
-                    } catch (error) {
-                        reportOperationFailure(socket, command.interactionId, command.sessionId, error);
-                    }
-                    return;
-                }
-                if (kind === SESSION_ELICITATION_RESPOND_KIND) {
-                    const command = message;
-                    if (command.sessionId !== delivery.sessionId) {
-                        throw new Error("Runtime delivery Session identity does not match its payload");
-                    }
-                    try {
-                        await sessions.respondElicitation(command);
-                        audit.record({
-                            commandId: command.interactionId,
-                            event: "session_elicitation_resolved",
-                            sessionId: command.sessionId,
-                        });
-                    } catch (error) {
-                        reportOperationFailure(socket, command.interactionId, command.sessionId, error);
-                    }
-                    return;
-                }
-                if (kind === SESSION_PROMPT_KIND) {
-                    const command = message;
-                    await processDeliveredPrompt(
-                        delivery,
-                        command,
-                        (attemptId, activateAttempt, executionSignal, turn) =>
-                            executePrompt(
-                                operations,
-                                publisher,
-                                command,
-                                config,
-                                directories,
-                                audit,
-                                sessions,
-                                attemptId,
-                                activateAttempt,
-                                () => sessionAvailable(command),
-                                timer,
-                                executionSignal,
-                                turn.recordText,
-                            ),
-                    );
-                    return;
-                }
-                throw new Error("Runtime delivery contains an unsupported protocol message");
-            };
-
-            const processRuntimeDelivery = (delivery: RuntimeDelivery, state: string): void => {
-                if (state === "processed" || processingDeliveryIds.has(delivery.deliveryId)) {
-                    return;
-                }
-                processingDeliveryIds.add(delivery.deliveryId);
-                void processDeliveredPayload(delivery)
-                    .then(() => {
-                        operations.markRuntimeDeliveryProcessed(delivery.deliveryId, delivery.sessionId);
-                    })
-                    .catch((error: unknown) => {
-                        if (connectionController.signal.aborted) {
-                            return;
-                        }
-                        console.error("Mobius daemon could not process a in-memory Runtime delivery", error);
-                        failAndClose(
-                            new Error("Runtime delivery processing failed", { cause: error }),
-                            4008,
-                            "Invalid Runtime delivery",
-                            "delivery",
-                        );
-                    })
-                    .finally(() => processingDeliveryIds.delete(delivery.deliveryId));
-            };
-
-            const receiveRuntimeDelivery = (delivery: RuntimeDelivery): void => {
-                const payload = decodeServiceToDaemonMessage(delivery.payload);
-                const payloadKind = payload.kind;
-                let payloadSessionId = "";
-                if (payloadKind === SESSION_CANCEL_KIND) {
-                    payloadSessionId = payload.sessionId;
-                } else if (payloadKind === SESSION_CONFIGURE_KIND) {
-                    payloadSessionId = payload.sessionId;
-                } else if (payloadKind === SESSION_PERMISSION_RESPOND_KIND) {
-                    payloadSessionId = payload.sessionId;
-                } else if (payloadKind === SESSION_ELICITATION_RESPOND_KIND) {
-                    payloadSessionId = payload.sessionId;
-                } else if (payloadKind === SESSION_PROMPT_KIND) {
-                    payloadSessionId = payload.sessionId;
-                } else {
-                    throw new Error("Runtime delivery contains an unsupported protocol message");
-                }
-                if (payloadSessionId !== delivery.sessionId) {
-                    throw new Error("Runtime delivery Session identity does not match its payload");
-                }
-                const stored = operations.claimRuntimeDelivery(delivery);
-                send(socket, {
-                    deliveryId: delivery.deliveryId,
-                    kind: RUNTIME_DELIVERY_RECEIVED_KIND,
-                    sessionId: delivery.sessionId,
-                });
-                processRuntimeDelivery(delivery, stored.state);
-            };
-
-            const resumeRuntimeDeliveries = (): void => {
-                for (const stored of operations.runtimeDeliveries()) {
-                    const delivery: RuntimeDelivery = {
-                        deliveryId: stored.deliveryId,
-                        kind: RUNTIME_DELIVERY_KIND,
-                        payload: stored.payload,
-                        sessionId: stored.sessionId,
-                    };
-                    if (stored.state !== "relay_committed") {
-                        send(socket, {
-                            deliveryId: stored.deliveryId,
-                            kind: RUNTIME_DELIVERY_RECEIVED_KIND,
-                            sessionId: stored.sessionId,
-                        });
-                    }
-                    processRuntimeDelivery(delivery, stored.state);
-                }
             };
 
             const connectionLiveness = new RelayConnectionLiveness(timer, {
@@ -618,17 +391,6 @@ async function runRelayConnection(
                 try {
                     const message = decodeServiceToDaemonMessage(encoded);
                     const kind = message.kind;
-                    if (kind === RUNTIME_DELIVERY_COMMITTED_KIND) {
-                        const committed = message;
-                        if (!operations.markRuntimeDeliveryCommitted(committed.deliveryId, committed.sessionId)) {
-                            console.warn("Mobius daemon ignored confirmation for an unknown Runtime delivery");
-                        }
-                        return;
-                    }
-                    if (kind === RUNTIME_DELIVERY_KIND) {
-                        receiveRuntimeDelivery(message);
-                        return;
-                    }
                     if (kind === SESSION_LIVE_HISTORY_LOAD_KIND) {
                         const command = decodeSessionLiveHistoryLoad(encoded);
                         void executeSessionLiveHistoryLoad(
@@ -1270,10 +1032,6 @@ async function runRelayConnection(
                         });
                 } catch (error) {
                     console.error("Mobius daemon rejected a message", error);
-                    if (error instanceof RuntimeDeliveryInboxCapacityError) {
-                        failAndClose(error, 4013, "Runtime delivery queue full", "delivery_backpressure");
-                        return;
-                    }
                     failAndClose(
                         new Error("Relay sent an invalid protocol message", { cause: error }),
                         4008,
@@ -1291,7 +1049,6 @@ async function runRelayConnection(
                         return;
                     }
                     publisher.connect(socket);
-                    resumeRuntimeDeliveries();
                 },
                 (error: unknown) => {
                     if (finished) {
@@ -1315,7 +1072,6 @@ async function runRelayConnection(
                             turn.abortDaemon();
                         }
                         publisher.connect(socket);
-                        resumeRuntimeDeliveries();
                         return;
                     }
                     failAndClose(

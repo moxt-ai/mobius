@@ -3,7 +3,6 @@ import {
     decodeDaemonToServiceMessage,
     encodeRuntimeStatusEvent,
     encodeServiceToDaemonMessage,
-    RUNTIME_DELIVERY_RECEIVED_KIND,
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_HEARTBEAT_KIND,
     RUNTIME_LIVENESS_READY_KIND,
@@ -36,7 +35,6 @@ export type RuntimeSocketIdentity =
           readonly role: "daemon" | "replaced-daemon";
           readonly connectionEpoch: number;
           readonly connectionId: string;
-          readonly deliveryReceipts: boolean;
           readonly runtimeId: string;
           readonly projectId: string;
       };
@@ -95,13 +93,7 @@ export class RuntimeService {
         this.#cx = cx;
     }
 
-    readonly acceptDaemon = async (
-        runtimeId: string,
-        scope: ProjectScope,
-        liveness: boolean,
-        deliveryReceipts: boolean,
-        signal: AbortSignal,
-    ) => {
+    readonly acceptDaemon = async (runtimeId: string, scope: ProjectScope, liveness: boolean, signal: AbortSignal) => {
         const accepting = { runtimeId, scope, controller: new AbortController() };
         this.#accepting.add(accepting);
         const operation = this.#acceptTail.then(async (): Promise<RuntimeAcceptance> => {
@@ -110,7 +102,6 @@ export class RuntimeService {
                     runtimeId,
                     scope,
                     liveness,
-                    deliveryReceipts,
                     AbortSignal.any([signal, accepting.controller.signal]),
                 );
             } catch (error) {
@@ -139,7 +130,6 @@ export class RuntimeService {
         runtimeId: string,
         scope: ProjectScope,
         liveness: boolean,
-        deliveryReceipts: boolean,
         signal: AbortSignal,
     ): Promise<RuntimeAcceptance> => {
         signal.throwIfAborted();
@@ -169,7 +159,6 @@ export class RuntimeService {
         }
         const identity: DaemonSocketIdentity = {
             ...prepared.identity,
-            deliveryReceipts,
             role: "daemon",
             projectId: scope.projectId,
         };
@@ -180,7 +169,7 @@ export class RuntimeService {
             return { kind: "accepted", response: accepted.response };
         }
         try {
-            await this.attachDaemon(runtimeId, scope, false, deliveryReceipts, signal);
+            await this.attachDaemon(runtimeId, scope, false, signal);
         } catch (error) {
             accepted.socket.close(1011, "Runtime attachment failed");
             throw error;
@@ -206,7 +195,7 @@ export class RuntimeService {
         ]);
         const operation = (async () => {
             try {
-                await this.attachDaemon(identity.runtimeId, scope, false, identity.deliveryReceipts, signal);
+                await this.attachDaemon(identity.runtimeId, scope, false, signal);
                 signal.throwIfAborted();
                 if (!this.#cx.services.connections.isCurrent(identity)) {
                     return;
@@ -312,7 +301,6 @@ export class RuntimeService {
         runtimeId: string,
         scope: ProjectScope,
         replaced: boolean,
-        _deliveryReceipts: boolean,
         signal: AbortSignal,
     ): Promise<void> => {
         const channel = this.channel(runtimeId, scope);
@@ -394,7 +382,7 @@ export class RuntimeService {
     };
 
     private readonly daemonMessageLane = (message: DaemonToServiceMessage): string => {
-        if (message.kind === SESSION_EVENT_KIND || message.kind === RUNTIME_DELIVERY_RECEIVED_KIND) {
+        if (message.kind === SESSION_EVENT_KIND) {
             return `session:${message.sessionId}`;
         }
         return "runtime";

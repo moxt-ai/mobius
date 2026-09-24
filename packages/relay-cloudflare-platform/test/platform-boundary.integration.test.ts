@@ -269,7 +269,7 @@ describe.sequential("Platform Session-only boundary", () => {
         const runtimeId = text(claimed, "runtimeId");
         const sessionId = "local-codex-session";
         const daemonResponse = await worker.fetch(
-            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect?deliveryReceipts=1&liveness=1`, {
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect?liveness=1`, {
                 headers: { authorization: `Bearer ${text(claimed, "runtimeCredential")}`, Upgrade: "websocket" },
             }),
             environment,
@@ -343,7 +343,7 @@ describe.sequential("Platform Session-only boundary", () => {
             daemon.close(1000, "Reconnect Runtime");
             expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "runtime.status", online: false });
             const reconnectResponse = await worker.fetch(
-                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect?deliveryReceipts=1&liveness=1`, {
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect?liveness=1`, {
                     headers: { authorization: `Bearer ${text(claimed, "runtimeCredential")}`, Upgrade: "websocket" },
                 }),
                 environment,
