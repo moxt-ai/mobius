@@ -74,6 +74,24 @@ export class AppCredentialAuthenticationService {
         return used;
     };
 
+    readonly readActiveCredentialByPublicId = async (
+        publicCredentialId: string,
+        signal: AbortSignal,
+    ): Promise<CredentialRow> => {
+        signal.throwIfAborted();
+        const credential = await this.#storage.readCredentialByPublicId(publicCredentialId, signal);
+        if (credential === null) {
+            throw new ProjectAuthenticationError("project_credential_invalid", "The AppCredential is invalid");
+        }
+        this.requireActive(credential);
+        const now = Date.now();
+        if (!(await this.#storage.touchCredential(credential.credential_id, now, signal))) {
+            throw new ProjectAuthenticationError("credential_revoked", "The AppCredential is no longer active");
+        }
+        signal.throwIfAborted();
+        return { ...credential, last_used_at: now };
+    };
+
     readonly invalidate = async (row: CredentialRow, signal: AbortSignal): Promise<void> => {
         try {
             await this.#cache.invalidate(row.secret_digest, signal);

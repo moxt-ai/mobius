@@ -10,6 +10,7 @@ import {
     decodeSessionLiveHistoryPageLoad,
     decodeSessionPrepareCommand,
     decodeSessionPromptCommand,
+    decodeSessionQueryCommand,
     decodeWorkspaceListCommand,
     encodeAgentActivityEvent,
     encodeAgentContentEvent,
@@ -29,6 +30,7 @@ import {
     encodeSessionOperationFailedEvent,
     encodeSessionReadyEvent,
     encodeSessionStartedEvent,
+    encodeSessionsQueriedEvent,
     encodeWorkspaceEntriesEvent,
     FILE_READ_KIND,
     NATIVE_SESSION_REQUEST_KIND,
@@ -40,7 +42,9 @@ import {
     SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
     SESSION_PREPARE_KIND,
     SESSION_PROMPT_KIND,
+    SESSION_QUERY_KIND,
     SESSION_STARTED_KIND,
+    type SessionMetadata,
     type SessionPromptCommand,
     type SessionReadyEvent,
     WORKSPACE_ENTRIES_KIND,
@@ -338,6 +342,7 @@ export interface FakeAgentDaemonBehavior {
     readonly afterLastDelta?: (command: SessionPromptCommand, signal: AbortSignal) => Promise<void>;
     readonly directoryLabel?: string;
     readonly nativeSessionIds?: ReadonlySet<string>;
+    readonly sessions?: readonly SessionMetadata[];
     readonly nativeSessionTitle?: (sessionId: string) => string;
     readonly loadNativeHistory?: (sessionId: string, signal: AbortSignal) => Promise<NativeSessionHistory>;
     readonly onPromptCompleted?: (command: SessionPromptCommand, response: string) => void;
@@ -478,12 +483,47 @@ async function processHappyPathCommand(
                     sessionId: command.sessionId,
                 }),
             );
+        } else if (command.action === "list") {
+            daemon.send(
+                encodeNativeSessionResult({
+                    action: "list",
+                    capabilities: {
+                        additionalDirectories: true,
+                        audioPrompt: false,
+                        closeSession: true,
+                        deleteSession: true,
+                        embeddedContextPrompt: true,
+                        imagePrompt: true,
+                        listSessions: true,
+                        loadSession: true,
+                        promptQueueing: false,
+                        resumeSession: true,
+                        steering: false,
+                        unstableForkSession: false,
+                    },
+                    entries: [...(behavior.nativeSessionIds ?? [])].map((nativeSessionId) => ({
+                        additionalDirectories: [],
+                        directoryId: "default",
+                        directoryLabel: behavior.directoryLabel ?? "Fake workspace",
+                        entryId: nativeSessionId,
+                        mobiusSessionIds: [],
+                        nativeSessionId,
+                        title: behavior.nativeSessionTitle?.(nativeSessionId) ?? "New chat",
+                        updatedAt: null,
+                    })),
+                    kind: "native.session.result",
+                    nextCursor: null,
+                    requestId: command.requestId,
+                    sessionId: command.sessionId,
+                }),
+            );
         } else if (command.action === "find" && behavior.nativeSessionIds?.has(command.nativeSessionId)) {
             daemon.send(
                 encodeNativeSessionResult({
                     action: "find",
                     entry: {
                         entryId: command.nativeSessionId,
+                        mobiusSessionIds: [],
                         nativeSessionId: command.nativeSessionId,
                         directoryId: "default",
                         directoryLabel: behavior.directoryLabel ?? "Fake workspace",
@@ -531,6 +571,17 @@ async function processHappyPathCommand(
                 }),
             );
         }
+        return;
+    }
+    if (kind === SESSION_QUERY_KIND) {
+        const command = decodeSessionQueryCommand(encoded);
+        daemon.send(
+            encodeSessionsQueriedEvent({
+                entries: (behavior.sessions ?? []).filter((entry) => command.sessionIds.includes(entry.sessionId)),
+                kind: "session.queried",
+                requestId: command.requestId,
+            }),
+        );
         return;
     }
     if (kind === SESSION_PREPARE_KIND) {
@@ -596,17 +647,27 @@ async function processHappyPathCommand(
     }
     if (kind === SESSION_LIVE_HISTORY_PAGE_LOAD_KIND) {
         const command = decodeSessionLiveHistoryPageLoad(encoded);
+        const available = behavior.sessions?.some((entry) => entry.sessionId === command.sessionId) === true;
         daemon.send(
             encodeSessionLiveHistoryPageLoaded({
                 kind: "session.live-history.page.loaded",
-                page: {
-                    cause: {
-                        code: "native_history_unsupported",
-                        message: "The fake Agent daemon does not provide native message history.",
-                    },
-                    nextCursor: null,
-                    status: "unavailable",
-                },
+                page: available
+                    ? {
+                          coveredCommandIds: [],
+                          coveredMessageIds: [],
+                          messages: [],
+                          nextCursor: null,
+                          status: "available",
+                          truncated: false,
+                      }
+                    : {
+                          cause: {
+                              code: "native_history_unsupported",
+                              message: "The fake Agent daemon does not provide native message history.",
+                          },
+                          nextCursor: null,
+                          status: "unavailable",
+                      },
                 requestId: command.requestId,
                 sessionId: command.sessionId,
             }),

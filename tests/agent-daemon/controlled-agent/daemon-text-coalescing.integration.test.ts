@@ -432,4 +432,248 @@ describe("daemon assistant text coalescing", () => {
             await rm(stateDirectory, { force: true, recursive: true });
         }
     }, 30_000);
+
+    it("Given a native Agent Turn has emitted partial text, When a follow-up is queued behind it and the target settles, Then the daemon runs the queued Turn next", async () => {
+        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-active-turn-"));
+        const workspace = join(stateDirectory, "workspace");
+        const nativeStateDirectory = join(stateDirectory, "native");
+        await Promise.all([mkdir(workspace), mkdir(nativeStateDirectory)]);
+        const socketReady = Promise.withResolvers<Duplex>();
+        const relaySockets = new Set<Duplex>();
+        const relay = createServer((_request, response) => {
+            response.writeHead(404);
+            response.end();
+        });
+        relay.on("connection", (socket) => {
+            relaySockets.add(socket);
+            socket.once("close", () => relaySockets.delete(socket));
+            socket.on("error", () => undefined);
+        });
+        relay.on("upgrade", (request, socket) => {
+            const key = request.headers["sec-websocket-key"];
+            if (typeof key !== "string") {
+                socket.destroy();
+                return;
+            }
+            const accept = createHash("sha1").update(`${key}${websocketGuid}`).digest("base64");
+            socket.write(
+                "HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+            );
+            socketReady.resolve(socket);
+        });
+        await listen(relay);
+        const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
+        relayUrl.searchParams.set("token", "d".repeat(43));
+        const agent = new LocalAgentDefinition(
+            "deepseek-harness",
+            "DeepSeek Harness",
+            process.execPath,
+            [fakeAgentPath, "--agent-name", "DeepSeek Harness"],
+            { MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory },
+        );
+        const config = createDaemonConfig(
+            { channelId: "channel_alpha", defaultWorkspace: workspace, relayUrl },
+            [agent],
+            [],
+            new DaemonLocalContext(stateDirectory),
+        );
+        const cancellation = new AbortController();
+        const audit = new AuditStore();
+        const daemon = runDaemon(config, audit, cancellation.signal);
+        try {
+            const socket = await socketReady.promise;
+            const frames = new ClientFrames(socket);
+            const sessionId = "snapshot_conversation";
+            const prompt: SessionPromptCommand = {
+                additionalDirectoryIds: [],
+                agentId: agent.id,
+                bindingId: config.bindingId,
+                commandId: "snapshot_turn",
+                directoryId: "default",
+                disposition: SessionPromptDisposition.Reject,
+                images: [],
+                kind: "session.prompt",
+                prompt: "hold after first delta",
+                resources: [],
+                sessionId,
+                targetCommandId: "",
+            };
+            const next = async (): Promise<string> => {
+                for (;;) {
+                    const message = await frames.next();
+                    if (decodeMessageKind(message) !== SESSION_EVENT_KIND) {
+                        return message;
+                    }
+                    const envelope = decodeSessionEventEnvelope(message);
+                    return envelope.payload;
+                }
+            };
+            sendText(socket, encodeSessionPromptCommand(prompt));
+            let delta: string;
+            do {
+                delta = await next();
+            } while (decodeMessageKind(delta) !== AGENT_MESSAGE_DELTA_KIND);
+            const firstDelta = decodeAgentMessageDeltaEvent(delta);
+            const request = (requestId: string) =>
+                encodeNativeSessionRequest({
+                    action: "active-turn",
+                    additionalDirectoryIds: [],
+                    agentId: agent.id,
+                    bindingId: config.bindingId,
+                    directoryId: "default",
+                    kind: "native.session.request",
+                    requestId,
+                    sessionId,
+                    targetSessionId: sessionId,
+                });
+            sendText(socket, request("active_one"));
+            let result: string;
+            do {
+                result = await next();
+            } while (decodeMessageKind(result) !== NATIVE_SESSION_RESULT_KIND);
+            const active = decodeNativeSessionResult(result);
+            expect(active).toMatchObject({
+                action: "active-turn",
+                turn: {
+                    commandId: prompt.commandId,
+                    epoch: firstDelta.epoch,
+                    prompt: prompt.prompt,
+                    sequence: firstDelta.sequence,
+                    text: "Partial reply",
+                    truncated: false,
+                },
+            });
+            sendText(socket, encodeSessionPromptCommand({ ...prompt, commandId: "second_burst_turn" }));
+            let rejected: string;
+            for (;;) {
+                rejected = await next();
+                const kind = decodeMessageKind(rejected);
+                if (kind === SESSION_STARTED_KIND) {
+                    expect(decodeSessionStartedEvent(rejected).commandId).not.toBe("second_burst_turn");
+                }
+                if (
+                    kind === SESSION_FAILED_KIND &&
+                    decodeSessionFailedEvent(rejected).commandId === "second_burst_turn"
+                ) {
+                    break;
+                }
+            }
+            expect(decodeSessionFailedEvent(rejected)).toMatchObject({
+                code: "session_busy",
+                commandId: "second_burst_turn",
+            });
+            sendText(
+                socket,
+                encodeSessionPromptCommand({
+                    ...prompt,
+                    bindingId: "another_binding",
+                    commandId: "unauthorized_burst_turn",
+                }),
+            );
+            for (;;) {
+                rejected = await next();
+                if (
+                    decodeMessageKind(rejected) === SESSION_FAILED_KIND &&
+                    decodeSessionFailedEvent(rejected).commandId === "unauthorized_burst_turn"
+                ) {
+                    break;
+                }
+            }
+            expect(decodeSessionFailedEvent(rejected).code).not.toBe("session_busy");
+            const cancelledQueuedPrompt: SessionPromptCommand = {
+                ...prompt,
+                commandId: "cancelled_queued_follow_up",
+                disposition: SessionPromptDisposition.Queue,
+                prompt: "do not run this follow-up",
+                targetCommandId: prompt.commandId,
+            };
+            sendText(socket, encodeSessionPromptCommand(cancelledQueuedPrompt));
+            sendText(
+                socket,
+                encodeSessionCancelCommand({
+                    commandId: cancelledQueuedPrompt.commandId,
+                    kind: SESSION_CANCEL_KIND,
+                    sessionId,
+                }),
+            );
+            do {
+                result = await next();
+            } while (
+                !(
+                    decodeMessageKind(result) === SESSION_COMPLETED_KIND &&
+                    decodeSessionCompletedEvent(result).commandId === cancelledQueuedPrompt.commandId
+                ) &&
+                !(
+                    decodeMessageKind(result) === SESSION_FAILED_KIND &&
+                    decodeSessionFailedEvent(result).commandId === cancelledQueuedPrompt.commandId
+                )
+            );
+            expect(decodeSessionCompletedEvent(result)).toMatchObject({
+                commandId: cancelledQueuedPrompt.commandId,
+                stopReason: "cancelled",
+            });
+            sendText(socket, request("active_after_queued_cancellation"));
+            do {
+                result = await next();
+            } while (decodeMessageKind(result) !== NATIVE_SESSION_RESULT_KIND);
+            expect(decodeNativeSessionResult(result)).toMatchObject({
+                action: "active-turn",
+                turn: { commandId: prompt.commandId, state: "running" },
+            });
+            const queuedPrompt: SessionPromptCommand = {
+                ...prompt,
+                commandId: "queued_follow_up",
+                disposition: SessionPromptDisposition.Queue,
+                prompt: "continue after the active turn",
+                targetCommandId: prompt.commandId,
+            };
+            sendText(socket, encodeSessionPromptCommand(queuedPrompt));
+            sendText(
+                socket,
+                encodeSessionCancelCommand({ commandId: prompt.commandId, kind: SESSION_CANCEL_KIND, sessionId }),
+            );
+            do {
+                result = await next();
+            } while (
+                !(
+                    decodeMessageKind(result) === SESSION_COMPLETED_KIND &&
+                    decodeSessionCompletedEvent(result).commandId === prompt.commandId
+                ) &&
+                !(
+                    decodeMessageKind(result) === SESSION_FAILED_KIND &&
+                    decodeSessionFailedEvent(result).commandId === prompt.commandId
+                )
+            );
+            do {
+                result = await next();
+            } while (
+                !(
+                    decodeMessageKind(result) === SESSION_COMPLETED_KIND &&
+                    decodeSessionCompletedEvent(result).commandId === queuedPrompt.commandId
+                ) &&
+                !(
+                    decodeMessageKind(result) === SESSION_FAILED_KIND &&
+                    decodeSessionFailedEvent(result).commandId === queuedPrompt.commandId
+                )
+            );
+            expect(decodeMessageKind(result)).toBe(SESSION_COMPLETED_KIND);
+            sendText(socket, request("active_two"));
+            do {
+                result = await next();
+            } while (decodeMessageKind(result) !== NATIVE_SESSION_RESULT_KIND);
+            expect(decodeNativeSessionResult(result)).toMatchObject({ action: "active-turn", turn: null });
+        } finally {
+            cancellation.abort();
+            await daemon;
+            audit.close();
+            for (const socket of relaySockets) {
+                socket.destroy();
+            }
+            await new Promise<void>((resolve) => relay.close(() => resolve()));
+            await rm(stateDirectory, { force: true, recursive: true });
+        }
+    }, 30_000);
 });

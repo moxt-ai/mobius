@@ -560,10 +560,11 @@ export async function executePrompt(
     sessions: AcpSessionManager,
     attemptId: string,
     activateAttempt: () => { readonly epoch: string; readonly sequence: 0 },
-    sessionAvailable: () => boolean,
+    waitForSessionAvailability: (signal: AbortSignal) => Promise<"available" | "busy" | "queue-target-unavailable">,
     timer: DaemonTimer,
     signal: AbortSignal,
     recordLiveText: (delta: string) => { readonly epoch: string; readonly sequence: number },
+    cancellationRequested: () => boolean,
 ): Promise<void> {
     const activities = new CoalescingDaemonActivityPublisher(timer, (activity) => {
         publisher.publish(command.sessionId, daemonActivity(command, activity));
@@ -610,13 +611,11 @@ export async function executePrompt(
             signal,
         );
         const agent = config.catalog.find(command.agentId);
-        if (!sessionAvailable()) {
+        const availability = await waitForSessionAvailability(signal);
+        if (availability === "busy") {
             throw new AcpExecutionError("Another prompt is already running in this conversation", {}, "session_busy");
         }
-        if (
-            command.disposition === SessionPromptDisposition.Queue &&
-            !operations.isTerminalExecution(command.targetCommandId, command.sessionId)
-        ) {
+        if (availability === "queue-target-unavailable") {
             throw new AcpExecutionError(
                 "The queued prompt target is unavailable",
                 {},
@@ -735,6 +734,21 @@ export async function executePrompt(
         text.flush();
         narration.flush();
         activities.flush();
+        if (signal.aborted && cancellationRequested()) {
+            publisher.publish(command.sessionId, {
+                commandId: command.commandId,
+                kind: SESSION_COMPLETED_KIND,
+                sessionId: command.sessionId,
+                stopReason: "cancelled",
+            });
+            operations.transitionExecution(command.commandId, "cancelled");
+            audit.record({
+                commandId: command.commandId,
+                event: "session_cancelled",
+                sessionId: command.sessionId,
+            });
+            return;
+        }
         audit.record({
             commandId: command.commandId,
             event: "session_failed",

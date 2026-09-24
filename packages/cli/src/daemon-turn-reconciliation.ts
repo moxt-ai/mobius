@@ -68,13 +68,19 @@ export class ActiveDaemonTurn {
     readonly matches = (cancellation: SessionCancelCommand): boolean =>
         cancellation.commandId === this.command.commandId && cancellation.sessionId === this.command.sessionId;
 
-    readonly requestCancellation = (): boolean => {
+    readonly requestCancellation = (): "already-requested" | "pending" | "running" => {
         if (this.#cancellationRequested) {
-            return false;
+            return "already-requested";
         }
         this.#cancellationRequested = true;
-        return true;
+        if (!this.#accepted) {
+            this.#controller.abort(new Error("The queued Agent turn was cancelled"));
+            return "pending";
+        }
+        return "running";
     };
+
+    readonly cancellationRequested = (): boolean => this.#cancellationRequested;
 
     get signal(): AbortSignal {
         return this.#controller.signal;

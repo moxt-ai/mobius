@@ -31,6 +31,7 @@ import {
     decodeSessionPermissionRespondCommand,
     decodeSessionPrepareCommand,
     decodeSessionPromptCommand,
+    decodeSessionQueryCommand,
     decodeWorkspaceListCommand,
     encodeAgentCatalogRefreshFailedEvent,
     encodeAgentSettingsDiscoveryFailedEvent,
@@ -64,6 +65,8 @@ import {
     SESSION_PERMISSION_RESPOND_KIND,
     SESSION_PREPARE_KIND,
     SESSION_PROMPT_KIND,
+    SESSION_QUERIED_KIND,
+    SESSION_QUERY_KIND,
     SESSION_READY_KIND,
     type ServiceToDaemonMessage,
     type SessionPromptCommand,
@@ -470,6 +473,8 @@ export class ChannelActor {
                 return;
             case FILE_FAILED_KIND:
                 return;
+            case SESSION_QUERIED_KIND:
+                return;
             case NATIVE_SESSION_RESULT_KIND:
                 return;
             case WORKSPACE_ENTRIES_KIND:
@@ -517,6 +522,10 @@ export class ChannelActor {
             }
             case WORKSPACE_LIST_KIND: {
                 const command = decodeWorkspaceListCommand(message);
+                return { message: command, requestId: command.requestId, sessionId: "" };
+            }
+            case SESSION_QUERY_KIND: {
+                const command = decodeSessionQueryCommand(message);
                 return { message: command, requestId: command.requestId, sessionId: "" };
             }
             case SESSION_CONFIGURE_KIND: {

@@ -2,15 +2,79 @@ import {
     decodeAgentCatalogRefreshCommand,
     decodeAgentSettingsDiscoverCommand,
     decodeNativeSessionRequest,
+    decodeSessionConfigureCommand,
+    decodeSessionLiveHistoryPageLoad,
+    decodeSessionPrepareCommand,
+    decodeSessionPromptCommand,
+    decodeSessionQueryCommand,
     decodeWorkspaceListCommand,
     RUNTIME_WORKSPACE_BINDING_ID,
 } from "@moxt-ai/mobius-protocol";
 import { Hono } from "hono";
+import * as v from "valibot";
 import { PairingDirectoryError, validateIdentifier } from "../../entity/pairing/pairing.ts";
 import { assertExactKeys, bearerToken, readString } from "../../infra/relay-http.ts";
 import { bodyParser } from "../middleware/body-parser.ts";
 import { errorMiddleware, rethrowHonoError } from "../middleware/error-middleware.ts";
 import type { RelayHttpEnvironment } from "../relay-http-environment.ts";
+
+const boundedString = (maximumLength: number) => v.pipe(v.string(), v.minLength(1), v.maxLength(maximumLength));
+const identifier = v.pipe(v.string(), v.regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/u));
+const sessionIdentitySchema = v.strictObject({
+    additionalDirectoryIds: v.array(boundedString(2_048)),
+    agentId: identifier,
+    directoryId: boundedString(2_048),
+});
+const createSessionSchema = v.strictObject({
+    ...sessionIdentitySchema.entries,
+    bindingId: identifier,
+    policy: v.strictObject({
+        contentLimitBytes: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
+        hotEventLimit: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
+        idempotencyRetentionMilliseconds: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
+        level: v.string(),
+        retentionMilliseconds: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
+    }),
+    runtimeId: identifier,
+    sessionId: identifier,
+    title: v.pipe(v.string(), v.maxLength(512)),
+});
+const configureSessionSchema = v.strictObject({
+    ...sessionIdentitySchema.entries,
+    booleanValue: v.boolean(),
+    configId: identifier,
+    value: v.string(),
+    valueType: v.picklist(["boolean", "select"]),
+});
+const nativeMessagesSchema = v.strictObject({
+    ...sessionIdentitySchema.entries,
+    cursor: v.nullable(v.string()),
+    limit: v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(200)),
+});
+const sessionQuerySchema = v.strictObject({
+    sessionIds: v.pipe(v.array(identifier), v.minLength(1), v.maxLength(500)),
+});
+const submitTurnSchema = v.strictObject({
+    ...sessionIdentitySchema.entries,
+    content: v.string(),
+    disposition: v.picklist(["reject", "queue", "steer"]),
+    idempotencyKey: identifier,
+    images: v.array(v.unknown()),
+    resources: v.array(v.unknown()),
+    sessionConfigurations: v.array(v.unknown()),
+    targetCommandId: v.string(),
+});
+
+function validated<TSchema extends v.GenericSchema<unknown, object>>(
+    schema: TSchema,
+    value: Readonly<Record<string, unknown>>,
+): v.InferOutput<TSchema> {
+    const result = v.safeParse(schema, value);
+    if (!result.success) {
+        throw new PairingDirectoryError("invalid_request", "The request fields are invalid", { cause: result.issues });
+    }
+    return result.output;
+}
 
 export function createProjectRuntimeRoutes() {
     return new Hono<RelayHttpEnvironment>()
@@ -25,6 +89,171 @@ export function createProjectRuntimeRoutes() {
             context.header("Cache-Control", "no-store");
             return context.json({ runtimes });
         })
+        .post(
+            "/projects/:projectId/runtimes/:runtimeId/sessions/query",
+            bodyParser<RelayHttpEnvironment>(),
+            async (context) => {
+                const body = validated(sessionQuerySchema, context.req.valid("json"));
+                const command = decodeSessionQueryCommand(
+                    JSON.stringify({
+                        kind: "session.query",
+                        requestId: crypto.randomUUID(),
+                        sessionIds: body.sessionIds,
+                    }),
+                );
+                const result = await context.env.services.runtimePairings.requestControl(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
+                    bearerToken(context.req.raw),
+                    command,
+                    context.req.raw.signal,
+                );
+                context.header("Cache-Control", "no-store");
+                return context.json(result);
+            },
+        )
+        .post(
+            "/projects/:projectId/runtimes/:runtimeId/sessions",
+            bodyParser<RelayHttpEnvironment>(),
+            async (context) => {
+                const body = validated(createSessionSchema, context.req.valid("json"));
+                if (body.runtimeId !== context.req.param("runtimeId")) {
+                    throw new PairingDirectoryError("invalid_request", "The Runtime identifier does not match");
+                }
+                const command = decodeSessionPrepareCommand(
+                    JSON.stringify({
+                        additionalDirectoryIds: body.additionalDirectoryIds,
+                        agentId: body.agentId,
+                        bindingId: "workspace",
+                        directoryId: body.directoryId,
+                        kind: "session.prepare",
+                        requestId: crypto.randomUUID(),
+                        sessionId: body.sessionId,
+                    }),
+                );
+                const result = await context.env.services.runtimePairings.requestControl(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
+                    bearerToken(context.req.raw),
+                    command,
+                    context.req.raw.signal,
+                );
+                context.header("Cache-Control", "no-store");
+                return context.json(result);
+            },
+        )
+        .post(
+            "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/load",
+            bodyParser<RelayHttpEnvironment>(),
+            async (context) => {
+                const body = validated(sessionIdentitySchema, context.req.valid("json"));
+                const command = decodeSessionPrepareCommand(
+                    JSON.stringify({
+                        ...body,
+                        bindingId: "workspace",
+                        kind: "session.prepare",
+                        requestId: crypto.randomUUID(),
+                        sessionId: validateIdentifier(context.req.param("sessionId"), "session_id"),
+                        sessionState: "provisioned",
+                    }),
+                );
+                const result = await context.env.services.runtimePairings.requestControl(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
+                    bearerToken(context.req.raw),
+                    command,
+                    context.req.raw.signal,
+                );
+                context.header("Cache-Control", "no-store");
+                return context.json(result);
+            },
+        )
+        .post(
+            "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/configuration",
+            bodyParser<RelayHttpEnvironment>(),
+            async (context) => {
+                const body = validated(configureSessionSchema, context.req.valid("json"));
+                const command = decodeSessionConfigureCommand(
+                    JSON.stringify({
+                        ...body,
+                        bindingId: "workspace",
+                        kind: "session.configure",
+                        requestId: crypto.randomUUID(),
+                        sessionId: validateIdentifier(context.req.param("sessionId"), "session_id"),
+                    }),
+                );
+                const result = await context.env.services.runtimePairings.requestControl(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
+                    bearerToken(context.req.raw),
+                    command,
+                    context.req.raw.signal,
+                );
+                context.header("Cache-Control", "no-store");
+                return context.json(result);
+            },
+        )
+        .post(
+            "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/native-messages",
+            bodyParser<RelayHttpEnvironment>(),
+            async (context) => {
+                const body = validated(nativeMessagesSchema, context.req.valid("json"));
+                const command = decodeSessionLiveHistoryPageLoad(
+                    JSON.stringify({
+                        ...body,
+                        bindingId: "workspace",
+                        kind: "session.live-history.page.load",
+                        requestId: crypto.randomUUID(),
+                        sessionId: validateIdentifier(context.req.param("sessionId"), "session_id"),
+                    }),
+                );
+                const result = await context.env.services.runtimePairings.requestControl(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
+                    bearerToken(context.req.raw),
+                    command,
+                    context.req.raw.signal,
+                );
+                context.header("Cache-Control", "no-store");
+                return context.json(result);
+            },
+        )
+        .post(
+            "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/turns",
+            bodyParser<RelayHttpEnvironment>(),
+            async (context) => {
+                const body = validated(submitTurnSchema, context.req.valid("json"));
+                const command = decodeSessionPromptCommand(
+                    JSON.stringify({
+                        additionalDirectoryIds: body.additionalDirectoryIds,
+                        agentId: body.agentId,
+                        bindingId: "workspace",
+                        commandId: body.idempotencyKey,
+                        directoryId: body.directoryId,
+                        disposition: body.disposition,
+                        images: body.images,
+                        kind: "session.prompt",
+                        prompt: body.content,
+                        resources: body.resources,
+                        sessionConfigurations: body.sessionConfigurations,
+                        sessionId: validateIdentifier(context.req.param("sessionId"), "session_id"),
+                        targetCommandId: body.targetCommandId,
+                    }),
+                );
+                const result = await context.env.services.runtimePairings.requestControl(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
+                    bearerToken(context.req.raw),
+                    command,
+                    context.req.raw.signal,
+                );
+                if (!("commandId" in result) || result.commandId !== command.commandId) {
+                    throw new PairingDirectoryError("invalid_request", "The Runtime returned an invalid Turn");
+                }
+                context.header("Cache-Control", "no-store");
+                return context.json({ turnId: result.commandId });
+            },
+        )
         .post(
             "/projects/:projectId/runtimes/:runtimeId/agent-catalog/refresh",
             bodyParser<RelayHttpEnvironment>(),

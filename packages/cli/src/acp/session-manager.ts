@@ -939,6 +939,15 @@ export class AcpSessionManager {
         ]);
     };
 
+    readonly findSessions = (sessionIds: readonly string[]) =>
+        sessionIds.flatMap((sessionId) => {
+            const stored = this.#store.read(sessionId);
+            return stored instanceof FoundAcpStoredSession ? [stored.session] : [];
+        });
+
+    readonly findLinkedSessions = (agentId: string, nativeSessionId: string) =>
+        this.#store.findNative(agentId, nativeSessionId);
+
     readonly hasPreparedSession = (
         sessionId: string,
         agentId: string,

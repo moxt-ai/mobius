@@ -5,6 +5,7 @@ import type {
     NativeSessionEntry,
     NativeSessionResult,
     NativeSessionTurnForkCommand,
+    SessionMetadata,
     SessionReadyEvent,
     WorkspaceEntry,
 } from "@moxt-ai/mobius-protocol";
@@ -177,6 +178,10 @@ export class NativeSessionService {
             });
             return {
                 entryId,
+                mobiusSessionIds: this.#sessions
+                    .findLinkedSessions(command.agentId, info.sessionId)
+                    .filter((session) => session.prompted && session.cwd === authorized.cwd)
+                    .map((session) => session.sessionId),
                 nativeSessionId: info.sessionId,
                 title: info.title ?? "Untitled session",
                 directoryId: authorized.directoryId,
@@ -394,6 +399,33 @@ export class NativeSessionService {
             title: target.info.title ?? "Untitled session",
             history: opened.history,
         };
+    };
+
+    readonly querySessions = async (
+        sessionIds: readonly string[],
+        signal: AbortSignal,
+    ): Promise<readonly SessionMetadata[]> => {
+        const entries: SessionMetadata[] = [];
+        for (const session of this.#sessions.findSessions(sessionIds)) {
+            signal.throwIfAborted();
+            const directory = await this.#directories.identify(this.#config.bindingId, session.cwd, signal);
+            const additionalDirectories = [];
+            for (const path of session.additionalDirectories) {
+                const identified = await this.#directories.identify(this.#config.bindingId, path, signal);
+                additionalDirectories.push({ directoryId: identified.directoryId, name: identified.name });
+            }
+            entries.push({
+                additionalDirectories,
+                agentId: session.agentId,
+                directoryId: directory.directoryId,
+                directoryLabel: directory.label,
+                prompted: session.prompted,
+                sessionId: session.sessionId,
+                title: session.title || "Untitled session",
+                updatedAt: session.updatedAt,
+            });
+        }
+        return entries;
     };
 
     readonly executeTurnFork = async (

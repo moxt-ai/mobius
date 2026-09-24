@@ -71,7 +71,9 @@ export class PairingService {
                     projectId,
                     runtimeId,
                     token,
-                    command.kind === "native.session.request" && command.action === "list"
+                    (command.kind === "native.session.request" && command.action === "list") ||
+                        command.kind === "session.query" ||
+                        command.kind === "session.live-history.page.load"
                         ? ProjectPermission.RuntimeRead
                         : ProjectPermission.SessionWrite,
                     deadline,

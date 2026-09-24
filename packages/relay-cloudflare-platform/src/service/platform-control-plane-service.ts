@@ -1132,6 +1132,20 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
         );
     };
 
+    readonly authorizePlatformCredentialRecord = async (
+        projectId: string,
+        credential: CredentialRow,
+        requiredPermission: ProjectPermission,
+        signal: AbortSignal,
+    ): Promise<ProjectAccessContext> =>
+        await this.authorizeCredentialForProject(
+            credential,
+            validateIdentifier(projectId, "project_id"),
+            requiredPermission,
+            "",
+            signal,
+        );
+
     readonly resolveApplicationId: ProjectApplicationResolver["resolveApplicationId"] = async (projectId, signal) => {
         const project = await this.#projectAuthorization.read(validateIdentifier(projectId, "project_id"), signal);
         if (project === null || project.lifecycle !== "active") {

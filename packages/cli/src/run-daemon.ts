@@ -321,16 +321,60 @@ async function runRelayConnection(
                 rejectConnection(failure);
             };
 
-            const sessionAvailable = (command: SessionPromptCommand): boolean => {
+            const waitForTurnCompletion = (turn: ActiveDaemonTurn, waitSignal: AbortSignal): Promise<void> => {
+                waitSignal.throwIfAborted();
+                return new Promise<void>((resolve, reject) => {
+                    let settled = false;
+                    const finish = (
+                        result: { readonly kind: "completed" } | { readonly kind: "failed"; readonly error: unknown },
+                    ): void => {
+                        if (settled) {
+                            return;
+                        }
+                        settled = true;
+                        waitSignal.removeEventListener("abort", onAbort);
+                        if (result.kind === "completed") {
+                            resolve();
+                        } else {
+                            reject(result.error);
+                        }
+                    };
+                    const onAbort = (): void => finish({ error: waitSignal.reason, kind: "failed" });
+                    waitSignal.addEventListener("abort", onAbort, { once: true });
+                    void turn.completion.then(
+                        () => finish({ kind: "completed" }),
+                        (error: unknown) => finish({ error, kind: "failed" }),
+                    );
+                });
+            };
+
+            const waitForSessionAvailability = async (
+                command: SessionPromptCommand,
+                waitSignal: AbortSignal,
+            ): Promise<"available" | "busy" | "queue-target-unavailable"> => {
                 if (command.disposition === SessionPromptDisposition.Steer) {
-                    return true;
+                    return "available";
                 }
-                const first = [...activeTurns.values()].find(
-                    (turn) =>
-                        turn.command.sessionId === command.sessionId &&
-                        turn.command.disposition !== SessionPromptDisposition.Steer,
-                );
-                return first === undefined || first.command.commandId === command.commandId;
+                for (;;) {
+                    const first = [...activeTurns.values()].find(
+                        (turn) =>
+                            turn.command.sessionId === command.sessionId &&
+                            turn.command.disposition !== SessionPromptDisposition.Steer,
+                    );
+                    if (first === undefined || first.command.commandId === command.commandId) {
+                        return command.disposition !== SessionPromptDisposition.Queue ||
+                            operations.isTerminalExecution(command.targetCommandId, command.sessionId)
+                            ? "available"
+                            : "queue-target-unavailable";
+                    }
+                    if (command.disposition !== SessionPromptDisposition.Queue) {
+                        return "busy";
+                    }
+                    if (first.command.commandId !== command.targetCommandId) {
+                        return "queue-target-unavailable";
+                    }
+                    await waitForTurnCompletion(first, waitSignal);
+                }
             };
 
             const connectionLiveness = new RelayConnectionLiveness(timer, {
@@ -1018,10 +1062,11 @@ async function runRelayConnection(
                         sessions,
                         receipt.attemptId,
                         turn.accept,
-                        () => sessionAvailable(command),
+                        (waitSignal) => waitForSessionAvailability(command, waitSignal),
                         timer,
                         turn.signal,
                         turn.recordText,
+                        turn.cancellationRequested,
                     )
                         .catch((error: unknown) => {
                             console.error("Mobius daemon turn failed", error);

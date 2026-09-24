@@ -5,6 +5,8 @@ export class AcpStoredSession {
     readonly nativeSessionId: string;
     readonly prompted: boolean;
     readonly sessionId: string;
+    readonly title: string;
+    readonly updatedAt: string;
 
     constructor(
         sessionId: string,
@@ -13,6 +15,8 @@ export class AcpStoredSession {
         cwd: string,
         additionalDirectories: readonly string[],
         prompted: boolean,
+        title: string,
+        updatedAt = new Date().toISOString(),
     ) {
         this.additionalDirectories = [...additionalDirectories];
         this.agentId = agentId;
@@ -20,6 +24,8 @@ export class AcpStoredSession {
         this.nativeSessionId = nativeSessionId;
         this.prompted = prompted;
         this.sessionId = sessionId;
+        this.title = title;
+        this.updatedAt = updatedAt;
     }
 }
 
@@ -47,6 +53,7 @@ export class DeletedAcpStoredSession extends AcpStoredSessionLookup {
 
 export interface AcpSessionStore {
     readonly findNative: (agentId: string, nativeSessionId: string) => readonly AcpStoredSession[];
+    readonly list: () => readonly AcpStoredSession[];
     readonly markDeleted: (agentId: string, nativeSessionId: string) => readonly string[];
     readonly read: (sessionId: string) => AcpStoredSessionLookup;
     readonly remove: (sessionId: string) => void;
@@ -61,6 +68,9 @@ export class MemoryAcpSessionStore implements AcpSessionStore {
         [...this.#sessions.values()].filter(
             (session) => session.agentId === agentId && session.nativeSessionId === nativeSessionId,
         );
+
+    readonly list = (): readonly AcpStoredSession[] =>
+        [...this.#sessions.values()].toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 
     readonly markDeleted = (agentId: string, nativeSessionId: string): readonly string[] => {
         const ids = this.findNative(agentId, nativeSessionId).map((session) => session.sessionId);
