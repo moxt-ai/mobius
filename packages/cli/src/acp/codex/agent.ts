@@ -418,6 +418,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
             // Declare only what this Agent actually serves. Mobius gates every request on these bits,
             // so an optimistic bit here becomes an unsupported ACP call at the far end.
             .onRequest(methods.agent.initialize, async () => ({
+                _meta: { steering: { supported: true } },
                 agentCapabilities: {
                     loadSession: true,
                     promptCapabilities: { embeddedContext: true, image: true },
