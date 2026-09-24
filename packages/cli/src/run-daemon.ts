@@ -13,7 +13,6 @@ import {
     FILE_READ_KIND,
     NATIVE_SESSION_CANCEL_KIND,
     NATIVE_SESSION_REQUEST_KIND,
-    NATIVE_SESSION_TURN_FORK_KIND,
     type RecordedSessionEvent,
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_LIVENESS_READY_KIND,
@@ -410,7 +409,7 @@ async function runRelayConnection(
                         handleCatalogRefresh.handle(message);
                         return;
                     }
-                    if (kind === NATIVE_SESSION_REQUEST_KIND || kind === NATIVE_SESSION_TURN_FORK_KIND) {
+                    if (kind === NATIVE_SESSION_REQUEST_KIND) {
                         nativeRequestHandler.handle(message);
                         return;
                     }

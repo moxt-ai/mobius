@@ -162,12 +162,6 @@ export interface AcpSteerOptions extends AcpPrepareOptions, AcpPromptContentOpti
     readonly targetCommandId: string;
 }
 
-export interface AcpSessionForkPoint {
-    readonly messageFingerprint: string;
-    readonly messageId: string;
-    readonly messageOccurrence: number;
-}
-
 export interface AcpPermissionResponseOptions {
     readonly interactionId: string;
     readonly optionId: string;
@@ -538,26 +532,6 @@ export class AcpProcessSession implements AcpClientHandler {
             unmeasuredOperationMetrics,
         );
 
-    static readonly startSessionForkAtTurn = async (
-        options: AcpPrepareOptions,
-        sourceNativeSessionId: string,
-        forkPoint: AcpSessionForkPoint,
-        getObserver: () => AcpSessionObserver,
-        store: AcpSessionStore,
-    ): Promise<AcpProcessSession> =>
-        await AcpProcessSession.#start(
-            options,
-            getObserver,
-            store,
-            async (runtime) =>
-                await runtime.initialize(
-                    options.signal,
-                    { kind: "fork", nativeSessionId: sourceNativeSessionId },
-                    forkPoint,
-                ),
-            unmeasuredOperationMetrics,
-        );
-
     readonly belongsTo = (agentId: string, cwd: string, additionalDirectories: readonly string[]): boolean =>
         this.#agentId === agentId &&
         this.#cwd === cwd &&
@@ -766,11 +740,7 @@ export class AcpProcessSession implements AcpClientHandler {
         );
     }
 
-    readonly initialize = async (
-        signal: AbortSignal,
-        origin?: NativeSessionOrigin,
-        forkPoint?: AcpSessionForkPoint,
-    ): Promise<void> => {
+    readonly initialize = async (signal: AbortSignal, origin?: NativeSessionOrigin): Promise<void> => {
         await this.#initializeAgent(signal);
         let stored = this.#metrics.measureSync("session-state-read", () =>
             origin?.kind === "import"
@@ -825,22 +795,6 @@ export class AcpProcessSession implements AcpClientHandler {
                                 cwd: this.#cwd,
                                 additionalDirectories: [...this.#additionalDirectories],
                                 mcpServers: [],
-                                ...(forkPoint === undefined
-                                    ? {}
-                                    : {
-                                          _meta: {
-                                              jetbrains: {
-                                                  air: {
-                                                      fork: {
-                                                          version: 1,
-                                                          messageFingerprint: forkPoint.messageFingerprint,
-                                                          messageId: forkPoint.messageId,
-                                                          messageOccurrence: forkPoint.messageOccurrence,
-                                                      },
-                                                  },
-                                              },
-                                          },
-                                      }),
                             },
                             { cancellationSignal: signal },
                         ),

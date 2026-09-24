@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -717,40 +716,7 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
             additionalDirectories: context.params.additionalDirectories ?? [],
         });
         const sourceHistory = nativeHistory.get(context.params.sessionId) ?? [];
-        const fork = isRecord(context.params._meta) ? context.params._meta["jetbrains"] : undefined;
-        const air = isRecord(fork) ? fork["air"] : undefined;
-        const point = isRecord(air) ? air["fork"] : undefined;
-        let forkHistory = [...sourceHistory];
-        if (isRecord(point) && point["version"] === 1) {
-            const requestedMessageId = point["messageId"];
-            let messageIndex =
-                typeof requestedMessageId === "string"
-                    ? sourceHistory.findIndex((message) => message.messageId === requestedMessageId)
-                    : -1;
-            const requestedFingerprint = point["messageFingerprint"];
-            const requestedOccurrence = point["messageOccurrence"];
-            if (
-                messageIndex < 0 &&
-                typeof requestedFingerprint === "string" &&
-                typeof requestedOccurrence === "number" &&
-                Number.isSafeInteger(requestedOccurrence) &&
-                requestedOccurrence > 0
-            ) {
-                const matches = sourceHistory
-                    .map((message, index) => ({ index, message }))
-                    .filter(
-                        ({ message }) =>
-                            message.role === "assistant" &&
-                            `sha256:${createHash("sha256").update(message.text, "utf8").digest("hex")}` ===
-                                requestedFingerprint,
-                    );
-                messageIndex = matches[requestedOccurrence - 1]?.index ?? -1;
-            }
-            if (messageIndex < 0 || sourceHistory[messageIndex]?.role !== "assistant") {
-                throw new Error("Unknown fork point");
-            }
-            forkHistory = sourceHistory.slice(0, messageIndex + 1);
-        }
+        const forkHistory = [...sourceHistory];
         const forkedState = state.withTurnCount(forkHistory.filter((message) => message.role === "assistant").length);
         nativeHistory.set(sessionId, forkHistory);
         sessions.set(sessionId, forkedState);

@@ -1,9 +1,4 @@
-import {
-    NATIVE_SESSION_REQUEST_KIND,
-    type NativeSessionCancel,
-    type NativeSessionCommand,
-    type NativeSessionTurnForkCommand,
-} from "@moxt-ai/mobius-protocol";
+import type { NativeSessionCancel, NativeSessionCommand } from "@moxt-ai/mobius-protocol";
 import { WebSocket } from "undici";
 import { AcpExecutionError } from "../acp/session-manager.ts";
 import type { AuditStore } from "../audit/audit-store.ts";
@@ -11,8 +6,6 @@ import { operationErrorCode, reportOperationFailure, send } from "../daemon-sess
 import type { RelayConnectionDiagnostics } from "../relay-connection/diagnostics.ts";
 import type { DaemonTimer } from "../relay-connection/timer.ts";
 import type { NativeSessionService } from "./service.ts";
-
-type NativeCommand = NativeSessionCommand | NativeSessionTurnForkCommand;
 
 type PendingRequest = Readonly<{
     agentId: string;
@@ -43,11 +36,9 @@ export function createNativeSessionRequestHandler(dependencies: NativeRequestDep
         }
     };
 
-    const handle = (command: NativeCommand): void => {
+    const handle = (command: NativeSessionCommand): void => {
         const previous = [...pending.values()].filter((request) => request.agentId === command.agentId);
-        const parallelRead =
-            command.kind === NATIVE_SESSION_REQUEST_KIND &&
-            (command.action === "linked-history" || command.action === "active-turn");
+        const parallelRead = command.action === "linked-history" || command.action === "active-turn";
         if (
             pending.has(command.requestId) ||
             pending.size >= 4 ||
@@ -74,7 +65,7 @@ export function createNativeSessionRequestHandler(dependencies: NativeRequestDep
         const completion = (async (): Promise<void> => {
             try {
                 operationSignal.throwIfAborted();
-                const skipPrevious = command.kind === NATIVE_SESSION_REQUEST_KIND && command.action === "active-turn";
+                const skipPrevious = command.action === "active-turn";
                 if (previous.length > 0 && !skipPrevious) {
                     await new Promise<void>((resolve, reject) => {
                         const onAbort = (): void => reject(operationSignal.reason);
@@ -92,10 +83,7 @@ export function createNativeSessionRequestHandler(dependencies: NativeRequestDep
                     });
                 }
                 operationSignal.throwIfAborted();
-                const result =
-                    command.kind === NATIVE_SESSION_REQUEST_KIND
-                        ? await nativeSessions.execute(command, operationSignal)
-                        : await nativeSessions.executeTurnFork(command, operationSignal);
+                const result = await nativeSessions.execute(command, operationSignal);
                 if (socket.readyState === WebSocket.OPEN) {
                     send(socket, result);
                 }
@@ -104,10 +92,7 @@ export function createNativeSessionRequestHandler(dependencies: NativeRequestDep
                     ? (controller.signal.reason ??
                       new AcpExecutionError("Native session operation cancelled", {}, "native_session_cancelled"))
                     : error;
-                const event =
-                    command.kind === NATIVE_SESSION_REQUEST_KIND
-                        ? "native_session_operation_failed"
-                        : "native_session_turn_fork_failed";
+                const event = "native_session_operation_failed";
                 audit.record({
                     commandId: command.requestId,
                     sessionId: command.sessionId,
@@ -118,7 +103,7 @@ export function createNativeSessionRequestHandler(dependencies: NativeRequestDep
                     event,
                     command.requestId,
                     {
-                        ...(command.kind === NATIVE_SESSION_REQUEST_KIND ? { action: command.action } : {}),
+                        action: command.action,
                         agentId: command.agentId,
                         code: operationErrorCode(failure),
                         sessionId: command.sessionId,

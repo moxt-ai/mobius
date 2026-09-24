@@ -109,15 +109,12 @@ import {
     decodeNativeSessionCancel,
     decodeNativeSessionCommand,
     decodeNativeSessionResult,
-    decodeNativeSessionTurnForkCommand,
     encodeNativeSessionCancel,
     encodeNativeSessionCommand,
     encodeNativeSessionResult,
-    encodeNativeSessionTurnForkCommand,
     NATIVE_SESSION_CANCEL_KIND,
     NATIVE_SESSION_REQUEST_KIND,
     NATIVE_SESSION_RESULT_KIND,
-    NATIVE_SESSION_TURN_FORK_KIND,
 } from "./native-sessions.ts";
 import { decodeSessionEventEnvelope, encodeSessionEventEnvelope, SESSION_EVENT_KIND } from "./session-events.ts";
 import {
@@ -192,11 +189,6 @@ const serviceToDaemonSignatures = {
         NATIVE_SESSION_REQUEST_KIND,
         encodeNativeSessionCommand,
         decodeNativeSessionCommand,
-    ),
-    [NATIVE_SESSION_TURN_FORK_KIND]: defineMessageSignature(
-        NATIVE_SESSION_TURN_FORK_KIND,
-        encodeNativeSessionTurnForkCommand,
-        decodeNativeSessionTurnForkCommand,
     ),
     [RUNTIME_HEARTBEAT_ACK_KIND]: defineMessageSignature(
         RUNTIME_HEARTBEAT_ACK_KIND,
