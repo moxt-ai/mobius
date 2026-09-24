@@ -325,6 +325,21 @@ export function recordsEqual(left: Readonly<Record<string, string>>, right: Read
     return leftEntries.length === rightEntries.length && leftEntries.every(([name, value]) => right[name] === value);
 }
 
+const OPEN_CODE_COMPACT_COMMAND: SessionCommand = {
+    description: "Compact the conversation context",
+    inputHint: "",
+    name: "compact",
+};
+
+function commandsForAgent(agentId: string, commands: readonly SessionCommand[]): readonly SessionCommand[] {
+    const withoutCompact = commands.filter((command) => command.name.toLowerCase() !== "compact");
+    if (agentId !== "opencode") {
+        return withoutCompact;
+    }
+    const advertised = commands.find((command) => command.name.toLowerCase() === "compact");
+    return [...withoutCompact, advertised ?? OPEN_CODE_COMPACT_COMMAND];
+}
+
 export class AcpProcessSession implements AcpClientHandler {
     readonly #additionalDirectories: readonly string[];
     readonly #acceptedUrlElicitations = new Map<string, string>();
@@ -376,6 +391,7 @@ export class AcpProcessSession implements AcpClientHandler {
     ) {
         this.#additionalDirectories = [...additionalDirectories];
         this.#agentId = agent.id;
+        this.#commands = commandsForAgent(agent.id, []);
         this.#cwd = cwd;
         this.#environment = agent.environment;
         this.#getObserver = getObserver;
@@ -1553,9 +1569,9 @@ export class AcpProcessSession implements AcpClientHandler {
                     name: truncate(command.name, 128),
                 }))
                 .filter((command) => command.name.length > 0);
-            this.#commands = commands;
+            this.#commands = commandsForAgent(this.#agentId, commands);
             await this.#getObserver().onCommands({
-                commands,
+                commands: this.#commands,
                 kind: SESSION_COMMANDS_UPDATED_KIND,
                 sessionId: this.#mobiusSessionId,
             });
