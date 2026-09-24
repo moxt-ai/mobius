@@ -196,7 +196,7 @@ export class ChannelActor {
         this.#clock = clock;
         this.#peers = peers;
         this.#runtimeId = runtimeId;
-        this.#liveEvents = new LiveSessionEventRelay(clock, peers);
+        this.#liveEvents = new LiveSessionEventRelay(peers);
     }
 
     readonly attachDaemon = async (replacedExistingConnection: boolean, _signal: AbortSignal): Promise<void> => {
@@ -244,7 +244,7 @@ export class ChannelActor {
                 throw new ProtocolMessageError("Cloud Session delivery is unavailable");
             }
             if (kind === SESSION_EVENT_KIND) {
-                await this.#liveEvents.receive(socket, message, signal);
+                this.#liveEvents.receive(message, signal);
                 return;
             }
             if (kind === NATIVE_SESSION_RESULT_KIND) {

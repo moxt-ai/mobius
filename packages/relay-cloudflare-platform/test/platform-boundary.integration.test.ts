@@ -8,7 +8,6 @@ import {
     encodeSessionEventEnvelope,
     encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
-    SESSION_EVENT_ACK_KIND,
 } from "@moxt-ai/mobius-protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestMobiusPlatformApp } from "../../../tests/infra/app.ts";
@@ -321,7 +320,6 @@ describe.sequential("Platform Session-only boundary", () => {
             }
             expect(decodeSessionPromptCommand(JSON.stringify(prompt)).prompt).toBe("show the local answer");
             const answer = encodeSessionEventEnvelope({
-                eventId: "local-codex-event",
                 kind: "session.event",
                 payload: JSON.stringify({
                     commandId: prompt.commandId,
@@ -333,27 +331,15 @@ describe.sequential("Platform Session-only boundary", () => {
                     text: "local answer",
                 }),
                 sessionId,
-                source: { attemptId: "local-codex-attempt", kind: "attempt", sourceSeq: "1" },
             });
             daemon.send(answer);
             const received = decodeCommittedSessionEvent(await hostMessages.next());
             expect(received.payload).toContain("local answer");
             expect(received).not.toHaveProperty("cursor");
             expect(received).not.toHaveProperty("sequence");
-            const acknowledged = decodeServiceToDaemonMessage(await daemonMessages.next());
-            expect(acknowledged).toEqual({
-                eventId: "local-codex-event",
-                kind: SESSION_EVENT_ACK_KIND,
-                sessionId,
-            });
             // A retransmission remains a live event; the viewer uses the Runtime's epoch and sequence.
             daemon.send(answer);
             expect(decodeCommittedSessionEvent(await hostMessages.next()).payload).toContain("local answer");
-            expect(decodeServiceToDaemonMessage(await daemonMessages.next())).toEqual({
-                eventId: "local-codex-event",
-                kind: SESSION_EVENT_ACK_KIND,
-                sessionId,
-            });
             daemon.close(1000, "Reconnect Runtime");
             expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "runtime.status", online: false });
             const reconnectResponse = await worker.fetch(

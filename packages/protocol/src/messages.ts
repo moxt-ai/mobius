@@ -113,10 +113,10 @@ export interface AgentMessageDeltaEvent {
  * An incremental append to a streaming narration activity (reasoning or progress).
  *
  * A narration activity is rewritten once per streamed Agent chunk. Sending the
- * accumulated text each time made the durable event stream quadratic in the
+ * accumulated text each time made live streaming quadratic in the
  * length of the narration, so only the newly produced text travels here. The
- * receiver appends `text` to what it already holds for `activityId`; the owning
- * Attempt's contiguous source sequence orders the appends, so no offset has to
+ * receiver appends `text` to what it already holds for `activityId`; the native
+ * activity sequence orders the appends, so no offset has to
  * be trusted. The fields carried here are what the receiver needs to render the
  * activity while it is still streaming.
  */

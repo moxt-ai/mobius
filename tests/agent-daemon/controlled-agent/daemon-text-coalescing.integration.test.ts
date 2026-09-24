@@ -17,13 +17,11 @@ import {
     decodeSessionStartedEvent,
     encodeNativeSessionRequest,
     encodeSessionCancelCommand,
-    encodeSessionEventAcknowledgement,
     encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
     NATIVE_SESSION_RESULT_KIND,
     SESSION_CANCEL_KIND,
     SESSION_COMPLETED_KIND,
-    SESSION_EVENT_ACK_KIND,
     SESSION_EVENT_KIND,
     SESSION_FAILED_KIND,
     SESSION_STARTED_KIND,
@@ -198,14 +196,6 @@ describe("daemon assistant text coalescing", () => {
                     continue;
                 }
                 const envelope = decodeSessionEventEnvelope(message);
-                sendText(
-                    socket,
-                    encodeSessionEventAcknowledgement({
-                        eventId: envelope.eventId,
-                        kind: SESSION_EVENT_ACK_KIND,
-                        sessionId: envelope.sessionId,
-                    }),
-                );
                 const kind = decodeMessageKind(envelope.payload);
                 if (kind === AGENT_MESSAGE_DELTA_KIND) {
                     const payload: unknown = JSON.parse(envelope.payload);
@@ -311,14 +301,6 @@ describe("daemon assistant text coalescing", () => {
                         return message;
                     }
                     const envelope = decodeSessionEventEnvelope(message);
-                    sendText(
-                        socket,
-                        encodeSessionEventAcknowledgement({
-                            eventId: envelope.eventId,
-                            kind: SESSION_EVENT_ACK_KIND,
-                            sessionId,
-                        }),
-                    );
                     return envelope.payload;
                 }
             };

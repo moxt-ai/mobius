@@ -45,7 +45,7 @@ import {
 } from "./relay-connection/coalescing-activity-publisher.ts";
 import { CoalescingNarrationPublisher } from "./relay-connection/coalescing-narration-publisher.ts";
 import { CoalescingTextPublisher } from "./relay-connection/coalescing-text-publisher.ts";
-import type { SessionEventOutbox } from "./relay-connection/session-event-outbox.ts";
+import type { DaemonOperationState } from "./relay-connection/daemon-operation-state.ts";
 import type { DaemonSessionEventPublisher } from "./relay-connection/session-event-publisher.ts";
 import type { DaemonTimer } from "./relay-connection/timer.ts";
 
@@ -112,19 +112,14 @@ export function reportFailure(
     command: DaemonTurnCommand,
     code: string,
     message: string,
-    attemptId: string,
 ): void {
-    publisher.recordAttempt(
-        command.sessionId,
-        {
-            code,
-            commandId: command.commandId,
-            kind: SESSION_FAILED_KIND,
-            message,
-            sessionId: command.sessionId,
-        },
-        attemptId,
-    );
+    publisher.publish(command.sessionId, {
+        code,
+        commandId: command.commandId,
+        kind: SESSION_FAILED_KIND,
+        message,
+        sessionId: command.sessionId,
+    });
 }
 
 /**
@@ -134,11 +129,11 @@ export function reportFailure(
  */
 export function settleAbandonedTurn(
     publisher: DaemonSessionEventPublisher,
-    outbox: SessionEventOutbox,
+    operations: DaemonOperationState,
     audit: AuditStore,
     cancellation: SessionCancelCommand,
 ): void {
-    const attemptId = outbox.findUnsettledAttemptId(cancellation.commandId, cancellation.sessionId);
+    const attemptId = operations.findUnsettledAttemptId(cancellation.commandId, cancellation.sessionId);
     if (attemptId === null) {
         console.warn("Mobius daemon ignored cancellation for an inactive turn");
         return;
@@ -153,9 +148,8 @@ export function settleAbandonedTurn(
         cancellation,
         "agent_execution_abandoned",
         "The local Agent execution was abandoned before it completed",
-        attemptId,
     );
-    outbox.transitionExecution(cancellation.commandId, "failed");
+    operations.transitionExecution(cancellation.commandId, "failed");
 }
 
 export function operationErrorCode(error: unknown): string {
@@ -340,7 +334,7 @@ export async function executeSessionPrepare(
                     event: "session_configured",
                     sessionId: command.sessionId,
                 });
-                publisher.recordRuntime(command.sessionId, {
+                publisher.publish(command.sessionId, {
                     configOptions,
                     kind: "session.config.updated",
                     requestId: command.requestId,
@@ -368,7 +362,7 @@ export async function executeSessionPrepare(
             // an event that can never be replayed. The direct send below still delivers it.
             if (command.transient !== true) {
                 metrics.measureSync("readiness-commit", () => {
-                    publisher.recordRuntime(command.sessionId, event);
+                    publisher.publish(command.sessionId, event);
                 });
             }
             return event;
@@ -544,7 +538,7 @@ export async function executeSessionConfigure(
             event: "session_configured",
             sessionId: command.sessionId,
         });
-        publisher.recordRuntime(command.sessionId, {
+        publisher.publish(command.sessionId, {
             configOptions,
             kind: "session.config.updated",
             requestId: command.requestId,
@@ -559,7 +553,7 @@ export async function executeSessionConfigure(
 }
 
 export async function executePrompt(
-    outbox: SessionEventOutbox,
+    operations: DaemonOperationState,
     publisher: DaemonSessionEventPublisher,
     command: SessionPromptCommand,
     config: DaemonConfig,
@@ -574,24 +568,20 @@ export async function executePrompt(
     recordLiveText: (delta: string) => { readonly epoch: string; readonly sequence: number },
 ): Promise<void> {
     const activities = new CoalescingDaemonActivityPublisher(timer, (activity) => {
-        publisher.recordAttempt(command.sessionId, daemonActivity(command, activity), attemptId);
+        publisher.publish(command.sessionId, daemonActivity(command, activity));
     });
     const narration = new CoalescingNarrationPublisher(
         timer,
         (increment) => {
-            publisher.recordAttempt(
-                command.sessionId,
-                {
-                    activityId: increment.activityId,
-                    activityType: increment.activityType,
-                    commandId: command.commandId,
-                    kind: AGENT_ACTIVITY_NARRATION_KIND,
-                    sequence: increment.sequence,
-                    sessionId: command.sessionId,
-                    text: increment.text,
-                },
-                attemptId,
-            );
+            publisher.publish(command.sessionId, {
+                activityId: increment.activityId,
+                activityType: increment.activityType,
+                commandId: command.commandId,
+                kind: AGENT_ACTIVITY_NARRATION_KIND,
+                sequence: increment.sequence,
+                sessionId: command.sessionId,
+                text: increment.text,
+            });
         },
         AGENT_ACTIVITY_COALESCING_MILLISECONDS,
         AGENT_TEXT_MAXIMUM_LENGTH,
@@ -600,19 +590,15 @@ export async function executePrompt(
         timer,
         (messageId, delta) => {
             const stream = recordLiveText(delta);
-            publisher.recordAttempt(
-                command.sessionId,
-                {
-                    commandId: command.commandId,
-                    epoch: stream.epoch,
-                    kind: AGENT_MESSAGE_DELTA_KIND,
-                    messageId,
-                    sequence: stream.sequence,
-                    sessionId: command.sessionId,
-                    text: delta,
-                },
-                attemptId,
-            );
+            publisher.publish(command.sessionId, {
+                commandId: command.commandId,
+                epoch: stream.epoch,
+                kind: AGENT_MESSAGE_DELTA_KIND,
+                messageId,
+                sequence: stream.sequence,
+                sessionId: command.sessionId,
+                text: delta,
+            });
         },
         AGENT_TEXT_COALESCING_MILLISECONDS,
         AGENT_TEXT_MAXIMUM_LENGTH,
@@ -631,7 +617,7 @@ export async function executePrompt(
         }
         if (
             command.disposition === SessionPromptDisposition.Queue &&
-            !outbox.isTerminalExecution(command.targetCommandId, command.sessionId)
+            !operations.isTerminalExecution(command.targetCommandId, command.sessionId)
         ) {
             throw new AcpExecutionError(
                 "The queued prompt target is unavailable",
@@ -679,21 +665,17 @@ export async function executePrompt(
             event: "session_authorized",
             sessionId: command.sessionId,
         });
-        outbox.transitionExecution(command.commandId, "running");
+        operations.transitionExecution(command.commandId, "running");
         const stream = activateAttempt();
-        publisher.recordAttempt(
-            command.sessionId,
-            {
-                commandId: command.commandId,
-                epoch: stream.epoch,
-                kind: SESSION_STARTED_KIND,
-                attemptId,
-                prompt: command.prompt,
-                sequence: stream.sequence,
-                sessionId: command.sessionId,
-            },
+        publisher.publish(command.sessionId, {
+            commandId: command.commandId,
+            epoch: stream.epoch,
+            kind: SESSION_STARTED_KIND,
             attemptId,
-        );
+            prompt: command.prompt,
+            sequence: stream.sequence,
+            sessionId: command.sessionId,
+        });
         const attachments = await resolvePromptArtifacts(config, command, signal);
         let stopReason: string;
         if (command.disposition === SessionPromptDisposition.Steer) {
@@ -739,17 +721,13 @@ export async function executePrompt(
         text.flush();
         narration.flush();
         activities.flush();
-        publisher.recordAttempt(
-            command.sessionId,
-            {
-                commandId: command.commandId,
-                kind: SESSION_COMPLETED_KIND,
-                sessionId: command.sessionId,
-                stopReason,
-            },
-            attemptId,
-        );
-        outbox.transitionExecution(command.commandId, stopReason === "cancelled" ? "cancelled" : "succeeded");
+        publisher.publish(command.sessionId, {
+            commandId: command.commandId,
+            kind: SESSION_COMPLETED_KIND,
+            sessionId: command.sessionId,
+            stopReason,
+        });
+        operations.transitionExecution(command.commandId, stopReason === "cancelled" ? "cancelled" : "succeeded");
         audit.record({
             commandId: command.commandId,
             event: stopReason === "cancelled" ? "session_cancelled" : "session_completed",
@@ -772,9 +750,8 @@ export async function executePrompt(
             code === "session_operation_failed"
                 ? "The local agent could not complete the request"
                 : operationErrorMessage(error),
-            attemptId,
         );
-        outbox.transitionExecution(command.commandId, "failed");
+        operations.transitionExecution(command.commandId, "failed");
         console.error("Mobius daemon command failed", error);
     }
 }

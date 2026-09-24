@@ -28,9 +28,6 @@ import {
     SESSION_CANCEL_KIND,
     SESSION_CONFIGURE_KIND,
     SESSION_ELICITATION_RESPOND_KIND,
-    SESSION_EVENT_ACK_KIND,
-    SESSION_EVENT_DEFERRED_KIND,
-    SESSION_EVENT_REJECTED_KIND,
     SESSION_LIVE_HISTORY_LOAD_KIND,
     SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
     SESSION_PERMISSION_RESPOND_KIND,
@@ -79,10 +76,10 @@ import { readCodexFullHistory } from "./native-sessions/codex-history.ts";
 import { NativeSessionService } from "./native-sessions/service.ts";
 import { revalidateExecutable } from "./process/executable.ts";
 import { connectRelay } from "./relay-connection/connect.ts";
+import { DaemonOperationState, RuntimeDeliveryInboxCapacityError } from "./relay-connection/daemon-operation-state.ts";
 import { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
 import { RelayConnectionLiveness } from "./relay-connection/liveness.ts";
 import { isRuntimeRelayRevocation, RuntimeRelayRevokedError } from "./relay-connection/runtime-revocation.ts";
-import { RuntimeDeliveryInboxCapacityError, SessionEventOutbox } from "./relay-connection/session-event-outbox.ts";
 import { DaemonSessionEventPublisher } from "./relay-connection/session-event-publisher.ts";
 import { type DaemonTimer, systemDaemonTimer } from "./relay-connection/timer.ts";
 
@@ -238,10 +235,9 @@ async function runRelayConnection(
     installations: AgentInstallationManager,
     installationObserver: DaemonInstallationObserver,
     nativeSessions: NativeSessionService,
-    outbox: SessionEventOutbox,
+    operations: DaemonOperationState,
     publisher: DaemonSessionEventPublisher,
     activeTurns: Map<string, ActiveDaemonTurn>,
-    activeAttemptIds: Map<string, string>,
     connectionEpoch: number,
     diagnostics: RelayConnectionDiagnostics,
     onConnected: () => void,
@@ -348,7 +344,6 @@ async function runRelayConnection(
             const processDeliveredPrompt = async (
                 delivery: RuntimeDelivery,
                 command: SessionPromptCommand,
-                trackActiveAttempt: boolean,
                 execute: (
                     attemptId: string,
                     activateAttempt: () => { readonly epoch: string; readonly sequence: 0 },
@@ -364,7 +359,7 @@ async function runRelayConnection(
                     await active.completion;
                     return;
                 }
-                const receipt = outbox.claimExecution(command.commandId, command.sessionId, delivery.payload);
+                const receipt = operations.claimExecution(command.commandId, command.sessionId, delivery.payload);
                 if (receipt.kind === "duplicate") {
                     if (receipt.state === "running") {
                         reportFailure(
@@ -372,9 +367,8 @@ async function runRelayConnection(
                             command,
                             "agent_execution_interrupted",
                             "The local Agent execution was interrupted before it completed",
-                            receipt.attemptId,
                         );
-                        outbox.transitionExecution(command.commandId, "failed");
+                        operations.transitionExecution(command.commandId, "failed");
                         return;
                     }
                     if (receipt.state !== "dispatching") {
@@ -384,20 +378,10 @@ async function runRelayConnection(
 
                 const turn = new ActiveDaemonTurn(command, receipt.attemptId);
                 activeTurns.set(command.commandId, turn);
-                const activateAttempt = (): { readonly epoch: string; readonly sequence: 0 } => {
-                    const stream = turn.accept();
-                    if (trackActiveAttempt) {
-                        activeAttemptIds.set(command.sessionId, receipt.attemptId);
-                    }
-                    return stream;
-                };
                 try {
-                    await execute(receipt.attemptId, activateAttempt, turn.signal, turn);
+                    await execute(receipt.attemptId, turn.accept, turn.signal, turn);
                 } finally {
                     activeTurns.delete(command.commandId);
-                    if (activeAttemptIds.get(command.sessionId) === receipt.attemptId) {
-                        activeAttemptIds.delete(command.sessionId);
-                    }
                     turn.finish();
                 }
             };
@@ -412,7 +396,7 @@ async function runRelayConnection(
                     }
                     const turn = activeTurns.get(cancellation.commandId);
                     if (turn === undefined || !turn.matches(cancellation)) {
-                        settleAbandonedTurn(publisher, outbox, audit, cancellation);
+                        settleAbandonedTurn(publisher, operations, audit, cancellation);
                         return;
                     }
                     if (!turn.requestCancellation()) {
@@ -482,10 +466,9 @@ async function runRelayConnection(
                     await processDeliveredPrompt(
                         delivery,
                         command,
-                        command.disposition !== SessionPromptDisposition.Steer,
                         (attemptId, activateAttempt, executionSignal, turn) =>
                             executePrompt(
-                                outbox,
+                                operations,
                                 publisher,
                                 command,
                                 config,
@@ -512,7 +495,7 @@ async function runRelayConnection(
                 processingDeliveryIds.add(delivery.deliveryId);
                 void processDeliveredPayload(delivery)
                     .then(() => {
-                        outbox.markRuntimeDeliveryProcessed(delivery.deliveryId, delivery.sessionId);
+                        operations.markRuntimeDeliveryProcessed(delivery.deliveryId, delivery.sessionId);
                     })
                     .catch((error: unknown) => {
                         if (connectionController.signal.aborted) {
@@ -549,7 +532,7 @@ async function runRelayConnection(
                 if (payloadSessionId !== delivery.sessionId) {
                     throw new Error("Runtime delivery Session identity does not match its payload");
                 }
-                const stored = outbox.claimRuntimeDelivery(delivery);
+                const stored = operations.claimRuntimeDelivery(delivery);
                 send(socket, {
                     deliveryId: delivery.deliveryId,
                     kind: RUNTIME_DELIVERY_RECEIVED_KIND,
@@ -559,7 +542,7 @@ async function runRelayConnection(
             };
 
             const resumeRuntimeDeliveries = (): void => {
-                for (const stored of outbox.runtimeDeliveries()) {
+                for (const stored of operations.runtimeDeliveries()) {
                     const delivery: RuntimeDelivery = {
                         deliveryId: stored.deliveryId,
                         kind: RUNTIME_DELIVERY_KIND,
@@ -637,35 +620,13 @@ async function runRelayConnection(
                     const kind = message.kind;
                     if (kind === RUNTIME_DELIVERY_COMMITTED_KIND) {
                         const committed = message;
-                        if (!outbox.markRuntimeDeliveryCommitted(committed.deliveryId, committed.sessionId)) {
+                        if (!operations.markRuntimeDeliveryCommitted(committed.deliveryId, committed.sessionId)) {
                             console.warn("Mobius daemon ignored confirmation for an unknown Runtime delivery");
                         }
                         return;
                     }
                     if (kind === RUNTIME_DELIVERY_KIND) {
                         receiveRuntimeDelivery(message);
-                        return;
-                    }
-                    if (kind === SESSION_EVENT_ACK_KIND) {
-                        publisher.acknowledge(message);
-                        return;
-                    }
-                    if (kind === SESSION_EVENT_DEFERRED_KIND) {
-                        publisher.defer(message);
-                        return;
-                    }
-                    if (kind === SESSION_EVENT_REJECTED_KIND) {
-                        const rejection = message;
-                        if (publisher.quarantine(rejection)) {
-                            audit.record({
-                                commandId: rejection.eventId,
-                                details: { code: rejection.code },
-                                event: "session_event_rejected",
-                                sessionId: rejection.sessionId,
-                            });
-                        } else {
-                            console.warn("Mobius daemon ignored a rejection for an unknown session event");
-                        }
                         return;
                     }
                     if (kind === SESSION_LIVE_HISTORY_LOAD_KIND) {
@@ -1175,7 +1136,7 @@ async function runRelayConnection(
                         const cancellation = message;
                         const turn = activeTurns.get(cancellation.commandId);
                         if (turn === undefined || !turn.matches(cancellation)) {
-                            settleAbandonedTurn(publisher, outbox, audit, cancellation);
+                            settleAbandonedTurn(publisher, operations, audit, cancellation);
                             return;
                         }
                         if (!turn.requestCancellation()) {
@@ -1278,7 +1239,7 @@ async function runRelayConnection(
                         return;
                     }
 
-                    const receipt = outbox.claimExecution(command.commandId, command.sessionId, encoded);
+                    const receipt = operations.claimExecution(command.commandId, command.sessionId, encoded);
                     if (receipt.kind === "duplicate") {
                         return;
                     }
@@ -1286,7 +1247,7 @@ async function runRelayConnection(
                     const turn = new ActiveDaemonTurn(command, receipt.attemptId);
                     activeTurns.set(command.commandId, turn);
                     void executePrompt(
-                        outbox,
+                        operations,
                         publisher,
                         command,
                         config,
@@ -1294,13 +1255,7 @@ async function runRelayConnection(
                         audit,
                         sessions,
                         receipt.attemptId,
-                        () => {
-                            const stream = turn.accept();
-                            if (command.disposition !== SessionPromptDisposition.Steer) {
-                                activeAttemptIds.set(command.sessionId, receipt.attemptId);
-                            }
-                            return stream;
-                        },
+                        turn.accept,
                         () => sessionAvailable(command),
                         timer,
                         turn.signal,
@@ -1311,9 +1266,6 @@ async function runRelayConnection(
                         })
                         .finally(() => {
                             activeTurns.delete(command.commandId);
-                            if (activeAttemptIds.get(command.sessionId) === receipt.attemptId) {
-                                activeAttemptIds.delete(command.sessionId);
-                            }
                             turn.finish();
                         });
                 } catch (error) {
@@ -1408,17 +1360,11 @@ export async function runDaemon(
         stateDirectory,
     });
     const sessionStore = new MemoryAcpSessionStore();
-    const outbox = new SessionEventOutbox();
-    const publisher = new DaemonSessionEventPublisher(outbox, timer);
+    const operations = new DaemonOperationState();
+    const publisher = new DaemonSessionEventPublisher();
     const activeTurns = new Map<string, ActiveDaemonTurn>();
-    const activeAttemptIds = new Map<string, string>();
     const recordSessionEvent = (sessionId: string, event: RecordedSessionEvent): void => {
-        const attemptId = activeAttemptIds.get(sessionId);
-        if (attemptId === undefined) {
-            publisher.recordRuntime(sessionId, event);
-            return;
-        }
-        publisher.recordAttempt(sessionId, event, attemptId);
+        publisher.publish(sessionId, event);
     };
     const sessions = new AcpSessionManager(
         new DaemonAcpObserver(recordSessionEvent),
@@ -1531,10 +1477,9 @@ export async function runDaemon(
                     installations,
                     installationObserver,
                     nativeSessions,
-                    outbox,
+                    operations,
                     publisher,
                     activeTurns,
-                    activeAttemptIds,
                     connectionEpoch,
                     diagnostics,
                     () => {
@@ -1581,7 +1526,7 @@ export async function runDaemon(
                         try {
                             publisher.close();
                         } finally {
-                            outbox.close();
+                            operations.close();
                         }
                     }
                 }

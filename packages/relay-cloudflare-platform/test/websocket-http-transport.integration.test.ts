@@ -69,12 +69,9 @@ it("Given a daemon request fails with a 5XX error, When the WebSocket transport 
 
 it("Given a live Session subscription, When an event arrives, Then Platform sends it on the existing transport socket", async () => {
     const sessionEvent: CommittedSessionEvent = {
-        eventId: "event-1",
         kind: "session.event.committed",
         payload: "{}",
-        recordedAt: "2026-09-22T00:00:00.000Z",
         sessionId: "session-1",
-        source: { kind: "runtime", sourceSeq: "1" },
     };
     const response = acceptWebSocketHttpTransport(
         new Request("https://platform.test/mobius/api/v1/transport", { headers: { Upgrade: "websocket" } }),
@@ -108,7 +105,6 @@ it("Given a live Session subscription, When an event arrives, Then Platform send
     });
     await expect(nextMessage(socket).then(JSON.parse)).resolves.toEqual({
         data: encodeCommittedSessionEvent(sessionEvent),
-        eventId: "event-1",
         kind: "session.events.event",
         subscriptionId: "subscription-1",
     });

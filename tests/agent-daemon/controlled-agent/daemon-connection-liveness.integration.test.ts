@@ -26,7 +26,6 @@ import {
     encodeRuntimeDeliveryCommitted,
     encodeRuntimeHeartbeatAckEvent,
     encodeSessionCancelCommand,
-    encodeSessionEventAcknowledgement,
     encodeSessionPromptCommand,
     encodeWorkspaceListCommand,
     MOBIUS_API_PREFIX,
@@ -37,7 +36,6 @@ import {
     RUNTIME_HEARTBEAT_KIND,
     RUNTIME_LIVENESS_READY_KIND,
     SESSION_COMPLETED_KIND,
-    SESSION_EVENT_ACK_KIND,
     SESSION_EVENT_KIND,
     SESSION_PROMPT_KIND,
     SESSION_STARTED_KIND,
@@ -718,14 +716,6 @@ describe("daemon relay connection liveness", () => {
                     return;
                 }
                 const envelope = decodeSessionEventEnvelope(frame.text);
-                writeServerTextFrame(
-                    socket,
-                    encodeSessionEventAcknowledgement({
-                        eventId: envelope.eventId,
-                        kind: SESSION_EVENT_ACK_KIND,
-                        sessionId: envelope.sessionId,
-                    }),
-                );
                 const kind = decodeMessageKind(envelope.payload);
                 if (kind === AGENT_ACTIVITY_KIND) {
                     activities.push(decodeAgentActivityEvent(envelope.payload));
