@@ -7,9 +7,6 @@ import {
     type AgentMessageDeltaEvent,
     decodeAgentActivityEvent,
     decodeAgentMessageDeltaEvent,
-    decodeRuntimeDelivery,
-    decodeRuntimeDeliveryCommitted,
-    decodeRuntimeDeliveryReceived,
     decodeRuntimeHeartbeatAckEvent,
     decodeRuntimeHeartbeatEvent,
     decodeRuntimeLivenessReadyEvent,
@@ -17,9 +14,6 @@ import {
     decodeSessionEventEnvelope,
     decodeSessionPromptCommand,
     encodeAgentActivityEvent,
-    encodeRuntimeDelivery,
-    encodeRuntimeDeliveryCommitted,
-    encodeRuntimeDeliveryReceived,
     encodeRuntimeHeartbeatAckEvent,
     encodeRuntimeHeartbeatEvent,
     encodeRuntimeLivenessReadyEvent,
@@ -28,15 +22,9 @@ import {
     encodeSessionPromptCommand,
     encodeSessionStartedEvent,
     ProtocolMessageError,
-    RUNTIME_DELIVERY_COMMITTED_KIND,
-    RUNTIME_DELIVERY_KIND,
-    RUNTIME_DELIVERY_RECEIVED_KIND,
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_HEARTBEAT_KIND,
     RUNTIME_LIVENESS_READY_KIND,
-    type RuntimeDelivery,
-    type RuntimeDeliveryCommitted,
-    type RuntimeDeliveryReceived,
     type RuntimeHeartbeatAckEvent,
     type RuntimeHeartbeatEvent,
     type RuntimeLivenessReadyEvent,
@@ -47,45 +35,6 @@ import {
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "../src/index.ts";
-
-describe("reliable Runtime delivery protocol", () => {
-    it("Given Relay has durable work for one Session, When daemon receipt crosses the WebSocket boundary, Then delivery identity and payload round-trip independently from execution completion", () => {
-        const payload = encodeSessionPromptCommand({
-            additionalDirectoryIds: [],
-            agentId: "codex",
-            bindingId: "workspace",
-            commandId: "command-1",
-            directoryId: "default",
-            disposition: SessionPromptDisposition.Reject,
-            images: [],
-            kind: SESSION_PROMPT_KIND,
-            prompt: "run reliably",
-            resources: [],
-            sessionId: "session-1",
-            targetCommandId: "",
-        });
-        const delivery: RuntimeDelivery = {
-            deliveryId: "dispatch-turn-1",
-            kind: RUNTIME_DELIVERY_KIND,
-            payload,
-            sessionId: "session-1",
-        };
-        const received: RuntimeDeliveryReceived = {
-            deliveryId: delivery.deliveryId,
-            kind: RUNTIME_DELIVERY_RECEIVED_KIND,
-            sessionId: delivery.sessionId,
-        };
-        const committed: RuntimeDeliveryCommitted = {
-            deliveryId: delivery.deliveryId,
-            kind: RUNTIME_DELIVERY_COMMITTED_KIND,
-            sessionId: delivery.sessionId,
-        };
-
-        expect(decodeRuntimeDelivery(encodeRuntimeDelivery(delivery))).toEqual(delivery);
-        expect(decodeRuntimeDeliveryReceived(encodeRuntimeDeliveryReceived(received))).toEqual(received);
-        expect(decodeRuntimeDeliveryCommitted(encodeRuntimeDeliveryCommitted(committed))).toEqual(committed);
-    });
-});
 
 describe("live Session event protocol", () => {
     it("Given an Agent event, When the daemon sends it, Then the live payload crosses the boundary without an acknowledgement cursor", () => {

@@ -92,7 +92,6 @@ export async function createFakeAgentDaemonRuntime(options: {
         );
         const relayUrl = new URL("/mobius/api/v1/runtimes/connect", options.origin);
         relayUrl.protocol = "ws:";
-        relayUrl.searchParams.set("deliveryReceipts", "1");
         const daemon = resources.use(
             await FakeAgentDaemon.connect(
                 relayUrl,

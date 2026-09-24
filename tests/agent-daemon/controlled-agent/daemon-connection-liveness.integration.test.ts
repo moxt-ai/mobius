@@ -19,19 +19,12 @@ import {
     decodeAgentActivityEvent,
     decodeAgentMessageDeltaEvent,
     decodeMessageKind,
-    decodeRuntimeDeliveryReceived,
     decodeRuntimeHeartbeatEvent,
     decodeSessionEventEnvelope,
-    encodeRuntimeDelivery,
-    encodeRuntimeDeliveryCommitted,
     encodeRuntimeHeartbeatAckEvent,
-    encodeSessionCancelCommand,
     encodeSessionPromptCommand,
     encodeWorkspaceListCommand,
     MOBIUS_API_PREFIX,
-    RUNTIME_DELIVERY_COMMITTED_KIND,
-    RUNTIME_DELIVERY_KIND,
-    RUNTIME_DELIVERY_RECEIVED_KIND,
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_HEARTBEAT_KIND,
     RUNTIME_LIVENESS_READY_KIND,
@@ -373,177 +366,6 @@ describe("daemon relay connection liveness", () => {
             restoreEnvironmentVariable("MOBIUS_COPILOT_PATH", previousCopilotPath);
             restoreEnvironmentVariable("MOBIUS_HERMES_PATH", previousHermesPath);
             restoreEnvironmentVariable("MOBIUS_GEMINI_PATH", previousGeminiPath);
-            restoreEnvironmentVariable("MOBIUS_STATE_DIRECTORY", previousStateDirectory);
-            restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
-            restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
-            restoreEnvironmentVariable("PATH", previousPath);
-            await rm(stateDirectory, { force: true, recursive: true });
-        }
-    });
-
-    it("Given Relay confirmation is lost after a durable delivery receipt, When the daemon reconnects, Then it repeats the same receipt without exposing its credential and retires the command after confirmation", async () => {
-        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-delivery-receipt-"));
-        const defaultWorkspace = join(stateDirectory, "workspace");
-        await mkdir(defaultWorkspace);
-        let catalogAuthorization = "";
-        const relay = createServer((request, response) => {
-            if (
-                request.method === "PUT" &&
-                request.url === `${MOBIUS_API_PREFIX}/channels/delivery-receipt-channel/catalog`
-            ) {
-                catalogAuthorization = request.headers.authorization ?? "";
-                request.resume();
-                response.writeHead(204);
-                response.end();
-                return;
-            }
-            response.writeHead(426);
-            response.end();
-        });
-        const sockets = new Set<Duplex>();
-        const daemonSockets: Duplex[] = [];
-        const receiptFrames: Array<Promise<ClientWebSocketFrame>> = [];
-        const upgradeWaiters: Array<() => void> = [];
-        const upgradeAuthorizations: string[] = [];
-        const upgradeUrls: string[] = [];
-        const waitForUpgrade = (): Promise<void> => new Promise((resolve) => upgradeWaiters.push(resolve));
-        const delivery = encodeRuntimeDelivery({
-            deliveryId: "cancel_delivery_1",
-            kind: RUNTIME_DELIVERY_KIND,
-            payload: encodeSessionCancelCommand({
-                commandId: "inactive-command",
-                kind: "session.cancel",
-                sessionId: "delivery-receipt-session",
-            }),
-            sessionId: "delivery-receipt-session",
-        });
-        relay.on("connection", (socket) => {
-            sockets.add(socket);
-            socket.once("close", () => sockets.delete(socket));
-            socket.on("error", () => undefined);
-        });
-        relay.on("upgrade", (request, socket) => {
-            const key = request.headers["sec-websocket-key"];
-            if (typeof key !== "string") {
-                socket.destroy();
-                return;
-            }
-            const accept = createHash("sha1").update(`${key}${WEBSOCKET_GUID}`).digest("base64");
-            socket.write(
-                "HTTP/1.1 101 Switching Protocols\r\n" +
-                    "Connection: Upgrade\r\n" +
-                    "Upgrade: websocket\r\n" +
-                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
-            );
-            daemonSockets.push(socket);
-            receiptFrames.push(readClientFrame(socket));
-            upgradeAuthorizations.push(request.headers.authorization ?? "");
-            upgradeUrls.push(request.url ?? "");
-            respondToClientClose(socket);
-            if (daemonSockets.length === 1) {
-                writeServerTextFrame(socket, delivery);
-            }
-            upgradeWaiters.shift()?.();
-        });
-        await listen(relay);
-
-        const audit = new AuditStore();
-        const cancellation = new AbortController();
-        const timer = new ControllableDaemonTimer();
-        const previousCodexPath = process.env["MOBIUS_CODEX_PATH"];
-        const previousClaudePath = process.env["MOBIUS_CLAUDE_PATH"];
-        const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
-        const previousNoProxy = process.env["NO_PROXY"];
-        const previousLowerNoProxy = process.env["no_proxy"];
-        const previousPath = process.env["PATH"];
-        process.env["MOBIUS_CODEX_PATH"] = join(stateDirectory, "missing-codex");
-        process.env["MOBIUS_CLAUDE_PATH"] = join(stateDirectory, "missing-claude");
-        process.env["MOBIUS_STATE_DIRECTORY"] = stateDirectory;
-        process.env["NO_PROXY"] = "127.0.0.1,localhost";
-        process.env["no_proxy"] = "127.0.0.1,localhost";
-        process.env["PATH"] = "";
-        const config = createDaemonConfig({
-            defaultWorkspace,
-            channelId: "delivery-receipt-channel",
-            relayUrl: new URL(
-                `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/delivery-receipt-channel/daemon?token=daemon-secret`,
-            ),
-        });
-
-        vi.useFakeTimers({ toFake: ["Date"] });
-        vi.setSystemTime(new Date("2026-09-11T00:00:00.000Z"));
-        const firstConnection = waitForUpgrade();
-        const daemon = runDaemon(config, audit, cancellation.signal, timer);
-
-        try {
-            await firstConnection;
-            const firstReceiptFrame = receiptFrames[0];
-            const firstSocket = daemonSockets[0];
-            if (firstReceiptFrame === undefined || firstSocket === undefined) {
-                throw new Error("Test relay did not retain the first durable receipt connection");
-            }
-            const firstReceipt = decodeRuntimeDeliveryReceived((await firstReceiptFrame).text);
-            expect(firstReceipt).toEqual({
-                deliveryId: "cancel_delivery_1",
-                kind: RUNTIME_DELIVERY_RECEIVED_KIND,
-                sessionId: "delivery-receipt-session",
-            });
-
-            const secondConnection = waitForUpgrade();
-            writeServerCloseFrame(firstSocket, 1012, "Receipt confirmation interrupted");
-            (await timer.waitForTask(500)).run();
-            await secondConnection;
-            const secondReceiptFrame = receiptFrames[1];
-            const secondSocket = daemonSockets[1];
-            if (secondReceiptFrame === undefined || secondSocket === undefined) {
-                throw new Error("Test relay did not retain the replacement durable receipt connection");
-            }
-            expect(decodeRuntimeDeliveryReceived((await secondReceiptFrame).text)).toEqual(firstReceipt);
-
-            const barrier = readClientFrame(secondSocket);
-            writeServerTextFrame(
-                secondSocket,
-                encodeRuntimeDeliveryCommitted({
-                    deliveryId: firstReceipt.deliveryId,
-                    kind: RUNTIME_DELIVERY_COMMITTED_KIND,
-                    sessionId: firstReceipt.sessionId,
-                }),
-            );
-            writeServerTextFrame(
-                secondSocket,
-                encodeWorkspaceListCommand({
-                    bindingId: "workspace",
-                    directoryId: "default",
-                    kind: WORKSPACE_LIST_KIND,
-                    requestId: "delivery-confirmation-barrier",
-                }),
-            );
-            expect(decodeMessageKind((await barrier).text)).toBe(WORKSPACE_ENTRIES_KIND);
-
-            expect(catalogAuthorization).toBe("Bearer daemon-secret");
-            expect(upgradeAuthorizations).toEqual(["Bearer daemon-secret", "Bearer daemon-secret"]);
-            expect(upgradeUrls).toEqual([
-                `${MOBIUS_API_PREFIX}/channels/delivery-receipt-channel/daemon?deliveryReceipts=1&liveness=1`,
-                `${MOBIUS_API_PREFIX}/channels/delivery-receipt-channel/daemon?deliveryReceipts=1&liveness=1`,
-            ]);
-        } finally {
-            cancellation.abort();
-            await daemon;
-            audit.close();
-            for (const socket of sockets) {
-                socket.destroy();
-            }
-            await new Promise<void>((resolve, reject) => {
-                relay.close((error) => {
-                    if (error === undefined) {
-                        resolve();
-                        return;
-                    }
-                    reject(error);
-                });
-            });
-            restoreEnvironmentVariable("MOBIUS_CODEX_PATH", previousCodexPath);
-            restoreEnvironmentVariable("MOBIUS_CLAUDE_PATH", previousClaudePath);
             restoreEnvironmentVariable("MOBIUS_STATE_DIRECTORY", previousStateDirectory);
             restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
             restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
@@ -937,7 +759,7 @@ describe("daemon relay connection liveness", () => {
             expect({ catalogRequestCount, connectionCount, requestedUrls }).toEqual({
                 catalogRequestCount: 2,
                 connectionCount: 1,
-                requestedUrls: [`${MOBIUS_API_PREFIX}/channels/liveness-channel/daemon?deliveryReceipts=1&liveness=1`],
+                requestedUrls: [`${MOBIUS_API_PREFIX}/channels/liveness-channel/daemon?liveness=1`],
             });
         } finally {
             cancellation.abort();

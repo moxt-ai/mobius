@@ -50,7 +50,6 @@ import {
     NATIVE_SESSION_TURN_FORK_REQUEST_KIND,
     type NativeSessionCommand,
     ProtocolMessageError,
-    RUNTIME_DELIVERY_RECEIVED_KIND,
     RUNTIME_STATUS_KIND,
     SESSION_CANCEL_KIND,
     SESSION_CONFIGURE_KIND,
@@ -74,7 +73,6 @@ import {
 import { SessionRuntimeError } from "../../entity/do/session.ts";
 import { LiveSessionEventRelay } from "./live-session-event-relay.ts";
 
-const _SESSION_EVENT_BACKPRESSURE_RETRY_MILLISECONDS = 1_000;
 const NATIVE_IMPORT_DEADLINE_MILLISECONDS = 5 * 60 * 1_000;
 const MAX_PENDING_NATIVE_IMPORTS = 4;
 const AGENT_SETTINGS_DISCOVERY_DEADLINE_MILLISECONDS = 2 * 60 * 1_000;
@@ -110,23 +108,6 @@ function sessionErrorCloseCode(error: SessionRuntimeError): 1008 | 1011 | 1013 {
         return 1011;
     }
     return 1008;
-}
-
-function _isTerminalSessionEventError(error: SessionRuntimeError): boolean {
-    return (
-        error.code === "event_source_conflict" ||
-        error.code === "session_access_denied" ||
-        error.code === "session_conflict" ||
-        error.code === "session_quota_exceeded"
-    );
-}
-
-function _isDeferredSessionEventError(error: SessionRuntimeError): boolean {
-    return (
-        error.code === "session_busy" ||
-        error.code === "session_storage_timeout" ||
-        error.code === "session_storage_unavailable"
-    );
 }
 
 export interface RelayClock {
@@ -178,7 +159,6 @@ export class ChannelActor {
               readonly expiresAt: number;
           }
     >();
-    readonly #backpressuredEventBySource = new Map<string, string>();
     readonly #clock: RelayClock;
     readonly #peers: ChannelPeers;
     readonly #runtimeId: string;
@@ -226,7 +206,6 @@ export class ChannelActor {
         if (anotherDaemonOnline) {
             return;
         }
-        this.#backpressuredEventBySource.clear();
         this.failPendingAgentCatalogRefreshes();
         this.failPendingAgentSettingsDiscoveries();
         this.#pendingNativeImports.clear();
@@ -240,9 +219,6 @@ export class ChannelActor {
     ): Promise<void> => {
         try {
             const kind = message.kind;
-            if (kind === RUNTIME_DELIVERY_RECEIVED_KIND) {
-                throw new ProtocolMessageError("Cloud Session delivery is unavailable");
-            }
             if (kind === SESSION_EVENT_KIND) {
                 this.#liveEvents.receive(message, signal);
                 return;

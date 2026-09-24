@@ -5,7 +5,6 @@ import {
     decodeFileReadCommand,
     decodeMessageKind,
     decodeNativeSessionCommand,
-    decodeRuntimeDelivery,
     decodeRuntimeHeartbeatEvent,
     decodeSessionLiveHistoryLoad,
     decodeSessionLiveHistoryPageLoad,
@@ -21,7 +20,6 @@ import {
     encodeFileChunkEvent,
     encodeFileEndEvent,
     encodeNativeSessionResult,
-    encodeRuntimeDeliveryReceived,
     encodeRuntimeHeartbeatAckEvent,
     encodeSessionCompletedEvent,
     encodeSessionEventEnvelope,
@@ -36,7 +34,6 @@ import {
     NATIVE_SESSION_REQUEST_KIND,
     type NativeSessionHistory,
     type NativeSessionResult,
-    RUNTIME_DELIVERY_KIND,
     RUNTIME_HEARTBEAT_KIND,
     SESSION_EVENT_KIND,
     SESSION_LIVE_HISTORY_LOAD_KIND,
@@ -393,18 +390,6 @@ async function processHappyPathCommand(
     signal: AbortSignal,
 ): Promise<void> {
     const kind = decodeMessageKind(encoded);
-    if (kind === RUNTIME_DELIVERY_KIND) {
-        const delivery = decodeRuntimeDelivery(encoded);
-        daemon.send(
-            encodeRuntimeDeliveryReceived({
-                deliveryId: delivery.deliveryId,
-                kind: "runtime.delivery.received",
-                sessionId: delivery.sessionId,
-            }),
-        );
-        await processHappyPathCommand(daemon, delivery.payload, behavior, nextTurn, activeTurns, signal);
-        return;
-    }
     if (kind === RUNTIME_HEARTBEAT_KIND) {
         const heartbeat = decodeRuntimeHeartbeatEvent(encoded);
         daemon.send(
