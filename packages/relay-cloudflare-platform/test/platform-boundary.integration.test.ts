@@ -217,7 +217,7 @@ describe.sequential("Platform Session-only boundary", () => {
         expect(retired).toMatchObject({ error: { code: "project_permission_invalid" } });
     });
 
-    it("Given a linked Codex Runtime, When Chat sends a prompt and the Runtime reconnects, Then the answer and connection status arrive without cloud Session storage", async () => {
+    it("Given a linked Codex Runtime, When Chat reads its Agents, sends a prompt, and the Runtime reconnects, Then the Runtime-scoped Agents, answer, and connection status arrive without cloud Session storage", async () => {
         vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
@@ -300,6 +300,18 @@ describe.sequential("Platform Session-only boundary", () => {
         );
         expect(claimed["appId"]).toBe(appId);
         const runtimeId = text(claimed, "runtimeId");
+        expect(
+            await responseJson(
+                await worker.fetch(
+                    new Request(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtimes/${runtimeId}/agents`,
+                        { headers: credentialHeaders(appCredential) },
+                    ),
+                    environment,
+                ),
+                200,
+            ),
+        ).toMatchObject({ agents: [{ id: "codex", label: "Codex" }], runtimeId });
         const sessionId = "local-codex-session";
         const daemonResponse = await worker.fetch(
             new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect?liveness=1`, {

@@ -57,6 +57,24 @@ export class PairingService {
         );
     };
 
+    readonly getRuntimeAgents = async (projectId: string, runtimeId: string, token: string, signal: AbortSignal) => {
+        const channels = await this.#pairings.listProjectRuntimes(projectId, token, signal);
+        const channel = channels.find((candidate) => candidate.runtimeId === runtimeId);
+        if (channel === undefined) {
+            throw new PairingDirectoryError(
+                "runtime_access_denied",
+                "The project credential cannot access this Runtime",
+            );
+        }
+        return new RuntimeDescriptor(
+            channel,
+            await this.#channels.readRuntimeStatus(
+                new VerifiedChannelAccess(channel.channelId, channel.runtimeId, channel.projectId, []),
+                signal,
+            ),
+        );
+    };
+
     readonly requestControl = async (
         projectId: string,
         runtimeId: string,

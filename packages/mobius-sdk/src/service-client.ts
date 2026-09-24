@@ -49,6 +49,7 @@ import {
     decodeMobiusSessionState,
     decodeMobiusToolCallDetail,
     decodeMobiusTurn,
+    decodeRuntimeDescriptor,
     type MobiusBrowserCredential,
     type MobiusBrowserCredentialRequest,
     type MobiusEventPage,
@@ -781,6 +782,14 @@ export class MobiusRuntimeResources {
 
     readonly list = async (signal: AbortSignal): Promise<readonly MobiusRuntimeDescriptor[]> =>
         decodeMobiusRuntimeList(await this.#executor.get(projectPath(this.#projectId, "runtimes"), signal));
+
+    readonly getAgents = async (runtimeId: string, signal: AbortSignal) =>
+        decodeRuntimeDescriptor(
+            await this.#executor.get(
+                projectPath(this.#projectId, `runtimes/${encodeURIComponent(runtimeId)}/agents`),
+                signal,
+            ),
+        ).agents;
 
     readonly listWorkspace = async (
         runtimeId: string,
