@@ -9,12 +9,15 @@ import {
     decodeAgentMessageDeltaEvent,
     decodeMessageKind,
     decodeNativeSessionResult,
+    decodeSessionCompletedEvent,
     decodeSessionEventEnvelope,
     decodeSessionStartedEvent,
     encodeNativeSessionCommand,
+    encodeSessionCancelCommand,
     encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
     NATIVE_SESSION_RESULT_KIND,
+    SESSION_CANCEL_KIND,
     SESSION_COMPLETED_KIND,
     SESSION_EVENT_KIND,
     SESSION_FAILED_KIND,
@@ -56,7 +59,7 @@ class Messages {
     };
 }
 
-test("Given real Codex and a local model provider, When a Turn streams, Then the daemon accepts it before ordered text and completion", async () => {
+test("Given real Codex and a local model provider, When a queued follow-up is cancelled during a Turn, Then the active Turn keeps streaming to completion", async () => {
     const providerEntered = Promise.withResolvers<void>();
     const releaseProvider = Promise.withResolvers<void>();
     const provider = await FakeOpenAiProvider.start("mobius-test-model", "Codex live reply", {
@@ -97,6 +100,7 @@ test("Given real Codex and a local model provider, When a Turn streams, Then the
         const socket = await connected.promise;
         const messages = new Messages(socket);
         const commandId = randomUUID();
+        const queuedCommandId = randomUUID();
         const sessionId = "new_codex_live_turn";
         socket.send(
             encodeSessionPromptCommand({
@@ -119,6 +123,7 @@ test("Given real Codex and a local model provider, When a Turn streams, Then the
         let sequence = 0;
         let epoch: string | undefined;
         let snapshotVerified = false;
+        let queuedCancelled = false;
         let text = "";
         while (!completed) {
             const message = await messages.next();
@@ -155,16 +160,26 @@ test("Given real Codex and a local model provider, When a Turn streams, Then the
                 started = true;
                 await providerEntered.promise;
                 socket.send(
-                    encodeNativeSessionCommand({
-                        action: "active-turn",
+                    encodeSessionPromptCommand({
                         additionalDirectoryIds: [],
                         agentId: "codex",
                         bindingId: config.bindingId,
+                        commandId: queuedCommandId,
                         directoryId: "default",
-                        kind: "native.session.request",
-                        requestId: randomUUID(),
+                        disposition: SessionPromptDisposition.Queue,
+                        images: [],
+                        kind: "session.prompt",
+                        prompt: "This queued prompt should not run",
+                        resources: [],
                         sessionId,
-                        targetSessionId: sessionId,
+                        targetCommandId: commandId,
+                    }),
+                );
+                socket.send(
+                    encodeSessionCancelCommand({
+                        commandId: queuedCommandId,
+                        kind: SESSION_CANCEL_KIND,
+                        sessionId,
                     }),
                 );
             } else if (kind === AGENT_MESSAGE_DELTA_KIND) {
@@ -177,12 +192,34 @@ test("Given real Codex and a local model provider, When a Turn streams, Then the
                 sequence = delta.sequence;
                 text += delta.text;
             } else if (kind === SESSION_COMPLETED_KIND) {
-                completed = true;
+                const completion = decodeSessionCompletedEvent(envelope.payload);
+                if (completion.commandId === queuedCommandId) {
+                    expect(completion.stopReason).toBe("cancelled");
+                    queuedCancelled = true;
+                    socket.send(
+                        encodeNativeSessionCommand({
+                            action: "active-turn",
+                            additionalDirectoryIds: [],
+                            agentId: "codex",
+                            bindingId: config.bindingId,
+                            directoryId: "default",
+                            kind: "native.session.request",
+                            requestId: randomUUID(),
+                            sessionId,
+                            targetSessionId: sessionId,
+                        }),
+                    );
+                } else {
+                    expect(completion.commandId).toBe(commandId);
+                    expect(queuedCancelled).toBe(true);
+                    completed = true;
+                }
             } else if (kind === SESSION_FAILED_KIND) {
                 throw new Error(`Real Codex Turn failed: ${envelope.payload}`);
             }
         }
         expect(started).toBe(true);
+        expect(queuedCancelled).toBe(true);
         expect(snapshotVerified).toBe(true);
         expect(sequence).toBeGreaterThan(0);
         expect(text).toContain("Codex live reply");
