@@ -45,10 +45,6 @@ export type ManagerResponse =
     | { readonly alreadyOnline: boolean; readonly kind: "ready"; readonly pair: ManagedRuntimeSummary }
     | { readonly kind: "stopped" };
 
-type DecodedManagerResponse =
-    | ManagerResponse
-    | { readonly kind: "legacy-listed"; readonly pairs: readonly ManagedRuntimeSummary[] };
-
 interface ActiveRuntime {
     readonly connection: VerifiedRuntimeConnection;
     readonly controller: AbortController;
@@ -154,7 +150,7 @@ function decodeCommand(value: unknown, expectedToken: string): ManagerCommand {
     throw new Error("The manager command is unsupported");
 }
 
-function decodeResponse(value: unknown): DecodedManagerResponse {
+function decodeResponse(value: unknown): ManagerResponse {
     if (!isRecord(value) || typeof value["kind"] !== "string") {
         throw new Error("The Mobius manager returned an invalid response");
     }
@@ -179,9 +175,6 @@ function decodeResponse(value: unknown): DecodedManagerResponse {
     }
     if (value["kind"] === "listed" && Array.isArray(value["pairs"]) && value["pairs"].every(isManagedRuntimeSummary)) {
         const managerVersion = value["managerVersion"];
-        if (managerVersion === undefined) {
-            return { kind: "legacy-listed", pairs: value["pairs"] };
-        }
         if (typeof managerVersion === "string" && managerVersion.length > 0 && managerVersion.length <= 128) {
             return { kind: "listed", managerVersion, pairs: value["pairs"] };
         }
@@ -449,7 +442,7 @@ async function sendControlRequest(
     stateDirectory: string,
     command: ManagerCommand,
     signal: AbortSignal,
-): Promise<DecodedManagerResponse> {
+): Promise<ManagerResponse> {
     const token = await readOrCreateControlToken(stateDirectory);
     const deadline = AbortSignal.any([signal, AbortSignal.timeout(CONTROL_TIMEOUT_MILLISECONDS)]);
     const socket = createConnection(controlSocketPath(stateDirectory));
@@ -530,11 +523,7 @@ export async function requestManager(
     if (command.kind === "list") {
         return listed;
     }
-    const response = await sendControlRequest(installation.stateDirectory, command, deadline);
-    if (response.kind === "legacy-listed") {
-        throw new Error("The Mobius manager returned an unexpected response");
-    }
-    return response;
+    return await sendControlRequest(installation.stateDirectory, command, deadline);
 }
 
 async function ensureMatchingManager(
@@ -552,7 +541,7 @@ async function ensureMatchingManager(
                 }
                 return response;
             }
-            if (response.kind !== "listed" && response.kind !== "legacy-listed") {
+            if (response.kind !== "listed") {
                 if (response.kind === "error") {
                     throw new Error(response.message);
                 }
