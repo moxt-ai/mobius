@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { ProtocolMessageError } from "./codecs/messages.ts";
+import { identifierStringSchema } from "./identifier.ts";
 
-const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/u;
 const APP_CREDENTIAL_PATTERN = /^mapp_([A-Za-z0-9_-]{22})_[A-Za-z0-9_-]{43}$/u;
 const SESSION_ACCESS_PATTERN = /^msession_([A-Za-z0-9_-]{22})_([A-Za-z0-9_-]+)_([A-Za-z0-9_-]{43})$/u;
 const MAXIMUM_LIFETIME_MILLISECONDS = 15 * 60 * 1_000;
@@ -10,10 +10,10 @@ const claimsSchema = z
     .strictObject({
         expiresAtEpochMilliseconds: z.number().int().nonnegative(),
         issuedAtEpochMilliseconds: z.number().int().nonnegative(),
-        projectId: z.string().regex(IDENTIFIER_PATTERN),
+        projectId: identifierStringSchema,
         purpose: z.literal("session-access"),
-        runtimeId: z.string().regex(IDENTIFIER_PATTERN),
-        sessionId: z.string().regex(IDENTIFIER_PATTERN),
+        runtimeId: identifierStringSchema,
+        sessionId: identifierStringSchema,
     })
     .readonly();
 

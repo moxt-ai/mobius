@@ -1,4 +1,4 @@
-import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
+import { isIdentifier, MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import { errorMiddleware, requestTimeoutMiddleware, rethrowHonoError } from "@moxt-ai/mobius-relay-core";
 import { Hono } from "hono";
 import * as v from "valibot";
@@ -55,7 +55,7 @@ async function authenticateDeveloper(context: {
 }
 
 function path(value: string): string {
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(value)) {
+    if (!isIdentifier(value)) {
         throw new PlatformControlPlaneError("invalid_request", "A Platform resource identifier is invalid", 400);
     }
     return value;

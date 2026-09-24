@@ -1,3 +1,4 @@
+import { isIdentifier } from "@moxt-ai/mobius-protocol";
 import type { ProjectScope } from "../do/session.ts";
 import type { HttpError } from "../http-error.ts";
 import { VerifiedChannelAccess } from "../pairing/pairing.ts";
@@ -252,7 +253,7 @@ export class VerifiedExternalIdentity {
         organization: VerifiedExternalIdentity["organization"] = { kind: "none" },
     ) {
         if (
-            !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(providerId) ||
+            !isIdentifier(providerId) ||
             issuer.length === 0 ||
             issuer.length > 2_048 ||
             subject.length === 0 ||
@@ -304,7 +305,7 @@ export class ExternalIdentityCredential {
     readonly providerId: string;
 
     constructor(providerId: string, credential: string) {
-        if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(providerId)) {
+        if (!isIdentifier(providerId)) {
             throw new ProjectAuthenticationError("external_provider_invalid", "The external provider is invalid");
         }
         if (credential.length === 0 || credential.length > 16 * 1_024 || hasControlCharacters(credential)) {
@@ -389,7 +390,7 @@ export class RegisteredExternalIdentityAuthenticator {
     readonly providerId: string;
 
     constructor(providerId: string, authenticator: ExternalIdentityAuthenticator) {
-        if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(providerId)) {
+        if (!isIdentifier(providerId)) {
             throw new ProjectAuthenticationError(
                 "external_provider_configuration_invalid",
                 "The external identity provider identifier is invalid",

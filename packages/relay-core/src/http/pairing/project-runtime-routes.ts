@@ -8,6 +8,8 @@ import {
     decodeSessionPromptCommand,
     decodeSessionQueryCommand,
     decodeWorkspaceListCommand,
+    type Identifier,
+    isIdentifier,
     RUNTIME_WORKSPACE_BINDING_ID,
 } from "@moxt-ai/mobius-protocol";
 import { Hono } from "hono";
@@ -19,7 +21,7 @@ import { errorMiddleware, rethrowHonoError } from "../middleware/error-middlewar
 import type { RelayHttpEnvironment } from "../relay-http-environment.ts";
 
 const boundedString = (maximumLength: number) => v.pipe(v.string(), v.minLength(1), v.maxLength(maximumLength));
-const identifier = v.pipe(v.string(), v.regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/u));
+const identifier = v.custom<Identifier>(isIdentifier);
 const sessionIdentitySchema = v.strictObject({
     additionalDirectoryIds: v.array(boundedString(2_048)),
     agentId: identifier,

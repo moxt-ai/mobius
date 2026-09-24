@@ -5,6 +5,7 @@ import {
     decodeRecordedAgentContentValue,
     decodeSessionConfigurationSelections,
 } from "../control-messages.ts";
+import { decodeIdentifier, type Identifier, isIdentifier } from "../identifier.ts";
 import {
     AGENT_ACTIVITY_DETAIL_LIMIT,
     AGENT_ACTIVITY_KIND,
@@ -39,7 +40,6 @@ import {
     type SessionStartedEvent,
 } from "../messages.ts";
 
-const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const DIRECTORY_IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/;
 const MAX_PROMPT_LENGTH = 10_000;
 export const MAX_PROMPT_ATTACHMENT_LENGTH = 6_000_000;
@@ -251,12 +251,12 @@ function readActivityDetail(value: Readonly<Record<string, unknown>>): AgentActi
     throw new ProtocolMessageError("Invalid activity detail availability");
 }
 
-function readIdentifier(value: Readonly<Record<string, unknown>>, key: string): string {
-    const field = readString(value, key, 128);
-    if (!IDENTIFIER_PATTERN.test(field)) {
-        throw new ProtocolMessageError(`Invalid identifier field: ${key}`);
+function readIdentifier(value: Readonly<Record<string, unknown>>, key: string): Identifier {
+    try {
+        return decodeIdentifier(value[key]);
+    } catch (cause) {
+        throw new ProtocolMessageError(`Invalid identifier field: ${key}`, { cause });
     }
-    return field;
 }
 
 function readDirectoryIdentifier(value: Readonly<Record<string, unknown>>, key: string): string {
@@ -323,7 +323,7 @@ export function decodeSessionPromptCommand(encoded: string): SessionPromptComman
     const targetCommandId = rawTargetCommandId === undefined ? "" : readText(value, "targetCommandId", 128);
     if (
         (disposition === SessionPromptDisposition.Reject && targetCommandId.length > 0) ||
-        (disposition !== SessionPromptDisposition.Reject && !IDENTIFIER_PATTERN.test(targetCommandId))
+        (disposition !== SessionPromptDisposition.Reject && !isIdentifier(targetCommandId))
     ) {
         throw new ProtocolMessageError("Prompt disposition has an invalid target command");
     }

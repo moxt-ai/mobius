@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { ProtocolMessageError } from "./codecs/messages.ts";
 import { displayContentSchema } from "./control-messages.ts";
+import { identifierStringSchema, isIdentifier } from "./identifier.ts";
 
 export const SESSION_HISTORY_CHARACTER_LIMIT = 256_000;
 export const SESSION_HISTORY_MESSAGE_LIMIT = 1_000;
@@ -91,12 +92,14 @@ const availableSessionHistoryObjectSchema = z.strictObject({
     status: z.literal("available"),
     messages: z.array(historyMessage).max(SESSION_HISTORY_MESSAGE_LIMIT).readonly(),
     truncated: z.boolean(),
-    coveredCommandIds: z
-        .array(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/))
-        .max(10_000)
-        .readonly(),
+    coveredCommandIds: z.array(identifierStringSchema).max(10_000).readonly(),
     coveredMessageIds: z
-        .array(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}:(?:user|agent)$/))
+        .array(
+            z.string().refine((value) => {
+                const suffix = value.endsWith(":user") ? ":user" : value.endsWith(":agent") ? ":agent" : null;
+                return suffix !== null && isIdentifier(value.slice(0, -suffix.length));
+            }),
+        )
         .max(20_000)
         .readonly()
         .default([]),
