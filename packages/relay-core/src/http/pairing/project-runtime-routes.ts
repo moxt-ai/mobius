@@ -91,6 +91,16 @@ export function createProjectRuntimeRoutes() {
             context.header("Cache-Control", "no-store");
             return context.json({ runtimes });
         })
+        .get("/projects/:projectId/runtimes/:runtimeId/agents", async (context) => {
+            const runtime = await context.env.services.runtimePairings.getRuntimeAgents(
+                validateIdentifier(context.req.param("projectId"), "project_id"),
+                validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
+                bearerToken(context.req.raw),
+                context.req.raw.signal,
+            );
+            context.header("Cache-Control", "no-store");
+            return context.json(runtime);
+        })
         .post(
             "/projects/:projectId/runtimes/:runtimeId/sessions/query",
             bodyParser<RelayHttpEnvironment>(),

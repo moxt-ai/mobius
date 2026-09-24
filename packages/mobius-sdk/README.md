@@ -10,4 +10,4 @@ Use `@moxt-ai/mobius-sdk/channel` for the live browser channel, `@moxt-ai/mobius
 
 Server clients use `HttpTransport` by default. A shared `WsTransport` can tunnel HTTP requests through the Relay's `/mobius/api/v1/transport` endpoint; its owner closes the transport when finished. The channel client manages its own WebSocket connection.
 
-Agent settings belong to the selected Runtime and Agent. Discover them with `client.runtimes.discoverAgentSettings(runtimeId, agentId, request, signal)` and pass the selected values to the live channel when prompting.
+Agent catalogs belong to a Runtime. Read one with `client.runtimes.getAgents(runtimeId, signal)`. Agent settings belong to the selected Runtime and Agent. Discover them with `client.runtimes.discoverAgentSettings(runtimeId, agentId, request, signal)` and pass the selected values to the live channel when prompting.
