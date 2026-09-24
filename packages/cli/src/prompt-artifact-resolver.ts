@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import type { PromptImage, PromptResource } from "@moxt-ai/mobius-protocol";
+import { isIdentifier, type PromptImage, type PromptResource } from "@moxt-ai/mobius-protocol";
 import { fetch } from "undici";
 
 import type { DaemonConfig } from "./config.ts";
@@ -11,7 +11,6 @@ const ARTIFACT_SCHEME = "mobius-artifact:";
 const ARTIFACT_DOWNLOAD_TIMEOUT_MILLISECONDS = 20_000;
 const MAX_AGENT_IMAGE_BASE64_LENGTH = 4_000_000;
 const MAX_AGENT_RESOURCE_BYTE_LENGTH = 1_000_000;
-const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 
 export class PromptArtifactError extends Error {
     readonly code: string;
@@ -73,7 +72,7 @@ function parseReference(resource: PromptResource): PromptArtifactReference {
         url.hash.length > 0 ||
         resource.type !== "link" ||
         resource.text.length > 0 ||
-        !IDENTIFIER_PATTERN.test(artifactId) ||
+        !isIdentifier(artifactId) ||
         keys.length !== 2 ||
         keys[0] !== "byteLength" ||
         keys[1] !== "sha256" ||

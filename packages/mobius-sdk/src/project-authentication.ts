@@ -1,4 +1,4 @@
-import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
+import { decodeIdentifier, type Identifier, isIdentifier, MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import {
     MobiusApiError,
     MobiusCancellationError,
@@ -54,17 +54,17 @@ function text(value: Readonly<Record<string, unknown>>, key: string, name: strin
     return field;
 }
 
-function identifierField(value: Readonly<Record<string, unknown>>, key: string, name: string): string {
-    const field = text(value, key, name);
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(field)) {
+function identifierField(value: Readonly<Record<string, unknown>>, key: string, name: string): Identifier {
+    try {
+        return decodeIdentifier(value[key]);
+    } catch {
         throw new MobiusProtocolError(`The service returned an invalid ${name}`);
     }
-    return field;
 }
 
 function optionalIdentifierField(value: Readonly<Record<string, unknown>>, key: string, name: string): string {
     const field = text(value, key, name, true);
-    if (field.length > 0 && !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(field)) {
+    if (field.length > 0 && !isIdentifier(field)) {
         throw new MobiusProtocolError(`The service returned an invalid ${name}`);
     }
     return field;
@@ -109,8 +109,8 @@ function requestPermissionList(value: readonly string[]): readonly string[] {
     return Object.freeze([...value]);
 }
 
-function identifier(value: string, name: string): string {
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(value)) {
+function identifier(value: string, name: string): Identifier {
+    if (!isIdentifier(value)) {
         throw new MobiusValidationError(`The ${name} identifier is invalid`);
     }
     return value;

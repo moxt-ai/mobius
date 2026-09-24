@@ -1,5 +1,8 @@
 import {
     createdOrganizationInviteSchema,
+    decodeIdentifier,
+    type Identifier,
+    isIdentifier,
     organizationInviteListSchema,
     organizationInvitePreviewSchema,
     organizationInviteRequestSchema,
@@ -25,7 +28,6 @@ export { HttpTransport } from "./transport/http-transport.ts";
 export type { MobiusWebSocketConnector, WsTransportOptions } from "./transport/ws-transport.ts";
 export { WsTransport } from "./transport/ws-transport.ts";
 
-const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const APP_CREDENTIAL_PATTERN = /^mapp_[a-zA-Z0-9_-]{22}_[a-zA-Z0-9_-]{43}$/;
 
 function record(value: unknown, name: string): Readonly<Record<string, unknown>> {
@@ -43,12 +45,12 @@ function string(value: Readonly<Record<string, unknown>>, field: string, maximum
     return candidate;
 }
 
-function identifier(value: Readonly<Record<string, unknown>>, field: string): string {
-    const candidate = string(value, field, 128);
-    if (!IDENTIFIER_PATTERN.test(candidate)) {
+function identifier(value: Readonly<Record<string, unknown>>, field: string): Identifier {
+    try {
+        return decodeIdentifier(value[field]);
+    } catch {
         throw new MobiusProtocolError(`The Platform returned an invalid ${field}`);
     }
-    return candidate;
 }
 
 function timestamp(value: Readonly<Record<string, unknown>>, field: string): string {
@@ -83,8 +85,8 @@ function strings(value: Readonly<Record<string, unknown>>, field: string): reado
     return Object.freeze(candidate.filter((entry) => typeof entry === "string"));
 }
 
-function requestedIdentifier(value: string, name: string): string {
-    if (!IDENTIFIER_PATTERN.test(value)) {
+function requestedIdentifier(value: string, name: string): Identifier {
+    if (!isIdentifier(value)) {
         throw new MobiusValidationError(`The Platform ${name} is invalid`);
     }
     return value;
@@ -412,7 +414,7 @@ export class MobiusPlatformDeveloperClient {
     readonly #executor: MobiusRequestExecutor;
 
     constructor(options: MobiusPlatformDeveloperClientOptions) {
-        if (!IDENTIFIER_PATTERN.test(options.authenticationProviderId)) {
+        if (!isIdentifier(options.authenticationProviderId)) {
             throw new MobiusValidationError("The OIDC provider identifier is invalid");
         }
         this.#executor = new MobiusRequestExecutor(options);

@@ -1,5 +1,6 @@
 import {
     decodeSessionAccessCredential,
+    isIdentifier,
     issueSessionAccessCredential,
     verifySessionAccessCredential,
 } from "@moxt-ai/mobius-protocol";
@@ -36,7 +37,7 @@ export class SessionAccessService {
         if (target.kind !== "session") {
             throw new ProjectAuthenticationError("project_permission_denied", "A selected Session is required");
         }
-        if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/u.test(runtimeId)) {
+        if (!isIdentifier(runtimeId)) {
             throw new ProjectAuthenticationError("invalid_request", "The Runtime identifier is invalid");
         }
         if (!Number.isSafeInteger(expiresInSeconds) || expiresInSeconds < 60 || expiresInSeconds > 900) {

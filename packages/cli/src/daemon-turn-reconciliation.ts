@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
     ACTIVE_TURN_TEXT_LIMIT,
+    decodeIdentifier,
     type NativeSessionResult,
     type RecordedSessionEvent,
     SESSION_ELICITATION_REQUESTED_KIND,
@@ -32,7 +33,7 @@ export class ActiveDaemonTurn {
         RecordedSessionEvent,
         { readonly kind: typeof SESSION_PERMISSION_REQUESTED_KIND | typeof SESSION_ELICITATION_REQUESTED_KIND }
     > | null = null;
-    readonly #epoch = randomUUID();
+    readonly #epoch = decodeIdentifier(randomUUID());
 
     constructor(command: SessionPromptCommand, attemptId: string) {
         this.attemptId = attemptId;
@@ -80,7 +81,7 @@ export class ActiveDaemonTurn {
     readonly snapshot = (): ActiveTurnSnapshot =>
         this.#accepted
             ? {
-                  commandId: this.command.commandId,
+                  commandId: decodeIdentifier(this.command.commandId),
                   prompt: this.command.prompt,
                   text: this.#text,
                   truncated: this.#truncated,

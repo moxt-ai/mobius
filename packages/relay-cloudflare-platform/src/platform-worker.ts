@@ -11,6 +11,8 @@ import {
     decodeSessionPermissionRespondCommand,
     decodeSessionPromptCommand,
     decodeSessionQueryCommand,
+    type Identifier,
+    isIdentifier,
     MOBIUS_API_PREFIX,
 } from "@moxt-ai/mobius-protocol";
 import {
@@ -81,7 +83,7 @@ const projectApplication = createMobiusApplication();
 const scopedProjectApplication = createProjectApplication();
 const controlApplication = createPlatformControlApplication();
 const PLATFORM_REQUEST_TIMEOUT_MILLISECONDS = 30_000;
-const sessionIdentifier = v.pipe(v.string(), v.regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/u));
+const sessionIdentifier = v.custom<Identifier>(isIdentifier);
 const sessionPromptBody = v.strictObject({
     additionalDirectoryIds: v.pipe(v.array(v.string()), v.maxLength(16)),
     agentId: v.optional(sessionIdentifier),
@@ -209,7 +211,7 @@ export function createPlatformApplication(
             const input = v.parse(
                 v.strictObject({
                     expiresInSeconds: v.pipe(v.number(), v.safeInteger(), v.minValue(60), v.maxValue(900)),
-                    runtimeId: v.pipe(v.string(), v.regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/u)),
+                    runtimeId: sessionIdentifier,
                 }),
                 body,
             );

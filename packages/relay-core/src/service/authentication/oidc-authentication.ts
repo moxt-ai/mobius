@@ -1,3 +1,4 @@
+import { isIdentifier } from "@moxt-ai/mobius-protocol";
 import {
     type ExternalIdentityAuthenticator,
     type ExternalIdentityCredential,
@@ -102,7 +103,7 @@ export class OidcProviderConfiguration {
         clockSkewMilliseconds: number,
         validationTimeoutMilliseconds: number,
     ) {
-        if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(providerId)) {
+        if (!isIdentifier(providerId)) {
             throw new ProjectAuthenticationError(
                 "external_provider_configuration_invalid",
                 "The OIDC provider identifier is invalid",

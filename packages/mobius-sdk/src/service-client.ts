@@ -9,6 +9,7 @@ import {
     decodeSessionsQueriedEvent,
     decodeWorkspaceEntriesEvent,
     type Interaction,
+    isIdentifier,
     MOBIUS_API_PREFIX,
     type NativeMessagePage,
     type NativeSessionRequest,
@@ -180,14 +181,14 @@ function normalizeEndpoint(value: string): URL {
 }
 
 function projectPath(projectId: string, resourcePath: string): string {
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(projectId)) {
+    if (!isIdentifier(projectId)) {
         throw new MobiusValidationError("The Mobius project identifier is invalid");
     }
     return `v1/projects/${encodeURIComponent(projectId)}/${resourcePath}`;
 }
 
 function sessionPath(projectId: string, sessionId: string, resourcePath: string): string {
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(sessionId)) {
+    if (!isIdentifier(sessionId)) {
         throw new MobiusValidationError("The Mobius Session identifier is invalid");
     }
     return projectPath(projectId, `sessions/${encodeURIComponent(sessionId)}/${resourcePath}`);
@@ -759,7 +760,7 @@ export class MobiusCredentialResources {
         );
 
     readonly revoke = async (credentialId: string, signal: AbortSignal): Promise<void> => {
-        if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(credentialId)) {
+        if (!isIdentifier(credentialId)) {
             throw new MobiusValidationError("The browser credential identifier is invalid");
         }
         await this.#executor.deleteEmpty(
@@ -877,7 +878,7 @@ export class MobiusRuntimeResources {
     };
 
     readonly revoke = async (runtimeId: string, signal: AbortSignal): Promise<void> => {
-        if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(runtimeId)) {
+        if (!isIdentifier(runtimeId)) {
             throw new MobiusValidationError("The Runtime identifier is invalid");
         }
         await this.#executor.deleteEmpty(
@@ -905,7 +906,7 @@ export class MobiusRuntimePairingResources {
         );
 
     readonly read = async (pairingId: string, signal: AbortSignal): Promise<MobiusRuntimePairingStatus> => {
-        if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(pairingId)) {
+        if (!isIdentifier(pairingId)) {
             throw new MobiusValidationError("The Runtime pairing identifier is invalid");
         }
         return decodeMobiusRuntimePairingStatus(
