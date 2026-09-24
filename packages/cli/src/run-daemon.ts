@@ -449,7 +449,8 @@ async function runRelayConnection(
                             settleAbandonedTurn(publisher, operations, audit, cancellation);
                             return;
                         }
-                        if (!turn.requestCancellation()) {
+                        const cancellationState = turn.requestCancellation();
+                        if (cancellationState === "already-requested") {
                             return;
                         }
                         audit.record({
@@ -457,6 +458,9 @@ async function runRelayConnection(
                             event: "session_cancellation_requested",
                             sessionId: cancellation.sessionId,
                         });
+                        if (cancellationState === "pending") {
+                            return;
+                        }
                         void sessions.cancelPrompt(cancellation.sessionId).catch((error) => {
                             console.error("Mobius daemon could not cancel the agent turn", error);
                         });
