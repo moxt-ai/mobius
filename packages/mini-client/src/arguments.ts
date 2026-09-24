@@ -1,4 +1,6 @@
-import { resolve } from "node:path";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { MiniClientError } from "./errors.ts";
 
 export interface ParsedArguments {
@@ -59,12 +61,22 @@ export function optionalFlag(flags: ReadonlyMap<string, string>, name: string, f
     return value === undefined ? fallback : value;
 }
 
-export function stateDirectory(flags: ReadonlyMap<string, string>): string {
+export type StateDirectorySelection =
+    | { readonly kind: "generated"; readonly path: string }
+    | { readonly kind: "requested"; readonly path: string };
+
+export function stateDirectory(flags: ReadonlyMap<string, string>, command: string): StateDirectorySelection {
+    if (!flags.has("state-dir")) {
+        if (command !== "create") {
+            requireFlag(flags, "state-dir");
+        }
+        return { kind: "generated", path: mkdtempSync(join(tmpdir(), "mobius-mini-client-")) };
+    }
     const requested = resolve(requireFlag(flags, "state-dir"));
     if (requested === resolve("/")) {
         throw new MiniClientError("invalid_state_directory", "The filesystem root cannot be used as state directory");
     }
-    return requested;
+    return { kind: "requested", path: requested };
 }
 
 export function validateFlags(flags: ReadonlyMap<string, string>, allowed: ReadonlySet<string>): void {

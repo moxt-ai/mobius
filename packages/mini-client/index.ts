@@ -252,6 +252,7 @@ async function createCommand(directory: string, flags: ReadonlyMap<string, strin
             endpoint: platformEndpoint,
             projectId: project.projectId,
             runtimeId: pairing.runtimeId,
+            stateDir: directory,
             status: connected.status,
             workspace,
         });
@@ -702,7 +703,7 @@ async function getCommand(directory: string, flags: ReadonlyMap<string, string>)
 
 function help(): void {
     process.stdout.write(
-        `Mobius mini-client\n\nUsage:\n  pnpm exec tsx ./index.ts --state-dir=<dir> <command> [options]\n\nCommands:\n  create, status, start, stop, list-runtimes, list-sessions, create-session\n  get-agent-configuration, update-agent-configuration\n  send-prompt, steer, cancel-turn, get\n`,
+        `Mobius mini-client\n\nUsage:\n  pnpm exec tsx ./index.ts create [--state-dir=<dir>] [options]\n  pnpm exec tsx ./index.ts --state-dir=<dir> <command> [options]\n\nThe create command generates an isolated temporary state directory when --state-dir is omitted.\n\nCommands:\n  create, status, start, stop, list-runtimes, list-sessions, create-session\n  get-agent-configuration, update-agent-configuration\n  send-prompt, steer, cancel-turn, get\n`,
     );
 }
 
@@ -712,7 +713,11 @@ async function main(): Promise<void> {
         help();
         return;
     }
-    const directory = stateDirectory(parsed.flags);
+    const selectedDirectory = stateDirectory(parsed.flags, parsed.command);
+    const directory = selectedDirectory.path;
+    if (selectedDirectory.kind === "generated") {
+        process.stderr.write(`Mini-client state directory: ${directory}\n`);
+    }
     await prepareStateDirectory(directory);
     switch (parsed.command) {
         case "create":

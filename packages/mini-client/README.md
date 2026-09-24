@@ -2,7 +2,7 @@
 
 This private developer tool drives the Mobius Platform and a local Mobius CLI without Mobius Chat. It creates one isolated Platform Project, pairs the checkout's CLI as a Runtime, and persists only the identifiers needed by later commands.
 
-The state directory contains an AppCredential and Runtime credentials. Create a fresh directory for every run, do not commit it, and remove it after verification.
+The state directory contains an AppCredential and Runtime credentials. `create` generates a fresh temporary directory by default so concurrent checkouts use independent Mobius CLI managers. Do not commit it, and remove it after verification.
 
 ## Prerequisites
 
@@ -36,16 +36,17 @@ read -r MOBIUS_TEST_APP_ID
 read -rs MOBIUS_TEST_APP_SECRET
 printf '\n'
 export MOBIUS_TEST_APP_ID MOBIUS_TEST_APP_SECRET
-export MOBIUS_MINI_STATE="$(mktemp -d "${TMPDIR:-/tmp}/mobius-mini-client.XXXXXX")"
 
-pnpm exec tsx ./index.ts \
-  --state-dir="$MOBIUS_MINI_STATE" \
+MOBIUS_MINI_CREATE="$(pnpm exec tsx ./index.ts \
   create \
   --app-id="$MOBIUS_TEST_APP_ID" \
-  --app-secret="$MOBIUS_TEST_APP_SECRET"
+  --app-secret="$MOBIUS_TEST_APP_SECRET")"
+printf '%s\n' "$MOBIUS_MINI_CREATE"
+export MOBIUS_MINI_STATE="$(printf '%s' "$MOBIUS_MINI_CREATE" | node -e \
+  'let value=""; process.stdin.on("data", chunk => value += chunk).on("end", () => process.stdout.write(JSON.parse(value).stateDir))')"
 ```
 
-`create` creates a Platform Project and Runtime pairing, launches `pnpm mobius pair` with its own `MOBIUS_STATE_DIRECTORY`, and waits for the detached local Runtime to report online. It prints identifiers but never the credential.
+`create` creates a Platform Project and Runtime pairing, launches `pnpm mobius pair` with its own `MOBIUS_STATE_DIRECTORY`, and waits for the detached local Runtime to report online. It prints the generated `stateDir` and identifiers but never the credential. Pass `--state-dir` only when an owner-provided location is required.
 
 Inspect the Runtime and available Agents:
 
