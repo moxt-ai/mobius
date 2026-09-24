@@ -15,10 +15,12 @@ import {
     decodeSessionCompletedEvent,
     decodeSessionEventEnvelope,
     decodeSessionFailedEvent,
+    decodeSessionLiveHistoryPageLoaded,
     decodeSessionQueuedEvent,
     decodeSessionStartedEvent,
     encodeNativeSessionRequest,
     encodeSessionCancelCommand,
+    encodeSessionLiveHistoryPageLoad,
     encodeSessionPromptCommand,
     encodeSessionPromptDispositionCommand,
     MOBIUS_API_PREFIX,
@@ -27,6 +29,7 @@ import {
     SESSION_COMPLETED_KIND,
     SESSION_EVENT_KIND,
     SESSION_FAILED_KIND,
+    SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
     SESSION_PROMPT_DISPOSITION_KIND,
     SESSION_QUEUED_KIND,
     SESSION_STARTED_KIND,
@@ -241,7 +244,7 @@ describe("daemon assistant text coalescing", () => {
         }
     }, 30_000);
 
-    it("Given a native Agent Turn has emitted more than 100k characters, When another viewer reads active state, Then the daemon returns the full bounded snapshot and releases it after cancellation", async () => {
+    it("Given a native Agent Turn has emitted more than 100k characters, When another viewer queries native messages, Then the daemon includes the active Turn and releases it after cancellation", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-active-turn-"));
         const workspace = join(stateDirectory, "workspace");
         const nativeStateDirectory = join(stateDirectory, "native");
@@ -367,6 +370,30 @@ describe("daemon assistant text coalescing", () => {
                 prompt: prompt.prompt,
                 sequence: expect.any(Number),
                 truncated: false,
+            });
+            sendText(
+                socket,
+                encodeSessionLiveHistoryPageLoad({
+                    additionalDirectoryIds: [],
+                    agentId: agent.id,
+                    bindingId: config.bindingId,
+                    cursor: null,
+                    directoryId: "default",
+                    kind: "session.live-history.page.load",
+                    limit: 50,
+                    requestId: "native_messages_with_active_turn",
+                    sessionId,
+                }),
+            );
+            do {
+                result = await next();
+            } while (decodeMessageKind(result) !== SESSION_LIVE_HISTORY_PAGE_LOADED_KIND);
+            expect(decodeSessionLiveHistoryPageLoaded(result).page).toMatchObject({
+                status: "available",
+                messages: [
+                    { role: "user", text: prompt.prompt },
+                    { role: "assistant", text: output },
+                ],
             });
             sendText(socket, encodeSessionPromptCommand({ ...prompt, commandId: "second_burst_turn" }));
             let rejected: string;

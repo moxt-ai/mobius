@@ -8,6 +8,7 @@ import {
     type decodeSessionLiveHistoryLoad,
     type decodeSessionLiveHistoryPageLoad,
     encodeDaemonToServiceMessage,
+    type NativeSessionResult,
     SESSION_COMPLETED_KIND,
     SESSION_FAILED_KIND,
     SESSION_STARTED_KIND,
@@ -448,6 +449,7 @@ export async function executeSessionLiveHistoryPageLoad(
     directories: WorkspaceDirectoryService,
     audit: AuditStore,
     sessions: AcpSessionManager,
+    activeTurn: (sessionId: string) => Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"],
     signal: AbortSignal,
 ): Promise<void> {
     try {
@@ -466,7 +468,13 @@ export async function executeSessionLiveHistoryPageLoad(
             signal,
         });
         signal.throwIfAborted();
-        const page = paginateLiveSessionHistory(history, command.sessionId, command.cursor, command.limit);
+        const page = paginateLiveSessionHistory(
+            history,
+            activeTurn(command.sessionId),
+            command.sessionId,
+            command.cursor,
+            command.limit,
+        );
         audit.record({
             commandId: command.requestId,
             event: "session_history_loaded",
