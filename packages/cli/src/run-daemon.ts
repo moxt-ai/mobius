@@ -8,7 +8,6 @@ import {
     AGENT_INSTALL_CANCEL_KIND,
     AGENT_INSTALL_REQUEST_KIND,
     AGENT_SETTINGS_DISCOVER_KIND,
-    AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
     type AgentCatalogRefreshCommand,
     decodeServiceToDaemonMessage,
     decodeSessionLiveHistoryLoad,
@@ -35,13 +34,13 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { type MessageEvent, WebSocket } from "undici";
 
-import { AcpConfigurationValueUnavailableError, AcpExecutionError, AcpSessionManager } from "./acp/session-manager.ts";
+import { AcpExecutionError, AcpSessionManager } from "./acp/session-manager.ts";
 import { MemoryAcpSessionStore } from "./acp/session-store.ts";
-import { discoverAgentSettings } from "./agent-catalog/discover-agent-settings.ts";
 import {
     discoverLocalAgentInventory,
     supportedLocalAgentSpecifications,
 } from "./agent-catalog/discover-local-agents.ts";
+import { createAgentSettingsDiscoveryHandler } from "./agent-catalog/handle-agent-settings-discovery.ts";
 import { type AcpAgentDefinition, AgentIntegrationDefinition } from "./agent-catalog/local-agent.ts";
 import { publishAgentCatalog } from "./agent-catalog/publish-agent-catalog.ts";
 import { AgentInstallationManager } from "./agent-installation/agent-installation-manager.ts";
@@ -53,7 +52,6 @@ import { type DaemonConfig, DaemonLocalContext, withDaemonEnvironment } from "./
 import { DaemonDiagnosticLog } from "./daemon-diagnostic-log.ts";
 import { AuditInstallationEvents, DaemonAcpObserver, DaemonInstallationObserver } from "./daemon-observers.ts";
 import {
-    agentSettingsFailureDetails,
     executePrompt,
     executeSessionConfigure,
     executeSessionLiveHistoryLoad,
@@ -255,16 +253,6 @@ async function runRelayConnection(
             readonly completion: Promise<void>;
         }
     >();
-    const agentSettingsDiscoveries = new Map<
-        string,
-        {
-            readonly agentId: string;
-            readonly model: string | undefined;
-            readonly requestIds: Set<string>;
-            readonly controller: AbortController;
-            readonly completion: Promise<void>;
-        }
-    >();
     const agentCatalogRefreshes = new Map<
         string,
         {
@@ -272,6 +260,16 @@ async function runRelayConnection(
             readonly completion: Promise<void>;
         }
     >();
+    const handleSettingsDiscovery = createAgentSettingsDiscoveryHandler({
+        config,
+        directories,
+        audit,
+        sessions,
+        diagnostics,
+        socket,
+        signal: connectionController.signal,
+        timer,
+    });
     installationObserver.connect(socket);
     onConnected();
 
@@ -432,160 +430,7 @@ async function runRelayConnection(
                         return;
                     }
                     if (kind === AGENT_SETTINGS_DISCOVER_KIND) {
-                        const command = message;
-                        const existing = [...agentSettingsDiscoveries.values()].find(
-                            (request) => request.agentId === command.agentId && !request.controller.signal.aborted,
-                        );
-                        if (
-                            [...agentSettingsDiscoveries.values()].some((request) =>
-                                request.requestIds.has(command.requestId),
-                            )
-                        ) {
-                            if (socket.readyState === WebSocket.OPEN) {
-                                send(socket, {
-                                    code: "agent_settings_discovery_busy",
-                                    kind: AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
-                                    message: "This settings discovery request is already running",
-                                    requestId: command.requestId,
-                                });
-                            }
-                            return;
-                        }
-                        if (
-                            existing !== undefined &&
-                            existing.model === command.model &&
-                            existing.requestIds.size < 16
-                        ) {
-                            existing.requestIds.add(command.requestId);
-                            return;
-                        }
-                        if (existing !== undefined) {
-                            if (socket.readyState === WebSocket.OPEN) {
-                                send(socket, {
-                                    code: "agent_settings_discovery_busy",
-                                    kind: AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
-                                    message: "Another settings discovery is already running for this Agent",
-                                    requestId: command.requestId,
-                                });
-                            }
-                            return;
-                        }
-                        if (agentSettingsDiscoveries.size >= 4) {
-                            if (socket.readyState === WebSocket.OPEN) {
-                                send(socket, {
-                                    code: "agent_settings_discovery_busy",
-                                    kind: AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
-                                    message: "Too many Agent settings discoveries are running",
-                                    requestId: command.requestId,
-                                });
-                            }
-                            return;
-                        }
-                        const controller = new AbortController();
-                        const requestIds = new Set([command.requestId]);
-                        const operationSignal = AbortSignal.any([connectionController.signal, controller.signal]);
-                        const timeout = timer.schedule(
-                            () =>
-                                controller.abort(
-                                    new AcpExecutionError(
-                                        "Agent settings discovery timed out",
-                                        {},
-                                        "agent_settings_discovery_timeout",
-                                    ),
-                                ),
-                            90_000,
-                        );
-                        const completion = (async (): Promise<void> => {
-                            try {
-                                const result = await discoverAgentSettings(
-                                    command,
-                                    config,
-                                    directories,
-                                    sessions,
-                                    operationSignal,
-                                );
-                                for (const diagnostic of result.unsupportedModels) {
-                                    const details = agentSettingsFailureDetails(command.agentId, diagnostic);
-                                    audit.record({
-                                        commandId: command.requestId,
-                                        details,
-                                        event: "agent_settings_model_unsupported",
-                                        sessionId: `agent-settings:${command.agentId}`,
-                                    });
-                                    diagnostics.daemonDiagnostic(
-                                        "agent_settings_model_unsupported",
-                                        command.requestId,
-                                        details,
-                                    );
-                                    process.stderr.write(
-                                        `Mobius daemon diagnostic ${JSON.stringify({ event: "agent_settings_model_unsupported", requestId: command.requestId, ...details })}\n`,
-                                    );
-                                }
-                                for (const requestId of requestIds) {
-                                    audit.record({
-                                        commandId: requestId,
-                                        details: {
-                                            agentId: command.agentId,
-                                            unsupportedModelCount: result.unsupportedModels.length.toString(),
-                                        },
-                                        event: "agent_settings_discovered",
-                                        sessionId: `agent-settings:${command.agentId}`,
-                                    });
-                                    if (socket.readyState === WebSocket.OPEN) {
-                                        send(socket, { ...result.event, requestId });
-                                    }
-                                }
-                            } catch (error) {
-                                const failure: unknown = operationSignal.aborted
-                                    ? (controller.signal.reason ??
-                                      new AcpExecutionError(
-                                          "Agent settings discovery cancelled",
-                                          {},
-                                          "agent_settings_discovery_cancelled",
-                                      ))
-                                    : error;
-                                const details = agentSettingsFailureDetails(command.agentId, failure);
-                                for (const requestId of requestIds) {
-                                    audit.record({
-                                        commandId: requestId,
-                                        details,
-                                        event: "agent_settings_discovery_failed",
-                                        sessionId: `agent-settings:${command.agentId}`,
-                                    });
-                                }
-                                diagnostics.daemonDiagnostic(
-                                    "agent_settings_discovery_failed",
-                                    command.requestId,
-                                    details,
-                                    failure,
-                                );
-                                if (failure instanceof AcpConfigurationValueUnavailableError) {
-                                    process.stderr.write(
-                                        `Mobius daemon diagnostic ${JSON.stringify({ event: "agent_settings_discovery_failed", requestId: command.requestId, ...details })}\n`,
-                                    );
-                                }
-                                if (socket.readyState === WebSocket.OPEN) {
-                                    for (const requestId of requestIds) {
-                                        send(socket, {
-                                            code: operationErrorCode(failure),
-                                            kind: AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
-                                            message: operationErrorMessage(failure),
-                                            requestId,
-                                        });
-                                    }
-                                }
-                            } finally {
-                                timeout.cancel();
-                                agentSettingsDiscoveries.delete(command.requestId);
-                            }
-                        })();
-                        agentSettingsDiscoveries.set(command.requestId, {
-                            agentId: command.agentId,
-                            model: command.model,
-                            requestIds,
-                            completion,
-                            controller,
-                        });
+                        handleSettingsDiscovery.handle(message);
                         return;
                     }
                     if (kind === AGENT_CATALOG_REFRESH_KIND) {
@@ -1091,7 +936,7 @@ async function runRelayConnection(
         connectionController.abort();
         await Promise.all([
             ...[...nativeRequests.values()].map((request) => request.completion),
-            ...[...agentSettingsDiscoveries.values()].map((request) => request.completion),
+            handleSettingsDiscovery.settle(),
             ...[...agentCatalogRefreshes.values()].map((request) => request.completion),
         ]);
     }
