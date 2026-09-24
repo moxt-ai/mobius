@@ -200,7 +200,11 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
     const client = pair[0];
     const server = pair[1];
     const controller = new AbortController();
-    const subscriptions = new Map<string, WebSocket>();
+    const subscriptions = new Map<
+        string,
+        | { readonly kind: "pending"; readonly controller: AbortController }
+        | { readonly kind: "open"; readonly socket: WebSocket }
+    >();
     const browserOrigin = request.headers.get("origin");
     let idleTimeout = setTimeout(() => {
         controller.abort(new Error("WebSocket transport became inactive"));
@@ -218,9 +222,15 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
         "close",
         () => {
             clearTimeout(idleTimeout);
-            controller.abort(new Error("WebSocket transport closed"));
             for (const subscription of subscriptions.values()) {
-                subscription.close(1000, "WebSocket transport closed");
+                if (subscription.kind === "pending") {
+                    subscription.controller.abort(new Error("WebSocket transport closed"));
+                } else if (
+                    subscription.socket.readyState === WebSocket.OPEN ||
+                    subscription.socket.readyState === WebSocket.CONNECTING
+                ) {
+                    subscription.socket.close(1000, "WebSocket transport closed");
+                }
             }
             subscriptions.clear();
         },
@@ -230,7 +240,6 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
         "error",
         () => {
             clearTimeout(idleTimeout);
-            controller.abort(new Error("WebSocket transport failed"));
         },
         { once: true },
     );
@@ -247,7 +256,16 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                 const kind = string(message, "kind", 32);
                 if (kind === EVENT_UNSUBSCRIBE_KIND) {
                     const subscriptionId = string(message, "subscriptionId", 128);
-                    subscriptions.get(subscriptionId)?.close(1000, "Session event subscription closed");
+                    const subscription = subscriptions.get(subscriptionId);
+                    if (subscription?.kind === "pending") {
+                        subscription.controller.abort(new Error("Session event subscription closed"));
+                    } else if (
+                        subscription?.kind === "open" &&
+                        (subscription.socket.readyState === WebSocket.OPEN ||
+                            subscription.socket.readyState === WebSocket.CONNECTING)
+                    ) {
+                        subscription.socket.close(1000, "Session event subscription closed");
+                    }
                     subscriptions.delete(subscriptionId);
                     return;
                 }
@@ -257,6 +275,7 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                         throw transportError("invalid_message");
                     }
                     requestId = subscriptionId;
+                    const subscriptionController = new AbortController();
                     const converted = requestFromMessage(
                         {
                             body: "",
@@ -269,13 +288,15 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                         subscriptionId,
                         new URL(request.url).origin,
                         browserOrigin,
-                        controller.signal,
+                        subscriptionController.signal,
                     );
+                    subscriptions.set(subscriptionId, { controller: subscriptionController, kind: "pending" });
                     const subscriptionHeaders = new Headers(converted.request.headers);
                     subscriptionHeaders.set("Upgrade", "websocket");
                     const response = await dispatch(new Request(converted.request, { headers: subscriptionHeaders }));
                     const subscription = response.webSocket;
                     if (subscription === null) {
+                        subscriptions.delete(subscriptionId);
                         const failure = await response.json().catch(() => null);
                         const error =
                             typeof failure === "object" && failure !== null && "error" in failure
@@ -295,9 +316,19 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                         );
                         return;
                     }
-                    subscriptions.set(subscriptionId, subscription);
+                    if (subscriptions.get(subscriptionId)?.kind !== "pending") {
+                        subscription.close(1000, "Session event subscription closed");
+                        return;
+                    }
+                    subscriptions.set(subscriptionId, { kind: "open", socket: subscription });
                     const finish = (): void => {
-                        if (subscriptions.delete(subscriptionId) && server.readyState === WebSocket.OPEN) {
+                        const current = subscriptions.get(subscriptionId);
+                        if (
+                            current?.kind === "open" &&
+                            current.socket === subscription &&
+                            subscriptions.delete(subscriptionId) &&
+                            server.readyState === WebSocket.OPEN
+                        ) {
                             server.send(JSON.stringify({ kind: "session.events.end", subscriptionId }));
                         }
                     };
@@ -305,7 +336,7 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                         if (
                             typeof subscriptionEvent.data === "string" &&
                             server.readyState === WebSocket.OPEN &&
-                            subscriptions.has(subscriptionId)
+                            subscriptions.get(subscriptionId)?.kind === "open"
                         ) {
                             server.send(
                                 JSON.stringify({
