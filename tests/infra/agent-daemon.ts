@@ -828,24 +828,31 @@ async function processHappyPathCommand(
     await behavior.afterSessionStarted?.(command, signal);
     const progress = behavior.progressText?.(command) ?? "";
     if (progress.length > 0) {
+        const activity = {
+            activityId: `fake-progress-${turn.toString()}`,
+            activityType: "progress",
+            content: [],
+            input: "",
+            locations: [],
+            name: "",
+            output: progress,
+            sequence: 0,
+            status: "completed",
+            title: "Progress update",
+            toolKind: "",
+        };
+        const current = activeTurns.get(command.sessionId);
+        if (current !== undefined) {
+            activeTurns.set(command.sessionId, { ...current, activities: [activity] });
+        }
         await daemon.sendSessionEvent(
             command.sessionId,
             encodeAgentActivityEvent({
-                activityId: `fake-progress-${turn.toString()}`,
-                activityType: "progress",
+                ...activity,
                 commandId: command.commandId,
-                content: [],
                 detail: { content: [], input: "", kind: "recorded", output: progress },
-                input: "",
                 kind: "agent.activity",
-                locations: [],
-                name: "",
-                output: progress,
-                sequence: 0,
                 sessionId: command.sessionId,
-                status: "completed",
-                title: "Progress update",
-                toolKind: "",
             }),
             signal,
         );
