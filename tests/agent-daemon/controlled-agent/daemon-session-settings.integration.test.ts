@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import {
     AGENT_ACTIVITY_KIND,
+    AGENT_ACTIVITY_NARRATION_KIND,
     AGENT_CATALOG_REFRESH_KIND,
     AGENT_CATALOG_REFRESHED_KIND,
     AGENT_MESSAGE_DELTA_KIND,
@@ -184,7 +185,12 @@ async function readCommandActivity(frames: ClientFrames, sessionId: string, comm
     }
 }
 
-async function readCompletedReasoningActivity(frames: ClientFrames, sessionId: string, commandId: string) {
+async function readReasoningActivity(
+    frames: ClientFrames,
+    sessionId: string,
+    commandId: string,
+    status: "running" | "completed",
+) {
     for (;;) {
         const message = await frames.next();
         if (decodeMessageKind(message) !== SESSION_EVENT_KIND) {
@@ -195,12 +201,28 @@ async function readCompletedReasoningActivity(frames: ClientFrames, sessionId: s
             continue;
         }
         const activity = decodeAgentActivityEvent(envelope.payload);
-        if (
-            activity.commandId === commandId &&
-            activity.activityType === "reasoning" &&
-            activity.status === "completed"
-        ) {
+        if (activity.commandId === commandId && activity.activityType === "reasoning" && activity.status === status) {
             return activity;
+        }
+    }
+}
+
+async function readReasoningNarration(frames: ClientFrames, sessionId: string, commandId: string): Promise<string> {
+    for (;;) {
+        const message = await frames.next();
+        if (decodeMessageKind(message) !== SESSION_EVENT_KIND) {
+            continue;
+        }
+        const envelope = decodeSessionEventEnvelope(message);
+        if (envelope.sessionId !== sessionId || decodeMessageKind(envelope.payload) !== AGENT_ACTIVITY_NARRATION_KIND) {
+            continue;
+        }
+        const payload: unknown = JSON.parse(envelope.payload);
+        if (
+            readStringField(payload, "commandId") === commandId &&
+            readStringField(payload, "activityType") === "reasoning"
+        ) {
+            return readStringField(payload, "text");
         }
     }
 }
@@ -590,7 +612,17 @@ if (process.argv.includes("--version")) {
             };
             sendText(await socketReady.promise, encodeSessionPromptCommand(reasoningPrompt));
             expect(
-                await readCompletedReasoningActivity(frames, reasoningPrompt.sessionId, reasoningPrompt.commandId),
+                await readReasoningActivity(frames, reasoningPrompt.sessionId, reasoningPrompt.commandId, "running"),
+            ).toMatchObject({
+                activityType: "reasoning",
+                output: "",
+                status: "running",
+            });
+            expect(await readReasoningNarration(frames, reasoningPrompt.sessionId, reasoningPrompt.commandId)).toBe(
+                "Planning the implementation",
+            );
+            expect(
+                await readReasoningActivity(frames, reasoningPrompt.sessionId, reasoningPrompt.commandId, "completed"),
             ).toMatchObject({
                 activityType: "reasoning",
                 output: "Planning the implementation",

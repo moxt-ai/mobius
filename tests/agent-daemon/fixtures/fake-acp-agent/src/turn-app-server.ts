@@ -249,6 +249,13 @@ input.on("line", (line) => {
         }
         notify("turn/started", { threadId, turn: { id: turnId, items: [], status: "inProgress" } });
         if (promptText === "fixture: reasoning turn") {
+            notify("item/reasoning/summaryTextDelta", {
+                delta: "Planning the implementation",
+                itemId: `reasoning-${nextTurn.toString()}`,
+                summaryIndex: 0,
+                threadId,
+                turnId,
+            });
             notify("item/completed", {
                 item: {
                     content: ["Inspecting the workspace before making changes."],

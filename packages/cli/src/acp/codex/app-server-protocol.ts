@@ -187,6 +187,13 @@ export const requestUserInputParamsSchema = z.object({
     turnId: boundedText(256),
 });
 
+export const reasoningTextDeltaParamsSchema = z.object({
+    delta: boundedText(100_000),
+    itemId: boundedText(256),
+    threadId: boundedText(256),
+    turnId: boundedText(256),
+});
+
 export const mcpElicitationParamsSchema = z.object({
     message: boundedText(4_096),
     mode: z.enum(["form", "url"]).or(z.string()),
