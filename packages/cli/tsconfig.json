@@ -3,6 +3,7 @@
     "compilerOptions": {
         "resolveJsonModule": true,
         "noEmit": true,
+        "skipLibCheck": true,
         "types": ["node"]
     },
     "include": ["src/**/*.ts", "tests/**/*.ts"]

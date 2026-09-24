@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { join } from "node:path";
 import { styleText } from "node:util";
 
 import {
@@ -35,7 +36,7 @@ import {
 import { type MessageEvent, WebSocket } from "undici";
 
 import { AcpSessionManager } from "./acp/session-manager.ts";
-import { MemoryAcpSessionStore } from "./acp/session-store.ts";
+import { SqliteAcpSessionStore } from "./acp/session-store.ts";
 import { supportedLocalAgentSpecifications } from "./agent-catalog/discover-local-agents.ts";
 import { createAgentCatalogRefreshHandler } from "./agent-catalog/handle-agent-catalog-refresh.ts";
 import { createAgentSettingsDiscoveryHandler } from "./agent-catalog/handle-agent-settings-discovery.ts";
@@ -695,7 +696,9 @@ export async function runDaemon(
         publishCatalog: async (installationSignal) => await publishAgentCatalog(config, installationSignal),
         stateDirectory,
     });
-    const sessionStore = new MemoryAcpSessionStore();
+    const sessionStore = new SqliteAcpSessionStore(
+        join(stateDirectory, "sessions", `${createHash("sha256").update(config.channelId).digest("hex")}.sqlite`),
+    );
     const operations = new DaemonOperationState();
     const publisher = new DaemonSessionEventPublisher();
     const activeTurns = new Map<string, ActiveDaemonTurn>();
@@ -863,9 +866,13 @@ export async function runDaemon(
                         await sessions.close();
                     } finally {
                         try {
-                            publisher.close();
+                            sessionStore.close();
                         } finally {
-                            operations.close();
+                            try {
+                                publisher.close();
+                            } finally {
+                                operations.close();
+                            }
                         }
                     }
                 }
