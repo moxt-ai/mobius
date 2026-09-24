@@ -542,19 +542,6 @@ async function processHappyPathCommand(
                     sessionId: command.sessionId,
                 }),
             );
-        } else if (command.action === "linked-history" && behavior.loadNativeHistory !== undefined) {
-            const history = await behavior.loadNativeHistory(command.targetSessionId, signal);
-            signal.throwIfAborted();
-            daemon.send(
-                encodeNativeSessionResult({
-                    action: "linked-history",
-                    history,
-                    kind: "native.session.result",
-                    requestId: command.requestId,
-                    sessionId: command.sessionId,
-                    targetSessionId: command.targetSessionId,
-                }),
-            );
         } else if (command.action === "active-turn") {
             const active = activeTurns.get(command.targetSessionId);
             const turn =
@@ -659,26 +646,39 @@ async function processHappyPathCommand(
     if (kind === SESSION_LIVE_HISTORY_PAGE_LOAD_KIND) {
         const command = decodeSessionLiveHistoryPageLoad(encoded);
         const available = behavior.sessions?.some((entry) => entry.sessionId === command.sessionId) === true;
+        const history =
+            behavior.loadNativeHistory === undefined
+                ? null
+                : await behavior.loadNativeHistory(command.sessionId, signal);
+        signal.throwIfAborted();
         daemon.send(
             encodeSessionLiveHistoryPageLoaded({
                 kind: "session.live-history.page.loaded",
-                page: available
-                    ? {
-                          coveredCommandIds: [],
-                          coveredMessageIds: [],
-                          messages: [],
-                          nextCursor: null,
-                          status: "available",
-                          truncated: false,
-                      }
-                    : {
-                          cause: {
-                              code: "native_history_unsupported",
-                              message: "The fake Agent daemon does not provide native message history.",
-                          },
-                          nextCursor: null,
-                          status: "unavailable",
-                      },
+                page:
+                    history?.status === "available"
+                        ? {
+                              ...history,
+                              nextCursor: null,
+                          }
+                        : history?.status === "unavailable"
+                          ? { ...history, nextCursor: null }
+                          : available
+                            ? {
+                                  coveredCommandIds: [],
+                                  coveredMessageIds: [],
+                                  messages: [],
+                                  nextCursor: null,
+                                  status: "available",
+                                  truncated: false,
+                              }
+                            : {
+                                  cause: {
+                                      code: "native_history_unsupported",
+                                      message: "The fake Agent daemon does not provide native message history.",
+                                  },
+                                  nextCursor: null,
+                                  status: "unavailable",
+                              },
                 requestId: command.requestId,
                 sessionId: command.sessionId,
             }),

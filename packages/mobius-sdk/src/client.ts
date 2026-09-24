@@ -51,6 +51,7 @@ import {
     decodeSessionElicitationRespondCommand,
     decodeSessionFailedEvent,
     decodeSessionInfoUpdatedEvent,
+    decodeSessionLiveHistoryPageLoaded,
     decodeSessionOperationFailedEvent,
     decodeSessionPermissionRequestedEvent,
     decodeSessionPermissionResolvedEvent,
@@ -70,6 +71,7 @@ import {
     encodeSessionCancelCommand,
     encodeSessionConfigureCommand,
     encodeSessionElicitationRespondCommand,
+    encodeSessionLiveHistoryPageLoad,
     encodeSessionPermissionRespondCommand,
     encodeSessionPrepareCommand,
     encodeSessionPromptCommand,
@@ -82,6 +84,7 @@ import {
     NATIVE_SESSION_CANCEL_KIND,
     NATIVE_SESSION_REQUEST_KIND,
     NATIVE_SESSION_RESULT_KIND,
+    type NativeMessagePage,
     type NativeSessionRequest,
     type NativeSessionResult,
     type PromptImage,
@@ -98,6 +101,7 @@ import {
     SESSION_EVENT_COMMITTED_KIND,
     SESSION_FAILED_KIND,
     SESSION_INFO_UPDATED_KIND,
+    SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
     SESSION_OPERATION_FAILED_KIND,
     SESSION_PERMISSION_REQUESTED_KIND,
     SESSION_PERMISSION_RESOLVED_KIND,
@@ -242,6 +246,17 @@ export interface SessionPrepareRequest {
      * composer, but it is not a Session the user has started, so it must not appear in the directory.
      */
     readonly transient?: boolean;
+}
+
+export interface LiveHistoryPageRequest {
+    readonly additionalDirectoryIds: readonly string[];
+    readonly agentId: string;
+    readonly bindingId: string;
+    readonly cursor: string | null;
+    readonly directoryId: string;
+    readonly limit: number;
+    readonly requestId?: string;
+    readonly sessionId: string;
 }
 
 export interface SessionConfigureRequest extends SessionPrepareRequest {
@@ -553,6 +568,34 @@ export class MobiusClient {
             (event) => event.requestId,
             signal,
         );
+    };
+
+    readonly loadLiveHistoryPage = async (
+        request: LiveHistoryPageRequest,
+        signal: AbortSignal,
+    ): Promise<NativeMessagePage> => {
+        const requestId = request.requestId ?? crypto.randomUUID();
+        const result = await this.#requestReply(
+            requestId,
+            encodeOutboundMessage(() =>
+                encodeSessionLiveHistoryPageLoad({
+                    additionalDirectoryIds: request.additionalDirectoryIds,
+                    agentId: request.agentId,
+                    bindingId: request.bindingId,
+                    cursor: request.cursor,
+                    directoryId: request.directoryId,
+                    kind: "session.live-history.page.load",
+                    limit: request.limit,
+                    requestId,
+                    sessionId: request.sessionId,
+                }),
+            ),
+            SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
+            decodeSessionLiveHistoryPageLoaded,
+            (event) => event.requestId,
+            signal,
+        );
+        return result.page;
     };
 
     readonly manageNativeSession = async (

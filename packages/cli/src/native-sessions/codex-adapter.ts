@@ -20,7 +20,6 @@ async function verifiedHistory(context: NativeSessionAdapterContext, full: boole
 }
 
 export const codexSessionAdapter: NativeSessionAdapter = {
-    linkedHistory: async (context) => await verifiedHistory(context, true),
     history: async (context) => await verifiedHistory(context, true),
     // Codex enforces an exclusive writer per thread. Its read-only app-server
     // history path keeps externally owned conversations previewable.

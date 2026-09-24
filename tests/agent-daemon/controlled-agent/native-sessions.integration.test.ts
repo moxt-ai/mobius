@@ -302,17 +302,16 @@ describe("native Agent session boundary", () => {
                     onText: async () => {},
                     onActivity: async () => {},
                 });
-                const service = new NativeSessionService(f.config, f.directories, restarted, f.audit, () => null);
-                const history = await service.execute(
-                    { ...f.identity, action: "linked-history", targetSessionId: created.nativeSessionId },
+                const history = await restarted.loadSessionHistory({
+                    agent: f.agent,
+                    additionalDirectories: [],
+                    cwd: f.workspace,
                     signal,
-                );
+                    sessionId: created.nativeSessionId,
+                });
                 expect(history).toMatchObject({
-                    action: "linked-history",
-                    history: {
-                        status: "available",
-                        messages: expect.arrayContaining([{ role: "user", text: "Continue this chat" }]),
-                    },
+                    status: "available",
+                    messages: expect.arrayContaining([{ role: "user", text: "Continue this chat" }]),
                 });
             } finally {
                 await restarted.close();
@@ -322,7 +321,7 @@ describe("native Agent session boundary", () => {
     );
 
     it.each(["Codex", "Claude Code", "OpenCode", "Pi"])(
-        "Given a new empty %s chat, When its first prompt arrives, Then the native ID runs that prompt and history becomes available",
+        "Given a new empty %s chat, When its first prompt arrives, Then the native ID runs that prompt and Runtime history becomes available",
         async (agentName) => {
             const f = await fixture(agentName, "persist-after-first-prompt", "native");
             const signal = new AbortController().signal;
@@ -331,14 +330,6 @@ describe("native Agent session boundary", () => {
                 if (created.action !== "create") {
                     throw new Error("Expected a native Agent session");
                 }
-                const empty = await f.service.execute(
-                    { ...f.identity, action: "linked-history", targetSessionId: created.nativeSessionId },
-                    signal,
-                );
-                expect(empty).toMatchObject({
-                    action: "linked-history",
-                    history: { status: "available", messages: [] },
-                });
                 await f.sessions.runPrompt({
                     agent: f.agent,
                     additionalDirectories: [],
@@ -352,16 +343,16 @@ describe("native Agent session boundary", () => {
                     onText: async () => {},
                     onActivity: async () => {},
                 });
-                const history = await f.service.execute(
-                    { ...f.identity, action: "linked-history", targetSessionId: created.nativeSessionId },
+                const history = await f.sessions.loadSessionHistory({
+                    agent: f.agent,
+                    additionalDirectories: [],
+                    cwd: f.workspace,
                     signal,
-                );
+                    sessionId: created.nativeSessionId,
+                });
                 expect(history).toMatchObject({
-                    action: "linked-history",
-                    history: {
-                        status: "available",
-                        messages: expect.arrayContaining([{ role: "user", text: "First message" }]),
-                    },
+                    status: "available",
+                    messages: expect.arrayContaining([{ role: "user", text: "First message" }]),
                 });
             } finally {
                 await f.close();
@@ -491,7 +482,7 @@ describe("native Agent session boundary", () => {
         },
     );
 
-    it("Given Chat forks a native conversation into an assigned Session, When a post-fork turn completes and Chat reloads, Then linked history contains that turn", async () => {
+    it("Given Chat forks a native conversation into an assigned Session, When a post-fork turn completes and Chat reloads, Then Runtime history contains that turn", async () => {
         const f = await fixture("Codex");
         const signal = new AbortController().signal;
         try {
@@ -524,17 +515,17 @@ describe("native Agent session boundary", () => {
                 onActivity: async () => {},
             });
 
-            const history = await f.service.execute(
-                { ...f.identity, action: "linked-history", targetSessionId },
+            const history = await f.sessions.loadSessionHistory({
+                agent: f.agent,
+                additionalDirectories: [],
+                cwd: f.workspace,
                 signal,
-            );
+                sessionId: targetSessionId,
+            });
 
             expect(history).toMatchObject({
-                action: "linked-history",
-                history: {
-                    status: "available",
-                    messages: expect.arrayContaining([{ role: "user", text: "Post-fork turn" }]),
-                },
+                status: "available",
+                messages: expect.arrayContaining([{ role: "user", text: "Post-fork turn" }]),
             });
         } finally {
             await f.close();
