@@ -118,10 +118,10 @@ export function createPlatformApplication(
                         .all("/audit-events/", controlHandler),
                 ),
         );
-    const unavailableSession: Handler<DispatchEnvironment> = (context) =>
-        context.json({ error: { code: "session_unavailable", message: "Cloud Sessions are unavailable." } }, 410);
-    const sessionRoutes = new Hono<DispatchEnvironment>()
-        .get("/:sessionId/live-event-subscription-target", sessionAccessTargetMiddleware, async (context) => {
+    const sessionRoutes = new Hono<DispatchEnvironment>().get(
+        "/:sessionId/live-event-subscription-target",
+        sessionAccessTargetMiddleware,
+        async (context) => {
             const authorization = context.req.header("authorization") ?? "";
             const credential = authorization.match(/^Bearer ([^\s]+)$/u)?.[1];
             if (credential === undefined) {
@@ -142,9 +142,8 @@ export function createPlatformApplication(
             );
             context.header("Cache-Control", "no-store");
             return context.json({ ...target, kind: "expiring" });
-        })
-        .all("/", unavailableSession)
-        .all("/*", unavailableSession);
+        },
+    );
     const projectRoutes = new Hono<DispatchEnvironment>()
         .route("/sessions", sessionRoutes)
         .all("/runtime-pairings/*", projectHandler)

@@ -91,15 +91,6 @@ describe("Standalone Relay", () => {
         if (typeof runtime !== "object" || runtime === null || typeof Reflect.get(runtime, "runtimeId") !== "string") {
             throw new Error("The Runtime response is invalid");
         }
-        const retiredSession = await worker.fetch(
-            new Request("https://standalone.test/mobius/api/v1/projects/standalone/sessions/standalone-first-session", {
-                headers: { authorization: `Bearer ${env.MOBIUS_STANDALONE_TOKEN}` },
-            }),
-            env,
-        );
-        expect(retiredSession.status).toBe(410);
-        expect(await retiredSession.json()).toMatchObject({ error: { code: "session_unavailable" } });
-
         const transport = await worker.fetch(
             new Request("https://standalone.test/mobius/api/v1/transport", {
                 headers: { Upgrade: "websocket" },
@@ -119,11 +110,11 @@ describe("Standalone Relay", () => {
                 headers: [["authorization", `Bearer ${env.MOBIUS_STANDALONE_TOKEN}`]],
                 kind: "http.request",
                 method: "GET",
-                path: "/mobius/api/v1/projects/standalone/sessions/standalone-first-session",
-                requestId: "read-session",
+                path: "/mobius/api/v1/projects/standalone/runtimes",
+                requestId: "list-runtimes",
             }),
         );
-        expect(await response).toMatchObject({ kind: "http.response", requestId: "read-session", status: 410 });
+        expect(await response).toMatchObject({ kind: "http.response", requestId: "list-runtimes", status: 200 });
         socket.close();
     });
 });

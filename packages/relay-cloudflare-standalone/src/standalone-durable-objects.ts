@@ -26,12 +26,6 @@ export class RuntimeRelay extends DurableObject<StandaloneDurableObjectEnvironme
     }
 
     override async fetch(request: Request): Promise<Response> {
-        if (new URL(request.url).pathname.startsWith("/internal/projects/")) {
-            return Response.json(
-                { error: { code: "session_unavailable", message: "Cloud Sessions are unavailable." } },
-                { status: 410 },
-            );
-        }
         return await this.#runtime.fetch(request);
     }
 

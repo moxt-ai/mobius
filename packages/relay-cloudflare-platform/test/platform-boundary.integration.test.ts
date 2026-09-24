@@ -367,14 +367,6 @@ describe.sequential("Platform Session-only boundary", () => {
                 ];
                 expect(sessionTables).toEqual([]);
             });
-            const oldSession = await worker.fetch(
-                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}`, {
-                    headers: credentialHeaders(appCredential),
-                }),
-                environment,
-            );
-            expect(oldSession.status).toBe(410);
-            expect(await oldSession.json()).toMatchObject({ error: { code: "session_unavailable" } });
         } finally {
             daemon.close(1000, "Test complete");
             host.close(1000, "Test complete");

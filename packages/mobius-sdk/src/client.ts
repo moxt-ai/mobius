@@ -39,7 +39,6 @@ import {
     decodeNativeSessionCancel,
     decodeNativeSessionCommand,
     decodeNativeSessionResult,
-    decodeNativeSessionTurnForkRequest,
     decodeRecordedSessionEvent,
     decodeRuntimeStatusEvent,
     decodeSessionCancelCommand,
@@ -68,7 +67,6 @@ import {
     encodeFileReadCommand,
     encodeNativeSessionCancel,
     encodeNativeSessionRequest,
-    encodeNativeSessionTurnForkRequest,
     encodeSessionCancelCommand,
     encodeSessionConfigureCommand,
     encodeSessionElicitationRespondCommand,
@@ -84,10 +82,8 @@ import {
     NATIVE_SESSION_CANCEL_KIND,
     NATIVE_SESSION_REQUEST_KIND,
     NATIVE_SESSION_RESULT_KIND,
-    NATIVE_SESSION_TURN_FORK_REQUEST_KIND,
     type NativeSessionRequest,
     type NativeSessionResult,
-    type NativeSessionTurnForkRequest,
     type PromptImage,
     type PromptResource,
     RUNTIME_STATUS_KIND,
@@ -590,37 +586,6 @@ export class MobiusClient {
         );
     };
 
-    readonly forkSessionTurn = async (
-        command: NativeSessionTurnForkRequest,
-        signal: AbortSignal,
-    ): Promise<NativeSessionResult> => {
-        signal.throwIfAborted();
-        return await this.#requestReply(
-            command.requestId,
-            encodeOutboundMessage(() => encodeNativeSessionTurnForkRequest(command)),
-            NATIVE_SESSION_RESULT_KIND,
-            decodeNativeSessionResult,
-            (event) => event.requestId,
-            signal,
-            () => {
-                try {
-                    if (this.#socket.readyState === WebSocket.OPEN) {
-                        sendImmediately(
-                            this.#socket,
-                            encodeNativeSessionCancel({
-                                kind: NATIVE_SESSION_CANCEL_KIND,
-                                requestId: command.requestId,
-                                sessionId: command.sessionId,
-                            }),
-                        );
-                    }
-                } catch {
-                    // The local runtime also cancels requests when the connection closes.
-                }
-            },
-        );
-    };
-
     readonly configureSession = async (
         request: SessionConfigureRequest,
         signal: AbortSignal,
@@ -1088,8 +1053,6 @@ export class MobiusClient {
                 decodeSessionPromptCommand(encoded);
             } else if (kind === NATIVE_SESSION_REQUEST_KIND) {
                 decodeNativeSessionCommand(encoded);
-            } else if (kind === NATIVE_SESSION_TURN_FORK_REQUEST_KIND) {
-                decodeNativeSessionTurnForkRequest(encoded);
             } else if (kind === NATIVE_SESSION_CANCEL_KIND) {
                 decodeNativeSessionCancel(encoded);
             } else if (kind === NATIVE_SESSION_RESULT_KIND) {

@@ -29,12 +29,6 @@ export function createRuntimeRoutes(runtime: RuntimeService) {
             runtime.revokeHost(channelId, credentialId, runtimeId, scope);
             return new Response(null, { status: 204 });
         }
-        if (request.method === "POST" && url.pathname.endsWith("/pending-daemon-deliveries")) {
-            return Response.json(
-                { error: { code: "session_unavailable", message: "Cloud Session delivery is unavailable." } },
-                { status: 410 },
-            );
-        }
         if (request.method === "GET" && url.pathname.endsWith("/runtime-status")) {
             return Response.json({ online: runtime.isOnline(runtimeId) });
         }

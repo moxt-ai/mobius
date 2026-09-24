@@ -28,12 +28,6 @@ const application = createMobiusApplication();
 export function createStandaloneWorker(): StandaloneWorker {
     const standalone: StandaloneWorker = {
         fetch: async (request, environment) => {
-            if (/\/v1\/projects\/[^/]+\/sessions(?:\/|$)/u.test(new URL(request.url).pathname)) {
-                return Response.json(
-                    { error: { code: "session_unavailable", message: "Cloud Sessions are unavailable." } },
-                    { status: 410 },
-                );
-            }
             if (new URL(request.url).pathname === `${MOBIUS_API_PREFIX}/v1/transport`) {
                 const dispatch = async (forwarded: Request): Promise<Response> =>
                     await standalone.fetch(forwarded, environment);
