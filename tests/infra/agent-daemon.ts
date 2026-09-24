@@ -762,7 +762,9 @@ async function processHappyPathCommand(
     const createsImage = command.prompt.toLowerCase().includes("image");
     const epoch = command.commandId;
     activeTurns.set(command.sessionId, {
+        activities: [],
         commandId: decodeIdentifier(command.commandId),
+        content: [],
         epoch: decodeIdentifier(epoch),
         interaction: null,
         prompt: command.prompt,

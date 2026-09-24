@@ -1116,21 +1116,6 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                 persistState(context.params.sessionId, state);
                 return { stopReason: "end_turn" };
             }
-            if (prompt === "wait for steering") {
-                const instruction = await steering.promise;
-                const text = `Steered: ${instruction}`;
-                await context.client.notify(acp.methods.client.session.update, {
-                    sessionId: context.params.sessionId,
-                    update: {
-                        content: { text, type: "text" },
-                        messageId: `assistant-${turnNumber.toString()}`,
-                        sessionUpdate: "agent_message_chunk",
-                    },
-                });
-                transcript.push({ messageId: `assistant-${turnNumber.toString()}`, role: "assistant", text });
-                persistState(context.params.sessionId, state);
-                return { stopReason: "end_turn" };
-            }
             const toolCallId =
                 prompt === "generate inline image with reused tool id"
                     ? "reused-image-tool"
@@ -1292,6 +1277,37 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                     toolCallId,
                 },
             });
+
+            if (prompt === "wait for steering") {
+                await context.client.notify(acp.methods.client.session.update, {
+                    sessionId: context.params.sessionId,
+                    update: {
+                        content: {
+                            resource: {
+                                mimeType: "text/plain",
+                                text: "Active structured content",
+                                uri: "resource:///active-content.txt",
+                            },
+                            type: "resource",
+                        },
+                        messageId: `assistant-${turnNumber.toString()}`,
+                        sessionUpdate: "agent_message_chunk",
+                    },
+                });
+                const instruction = await steering.promise;
+                const text = `Steered: ${instruction}`;
+                await context.client.notify(acp.methods.client.session.update, {
+                    sessionId: context.params.sessionId,
+                    update: {
+                        content: { text, type: "text" },
+                        messageId: `assistant-${turnNumber.toString()}`,
+                        sessionUpdate: "agent_message_chunk",
+                    },
+                });
+                transcript.push({ messageId: `assistant-${turnNumber.toString()}`, role: "assistant", text });
+                persistState(context.params.sessionId, state);
+                return { stopReason: "end_turn" };
+            }
 
             let selectedBranch = "";
             if (prompt === "exercise ACP controls") {

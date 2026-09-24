@@ -139,14 +139,21 @@ export function paginateLiveSessionHistory(
     }
 
     const activeMessageOverhead = 4;
+    const activeStructuredCharacters =
+        JSON.stringify(activeTurn.activities).length + JSON.stringify(activeTurn.content).length;
     const maximumActiveTextLength = Math.max(
         0,
-        SESSION_HISTORY_CHARACTER_LIMIT - activeTurn.prompt.length - activeMessageOverhead,
+        SESSION_HISTORY_CHARACTER_LIMIT - activeTurn.prompt.length - activeStructuredCharacters - activeMessageOverhead,
     );
     const activeText = activeTurn.text.slice(-maximumActiveTextLength);
     const completeActiveMessages = [
         { role: "user" as const, text: activeTurn.prompt },
-        { activities: [], content: [], role: "assistant" as const, text: activeText },
+        {
+            activities: activeTurn.activities,
+            content: activeTurn.content,
+            role: "assistant" as const,
+            text: activeText,
+        },
     ];
     if (history.status === "unavailable") {
         return {
@@ -169,6 +176,7 @@ export function paginateLiveSessionHistory(
         SESSION_HISTORY_CHARACTER_LIMIT -
         activeText.length -
         activeMessageOverhead -
+        activeStructuredCharacters -
         (activeMessages.length === completeActiveMessages.length ? activeTurn.prompt.length : 0);
     const historicalMessageLimit = Math.max(0, limit - activeMessages.length);
     for (
@@ -203,5 +211,23 @@ export function paginateLiveSessionHistory(
         ...page,
         messages: [...page.messages, ...activeMessages],
         truncated: page.truncated || activeTurn.truncated || activeText.length !== activeTurn.text.length,
+    };
+}
+
+export function mergeLiveSessionHistory(
+    history: NativeSessionHistory,
+    activeTurn: ActiveTurnSnapshot,
+    sessionId: string,
+): NativeSessionHistory {
+    const page = paginateLiveSessionHistory(history, activeTurn, sessionId, null, 1_000);
+    if (page.status === "unavailable") {
+        return { cause: page.cause, status: "unavailable" };
+    }
+    return {
+        coveredCommandIds: page.coveredCommandIds,
+        coveredMessageIds: page.coveredMessageIds,
+        messages: page.messages,
+        status: "available",
+        truncated: page.truncated,
     };
 }

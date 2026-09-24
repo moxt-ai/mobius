@@ -47,6 +47,7 @@ import { streamLocalFile } from "./artifacts/local-file-streamer.ts";
 import type { AuditStore } from "./audit/audit-store.ts";
 import { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
 import type { DaemonConfig } from "./config.ts";
+import { ActiveDaemonTurn } from "./daemon-active-turn.ts";
 import { DaemonDiagnosticLog } from "./daemon-diagnostic-log.ts";
 import { AuditInstallationEvents, DaemonAcpObserver, DaemonInstallationObserver } from "./daemon-observers.ts";
 import {
@@ -60,7 +61,6 @@ import {
     send,
     settleAbandonedTurn,
 } from "./daemon-session-commands.ts";
-import { ActiveDaemonTurn, ActiveTurnReconciliationError, reconcileActiveTurns } from "./daemon-turn-reconciliation.ts";
 import { readCodexFullHistory } from "./native-sessions/codex-history.ts";
 import { createNativeSessionRequestHandler } from "./native-sessions/handle-native-requests.ts";
 import { NativeSessionService } from "./native-sessions/service.ts";
@@ -73,7 +73,6 @@ import { DaemonSessionEventPublisher } from "./relay-connection/session-event-pu
 import { type DaemonTimer, systemDaemonTimer } from "./relay-connection/timer.ts";
 
 const RELAY_RECONNECT_DELAY_MILLISECONDS = 500;
-const ACTIVE_TURN_RECONCILIATION_CLOSE_CODE = 4009;
 
 function closeRelaySocket(socket: WebSocket, code: number, reason: string): void {
     try {
@@ -182,7 +181,6 @@ async function runRelayConnection(
     const relayUrl = new URL(config.relayUrl);
     relayUrl.searchParams.set("liveness", "1");
     const socket = await connectRelay(relayUrl, signal);
-    const reconnectingTurns = [...activeTurns.values()];
     diagnostics.connectionOpened(connectionEpoch);
     const connectionController = new AbortController();
     const handleSettingsDiscovery = createAgentSettingsDiscoveryHandler({
@@ -204,6 +202,18 @@ async function runRelayConnection(
         timer,
         resolveEnvironment: resolveAgentCatalogEnvironment,
     });
+    const activeTurnSnapshot = (sessionId: string) => {
+        for (const turn of activeTurns.values()) {
+            if (turn.command.sessionId !== sessionId) {
+                continue;
+            }
+            const snapshot = turn.snapshot();
+            if (snapshot !== null) {
+                return snapshot;
+            }
+        }
+        return null;
+    };
     const nativeRequestHandler = createNativeSessionRequestHandler({
         audit,
         diagnostics,
@@ -399,6 +409,7 @@ async function runRelayConnection(
                             directories,
                             audit,
                             sessions,
+                            activeTurnSnapshot,
                             connectionController.signal,
                         );
                         return;
@@ -412,18 +423,7 @@ async function runRelayConnection(
                             directories,
                             audit,
                             sessions,
-                            (sessionId) => {
-                                for (const turn of activeTurns.values()) {
-                                    if (turn.command.sessionId !== sessionId) {
-                                        continue;
-                                    }
-                                    const snapshot = turn.snapshot();
-                                    if (snapshot !== null) {
-                                        return snapshot;
-                                    }
-                                }
-                                return null;
-                            },
+                            activeTurnSnapshot,
                             connectionController.signal,
                         );
                         return;
@@ -638,7 +638,7 @@ async function runRelayConnection(
                         (waitSignal) => waitForSessionAvailability(command, turn, waitSignal),
                         timer,
                         turn.signal,
-                        turn.recordText,
+                        turn.recordEvent,
                         turn.cancellationRequested,
                     )
                         .catch((error: unknown) => {
@@ -661,45 +661,7 @@ async function runRelayConnection(
             socket.addEventListener("close", handleClose);
             socket.addEventListener("error", handleError);
             socket.addEventListener("message", handleMessage);
-            void reconcileActiveTurns(config, reconnectingTurns, connectionController.signal).then(
-                () => {
-                    if (finished) {
-                        return;
-                    }
-                    publisher.connect(socket);
-                },
-                (error: unknown) => {
-                    if (finished) {
-                        return;
-                    }
-                    console.error("Mobius daemon could not reconcile active Agent turns", error);
-                    if (error instanceof ActiveTurnReconciliationError && error.terminal) {
-                        // The Relay has already settled these Attempts, so this Runtime can never reconcile them.
-                        // Abandoning the stale turns lets the connection recover instead of looping on code 4009.
-                        diagnostics.reconciliationAbandoned(
-                            connectionEpoch,
-                            error.relayErrorCode,
-                            reconnectingTurns.length,
-                        );
-                        console.error(
-                            "Mobius daemon abandoned Agent turns the Relay already settled",
-                            error.relayErrorCode,
-                        );
-                        for (const turn of reconnectingTurns) {
-                            activeTurns.delete(turn.command.commandId);
-                            turn.abortDaemon();
-                        }
-                        publisher.connect(socket);
-                        return;
-                    }
-                    failAndClose(
-                        new Error("Active Agent turn reconciliation failed", { cause: error }),
-                        ACTIVE_TURN_RECONCILIATION_CLOSE_CODE,
-                        "Active Agent turn reconciliation failed",
-                        "reconciliation",
-                    );
-                },
-            );
+            publisher.connect(socket);
 
             if (signal.aborted) {
                 stop();
@@ -739,7 +701,7 @@ export async function runDaemon(
     const activeTurns = new Map<string, ActiveDaemonTurn>();
     const recordSessionEvent = (sessionId: string, event: RecordedSessionEvent): void => {
         for (const turn of activeTurns.values()) {
-            turn.recordInteraction(event);
+            turn.recordEvent(event);
         }
         publisher.publish(sessionId, event);
     };
