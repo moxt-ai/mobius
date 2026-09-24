@@ -491,6 +491,56 @@ describe("native Agent session boundary", () => {
         },
     );
 
+    it("Given Chat forks a native conversation into an assigned Session, When a post-fork turn completes and Chat reloads, Then linked history contains that turn", async () => {
+        const f = await fixture("Codex");
+        const signal = new AbortController().signal;
+        try {
+            await f.seed("Fork source");
+            const entry = (await f.list()).entries[0];
+            if (entry === undefined) {
+                throw new Error("Missing native conversation");
+            }
+            const targetSessionId = "forked-history";
+            await f.service.execute(
+                {
+                    ...f.identity,
+                    action: "fork",
+                    entryId: entry.entryId,
+                    targetSessionId,
+                },
+                signal,
+            );
+            await f.sessions.runPrompt({
+                agent: f.agent,
+                additionalDirectories: [],
+                cwd: f.workspace,
+                signal,
+                sessionId: targetSessionId,
+                commandId: crypto.randomUUID(),
+                prompt: "Post-fork turn",
+                images: [],
+                resources: [],
+                onText: async () => {},
+                onActivity: async () => {},
+            });
+
+            const history = await f.service.execute(
+                { ...f.identity, action: "linked-history", targetSessionId },
+                signal,
+            );
+
+            expect(history).toMatchObject({
+                action: "linked-history",
+                history: {
+                    status: "available",
+                    messages: expect.arrayContaining([{ role: "user", text: "Post-fork turn" }]),
+                },
+            });
+        } finally {
+            await f.close();
+        }
+    });
+
     it("Given a saved Codex thread with a long preview, When its directory is listed, Then the thread has a bounded title", async () => {
         const f = await codexFixture();
         try {
