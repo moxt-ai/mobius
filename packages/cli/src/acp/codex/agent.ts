@@ -35,6 +35,7 @@ import {
     threadStartResponseSchema,
     turnNotificationSchema,
     turnSchema,
+    turnSteerResponseSchema,
     type UserInputQuestion,
 } from "./app-server-protocol.ts";
 import { agentMessageMeta, decodeThreadItem, toolCallUpdate } from "./items.ts";
@@ -164,6 +165,55 @@ function promptInput(prompt: readonly ContentBlock[]): readonly unknown[] {
         if (block.type === "resource_link") {
             input.push({ text: `Resource: ${block.uri}`, text_elements: [], type: "text" });
         }
+    }
+    return input;
+}
+
+function steeringPromptInput(prompt: readonly unknown[]): readonly unknown[] {
+    const input: unknown[] = [];
+    for (const block of prompt) {
+        if (typeof block !== "object" || block === null) {
+            throw new AcpExecutionError("Codex received an invalid steering prompt", {}, "invalid_request");
+        }
+        const type = Reflect.get(block, "type");
+        if (type === "text") {
+            const text = Reflect.get(block, "text");
+            if (typeof text !== "string") {
+                throw new AcpExecutionError("Codex received an invalid steering prompt", {}, "invalid_request");
+            }
+            input.push({ text, text_elements: [], type: "text" });
+            continue;
+        }
+        if (type === "image") {
+            const data = Reflect.get(block, "data");
+            const mimeType = Reflect.get(block, "mimeType");
+            if (typeof data !== "string" || typeof mimeType !== "string") {
+                throw new AcpExecutionError("Codex received an invalid steering prompt", {}, "invalid_request");
+            }
+            input.push({ type: "image", url: `data:${mimeType};base64,${data}` });
+            continue;
+        }
+        if (type === "resource") {
+            const resource = Reflect.get(block, "resource");
+            if (typeof resource !== "object" || resource === null) {
+                throw new AcpExecutionError("Codex received an invalid steering prompt", {}, "invalid_request");
+            }
+            const text = Reflect.get(resource, "text");
+            if (text !== undefined && typeof text !== "string") {
+                throw new AcpExecutionError("Codex received an invalid steering prompt", {}, "invalid_request");
+            }
+            input.push({ text: text ?? "", text_elements: [], type: "text" });
+            continue;
+        }
+        if (type === "resource_link") {
+            const uri = Reflect.get(block, "uri");
+            if (typeof uri !== "string") {
+                throw new AcpExecutionError("Codex received an invalid steering prompt", {}, "invalid_request");
+            }
+            input.push({ text: `Resource: ${uri}`, text_elements: [], type: "text" });
+            continue;
+        }
+        throw new AcpExecutionError("Codex received an unsupported steering prompt", {}, "invalid_request");
     }
     return input;
 }
@@ -508,6 +558,11 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
             .onRequest(methods.agent.session.prompt, async (context) => {
                 return await this.#runTurn(promptInput(context.params.prompt), context.signal);
             })
+            .onRequest(
+                "_session/steering",
+                (params: unknown) => params,
+                async (context) => await this.#steerTurn(context.params, context.signal),
+            )
             .onRequest(methods.agent.session.list, async (context) => {
                 const decoded = threadListResponseSchema.parse(
                     await this.#appServer.request(
@@ -1127,6 +1182,39 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 this.#turn = null;
             }
         }
+    };
+
+    readonly #steerTurn = async (
+        params: unknown,
+        signal: AbortSignal,
+    ): Promise<{ readonly outcome: "injected" | "promptRequired"; readonly reason?: string }> => {
+        if (typeof params !== "object" || params === null) {
+            throw new AcpExecutionError("Codex received an invalid steering request", {}, "invalid_request");
+        }
+        const sessionId = Reflect.get(params, "sessionId");
+        const prompt = Reflect.get(params, "prompt");
+        if (typeof sessionId !== "string" || !Array.isArray(prompt)) {
+            throw new AcpExecutionError("Codex received an invalid steering request", {}, "invalid_request");
+        }
+        const active = this.#turn;
+        if (sessionId !== this.#nativeSessionId || active === null || active.turn.id.length === 0) {
+            return { outcome: "promptRequired", reason: "noRunningTurn" };
+        }
+        const input = steeringPromptInput(prompt);
+        if (input.length === 0) {
+            throw new AcpExecutionError("Codex received an empty steering request", {}, "invalid_request");
+        }
+        const response = turnSteerResponseSchema.parse(
+            await this.#appServer.request(
+                "turn/steer",
+                { expectedTurnId: active.turn.id, input, threadId: this.#nativeSessionId },
+                AbortSignal.any([signal, AbortSignal.timeout(APPROVAL_TIMEOUT_MILLISECONDS)]),
+            ),
+        );
+        if (response.turnId !== active.turn.id) {
+            throw new AcpExecutionError("Codex steered an unexpected turn", {}, "steering_target_unavailable");
+        }
+        return { outcome: "injected" };
     };
 
     readonly #interruptTurn = async (): Promise<void> => {
