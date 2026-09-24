@@ -11,7 +11,6 @@ import { sessionHistorySchema } from "./session-history.ts";
 export const NATIVE_SESSION_REQUEST_KIND = "native.session.request";
 export const NATIVE_SESSION_RESULT_KIND = "native.session.result";
 export const NATIVE_SESSION_CANCEL_KIND = "native.session.cancel";
-export const NATIVE_SESSION_TURN_FORK_REQUEST_KIND = "native.session.turn-fork.request";
 export const NATIVE_SESSION_TURN_FORK_KIND = "native.session.turn-fork";
 export const ACTIVE_TURN_TEXT_LIMIT = 1_000_000;
 
@@ -40,14 +39,6 @@ const turnForkIdentity = {
     sourceCommandId: identifier,
     targetSessionId: identifier,
 };
-
-const nativeSessionTurnForkRequestSchema = z
-    .strictObject({
-        ...turnForkIdentity,
-        kind: z.literal(NATIVE_SESSION_TURN_FORK_REQUEST_KIND),
-    })
-    .readonly();
-export type NativeSessionTurnForkRequest = z.infer<typeof nativeSessionTurnForkRequestSchema>;
 
 const nativeSessionTurnForkCommandSchema = z
     .strictObject({
@@ -281,10 +272,6 @@ export const decodeNativeSessionCancel = (encoded: string): NativeSessionCancel 
     decode(nativeSessionCancelSchema, encoded);
 export const encodeNativeSessionCancel = (value: NativeSessionCancel): string =>
     JSON.stringify(nativeSessionCancelSchema.parse(value));
-export const decodeNativeSessionTurnForkRequest = (encoded: string): NativeSessionTurnForkRequest =>
-    decode(nativeSessionTurnForkRequestSchema, encoded);
-export const encodeNativeSessionTurnForkRequest = (value: NativeSessionTurnForkRequest): string =>
-    JSON.stringify(nativeSessionTurnForkRequestSchema.parse(value));
 export const decodeNativeSessionTurnForkCommand = (encoded: string): NativeSessionTurnForkCommand =>
     decode(nativeSessionTurnForkCommandSchema, encoded);
 export const encodeNativeSessionTurnForkCommand = (value: NativeSessionTurnForkCommand): string =>

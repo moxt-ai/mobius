@@ -16,7 +16,6 @@ import {
     decodeAgentSettingsDiscoveredEvent,
     decodeNativeSessionHistory,
     decodeNativeSessionTurnForkCommand,
-    decodeNativeSessionTurnForkRequest,
     decodeSessionConfigOptions,
     decodeSessionConfigureCommand,
     decodeSessionElicitationRequestedEvent,
@@ -31,7 +30,6 @@ import {
     encodeAgentSettingsDiscoverCommand,
     encodeAgentSettingsDiscoveredEvent,
     encodeNativeSessionTurnForkCommand,
-    encodeNativeSessionTurnForkRequest,
     encodeSessionConfigureCommand,
     encodeSessionElicitationRequestedEvent,
     encodeSessionOperationFailedEvent,
@@ -75,26 +73,20 @@ it("Given local Session preparation fails after measurable work, When the Runtim
     expect(decodeSessionOperationFailedEvent(encodeSessionOperationFailedEvent(failure))).toEqual(failure);
 });
 
-it("Given a completed Mobius turn, When the Host requests a fork and the Relay resolves its native anchor, Then both trust-boundary messages round-trip without conflating unresolved and authorized input", () => {
-    const request = {
+it("Given a native Agent turn anchor, When the daemon receives a fork command, Then the validated command round-trips", () => {
+    const command = {
         additionalDirectoryIds: [],
         agentId: "codex",
         bindingId: "workspace",
         directoryId: "default",
-        kind: "native.session.turn-fork.request",
-        requestId: "fork-request-1",
-        sessionId: "source-session",
-        sourceCommandId: "source-command",
-        targetSessionId: "target-session",
-    } as const;
-    expect(decodeNativeSessionTurnForkRequest(encodeNativeSessionTurnForkRequest(request))).toEqual(request);
-
-    const command = {
-        ...request,
         kind: "native.session.turn-fork",
         messageFingerprint: `sha256:${"a".repeat(64)}`,
         messageId: "assistant-message-7",
         messageOccurrence: 2,
+        requestId: "fork-request-1",
+        sessionId: "source-session",
+        sourceCommandId: "source-command",
+        targetSessionId: "target-session",
         title: "Source session",
     } as const;
     expect(decodeNativeSessionTurnForkCommand(encodeNativeSessionTurnForkCommand(command))).toEqual(command);

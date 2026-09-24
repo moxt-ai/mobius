@@ -22,7 +22,6 @@ import {
     decodeNativeSessionCancel,
     decodeNativeSessionCommand,
     decodeNativeSessionRequest,
-    decodeNativeSessionTurnForkRequest,
     decodeSessionCancelCommand,
     decodeSessionConfigureCommand,
     decodeSessionElicitationRespondCommand,
@@ -39,7 +38,6 @@ import {
     encodeRuntimeStatusEvent,
     encodeServiceToDaemonMessage,
     encodeSessionFailedEvent,
-    encodeSessionOperationFailedEvent,
     FILE_BEGIN_KIND,
     FILE_CHUNK_KIND,
     FILE_END_KIND,
@@ -48,7 +46,6 @@ import {
     NATIVE_SESSION_CANCEL_KIND,
     NATIVE_SESSION_REQUEST_KIND,
     NATIVE_SESSION_RESULT_KIND,
-    NATIVE_SESSION_TURN_FORK_REQUEST_KIND,
     type NativeSessionCommand,
     ProtocolMessageError,
     RUNTIME_STATUS_KIND,
@@ -103,12 +100,9 @@ class PendingAgentCatalogRefresh {
     }
 }
 
-function sessionErrorCloseCode(error: SessionRuntimeError): 1008 | 1011 | 1013 {
-    if (error.code === "session_busy" || error.code === "session_quota_exceeded") {
+function sessionErrorCloseCode(error: SessionRuntimeError): 1008 | 1013 {
+    if (error.code === "session_busy") {
         return 1013;
-    }
-    if (error.code === "session_storage_timeout" || error.code === "session_storage_unavailable") {
-        return 1011;
     }
     return 1008;
 }
@@ -388,19 +382,6 @@ export class ChannelActor {
                     }
                 }
                 this.forwardControl(socket, command, request.requestId, request.sessionId, request);
-                return;
-            }
-            if (kind === NATIVE_SESSION_TURN_FORK_REQUEST_KIND) {
-                const command = decodeNativeSessionTurnForkRequest(message);
-                socket.send(
-                    encodeSessionOperationFailedEvent({
-                        code: "session_unavailable",
-                        kind: SESSION_OPERATION_FAILED_KIND,
-                        message: "Cloud Session turn forks are unavailable",
-                        requestId: command.requestId,
-                        sessionId: command.sessionId,
-                    }),
-                );
                 return;
             }
             if (kind === SESSION_LIVE_HISTORY_LOAD_KIND || kind === SESSION_LIVE_HISTORY_PAGE_LOAD_KIND) {

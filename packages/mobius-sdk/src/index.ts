@@ -17,7 +17,6 @@ export type {
     NativeSessionEntry,
     NativeSessionRequest,
     NativeSessionResult,
-    NativeSessionTurnForkRequest,
     PromptImage,
     PromptResource,
     SessionCapabilities,
