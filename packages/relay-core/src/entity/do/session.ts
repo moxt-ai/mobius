@@ -10,61 +10,13 @@ export class ProjectScope {
 }
 
 function sessionRuntimeErrorStatus(code: string): number {
-    if (code === "execution_capability_invalid") {
-        return 401;
-    }
-    if (
-        code === "conversation_access_denied" ||
-        code === "delivery_target_not_allowed" ||
-        code === "execution_context_mismatch"
-    ) {
-        return 403;
-    }
-    if (code === "execution_capability_expired") {
-        return 410;
-    }
-    if (code === "queue_full") {
-        return 429;
-    }
-    if (
-        code === "session_not_found" ||
-        code === "artifact_not_found" ||
-        code === "interaction_not_found" ||
-        code === "pending_work_not_found"
-    ) {
+    if (code === "session_not_found") {
         return 404;
     }
-    if (code === "session_access_denied" || code === "artifact_upload_unauthorized") {
-        return 403;
-    }
-    if (code === "session_deleted" || code === "cursor_expired" || code === "artifact_upload_expired") {
-        return 410;
-    }
-    if (code === "session_quota_exceeded") {
-        return 429;
-    }
-    if (
-        code === "session_busy" ||
-        code === "session_conflict" ||
-        code === "session_history_not_retained" ||
-        code === "idempotency_conflict" ||
-        code === "interaction_conflict" ||
-        code === "event_source_conflict" ||
-        code === "artifact_upload_closed" ||
-        code === "artifact_not_ready"
-    ) {
+    if (code === "session_busy" || code === "session_conflict" || code === "idempotency_conflict") {
         return 409;
     }
-    if (code === "content_too_large") {
-        return 413;
-    }
-    if (
-        code === "invalid_cursor" ||
-        code === "invalid_export" ||
-        code === "invalid_page_size" ||
-        code === "invalid_request" ||
-        code === "artifact_content_mismatch"
-    ) {
+    if (code === "invalid_cursor" || code === "invalid_request") {
         return 400;
     }
     return 503;
