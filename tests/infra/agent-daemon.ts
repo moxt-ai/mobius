@@ -11,6 +11,7 @@ import {
     decodeSessionLiveHistoryPageLoad,
     decodeSessionPrepareCommand,
     decodeSessionPromptCommand,
+    decodeSessionPromptDispositionCommand,
     decodeSessionQueryCommand,
     decodeWorkspaceListCommand,
     encodeAgentActivityEvent,
@@ -29,6 +30,7 @@ import {
     encodeSessionLiveHistoryLoaded,
     encodeSessionLiveHistoryPageLoaded,
     encodeSessionOperationFailedEvent,
+    encodeSessionQueuedEvent,
     encodeSessionReadyEvent,
     encodeSessionStartedEvent,
     encodeSessionsQueriedEvent,
@@ -42,6 +44,7 @@ import {
     SESSION_LIVE_HISTORY_LOAD_KIND,
     SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
     SESSION_PREPARE_KIND,
+    SESSION_PROMPT_DISPOSITION_KIND,
     SESSION_PROMPT_KIND,
     SESSION_QUERY_KIND,
     SESSION_STARTED_KIND,
@@ -49,6 +52,7 @@ import {
     type SessionMetadata,
     type SessionPermissionRequestedEvent,
     type SessionPromptCommand,
+    SessionPromptDisposition,
     type SessionReadyEvent,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
@@ -346,6 +350,7 @@ export interface FakeAgentDaemonBehavior {
     readonly directoryLabel?: string;
     readonly nativeSessionIds?: ReadonlySet<string>;
     readonly sessions?: readonly SessionMetadata[];
+    readonly steering?: boolean;
     readonly nativeSessionTitle?: (sessionId: string) => string;
     readonly loadNativeHistory?: (sessionId: string, signal: AbortSignal) => Promise<NativeSessionHistory>;
     readonly beforeActiveTurnSnapshot?: (sessionId: string, signal: AbortSignal) => Promise<void>;
@@ -399,10 +404,32 @@ async function processHappyPathCommand(
     behavior: FakeAgentDaemonBehavior,
     nextTurn: () => number,
     activeTurns: Map<string, ActiveTurn>,
+    queuedPrompts: Map<string, SessionPromptCommand>,
     sessions: Map<string, SessionMetadata>,
     signal: AbortSignal,
 ): Promise<void> {
     const kind = decodeMessageKind(encoded);
+    if (kind === SESSION_PROMPT_DISPOSITION_KIND) {
+        const command = decodeSessionPromptDispositionCommand(encoded);
+        const queued = queuedPrompts.get(command.commandId);
+        queuedPrompts.delete(command.commandId);
+        if (queued !== undefined) {
+            await daemon.sendSessionEvent(
+                command.sessionId,
+                encodeSessionStartedEvent({
+                    attemptId: `fake-steer-${command.commandId}`,
+                    commandId: command.commandId,
+                    epoch: command.commandId,
+                    kind: SESSION_STARTED_KIND,
+                    prompt: queued.prompt,
+                    sequence: 0,
+                    sessionId: command.sessionId,
+                }),
+                signal,
+            );
+        }
+        return;
+    }
     if (kind === RUNTIME_HEARTBEAT_KIND) {
         const heartbeat = decodeRuntimeHeartbeatEvent(encoded);
         daemon.send(
@@ -505,9 +532,9 @@ async function processHappyPathCommand(
                         imagePrompt: true,
                         listSessions: true,
                         loadSession: true,
-                        promptQueueing: false,
+                        promptQueueing: behavior.steering ?? false,
                         resumeSession: true,
-                        steering: false,
+                        steering: behavior.steering ?? false,
                         unstableForkSession: false,
                     },
                     entries: [...(behavior.nativeSessionIds ?? [])].map((nativeSessionId) => ({
@@ -618,9 +645,9 @@ async function processHappyPathCommand(
                 imagePrompt: true,
                 listSessions: true,
                 loadSession: true,
-                promptQueueing: false,
+                promptQueueing: behavior.steering ?? false,
                 resumeSession: true,
-                steering: false,
+                steering: behavior.steering ?? false,
                 unstableForkSession: false,
             },
             commands: [],
@@ -722,6 +749,17 @@ async function processHappyPathCommand(
         return;
     }
     const command = decodeSessionPromptCommand(encoded);
+    if (command.disposition === SessionPromptDisposition.Queue && activeTurns.has(command.sessionId)) {
+        queuedPrompts.set(command.commandId, command);
+        daemon.send(
+            encodeSessionQueuedEvent({
+                commandId: command.commandId,
+                kind: "session.queued",
+                sessionId: command.sessionId,
+            }),
+        );
+        return;
+    }
     const session = sessions.get(command.sessionId);
     if (session !== undefined) {
         sessions.set(command.sessionId, {
@@ -915,6 +953,7 @@ export function serveFakeAgentDaemon(
     const failure = Promise.withResolvers<never>();
     const tasks = new Set<Promise<void>>();
     const activeTurns = new Map<string, ActiveTurn>();
+    const queuedPrompts = new Map<string, SessionPromptCommand>();
     const sessions = new Map<string, SessionMetadata>();
     let turn = 0;
     const nextTurn = (): number => {
@@ -928,6 +967,7 @@ export function serveFakeAgentDaemon(
             behavior,
             nextTurn,
             activeTurns,
+            queuedPrompts,
             sessions,
             cancellation.signal,
         );
