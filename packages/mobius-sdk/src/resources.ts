@@ -345,8 +345,8 @@ export class MobiusSessionAccess {
     readonly expiresAt: string;
     constructor(value: unknown) {
         const resource = record(value, "Session access");
-        this.credential = stringField(resource, "credential", 256);
-        if (!/^msession_[A-Za-z0-9_-]{22}_[A-Za-z0-9_-]{43}$/u.test(this.credential)) {
+        this.credential = stringField(resource, "credential", 2_048);
+        if (!/^msession_[A-Za-z0-9_-]{22}_[A-Za-z0-9_-]+_[A-Za-z0-9_-]{43}$/u.test(this.credential)) {
             throw invalidResponse("The Session credential is invalid");
         }
         this.credentialId = identifierField(resource, "credentialId");
@@ -357,6 +357,7 @@ export class MobiusSessionAccess {
 }
 
 export interface CreateMobiusSessionRequest {
+    readonly additionalDirectoryIds: readonly string[];
     readonly agentId: string;
     readonly bindingId: string;
     readonly directoryId: string;

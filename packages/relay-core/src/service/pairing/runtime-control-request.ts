@@ -17,8 +17,11 @@ import {
     decodeRuntimeStatusEvent,
     decodeSessionConfigUpdatedEvent,
     decodeSessionFailedEvent,
+    decodeSessionLiveHistoryPageLoaded,
     decodeSessionOperationFailedEvent,
     decodeSessionReadyEvent,
+    decodeSessionStartedEvent,
+    decodeSessionsQueriedEvent,
     decodeWorkspaceEntriesEvent,
     encodeNativeSessionRequest,
     encodeServiceToDaemonMessage,
@@ -31,15 +34,33 @@ import {
     type NativeSessionResult,
     type SessionConfigUpdatedEvent,
     type SessionConfigureCommand,
+    type SessionLiveHistoryPageLoad,
+    type SessionLiveHistoryPageLoaded,
     type SessionPrepareCommand,
+    type SessionPromptCommand,
+    type SessionQueryCommand,
     type SessionReadyEvent,
+    type SessionStartedEvent,
+    type SessionsQueriedEvent,
     type WorkspaceEntriesEvent,
     type WorkspaceListCommand,
 } from "@moxt-ai/mobius-protocol";
 import { SessionRuntimeError } from "../../entity/do/session.ts";
 
-export type RuntimeControlCommand = NativeSessionRequest | SessionPrepareCommand | SessionConfigureCommand;
-export type RuntimeControlResult = NativeSessionResult | SessionReadyEvent | SessionConfigUpdatedEvent;
+export type RuntimeControlCommand =
+    | NativeSessionRequest
+    | SessionPrepareCommand
+    | SessionConfigureCommand
+    | SessionPromptCommand
+    | SessionLiveHistoryPageLoad
+    | SessionQueryCommand;
+export type RuntimeControlResult =
+    | NativeSessionResult
+    | SessionReadyEvent
+    | SessionConfigUpdatedEvent
+    | SessionStartedEvent
+    | SessionLiveHistoryPageLoaded
+    | SessionsQueriedEvent;
 
 export interface RuntimeFileStream {
     readonly finished: Promise<void>;
@@ -341,6 +362,7 @@ export async function requestRuntimeControl(
     signal: AbortSignal,
 ): Promise<RuntimeControlResult> {
     const deadline = AbortSignal.any([signal, AbortSignal.timeout(120000)]);
+    const requestId = command.kind === "session.prompt" ? command.commandId : command.requestId;
     let cleanup = () => {};
     try {
         deadline.throwIfAborted();
@@ -376,14 +398,14 @@ export async function requestRuntimeControl(
                     }
                     if (kind === "session.failed") {
                         const failed = decodeSessionFailedEvent(raw);
-                        if (failed.commandId === command.requestId) {
+                        if (failed.commandId === requestId) {
                             reject(new SessionRuntimeError(failed.code, failed.message));
                         }
                         return;
                     }
                     if (kind === "session.operation.failed") {
                         const failed = decodeSessionOperationFailedEvent(raw);
-                        if (failed.requestId === command.requestId) {
+                        if (failed.requestId === requestId) {
                             reject(
                                 new SessionRuntimeError(failed.code, failed.message, {
                                     runtimeTimings: failed.runtimeTimings,
@@ -395,13 +417,25 @@ export async function requestRuntimeControl(
                     const result =
                         command.kind === "native.session.request" && kind === "native.session.result"
                             ? decodeNativeSessionResult(raw)
-                            : command.kind === "session.prepare" && kind === "session.ready"
-                              ? decodeSessionReadyEvent(raw)
-                              : command.kind === "session.configure" && kind === "session.config.updated"
-                                ? decodeSessionConfigUpdatedEvent(raw)
-                                : null;
-                    if (result !== null && result.requestId === command.requestId) {
-                        resolve(result);
+                            : command.kind === "session.query" && kind === "session.queried"
+                              ? decodeSessionsQueriedEvent(raw)
+                              : command.kind === "session.prepare" && kind === "session.ready"
+                                ? decodeSessionReadyEvent(raw)
+                                : command.kind === "session.configure" && kind === "session.config.updated"
+                                  ? decodeSessionConfigUpdatedEvent(raw)
+                                  : null;
+                    const resolved =
+                        result ??
+                        (command.kind === "session.live-history.page.load" &&
+                        kind === "session.live-history.page.loaded"
+                            ? decodeSessionLiveHistoryPageLoaded(raw)
+                            : command.kind === "session.prompt" && kind === "session.started"
+                              ? decodeSessionStartedEvent(raw)
+                              : null);
+                    const resolvedRequestId =
+                        resolved !== null && "requestId" in resolved ? resolved.requestId : resolved?.commandId;
+                    if (resolved !== null && resolvedRequestId === requestId) {
+                        resolve(resolved);
                     }
                 } catch (cause) {
                     reject(

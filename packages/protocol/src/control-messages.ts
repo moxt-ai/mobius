@@ -7,6 +7,8 @@ export const WORKSPACE_LIST_KIND = "workspace.list";
 export const WORKSPACE_ENTRIES_KIND = "workspace.entries";
 export const SESSION_PREPARE_KIND = "session.prepare";
 export const SESSION_READY_KIND = "session.ready";
+export const SESSION_QUERY_KIND = "session.query";
+export const SESSION_QUERIED_KIND = "session.queried";
 export const SESSION_CONFIGURE_KIND = "session.configure";
 export const SESSION_CONFIG_UPDATED_KIND = "session.config.updated";
 export const SESSION_USAGE_UPDATED_KIND = "session.usage.updated";
@@ -54,6 +56,41 @@ const workspaceEntrySchema = z
     .readonly();
 
 export type WorkspaceEntry = z.infer<typeof workspaceEntrySchema>;
+
+const sessionMetadataSchema = z
+    .strictObject({
+        additionalDirectories: z.array(workspaceEntrySchema).max(16).readonly(),
+        agentId: IDENTIFIER,
+        directoryId: DIRECTORY_IDENTIFIER,
+        directoryLabel: z.string().min(1).max(2_048),
+        prompted: z.boolean(),
+        sessionId: IDENTIFIER,
+        title: z.string().max(500),
+        updatedAt: z.iso.datetime({ offset: true }),
+    })
+    .readonly();
+
+export type SessionMetadata = z.infer<typeof sessionMetadataSchema>;
+
+const sessionQueryCommandSchema = z
+    .strictObject({
+        kind: z.literal(SESSION_QUERY_KIND),
+        requestId: IDENTIFIER,
+        sessionIds: z.array(IDENTIFIER).min(1).max(500).readonly(),
+    })
+    .readonly();
+
+export type SessionQueryCommand = z.infer<typeof sessionQueryCommandSchema>;
+
+const sessionsQueriedEventSchema = z
+    .strictObject({
+        entries: z.array(sessionMetadataSchema).max(500).readonly(),
+        kind: z.literal(SESSION_QUERIED_KIND),
+        requestId: IDENTIFIER,
+    })
+    .readonly();
+
+export type SessionsQueriedEvent = z.infer<typeof sessionsQueriedEventSchema>;
 
 const fileReadCommandSchema = z
     .strictObject({
@@ -940,6 +977,14 @@ export const decodeWorkspaceEntriesEvent = (encoded: string): WorkspaceEntriesEv
     decode(encoded, workspaceEntriesEventSchema);
 export const encodeWorkspaceEntriesEvent = (message: WorkspaceEntriesEvent): string =>
     encode(message, workspaceEntriesEventSchema);
+export const decodeSessionQueryCommand = (encoded: string): SessionQueryCommand =>
+    decode(encoded, sessionQueryCommandSchema);
+export const encodeSessionQueryCommand = (message: SessionQueryCommand): string =>
+    encode(message, sessionQueryCommandSchema);
+export const decodeSessionsQueriedEvent = (encoded: string): SessionsQueriedEvent =>
+    decode(encoded, sessionsQueriedEventSchema);
+export const encodeSessionsQueriedEvent = (message: SessionsQueriedEvent): string =>
+    encode(message, sessionsQueriedEventSchema);
 export const decodeSessionPrepareCommand = (encoded: string): SessionPrepareCommand =>
     decode(encoded, sessionPrepareCommandSchema);
 export const encodeSessionPrepareCommand = (message: SessionPrepareCommand): string =>

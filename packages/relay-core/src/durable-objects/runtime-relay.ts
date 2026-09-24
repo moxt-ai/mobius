@@ -19,6 +19,24 @@ export class RuntimeRelay {
         await this.withOperationSignal((signal) => this.#dependencies.services.runtime.alarm(signal));
     }
 
+    async openLiveSessionEventSocket(
+        subscriptionId: string,
+        projectId: string,
+        runtimeId: string,
+        signal: AbortSignal,
+    ): Promise<Response> {
+        return await this.#dependencies.services.runtime.acceptHost(
+            {
+                channelId: subscriptionId,
+                credentialId: `live_${subscriptionId}`,
+                projectId,
+                role: "host",
+                runtimeId,
+            },
+            signal,
+        );
+    }
+
     async webSocketMessage(webSocket: WebSocket, message: unknown): Promise<void> {
         const socket = new CloudflareChannelSocket(webSocket);
         const controller = new AbortController();

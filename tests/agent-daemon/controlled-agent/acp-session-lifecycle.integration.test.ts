@@ -42,6 +42,33 @@ function processExists(pid: number): boolean {
 }
 
 describe("ACP conversation sessions", () => {
+    it("Given a conversation has been prepared without a turn, When Runtime metadata is queried, Then that conversation is immediately available", async () => {
+        const store = new MemoryAcpSessionStore();
+        const manager = new AcpSessionManager(undefined, store);
+        const agent = new LocalAgentDefinition("codex", "Codex", process.execPath, [
+            fakeAgentPath,
+            "--agent-name",
+            "Codex",
+        ]);
+        const sessionId = "freshly-prepared-conversation";
+
+        try {
+            await manager.prepareSession({
+                additionalDirectories: [],
+                agent,
+                cwd: process.cwd(),
+                sessionId,
+                signal: new AbortController().signal,
+            });
+
+            expect(manager.findSessions([sessionId])).toEqual([
+                expect.objectContaining({ agentId: "codex", prompted: false, sessionId, title: "" }),
+            ]);
+        } finally {
+            await manager.close();
+        }
+    });
+
     it.skipIf(process.platform === "win32")(
         "Given an ACP Turn keeps running, When days elapse, Then Mobius keeps it active until cancellation and releases the process tree",
         async () => {

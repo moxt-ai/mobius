@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { decodeCommittedSessionEvent, decodeMessageKind, RUNTIME_STATUS_KIND } from "@moxt-ai/mobius-protocol";
 import {
     DurableObjectSqlDatabase,
     RuntimeRelay as RuntimeRelayImplementation,
@@ -11,6 +12,7 @@ import {
 
 export class RuntimeRelay extends DurableObject<PlatformDurableObjectEnvironment> {
     readonly #runtime: RuntimeRelayImplementation;
+    readonly #liveSubscriptions = new Map<string, { readonly complete: () => void; readonly socket: WebSocket }>();
 
     constructor(state: DurableObjectState, environment: PlatformDurableObjectEnvironment) {
         super(state, environment);
@@ -48,16 +50,73 @@ export class RuntimeRelay extends DurableObject<PlatformDurableObjectEnvironment
     }
 
     async subscribeToLiveSessionEvents(
-        _subscriptionId: string,
-        _projectId: string,
-        _runtimeId: string,
-        _sessionId: string,
-        _receive: SessionEventReceiver,
+        subscriptionId: string,
+        projectId: string,
+        runtimeId: string,
+        sessionId: string,
+        receive: SessionEventReceiver,
     ): Promise<void> {
-        throw new Error("Cloud Session subscriptions are unavailable.");
+        this.unsubscribeFromLiveSessionEvents(subscriptionId);
+        const response = await this.#runtime.openLiveSessionEventSocket(
+            subscriptionId,
+            projectId,
+            runtimeId,
+            AbortSignal.timeout(15_000),
+        );
+        const socket = response.webSocket;
+        if (socket === null) {
+            throw new Error("The Runtime live event socket is unavailable");
+        }
+        let complete = (): void => undefined;
+        const completed = new Promise<void>((resolve) => {
+            complete = resolve;
+        });
+        let deliveries = Promise.resolve();
+        let ready = false;
+        const close = (): void => {
+            deliveries = deliveries.then(async () => await receive.receive({ kind: "end" }));
+            void deliveries.finally(complete);
+        };
+        socket.addEventListener("message", (event) => {
+            if (typeof event.data !== "string") {
+                return;
+            }
+            const kind = decodeMessageKind(event.data);
+            if (kind === RUNTIME_STATUS_KIND && !ready) {
+                ready = true;
+                deliveries = deliveries.then(async () => await receive.receive({ kind: "ready" }));
+                return;
+            }
+            if (kind !== "session.event.committed") {
+                return;
+            }
+            const committed = decodeCommittedSessionEvent(event.data);
+            if (committed.sessionId === sessionId) {
+                deliveries = deliveries.then(async () => await receive.receive({ event: committed, kind: "event" }));
+            }
+        });
+        socket.addEventListener("close", close, { once: true });
+        socket.addEventListener("error", close, { once: true });
+        this.#liveSubscriptions.set(subscriptionId, { complete, socket });
+        socket.accept();
+        try {
+            await completed;
+            await deliveries;
+        } finally {
+            const current = this.#liveSubscriptions.get(subscriptionId);
+            if (current?.socket === socket) {
+                this.#liveSubscriptions.delete(subscriptionId);
+            }
+        }
     }
 
-    unsubscribeFromLiveSessionEvents(_subscriptionId: string): void {
-        return;
+    unsubscribeFromLiveSessionEvents(subscriptionId: string): void {
+        const subscription = this.#liveSubscriptions.get(subscriptionId);
+        if (subscription === undefined) {
+            return;
+        }
+        this.#liveSubscriptions.delete(subscriptionId);
+        subscription.socket.close(1000, "Subscription closed");
+        subscription.complete();
     }
 }

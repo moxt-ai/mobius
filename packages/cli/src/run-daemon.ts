@@ -64,6 +64,7 @@ import {
     SESSION_PERMISSION_RESPOND_KIND,
     SESSION_PREPARE_KIND,
     SESSION_PROMPT_KIND,
+    SESSION_QUERY_KIND,
     SESSION_STARTED_KIND,
     type SessionCancelCommand,
     type SessionCommandsUpdatedEvent,
@@ -2760,6 +2761,22 @@ async function runRelayConnection(
                             audit,
                             sessions,
                             connectionController.signal,
+                        );
+                        return;
+                    }
+                    if (kind === SESSION_QUERY_KIND) {
+                        const command = message;
+                        void nativeSessions.querySessions(command.sessionIds, connectionController.signal).then(
+                            (entries) => {
+                                if (socket.readyState === WebSocket.OPEN) {
+                                    send(socket, {
+                                        entries,
+                                        kind: "session.queried",
+                                        requestId: command.requestId,
+                                    });
+                                }
+                            },
+                            (error: unknown) => reportOperationFailure(socket, command.requestId, "", error),
                         );
                         return;
                     }

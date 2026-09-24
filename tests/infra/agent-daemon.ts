@@ -13,6 +13,7 @@ import {
     decodeSessionLiveHistoryPageLoad,
     decodeSessionPrepareCommand,
     decodeSessionPromptCommand,
+    decodeSessionQueryCommand,
     decodeSessionStartedEvent,
     decodeWorkspaceListCommand,
     encodeAgentActivityEvent,
@@ -33,6 +34,7 @@ import {
     encodeSessionOperationFailedEvent,
     encodeSessionReadyEvent,
     encodeSessionStartedEvent,
+    encodeSessionsQueriedEvent,
     encodeWorkspaceEntriesEvent,
     FILE_READ_KIND,
     NATIVE_SESSION_REQUEST_KIND,
@@ -46,7 +48,9 @@ import {
     SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
     SESSION_PREPARE_KIND,
     SESSION_PROMPT_KIND,
+    SESSION_QUERY_KIND,
     SESSION_STARTED_KIND,
+    type SessionMetadata,
     type SessionReadyEvent,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
@@ -411,6 +415,7 @@ export interface FakeAgentDaemonBehavior {
     readonly afterSessionStarted?: (signal: AbortSignal) => Promise<void>;
     readonly directoryLabel?: string;
     readonly nativeSessionIds?: ReadonlySet<string>;
+    readonly sessions?: readonly SessionMetadata[];
 }
 
 export interface RunningFakeAgentDaemon extends AsyncDisposable {
@@ -584,6 +589,17 @@ async function processHappyPathCommand(
         }
         return;
     }
+    if (kind === SESSION_QUERY_KIND) {
+        const command = decodeSessionQueryCommand(encoded);
+        daemon.send(
+            encodeSessionsQueriedEvent({
+                entries: (behavior.sessions ?? []).filter((entry) => command.sessionIds.includes(entry.sessionId)),
+                kind: "session.queried",
+                requestId: command.requestId,
+            }),
+        );
+        return;
+    }
     if (kind === SESSION_PREPARE_KIND) {
         const command = decodeSessionPrepareCommand(encoded);
         const ready: SessionReadyEvent = {
@@ -647,17 +663,27 @@ async function processHappyPathCommand(
     }
     if (kind === SESSION_LIVE_HISTORY_PAGE_LOAD_KIND) {
         const command = decodeSessionLiveHistoryPageLoad(encoded);
+        const available = behavior.sessions?.some((entry) => entry.sessionId === command.sessionId) === true;
         daemon.send(
             encodeSessionLiveHistoryPageLoaded({
                 kind: "session.live-history.page.loaded",
-                page: {
-                    cause: {
-                        code: "native_history_unsupported",
-                        message: "The fake Agent daemon does not provide native message history.",
-                    },
-                    nextCursor: null,
-                    status: "unavailable",
-                },
+                page: available
+                    ? {
+                          coveredCommandIds: [],
+                          coveredMessageIds: [],
+                          messages: [],
+                          nextCursor: null,
+                          status: "available",
+                          truncated: false,
+                      }
+                    : {
+                          cause: {
+                              code: "native_history_unsupported",
+                              message: "The fake Agent daemon does not provide native message history.",
+                          },
+                          nextCursor: null,
+                          status: "unavailable",
+                      },
                 requestId: command.requestId,
                 sessionId: command.sessionId,
             }),

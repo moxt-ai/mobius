@@ -7,6 +7,7 @@ import {
     decodeSessionPromptCommand,
     encodeSessionEventEnvelope,
     encodeSessionPromptCommand,
+    issueSessionAccessCredential,
     MOBIUS_API_PREFIX,
     SESSION_EVENT_ACK_KIND,
 } from "@moxt-ai/mobius-protocol";
@@ -286,18 +287,51 @@ describe.sequential("Platform Session-only boundary", () => {
         );
         expect(daemonResponse.status).toBe(101);
         expect(hostResponse.status).toBe(101);
-        if (daemonResponse.webSocket === null || hostResponse.webSocket === null) {
-            throw new Error("Expected both channel sockets");
+        const issuedAtEpochMilliseconds = Date.now();
+        const liveCredential = await issueSessionAccessCredential(appCredential, {
+            expiresAtEpochMilliseconds: issuedAtEpochMilliseconds + 10 * 60 * 1_000,
+            issuedAtEpochMilliseconds,
+            projectId,
+            purpose: "session-access",
+            runtimeId,
+            sessionId,
+        });
+        const transportResponse = await worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/transport`, { headers: { Upgrade: "websocket" } }),
+            environment,
+        );
+        expect(transportResponse.status).toBe(101);
+        if (
+            daemonResponse.webSocket === null ||
+            hostResponse.webSocket === null ||
+            transportResponse.webSocket === null
+        ) {
+            throw new Error("Expected daemon, host, and browser transport sockets");
         }
         const daemon = daemonResponse.webSocket;
         const host = hostResponse.webSocket;
+        const transport = transportResponse.webSocket;
         const daemonMessages = new SocketMessages(daemon);
         const hostMessages = new SocketMessages(host);
+        const transportMessages = new SocketMessages(transport);
         daemon.accept();
         host.accept();
+        transport.accept();
         try {
             expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("runtime.liveness.ready");
             expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "runtime.status", online: true });
+            transport.send(
+                JSON.stringify({
+                    headers: [["authorization", `Bearer ${liveCredential}`]],
+                    kind: "session.events.subscribe",
+                    path: `${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/events`,
+                    subscriptionId: "browser-live-session",
+                }),
+            );
+            expect(JSON.parse(await transportMessages.next())).toEqual({
+                kind: "session.events.ready",
+                subscriptionId: "browser-live-session",
+            });
             host.send(
                 encodeSessionPromptCommand({
                     additionalDirectoryIds: [],
@@ -338,6 +372,12 @@ describe.sequential("Platform Session-only boundary", () => {
             const committedMessage =
                 JSON.parse(firstHostMessage).kind === "session.prompt" ? await hostMessages.next() : firstHostMessage;
             expect(decodeCommittedSessionEvent(committedMessage).payload).toContain("local answer");
+            const browserEvent = JSON.parse(await transportMessages.next());
+            expect(browserEvent).toMatchObject({
+                kind: "session.events.event",
+                subscriptionId: "browser-live-session",
+            });
+            expect(decodeCommittedSessionEvent(text(record(browserEvent), "data")).payload).toContain("local answer");
             expect(decodeServiceToDaemonMessage(await daemonMessages.next())).toMatchObject({
                 eventId: "local-codex-event",
                 kind: SESSION_EVENT_ACK_KIND,
@@ -369,6 +409,7 @@ describe.sequential("Platform Session-only boundary", () => {
         } finally {
             daemon.close(1000, "Test complete");
             host.close(1000, "Test complete");
+            transport.close(1000, "Test complete");
         }
     });
 });

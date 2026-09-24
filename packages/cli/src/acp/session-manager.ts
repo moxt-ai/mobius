@@ -1289,6 +1289,7 @@ class AcpProcessSession implements AcpClientHandler {
                           this.#cwd,
                           this.#additionalDirectories,
                           true,
+                          "",
                       ),
                   )
                 : this.#store.read(this.#mobiusSessionId),
@@ -1376,6 +1377,7 @@ class AcpProcessSession implements AcpClientHandler {
         ) {
             this.selectNativeSession(stored.session.nativeSessionId);
             this.#prompted = stored.session.prompted;
+            this.#sessionTitle = stored.session.title;
             this.#restored = true;
             if (this.#capabilities.resumeSession) {
                 lifecycleResponse = await this.#metrics.measure(
@@ -1462,18 +1464,17 @@ class AcpProcessSession implements AcpClientHandler {
         this.#configOptions = this.#sessionConfigProtocol.normalizeLifecycle(lifecycleResponse);
         await this.#updateTail;
         signal.throwIfAborted();
-        if (this.#prompted) {
-            this.#store.write(
-                new AcpStoredSession(
-                    this.#mobiusSessionId,
-                    this.#agentId,
-                    this.#nativeSessionId,
-                    this.#cwd,
-                    this.#additionalDirectories,
-                    true,
-                ),
-            );
-        }
+        this.#store.write(
+            new AcpStoredSession(
+                this.#mobiusSessionId,
+                this.#agentId,
+                this.#nativeSessionId,
+                this.#cwd,
+                this.#additionalDirectories,
+                this.#prompted,
+                this.#sessionTitle ?? "",
+            ),
+        );
     };
 
     readonly listNativeSessions = async (cursor: string | null, signal: AbortSignal): Promise<NativeSessionPage> => {
@@ -1529,7 +1530,15 @@ class AcpProcessSession implements AcpClientHandler {
         }
         const previousSessionId = this.#mobiusSessionId;
         this.#store.write(
-            new AcpStoredSession(sessionId, this.#agentId, sessionId, this.#cwd, this.#additionalDirectories, false),
+            new AcpStoredSession(
+                sessionId,
+                this.#agentId,
+                sessionId,
+                this.#cwd,
+                this.#additionalDirectories,
+                false,
+                "",
+            ),
         );
         this.#store.remove(previousSessionId);
         this.#mobiusSessionId = sessionId;
@@ -1663,6 +1672,9 @@ class AcpProcessSession implements AcpClientHandler {
             throw new AcpExecutionError("Another prompt is already running in this conversation", {}, "session_busy");
         }
         const prompt = this.buildPrompt(options);
+        if (this.#sessionTitle === null || this.#sessionTitle.length === 0) {
+            this.#sessionTitle = truncate(options.prompt, 500);
+        }
         this.#store.write(
             new AcpStoredSession(
                 this.#mobiusSessionId,
@@ -1671,6 +1683,7 @@ class AcpProcessSession implements AcpClientHandler {
                 this.#cwd,
                 this.#additionalDirectories,
                 true,
+                this.#sessionTitle,
             ),
         );
         this.#prompted = true;
@@ -2136,6 +2149,19 @@ class AcpProcessSession implements AcpClientHandler {
             if (Object.hasOwn(update, "updatedAt")) {
                 this.#sessionUpdatedAt = truncate(update.updatedAt ?? "", 128);
             }
+            if (this.#nativeSessionId.length > 0) {
+                this.#store.write(
+                    new AcpStoredSession(
+                        this.#mobiusSessionId,
+                        this.#agentId,
+                        this.#nativeSessionId,
+                        this.#cwd,
+                        this.#additionalDirectories,
+                        this.#prompted,
+                        this.#sessionTitle ?? "",
+                    ),
+                );
+            }
             await this.#getObserver().onInfo({
                 kind: SESSION_INFO_UPDATED_KIND,
                 sessionId: this.#mobiusSessionId,
@@ -2374,6 +2400,12 @@ export class AcpSessionManager {
     readonly findLinkedSessions = (agentId: string, nativeSessionId: string): readonly AcpStoredSession[] =>
         this.#store.findNative(agentId, nativeSessionId);
 
+    readonly findSessions = (sessionIds: readonly string[]): readonly AcpStoredSession[] =>
+        sessionIds.flatMap((sessionId) => {
+            const stored = this.#store.read(sessionId);
+            return stored instanceof FoundAcpStoredSession ? [stored.session] : [];
+        });
+
     #notifyProcessCapacityChanged(): void {
         const changed = this.#processCapacityChanged;
         this.#processCapacityChanged = Promise.withResolvers<void>();
@@ -2533,7 +2565,7 @@ export class AcpSessionManager {
     ): Promise<void> {
         const retained = this.#nativeBrowserSessions.get(sessionId) === runtime;
         if (retained) {
-            this.#nativeBrowserSessions.delete(sessionId);
+            void this.#nativeBrowserSessions.delete(sessionId);
             this.#nativeBrowserStore.remove(sessionId);
         }
         await this.#retireProcess(runtime, retained, close);

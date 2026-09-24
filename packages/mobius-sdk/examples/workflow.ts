@@ -64,6 +64,7 @@ export async function runMobiusExample(
         await client.capabilities.read(signal);
         const session = await client.sessions.create(
             {
+                additionalDirectoryIds: [],
                 agentId: options.agentId,
                 bindingId: crypto.randomUUID(),
                 directoryId: options.workspaceRef,

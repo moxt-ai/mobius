@@ -117,7 +117,7 @@ export class CloudflareChannelSocket implements RuntimeSocket {
         socket instanceof CloudflareChannelSocket && socket.#socket === this.#socket;
     readonly permitsLiveSessionHistory = (): boolean => {
         const identity = this.identity();
-        return identity.role === "relay";
+        return identity.role === "relay" || (identity.role === "host" && identity.credentialId.startsWith("ctl_"));
     };
     readonly send = (message: string): void => this.#socket.send(message);
     readonly trackAgentCatalogRefresh = (requestId: string, expiresAt: number): void => {

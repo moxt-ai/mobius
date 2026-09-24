@@ -30,9 +30,14 @@ import { createProjectApplication } from "./http/project-routes.ts";
 import { ClerkOrganizationGateway } from "./infra/clerk-organization-gateway.ts";
 import type { OrganizationMembershipGateway } from "./infra/organization-membership-gateway.ts";
 import { PlatformProjectStorageDirectory } from "./infra/platform-project-storage-directory.ts";
+import {
+    initializeSessionAccessTargetMiddleware,
+    sessionAccessTargetMiddleware,
+} from "./middleware/session-access-target.ts";
 import { AppCredentialAuthenticationService } from "./service/app-credential-authentication-service.ts";
 import { OrganizationInviteService } from "./service/organization-invite-service.ts";
 import { PlatformControlPlaneService } from "./service/platform-control-plane-service.ts";
+import { SessionAccessService, type SessionAccessTarget } from "./service/session-access-service.ts";
 import { AppCredentialCacheStorage } from "./storage/app-credential-cache-storage.ts";
 import { OrganizationInviteStorage } from "./storage/organization-invite-storage.ts";
 import { PlatformControlPlaneStorage } from "./storage/platform-control-plane-storage.ts";
@@ -236,6 +241,8 @@ type DispatchEnvironment = {
         readonly storageRegistry: PlatformStorageRegistry;
         readonly projectDatabases: import("@moxt-ai/mobius-relay-core/database").SqlDatabase[];
         readonly relay: RelayContext;
+        readonly sessionAccess: SessionAccessService;
+        readonly sessionAccessTarget: SessionAccessTarget;
         readonly signal: AbortSignal;
     };
 };
@@ -280,8 +287,31 @@ export function createPlatformApplication(
                         .all("/audit-events/", controlHandler),
                 ),
         );
+    const unavailableSession: Handler<DispatchEnvironment> = (context) =>
+        context.json({ error: { code: "session_unavailable", message: "Cloud Sessions are unavailable." } }, 410);
+    const sessionRoutes = new Hono<DispatchEnvironment>()
+        .get("/:sessionId/live-event-subscription-target", sessionAccessTargetMiddleware, async (context) => {
+            const authorization = context.req.header("authorization") ?? "";
+            const credential = authorization.match(/^Bearer ([^\s]+)$/u)?.[1];
+            if (credential === undefined) {
+                throw new LiveEventSubscriptionError(
+                    "session_access_required",
+                    "A live Session credential is required",
+                    401,
+                );
+            }
+            const target = await context.var.sessionAccess.authorizeLiveEvents(
+                context.var.sessionAccessTarget,
+                credential,
+                context.req.raw.signal,
+            );
+            context.header("Cache-Control", "no-store");
+            return context.json({ ...target, kind: "expiring" });
+        })
+        .all("/", unavailableSession)
+        .all("/*", unavailableSession);
     const projectRoutes = new Hono<DispatchEnvironment>()
-        .all("/browser-credentials/*", projectHandler)
+        .route("/sessions", sessionRoutes)
         .all("/runtime-pairings/*", projectHandler)
         .all("/runtimes/*", projectHandler)
         .all("/*", projectHandler);
@@ -293,16 +323,6 @@ export function createPlatformApplication(
 
     const application = new Hono<DispatchEnvironment>()
         .use("*", requestTimeoutMiddleware<DispatchEnvironment>(PLATFORM_REQUEST_TIMEOUT_MILLISECONDS))
-        .use("*", async (context, next) => {
-            const path = new URL(context.req.url).pathname;
-            if (/\/v1\/projects\/[^/]+\/sessions(?:\/|$)/u.test(path)) {
-                return context.json(
-                    { error: { code: "session_unavailable", message: "Cloud Sessions are unavailable." } },
-                    410,
-                );
-            }
-            return await next();
-        })
         .use("*", async (context, next) => {
             const routed = await routeProjectDurableObject(context.req.raw, context.env, authentication.allowedOrigins);
             if (routed !== null) {
@@ -336,12 +356,14 @@ export function createPlatformApplication(
             );
             context.set("control", control);
             context.set("appAuthentication", appAuthentication);
+            context.set("sessionAccess", new SessionAccessService(appAuthentication, control));
             context.set("databases", databases);
             context.set("storageRegistry", storageRegistry);
             context.set("projectDatabases", projectDatabases);
             await next();
         })
         .route(`${MOBIUS_API_PREFIX}/dashboard`, controlRoutes)
+        .use("*", initializeSessionAccessTargetMiddleware)
         .use("*", async (context, next) => {
             const environment = context.env;
             const { control, databases, storageRegistry, projectDatabases } = context.var;

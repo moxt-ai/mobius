@@ -6,6 +6,7 @@ import {
     decodeNativeSessionResult,
     decodeSessionConfigUpdatedEvent,
     decodeSessionReadyEvent,
+    decodeSessionsQueriedEvent,
     decodeWorkspaceEntriesEvent,
     type Interaction,
     MOBIUS_API_PREFIX,
@@ -838,6 +839,17 @@ export class MobiusRuntimeResources {
             ),
         );
 
+    readonly querySessions = async (runtimeId: string, sessionIds: readonly string[], signal: AbortSignal) =>
+        decodeSessionsQueriedEvent(
+            JSON.stringify(
+                await this.#executor.post(
+                    projectPath(this.#projectId, `runtimes/${encodeURIComponent(runtimeId)}/sessions/query`),
+                    { sessionIds },
+                    signal,
+                ),
+            ),
+        ).entries;
+
     readonly findNativeSessionByNativeSessionId = async (
         runtimeId: string,
         request: Omit<
@@ -956,8 +968,16 @@ export class MobiusSessionResources {
         this.#projectId = projectId;
     }
 
-    readonly create = async (request: CreateMobiusSessionRequest, signal: AbortSignal): Promise<MobiusSession> =>
-        decodeMobiusSession(await this.#executor.post(projectPath(this.#projectId, "sessions"), request, signal));
+    readonly create = async (request: CreateMobiusSessionRequest, signal: AbortSignal) =>
+        decodeSessionReadyEvent(
+            JSON.stringify(
+                await this.#executor.post(
+                    projectPath(this.#projectId, `runtimes/${encodeURIComponent(request.runtimeId)}/sessions`),
+                    request,
+                    signal,
+                ),
+            ),
+        );
 
     readonly createAccess = async (sessionId: string, expiresInSeconds: number, signal: AbortSignal) =>
         new MobiusSessionAccess(
@@ -968,21 +988,60 @@ export class MobiusSessionResources {
             ),
         );
 
-    readonly prepare = async (sessionId: string, signal: AbortSignal) =>
+    readonly load = async (
+        runtimeId: string,
+        sessionId: string,
+        request: {
+            readonly additionalDirectoryIds: readonly string[];
+            readonly agentId: string;
+            readonly directoryId: string;
+        },
+        signal: AbortSignal,
+    ) =>
         decodeSessionReadyEvent(
-            JSON.stringify(await this.#executor.post(sessionPath(this.#projectId, sessionId, "prepare"), {}, signal)),
+            JSON.stringify(
+                await this.#executor.post(
+                    projectPath(
+                        this.#projectId,
+                        `runtimes/${encodeURIComponent(runtimeId)}/sessions/${encodeURIComponent(sessionId)}/load`,
+                    ),
+                    request,
+                    signal,
+                ),
+            ),
         );
 
     readonly updateConfiguration = async (
-        sessionId: string,
-        request: Pick<SessionConfigureCommand, "configId" | "value" | "booleanValue" | "valueType">,
-        signal: AbortSignal,
-    ) =>
-        decodeSessionConfigUpdatedEvent(
-            JSON.stringify(
-                await this.#executor.post(sessionPath(this.#projectId, sessionId, "configuration"), request, signal),
-            ),
-        );
+        ...operation:
+            | readonly [
+                  runtimeId: string,
+                  sessionId: string,
+                  request: Omit<SessionConfigureCommand, "bindingId" | "kind" | "requestId" | "sessionId">,
+                  signal: AbortSignal,
+              ]
+            | readonly [
+                  sessionId: string,
+                  request: Pick<SessionConfigureCommand, "configId" | "value" | "booleanValue" | "valueType">,
+                  signal: AbortSignal,
+              ]
+    ) => {
+        const result =
+            operation.length === 3
+                ? await this.#executor.post(
+                      sessionPath(this.#projectId, operation[0], "configuration"),
+                      operation[1],
+                      operation[2],
+                  )
+                : await this.#executor.post(
+                      projectPath(
+                          this.#projectId,
+                          `runtimes/${encodeURIComponent(operation[0])}/sessions/${encodeURIComponent(operation[1])}/configuration`,
+                      ),
+                      operation[2],
+                      operation[3],
+                  );
+        return decodeSessionConfigUpdatedEvent(JSON.stringify(result));
+    };
 
     readonly configure = async (
         sessionId: string,
@@ -1073,14 +1132,34 @@ export class MobiusSessionResources {
 
     readonly queryNativeMessages = async (
         ...request:
+            | readonly [
+                  runtimeId: string,
+                  sessionId: string,
+                  identity: {
+                      readonly additionalDirectoryIds: readonly string[];
+                      readonly agentId: string;
+                      readonly directoryId: string;
+                  },
+                  page: MobiusPageRequest,
+                  signal: AbortSignal,
+              ]
+            | readonly [
+                  runtimeId: string,
+                  sessionId: string,
+                  identity: {
+                      readonly additionalDirectoryIds: readonly string[];
+                      readonly agentId: string;
+                      readonly directoryId: string;
+                  },
+                  signal: AbortSignal,
+              ]
             | readonly [sessionId: string, page: MobiusPageRequest, signal: AbortSignal]
             | readonly [sessionId: string, signal: AbortSignal]
     ): Promise<NativeMessagePage> => {
-        const [sessionId, page, signal] =
-            request.length === 2
-                ? [request[0], new MobiusPageRequest(50, ""), request[1]]
-                : [request[0], request[1], request[2]];
-        try {
+        if (request.length === 2 || request.length === 3) {
+            const sessionId = request[0];
+            const page = request.length === 2 ? new MobiusPageRequest(50, "") : request[1];
+            const signal = request.length === 2 ? request[1] : request[2];
             const path = requestUrl(
                 new URL("https://mobius.invalid/"),
                 sessionPath(this.#projectId, sessionId, "native-messages"),
@@ -1090,6 +1169,24 @@ export class MobiusSessionResources {
                 path.searchParams.set("cursor", page.cursor);
             }
             return decodeNativeMessagePage(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal));
+        }
+        const [runtimeId, sessionId, identity, page, signal] =
+            request.length === 4
+                ? [request[0], request[1], request[2], new MobiusPageRequest(50, ""), request[3]]
+                : request;
+        try {
+            const result = await this.#executor.post(
+                projectPath(
+                    this.#projectId,
+                    `runtimes/${encodeURIComponent(runtimeId)}/sessions/${encodeURIComponent(sessionId)}/native-messages`,
+                ),
+                { ...identity, cursor: page.cursor.length === 0 ? null : page.cursor, limit: page.limit },
+                signal,
+            );
+            if (typeof result !== "object" || result === null || !("page" in result)) {
+                throw new MobiusProtocolError("The service returned invalid native messages");
+            }
+            return decodeNativeMessagePage(Reflect.get(result, "page"));
         } catch (cause) {
             if (cause instanceof MobiusError) {
                 throw cause;
@@ -1114,6 +1211,35 @@ export class MobiusTurnResources {
         signal: AbortSignal,
     ): Promise<MobiusTurn> =>
         decodeMobiusTurn(await this.#executor.post(sessionPath(this.#projectId, sessionId, "turns"), request, signal));
+
+    readonly submitToRuntime = async (
+        runtimeId: string,
+        sessionId: string,
+        request: SubmitMobiusTurnRequest & { readonly agentId: string; readonly directoryId: string },
+        signal: AbortSignal,
+    ): Promise<{ readonly turnId: string }> => {
+        const result = await this.#executor.post(
+            projectPath(
+                this.#projectId,
+                `runtimes/${encodeURIComponent(runtimeId)}/sessions/${encodeURIComponent(sessionId)}/turns`,
+            ),
+            {
+                ...request,
+                disposition: request.disposition ?? "reject",
+                sessionConfigurations: request.sessionConfigurations ?? [],
+                targetCommandId: request.targetCommandId ?? "",
+            },
+            signal,
+        );
+        if (typeof result !== "object" || result === null || !("turnId" in result)) {
+            throw new MobiusProtocolError("The service returned an invalid Turn");
+        }
+        const turnId = Reflect.get(result, "turnId");
+        if (typeof turnId !== "string") {
+            throw new MobiusProtocolError("The service returned an invalid Turn");
+        }
+        return { turnId };
+    };
 
     readonly read = async (sessionId: string, turnId: string, signal: AbortSignal): Promise<MobiusTurn> =>
         decodeMobiusTurn(
