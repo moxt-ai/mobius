@@ -26,8 +26,9 @@ import {
     StaticMobiusCredentialProvider,
     WsTransport,
 } from "@moxt-ai/mobius-sdk/server";
+import { Command, CommanderError } from "commander";
 import * as v from "valibot";
-import { optionalFlag, parseArguments, requireFlag, stateDirectory, validateFlags } from "./src/arguments.ts";
+import { optionalFlag, requireFlag, stateDirectory } from "./src/arguments.ts";
 import { errorOutput, MiniClientError } from "./src/errors.ts";
 import { runProcess } from "./src/process.ts";
 import {
@@ -177,7 +178,6 @@ async function listCliPairs(directory: string): Promise<readonly PairSummary[]> 
 }
 
 async function createCommand(directory: string, flags: ReadonlyMap<string, string>): Promise<void> {
-    validateFlags(flags, new Set(["app-id", "app-secret", "endpoint", "workspace"]));
     await requireFreshState(directory);
     const appId = requireFlag(flags, "app-id");
     const appSecret = requireFlag(flags, "app-secret");
@@ -261,8 +261,7 @@ async function createCommand(directory: string, flags: ReadonlyMap<string, strin
     }
 }
 
-async function statusCommand(directory: string, flags: ReadonlyMap<string, string>): Promise<void> {
-    validateFlags(flags, new Set());
+async function statusCommand(directory: string): Promise<void> {
     const state = await readState(directory);
     const pair = (await listCliPairs(directory)).find((candidate) => candidate.connection_id === state.connectionId);
     const connection = client(state);
@@ -283,12 +282,7 @@ async function statusCommand(directory: string, flags: ReadonlyMap<string, strin
     }
 }
 
-async function transitionRuntime(
-    directory: string,
-    flags: ReadonlyMap<string, string>,
-    transition: "start" | "stop",
-): Promise<void> {
-    validateFlags(flags, new Set());
+async function transitionRuntime(directory: string, transition: "start" | "stop"): Promise<void> {
     const state = await readState(directory);
     await runMobiusCli(
         directory,
@@ -302,8 +296,7 @@ async function transitionRuntime(
     output({ connectionId: state.connectionId, status: lifecycle });
 }
 
-async function runtimeCommand(directory: string, flags: ReadonlyMap<string, string>): Promise<void> {
-    validateFlags(flags, new Set());
+async function runtimeCommand(directory: string): Promise<void> {
     const state = await readState(directory);
     requireOnline(state);
     const connection = client(state);
@@ -316,7 +309,6 @@ async function runtimeCommand(directory: string, flags: ReadonlyMap<string, stri
 }
 
 async function createSessionCommand(directory: string, flags: ReadonlyMap<string, string>): Promise<void> {
-    validateFlags(flags, new Set(["agent", "session", "title"]));
     const state = await readState(directory);
     requireOnline(state);
     const connection = client(state);
@@ -371,8 +363,7 @@ async function createSessionCommand(directory: string, flags: ReadonlyMap<string
     }
 }
 
-async function listSessionsCommand(directory: string, flags: ReadonlyMap<string, string>): Promise<void> {
-    validateFlags(flags, new Set());
+async function listSessionsCommand(directory: string): Promise<void> {
     const state = await readState(directory);
     const connection = client(state);
     const service = connection.service;
@@ -390,12 +381,8 @@ async function listSessionsCommand(directory: string, flags: ReadonlyMap<string,
     }
 }
 
-async function loadConfiguration(
-    service: MobiusClient,
-    runtimeId: string,
-    session: MiniClientSession,
-): Promise<readonly SessionConfigOption[]> {
-    const ready = await service.sessions.load(
+async function loadSession(service: MobiusClient, runtimeId: string, session: MiniClientSession) {
+    return await service.sessions.load(
         runtimeId,
         session.sessionId,
         {
@@ -405,7 +392,6 @@ async function loadConfiguration(
         },
         operationSignal(),
     );
-    return ready.configOptions;
 }
 
 async function configurationCommand(
@@ -413,14 +399,13 @@ async function configurationCommand(
     flags: ReadonlyMap<string, string>,
     update: boolean,
 ): Promise<void> {
-    validateFlags(flags, update ? new Set(["session", "config-id", "value"]) : new Set(["session"]));
     const state = await readState(directory);
     requireOnline(state);
     const session = sessionFromState(state, requireFlag(flags, "session"));
     const connection = client(state);
     const service = connection.service;
     try {
-        let options = await loadConfiguration(service, state.runtimeId, session);
+        let options = (await loadSession(service, state.runtimeId, session)).configOptions;
         if (update) {
             const configId = requireFlag(flags, "config-id");
             const value = requireFlag(flags, "value");
@@ -486,17 +471,15 @@ async function promptCommand(
     flags: ReadonlyMap<string, string>,
     disposition: "prompt" | "steer",
 ): Promise<void> {
-    validateFlags(
-        flags,
-        disposition === "steer" ? new Set(["session", "prompt"]) : new Set(["session", "prompt", "disposition"]),
-    );
     const state = await readState(directory);
     requireOnline(state);
     const session = sessionFromState(state, requireFlag(flags, "session"));
     const authority = client(state);
     let execution: ClientConnection | undefined;
     try {
-        const configuration = selections(await loadConfiguration(authority.service, state.runtimeId, session));
+        const configuration = selections(
+            (await loadSession(authority.service, state.runtimeId, session)).configOptions,
+        );
         execution = await sessionClient(state, session);
         const requestedDisposition =
             disposition === "steer" ? SessionPromptDisposition.Steer : optionalFlag(flags, "disposition", "reject");
@@ -532,8 +515,44 @@ async function promptCommand(
     }
 }
 
+async function compactCommand(directory: string, flags: ReadonlyMap<string, string>): Promise<void> {
+    const state = await readState(directory);
+    requireOnline(state);
+    const session = sessionFromState(state, requireFlag(flags, "session"));
+    const authority = client(state);
+    let execution: ClientConnection | undefined;
+    try {
+        const ready = await loadSession(authority.service, state.runtimeId, session);
+        const command = ready.commands.find((candidate) => candidate.name.toLowerCase() === "compact");
+        if (command === undefined) {
+            throw new MiniClientError("compact_unavailable", "The selected Agent does not provide context compaction");
+        }
+        const prompt = `/${command.name}`;
+        execution = await sessionClient(state, session);
+        const turn = await execution.service.turns.submit(
+            session.sessionId,
+            {
+                additionalDirectoryIds: session.additionalDirectoryIds,
+                content: prompt,
+                disposition: SessionPromptDisposition.Reject,
+                idempotencyKey: identifier("compact"),
+                images: [],
+                resources: [],
+                sessionConfigurations: selections(ready.configOptions),
+                targetCommandId: "",
+            },
+            operationSignal(),
+        );
+        const updated = { ...session, turns: [...session.turns, { prompt, turnId: turn.turnId }] };
+        await writeState(directory, replaceSession(state, updated));
+        output({ command: command.name, sessionId: session.sessionId, state: turn.state, turnId: turn.turnId });
+    } finally {
+        execution?.close();
+        authority.close();
+    }
+}
+
 async function cancelCommand(directory: string, flags: ReadonlyMap<string, string>): Promise<void> {
-    validateFlags(flags, new Set(["session", "turn"]));
     const state = await readState(directory);
     requireOnline(state);
     const session = sessionFromState(state, requireFlag(flags, "session"));
@@ -652,7 +671,6 @@ async function waitForTerminalSnapshot(
 }
 
 async function getCommand(directory: string, flags: ReadonlyMap<string, string>): Promise<void> {
-    validateFlags(flags, new Set(["session", "follow"]));
     const state = await readState(directory);
     requireOnline(state);
     const session = sessionFromState(state, requireFlag(flags, "session"));
@@ -701,70 +719,160 @@ async function getCommand(directory: string, flags: ReadonlyMap<string, string>)
     }
 }
 
-function help(): void {
-    process.stdout.write(
-        `Mobius mini-client\n\nUsage:\n  pnpm exec tsx ./index.ts create [--state-dir=<dir>] [options]\n  pnpm exec tsx ./index.ts --state-dir=<dir> <command> [options]\n\nThe create command generates an isolated temporary state directory when --state-dir is omitted.\n\nCommands:\n  create, status, start, stop, list-runtimes, list-sessions, create-session\n  get-agent-configuration, update-agent-configuration\n  send-prompt, steer, cancel-turn, get\n`,
-    );
+type MiniClientCommand =
+    | "cancel-turn"
+    | "compact"
+    | "create"
+    | "create-session"
+    | "get"
+    | "get-agent-configuration"
+    | "list-runtimes"
+    | "list-sessions"
+    | "send-prompt"
+    | "start"
+    | "status"
+    | "steer"
+    | "stop"
+    | "update-agent-configuration";
+
+function commandFlags(command: Command): ReadonlyMap<string, string> {
+    const flags = new Map<string, string>();
+    for (const option of command.options) {
+        const name = option.long?.slice(2);
+        const value: unknown = command.getOptionValue(option.attributeName());
+        if (name === undefined || value === undefined || value === false) {
+            continue;
+        }
+        if (typeof value === "string") {
+            flags.set(name, value);
+        } else if (value === true) {
+            flags.set(name, "true");
+        } else {
+            throw new MiniClientError("invalid_arguments", `Option --${name} has an invalid value`);
+        }
+    }
+    return flags;
 }
 
-async function main(): Promise<void> {
-    const parsed = parseArguments(process.argv.slice(2));
-    if (parsed.command.length === 0 || parsed.command === "help" || parsed.flags.has("help")) {
-        help();
-        return;
-    }
-    const selectedDirectory = stateDirectory(parsed.flags, parsed.command);
+async function runCommand(program: Command, command: Command, name: MiniClientCommand): Promise<void> {
+    const selectedDirectory = stateDirectory(program.getOptionValue("stateDir"), name);
     const directory = selectedDirectory.path;
     if (selectedDirectory.kind === "generated") {
         process.stderr.write(`Mini-client state directory: ${directory}\n`);
     }
     await prepareStateDirectory(directory);
-    switch (parsed.command) {
+    const flags = commandFlags(command);
+    switch (name) {
         case "create":
-            await createCommand(directory, parsed.flags);
+            await createCommand(directory, flags);
             break;
         case "status":
-            await statusCommand(directory, parsed.flags);
+            await statusCommand(directory);
             break;
         case "start":
         case "stop":
-            await transitionRuntime(directory, parsed.flags, parsed.command);
+            await transitionRuntime(directory, name);
             break;
         case "list-runtimes":
-            await runtimeCommand(directory, parsed.flags);
+            await runtimeCommand(directory);
             break;
         case "list-sessions":
-            await listSessionsCommand(directory, parsed.flags);
+            await listSessionsCommand(directory);
             break;
         case "create-session":
-            await createSessionCommand(directory, parsed.flags);
+            await createSessionCommand(directory, flags);
             break;
         case "get-agent-configuration":
-            await configurationCommand(directory, parsed.flags, false);
+            await configurationCommand(directory, flags, false);
             break;
         case "update-agent-configuration":
-            await configurationCommand(directory, parsed.flags, true);
+            await configurationCommand(directory, flags, true);
             break;
         case "send-prompt":
-            await promptCommand(directory, parsed.flags, "prompt");
+            await promptCommand(directory, flags, "prompt");
+            break;
+        case "compact":
+            await compactCommand(directory, flags);
             break;
         case "steer":
-            await promptCommand(directory, parsed.flags, "steer");
+            await promptCommand(directory, flags, "steer");
             break;
         case "cancel-turn":
-            await cancelCommand(directory, parsed.flags);
+            await cancelCommand(directory, flags);
             break;
         case "get":
-            await getCommand(directory, parsed.flags);
+            await getCommand(directory, flags);
             break;
-        default:
-            throw new MiniClientError("unknown_command", `Unknown command: ${parsed.command}`);
     }
+}
+
+function createProgram(): Command {
+    const program = new Command()
+        .name("mobius-mini-client")
+        .description("Drive a Mobius Platform and local Runtime without Mobius Chat.")
+        .option("--state-dir <directory>", "persistent mini-client state directory")
+        .showHelpAfterError()
+        .exitOverride()
+        .configureOutput({ writeErr: () => {} });
+    program.action(() => program.outputHelp());
+
+    const add = (name: MiniClientCommand, description: string): Command => {
+        const command = program.command(name).description(description);
+        command.action(async () => runCommand(program, command, name));
+        return command;
+    };
+
+    add("create", "create a Project and pair an isolated Runtime")
+        .option("--app-id <id>", "Platform application identifier")
+        .option("--app-secret <secret>", "Platform application credential")
+        .option("--endpoint <url>", "Platform endpoint")
+        .option("--workspace <directory>", "Runtime workspace directory");
+    add("status", "show the isolated Runtime status");
+    add("start", "start the isolated Runtime");
+    add("stop", "stop the isolated Runtime");
+    add("list-runtimes", "list Platform Runtimes");
+    add("list-sessions", "list Runtime Sessions");
+    add("create-session", "create an Agent Session")
+        .option("--agent <id>", "Agent identifier")
+        .option("--session <id>", "Session identifier")
+        .option("--title <title>", "Session title");
+    add("get-agent-configuration", "show Agent configuration").option("--session <id>", "Session identifier");
+    add("update-agent-configuration", "update Agent configuration")
+        .option("--session <id>", "Session identifier")
+        .option("--config-id <id>", "configuration identifier")
+        .option("--value <value>", "configuration value");
+    add("send-prompt", "submit a prompt")
+        .option("--session <id>", "Session identifier")
+        .option("--prompt <text>", "prompt text")
+        .option("--disposition <mode>", "reject or queue while another turn is active");
+    add("compact", "compact the Session context").option("--session <id>", "Session identifier");
+    add("steer", "steer an active turn")
+        .option("--session <id>", "Session identifier")
+        .option("--prompt <text>", "steering prompt text");
+    add("cancel-turn", "cancel a turn")
+        .option("--session <id>", "Session identifier")
+        .option("--turn <id>", "turn identifier");
+    add("get", "get native messages and optionally follow updates")
+        .option("--session <id>", "Session identifier")
+        .option("--follow", "follow Session updates");
+    return program;
+}
+
+async function main(): Promise<void> {
+    await createProgram().parseAsync(process.argv);
 }
 
 try {
     await main();
 } catch (cause) {
-    process.stderr.write(`${JSON.stringify(errorOutput(cause))}\n`);
-    process.exitCode = shutdown.signal.aborted ? 130 : 1;
+    if (cause instanceof CommanderError && cause.exitCode === 0) {
+        process.exitCode = 0;
+    } else {
+        const error =
+            cause instanceof CommanderError
+                ? new MiniClientError("invalid_arguments", cause.message, { cause })
+                : cause;
+        process.stderr.write(`${JSON.stringify(errorOutput(error))}\n`);
+        process.exitCode = shutdown.signal.aborted ? 130 : 1;
+    }
 }
