@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { ProtocolMessageError } from "./codecs/messages.ts";
 import {
+    displayContentSchema,
     sessionCapabilitiesSchema,
     sessionElicitationRequestedEventSchema,
     sessionPermissionRequestedEventSchema,
@@ -19,6 +20,21 @@ const envelope = {
     requestId: identifier,
     sessionId: identifier,
 };
+const activeTurnActivitySchema = z
+    .strictObject({
+        activityId: z.string().min(1).max(128),
+        activityType: z.string().min(1).max(128),
+        content: z.array(displayContentSchema).max(100).readonly(),
+        input: z.string().max(100_000),
+        locations: z.array(z.string().min(1).max(2_048)).max(100).readonly(),
+        name: z.string().max(128),
+        output: z.string().max(100_000),
+        sequence: z.number().int().nonnegative(),
+        status: z.string().min(1).max(64),
+        title: z.string().max(500),
+        toolKind: z.string().max(64),
+    })
+    .readonly();
 const identity = {
     ...envelope,
     kind: z.literal(NATIVE_SESSION_REQUEST_KIND),
@@ -119,7 +135,9 @@ const nativeSessionResultSchema = z.discriminatedUnion("action", [
             targetSessionId: identifier,
             turn: z
                 .strictObject({
+                    activities: z.array(activeTurnActivitySchema).max(100).readonly(),
                     commandId: identifier,
+                    content: z.array(displayContentSchema).max(100).readonly(),
                     prompt: z.string().max(100_000),
                     text: z.string().max(ACTIVE_TURN_TEXT_LIMIT),
                     truncated: z.boolean(),

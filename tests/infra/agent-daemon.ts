@@ -762,7 +762,9 @@ async function processHappyPathCommand(
     const createsImage = command.prompt.toLowerCase().includes("image");
     const epoch = command.commandId;
     activeTurns.set(command.sessionId, {
+        activities: [],
         commandId: decodeIdentifier(command.commandId),
+        content: [],
         epoch: decodeIdentifier(epoch),
         interaction: null,
         prompt: command.prompt,
@@ -801,6 +803,27 @@ async function processHappyPathCommand(
           }
         : null;
     if (imageContent !== null) {
+        await daemon.sendSessionEvent(
+            command.sessionId,
+            encodeAgentActivityEvent({
+                activityId: `fake-image-${turn.toString()}`,
+                activityType: "tool",
+                commandId: command.commandId,
+                content: [],
+                detail: { content: [], input: command.prompt, kind: "recorded", output: "" },
+                input: command.prompt,
+                kind: "agent.activity",
+                locations: [imagePath],
+                name: "generate_image",
+                output: "",
+                sequence: 0,
+                sessionId: command.sessionId,
+                status: "running",
+                title: "Generate image",
+                toolKind: "other",
+            }),
+            signal,
+        );
         await daemon.sendSessionEvent(
             command.sessionId,
             encodeAgentActivityEvent({

@@ -105,30 +105,6 @@ export class RelayConnectionDiagnostics {
         this.#record("relay_connection_failed", connectionEpoch.toString(), details, true);
     };
 
-    /**
-     * Records that the Runtime gave up on Agent turns the Relay already settled. This is not a connection
-     * failure, so it is recorded independently of the per-epoch failure deduplication.
-     */
-    readonly reconciliationAbandoned = (
-        connectionEpoch: number,
-        relayErrorCode: string | null,
-        turnCount: number,
-    ): void => {
-        this.#record(
-            "relay_reconciliation_abandoned",
-            connectionEpoch.toString(),
-            {
-                connectionEpoch: connectionEpoch.toString(),
-                relayErrorCode: relayErrorCode ?? "unknown",
-                relayOrigin: this.#relayOrigin,
-                source: "reconciliation_abandoned",
-                turnCount: turnCount.toString(),
-                ...this.#route,
-            },
-            true,
-        );
-    };
-
     readonly connectionOpened = (connectionEpoch: number): void => {
         this.#record(
             "relay_connection_opened",

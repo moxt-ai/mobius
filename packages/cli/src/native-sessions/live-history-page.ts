@@ -1,5 +1,14 @@
-import type { NativeMessagePage, NativeSessionHistory } from "@moxt-ai/mobius-protocol";
+import {
+    type NativeMessagePage,
+    type NativeSessionHistory,
+    type NativeSessionResult,
+    SESSION_HISTORY_CHARACTER_LIMIT,
+} from "@moxt-ai/mobius-protocol";
 import { AcpExecutionError } from "../acp/session-manager.ts";
+
+type ActiveTurnSnapshot = Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"];
+type AvailableNativeMessagePage = Extract<NativeMessagePage, { readonly status: "available" }>;
+type AvailableNativeSessionHistory = Extract<NativeSessionHistory, { readonly status: "available" }>;
 
 interface LiveHistoryCoveredTurnRange {
     readonly assistantEndIndex: number;
@@ -37,9 +46,7 @@ function liveHistoryEndIndex(cursor: string, sessionId: string): number {
     }
 }
 
-function liveHistoryCoveredTurnRanges(
-    history: Extract<NativeSessionHistory, { readonly status: "available" }>,
-): readonly LiveHistoryCoveredTurnRange[] {
+function liveHistoryCoveredTurnRanges(history: AvailableNativeSessionHistory): readonly LiveHistoryCoveredTurnRange[] {
     const ranges: LiveHistoryCoveredTurnRange[] = [];
     let historyIndex = history.messages.length;
     for (const commandId of history.coveredCommandIds) {
@@ -57,7 +64,28 @@ function liveHistoryCoveredTurnRanges(
     return ranges;
 }
 
-export function paginateLiveSessionHistory(
+function historyMessageCharacters(message: AvailableNativeSessionHistory["messages"][number]): number {
+    return (
+        message.text.length +
+        (message.role === "assistant"
+            ? JSON.stringify(message.activities).length + JSON.stringify(message.content).length
+            : 0)
+    );
+}
+
+function paginateAcpSessionHistory(
+    history: AvailableNativeSessionHistory,
+    sessionId: string,
+    cursor: string | null,
+    limit: number,
+): AvailableNativeMessagePage;
+function paginateAcpSessionHistory(
+    history: NativeSessionHistory,
+    sessionId: string,
+    cursor: string | null,
+    limit: number,
+): NativeMessagePage;
+function paginateAcpSessionHistory(
     history: NativeSessionHistory,
     sessionId: string,
     cursor: string | null,
@@ -96,5 +124,110 @@ export function paginateLiveSessionHistory(
         nextCursor: startIndex > 0 ? liveHistoryCursor(sessionId, startIndex) : null,
         status: "available",
         truncated: history.truncated,
+    };
+}
+
+export function paginateLiveSessionHistory(
+    history: NativeSessionHistory,
+    activeTurn: ActiveTurnSnapshot,
+    sessionId: string,
+    cursor: string | null,
+    limit: number,
+): NativeMessagePage {
+    if (activeTurn === null || cursor !== null) {
+        return paginateAcpSessionHistory(history, sessionId, cursor, limit);
+    }
+
+    const activeMessageOverhead = 4;
+    const activeStructuredCharacters =
+        JSON.stringify(activeTurn.activities).length + JSON.stringify(activeTurn.content).length;
+    const maximumActiveTextLength = Math.max(
+        0,
+        SESSION_HISTORY_CHARACTER_LIMIT - activeTurn.prompt.length - activeStructuredCharacters - activeMessageOverhead,
+    );
+    const activeText = activeTurn.text.slice(-maximumActiveTextLength);
+    const completeActiveMessages = [
+        { role: "user" as const, text: activeTurn.prompt },
+        {
+            activities: activeTurn.activities,
+            content: activeTurn.content,
+            role: "assistant" as const,
+            text: activeText,
+        },
+    ];
+    if (history.status === "unavailable") {
+        return {
+            coveredCommandIds: [],
+            coveredMessageIds: [],
+            messages: completeActiveMessages,
+            nextCursor: null,
+            status: "available",
+            truncated: activeTurn.truncated || activeText.length !== activeTurn.text.length,
+        };
+    }
+    const latestNativeMessage = history.messages.at(-1);
+    const activeMessages =
+        latestNativeMessage?.role === "user" && latestNativeMessage.text === activeTurn.prompt
+            ? completeActiveMessages.slice(1)
+            : completeActiveMessages;
+
+    let historicalMessageCount = 0;
+    let remainingCharacters =
+        SESSION_HISTORY_CHARACTER_LIMIT -
+        activeText.length -
+        activeMessageOverhead -
+        activeStructuredCharacters -
+        (activeMessages.length === completeActiveMessages.length ? activeTurn.prompt.length : 0);
+    const historicalMessageLimit = Math.max(0, limit - activeMessages.length);
+    for (
+        let index = history.messages.length - 1;
+        index >= 0 && historicalMessageCount < historicalMessageLimit;
+        index -= 1
+    ) {
+        const message = history.messages[index];
+        if (message === undefined) {
+            break;
+        }
+        const characters = historyMessageCharacters(message);
+        if (characters > remainingCharacters) {
+            break;
+        }
+        historicalMessageCount += 1;
+        remainingCharacters -= characters;
+    }
+    const page =
+        historicalMessageCount === 0
+            ? {
+                  coveredCommandIds: [],
+                  coveredMessageIds: [],
+                  messages: [],
+                  nextCursor:
+                      history.messages.length === 0 ? null : liveHistoryCursor(sessionId, history.messages.length),
+                  status: "available" as const,
+                  truncated: history.truncated,
+              }
+            : paginateAcpSessionHistory(history, sessionId, null, historicalMessageCount);
+    return {
+        ...page,
+        messages: [...page.messages, ...activeMessages],
+        truncated: page.truncated || activeTurn.truncated || activeText.length !== activeTurn.text.length,
+    };
+}
+
+export function mergeLiveSessionHistory(
+    history: NativeSessionHistory,
+    activeTurn: ActiveTurnSnapshot,
+    sessionId: string,
+): NativeSessionHistory {
+    const page = paginateLiveSessionHistory(history, activeTurn, sessionId, null, 1_000);
+    if (page.status === "unavailable") {
+        return { cause: page.cause, status: "unavailable" };
+    }
+    return {
+        coveredCommandIds: page.coveredCommandIds,
+        coveredMessageIds: page.coveredMessageIds,
+        messages: page.messages,
+        status: "available",
+        truncated: page.truncated,
     };
 }

@@ -8,6 +8,8 @@ import {
     type decodeSessionLiveHistoryLoad,
     type decodeSessionLiveHistoryPageLoad,
     encodeDaemonToServiceMessage,
+    type NativeSessionResult,
+    type RecordedSessionEvent,
     SESSION_COMPLETED_KIND,
     SESSION_FAILED_KIND,
     SESSION_STARTED_KIND,
@@ -37,7 +39,7 @@ import { LocalAuthorizationError } from "./authorization/local-authorization-err
 import type { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
 import type { DaemonConfig } from "./config.ts";
 import { AccumulatingOperationMetrics, type DurationMetric } from "./infra/operation-metrics.ts";
-import { paginateLiveSessionHistory } from "./native-sessions/live-history-page.ts";
+import { mergeLiveSessionHistory, paginateLiveSessionHistory } from "./native-sessions/live-history-page.ts";
 import { PromptArtifactError, resolvePromptArtifacts } from "./prompt-artifact-resolver.ts";
 import {
     AGENT_ACTIVITY_COALESCING_MILLISECONDS,
@@ -390,6 +392,7 @@ export async function executeSessionLiveHistoryLoad(
     directories: WorkspaceDirectoryService,
     audit: AuditStore,
     sessions: AcpSessionManager,
+    activeTurn: (sessionId: string) => Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"],
     signal: AbortSignal,
 ): Promise<void> {
     try {
@@ -408,13 +411,14 @@ export async function executeSessionLiveHistoryLoad(
             signal,
         });
         signal.throwIfAborted();
+        const mergedHistory = mergeLiveSessionHistory(history, activeTurn(command.sessionId), command.sessionId);
         audit.record({
             commandId: command.requestId,
             event: "session_history_loaded",
             sessionId: command.sessionId,
         });
         send(socket, {
-            history,
+            history: mergedHistory,
             kind: "session.live-history.loaded",
             requestId: command.requestId,
             sessionId: command.sessionId,
@@ -448,6 +452,7 @@ export async function executeSessionLiveHistoryPageLoad(
     directories: WorkspaceDirectoryService,
     audit: AuditStore,
     sessions: AcpSessionManager,
+    activeTurn: (sessionId: string) => Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"],
     signal: AbortSignal,
 ): Promise<void> {
     try {
@@ -466,7 +471,13 @@ export async function executeSessionLiveHistoryPageLoad(
             signal,
         });
         signal.throwIfAborted();
-        const page = paginateLiveSessionHistory(history, command.sessionId, command.cursor, command.limit);
+        const page = paginateLiveSessionHistory(
+            history,
+            activeTurn(command.sessionId),
+            command.sessionId,
+            command.cursor,
+            command.limit,
+        );
         audit.record({
             commandId: command.requestId,
             event: "session_history_loaded",
@@ -570,16 +581,17 @@ export async function executePrompt(
     >,
     timer: DaemonTimer,
     signal: AbortSignal,
-    recordLiveText: (delta: string) => { readonly epoch: string; readonly sequence: number },
+    recordLiveEvent: (
+        event:
+            | { readonly kind: typeof AGENT_MESSAGE_DELTA_KIND; readonly messageId: string; readonly text: string }
+            | Exclude<RecordedSessionEvent, { readonly kind: typeof AGENT_MESSAGE_DELTA_KIND }>,
+    ) => RecordedSessionEvent,
     cancellationRequested: () => boolean,
 ): Promise<void> {
-    const activities = new CoalescingDaemonActivityPublisher(timer, (activity) => {
-        publisher.publish(command.sessionId, daemonActivity(command, activity));
-    });
     const narration = new CoalescingNarrationPublisher(
         timer,
         (increment) => {
-            publisher.publish(command.sessionId, {
+            const event: RecordedSessionEvent = {
                 activityId: increment.activityId,
                 activityType: increment.activityType,
                 commandId: command.commandId,
@@ -587,24 +599,26 @@ export async function executePrompt(
                 sequence: increment.sequence,
                 sessionId: command.sessionId,
                 text: increment.text,
-            });
+            };
+            publisher.publish(command.sessionId, recordLiveEvent(event));
         },
         AGENT_ACTIVITY_COALESCING_MILLISECONDS,
         AGENT_TEXT_MAXIMUM_LENGTH,
     );
+    const activities = new CoalescingDaemonActivityPublisher(timer, (activity) => {
+        if (activity.status !== "pending" && activity.status !== "running") {
+            narration.flush();
+        }
+        const event = daemonActivity(command, activity);
+        publisher.publish(command.sessionId, recordLiveEvent(event));
+    });
     const text = new CoalescingTextPublisher(
         timer,
         (messageId, delta) => {
-            const stream = recordLiveText(delta);
-            publisher.publish(command.sessionId, {
-                commandId: command.commandId,
-                epoch: stream.epoch,
-                kind: AGENT_MESSAGE_DELTA_KIND,
-                messageId,
-                sequence: stream.sequence,
-                sessionId: command.sessionId,
-                text: delta,
-            });
+            publisher.publish(
+                command.sessionId,
+                recordLiveEvent({ kind: AGENT_MESSAGE_DELTA_KIND, messageId, text: delta }),
+            );
         },
         AGENT_TEXT_COALESCING_MILLISECONDS,
         AGENT_TEXT_MAXIMUM_LENGTH,

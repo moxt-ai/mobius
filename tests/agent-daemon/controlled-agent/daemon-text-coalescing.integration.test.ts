@@ -8,17 +8,26 @@ import { fileURLToPath } from "node:url";
 
 import {
     AGENT_ACTIVITY_KIND,
+    AGENT_ACTIVITY_NARRATION_KIND,
+    AGENT_CONTENT_KIND,
     AGENT_MESSAGE_DELTA_KIND,
+    decodeAgentActivityEvent,
+    decodeAgentActivityNarrationEvent,
+    decodeAgentContentEvent,
     decodeAgentMessageDeltaEvent,
     decodeMessageKind,
     decodeNativeSessionResult,
     decodeSessionCompletedEvent,
     decodeSessionEventEnvelope,
     decodeSessionFailedEvent,
+    decodeSessionLiveHistoryLoaded,
+    decodeSessionLiveHistoryPageLoaded,
     decodeSessionQueuedEvent,
     decodeSessionStartedEvent,
     encodeNativeSessionRequest,
     encodeSessionCancelCommand,
+    encodeSessionLiveHistoryLoad,
+    encodeSessionLiveHistoryPageLoad,
     encodeSessionPromptCommand,
     encodeSessionPromptDispositionCommand,
     MOBIUS_API_PREFIX,
@@ -27,6 +36,8 @@ import {
     SESSION_COMPLETED_KIND,
     SESSION_EVENT_KIND,
     SESSION_FAILED_KIND,
+    SESSION_LIVE_HISTORY_LOADED_KIND,
+    SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
     SESSION_PROMPT_DISPOSITION_KIND,
     SESSION_QUEUED_KIND,
     SESSION_STARTED_KIND,
@@ -241,7 +252,7 @@ describe("daemon assistant text coalescing", () => {
         }
     }, 30_000);
 
-    it("Given a native Agent Turn has emitted more than 100k characters, When another viewer reads active state, Then the daemon returns the full bounded snapshot and releases it after cancellation", async () => {
+    it("Given a native Agent Turn has emitted more than 100k characters, When another viewer queries native messages, Then the daemon includes the active Turn and releases it after cancellation", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-active-turn-"));
         const workspace = join(stateDirectory, "workspace");
         const nativeStateDirectory = join(stateDirectory, "native");
@@ -367,6 +378,30 @@ describe("daemon assistant text coalescing", () => {
                 prompt: prompt.prompt,
                 sequence: expect.any(Number),
                 truncated: false,
+            });
+            sendText(
+                socket,
+                encodeSessionLiveHistoryPageLoad({
+                    additionalDirectoryIds: [],
+                    agentId: agent.id,
+                    bindingId: config.bindingId,
+                    cursor: null,
+                    directoryId: "default",
+                    kind: "session.live-history.page.load",
+                    limit: 50,
+                    requestId: "native_messages_with_active_turn",
+                    sessionId,
+                }),
+            );
+            do {
+                result = await next();
+            } while (decodeMessageKind(result) !== SESSION_LIVE_HISTORY_PAGE_LOADED_KIND);
+            expect(decodeSessionLiveHistoryPageLoaded(result).page).toMatchObject({
+                status: "available",
+                messages: [
+                    { role: "user", text: prompt.prompt },
+                    { role: "assistant", text: output },
+                ],
             });
             sendText(socket, encodeSessionPromptCommand({ ...prompt, commandId: "second_burst_turn" }));
             let rejected: string;
@@ -526,6 +561,32 @@ describe("daemon assistant text coalescing", () => {
             do {
                 activity = await next();
             } while (decodeMessageKind(activity) !== AGENT_ACTIVITY_KIND);
+            const activeActivity = decodeAgentActivityEvent(activity);
+            const { activeContent, activeNarration, activeTool } = await (async () => {
+                let content: ReturnType<typeof decodeAgentContentEvent> | null = null;
+                let narration: ReturnType<typeof decodeAgentActivityNarrationEvent> | null = null;
+                let tool: ReturnType<typeof decodeAgentActivityEvent> | null = null;
+                for (;;) {
+                    const event = await next();
+                    const kind = decodeMessageKind(event);
+                    if (kind === AGENT_ACTIVITY_NARRATION_KIND) {
+                        const candidate = decodeAgentActivityNarrationEvent(event);
+                        if (candidate.activityType === "reasoning") {
+                            narration = candidate;
+                        }
+                    } else if (kind === AGENT_ACTIVITY_KIND) {
+                        const candidate = decodeAgentActivityEvent(event);
+                        if (candidate.locations.length > 0 && candidate.status === "completed") {
+                            tool = candidate;
+                        }
+                    } else if (kind === AGENT_CONTENT_KIND) {
+                        content = decodeAgentContentEvent(event);
+                    }
+                    if (content !== null && narration !== null && tool !== null) {
+                        return { activeContent: content, activeNarration: narration, activeTool: tool };
+                    }
+                }
+            })();
             const request = (requestId: string) =>
                 encodeNativeSessionRequest({
                     action: "active-turn",
@@ -553,7 +614,105 @@ describe("daemon assistant text coalescing", () => {
                     sequence: firstStarted.sequence,
                     text: "",
                     truncated: false,
+                    activities: expect.arrayContaining([
+                        expect.objectContaining({
+                            activityId: activeActivity.activityId,
+                            locations: activeActivity.locations,
+                        }),
+                        expect.objectContaining({
+                            activityType: "reasoning",
+                            output: activeNarration.text,
+                        }),
+                        expect.objectContaining({
+                            activityId: activeTool.activityId,
+                            locations: activeTool.locations,
+                            status: "completed",
+                        }),
+                    ]),
+                    content: [activeContent.content],
                 },
+            });
+            sendText(
+                socket,
+                encodeSessionLiveHistoryLoad({
+                    additionalDirectoryIds: [],
+                    agentId: agent.id,
+                    bindingId: config.bindingId,
+                    directoryId: "default",
+                    kind: "session.live-history.load",
+                    requestId: "initial_history_with_active_activity",
+                    sessionId,
+                }),
+            );
+            do {
+                result = await next();
+            } while (decodeMessageKind(result) !== SESSION_LIVE_HISTORY_LOADED_KIND);
+            expect(decodeSessionLiveHistoryLoaded(result).history).toMatchObject({
+                status: "available",
+                messages: [
+                    { role: "user", text: prompt.prompt },
+                    {
+                        activities: expect.arrayContaining([
+                            expect.objectContaining({
+                                activityId: activeActivity.activityId,
+                                locations: activeActivity.locations,
+                            }),
+                            expect.objectContaining({
+                                activityType: "reasoning",
+                                output: activeNarration.text,
+                            }),
+                            expect.objectContaining({
+                                activityId: activeTool.activityId,
+                                locations: activeTool.locations,
+                                status: "completed",
+                            }),
+                        ]),
+                        content: [activeContent.content],
+                        role: "assistant",
+                    },
+                ],
+            });
+            sendText(
+                socket,
+                encodeSessionLiveHistoryPageLoad({
+                    additionalDirectoryIds: [],
+                    agentId: agent.id,
+                    bindingId: config.bindingId,
+                    cursor: null,
+                    directoryId: "default",
+                    kind: "session.live-history.page.load",
+                    limit: 50,
+                    requestId: "paged_history_with_active_activity",
+                    sessionId,
+                }),
+            );
+            do {
+                result = await next();
+            } while (decodeMessageKind(result) !== SESSION_LIVE_HISTORY_PAGE_LOADED_KIND);
+            expect(decodeSessionLiveHistoryPageLoaded(result).page).toMatchObject({
+                status: "available",
+                messages: [
+                    { role: "user", text: prompt.prompt },
+                    {
+                        activities: expect.arrayContaining([
+                            expect.objectContaining({
+                                activityId: activeActivity.activityId,
+                                locations: activeActivity.locations,
+                            }),
+                            expect.objectContaining({
+                                activityType: "reasoning",
+                                output: activeNarration.text,
+                            }),
+                            expect.objectContaining({
+                                activityId: activeTool.activityId,
+                                locations: activeTool.locations,
+                                status: "completed",
+                            }),
+                        ]),
+                        content: [activeContent.content],
+                        role: "assistant",
+                    },
+                ],
             });
             const cancelledQueuedPrompt: SessionPromptCommand = {
                 ...prompt,
