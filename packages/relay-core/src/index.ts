@@ -52,10 +52,7 @@ export type { ChannelGateway } from "./gateway/index.ts";
 export type { ProjectAccessAuthorizer } from "./gateway/project-access-authorizer.ts";
 export { errorMiddleware, rethrowHonoError } from "./http/middleware/error-middleware.ts";
 export { requestTimeoutMiddleware } from "./http/middleware/request-timeout-middleware.ts";
-export {
-    acceptWebSocketHttpTransport,
-    type SubscribeSessionEvents,
-} from "./http/transport/websocket-http-transport.ts";
+export { acceptWebSocketHttpTransport } from "./http/transport/websocket-http-transport.ts";
 export {
     RequestBodyError,
     type RequestBodyErrorCode,
@@ -78,7 +75,6 @@ export type {
     ProjectStoragePlacement,
 } from "./infra/project-storage-directory.ts";
 export { instrumentD1Database, RequestAccessMetrics } from "./infra/request-access-metrics.ts";
-export type { LiveSessionEvent, SessionEventReceiver } from "./infra/session-event-receiver.ts";
 export * from "./service/authentication/oidc-authentication.ts";
 export { RuntimeDescriptor, RuntimeStatus } from "./service/channel/channel.ts";
 export {

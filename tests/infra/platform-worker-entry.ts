@@ -1,5 +1,4 @@
 import { VerifiedExternalIdentity } from "@moxt-ai/mobius-relay-core";
-import { createLiveSessionEventRpcTarget } from "../../packages/relay-cloudflare-platform/src/composition/live-session-event-rpc-target.ts";
 import {
     createPlatformApplication,
     createPlatformGateways,
@@ -32,7 +31,6 @@ const application = createPlatformApplication(
     new PlatformAuthenticationConfiguration(authenticator, new Set(["developer-1"]), new Set(["*"])),
     createPlatformGateways,
     undefined,
-    { create: createLiveSessionEventRpcTarget },
 );
 
 export default {

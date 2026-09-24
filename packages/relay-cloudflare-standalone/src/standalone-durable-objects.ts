@@ -1,8 +1,4 @@
-import {
-    createDurableObjectContext,
-    RuntimeRelay as RuntimeRelayImplementation,
-    type SessionEventReceiver,
-} from "@moxt-ai/mobius-relay-core";
+import { createDurableObjectContext, RuntimeRelay as RuntimeRelayImplementation } from "@moxt-ai/mobius-relay-core";
 import { StandaloneDatabaseResolver } from "./standalone-database-resolver.ts";
 import { StandaloneProjectStorageDirectory } from "./standalone-project-storage-directory.ts";
 
@@ -49,20 +45,6 @@ export class RuntimeRelay extends DurableObject<StandaloneDurableObjectEnvironme
 
     override webSocketError(socket: WebSocket): void {
         this.#runtime.webSocketError(socket);
-    }
-
-    async subscribeToLiveSessionEvents(
-        _subscriptionId: string,
-        _projectId: string,
-        _runtimeId: string,
-        _sessionId: string,
-        _receive: SessionEventReceiver,
-    ): Promise<void> {
-        throw new Error("Cloud Session subscriptions are unavailable.");
-    }
-
-    unsubscribeFromLiveSessionEvents(_subscriptionId: string): void {
-        return;
     }
 }
 
