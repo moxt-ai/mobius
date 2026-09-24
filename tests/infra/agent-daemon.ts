@@ -44,7 +44,9 @@ import {
     SESSION_PROMPT_KIND,
     SESSION_QUERY_KIND,
     SESSION_STARTED_KIND,
+    type SessionElicitationRequestedEvent,
     type SessionMetadata,
+    type SessionPermissionRequestedEvent,
     type SessionPromptCommand,
     type SessionReadyEvent,
     WORKSPACE_ENTRIES_KIND,
@@ -346,6 +348,9 @@ export interface FakeAgentDaemonBehavior {
     readonly nativeSessionTitle?: (sessionId: string) => string;
     readonly loadNativeHistory?: (sessionId: string, signal: AbortSignal) => Promise<NativeSessionHistory>;
     readonly beforeActiveTurnSnapshot?: (sessionId: string, signal: AbortSignal) => Promise<void>;
+    readonly activeInteraction?: (
+        turn: ActiveTurn,
+    ) => SessionPermissionRequestedEvent | SessionElicitationRequestedEvent | null;
     readonly onPromptCompleted?: (command: SessionPromptCommand, response: string) => void;
     readonly requiredBindingId?: string;
     readonly responseParts?: (command: SessionPromptCommand, turn: number) => readonly string[];
@@ -551,7 +556,9 @@ async function processHappyPathCommand(
                 }),
             );
         } else if (command.action === "active-turn") {
-            const turn = activeTurns.get(command.targetSessionId) ?? null;
+            const active = activeTurns.get(command.targetSessionId);
+            const turn =
+                active === undefined ? null : { ...active, interaction: behavior.activeInteraction?.(active) ?? null };
             await behavior.beforeActiveTurnSnapshot?.(command.targetSessionId, signal);
             signal.throwIfAborted();
             daemon.send(
