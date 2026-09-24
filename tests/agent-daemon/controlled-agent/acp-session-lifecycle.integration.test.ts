@@ -8,7 +8,11 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 import { AcpSessionManager, createWritableAcpStream } from "../../../packages/cli/src/acp/session-manager.ts";
-import { FoundAcpStoredSession, MemoryAcpSessionStore } from "../../../packages/cli/src/acp/session-store.ts";
+import {
+    FoundAcpStoredSession,
+    MemoryAcpSessionStore,
+    SqliteAcpSessionStore,
+} from "../../../packages/cli/src/acp/session-store.ts";
 import { LocalAgentDefinition } from "../../../packages/cli/src/config.ts";
 import { AccumulatingOperationMetrics } from "../../../packages/cli/src/infra/operation-metrics.ts";
 
@@ -42,6 +46,51 @@ function processExists(pid: number): boolean {
 }
 
 describe("ACP conversation sessions", () => {
+    it("Given a managed Claude Code conversation, When the Runtime restarts, Then its Session remains discoverable", async () => {
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-session-store-"));
+        const databasePath = join(temporaryDirectory, "sessions.sqlite");
+        const sessionId = `chat_${"a".repeat(64)}`;
+        const agent = new LocalAgentDefinition("claude", "Claude Code", process.execPath, [
+            fakeAgentPath,
+            "--agent-name",
+            "Claude Code",
+        ]);
+        const signal = new AbortController().signal;
+        const firstStore = new SqliteAcpSessionStore(databasePath);
+        const firstRuntime = new AcpSessionManager(undefined, firstStore, null, "native");
+
+        try {
+            await firstRuntime.runPrompt({
+                additionalDirectories: [],
+                agent,
+                commandId: "claude-first-turn",
+                cwd: process.cwd(),
+                images: [],
+                onActivity: () => Promise.resolve(),
+                onText: () => Promise.resolve(),
+                prompt: "Remember this conversation",
+                resources: [],
+                sessionId,
+                signal,
+            });
+        } finally {
+            await firstRuntime.close();
+            firstStore.close();
+        }
+
+        const restartedStore = new SqliteAcpSessionStore(databasePath);
+        const restartedRuntime = new AcpSessionManager(undefined, restartedStore, null, "native");
+        try {
+            expect(restartedRuntime.findSessions([sessionId])).toEqual([
+                expect.objectContaining({ agentId: "claude", prompted: true, sessionId }),
+            ]);
+        } finally {
+            await restartedRuntime.close();
+            restartedStore.close();
+            await rm(temporaryDirectory, { force: true, recursive: true });
+        }
+    });
+
     it("Given a conversation has been prepared without a turn, When Runtime metadata is queried, Then that conversation is immediately available", async () => {
         const store = new MemoryAcpSessionStore();
         const manager = new AcpSessionManager(undefined, store);

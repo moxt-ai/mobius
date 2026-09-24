@@ -1,3 +1,13 @@
+import { chmodSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+import Database from "better-sqlite3";
+import { and, desc, eq } from "drizzle-orm";
+import { type BetterSQLite3Database, drizzle } from "drizzle-orm/better-sqlite3";
+import { z } from "zod";
+import { acpSessionStoreMigrations } from "../generated/acp-session-store-migrations.ts";
+import * as schema from "../schema/acp-session-store/index.ts";
+import { acpSession, deletedAcpSession } from "../schema/acp-session-store/index.ts";
+
 export class AcpStoredSession {
     readonly additionalDirectories: readonly string[];
     readonly agentId: string;
@@ -52,6 +62,7 @@ export class DeletedAcpStoredSession extends AcpStoredSessionLookup {
 }
 
 export interface AcpSessionStore {
+    readonly close: () => void;
     readonly findNative: (agentId: string, nativeSessionId: string) => readonly AcpStoredSession[];
     readonly list: () => readonly AcpStoredSession[];
     readonly markDeleted: (agentId: string, nativeSessionId: string) => readonly string[];
@@ -63,6 +74,11 @@ export interface AcpSessionStore {
 export class MemoryAcpSessionStore implements AcpSessionStore {
     readonly #sessions = new Map<string, AcpStoredSession>();
     readonly #deleted = new Set<string>();
+
+    readonly close = (): void => {
+        this.#sessions.clear();
+        this.#deleted.clear();
+    };
 
     readonly findNative = (agentId: string, nativeSessionId: string): readonly AcpStoredSession[] =>
         [...this.#sessions.values()].filter(
@@ -95,5 +111,150 @@ export class MemoryAcpSessionStore implements AcpSessionStore {
 
     readonly write = (session: AcpStoredSession): void => {
         this.#sessions.set(session.sessionId, session);
+    };
+}
+
+const storedSessionRowSchema = z.object({
+    additionalDirectories: z.string(),
+    agentId: z.string(),
+    cwd: z.string(),
+    nativeSessionId: z.string(),
+    prompted: z.boolean(),
+    sessionId: z.string(),
+    title: z.string(),
+    updatedAt: z.string(),
+});
+
+const sessionIdRowSchema = z.object({ sessionId: z.string() });
+
+function decodeStoredSession(value: unknown): AcpStoredSession {
+    const row = storedSessionRowSchema.parse(value);
+    const decodedAdditionalDirectories: unknown = JSON.parse(row.additionalDirectories);
+    const additionalDirectories = z.array(z.string()).parse(decodedAdditionalDirectories);
+    return new AcpStoredSession(
+        row.sessionId,
+        row.agentId,
+        row.nativeSessionId,
+        row.cwd,
+        additionalDirectories,
+        row.prompted,
+        row.title,
+        row.updatedAt,
+    );
+}
+
+export class SqliteAcpSessionStore implements AcpSessionStore {
+    readonly #database: BetterSQLite3Database<typeof schema>;
+    readonly #sqliteDatabase: Database.Database;
+
+    constructor(path: string) {
+        mkdirSync(dirname(path), { mode: 0o700, recursive: true });
+        this.#sqliteDatabase = new Database(path);
+        chmodSync(path, 0o600);
+        this.#migrate();
+        this.#database = drizzle(this.#sqliteDatabase, { schema });
+    }
+
+    readonly #migrate = (): void => {
+        const version = z
+            .number()
+            .int()
+            .nonnegative()
+            .parse(this.#sqliteDatabase.pragma("user_version", { simple: true }));
+        if (version > acpSessionStoreMigrations.length) {
+            this.#sqliteDatabase.close();
+            throw new Error("The ACP Session database was created by a newer Mobius version");
+        }
+        for (let index = version; index < acpSessionStoreMigrations.length; index += 1) {
+            const migration = acpSessionStoreMigrations[index];
+            if (migration === undefined) {
+                throw new Error("The ACP Session migration is unavailable");
+            }
+            this.#sqliteDatabase.exec("BEGIN IMMEDIATE");
+            try {
+                this.#sqliteDatabase.exec(migration.sql);
+                this.#sqliteDatabase.pragma(`user_version = ${index + 1}`);
+                this.#sqliteDatabase.exec("COMMIT");
+            } catch (error) {
+                this.#sqliteDatabase.exec("ROLLBACK");
+                throw error;
+            }
+        }
+    };
+
+    readonly close = (): void => {
+        this.#sqliteDatabase.close();
+    };
+
+    readonly findNative = (agentId: string, nativeSessionId: string): readonly AcpStoredSession[] =>
+        this.#database
+            .select()
+            .from(acpSession)
+            .where(and(eq(acpSession.agentId, agentId), eq(acpSession.nativeSessionId, nativeSessionId)))
+            .all()
+            .map(decodeStoredSession);
+
+    readonly list = (): readonly AcpStoredSession[] =>
+        this.#database.select().from(acpSession).orderBy(desc(acpSession.updatedAt)).all().map(decodeStoredSession);
+
+    readonly markDeleted = (agentId: string, nativeSessionId: string): readonly string[] => {
+        const ids = this.#database
+            .select({ sessionId: acpSession.sessionId })
+            .from(acpSession)
+            .where(and(eq(acpSession.agentId, agentId), eq(acpSession.nativeSessionId, nativeSessionId)))
+            .all()
+            .map((row) => sessionIdRowSchema.parse(row).sessionId);
+        this.#database.transaction((transaction) => {
+            transaction
+                .delete(acpSession)
+                .where(and(eq(acpSession.agentId, agentId), eq(acpSession.nativeSessionId, nativeSessionId)))
+                .run();
+            for (const id of ids) {
+                transaction.insert(deletedAcpSession).values({ sessionId: id }).onConflictDoNothing().run();
+            }
+        });
+        return ids;
+    };
+
+    readonly read = (sessionId: string): AcpStoredSessionLookup => {
+        const deleted = this.#database
+            .select({ sessionId: deletedAcpSession.sessionId })
+            .from(deletedAcpSession)
+            .where(eq(deletedAcpSession.sessionId, sessionId))
+            .get();
+        if (deleted !== undefined) {
+            sessionIdRowSchema.parse(deleted);
+            return new DeletedAcpStoredSession();
+        }
+        const row = this.#database.select().from(acpSession).where(eq(acpSession.sessionId, sessionId)).get();
+        return row === undefined ? new MissingAcpStoredSession() : new FoundAcpStoredSession(decodeStoredSession(row));
+    };
+
+    readonly remove = (sessionId: string): void => {
+        this.#database.delete(acpSession).where(eq(acpSession.sessionId, sessionId)).run();
+    };
+
+    readonly write = (session: AcpStoredSession): void => {
+        const value = {
+            additionalDirectories: JSON.stringify(session.additionalDirectories),
+            agentId: session.agentId,
+            cwd: session.cwd,
+            nativeSessionId: session.nativeSessionId,
+            prompted: session.prompted,
+            sessionId: session.sessionId,
+            title: session.title,
+            updatedAt: session.updatedAt,
+        };
+        this.#database.transaction((transaction) => {
+            transaction.delete(deletedAcpSession).where(eq(deletedAcpSession.sessionId, session.sessionId)).run();
+            transaction
+                .insert(acpSession)
+                .values(value)
+                .onConflictDoUpdate({
+                    target: acpSession.sessionId,
+                    set: value,
+                })
+                .run();
+        });
     };
 }

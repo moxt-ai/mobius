@@ -34,8 +34,15 @@ async function writeMigrationModule(
 }
 
 const root = resolve(import.meta.dirname, "..");
+const cli = join(root, "packages/cli");
 const relayCore = join(root, "packages/relay-core");
 const platform = join(root, "packages/relay-cloudflare-platform");
+
+await writeMigrationModule(
+    join(cli, "src/generated/acp-session-store-migrations.ts"),
+    "acpSessionStoreMigrations",
+    await sqlFiles(join(cli, "migrations/acp-session-store")),
+);
 
 await writeMigrationModule(
     join(relayCore, "src/generated/runtime-connection-do-migrations.ts"),

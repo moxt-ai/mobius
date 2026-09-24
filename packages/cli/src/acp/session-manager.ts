@@ -269,7 +269,13 @@ export class AcpSessionManager {
             await this.#retireProcess(runtime, retained, close);
         } finally {
             if (retained && this.#sessionIdentity === "native") {
-                this.#store.remove(sessionId);
+                const stored = this.#store.read(sessionId);
+                if (
+                    stored instanceof FoundAcpStoredSession &&
+                    isNativeChatSessionId(stored.session.agentId, sessionId)
+                ) {
+                    this.#store.remove(sessionId);
+                }
             }
         }
     }

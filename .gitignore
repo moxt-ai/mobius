@@ -15,3 +15,4 @@ coverage/
 .DS_Store
 packages/relay-core/src/generated/
 packages/relay-cloudflare-platform/src/generated/
+packages/cli/src/generated/
