@@ -582,7 +582,14 @@ async function processHappyPathCommand(
             encodeSessionsQueriedEvent({
                 entries: command.sessionIds.flatMap((sessionId) => {
                     const entry = entries.get(sessionId);
-                    return entry === undefined ? [] : [entry];
+                    return entry === undefined
+                        ? []
+                        : [
+                              {
+                                  ...entry,
+                                  title: behavior.nativeSessionTitle?.(sessionId) ?? entry.title,
+                              },
+                          ];
                 }),
                 kind: "session.queried",
                 requestId: command.requestId,
