@@ -51,7 +51,6 @@ import {
     type AcpTurnOptions,
     arraysEqual,
     NullAcpSessionObserver,
-    nativeHistoryNotRetained,
 } from "./process-session.ts";
 
 abstract class AcpProcessEvictionCandidate {}
@@ -455,7 +454,8 @@ export class AcpSessionManager {
                     options,
                     async () =>
                         await AcpProcessSession.start(
-                            this.#sessionIdentity === "native" &&
+                            options.origin === undefined &&
+                                this.#sessionIdentity === "native" &&
                                 isNativeChatSessionId(options.agent.id, options.sessionId) &&
                                 this.#store.read(options.sessionId) instanceof MissingAcpStoredSession
                                 ? { ...options, origin: { kind: "import", nativeSessionId: options.sessionId } }
@@ -1138,11 +1138,9 @@ export class AcpSessionManager {
     readonly openNativeSession = async (
         options: AcpPrepareOptions,
         origin: NativeSessionOrigin,
-        loadHistory: boolean,
     ): Promise<{
         readonly sessionId: string;
         readonly prepared: AcpPreparedSession;
-        readonly history: NativeSessionHistory;
     }> => {
         const key = `${options.agent.id}:${origin.nativeSessionId}`;
         if (this.#nativeOperations.has(key)) {
@@ -1175,21 +1173,10 @@ export class AcpSessionManager {
                 }
                 this.#nativeOperations.add(key);
                 try {
-                    const history = loadHistory
-                        ? await runtime.loadHistory(options.signal)
-                        : nativeHistoryNotRetained();
                     return {
                         prepared: runtime.prepared(),
                         sessionId: existing.sessionId,
-                        history,
                     };
-                } catch (error) {
-                    await this.#retireSessionProcess(
-                        existing.sessionId,
-                        runtime,
-                        async () => await runtime.closeProcess(),
-                    );
-                    throw error;
                 } finally {
                     this.#nativeOperations.delete(key);
                     this.#notifyProcessCapacityChanged();
@@ -1213,16 +1200,10 @@ export class AcpSessionManager {
             const openedKey = `${options.agent.id}:${runtime.nativeSessionId()}`;
             this.#nativeOperations.add(openedKey);
             try {
-                const history = loadHistory ? await runtime.loadHistory(options.signal) : nativeHistoryNotRetained();
                 return {
                     sessionId: options.sessionId,
                     prepared: runtime.prepared(),
-                    history,
                 };
-            } catch (error) {
-                this.#store.remove(options.sessionId);
-                await this.#retireSessionProcess(options.sessionId, runtime, async () => await runtime.closeProcess());
-                throw error;
             } finally {
                 this.#nativeOperations.delete(openedKey);
                 this.#notifyProcessCapacityChanged();
@@ -1303,14 +1284,9 @@ export class AcpSessionManager {
             this.#nativeOperations.add(openedKey);
             try {
                 return {
-                    history: await runtime.loadHistory(options.signal),
                     prepared: runtime.prepared(),
                     sessionId: options.sessionId,
                 };
-            } catch (error) {
-                this.#store.remove(options.sessionId);
-                await this.#retireSessionProcess(options.sessionId, runtime, async () => await runtime.closeProcess());
-                throw error;
             } finally {
                 this.#nativeOperations.delete(openedKey);
                 this.#notifyProcessCapacityChanged();

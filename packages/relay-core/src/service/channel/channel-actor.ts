@@ -346,10 +346,7 @@ export class ChannelActor {
             }
             if (kind === NATIVE_SESSION_REQUEST_KIND) {
                 const request = decodeNativeSessionRequest(message);
-                const command: NativeSessionCommand =
-                    request.action === "import" || request.action === "fork"
-                        ? { ...request, action: request.action === "import" ? "import-only" : "fork-only" }
-                        : decodeNativeSessionCommand(message);
+                const command: NativeSessionCommand = decodeNativeSessionCommand(message);
                 if (command.action === "preview") {
                     const now = this.#clock.now();
                     this.expireNativeImports(now);

@@ -860,7 +860,7 @@ describe("ACP session features", () => {
             expect(await prompt("source-session", "source-command-2", "second")).toBe("Codex turn 2: second");
 
             const selectedResponse = "Codex turn 1: first";
-            const forked = await manager.forkSessionAtTurn(
+            await manager.forkSessionAtTurn(
                 {
                     additionalDirectories: [],
                     agent: fakeAgent(),
@@ -876,14 +876,6 @@ describe("ACP session features", () => {
                 },
             );
 
-            expect(forked.history).toMatchObject({
-                status: "available",
-                messages: [
-                    expect.objectContaining({ role: "user", text: "first" }),
-                    expect.objectContaining({ role: "assistant", text: selectedResponse }),
-                ],
-            });
-            expect(JSON.stringify(forked.history)).not.toContain("second");
             expect(await prompt("forked-session", "forked-command", "after fork")).toBe("Codex turn 2: after fork");
         } finally {
             await manager.close();
