@@ -56,10 +56,11 @@ class ClientFrames {
             if (message === null) {
                 return;
             }
-            this.#messages.push(message);
             const resolve = this.#resolvers.shift();
             if (resolve !== undefined) {
                 resolve(message);
+            } else {
+                this.#messages.push(message);
             }
         }
     }
@@ -79,6 +80,15 @@ class ClientFrames {
             }
             length = this.#buffered.readUInt16BE(2);
             offset = 4;
+        } else if (length === 127) {
+            if (this.#buffered.byteLength < 10) {
+                return null;
+            }
+            length = Number(this.#buffered.readBigUInt64BE(2));
+            if (!Number.isSafeInteger(length)) {
+                throw new Error("WebSocket frame is too large");
+            }
+            offset = 10;
         }
         const maskLength = masked ? 4 : 0;
         if (this.#buffered.byteLength < offset + maskLength + length) {
@@ -226,7 +236,7 @@ describe("daemon assistant text coalescing", () => {
         }
     }, 30_000);
 
-    it("Given a native Agent Turn has emitted partial text, When another viewer reads active state, Then the daemon returns a bounded snapshot and releases it after cancellation", async () => {
+    it("Given a native Agent Turn has emitted more than 100k characters, When another viewer reads active state, Then the daemon returns the full bounded snapshot and releases it after cancellation", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-active-turn-"));
         const workspace = join(stateDirectory, "workspace");
         const nativeStateDirectory = join(stateDirectory, "native");
@@ -289,7 +299,7 @@ describe("daemon assistant text coalescing", () => {
                 disposition: SessionPromptDisposition.Reject,
                 images: [],
                 kind: "session.prompt",
-                prompt: "hold after first delta",
+                prompt: "hold after large output",
                 resources: [],
                 sessionId,
                 targetCommandId: "",
@@ -305,11 +315,23 @@ describe("daemon assistant text coalescing", () => {
                 }
             };
             sendText(socket, encodeSessionPromptCommand(prompt));
-            let delta: string;
-            do {
-                delta = await next();
-            } while (decodeMessageKind(delta) !== AGENT_MESSAGE_DELTA_KIND);
-            const firstDelta = decodeAgentMessageDeltaEvent(delta);
+            let output = "";
+            let firstDelta: ReturnType<typeof decodeAgentMessageDeltaEvent> | null = null;
+            let lastSequence = 0;
+            while (output.length < 200_000) {
+                const message = await next();
+                if (decodeMessageKind(message) === AGENT_MESSAGE_DELTA_KIND) {
+                    const delta = decodeAgentMessageDeltaEvent(message);
+                    firstDelta ??= delta;
+                    expect(delta.sequence).toBe(lastSequence + 1);
+                    lastSequence = delta.sequence;
+                    output += delta.text;
+                }
+            }
+            expect(output).toBe("x".repeat(200_000));
+            if (firstDelta === null) {
+                throw new Error("Expected a live Agent text delta");
+            }
             const request = (requestId: string) =>
                 encodeNativeSessionRequest({
                     action: "active-turn",
@@ -328,16 +350,18 @@ describe("daemon assistant text coalescing", () => {
                 result = await next();
             } while (decodeMessageKind(result) !== NATIVE_SESSION_RESULT_KIND);
             const active = decodeNativeSessionResult(result);
-            expect(active).toMatchObject({
-                action: "active-turn",
-                turn: {
-                    commandId: prompt.commandId,
-                    epoch: firstDelta.epoch,
-                    prompt: prompt.prompt,
-                    sequence: firstDelta.sequence,
-                    text: "Partial reply",
-                    truncated: false,
-                },
+            if (active.action !== "active-turn" || active.turn === null) {
+                throw new Error("Expected an active Turn snapshot");
+            }
+            expect(active.turn.sequence).toBe(lastSequence);
+            expect(active.turn.text.length).toBe(output.length);
+            expect(active.turn.text).toBe(output);
+            expect(active.turn).toMatchObject({
+                commandId: prompt.commandId,
+                epoch: firstDelta.epoch,
+                prompt: prompt.prompt,
+                sequence: expect.any(Number),
+                truncated: false,
             });
             sendText(socket, encodeSessionPromptCommand({ ...prompt, commandId: "second_burst_turn" }));
             let rejected: string;
