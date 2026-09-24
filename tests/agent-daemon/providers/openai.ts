@@ -404,7 +404,7 @@ export class FakeOpenAiProvider implements AsyncDisposable {
     static async start(
         model: string,
         answer: string,
-        options: { readonly fallbackPrompt?: string } = {},
+        options: { readonly beforeFirstText?: () => Promise<void>; readonly fallbackPrompt?: string } = {},
     ): Promise<FakeOpenAiProvider> {
         const requests: ProviderRequestDiagnostic[] = [];
         const fallbackScenario =
@@ -463,6 +463,7 @@ export class FakeOpenAiProvider implements AsyncDisposable {
             if (request.url?.endsWith("/responses") === true) {
                 response.writeHead(200, responseHeaders());
                 if (tool === undefined) {
+                    await options.beforeFirstText?.();
                     sendResponsesText(response, model, selectedAnswer, selectedChunks);
                 } else {
                     sendResponsesToolCall(response, model, tool);

@@ -8,11 +8,14 @@ import {
     AGENT_MESSAGE_DELTA_KIND,
     decodeAgentMessageDeltaEvent,
     decodeMessageKind,
+    decodeNativeSessionResult,
     decodeSessionEventEnvelope,
     decodeSessionStartedEvent,
+    encodeNativeSessionCommand,
     encodeSessionEventAcknowledgement,
     encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
+    NATIVE_SESSION_RESULT_KIND,
     SESSION_COMPLETED_KIND,
     SESSION_EVENT_ACK_KIND,
     SESSION_EVENT_KIND,
@@ -56,7 +59,14 @@ class Messages {
 }
 
 test("Given real Codex and a local model provider, When a Turn streams, Then the daemon accepts it before ordered text and completion", async () => {
-    const provider = await FakeOpenAiProvider.start("mobius-test-model", "Codex live reply");
+    const providerEntered = Promise.withResolvers<void>();
+    const releaseProvider = Promise.withResolvers<void>();
+    const provider = await FakeOpenAiProvider.start("mobius-test-model", "Codex live reply", {
+        beforeFirstText: async () => {
+            providerEntered.resolve();
+            await releaseProvider.promise;
+        },
+    });
     const codex = await CodexFixture.create(provider);
     const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-real-codex-live-"));
     const workspace = join(stateDirectory, "workspace");
@@ -110,10 +120,28 @@ test("Given real Codex and a local model provider, When a Turn streams, Then the
         let completed = false;
         let sequence = 0;
         let epoch: string | undefined;
+        let snapshotVerified = false;
         let text = "";
         let receiptSequence = 0;
         while (!completed) {
             const message = await messages.next();
+            if (decodeMessageKind(message) === NATIVE_SESSION_RESULT_KIND) {
+                const result = decodeNativeSessionResult(message);
+                expect(result.action).toBe("active-turn");
+                if (result.action === "active-turn") {
+                    expect(result.turn).toMatchObject({
+                        commandId,
+                        epoch: expect.any(String),
+                        prompt: "Reply briefly using the configured model",
+                        sequence: 0,
+                        state: "running",
+                        text: "",
+                    });
+                }
+                snapshotVerified = true;
+                releaseProvider.resolve();
+                continue;
+            }
             if (decodeMessageKind(message) !== SESSION_EVENT_KIND) {
                 continue;
             }
@@ -139,6 +167,20 @@ test("Given real Codex and a local model provider, When a Turn streams, Then the
                     sequence: 0,
                 });
                 started = true;
+                await providerEntered.promise;
+                socket.send(
+                    encodeNativeSessionCommand({
+                        action: "active-turn",
+                        additionalDirectoryIds: [],
+                        agentId: "codex",
+                        bindingId: config.bindingId,
+                        directoryId: "default",
+                        kind: "native.session.request",
+                        requestId: randomUUID(),
+                        sessionId,
+                        targetSessionId: sessionId,
+                    }),
+                );
             } else if (kind === AGENT_MESSAGE_DELTA_KIND) {
                 expect(started).toBe(true);
                 const delta = decodeAgentMessageDeltaEvent(envelope.payload);
@@ -155,9 +197,11 @@ test("Given real Codex and a local model provider, When a Turn streams, Then the
             }
         }
         expect(started).toBe(true);
+        expect(snapshotVerified).toBe(true);
         expect(sequence).toBeGreaterThan(0);
         expect(text).toContain("Codex live reply");
     } finally {
+        releaseProvider.resolve();
         cancellation.abort();
         await daemon;
         audit.close();
