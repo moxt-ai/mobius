@@ -9,6 +9,7 @@ This repository starts with new database schemas. Existing Mobius data is not im
 - `packages/cli`: local daemon, pairing, agent discovery, and ACP session execution.
 - `packages/protocol`: messages shared across the daemon, Worker, and SDK.
 - `packages/mobius-sdk`: client and server API used by Mobius Chat.
+- `packages/mini-client`: private stateful CLI for exercising a local Platform Worker and local Runtime.
 - `packages/relay-core`: runtime and session behavior, storage, and protocol boundaries.
 - `packages/relay-cloudflare-platform`: Cloudflare Worker and local Worker integration tests.
 - `packages/relay-cloudflare-standalone`: accountless, single-project Cloudflare Worker and integration tests.

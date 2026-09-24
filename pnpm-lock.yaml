@@ -63,6 +63,25 @@ importers:
         specifier: 0.28.2
         version: 0.28.2
 
+  packages/mini-client:
+    dependencies:
+      '@moxt-ai/mobius-protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@moxt-ai/mobius-sdk':
+        specifier: workspace:*
+        version: link:../mobius-sdk
+      valibot:
+        specifier: 1.5.0
+        version: 1.5.0(typescript@7.0.2)
+    devDependencies:
+      '@types/node':
+        specifier: ^24.13.5
+        version: 24.13.5
+      tsx:
+        specifier: 4.23.14
+        version: 4.23.14
+
   packages/mobius-sdk:
     dependencies:
       '@moxt-ai/mobius-protocol':
