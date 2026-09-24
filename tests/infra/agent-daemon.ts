@@ -358,6 +358,7 @@ export interface FakeAgentDaemonBehavior {
         turn: ActiveTurn,
     ) => SessionPermissionRequestedEvent | SessionElicitationRequestedEvent | null;
     readonly onPromptCompleted?: (command: SessionPromptCommand, response: string) => void;
+    readonly progressText?: (command: SessionPromptCommand) => string;
     readonly requiredBindingId?: string;
     readonly responseParts?: (command: SessionPromptCommand, turn: number) => readonly string[];
 }
@@ -825,6 +826,30 @@ async function processHappyPathCommand(
         signal,
     );
     await behavior.afterSessionStarted?.(command, signal);
+    const progress = behavior.progressText?.(command) ?? "";
+    if (progress.length > 0) {
+        await daemon.sendSessionEvent(
+            command.sessionId,
+            encodeAgentActivityEvent({
+                activityId: `fake-progress-${turn.toString()}`,
+                activityType: "progress",
+                commandId: command.commandId,
+                content: [],
+                detail: { content: [], input: "", kind: "recorded", output: progress },
+                input: "",
+                kind: "agent.activity",
+                locations: [],
+                name: "",
+                output: progress,
+                sequence: 0,
+                sessionId: command.sessionId,
+                status: "completed",
+                title: "Progress update",
+                toolKind: "",
+            }),
+            signal,
+        );
+    }
     const imageContent = createsImage
         ? {
               artifactId: "",

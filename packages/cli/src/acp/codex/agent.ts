@@ -27,6 +27,7 @@ import {
     type McpElicitationParams,
     mcpElicitationParamsSchema,
     modelListResponseSchema,
+    reasoningTextDeltaParamsSchema,
     requestUserInputParamsSchema,
     threadForkResponseSchema,
     threadListResponseSchema,
@@ -428,6 +429,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
     // rather than break every turn.
     #collaborationModeSupported: boolean | null = null;
     #selection: SessionSelection;
+    readonly #streamedReasoningItemIds = new Set<string>();
     #turn: ActiveTurn | null = null;
     #updateTail: Promise<void> = Promise.resolve();
 
@@ -939,6 +941,26 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
             }
             return;
         }
+        if (method === "item/reasoning/summaryTextDelta" || method === "item/reasoning/textDelta") {
+            const decoded = reasoningTextDeltaParamsSchema.safeParse(params);
+            if (
+                decoded.success &&
+                decoded.data.threadId === this.#nativeSessionId &&
+                this.#turn !== null &&
+                decoded.data.turnId === this.#turn.turn.id &&
+                decoded.data.delta.length > 0
+            ) {
+                this.#streamedReasoningItemIds.add(decoded.data.itemId);
+                await this.#enqueue(async () => {
+                    await this.#emit({
+                        content: { text: decoded.data.delta, type: "text" },
+                        messageId: decoded.data.itemId,
+                        sessionUpdate: "agent_thought_chunk",
+                    });
+                });
+            }
+            return;
+        }
         if (method !== "item/started" && method !== "item/completed") {
             return;
         }
@@ -964,7 +986,8 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
         }
         const reasoning = reasoningText(item);
         if (reasoning !== null) {
-            if (method === "item/completed" && reasoning.length > 0) {
+            const streamed = method === "item/completed" && this.#streamedReasoningItemIds.delete(item.id);
+            if (method === "item/completed" && reasoning.length > 0 && !streamed) {
                 await this.#enqueue(async () => {
                     await this.#emit({
                         content: { text: reasoning, type: "text" },
@@ -1136,6 +1159,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
         // The turn is armed before `turn/start` is sent: a short turn can complete before its own
         // response arrives, and a completion for an unarmed turn would be lost.
         const turn: ActiveTurn = { completion, turn: { id: "" } };
+        this.#streamedReasoningItemIds.clear();
         this.#turn = turn;
         try {
             // The selection rides on the turn rather than the thread, so a choice made between turns
@@ -1193,6 +1217,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
             signal.removeEventListener("abort", aborted);
             if (this.#turn === turn) {
                 this.#turn = null;
+                this.#streamedReasoningItemIds.clear();
             }
         }
     };
