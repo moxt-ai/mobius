@@ -69,7 +69,6 @@ export const SessionEventRejectionCode = {
 } as const;
 
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
-const CURSOR_PATTERN = /^[A-Za-z0-9_-]{1,512}$/;
 const MAX_RECORDED_EVENT_LENGTH = 8 * 1024 * 1024;
 const DECIMAL_SEQUENCE_PATTERN = /^(?:0|[1-9][0-9]*)$/;
 
@@ -103,12 +102,10 @@ const eventEnvelopeSchema = z
 
 const committedEventSchema = z
     .strictObject({
-        cursor: z.string().min(1).max(512).regex(CURSOR_PATTERN),
         eventId: z.string().min(1).max(128).regex(IDENTIFIER_PATTERN),
         kind: z.literal(SESSION_EVENT_COMMITTED_KIND),
         payload: z.string().min(2).max(MAX_RECORDED_EVENT_LENGTH),
         recordedAt: z.string().datetime({ offset: true }),
-        sequence: z.string().min(1).max(40).regex(DECIMAL_SEQUENCE_PATTERN),
         sessionId: z.string().min(1).max(128).regex(IDENTIFIER_PATTERN),
         source: eventSourceSchema,
     })
@@ -116,11 +113,8 @@ const committedEventSchema = z
 
 const eventAcknowledgementSchema = z
     .strictObject({
-        cursor: z.string().min(1).max(512).regex(CURSOR_PATTERN),
-        duplicate: z.boolean(),
         eventId: z.string().min(1).max(128).regex(IDENTIFIER_PATTERN),
         kind: z.literal(SESSION_EVENT_ACK_KIND),
-        sequence: z.string().min(1).max(40).regex(DECIMAL_SEQUENCE_PATTERN),
         sessionId: z.string().min(1).max(128).regex(IDENTIFIER_PATTERN),
     })
     .readonly();

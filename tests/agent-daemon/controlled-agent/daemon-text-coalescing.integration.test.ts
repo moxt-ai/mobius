@@ -192,22 +192,17 @@ describe("daemon assistant text coalescing", () => {
             let deltaCount = 0;
             let deltaText = "";
             let completed = false;
-            let eventSequence = 0;
             while (!completed) {
                 const message = await frames.next();
                 if (decodeMessageKind(message) !== SESSION_EVENT_KIND) {
                     continue;
                 }
                 const envelope = decodeSessionEventEnvelope(message);
-                eventSequence += 1;
                 sendText(
                     socket,
                     encodeSessionEventAcknowledgement({
-                        cursor: `cursor-${eventSequence.toString()}`,
-                        duplicate: false,
                         eventId: envelope.eventId,
                         kind: SESSION_EVENT_ACK_KIND,
-                        sequence: eventSequence.toString(),
                         sessionId: envelope.sessionId,
                     }),
                 );
@@ -309,7 +304,6 @@ describe("daemon assistant text coalescing", () => {
                 sessionId,
                 targetCommandId: "",
             };
-            let eventSequence = 0;
             const next = async (): Promise<string> => {
                 for (;;) {
                     const message = await frames.next();
@@ -317,15 +311,11 @@ describe("daemon assistant text coalescing", () => {
                         return message;
                     }
                     const envelope = decodeSessionEventEnvelope(message);
-                    eventSequence += 1;
                     sendText(
                         socket,
                         encodeSessionEventAcknowledgement({
-                            cursor: `cursor-${eventSequence.toString()}`,
-                            duplicate: false,
                             eventId: envelope.eventId,
                             kind: SESSION_EVENT_ACK_KIND,
-                            sequence: eventSequence.toString(),
                             sessionId,
                         }),
                     );

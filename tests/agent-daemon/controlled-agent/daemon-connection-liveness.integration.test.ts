@@ -691,7 +691,6 @@ describe("daemon relay connection liveness", () => {
         const activities: Array<ReturnType<typeof decodeAgentActivityEvent>> = [];
         let agentText = "";
         let removeObserver = (): void => undefined;
-        let eventSequence = 0;
         let resolveCompleted = (): void => undefined;
         const completed = new Promise<void>((resolve) => {
             resolveCompleted = resolve;
@@ -719,15 +718,11 @@ describe("daemon relay connection liveness", () => {
                     return;
                 }
                 const envelope = decodeSessionEventEnvelope(frame.text);
-                eventSequence += 1;
                 writeServerTextFrame(
                     socket,
                     encodeSessionEventAcknowledgement({
-                        cursor: `activity-cursor-${eventSequence.toString()}`,
-                        duplicate: false,
                         eventId: envelope.eventId,
                         kind: SESSION_EVENT_ACK_KIND,
-                        sequence: eventSequence.toString(),
                         sessionId: envelope.sessionId,
                     }),
                 );

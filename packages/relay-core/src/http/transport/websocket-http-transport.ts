@@ -334,7 +334,7 @@ export function acceptWebSocketHttpTransport(
                                     delivery.kind === "event"
                                         ? {
                                               data: encodeCommittedSessionEvent(delivery.event),
-                                              eventId: delivery.event.cursor,
+                                              eventId: delivery.event.eventId,
                                               kind: "session.events.event",
                                               subscriptionId: converted.subscriptionId,
                                           }

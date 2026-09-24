@@ -20,14 +20,7 @@ it("Given events from different Turns, When one is rejected and another is ackno
             }),
         ).toBe(true);
         expect(
-            outbox.acknowledge({
-                cursor: second.eventId,
-                duplicate: false,
-                eventId: second.eventId,
-                kind: "session.event.ack",
-                sequence: "1",
-                sessionId: second.sessionId,
-            }),
+            outbox.acknowledge({ eventId: second.eventId, kind: "session.event.ack", sessionId: second.sessionId }),
         ).toBe(true);
 
         const third = decodeSessionEventEnvelope(outbox.enqueue("session-a", "{}", "attempt-c"));
