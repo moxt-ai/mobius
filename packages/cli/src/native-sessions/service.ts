@@ -95,14 +95,15 @@ export class NativeSessionService {
         }
         if (command.action === "linked-history") {
             const nativeSessionId = nativeSessionIdSchema.parse(command.targetSessionId);
-            if (
-                this.#sessions.hasPreparedSession(nativeSessionId, options.agent.id, cwd, additionalDirectories) &&
-                (await this.#sessions.loadLinkedSessionHistory({ ...options, sessionId: nativeSessionId })) === null
-            ) {
+            if (this.#sessions.hasPreparedSession(nativeSessionId, options.agent.id, cwd, additionalDirectories)) {
+                const linked = await this.#sessions.loadLinkedSessionHistory({
+                    ...options,
+                    sessionId: nativeSessionId,
+                });
                 this.record(command, "native_session_history_read");
                 return {
                     action: "linked-history",
-                    history: {
+                    history: linked ?? {
                         status: "available",
                         messages: [],
                         truncated: false,
