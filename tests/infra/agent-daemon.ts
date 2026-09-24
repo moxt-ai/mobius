@@ -38,6 +38,7 @@ import {
     FILE_READ_KIND,
     NATIVE_SESSION_REQUEST_KIND,
     type NativeSessionHistory,
+    type NativeSessionResult,
     RUNTIME_DELIVERY_KIND,
     RUNTIME_HEARTBEAT_KIND,
     SESSION_EVENT_ACK_KIND,
@@ -49,6 +50,7 @@ import {
     SESSION_PREPARE_KIND,
     SESSION_PROMPT_KIND,
     SESSION_STARTED_KIND,
+    type SessionPromptCommand,
     type SessionReadyEvent,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
@@ -415,12 +417,18 @@ export interface FakeAgentDaemonBehavior {
         readonly id: "codex" | "claude" | "opencode" | "pi";
         readonly name: string;
     }[];
-    readonly afterSessionStarted?: (signal: AbortSignal) => Promise<void>;
+    readonly afterSessionStarted?: (command: SessionPromptCommand, signal: AbortSignal) => Promise<void>;
+    readonly afterFirstDelta?: (command: SessionPromptCommand, signal: AbortSignal) => Promise<void>;
     readonly directoryLabel?: string;
     readonly nativeSessionIds?: ReadonlySet<string>;
+    readonly nativeSessionTitle?: (sessionId: string) => string;
     readonly loadNativeHistory?: (sessionId: string, signal: AbortSignal) => Promise<NativeSessionHistory>;
+    readonly onPromptCompleted?: (command: SessionPromptCommand, response: string) => void;
     readonly requiredBindingId?: string;
+    readonly responseParts?: (command: SessionPromptCommand, turn: number) => readonly string[];
 }
+
+type ActiveTurn = NonNullable<Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"]>;
 
 export interface RunningFakeAgentDaemon extends AsyncDisposable {
     /** Rejects when the fake cannot continue serving the protocol. */
@@ -461,6 +469,7 @@ async function processHappyPathCommand(
     encoded: string,
     behavior: FakeAgentDaemonBehavior,
     nextTurn: () => number,
+    activeTurns: Map<string, ActiveTurn>,
     signal: AbortSignal,
 ): Promise<void> {
     const kind = decodeMessageKind(encoded);
@@ -473,7 +482,7 @@ async function processHappyPathCommand(
                 sessionId: delivery.sessionId,
             }),
         );
-        await processHappyPathCommand(daemon, delivery.payload, behavior, nextTurn, signal);
+        await processHappyPathCommand(daemon, delivery.payload, behavior, nextTurn, activeTurns, signal);
         return;
     }
     if (kind === RUNTIME_HEARTBEAT_KIND) {
@@ -574,7 +583,7 @@ async function processHappyPathCommand(
                         directoryId: "default",
                         directoryLabel: behavior.directoryLabel ?? "Fake workspace",
                         additionalDirectories: [],
-                        title: "New chat",
+                        title: behavior.nativeSessionTitle?.(command.nativeSessionId) ?? "New chat",
                         updatedAt: null,
                     },
                     kind: "native.session.result",
@@ -593,6 +602,17 @@ async function processHappyPathCommand(
                     requestId: command.requestId,
                     sessionId: command.sessionId,
                     targetSessionId: command.targetSessionId,
+                }),
+            );
+        } else if (command.action === "active-turn") {
+            daemon.send(
+                encodeNativeSessionResult({
+                    action: "active-turn",
+                    kind: "native.session.result",
+                    requestId: command.requestId,
+                    sessionId: command.sessionId,
+                    targetSessionId: command.targetSessionId,
+                    turn: activeTurns.get(command.targetSessionId) ?? null,
                 }),
             );
         } else {
@@ -710,14 +730,38 @@ async function processHappyPathCommand(
         );
         return;
     }
+    if (activeTurns.has(command.sessionId)) {
+        await daemon.sendSessionEvent(
+            command.sessionId,
+            encodeSessionFailedEvent({
+                code: "session_busy",
+                commandId: command.commandId,
+                kind: "session.failed",
+                message: "The Session already has an active Turn.",
+                sessionId: command.sessionId,
+            }),
+            signal,
+        );
+        return;
+    }
     const turn = nextTurn();
     const createsImage = command.prompt.toLowerCase().includes("image");
+    const epoch = command.commandId;
+    activeTurns.set(command.sessionId, {
+        commandId: command.commandId,
+        epoch,
+        prompt: command.prompt,
+        sequence: 0,
+        state: "running",
+        text: "",
+        truncated: false,
+    });
     await daemon.sendSessionEvent(
         command.sessionId,
         encodeSessionStartedEvent({
             attemptId: `fake-attempt-${turn.toString()}`,
             commandId: command.commandId,
-            epoch: command.commandId,
+            epoch,
             kind: SESSION_STARTED_KIND,
             prompt: command.prompt,
             sequence: 0,
@@ -725,7 +769,7 @@ async function processHappyPathCommand(
         }),
         signal,
     );
-    await behavior.afterSessionStarted?.(signal);
+    await behavior.afterSessionStarted?.(command, signal);
     const imageContent = createsImage
         ? {
               artifactId: "",
@@ -764,21 +808,38 @@ async function processHappyPathCommand(
             signal,
         );
     }
-    await daemon.sendSessionEvent(
-        command.sessionId,
-        encodeAgentMessageDeltaEvent({
-            commandId: command.commandId,
-            epoch: command.commandId,
-            kind: "agent.message.delta",
-            messageId: `fake-message-${turn.toString()}`,
-            sequence: 1,
-            sessionId: command.sessionId,
-            text: `${behavior.agentName ?? "Fake Agent"} turn ${turn.toString()}: ${command.prompt}${
-                createsImage ? `\n\n[Generated source](<${sourcePath}:104>)` : ""
-            }`,
-        }),
-        signal,
-    );
+    const parts = behavior.responseParts?.(command, turn) ?? [
+        `${behavior.agentName ?? "Fake Agent"} turn ${turn.toString()}: ${command.prompt}${
+            createsImage ? `\n\n[Generated source](<${sourcePath}:104>)` : ""
+        }`,
+    ];
+    for (const [index, text] of parts.entries()) {
+        const current = activeTurns.get(command.sessionId);
+        if (current !== undefined) {
+            activeTurns.set(command.sessionId, {
+                ...current,
+                sequence: index + 1,
+                text: `${current.text}${text}`.slice(-100_000),
+                truncated: current.truncated || current.text.length + text.length > 100_000,
+            });
+        }
+        await daemon.sendSessionEvent(
+            command.sessionId,
+            encodeAgentMessageDeltaEvent({
+                commandId: command.commandId,
+                epoch,
+                kind: "agent.message.delta",
+                messageId: `fake-message-${turn.toString()}`,
+                sequence: index + 1,
+                sessionId: command.sessionId,
+                text,
+            }),
+            signal,
+        );
+        if (index === 0 && parts.length > 1) {
+            await behavior.afterFirstDelta?.(command, signal);
+        }
+    }
     if (imageContent !== null) {
         await daemon.sendSessionEvent(
             command.sessionId,
@@ -793,6 +854,8 @@ async function processHappyPathCommand(
             signal,
         );
     }
+    activeTurns.delete(command.sessionId);
+    behavior.onPromptCompleted?.(command, parts.join(""));
     await daemon.sendSessionEvent(
         command.sessionId,
         encodeSessionCompletedEvent({
@@ -812,13 +875,14 @@ export function serveFakeAgentDaemon(
     const cancellation = new AbortController();
     const failure = Promise.withResolvers<never>();
     const tasks = new Set<Promise<void>>();
+    const activeTurns = new Map<string, ActiveTurn>();
     let turn = 0;
     const nextTurn = (): number => {
         turn += 1;
         return turn;
     };
     const start = (message: string): void => {
-        const task = processHappyPathCommand(daemon, message, behavior, nextTurn, cancellation.signal);
+        const task = processHappyPathCommand(daemon, message, behavior, nextTurn, activeTurns, cancellation.signal);
         tasks.add(task);
         void task.then(
             () => tasks.delete(task),
