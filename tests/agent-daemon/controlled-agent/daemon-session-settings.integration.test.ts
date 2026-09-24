@@ -13,6 +13,7 @@ import {
     AGENT_MESSAGE_DELTA_KIND,
     AGENT_SETTINGS_DISCOVER_KIND,
     AGENT_SETTINGS_DISCOVERED_KIND,
+    decodeAgentActivityEvent,
     decodeAgentCatalogRefreshedEvent,
     decodeAgentSettingsDiscoveredEvent,
     decodeMessageKind,
@@ -179,6 +180,27 @@ async function readCommandActivity(frames: ClientFrames, sessionId: string, comm
         const payload: unknown = JSON.parse(envelope.payload);
         if (readStringField(payload, "commandId") === commandId) {
             return;
+        }
+    }
+}
+
+async function readCompletedReasoningActivity(frames: ClientFrames, sessionId: string, commandId: string) {
+    for (;;) {
+        const message = await frames.next();
+        if (decodeMessageKind(message) !== SESSION_EVENT_KIND) {
+            continue;
+        }
+        const envelope = decodeSessionEventEnvelope(message);
+        if (envelope.sessionId !== sessionId || decodeMessageKind(envelope.payload) !== AGENT_ACTIVITY_KIND) {
+            continue;
+        }
+        const activity = decodeAgentActivityEvent(envelope.payload);
+        if (
+            activity.commandId === commandId &&
+            activity.activityType === "reasoning" &&
+            activity.status === "completed"
+        ) {
+            return activity;
         }
     }
 }
@@ -559,6 +581,24 @@ if (process.argv.includes("--version")) {
             sendText(await socketReady.promise, encodeSessionPromptCommand(inheritedPrompt));
             const inherited = await readTerminalSessionResult(frames, inheritedPrompt.sessionId);
             expect(inherited.text).toBe("Scripted Codex answer (scripted-small/medium/undefined/undefined/default)");
+
+            const reasoningPrompt: SessionPromptCommand = {
+                ...inheritedPrompt,
+                commandId: "codex_reasoning_turn",
+                prompt: "fixture: reasoning turn",
+                sessionId: "codex_reasoning_conversation",
+            };
+            sendText(await socketReady.promise, encodeSessionPromptCommand(reasoningPrompt));
+            expect(
+                await readCompletedReasoningActivity(frames, reasoningPrompt.sessionId, reasoningPrompt.commandId),
+            ).toMatchObject({
+                activityType: "reasoning",
+                output: "Planning the implementation",
+                status: "completed",
+            });
+            expect(
+                await readTerminalSessionResult(frames, reasoningPrompt.sessionId, reasoningPrompt.commandId),
+            ).toMatchObject({ kind: SESSION_COMPLETED_KIND });
 
             // Discovery alone is not the fix: a selection has to reach Codex. The app-server names
             // the model and effort each turn ran with, so the answer proves the choice was applied.

@@ -12,6 +12,19 @@ function truncate(value: string, limit: number): string {
     return value.length <= limit ? value : value.slice(0, limit);
 }
 
+function boundedParagraphs(values: readonly string[], limit: number): string {
+    let text = "";
+    for (const value of values) {
+        const separator = text.length === 0 ? "" : "\n\n";
+        const remaining = limit - text.length;
+        if (remaining <= separator.length) {
+            break;
+        }
+        text += `${separator}${value.slice(0, remaining - separator.length)}`;
+    }
+    return text;
+}
+
 function textContent(text: string): ToolCallContent {
     const block: ContentBlock = { text: truncate(text, TOOL_OUTPUT_CHARACTER_LIMIT), type: "text" };
     return { content: block, type: "content" };
@@ -156,6 +169,14 @@ export function toolCallUpdate(
 export function decodeThreadItem(value: unknown): ThreadItem | null {
     const decoded = threadItemSchema.safeParse(value);
     return decoded.success ? decoded.data : null;
+}
+
+/** Returns the bounded narration Codex exposes for a completed reasoning item. */
+export function reasoningText(item: ThreadItem): string | null {
+    if (item.type !== "reasoning") {
+        return null;
+    }
+    return boundedParagraphs(item.summary.length > 0 ? item.summary : item.content, TOOL_OUTPUT_CHARACTER_LIMIT);
 }
 
 /**

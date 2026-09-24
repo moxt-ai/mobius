@@ -248,6 +248,18 @@ input.on("line", (line) => {
             return;
         }
         notify("turn/started", { threadId, turn: { id: turnId, items: [], status: "inProgress" } });
+        if (promptText === "fixture: reasoning turn") {
+            notify("item/completed", {
+                item: {
+                    content: ["Inspecting the workspace before making changes."],
+                    id: `reasoning-${nextTurn.toString()}`,
+                    summary: ["Planning the implementation"],
+                    type: "reasoning",
+                },
+                threadId,
+                turnId,
+            });
+        }
         notify("item/started", {
             item: {
                 command: "pwd",
