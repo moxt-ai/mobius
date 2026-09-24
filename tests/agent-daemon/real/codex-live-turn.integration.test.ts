@@ -12,12 +12,10 @@ import {
     decodeSessionEventEnvelope,
     decodeSessionStartedEvent,
     encodeNativeSessionCommand,
-    encodeSessionEventAcknowledgement,
     encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
     NATIVE_SESSION_RESULT_KIND,
     SESSION_COMPLETED_KIND,
-    SESSION_EVENT_ACK_KIND,
     SESSION_EVENT_KIND,
     SESSION_FAILED_KIND,
     SESSION_STARTED_KIND,
@@ -145,13 +143,6 @@ test("Given real Codex and a local model provider, When a Turn streams, Then the
                 continue;
             }
             const envelope = decodeSessionEventEnvelope(message);
-            socket.send(
-                encodeSessionEventAcknowledgement({
-                    eventId: envelope.eventId,
-                    kind: SESSION_EVENT_ACK_KIND,
-                    sessionId: envelope.sessionId,
-                }),
-            );
             const kind = decodeMessageKind(envelope.payload);
             if (kind === SESSION_STARTED_KIND) {
                 expect(started).toBe(false);

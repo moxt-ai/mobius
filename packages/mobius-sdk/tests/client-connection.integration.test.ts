@@ -326,23 +326,15 @@ describe("browser relay connection", () => {
             writeServerTextFrame(
                 socket,
                 encodeCommittedSessionEvent({
-                    eventId: "delta-7",
                     kind: SESSION_EVENT_COMMITTED_KIND,
                     payload: deltaPayload,
-                    recordedAt: "2026-09-08T00:00:00.000Z",
                     sessionId: prompt.sessionId,
-                    source: {
-                        attemptId: "attempt-1",
-                        kind: "attempt",
-                        sourceSeq: "1",
-                    },
                 }),
             );
             await expect(deltas.next()).resolves.toEqual(new ObservedDelta("Hello", "1"));
             writeServerTextFrame(
                 socket,
                 encodeCommittedSessionEvent({
-                    eventId: "completed-8",
                     kind: SESSION_EVENT_COMMITTED_KIND,
                     payload: encodeSessionCompletedEvent({
                         commandId: prompt.commandId,
@@ -350,13 +342,7 @@ describe("browser relay connection", () => {
                         sessionId: prompt.sessionId,
                         stopReason: "end_turn",
                     }),
-                    recordedAt: "2026-09-08T00:00:01.000Z",
                     sessionId: prompt.sessionId,
-                    source: {
-                        attemptId: "attempt-1",
-                        kind: "attempt",
-                        sourceSeq: "2",
-                    },
                 }),
             );
             await expect(result).resolves.toEqual({
@@ -493,7 +479,6 @@ describe("browser relay connection", () => {
             writeServerTextFrame(
                 socket,
                 encodeCommittedSessionEvent({
-                    eventId: "delta-1",
                     kind: SESSION_EVENT_COMMITTED_KIND,
                     payload: encodeAgentMessageDeltaEvent({
                         commandId: "command-1",
@@ -504,13 +489,7 @@ describe("browser relay connection", () => {
                         sessionId: "session-1",
                         text: "History changed",
                     }),
-                    recordedAt: "2026-09-08T00:00:00.000Z",
                     sessionId: "session-1",
-                    source: {
-                        attemptId: "attempt-1",
-                        kind: "attempt",
-                        sourceSeq: "1",
-                    },
                 }),
             );
             await expect(nextHistoryChange.next()).resolves.toBe("changed");

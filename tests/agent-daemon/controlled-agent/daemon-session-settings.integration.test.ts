@@ -21,13 +21,11 @@ import {
     encodeAgentCatalogRefreshCommand,
     encodeAgentSettingsDiscoverCommand,
     encodeSessionCancelCommand,
-    encodeSessionEventAcknowledgement,
     encodeSessionLiveHistoryPageLoad,
     encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
     SESSION_CANCEL_KIND,
     SESSION_COMPLETED_KIND,
-    SESSION_EVENT_ACK_KIND,
     SESSION_EVENT_KIND,
     SESSION_FAILED_KIND,
     SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
@@ -58,10 +56,8 @@ class ClientFrames {
     #buffered = Buffer.alloc(0);
     readonly #messages: string[] = [];
     readonly #resolvers: Array<(message: string) => void> = [];
-    readonly #socket: Duplex;
 
     constructor(socket: Duplex) {
-        this.#socket = socket;
         socket.on("data", (chunk: Buffer) => {
             this.#buffered = Buffer.concat([this.#buffered, chunk]);
             this.decode();
@@ -102,17 +98,6 @@ class ClientFrames {
                 continue;
             }
             const message = payload.toString("utf8");
-            if (decodeMessageKind(message) === SESSION_EVENT_KIND) {
-                const envelope = decodeSessionEventEnvelope(message);
-                sendText(
-                    this.#socket,
-                    encodeSessionEventAcknowledgement({
-                        eventId: envelope.eventId,
-                        kind: SESSION_EVENT_ACK_KIND,
-                        sessionId: envelope.sessionId,
-                    }),
-                );
-            }
             const resolve = this.#resolvers.shift();
             if (resolve === undefined) {
                 this.#messages.push(message);

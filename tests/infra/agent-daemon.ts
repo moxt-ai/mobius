@@ -6,14 +6,10 @@ import {
     decodeNativeSessionCommand,
     decodeRuntimeDelivery,
     decodeRuntimeHeartbeatEvent,
-    decodeSessionEventAcknowledgement,
-    decodeSessionEventDeferred,
-    decodeSessionEventRejection,
     decodeSessionLiveHistoryLoad,
     decodeSessionLiveHistoryPageLoad,
     decodeSessionPrepareCommand,
     decodeSessionPromptCommand,
-    decodeSessionStartedEvent,
     decodeWorkspaceListCommand,
     encodeAgentActivityEvent,
     encodeAgentContentEvent,
@@ -41,10 +37,7 @@ import {
     type NativeSessionResult,
     RUNTIME_DELIVERY_KIND,
     RUNTIME_HEARTBEAT_KIND,
-    SESSION_EVENT_ACK_KIND,
-    SESSION_EVENT_DEFERRED_KIND,
     SESSION_EVENT_KIND,
-    SESSION_EVENT_REJECTED_KIND,
     SESSION_LIVE_HISTORY_LOAD_KIND,
     SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
     SESSION_PREPARE_KIND,
@@ -103,17 +96,6 @@ async function waitFor<T>(operation: Promise<T>, signal: AbortSignal): Promise<T
     });
 }
 
-/**
- * Per-Runtime event-source state that outlives a single connection. The real daemon keeps its Attempt
- * identities and per-source sequences in a durable outbox, so a reconnecting Runtime continues its
- * source sequences instead of restarting them. Sharing this record across reconnections keeps the fake
- * daemon contiguous the same way, which is what the Relay requires of the source it already recorded.
- */
-export class FakeAgentDaemonState {
-    readonly attemptIdsByCommand = new Map<string, string>();
-    readonly sourceSequences = new Map<string, number>();
-}
-
 /** A stateful peer at the public daemon/server protocol boundary. */
 export class FakeAgentDaemon implements AsyncDisposable {
     readonly #closed: Promise<void>;
@@ -122,11 +104,9 @@ export class FakeAgentDaemon implements AsyncDisposable {
     readonly #messages: string[] = [];
     readonly #pending: PendingMessage[] = [];
     readonly #socket: AgentDaemonSocket;
-    readonly #state: FakeAgentDaemonState;
 
-    private constructor(socket: AgentDaemonSocket, state: FakeAgentDaemonState) {
+    private constructor(socket: AgentDaemonSocket) {
         this.#socket = socket;
-        this.#state = state;
         this.#closed = new Promise((resolve) => {
             if (socket.readyState === 3) {
                 resolve();
@@ -187,7 +167,6 @@ export class FakeAgentDaemon implements AsyncDisposable {
         url: URL,
         createSocket: (url: URL) => AgentDaemonSocket,
         signal = AbortSignal.timeout(8_000),
-        state: FakeAgentDaemonState = new FakeAgentDaemonState(),
     ): Promise<FakeAgentDaemon> {
         const socket = createSocket(url);
         await new Promise<void>((resolve, reject) => {
@@ -219,7 +198,7 @@ export class FakeAgentDaemon implements AsyncDisposable {
             socket.addEventListener("open", open, { once: true });
             signal.addEventListener("abort", abort, { once: true });
         });
-        return new FakeAgentDaemon(socket, state);
+        return new FakeAgentDaemon(socket);
     }
 
     readonly available = (kind: string): number =>
@@ -326,69 +305,7 @@ export class FakeAgentDaemon implements AsyncDisposable {
 
     readonly sendSessionEvent = async (sessionId: string, payload: string, signal?: AbortSignal): Promise<void> => {
         signal?.throwIfAborted();
-        const eventId = crypto.randomUUID();
-        if (decodeMessageKind(payload) === SESSION_STARTED_KIND) {
-            const started = decodeSessionStartedEvent(payload);
-            this.#state.attemptIdsByCommand.set(`${sessionId}:${started.commandId}`, started.attemptId);
-        }
-        const decoded: unknown = JSON.parse(payload);
-        const commandId =
-            typeof decoded === "object" &&
-            decoded !== null &&
-            !Array.isArray(decoded) &&
-            typeof Reflect.get(decoded, "commandId") === "string"
-                ? String(Reflect.get(decoded, "commandId"))
-                : undefined;
-        const attemptId =
-            commandId === undefined ? undefined : this.#state.attemptIdsByCommand.get(`${sessionId}:${commandId}`);
-        const sourceKey = attemptId === undefined ? `runtime:${sessionId}` : `attempt:${sessionId}:${attemptId}`;
-        const sourceSequence = (this.#state.sourceSequences.get(sourceKey) ?? 0) + 1;
-        this.#state.sourceSequences.set(sourceKey, sourceSequence);
-        const envelope = encodeSessionEventEnvelope({
-            eventId,
-            kind: SESSION_EVENT_KIND,
-            payload,
-            sessionId,
-            source:
-                attemptId === undefined
-                    ? { kind: "runtime", sourceSeq: sourceSequence.toString() }
-                    : { attemptId, kind: "attempt", sourceSeq: sourceSequence.toString() },
-        });
-        while (true) {
-            const response = this.receive("*", signal, (message) => {
-                const kind = decodeMessageKind(message);
-                if (kind === SESSION_EVENT_ACK_KIND) {
-                    const candidate = decodeSessionEventAcknowledgement(message);
-                    return candidate.eventId === eventId && candidate.sessionId === sessionId;
-                }
-                if (kind === SESSION_EVENT_DEFERRED_KIND) {
-                    const candidate = decodeSessionEventDeferred(message);
-                    return candidate.eventId === eventId && candidate.sessionId === sessionId;
-                }
-                if (kind === SESSION_EVENT_REJECTED_KIND) {
-                    const candidate = decodeSessionEventRejection(message);
-                    return candidate.eventId === eventId && candidate.sessionId === sessionId;
-                }
-                return false;
-            });
-            this.#socket.send(envelope);
-            const encoded = await response;
-            const kind = decodeMessageKind(encoded);
-            if (kind === SESSION_EVENT_DEFERRED_KIND) {
-                const deferred = decodeSessionEventDeferred(encoded);
-                await waitFor(
-                    new Promise<void>((resolve) => setTimeout(resolve, deferred.retryAfterMilliseconds)),
-                    signal ?? AbortSignal.timeout(20_000),
-                );
-                continue;
-            }
-            if (kind === SESSION_EVENT_REJECTED_KIND) {
-                const rejection = decodeSessionEventRejection(encoded);
-                throw new Error(`The server rejected the Session event: ${rejection.code}`);
-            }
-            decodeSessionEventAcknowledgement(encoded);
-            return;
-        }
+        this.#socket.send(encodeSessionEventEnvelope({ kind: SESSION_EVENT_KIND, payload, sessionId }));
     };
 
     async [Symbol.asyncDispose](): Promise<void> {
