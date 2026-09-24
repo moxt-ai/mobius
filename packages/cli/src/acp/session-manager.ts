@@ -1107,34 +1107,6 @@ export class AcpSessionManager {
         }
     };
 
-    readonly loadLinkedSessionHistory = async (options: AcpPrepareOptions): Promise<NativeSessionHistory | null> => {
-        options.signal.throwIfAborted();
-        const stored = this.#store.read(options.sessionId);
-        if (!(stored instanceof FoundAcpStoredSession) || !stored.session.prompted) {
-            return null;
-        }
-        const linked = stored.session;
-        if (
-            linked.agentId !== options.agent.id ||
-            linked.cwd !== options.cwd ||
-            linked.additionalDirectories.length !== options.additionalDirectories.length ||
-            linked.additionalDirectories.some((directory, index) => directory !== options.additionalDirectories[index])
-        ) {
-            throw new AcpExecutionError(
-                "The session belongs to another Agent or workspace",
-                {},
-                "session_identity_mismatch",
-            );
-        }
-        if (this.#nativeHistoryReader === null) {
-            return await this.loadSessionHistory(options);
-        }
-        return (
-            (await this.#nativeHistoryReader.read(options, linked.nativeSessionId)) ??
-            (await this.loadSessionHistory(options))
-        );
-    };
-
     readonly openNativeSession = async (
         options: AcpPrepareOptions,
         origin: NativeSessionOrigin,

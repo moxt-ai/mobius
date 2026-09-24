@@ -562,8 +562,7 @@ async function runRelayConnection(
                         if (
                             nativeRequests.has(command.requestId) ||
                             nativeRequests.size >= 4 ||
-                            (command.action !== "linked-history" &&
-                                command.action !== "active-turn" &&
+                            (command.action !== "active-turn" &&
                                 previous.some((request) => !request.controller.signal.aborted))
                         ) {
                             reportOperationFailure(
