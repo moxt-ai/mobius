@@ -29,13 +29,17 @@ import {
     SESSION_CANCEL_KIND,
     SESSION_COMPLETED_KIND,
     SESSION_FAILED_KIND,
+    SESSION_PROMPT_DISPOSITION_KIND,
     SESSION_PROMPT_KIND,
+    SESSION_QUEUED_KIND,
     SESSION_STARTED_KIND,
     type SessionCancelCommand,
     type SessionCompletedEvent,
     type SessionFailedEvent,
     type SessionPromptCommand,
     SessionPromptDisposition,
+    type SessionPromptDispositionCommand,
+    type SessionQueuedEvent,
     type SessionStartedEvent,
 } from "../messages.ts";
 
@@ -364,6 +368,32 @@ export function decodeSessionCancelCommand(encoded: string): SessionCancelComman
     };
 }
 
+export function decodeSessionPromptDispositionCommand(encoded: string): SessionPromptDispositionCommand {
+    const value = parseJson(encoded);
+    assertExactKeys(value, ["commandId", "disposition", "kind", "sessionId"]);
+    assertKind(value, SESSION_PROMPT_DISPOSITION_KIND);
+    if (readPromptDisposition(value) !== SessionPromptDisposition.Steer) {
+        throw new ProtocolMessageError("Only queued prompts can be steered");
+    }
+    return {
+        commandId: readIdentifier(value, "commandId"),
+        disposition: SessionPromptDisposition.Steer,
+        kind: SESSION_PROMPT_DISPOSITION_KIND,
+        sessionId: readIdentifier(value, "sessionId"),
+    };
+}
+
+export function decodeSessionQueuedEvent(encoded: string): SessionQueuedEvent {
+    const value = parseJson(encoded);
+    assertExactKeys(value, ["commandId", "kind", "sessionId"]);
+    assertKind(value, SESSION_QUEUED_KIND);
+    return {
+        commandId: readIdentifier(value, "commandId"),
+        kind: SESSION_QUEUED_KIND,
+        sessionId: readIdentifier(value, "sessionId"),
+    };
+}
+
 export function decodeRuntimeStatusEvent(encoded: string): RuntimeStatusEvent {
     const value = parseJson(encoded);
     assertExactKeys(value, ["kind", "online", "runtimeId"]);
@@ -521,6 +551,14 @@ export function encodeSessionPromptCommand(message: SessionPromptCommand): strin
 
 export function encodeSessionCancelCommand(message: SessionCancelCommand): string {
     return JSON.stringify(decodeSessionCancelCommand(JSON.stringify(message)));
+}
+
+export function encodeSessionPromptDispositionCommand(message: SessionPromptDispositionCommand): string {
+    return JSON.stringify(decodeSessionPromptDispositionCommand(JSON.stringify(message)));
+}
+
+export function encodeSessionQueuedEvent(message: SessionQueuedEvent): string {
+    return JSON.stringify(decodeSessionQueuedEvent(JSON.stringify(message)));
 }
 
 export function encodeRuntimeStatusEvent(message: RuntimeStatusEvent): string {

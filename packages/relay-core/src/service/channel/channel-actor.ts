@@ -30,6 +30,7 @@ import {
     decodeSessionPermissionRespondCommand,
     decodeSessionPrepareCommand,
     decodeSessionPromptCommand,
+    decodeSessionPromptDispositionCommand,
     decodeSessionQueryCommand,
     decodeWorkspaceListCommand,
     encodeAgentCatalogRefreshFailedEvent,
@@ -61,9 +62,11 @@ import {
     SESSION_OPERATION_FAILED_KIND,
     SESSION_PERMISSION_RESPOND_KIND,
     SESSION_PREPARE_KIND,
+    SESSION_PROMPT_DISPOSITION_KIND,
     SESSION_PROMPT_KIND,
     SESSION_QUERIED_KIND,
     SESSION_QUERY_KIND,
+    SESSION_QUEUED_KIND,
     SESSION_READY_KIND,
     type ServiceToDaemonMessage,
     type SessionPromptCommand,
@@ -453,6 +456,8 @@ export class ChannelActor {
                 return;
             case SESSION_QUERIED_KIND:
                 return;
+            case SESSION_QUEUED_KIND:
+                return;
             case NATIVE_SESSION_RESULT_KIND:
                 return;
             case WORKSPACE_ENTRIES_KIND:
@@ -496,6 +501,10 @@ export class ChannelActor {
             }
             case SESSION_CANCEL_KIND: {
                 const command = decodeSessionCancelCommand(message);
+                return { message: command, requestId: command.commandId, sessionId: command.sessionId };
+            }
+            case SESSION_PROMPT_DISPOSITION_KIND: {
+                const command = decodeSessionPromptDispositionCommand(message);
                 return { message: command, requestId: command.commandId, sessionId: command.sessionId };
             }
             case WORKSPACE_LIST_KIND: {

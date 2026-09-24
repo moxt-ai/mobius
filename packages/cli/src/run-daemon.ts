@@ -23,9 +23,11 @@ import {
     SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
     SESSION_PERMISSION_RESPOND_KIND,
     SESSION_PREPARE_KIND,
+    SESSION_PROMPT_DISPOSITION_KIND,
     SESSION_PROMPT_KIND,
     SESSION_QUERIED_KIND,
     SESSION_QUERY_KIND,
+    SESSION_QUEUED_KIND,
     type SessionPromptCommand,
     SessionPromptDisposition,
     WORKSPACE_LIST_KIND,
@@ -288,10 +290,15 @@ async function runRelayConnection(
 
             const waitForSessionAvailability = async (
                 command: SessionPromptCommand,
+                queuedTurn: ActiveDaemonTurn,
                 waitSignal: AbortSignal,
-            ): Promise<"available" | "busy" | "queue-target-unavailable"> => {
-                if (command.disposition === SessionPromptDisposition.Steer) {
-                    return "available";
+            ): Promise<
+                | { readonly kind: "available"; readonly disposition: string }
+                | { readonly kind: "busy" }
+                | { readonly kind: "queue-target-unavailable" }
+            > => {
+                if (queuedTurn.effectiveDisposition() === SessionPromptDisposition.Steer) {
+                    return { disposition: SessionPromptDisposition.Steer, kind: "available" };
                 }
                 for (;;) {
                     const first = [...activeTurns.values()].find(
@@ -302,16 +309,26 @@ async function runRelayConnection(
                     if (first === undefined || first.command.commandId === command.commandId) {
                         return command.disposition !== SessionPromptDisposition.Queue ||
                             operations.isTerminalExecution(command.targetCommandId, command.sessionId)
-                            ? "available"
-                            : "queue-target-unavailable";
+                            ? { disposition: queuedTurn.effectiveDisposition(), kind: "available" }
+                            : { kind: "queue-target-unavailable" };
                     }
                     if (command.disposition !== SessionPromptDisposition.Queue) {
-                        return "busy";
+                        return { kind: "busy" };
                     }
                     if (first.command.commandId !== command.targetCommandId) {
-                        return "queue-target-unavailable";
+                        return { kind: "queue-target-unavailable" };
                     }
-                    await waitForTurnCompletion(first, waitSignal);
+                    const promotion = queuedTurn.queuePromotion();
+                    if (promotion === null) {
+                        throw new Error("The queued prompt cannot be promoted");
+                    }
+                    const decision = await Promise.race([
+                        waitForTurnCompletion(first, waitSignal).then(() => "target-completed" as const),
+                        promotion.then(() => "promoted" as const),
+                    ]);
+                    if (decision === "promoted") {
+                        return { disposition: SessionPromptDisposition.Steer, kind: "available" };
+                    }
                 }
             };
 
@@ -467,6 +484,19 @@ async function runRelayConnection(
                         });
                         return;
                     }
+                    if (kind === SESSION_PROMPT_DISPOSITION_KIND) {
+                        const disposition = message;
+                        const turn = activeTurns.get(disposition.commandId);
+                        if (turn === undefined || !turn.promoteQueuedPrompt(disposition)) {
+                            reportOperationFailure(
+                                socket,
+                                disposition.commandId,
+                                disposition.sessionId,
+                                new Error("The queued prompt is unavailable"),
+                            );
+                        }
+                        return;
+                    }
                     if (kind === WORKSPACE_LIST_KIND) {
                         const command = message;
                         void executeWorkspaceList(socket, command, directories, audit, connectionController.signal);
@@ -587,7 +617,13 @@ async function runRelayConnection(
                         sessions,
                         receipt.attemptId,
                         turn.accept,
-                        (waitSignal) => waitForSessionAvailability(command, waitSignal),
+                        () =>
+                            send(socket, {
+                                commandId: command.commandId,
+                                kind: SESSION_QUEUED_KIND,
+                                sessionId: command.sessionId,
+                            }),
+                        (waitSignal) => waitForSessionAvailability(command, turn, waitSignal),
                         timer,
                         turn.signal,
                         turn.recordText,

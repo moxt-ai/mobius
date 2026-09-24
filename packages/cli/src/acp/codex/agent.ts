@@ -694,7 +694,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                     });
                     continue;
                 }
-                const update = toolCallUpdate(item);
+                const update = toolCallUpdate(item, "snapshot");
                 if (update !== null) {
                     await this.#emit({ ...update, sessionUpdate: "tool_call_update" });
                 }
@@ -906,7 +906,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
             });
             return;
         }
-        const update = toolCallUpdate(item);
+        const update = toolCallUpdate(item, method === "item/completed" ? "completed" : "started");
         if (update !== null) {
             await this.#enqueue(async () => {
                 await this.#emit({ ...update, sessionUpdate: "tool_call_update" });

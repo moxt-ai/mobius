@@ -5,11 +5,15 @@ import {
     decodeRuntimeLivenessReadyEvent,
     decodeSessionCancelCommand,
     decodeSessionPromptCommand,
+    decodeSessionPromptDispositionCommand,
+    decodeSessionQueuedEvent,
     encodeRuntimeHeartbeatAckEvent,
     encodeRuntimeHeartbeatEvent,
     encodeRuntimeLivenessReadyEvent,
     encodeSessionCancelCommand,
     encodeSessionPromptCommand,
+    encodeSessionPromptDispositionCommand,
+    encodeSessionQueuedEvent,
     ProtocolMessageError,
 } from "./codecs/messages.ts";
 import {
@@ -103,7 +107,9 @@ import {
     RUNTIME_HEARTBEAT_KIND,
     RUNTIME_LIVENESS_READY_KIND,
     SESSION_CANCEL_KIND,
+    SESSION_PROMPT_DISPOSITION_KIND,
     SESSION_PROMPT_KIND,
+    SESSION_QUEUED_KIND,
 } from "./messages.ts";
 import {
     decodeNativeSessionCancel,
@@ -240,6 +246,11 @@ const serviceToDaemonSignatures = {
         encodeSessionPromptCommand,
         decodeSessionPromptCommand,
     ),
+    [SESSION_PROMPT_DISPOSITION_KIND]: defineMessageSignature(
+        SESSION_PROMPT_DISPOSITION_KIND,
+        encodeSessionPromptDispositionCommand,
+        decodeSessionPromptDispositionCommand,
+    ),
     [WORKSPACE_LIST_KIND]: defineMessageSignature(
         WORKSPACE_LIST_KIND,
         encodeWorkspaceListCommand,
@@ -321,6 +332,11 @@ const daemonToServiceSignatures = {
         SESSION_QUERIED_KIND,
         encodeSessionsQueriedEvent,
         decodeSessionsQueriedEvent,
+    ),
+    [SESSION_QUEUED_KIND]: defineMessageSignature(
+        SESSION_QUEUED_KIND,
+        encodeSessionQueuedEvent,
+        decodeSessionQueuedEvent,
     ),
     [NATIVE_SESSION_RESULT_KIND]: defineMessageSignature(
         NATIVE_SESSION_RESULT_KIND,

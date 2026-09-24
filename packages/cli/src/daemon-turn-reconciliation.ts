@@ -9,6 +9,8 @@ import {
     SESSION_PERMISSION_RESOLVED_KIND,
     type SessionCancelCommand,
     type SessionPromptCommand,
+    SessionPromptDisposition,
+    type SessionPromptDispositionCommand,
 } from "@moxt-ai/mobius-protocol";
 import { fetch } from "undici";
 import type { DaemonConfig } from "./config.ts";
@@ -18,13 +20,19 @@ import { relayHttpEndpoint, runtimeAuthorization } from "./relay-connection/runt
 const ACTIVE_TURN_RECONCILIATION_TIMEOUT_MILLISECONDS = 20_000;
 type ActiveTurnSnapshot = Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"];
 
+type TurnDispatchState =
+    | { readonly kind: "pending" }
+    | { readonly kind: "queued"; readonly promotion: PromiseWithResolvers<void> }
+    | { readonly kind: "promoted" }
+    | { readonly kind: "accepted" };
+
 export class ActiveDaemonTurn {
     readonly attemptId: string;
     readonly command: SessionPromptCommand;
     readonly #controller: AbortController;
     readonly #finished = Promise.withResolvers<void>();
     #cancellationRequested = false;
-    #accepted = false;
+    #dispatch: TurnDispatchState;
     #text = "";
     #truncated = false;
     #sequence = 0;
@@ -38,6 +46,10 @@ export class ActiveDaemonTurn {
         this.attemptId = attemptId;
         this.command = command;
         this.#controller = new AbortController();
+        this.#dispatch =
+            command.disposition === SessionPromptDisposition.Queue
+                ? { kind: "queued", promotion: Promise.withResolvers<void>() }
+                : { kind: "pending" };
     }
 
     readonly abortDaemon = (): void => {
@@ -47,9 +59,33 @@ export class ActiveDaemonTurn {
     readonly finish = (): void => this.#finished.resolve();
 
     readonly accept = (): { readonly epoch: string; readonly sequence: 0 } => {
-        this.#accepted = true;
+        this.#dispatch = { kind: "accepted" };
         return { epoch: this.#epoch, sequence: 0 };
     };
+
+    readonly promoteQueuedPrompt = (command: SessionPromptDispositionCommand): boolean => {
+        if (
+            command.commandId !== this.command.commandId ||
+            command.sessionId !== this.command.sessionId ||
+            this.#dispatch.kind !== "queued"
+        ) {
+            return false;
+        }
+        const promotion = this.#dispatch.promotion;
+        this.#dispatch = { kind: "promoted" };
+        promotion.resolve();
+        return true;
+    };
+
+    readonly queuePromotion = (): Promise<void> | null => {
+        if (this.#dispatch.kind === "queued") {
+            return this.#dispatch.promotion.promise;
+        }
+        return this.#dispatch.kind === "promoted" ? Promise.resolve() : null;
+    };
+
+    readonly effectiveDisposition = (): string =>
+        this.#dispatch.kind === "promoted" ? SessionPromptDisposition.Steer : this.command.disposition;
 
     readonly recordText = (delta: string): { readonly epoch: string; readonly sequence: number } => {
         this.#sequence += 1;
@@ -78,7 +114,7 @@ export class ActiveDaemonTurn {
     };
 
     readonly snapshot = (): ActiveTurnSnapshot =>
-        this.#accepted
+        this.#dispatch.kind === "accepted"
             ? {
                   commandId: this.command.commandId,
                   prompt: this.command.prompt,
@@ -99,7 +135,7 @@ export class ActiveDaemonTurn {
             return "already-requested";
         }
         this.#cancellationRequested = true;
-        if (!this.#accepted) {
+        if (this.#dispatch.kind !== "accepted") {
             this.#controller.abort(new Error("The queued Agent turn was cancelled"));
             return "pending";
         }
