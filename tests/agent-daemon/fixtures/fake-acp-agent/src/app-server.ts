@@ -28,6 +28,38 @@ input.on("line", (line) => {
         reply({ userAgent: "stateful-codex" });
     } else if (method === "initialized") {
         initialized = true;
+    } else if ((method === "thread/resume" || method === "thread/fork") && initialized) {
+        const params: unknown = Reflect.get(value, "params");
+        const threadId = typeof params === "object" && params !== null ? Reflect.get(params, "threadId") : undefined;
+        if (typeof threadId !== "string" || directory === undefined) {
+            return;
+        }
+        const sourcePath = join(directory, `${encodeURIComponent(threadId)}.json`);
+        const saved: unknown = JSON.parse(readFileSync(sourcePath, "utf8"));
+        if (typeof saved !== "object" || saved === null) {
+            return;
+        }
+        const openedThreadId = method === "thread/fork" ? crypto.randomUUID() : threadId;
+        if (method === "thread/fork") {
+            writeFileSync(join(directory, `${encodeURIComponent(openedThreadId)}.json`), JSON.stringify(saved));
+        }
+        reply({
+            model: "scripted-small",
+            reasoningEffort: "medium",
+            thread: { id: openedThreadId },
+            turns: [
+                {
+                    items: [
+                        {
+                            content: [{ text: Reflect.get(saved, "title"), type: "text" }],
+                            id: "prompt",
+                            type: "userMessage",
+                        },
+                        { id: "answer", phase: "final_answer", text: "Restored", type: "agentMessage" },
+                    ],
+                },
+            ],
+        });
     } else if (
         (method === "thread/read" || method === "thread/turns/list" || method === "thread/list") &&
         initialized

@@ -206,7 +206,7 @@ describe("native Agent session boundary", () => {
 
     // The restored Codex listing path: Mobius hosts the ACP Agent in-process and drives
     // `codex app-server` directly, so the fixture plays that protocol against the real adapter.
-    async function codexFixture() {
+    async function codexFixture(sessionIdentity: "assigned" | "native" = "assigned") {
         const temporary = await realpath(await mkdtemp(join(tmpdir(), "mobius-native-codex-")));
         const workspace = join(temporary, "workspace");
         const native = join(temporary, "native");
@@ -226,7 +226,7 @@ describe("native Agent session boundary", () => {
             (options) => new CodexAcpAgent(options),
         );
         const store = new MemoryAcpSessionStore();
-        const sessions = new AcpSessionManager(new NullAcpSessionObserver(), store);
+        const sessions = new AcpSessionManager(new NullAcpSessionObserver(), store, null, sessionIdentity);
         const audit = new AuditStore();
         const config = createDaemonConfig(
             {
@@ -460,6 +460,37 @@ describe("native Agent session boundary", () => {
         }
     });
 
+    it.each(["import", "fork"] satisfies readonly ("import" | "fork")[])(
+        "Given Runtime uses native Session identities, When Chat requests %s with an assigned destination, Then Codex opens the selected source without returning native history",
+        async (action) => {
+            const f = await codexFixture("native");
+            try {
+                await f.seed("Selected source conversation");
+                const entry = (await f.list()).entries[0];
+                if (entry === undefined) {
+                    throw new Error("Missing native conversation");
+                }
+                const targetSessionId = crypto.randomUUID();
+                const result = await f.service.execute(
+                    {
+                        ...f.identity,
+                        action,
+                        entryId: entry.entryId,
+                        targetSessionId,
+                    },
+                    new AbortController().signal,
+                );
+                expect(result).toMatchObject({
+                    action,
+                    ready: { sessionId: targetSessionId },
+                });
+                expect("history" in result).toBe(false);
+            } finally {
+                await f.close();
+            }
+        },
+    );
+
     it("Given a saved Codex thread with a long preview, When its directory is listed, Then the thread has a bounded title", async () => {
         const f = await codexFixture();
         try {
@@ -475,7 +506,7 @@ describe("native Agent session boundary", () => {
         }
     });
 
-    it("Given a saved local conversation, When its history is previewed and then forked, Then preview leaves the source untouched and only the fork creates a new conversation", async () => {
+    it("Given a saved local conversation, When its history is previewed and then forked, Then only preview returns history and only fork creates a new conversation", async () => {
         vi.useFakeTimers({ toFake: ["Date"] });
         vi.setSystemTime(new Date("2026-09-15T12:00:00Z"));
         const f = await fixture("Codex", "exclusive-writer");
@@ -517,10 +548,6 @@ describe("native Agent session boundary", () => {
             expect(fork).toMatchObject({
                 action: "fork",
                 ready: { sessionId: "forked-copy" },
-                history: {
-                    status: "available",
-                    messages: expect.arrayContaining([{ role: "user", text: "Original context" }]),
-                },
             });
             expect((await f.list()).entries).toHaveLength(2);
             expect(await readFile(join(f.native, source), "utf8")).toBe(original);
@@ -530,7 +557,7 @@ describe("native Agent session boundary", () => {
         }
     });
     it.each(["import", "fork"] satisfies readonly ("import" | "fork")[])(
-        "Given only live Session content is available, When a saved conversation is %sed, Then the conversation opens without loading or returning native history",
+        "Given native history loading is unavailable, When a saved conversation is %sed, Then Runtime opens it without loading history",
         async (action) => {
             const f = await fixture("Claude Code");
             try {
@@ -544,21 +571,17 @@ describe("native Agent session boundary", () => {
                 const result = await f.service.execute(
                     {
                         ...f.identity,
-                        action: action === "import" ? "import-only" : "fork-only",
+                        action,
                         entryId: entry.entryId,
                         targetSessionId: `${action}-without-history`,
                     },
                     new AbortController().signal,
                 );
-
                 expect(result).toMatchObject({
                     action,
-                    history: { status: "unavailable" },
                     ready: { sessionId: `${action}-without-history` },
                 });
-                if (result.action !== action) {
-                    throw new Error(`Expected ${action} result`);
-                }
+                expect("history" in result).toBe(false);
                 expect(await readdir(f.native)).not.toContain("load-paused");
             } finally {
                 await f.close();
@@ -659,10 +682,6 @@ describe("native Agent session boundary", () => {
             expect(await f.service.execute(command, new AbortController().signal)).toMatchObject({
                 action: "import",
                 ready: { sessionId: "imported" },
-                history: {
-                    status: "available",
-                    messages: expect.arrayContaining([{ role: "user", text: "Saved conversation" }]),
-                },
             });
         } finally {
             await external.close();
@@ -792,9 +811,6 @@ describe("native Agent session boundary", () => {
             ).resolves.toMatchObject({
                 action: "import",
                 ready: { sessionId: "handoff-import" },
-                history: {
-                    messages: expect.arrayContaining([{ role: "user", text: "Current handoff conversation" }]),
-                },
             });
         } finally {
             await f.close();
@@ -829,63 +845,6 @@ describe("native Agent session boundary", () => {
             await f.close();
         }
     });
-
-    it.each(["import", "fork"] satisfies readonly ("import" | "fork")[])(
-        "Given an Agent stalls while loading %s history, When a prompt arrives and the deadline expires, Then the prompt is rejected and cancellation preserves the saved session",
-        async (action) => {
-            vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-            vi.setSystemTime(new Date("2026-09-05T00:00:00Z"));
-            const f = await fixture("Codex");
-            try {
-                await f.seed("Keep on timeout");
-                const entry = (await f.list()).entries[0];
-                if (entry === undefined) {
-                    throw new Error("Missing native conversation");
-                }
-                await writeFile(join(f.native, "pause-load"), "");
-                const controller = new AbortController();
-                const reason = new Error("Deadline elapsed");
-                const loading = f.service.execute(
-                    {
-                        ...f.identity,
-                        action,
-                        entryId: entry.entryId,
-                        targetSessionId: "loading-chat",
-                    },
-                    controller.signal,
-                );
-                const cancelled = expect(loading).rejects.toBe(reason);
-                await f.observer.loading.promise;
-                const attempted = await Promise.allSettled([
-                    f.sessions.runPrompt({
-                        agent: f.agent,
-                        additionalDirectories: [],
-                        cwd: f.workspace,
-                        sessionId: "loading-chat",
-                        commandId: "concurrent-prompt",
-                        prompt: "Wait for history",
-                        images: [],
-                        resources: [],
-                        onText: async () => {},
-                        onActivity: async () => {},
-                        signal: new AbortController().signal,
-                    }),
-                ]);
-                const timeout = setTimeout(() => controller.abort(reason), 90_000);
-                await vi.advanceTimersByTimeAsync(90_000);
-                clearTimeout(timeout);
-                await cancelled;
-                expect(attempted).toMatchObject([{ status: "rejected", reason: { code: "session_busy" } }]);
-                expect((await f.list()).entries.map((session) => session.title)).toEqual([
-                    "Keep on timeout",
-                    ...(action === "fork" ? ["Keep on timeout"] : []),
-                ]);
-            } finally {
-                await f.close();
-                vi.useRealTimers();
-            }
-        },
-    );
 
     it("Given an Agent omits native session capabilities, When a remote caller requests its sessions, Then the local boundary rejects the operation", async () => {
         const f = await fixture("Codex", "unsupported");

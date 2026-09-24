@@ -343,8 +343,7 @@ export class NativeSessionService {
                 deletedSessionIds,
             };
         }
-        const action =
-            command.action === "import-only" ? "import" : command.action === "fork-only" ? "fork" : command.action;
+        const action = command.action;
         if (action === "import" && !prepared.capabilities.loadSession && !prepared.capabilities.resumeSession) {
             throw new AcpExecutionError("This Agent cannot import native sessions", {}, "native_session_unsupported");
         }
@@ -370,7 +369,6 @@ export class NativeSessionService {
                 additionalDirectories: target.additionalDirectories,
             },
             { kind: action, nativeSessionId: target.info.sessionId },
-            command.action !== "import-only" && command.action !== "fork-only",
         );
         signal.throwIfAborted();
         const ready: SessionReadyEvent = {
@@ -395,7 +393,6 @@ export class NativeSessionService {
             ready,
             targetSessionId: command.targetSessionId,
             title: target.info.title ?? "Untitled session",
-            history: opened.history,
         };
     };
 

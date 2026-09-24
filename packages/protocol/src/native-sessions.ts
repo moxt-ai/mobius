@@ -84,14 +84,6 @@ const nativeSessionCommandSchema = z.discriminatedUnion("action", [
     z
         .strictObject({
             ...identity,
-            action: z.enum(["import-only", "fork-only"]),
-            entryId: identifier,
-            targetSessionId: identifier,
-        })
-        .readonly(),
-    z
-        .strictObject({
-            ...identity,
             action: z.literal("delete"),
             entryId: identifier,
         })
@@ -184,7 +176,6 @@ const nativeSessionResultSchema = z.discriminatedUnion("action", [
             action: z.enum(["import", "fork"]),
             targetSessionId: identifier,
             ready: sessionReadyEventSchema,
-            history: sessionHistorySchema,
             title: z.string().max(500),
         })
         .readonly(),
