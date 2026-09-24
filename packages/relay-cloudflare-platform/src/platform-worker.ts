@@ -48,6 +48,7 @@ import { createProjectApplication } from "./http/project-routes.ts";
 import { ClerkOrganizationGateway } from "./infra/clerk-organization-gateway.ts";
 import type { OrganizationMembershipGateway } from "./infra/organization-membership-gateway.ts";
 import { PlatformProjectStorageDirectory } from "./infra/platform-project-storage-directory.ts";
+import { createBrowserCors } from "./middleware/browser-cors.ts";
 import {
     initializeSessionAccessTargetMiddleware,
     sessionAccessTargetMiddleware,
@@ -200,6 +201,14 @@ export function createPlatformApplication(
                 ),
         );
     const sessionRoutes = new Hono<DispatchEnvironment>()
+        .use(
+            "*",
+            createBrowserCors(
+                ["GET", "POST", "PUT"],
+                ["authorization", "content-type", "x-mobius-oidc-provider"],
+                authentication.allowedOrigins,
+            ),
+        )
         .post("/:sessionId/access-credentials", sessionAccessTargetMiddleware, async (context) => {
             const authorization = context.req.header("authorization") ?? "";
             const credential = authorization.match(/^Bearer ([^\s]+)$/u)?.[1];

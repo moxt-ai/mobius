@@ -125,6 +125,39 @@ afterEach(() => {
 });
 
 describe.sequential("Platform Session-only boundary", () => {
+    it("Given an allowed Chat origin, When the browser preflights a Session file read, Then Platform permits the request", async () => {
+        const browserOrigin = "https://chat.test";
+        const worker = createTestMobiusPlatformApp(
+            new PlatformAuthenticationConfiguration(
+                clerk.authenticator,
+                new Set(["developer-1"]),
+                new Set([browserOrigin]),
+            ),
+            createPlatformGateways,
+        );
+        const projectId = "prj_ap_01_abcdefghijklmnopqrstuvwx";
+
+        const response = await worker.fetch(
+            new Request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/local-session/files/content?maxBytes=33554432&path=%2Fworkspace%2Fpackage.json`,
+                {
+                    headers: {
+                        "access-control-request-headers": "authorization",
+                        "access-control-request-method": "GET",
+                        origin: browserOrigin,
+                    },
+                    method: "OPTIONS",
+                },
+            ),
+            bindings(),
+        );
+
+        expect(response.status).toBe(204);
+        expect(response.headers.get("access-control-allow-origin")).toBe(browserOrigin);
+        expect(response.headers.get("access-control-allow-methods")).toContain("GET");
+        expect(response.headers.get("access-control-allow-headers")).toContain("authorization");
+    });
+
     it("Given a Platform developer, When it issues an AppCredential, Then Session permissions are accepted and retired Conversation permissions are rejected", async () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
