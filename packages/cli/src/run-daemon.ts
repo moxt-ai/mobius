@@ -24,6 +24,8 @@ import {
     SESSION_PERMISSION_RESPOND_KIND,
     SESSION_PREPARE_KIND,
     SESSION_PROMPT_KIND,
+    SESSION_QUERIED_KIND,
+    SESSION_QUERY_KIND,
     type SessionPromptCommand,
     SessionPromptDisposition,
     WORKSPACE_LIST_KIND,
@@ -496,6 +498,22 @@ async function runRelayConnection(
                             sessions,
                             connectionController.signal,
                         );
+                        return;
+                    }
+                    if (kind === SESSION_QUERY_KIND) {
+                        const command = message;
+                        void nativeSessions
+                            .querySessions(command.sessionIds, connectionController.signal)
+                            .then((entries) => {
+                                send(socket, {
+                                    entries,
+                                    kind: SESSION_QUERIED_KIND,
+                                    requestId: command.requestId,
+                                });
+                            })
+                            .catch((error: unknown) => {
+                                reportOperationFailure(socket, command.requestId, "", error);
+                            });
                         return;
                     }
                     if (kind === SESSION_PERMISSION_RESPOND_KIND) {

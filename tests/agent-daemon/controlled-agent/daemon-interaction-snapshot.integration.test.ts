@@ -10,15 +10,20 @@ import {
     decodeSessionElicitationRequestedEvent,
     decodeSessionEventEnvelope,
     decodeSessionPermissionRequestedEvent,
+    decodeSessionsQueriedEvent,
     encodeNativeSessionRequest,
     encodeSessionElicitationRespondCommand,
     encodeSessionPermissionRespondCommand,
+    encodeSessionPrepareCommand,
     encodeSessionPromptCommand,
+    encodeSessionQueryCommand,
     MOBIUS_API_PREFIX,
     NATIVE_SESSION_RESULT_KIND,
     SESSION_ELICITATION_REQUESTED_KIND,
     SESSION_EVENT_KIND,
     SESSION_PERMISSION_REQUESTED_KIND,
+    SESSION_QUERIED_KIND,
+    SESSION_READY_KIND,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { expect, test } from "vitest";
@@ -155,6 +160,83 @@ test("Given a real daemon with an Agent waiting for permission and input, When a
                 sessionId,
             }),
         );
+    } finally {
+        cancellation.abort();
+        await daemon;
+        audit.close();
+        for (const socket of websocketServer.clients) {
+            socket.terminate();
+        }
+        await new Promise<void>((resolve) => websocketServer.close(() => resolve()));
+        await new Promise<void>((resolve) => relay.close(() => resolve()));
+        await rm(stateDirectory, { recursive: true, force: true });
+    }
+}, 30_000);
+
+test("Given a real daemon prepared a Session, When Platform queries its metadata, Then the daemon returns it without closing the Runtime", async () => {
+    const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-session-query-"));
+    const workspace = join(stateDirectory, "workspace");
+    await mkdir(workspace);
+    const relay = createServer((_request, response) => response.writeHead(404).end());
+    const websocketServer = new WebSocketServer({ server: relay });
+    const connected = Promise.withResolvers<WebSocket>();
+    websocketServer.on("connection", (socket) => connected.resolve(socket));
+    await listen(relay);
+    const relayUrl = new URL(
+        `ws://127.0.0.1:${port(relay).toString()}${MOBIUS_API_PREFIX}/channels/session-query/daemon`,
+    );
+    relayUrl.searchParams.set("token", "r".repeat(43));
+    const fakeAgentPath = fileURLToPath(new URL("../fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
+    const agent = new LocalAgentDefinition("codex", "Codex", process.execPath, [
+        fakeAgentPath,
+        "--agent-name",
+        "Codex",
+    ]);
+    const config = createDaemonConfig(
+        { channelId: "session-query", defaultWorkspace: workspace, relayUrl },
+        [agent],
+        [],
+        new DaemonLocalContext(stateDirectory),
+    );
+    const cancellation = new AbortController();
+    const audit = new AuditStore();
+    const daemon = runDaemon(config, audit, cancellation.signal);
+    try {
+        const socket = await connected.promise;
+        const messages = new Messages(socket);
+        const sessionId = "prepared_session";
+        socket.send(
+            encodeSessionPrepareCommand({
+                additionalDirectoryIds: [],
+                agentId: "codex",
+                bindingId: config.bindingId,
+                directoryId: "default",
+                kind: "session.prepare",
+                requestId: "prepare_request",
+                sessionId,
+            }),
+        );
+        await messages.nextKind(SESSION_READY_KIND);
+
+        socket.send(
+            encodeSessionQueryCommand({
+                kind: "session.query",
+                requestId: "query_request",
+                sessionIds: [sessionId],
+            }),
+        );
+
+        expect(decodeSessionsQueriedEvent(await messages.nextKind(SESSION_QUERIED_KIND))).toMatchObject({
+            entries: [
+                {
+                    agentId: "codex",
+                    prompted: false,
+                    sessionId,
+                    title: "Untitled session",
+                },
+            ],
+            requestId: "query_request",
+        });
     } finally {
         cancellation.abort();
         await daemon;
