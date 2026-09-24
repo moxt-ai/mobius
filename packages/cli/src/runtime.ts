@@ -1,5 +1,6 @@
 import { mkdir, realpath, stat } from "node:fs/promises";
 import { resolve } from "node:path";
+import { isIdentifier } from "@moxt-ai/mobius-protocol";
 
 import { discoverLocalAgentInventory } from "./agent-catalog/discover-local-agents.ts";
 import { AuditStore } from "./audit/audit-store.ts";
@@ -7,7 +8,6 @@ import { createDaemonConfig, type DaemonConfig, DaemonLocalContext, loadDefaultW
 import { runDaemon } from "./run-daemon.ts";
 import { readStateDirectory } from "./storage/state-directory.ts";
 
-const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const RUNTIME_CREDENTIAL_PATTERN = /^[a-zA-Z0-9_-]{32,256}$/;
 
 export interface MobiusRuntimeConnection {
@@ -75,7 +75,7 @@ export function loadMobiusRuntimeConnection(
     environment: Readonly<NodeJS.ProcessEnv> = process.env,
 ): MobiusRuntimeConnection {
     const channelId = requiredEnvironmentValue(environment, "MOBIUS_CHANNEL_ID");
-    if (!IDENTIFIER_PATTERN.test(channelId)) {
+    if (!isIdentifier(channelId)) {
         throw new MobiusRuntimeConfigurationError("MOBIUS_CHANNEL_ID is invalid");
     }
     return Object.freeze({

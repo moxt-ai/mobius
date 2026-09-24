@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { type FileHandle, mkdir, open, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
+import { isIdentifier } from "@moxt-ai/mobius-protocol";
 
 const APPLICATION_ID_PATTERN = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+){1,31}$/;
 const CONNECTION_ID_PATTERN = /^mcn_[a-f0-9]{32}$/;
 const INSTALLATION_ID_PATTERN = /^min_[a-f0-9]{32}$/;
-const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const RUNTIME_CREDENTIAL_PATTERN = /^[a-zA-Z0-9_-]{32,256}$/;
 const MAX_FILE_LENGTH = 16 * 1024;
 const INSTALLATION_POINTER_KEYS: readonly string[] = ["installationId", "version"];
@@ -133,7 +133,7 @@ function validateApplicationId(value: string): string {
 }
 
 function validateRemoteAppId(value: string): string {
-    if (!IDENTIFIER_PATTERN.test(value)) {
+    if (!isIdentifier(value)) {
         throw new RuntimeInstallationStoreError("invalid_app_id", "The remote App ID is invalid");
     }
     return value;
@@ -154,7 +154,7 @@ function validateInstallationId(value: string): string {
 }
 
 function validateIdentifier(value: string, code: string): string {
-    if (!IDENTIFIER_PATTERN.test(value)) {
+    if (!isIdentifier(value)) {
         throw new RuntimeInstallationStoreError(code, "The saved Runtime connection is invalid");
     }
     return value;

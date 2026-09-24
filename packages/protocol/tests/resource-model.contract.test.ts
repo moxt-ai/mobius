@@ -1,17 +1,29 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import {
     decodeArchiveSegment,
     decodeAttempt,
+    decodeIdentifier,
     decodeMessageView,
     decodeSession,
     decodeSessionBinding,
     decodeToolCallView,
     decodeTurn,
+    type Identifier,
     transitionAttempt,
     transitionTurn,
 } from "../src/index.ts";
 
 describe("Mobius resource model contract", () => {
+    it("Given an untrusted protocol identifier, When it is decoded, Then valid values are branded and malformed values are rejected", () => {
+        const identifier = decodeIdentifier("session-a");
+
+        expect(identifier).toBe("session-a");
+        expect(() => decodeIdentifier("session/a")).toThrow();
+        expect(() => decodeIdentifier(42)).toThrow();
+        expectTypeOf(identifier).toEqualTypeOf<Identifier>();
+        expectTypeOf<string>().not.toMatchTypeOf<Identifier>();
+    });
+
     it("Given a Turn request was not retained, When its public record is decoded, Then only terminal states without request content are accepted", () => {
         const turn = {
             acceptedAt: "2026-09-07T00:00:01.000Z",

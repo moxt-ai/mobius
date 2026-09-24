@@ -6,14 +6,13 @@ import {
     permissionOptionSchema,
     sessionConfigurationSelectionsSchema,
 } from "./control-messages.ts";
+import { identifierSchema } from "./identifier.ts";
 
 export const MAX_LOCAL_AGENT_DIRECTORY_ENTRIES = 32;
 
-const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const DECIMAL_SEQUENCE_PATTERN = /^(?:0|[1-9][0-9]*)$/;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 
-const identifierSchema = z.string().min(1).max(128).regex(IDENTIFIER_PATTERN);
 const timestampSchema = z.string().datetime({ offset: true });
 const decimalSequenceSchema = z.string().min(1).max(40).regex(DECIMAL_SEQUENCE_PATTERN);
 const digestSchema = z.string().length(64).regex(SHA256_PATTERN);

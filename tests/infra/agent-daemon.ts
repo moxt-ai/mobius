@@ -3,6 +3,7 @@ import {
     AGENT_SETTINGS_DISCOVER_KIND,
     decodeAgentSettingsDiscoverCommand,
     decodeFileReadCommand,
+    decodeIdentifier,
     decodeMessageKind,
     decodeNativeSessionCommand,
     decodeRuntimeHeartbeatEvent,
@@ -482,10 +483,11 @@ async function processHappyPathCommand(
                 encodeNativeSessionResult({
                     action: "create",
                     kind: "native.session.result",
-                    nativeSessionId:
+                    nativeSessionId: decodeIdentifier(
                         behavior.agentId === "opencode"
                             ? `ses_${crypto.randomUUID().replaceAll("-", "")}`
                             : crypto.randomUUID(),
+                    ),
                     requestId: command.requestId,
                     sessionId: command.sessionId,
                 }),
@@ -512,9 +514,9 @@ async function processHappyPathCommand(
                         additionalDirectories: [],
                         directoryId: "default",
                         directoryLabel: behavior.directoryLabel ?? "Fake workspace",
-                        entryId: nativeSessionId,
+                        entryId: decodeIdentifier(nativeSessionId),
                         mobiusSessionIds: [],
-                        nativeSessionId,
+                        nativeSessionId: decodeIdentifier(nativeSessionId),
                         title: behavior.nativeSessionTitle?.(nativeSessionId) ?? "New chat",
                         updatedAt: null,
                     })),
@@ -760,8 +762,8 @@ async function processHappyPathCommand(
     const createsImage = command.prompt.toLowerCase().includes("image");
     const epoch = command.commandId;
     activeTurns.set(command.sessionId, {
-        commandId: command.commandId,
-        epoch,
+        commandId: decodeIdentifier(command.commandId),
+        epoch: decodeIdentifier(epoch),
         interaction: null,
         prompt: command.prompt,
         sequence: 0,
