@@ -38,7 +38,7 @@ import {
     turnSteerResponseSchema,
     type UserInputQuestion,
 } from "./app-server-protocol.ts";
-import { agentMessageMeta, decodeThreadItem, toolCallUpdate } from "./items.ts";
+import { agentMessageMeta, decodeThreadItem, reasoningText, toolCallUpdate } from "./items.ts";
 
 const APPROVAL_REASON_CHARACTER_LIMIT = 500;
 const APPROVAL_TIMEOUT_MILLISECONDS = 3_600_000;
@@ -960,6 +960,19 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                     sessionUpdate: "agent_message_chunk",
                 });
             });
+            return;
+        }
+        const reasoning = reasoningText(item);
+        if (reasoning !== null) {
+            if (method === "item/completed" && reasoning.length > 0) {
+                await this.#enqueue(async () => {
+                    await this.#emit({
+                        content: { text: reasoning, type: "text" },
+                        messageId: item.id,
+                        sessionUpdate: "agent_thought_chunk",
+                    });
+                });
+            }
             return;
         }
         const update = toolCallUpdate(item, method === "item/completed" ? "completed" : "started");
