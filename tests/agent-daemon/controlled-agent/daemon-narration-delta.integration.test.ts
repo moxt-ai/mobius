@@ -195,22 +195,17 @@ describe("daemon narration delivery", () => {
             let completedActivityId = "";
             let maxEventBytes = 0;
             let completed = false;
-            let eventSequence = 0;
             while (!completed) {
                 const message = await frames.next();
                 if (decodeMessageKind(message) !== SESSION_EVENT_KIND) {
                     continue;
                 }
                 const envelope = decodeSessionEventEnvelope(message);
-                eventSequence += 1;
                 sendText(
                     socket,
                     encodeSessionEventAcknowledgement({
-                        cursor: `cursor-${eventSequence.toString()}`,
-                        duplicate: false,
                         eventId: envelope.eventId,
                         kind: SESSION_EVENT_ACK_KIND,
-                        sequence: eventSequence.toString(),
                         sessionId: envelope.sessionId,
                     }),
                 );

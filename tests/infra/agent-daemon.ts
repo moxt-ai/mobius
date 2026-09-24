@@ -324,7 +324,7 @@ export class FakeAgentDaemon implements AsyncDisposable {
         await this.#socket.sendBatch(messages);
     };
 
-    readonly sendSessionEvent = async (sessionId: string, payload: string, signal?: AbortSignal): Promise<string> => {
+    readonly sendSessionEvent = async (sessionId: string, payload: string, signal?: AbortSignal): Promise<void> => {
         signal?.throwIfAborted();
         const eventId = crypto.randomUUID();
         if (decodeMessageKind(payload) === SESSION_STARTED_KIND) {
@@ -386,7 +386,8 @@ export class FakeAgentDaemon implements AsyncDisposable {
                 const rejection = decodeSessionEventRejection(encoded);
                 throw new Error(`The server rejected the Session event: ${rejection.code}`);
             }
-            return decodeSessionEventAcknowledgement(encoded).sequence;
+            decodeSessionEventAcknowledgement(encoded);
+            return;
         }
     };
 

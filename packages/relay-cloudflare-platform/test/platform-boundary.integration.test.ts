@@ -336,15 +336,20 @@ describe.sequential("Platform Session-only boundary", () => {
                 source: { attemptId: "local-codex-attempt", kind: "attempt", sourceSeq: "1" },
             });
             daemon.send(answer);
-            expect(decodeCommittedSessionEvent(await hostMessages.next()).payload).toContain("local answer");
-            expect(decodeServiceToDaemonMessage(await daemonMessages.next())).toMatchObject({
+            const received = decodeCommittedSessionEvent(await hostMessages.next());
+            expect(received.payload).toContain("local answer");
+            expect(received).not.toHaveProperty("cursor");
+            expect(received).not.toHaveProperty("sequence");
+            const acknowledged = decodeServiceToDaemonMessage(await daemonMessages.next());
+            expect(acknowledged).toEqual({
                 eventId: "local-codex-event",
                 kind: SESSION_EVENT_ACK_KIND,
                 sessionId,
             });
+            // A retransmission remains a live event; the viewer uses the Runtime's epoch and sequence.
             daemon.send(answer);
-            expect(decodeServiceToDaemonMessage(await daemonMessages.next())).toMatchObject({
-                duplicate: true,
+            expect(decodeCommittedSessionEvent(await hostMessages.next()).payload).toContain("local answer");
+            expect(decodeServiceToDaemonMessage(await daemonMessages.next())).toEqual({
                 eventId: "local-codex-event",
                 kind: SESSION_EVENT_ACK_KIND,
                 sessionId,

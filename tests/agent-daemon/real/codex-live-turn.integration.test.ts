@@ -122,7 +122,6 @@ test("Given real Codex and a local model provider, When a Turn streams, Then the
         let epoch: string | undefined;
         let snapshotVerified = false;
         let text = "";
-        let receiptSequence = 0;
         while (!completed) {
             const message = await messages.next();
             if (decodeMessageKind(message) === NATIVE_SESSION_RESULT_KIND) {
@@ -146,14 +145,10 @@ test("Given real Codex and a local model provider, When a Turn streams, Then the
                 continue;
             }
             const envelope = decodeSessionEventEnvelope(message);
-            receiptSequence += 1;
             socket.send(
                 encodeSessionEventAcknowledgement({
-                    cursor: `real-codex-${receiptSequence.toString()}`,
-                    duplicate: false,
                     eventId: envelope.eventId,
                     kind: SESSION_EVENT_ACK_KIND,
-                    sequence: receiptSequence.toString(),
                     sessionId: envelope.sessionId,
                 }),
             );

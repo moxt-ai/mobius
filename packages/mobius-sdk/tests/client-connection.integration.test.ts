@@ -326,12 +326,10 @@ describe("browser relay connection", () => {
             writeServerTextFrame(
                 socket,
                 encodeCommittedSessionEvent({
-                    cursor: "cursor-7",
                     eventId: "delta-7",
                     kind: SESSION_EVENT_COMMITTED_KIND,
                     payload: deltaPayload,
                     recordedAt: "2026-09-08T00:00:00.000Z",
-                    sequence: "7",
                     sessionId: prompt.sessionId,
                     source: {
                         attemptId: "attempt-1",
@@ -340,11 +338,10 @@ describe("browser relay connection", () => {
                     },
                 }),
             );
-            await expect(deltas.next()).resolves.toEqual(new ObservedDelta("Hello", "7"));
+            await expect(deltas.next()).resolves.toEqual(new ObservedDelta("Hello", "1"));
             writeServerTextFrame(
                 socket,
                 encodeCommittedSessionEvent({
-                    cursor: "cursor-8",
                     eventId: "completed-8",
                     kind: SESSION_EVENT_COMMITTED_KIND,
                     payload: encodeSessionCompletedEvent({
@@ -354,7 +351,6 @@ describe("browser relay connection", () => {
                         stopReason: "end_turn",
                     }),
                     recordedAt: "2026-09-08T00:00:01.000Z",
-                    sequence: "8",
                     sessionId: prompt.sessionId,
                     source: {
                         attemptId: "attempt-1",
@@ -497,7 +493,6 @@ describe("browser relay connection", () => {
             writeServerTextFrame(
                 socket,
                 encodeCommittedSessionEvent({
-                    cursor: "cursor-1",
                     eventId: "delta-1",
                     kind: SESSION_EVENT_COMMITTED_KIND,
                     payload: encodeAgentMessageDeltaEvent({
@@ -510,7 +505,6 @@ describe("browser relay connection", () => {
                         text: "History changed",
                     }),
                     recordedAt: "2026-09-08T00:00:00.000Z",
-                    sequence: "1",
                     sessionId: "session-1",
                     source: {
                         attemptId: "attempt-1",

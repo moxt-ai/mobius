@@ -309,14 +309,6 @@ function readInboundMessage(event: MessageEvent<unknown>): string {
     return committed.payload;
 }
 
-function readInboundCommittedSequence(event: MessageEvent<unknown>): string {
-    const encoded = readMessageText(event);
-    if (decodeMessageKind(encoded) !== SESSION_EVENT_COMMITTED_KIND) {
-        throw new MobiusClientError("invalid_protocol_message", "Relay sent an uncommitted Session event");
-    }
-    return decodeCommittedSessionEvent(encoded).sequence;
-}
-
 function encodeOutboundMessage(encode: () => string): string {
     try {
         return encode();
@@ -904,7 +896,7 @@ export class MobiusClient {
                     if (kind === AGENT_MESSAGE_DELTA_KIND) {
                         const message = decodeAgentMessageDeltaEvent(encoded);
                         if (message.commandId === commandId) {
-                            request.observer?.onDelta?.(message.text, readInboundCommittedSequence(event));
+                            request.observer?.onDelta?.(message.text, String(message.sequence));
                         }
                         return;
                     }

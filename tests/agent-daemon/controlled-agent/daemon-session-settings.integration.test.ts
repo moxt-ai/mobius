@@ -56,7 +56,6 @@ function executableSource(source: string): string {
 
 class ClientFrames {
     #buffered = Buffer.alloc(0);
-    #eventSequence = 0;
     readonly #messages: string[] = [];
     readonly #resolvers: Array<(message: string) => void> = [];
     readonly #socket: Duplex;
@@ -105,15 +104,11 @@ class ClientFrames {
             const message = payload.toString("utf8");
             if (decodeMessageKind(message) === SESSION_EVENT_KIND) {
                 const envelope = decodeSessionEventEnvelope(message);
-                this.#eventSequence += 1;
                 sendText(
                     this.#socket,
                     encodeSessionEventAcknowledgement({
-                        cursor: `cursor-${this.#eventSequence.toString()}`,
-                        duplicate: false,
                         eventId: envelope.eventId,
                         kind: SESSION_EVENT_ACK_KIND,
-                        sequence: this.#eventSequence.toString(),
                         sessionId: envelope.sessionId,
                     }),
                 );
