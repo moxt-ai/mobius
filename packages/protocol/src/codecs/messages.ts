@@ -452,26 +452,41 @@ export function decodeRuntimeDeliveryCommitted(encoded: string): RuntimeDelivery
 
 export function decodeSessionStartedEvent(encoded: string): SessionStartedEvent {
     const value = parseJson(encoded);
-    assertExactKeys(value, ["commandId", "kind", "attemptId", "sessionId"]);
+    assertExactKeys(value, ["commandId", "epoch", "kind", "attemptId", "prompt", "sequence", "sessionId"]);
     assertKind(value, SESSION_STARTED_KIND);
+
+    const sequence = readSequence(value, "sequence");
+    if (sequence !== 0) {
+        throw new ProtocolMessageError("Invalid live start sequence");
+    }
 
     return {
         commandId: readIdentifier(value, "commandId"),
+        epoch: readIdentifier(value, "epoch"),
         kind: SESSION_STARTED_KIND,
         attemptId: readIdentifier(value, "attemptId"),
+        prompt: readText(value, "prompt", MAX_PROMPT_LENGTH),
+        sequence,
         sessionId: readIdentifier(value, "sessionId"),
     };
 }
 
 export function decodeAgentMessageDeltaEvent(encoded: string): AgentMessageDeltaEvent {
     const value = parseJson(encoded);
-    assertExactKeys(value, ["commandId", "kind", "messageId", "sessionId", "text"]);
+    assertExactKeys(value, ["commandId", "epoch", "kind", "messageId", "sequence", "sessionId", "text"]);
     assertKind(value, AGENT_MESSAGE_DELTA_KIND);
+
+    const sequence = readSequence(value, "sequence");
+    if (sequence === 0) {
+        throw new ProtocolMessageError("Invalid live sequence");
+    }
 
     return {
         commandId: readIdentifier(value, "commandId"),
+        epoch: readIdentifier(value, "epoch"),
         kind: AGENT_MESSAGE_DELTA_KIND,
         messageId: value["messageId"] === undefined ? "" : readText(value, "messageId", 255),
+        sequence,
         sessionId: readIdentifier(value, "sessionId"),
         text: readString(value, "text", MAX_EVENT_TEXT_LENGTH),
     };

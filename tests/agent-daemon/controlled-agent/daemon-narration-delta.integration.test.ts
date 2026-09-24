@@ -11,11 +11,9 @@ import {
     AGENT_ACTIVITY_NARRATION_KIND,
     decodeMessageKind,
     decodeSessionEventEnvelope,
-    encodeSessionEventAcknowledgement,
     encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
     SESSION_COMPLETED_KIND,
-    SESSION_EVENT_ACK_KIND,
     SESSION_EVENT_KIND,
     SESSION_FAILED_KIND,
     type SessionPromptCommand,
@@ -195,25 +193,12 @@ describe("daemon narration delivery", () => {
             let completedActivityId = "";
             let maxEventBytes = 0;
             let completed = false;
-            let eventSequence = 0;
             while (!completed) {
                 const message = await frames.next();
                 if (decodeMessageKind(message) !== SESSION_EVENT_KIND) {
                     continue;
                 }
                 const envelope = decodeSessionEventEnvelope(message);
-                eventSequence += 1;
-                sendText(
-                    socket,
-                    encodeSessionEventAcknowledgement({
-                        cursor: `cursor-${eventSequence.toString()}`,
-                        duplicate: false,
-                        eventId: envelope.eventId,
-                        kind: SESSION_EVENT_ACK_KIND,
-                        sequence: eventSequence.toString(),
-                        sessionId: envelope.sessionId,
-                    }),
-                );
                 maxEventBytes = Math.max(maxEventBytes, Buffer.byteLength(envelope.payload, "utf8"));
                 const kind = decodeMessageKind(envelope.payload);
                 if (kind === AGENT_ACTIVITY_NARRATION_KIND) {

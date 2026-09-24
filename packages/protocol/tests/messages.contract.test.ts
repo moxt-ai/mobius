@@ -14,10 +14,7 @@ import {
     decodeRuntimeHeartbeatEvent,
     decodeRuntimeLivenessReadyEvent,
     decodeSessionCancelCommand,
-    decodeSessionEventAcknowledgement,
-    decodeSessionEventDeferred,
     decodeSessionEventEnvelope,
-    decodeSessionEventRejection,
     decodeSessionPromptCommand,
     encodeAgentActivityEvent,
     encodeRuntimeDelivery,
@@ -27,10 +24,7 @@ import {
     encodeRuntimeHeartbeatEvent,
     encodeRuntimeLivenessReadyEvent,
     encodeSessionCancelCommand,
-    encodeSessionEventAcknowledgement,
-    encodeSessionEventDeferred,
     encodeSessionEventEnvelope,
-    encodeSessionEventRejection,
     encodeSessionPromptCommand,
     encodeSessionStartedEvent,
     ProtocolMessageError,
@@ -47,13 +41,9 @@ import {
     type RuntimeHeartbeatEvent,
     type RuntimeLivenessReadyEvent,
     SESSION_CANCEL_KIND,
-    SESSION_EVENT_ACK_KIND,
-    SESSION_EVENT_DEFERRED_KIND,
     SESSION_EVENT_KIND,
-    SESSION_EVENT_REJECTED_KIND,
     SESSION_PROMPT_KIND,
     type SessionCancelCommand,
-    SessionEventRejectionCode,
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "../src/index.ts";
@@ -97,60 +87,19 @@ describe("reliable Runtime delivery protocol", () => {
     });
 });
 
-describe("reliable session event protocol", () => {
-    it("Given a daemon event has a stable identity, When it is retransmitted and acknowledged, Then its identity and durable cursor round-trip exactly", () => {
+describe("live Session event protocol", () => {
+    it("Given an Agent event, When the daemon sends it, Then the live payload crosses the boundary without an acknowledgement cursor", () => {
         const payload = encodeSessionStartedEvent({
             commandId: "command-1",
+            epoch: "epoch-1",
             kind: "session.started",
             attemptId: "attempt-1",
+            prompt: "Hello",
+            sequence: 0,
             sessionId: "session-1",
         });
-        const envelope = {
-            eventId: "event-1",
-            kind: SESSION_EVENT_KIND,
-            payload,
-            sessionId: "session-1",
-            source: {
-                attemptId: "attempt-1",
-                kind: "attempt",
-                sourceSeq: "1",
-            },
-        } as const;
-        const acknowledgement = {
-            cursor: "ZXZlbnQtY3Vyc29y",
-            duplicate: true,
-            eventId: envelope.eventId,
-            kind: SESSION_EVENT_ACK_KIND,
-            sequence: "12",
-            sessionId: envelope.sessionId,
-        } as const;
-
+        const envelope = { kind: SESSION_EVENT_KIND, payload, sessionId: "session-1" } as const;
         expect(decodeSessionEventEnvelope(encodeSessionEventEnvelope(envelope))).toEqual(envelope);
-        expect(decodeSessionEventAcknowledgement(encodeSessionEventAcknowledgement(acknowledgement))).toEqual(
-            acknowledgement,
-        );
-    });
-
-    it("Given a stale daemon event targets a terminal Session, When the Relay rejects it, Then the event identity and terminal code round-trip exactly", () => {
-        const rejection = {
-            code: SessionEventRejectionCode.SessionDeleted,
-            eventId: "event-1",
-            kind: SESSION_EVENT_REJECTED_KIND,
-            sessionId: "session-1",
-        } as const;
-
-        expect(decodeSessionEventRejection(encodeSessionEventRejection(rejection))).toEqual(rejection);
-    });
-
-    it("Given Relay archive storage applies backpressure, When it defers one durable event, Then the retry identity and bounded delay round-trip exactly", () => {
-        const deferred = {
-            eventId: "event-1",
-            kind: SESSION_EVENT_DEFERRED_KIND,
-            retryAfterMilliseconds: 1_000,
-            sessionId: "session-1",
-        } as const;
-
-        expect(decodeSessionEventDeferred(encodeSessionEventDeferred(deferred))).toEqual(deferred);
     });
 });
 
@@ -282,8 +231,10 @@ describe("agent message protocol", () => {
     it("Given an Agent emits a native message anchor, When its text crosses the durable event boundary, Then the anchor remains available for turn forking", () => {
         const event: AgentMessageDeltaEvent = {
             commandId: "command-1",
+            epoch: "epoch-1",
             kind: AGENT_MESSAGE_DELTA_KIND,
             messageId: "agent-message-1",
+            sequence: 1,
             sessionId: "session-1",
             text: "done",
         };

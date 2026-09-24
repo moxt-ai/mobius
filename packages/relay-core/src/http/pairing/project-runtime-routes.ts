@@ -8,6 +8,7 @@ import {
     decodeSessionPromptCommand,
     decodeSessionQueryCommand,
     decodeWorkspaceListCommand,
+    RUNTIME_WORKSPACE_BINDING_ID,
 } from "@moxt-ai/mobius-protocol";
 import { Hono } from "hono";
 import * as v from "valibot";
@@ -338,7 +339,7 @@ export function createProjectRuntimeRoutes() {
                         kind: "native.session.request",
                         requestId: crypto.randomUUID(),
                         sessionId,
-                        bindingId: "workspace",
+                        bindingId: RUNTIME_WORKSPACE_BINDING_ID,
                         ...(body["action"] === "import" || body["action"] === "fork"
                             ? { targetSessionId: crypto.randomUUID() }
                             : {}),
@@ -363,7 +364,7 @@ export function createProjectRuntimeRoutes() {
                 assertExactKeys(body, ["directoryId"]);
                 const command = decodeWorkspaceListCommand(
                     JSON.stringify({
-                        bindingId: "workspace",
+                        bindingId: RUNTIME_WORKSPACE_BINDING_ID,
                         directoryId: readString(body, "directoryId", 2_048),
                         kind: "workspace.list",
                         requestId: crypto.randomUUID(),

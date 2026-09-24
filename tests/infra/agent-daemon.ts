@@ -6,15 +6,11 @@ import {
     decodeNativeSessionCommand,
     decodeRuntimeDelivery,
     decodeRuntimeHeartbeatEvent,
-    decodeSessionEventAcknowledgement,
-    decodeSessionEventDeferred,
-    decodeSessionEventRejection,
     decodeSessionLiveHistoryLoad,
     decodeSessionLiveHistoryPageLoad,
     decodeSessionPrepareCommand,
     decodeSessionPromptCommand,
     decodeSessionQueryCommand,
-    decodeSessionStartedEvent,
     decodeWorkspaceListCommand,
     encodeAgentActivityEvent,
     encodeAgentContentEvent,
@@ -29,6 +25,7 @@ import {
     encodeRuntimeHeartbeatAckEvent,
     encodeSessionCompletedEvent,
     encodeSessionEventEnvelope,
+    encodeSessionFailedEvent,
     encodeSessionLiveHistoryLoaded,
     encodeSessionLiveHistoryPageLoaded,
     encodeSessionOperationFailedEvent,
@@ -38,12 +35,11 @@ import {
     encodeWorkspaceEntriesEvent,
     FILE_READ_KIND,
     NATIVE_SESSION_REQUEST_KIND,
+    type NativeSessionHistory,
+    type NativeSessionResult,
     RUNTIME_DELIVERY_KIND,
     RUNTIME_HEARTBEAT_KIND,
-    SESSION_EVENT_ACK_KIND,
-    SESSION_EVENT_DEFERRED_KIND,
     SESSION_EVENT_KIND,
-    SESSION_EVENT_REJECTED_KIND,
     SESSION_LIVE_HISTORY_LOAD_KIND,
     SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
     SESSION_PREPARE_KIND,
@@ -51,6 +47,7 @@ import {
     SESSION_QUERY_KIND,
     SESSION_STARTED_KIND,
     type SessionMetadata,
+    type SessionPromptCommand,
     type SessionReadyEvent,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
@@ -103,17 +100,6 @@ async function waitFor<T>(operation: Promise<T>, signal: AbortSignal): Promise<T
     });
 }
 
-/**
- * Per-Runtime event-source state that outlives a single connection. The real daemon keeps its Attempt
- * identities and per-source sequences in a durable outbox, so a reconnecting Runtime continues its
- * source sequences instead of restarting them. Sharing this record across reconnections keeps the fake
- * daemon contiguous the same way, which is what the Relay requires of the source it already recorded.
- */
-export class FakeAgentDaemonState {
-    readonly attemptIdsByCommand = new Map<string, string>();
-    readonly sourceSequences = new Map<string, number>();
-}
-
 /** A stateful peer at the public daemon/server protocol boundary. */
 export class FakeAgentDaemon implements AsyncDisposable {
     readonly #closed: Promise<void>;
@@ -122,11 +108,9 @@ export class FakeAgentDaemon implements AsyncDisposable {
     readonly #messages: string[] = [];
     readonly #pending: PendingMessage[] = [];
     readonly #socket: AgentDaemonSocket;
-    readonly #state: FakeAgentDaemonState;
 
-    private constructor(socket: AgentDaemonSocket, state: FakeAgentDaemonState) {
+    private constructor(socket: AgentDaemonSocket) {
         this.#socket = socket;
-        this.#state = state;
         this.#closed = new Promise((resolve) => {
             if (socket.readyState === 3) {
                 resolve();
@@ -187,7 +171,6 @@ export class FakeAgentDaemon implements AsyncDisposable {
         url: URL,
         createSocket: (url: URL) => AgentDaemonSocket,
         signal = AbortSignal.timeout(8_000),
-        state: FakeAgentDaemonState = new FakeAgentDaemonState(),
     ): Promise<FakeAgentDaemon> {
         const socket = createSocket(url);
         await new Promise<void>((resolve, reject) => {
@@ -219,7 +202,7 @@ export class FakeAgentDaemon implements AsyncDisposable {
             socket.addEventListener("open", open, { once: true });
             signal.addEventListener("abort", abort, { once: true });
         });
-        return new FakeAgentDaemon(socket, state);
+        return new FakeAgentDaemon(socket);
     }
 
     readonly available = (kind: string): number =>
@@ -324,70 +307,9 @@ export class FakeAgentDaemon implements AsyncDisposable {
         await this.#socket.sendBatch(messages);
     };
 
-    readonly sendSessionEvent = async (sessionId: string, payload: string, signal?: AbortSignal): Promise<string> => {
+    readonly sendSessionEvent = async (sessionId: string, payload: string, signal?: AbortSignal): Promise<void> => {
         signal?.throwIfAborted();
-        const eventId = crypto.randomUUID();
-        if (decodeMessageKind(payload) === SESSION_STARTED_KIND) {
-            const started = decodeSessionStartedEvent(payload);
-            this.#state.attemptIdsByCommand.set(`${sessionId}:${started.commandId}`, started.attemptId);
-        }
-        const decoded: unknown = JSON.parse(payload);
-        const commandId =
-            typeof decoded === "object" &&
-            decoded !== null &&
-            !Array.isArray(decoded) &&
-            typeof Reflect.get(decoded, "commandId") === "string"
-                ? String(Reflect.get(decoded, "commandId"))
-                : undefined;
-        const attemptId =
-            commandId === undefined ? undefined : this.#state.attemptIdsByCommand.get(`${sessionId}:${commandId}`);
-        const sourceKey = attemptId === undefined ? `runtime:${sessionId}` : `attempt:${sessionId}:${attemptId}`;
-        const sourceSequence = (this.#state.sourceSequences.get(sourceKey) ?? 0) + 1;
-        this.#state.sourceSequences.set(sourceKey, sourceSequence);
-        const envelope = encodeSessionEventEnvelope({
-            eventId,
-            kind: SESSION_EVENT_KIND,
-            payload,
-            sessionId,
-            source:
-                attemptId === undefined
-                    ? { kind: "runtime", sourceSeq: sourceSequence.toString() }
-                    : { attemptId, kind: "attempt", sourceSeq: sourceSequence.toString() },
-        });
-        while (true) {
-            const response = this.receive("*", signal, (message) => {
-                const kind = decodeMessageKind(message);
-                if (kind === SESSION_EVENT_ACK_KIND) {
-                    const candidate = decodeSessionEventAcknowledgement(message);
-                    return candidate.eventId === eventId && candidate.sessionId === sessionId;
-                }
-                if (kind === SESSION_EVENT_DEFERRED_KIND) {
-                    const candidate = decodeSessionEventDeferred(message);
-                    return candidate.eventId === eventId && candidate.sessionId === sessionId;
-                }
-                if (kind === SESSION_EVENT_REJECTED_KIND) {
-                    const candidate = decodeSessionEventRejection(message);
-                    return candidate.eventId === eventId && candidate.sessionId === sessionId;
-                }
-                return false;
-            });
-            this.#socket.send(envelope);
-            const encoded = await response;
-            const kind = decodeMessageKind(encoded);
-            if (kind === SESSION_EVENT_DEFERRED_KIND) {
-                const deferred = decodeSessionEventDeferred(encoded);
-                await waitFor(
-                    new Promise<void>((resolve) => setTimeout(resolve, deferred.retryAfterMilliseconds)),
-                    signal ?? AbortSignal.timeout(20_000),
-                );
-                continue;
-            }
-            if (kind === SESSION_EVENT_REJECTED_KIND) {
-                const rejection = decodeSessionEventRejection(encoded);
-                throw new Error(`The server rejected the Session event: ${rejection.code}`);
-            }
-            return decodeSessionEventAcknowledgement(encoded).sequence;
-        }
+        this.#socket.send(encodeSessionEventEnvelope({ kind: SESSION_EVENT_KIND, payload, sessionId }));
     };
 
     async [Symbol.asyncDispose](): Promise<void> {
@@ -411,12 +333,25 @@ const imageBytes = Uint8Array.from(
 const sourceBytes = new TextEncoder().encode("export const generated = true;\n");
 
 export interface FakeAgentDaemonBehavior {
+    readonly agentId?: "codex" | "claude" | "opencode" | "pi";
     readonly agentName?: string;
-    readonly afterSessionStarted?: (signal: AbortSignal) => Promise<void>;
+    readonly additionalAgents?: readonly {
+        readonly id: "codex" | "claude" | "opencode" | "pi";
+        readonly name: string;
+    }[];
+    readonly afterSessionStarted?: (command: SessionPromptCommand, signal: AbortSignal) => Promise<void>;
+    readonly afterFirstDelta?: (command: SessionPromptCommand, signal: AbortSignal) => Promise<void>;
     readonly directoryLabel?: string;
     readonly nativeSessionIds?: ReadonlySet<string>;
     readonly sessions?: readonly SessionMetadata[];
+    readonly nativeSessionTitle?: (sessionId: string) => string;
+    readonly loadNativeHistory?: (sessionId: string, signal: AbortSignal) => Promise<NativeSessionHistory>;
+    readonly onPromptCompleted?: (command: SessionPromptCommand, response: string) => void;
+    readonly requiredBindingId?: string;
+    readonly responseParts?: (command: SessionPromptCommand, turn: number) => readonly string[];
 }
+
+type ActiveTurn = NonNullable<Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"]>;
 
 export interface RunningFakeAgentDaemon extends AsyncDisposable {
     /** Rejects when the fake cannot continue serving the protocol. */
@@ -457,6 +392,7 @@ async function processHappyPathCommand(
     encoded: string,
     behavior: FakeAgentDaemonBehavior,
     nextTurn: () => number,
+    activeTurns: Map<string, ActiveTurn>,
     signal: AbortSignal,
 ): Promise<void> {
     const kind = decodeMessageKind(encoded);
@@ -469,7 +405,7 @@ async function processHappyPathCommand(
                 sessionId: delivery.sessionId,
             }),
         );
-        await processHappyPathCommand(daemon, delivery.payload, behavior, nextTurn, signal);
+        await processHappyPathCommand(daemon, delivery.payload, behavior, nextTurn, activeTurns, signal);
         return;
     }
     if (kind === RUNTIME_HEARTBEAT_KIND) {
@@ -552,7 +488,44 @@ async function processHappyPathCommand(
                 encodeNativeSessionResult({
                     action: "create",
                     kind: "native.session.result",
-                    nativeSessionId: crypto.randomUUID(),
+                    nativeSessionId:
+                        behavior.agentId === "opencode"
+                            ? `ses_${crypto.randomUUID().replaceAll("-", "")}`
+                            : crypto.randomUUID(),
+                    requestId: command.requestId,
+                    sessionId: command.sessionId,
+                }),
+            );
+        } else if (command.action === "list") {
+            daemon.send(
+                encodeNativeSessionResult({
+                    action: "list",
+                    capabilities: {
+                        additionalDirectories: true,
+                        audioPrompt: false,
+                        closeSession: true,
+                        deleteSession: true,
+                        embeddedContextPrompt: true,
+                        imagePrompt: true,
+                        listSessions: true,
+                        loadSession: true,
+                        promptQueueing: false,
+                        resumeSession: true,
+                        steering: false,
+                        unstableForkSession: false,
+                    },
+                    entries: [...(behavior.nativeSessionIds ?? [])].map((nativeSessionId) => ({
+                        additionalDirectories: [],
+                        directoryId: "default",
+                        directoryLabel: behavior.directoryLabel ?? "Fake workspace",
+                        entryId: nativeSessionId,
+                        mobiusSessionIds: [],
+                        nativeSessionId,
+                        title: behavior.nativeSessionTitle?.(nativeSessionId) ?? "New chat",
+                        updatedAt: null,
+                    })),
+                    kind: "native.session.result",
+                    nextCursor: null,
                     requestId: command.requestId,
                     sessionId: command.sessionId,
                 }),
@@ -568,12 +541,36 @@ async function processHappyPathCommand(
                         directoryId: "default",
                         directoryLabel: behavior.directoryLabel ?? "Fake workspace",
                         additionalDirectories: [],
-                        title: "New chat",
+                        title: behavior.nativeSessionTitle?.(command.nativeSessionId) ?? "New chat",
                         updatedAt: null,
                     },
                     kind: "native.session.result",
                     requestId: command.requestId,
                     sessionId: command.sessionId,
+                }),
+            );
+        } else if (command.action === "linked-history" && behavior.loadNativeHistory !== undefined) {
+            const history = await behavior.loadNativeHistory(command.targetSessionId, signal);
+            signal.throwIfAborted();
+            daemon.send(
+                encodeNativeSessionResult({
+                    action: "linked-history",
+                    history,
+                    kind: "native.session.result",
+                    requestId: command.requestId,
+                    sessionId: command.sessionId,
+                    targetSessionId: command.targetSessionId,
+                }),
+            );
+        } else if (command.action === "active-turn") {
+            daemon.send(
+                encodeNativeSessionResult({
+                    action: "active-turn",
+                    kind: "native.session.result",
+                    requestId: command.requestId,
+                    sessionId: command.sessionId,
+                    targetSessionId: command.targetSessionId,
+                    turn: activeTurns.get(command.targetSessionId) ?? null,
                 }),
             );
         } else {
@@ -698,19 +695,60 @@ async function processHappyPathCommand(
         return;
     }
     const command = decodeSessionPromptCommand(encoded);
+    if (behavior.requiredBindingId !== undefined && command.bindingId !== behavior.requiredBindingId) {
+        await daemon.sendSessionEvent(
+            command.sessionId,
+            encodeSessionFailedEvent({
+                code: "binding_mismatch",
+                commandId: command.commandId,
+                kind: "session.failed",
+                message: "The runtime binding is not authorized",
+                sessionId: command.sessionId,
+            }),
+            signal,
+        );
+        return;
+    }
+    if (activeTurns.has(command.sessionId)) {
+        await daemon.sendSessionEvent(
+            command.sessionId,
+            encodeSessionFailedEvent({
+                code: "session_busy",
+                commandId: command.commandId,
+                kind: "session.failed",
+                message: "The Session already has an active Turn.",
+                sessionId: command.sessionId,
+            }),
+            signal,
+        );
+        return;
+    }
     const turn = nextTurn();
     const createsImage = command.prompt.toLowerCase().includes("image");
+    const epoch = command.commandId;
+    activeTurns.set(command.sessionId, {
+        commandId: command.commandId,
+        epoch,
+        prompt: command.prompt,
+        sequence: 0,
+        state: "running",
+        text: "",
+        truncated: false,
+    });
     await daemon.sendSessionEvent(
         command.sessionId,
         encodeSessionStartedEvent({
             attemptId: `fake-attempt-${turn.toString()}`,
             commandId: command.commandId,
+            epoch,
             kind: SESSION_STARTED_KIND,
+            prompt: command.prompt,
+            sequence: 0,
             sessionId: command.sessionId,
         }),
         signal,
     );
-    await behavior.afterSessionStarted?.(signal);
+    await behavior.afterSessionStarted?.(command, signal);
     const imageContent = createsImage
         ? {
               artifactId: "",
@@ -749,19 +787,38 @@ async function processHappyPathCommand(
             signal,
         );
     }
-    await daemon.sendSessionEvent(
-        command.sessionId,
-        encodeAgentMessageDeltaEvent({
-            commandId: command.commandId,
-            kind: "agent.message.delta",
-            messageId: `fake-message-${turn.toString()}`,
-            sessionId: command.sessionId,
-            text: `${behavior.agentName ?? "Fake Agent"} turn ${turn.toString()}: ${command.prompt}${
-                createsImage ? `\n\n[Generated source](<${sourcePath}:104>)` : ""
-            }`,
-        }),
-        signal,
-    );
+    const parts = behavior.responseParts?.(command, turn) ?? [
+        `${behavior.agentName ?? "Fake Agent"} turn ${turn.toString()}: ${command.prompt}${
+            createsImage ? `\n\n[Generated source](<${sourcePath}:104>)` : ""
+        }`,
+    ];
+    for (const [index, text] of parts.entries()) {
+        const current = activeTurns.get(command.sessionId);
+        if (current !== undefined) {
+            activeTurns.set(command.sessionId, {
+                ...current,
+                sequence: index + 1,
+                text: `${current.text}${text}`.slice(-100_000),
+                truncated: current.truncated || current.text.length + text.length > 100_000,
+            });
+        }
+        await daemon.sendSessionEvent(
+            command.sessionId,
+            encodeAgentMessageDeltaEvent({
+                commandId: command.commandId,
+                epoch,
+                kind: "agent.message.delta",
+                messageId: `fake-message-${turn.toString()}`,
+                sequence: index + 1,
+                sessionId: command.sessionId,
+                text,
+            }),
+            signal,
+        );
+        if (index === 0 && parts.length > 1) {
+            await behavior.afterFirstDelta?.(command, signal);
+        }
+    }
     if (imageContent !== null) {
         await daemon.sendSessionEvent(
             command.sessionId,
@@ -776,6 +833,8 @@ async function processHappyPathCommand(
             signal,
         );
     }
+    activeTurns.delete(command.sessionId);
+    behavior.onPromptCompleted?.(command, parts.join(""));
     await daemon.sendSessionEvent(
         command.sessionId,
         encodeSessionCompletedEvent({
@@ -795,13 +854,14 @@ export function serveFakeAgentDaemon(
     const cancellation = new AbortController();
     const failure = Promise.withResolvers<never>();
     const tasks = new Set<Promise<void>>();
+    const activeTurns = new Map<string, ActiveTurn>();
     let turn = 0;
     const nextTurn = (): number => {
         turn += 1;
         return turn;
     };
     const start = (message: string): void => {
-        const task = processHappyPathCommand(daemon, message, behavior, nextTurn, cancellation.signal);
+        const task = processHappyPathCommand(daemon, message, behavior, nextTurn, activeTurns, cancellation.signal);
         tasks.add(task);
         void task.then(
             () => tasks.delete(task),

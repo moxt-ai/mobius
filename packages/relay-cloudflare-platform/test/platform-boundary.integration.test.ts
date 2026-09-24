@@ -7,9 +7,7 @@ import {
     decodeSessionPromptCommand,
     encodeSessionEventEnvelope,
     encodeSessionPromptCommand,
-    issueSessionAccessCredential,
     MOBIUS_API_PREFIX,
-    SESSION_EVENT_ACK_KIND,
 } from "@moxt-ai/mobius-protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestMobiusPlatformApp } from "../../../tests/infra/app.ts";
@@ -186,7 +184,7 @@ describe.sequential("Platform Session-only boundary", () => {
         expect(retired).toMatchObject({ error: { code: "project_permission_invalid" } });
     });
 
-    it("Given a linked Codex Runtime, When Chat sends a prompt, Then the answer arrives without cloud Session storage", async () => {
+    it("Given a linked Codex Runtime, When Chat sends a prompt and the Runtime reconnects, Then the answer and connection status arrive without cloud Session storage", async () => {
         vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
@@ -287,51 +285,18 @@ describe.sequential("Platform Session-only boundary", () => {
         );
         expect(daemonResponse.status).toBe(101);
         expect(hostResponse.status).toBe(101);
-        const issuedAtEpochMilliseconds = Date.now();
-        const liveCredential = await issueSessionAccessCredential(appCredential, {
-            expiresAtEpochMilliseconds: issuedAtEpochMilliseconds + 10 * 60 * 1_000,
-            issuedAtEpochMilliseconds,
-            projectId,
-            purpose: "session-access",
-            runtimeId,
-            sessionId,
-        });
-        const transportResponse = await worker.fetch(
-            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/transport`, { headers: { Upgrade: "websocket" } }),
-            environment,
-        );
-        expect(transportResponse.status).toBe(101);
-        if (
-            daemonResponse.webSocket === null ||
-            hostResponse.webSocket === null ||
-            transportResponse.webSocket === null
-        ) {
-            throw new Error("Expected daemon, host, and browser transport sockets");
+        if (daemonResponse.webSocket === null || hostResponse.webSocket === null) {
+            throw new Error("Expected both channel sockets");
         }
         const daemon = daemonResponse.webSocket;
         const host = hostResponse.webSocket;
-        const transport = transportResponse.webSocket;
         const daemonMessages = new SocketMessages(daemon);
         const hostMessages = new SocketMessages(host);
-        const transportMessages = new SocketMessages(transport);
         daemon.accept();
         host.accept();
-        transport.accept();
         try {
             expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("runtime.liveness.ready");
             expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "runtime.status", online: true });
-            transport.send(
-                JSON.stringify({
-                    headers: [["authorization", `Bearer ${liveCredential}`]],
-                    kind: "session.events.subscribe",
-                    path: `${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/events`,
-                    subscriptionId: "browser-live-session",
-                }),
-            );
-            expect(JSON.parse(await transportMessages.next())).toEqual({
-                kind: "session.events.ready",
-                subscriptionId: "browser-live-session",
-            });
             host.send(
                 encodeSessionPromptCommand({
                     additionalDirectoryIds: [],
@@ -355,45 +320,49 @@ describe.sequential("Platform Session-only boundary", () => {
             }
             expect(decodeSessionPromptCommand(JSON.stringify(prompt)).prompt).toBe("show the local answer");
             const answer = encodeSessionEventEnvelope({
-                eventId: "local-codex-event",
                 kind: "session.event",
                 payload: JSON.stringify({
                     commandId: prompt.commandId,
+                    epoch: prompt.commandId,
                     kind: AGENT_MESSAGE_DELTA_KIND,
                     messageId: "local-codex-message",
+                    sequence: 1,
                     sessionId,
                     text: "local answer",
                 }),
                 sessionId,
-                source: { attemptId: "local-codex-attempt", kind: "attempt", sourceSeq: "1" },
             });
             daemon.send(answer);
-            const firstHostMessage = await hostMessages.next();
-            const committedMessage =
-                JSON.parse(firstHostMessage).kind === "session.prompt" ? await hostMessages.next() : firstHostMessage;
-            expect(decodeCommittedSessionEvent(committedMessage).payload).toContain("local answer");
-            const browserEvent = JSON.parse(await transportMessages.next());
-            expect(browserEvent).toMatchObject({
-                kind: "session.events.event",
-                subscriptionId: "browser-live-session",
-            });
-            expect(decodeCommittedSessionEvent(text(record(browserEvent), "data")).payload).toContain("local answer");
-            expect(decodeServiceToDaemonMessage(await daemonMessages.next())).toMatchObject({
-                eventId: "local-codex-event",
-                kind: SESSION_EVENT_ACK_KIND,
-                sessionId,
-            });
+            const received = decodeCommittedSessionEvent(await hostMessages.next());
+            expect(received.payload).toContain("local answer");
+            expect(received).not.toHaveProperty("cursor");
+            expect(received).not.toHaveProperty("sequence");
+            // A retransmission remains a live event; the viewer uses the Runtime's epoch and sequence.
             daemon.send(answer);
-            expect(decodeServiceToDaemonMessage(await daemonMessages.next())).toMatchObject({
-                duplicate: true,
-                eventId: "local-codex-event",
-                kind: SESSION_EVENT_ACK_KIND,
-                sessionId,
-            });
+            expect(decodeCommittedSessionEvent(await hostMessages.next()).payload).toContain("local answer");
+            daemon.close(1000, "Reconnect Runtime");
+            expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "runtime.status", online: false });
+            const reconnectResponse = await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect?deliveryReceipts=1&liveness=1`, {
+                    headers: { authorization: `Bearer ${text(claimed, "runtimeCredential")}`, Upgrade: "websocket" },
+                }),
+                environment,
+            );
+            expect(reconnectResponse.status).toBe(101);
+            if (reconnectResponse.webSocket === null) {
+                throw new Error("Expected the reconnected Runtime socket");
+            }
+            const reconnected = reconnectResponse.webSocket;
+            const reconnectMessages = new SocketMessages(reconnected);
+            reconnected.accept();
+            expect(decodeServiceToDaemonMessage(await reconnectMessages.next()).kind).toBe("runtime.liveness.ready");
+            expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "runtime.status", online: true });
+            reconnected.close(1000, "Test complete");
+            expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "runtime.status", online: false });
             await runInDurableObject(environment.RUNTIME_RELAY.getByName(runtimeId), async (_instance, state) => {
                 const sessionTables = [
                     ...state.storage.sql.exec<{ name: string }>(
-                        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('sessions', 'session_bindings', 'session_configuration_snapshots', 'turns', 'attempts', 'interactions', 'pending_work', 'command_receipts', 'session_event_receipts', 'runtime_active_sessions')",
+                        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('sessions', 'session_bindings', 'session_configuration_snapshots', 'turns', 'attempts', 'interactions', 'pending_work', 'command_receipts', 'session_event_receipts', 'runtime_active_sessions', 'runtime_disconnect')",
                     ),
                 ];
                 expect(sessionTables).toEqual([]);
@@ -409,7 +378,6 @@ describe.sequential("Platform Session-only boundary", () => {
         } finally {
             daemon.close(1000, "Test complete");
             host.close(1000, "Test complete");
-            transport.close(1000, "Test complete");
         }
     });
 });

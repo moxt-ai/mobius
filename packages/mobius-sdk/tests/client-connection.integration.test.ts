@@ -316,34 +316,25 @@ describe("browser relay connection", () => {
             const prompt = decodeSessionPromptCommand(frame.text);
             const deltaPayload = encodeAgentMessageDeltaEvent({
                 commandId: prompt.commandId,
+                epoch: "epoch-1",
                 kind: "agent.message.delta",
                 messageId: "agent-message-1",
+                sequence: 1,
                 sessionId: prompt.sessionId,
                 text: "Hello",
             });
             writeServerTextFrame(
                 socket,
                 encodeCommittedSessionEvent({
-                    cursor: "cursor-7",
-                    eventId: "delta-7",
                     kind: SESSION_EVENT_COMMITTED_KIND,
                     payload: deltaPayload,
-                    recordedAt: "2026-09-08T00:00:00.000Z",
-                    sequence: "7",
                     sessionId: prompt.sessionId,
-                    source: {
-                        attemptId: "attempt-1",
-                        kind: "attempt",
-                        sourceSeq: "1",
-                    },
                 }),
             );
-            await expect(deltas.next()).resolves.toEqual(new ObservedDelta("Hello", "7"));
+            await expect(deltas.next()).resolves.toEqual(new ObservedDelta("Hello", "1"));
             writeServerTextFrame(
                 socket,
                 encodeCommittedSessionEvent({
-                    cursor: "cursor-8",
-                    eventId: "completed-8",
                     kind: SESSION_EVENT_COMMITTED_KIND,
                     payload: encodeSessionCompletedEvent({
                         commandId: prompt.commandId,
@@ -351,14 +342,7 @@ describe("browser relay connection", () => {
                         sessionId: prompt.sessionId,
                         stopReason: "end_turn",
                     }),
-                    recordedAt: "2026-09-08T00:00:01.000Z",
-                    sequence: "8",
                     sessionId: prompt.sessionId,
-                    source: {
-                        attemptId: "attempt-1",
-                        kind: "attempt",
-                        sourceSeq: "2",
-                    },
                 }),
             );
             await expect(result).resolves.toEqual({
@@ -495,24 +479,17 @@ describe("browser relay connection", () => {
             writeServerTextFrame(
                 socket,
                 encodeCommittedSessionEvent({
-                    cursor: "cursor-1",
-                    eventId: "delta-1",
                     kind: SESSION_EVENT_COMMITTED_KIND,
                     payload: encodeAgentMessageDeltaEvent({
                         commandId: "command-1",
+                        epoch: "epoch-1",
                         kind: "agent.message.delta",
                         messageId: "agent-message-1",
+                        sequence: 1,
                         sessionId: "session-1",
                         text: "History changed",
                     }),
-                    recordedAt: "2026-09-08T00:00:00.000Z",
-                    sequence: "1",
                     sessionId: "session-1",
-                    source: {
-                        attemptId: "attempt-1",
-                        kind: "attempt",
-                        sourceSeq: "1",
-                    },
                 }),
             );
             await expect(nextHistoryChange.next()).resolves.toBe("changed");

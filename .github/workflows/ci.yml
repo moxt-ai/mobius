@@ -57,6 +57,8 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+      - run: npm install --global @openai/codex@0.154.0
+      - run: pnpm test:agent-daemon:real
 
   deploy-cloudflare-platform:
     name: Deploy Platform (${{ matrix.environment }})

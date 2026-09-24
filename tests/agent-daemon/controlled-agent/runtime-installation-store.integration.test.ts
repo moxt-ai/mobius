@@ -11,8 +11,8 @@ import {
 } from "../../../packages/cli/src/storage/runtime-installation-store.ts";
 
 describe("Runtime installation storage", () => {
-    it("Given a saved connection whose App ID predates relay authority, When it is read, Then its caller-supplied App ID is not trusted", async () => {
-        const stateRoot = await mkdtemp(join(tmpdir(), "mobius-runtime-legacy-app-id-"));
+    it("Given an obsolete pairing record, When the Runtime restores it, Then it rejects the record without a compatibility fallback", async () => {
+        const stateRoot = await mkdtemp(join(tmpdir(), "mobius-obsolete-pairing-"));
         const signal = new AbortController().signal;
         try {
             const installation = await openRuntimeInstallationStore(
@@ -20,29 +20,29 @@ describe("Runtime installation storage", () => {
                 signal,
             );
             const connectionId = `mcn_${"0".repeat(32)}`;
-            const path = installation.connectionPath(connectionId);
             await mkdir(join(installation.stateDirectory, "connections"), { recursive: true });
             await writeFile(
-                path,
+                installation.connectionPath(connectionId),
                 JSON.stringify({
-                    activation: "stopped",
-                    appId: "app_client_spoofed",
+                    activation: "active",
+                    appId: "app_old",
                     applicationId: installation.applicationId,
-                    channelId: "legacy_channel",
+                    channelId: "old_channel",
                     connectionId,
-                    defaultWorkspace: "/workspace/legacy",
+                    defaultWorkspace: "/workspace/old",
                     installationId: installation.installationId,
                     kind: "verified",
-                    pairingId: "legacy_pairing",
+                    pairingId: "old_pairing",
                     relayOrigin: "https://relay.example.com/",
                     runtimeCredential: "a".repeat(43),
-                    runtimeId: "legacy_runtime",
+                    runtimeId: "old_runtime",
                     version: 4,
                 }),
                 { mode: 0o600 },
             );
-
-            expect((await installation.readConnection(connectionId, signal)).appId).toBe("unknown");
+            await expect(installation.readConnection(connectionId, signal)).rejects.toMatchObject({
+                code: "invalid_connection",
+            });
         } finally {
             await rm(stateRoot, { force: true, recursive: true });
         }

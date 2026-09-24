@@ -10,7 +10,6 @@ import {
 } from "@moxt-ai/mobius-relay-core";
 import { StandaloneDatabaseResolver } from "./standalone-database-resolver.ts";
 import { RuntimeRelay } from "./standalone-durable-objects.ts";
-import { directLiveSessionEventReceiverFactory, subscribeToLiveEvents } from "./standalone-live-event-subscription.ts";
 import { StandaloneProjectAuthentication } from "./standalone-project-authentication.ts";
 import { StandaloneProjectStorageDirectory } from "./standalone-project-storage-directory.ts";
 
@@ -38,19 +37,7 @@ export function createStandaloneWorker(): StandaloneWorker {
             if (new URL(request.url).pathname === `${MOBIUS_API_PREFIX}/v1/transport`) {
                 const dispatch = async (forwarded: Request): Promise<Response> =>
                     await standalone.fetch(forwarded, environment);
-                return acceptWebSocketHttpTransport(
-                    request,
-                    dispatch,
-                    async (subscription, receive, signal) =>
-                        await subscribeToLiveEvents(
-                            subscription,
-                            receive,
-                            signal,
-                            dispatch,
-                            environment,
-                            directLiveSessionEventReceiverFactory,
-                        ),
-                );
+                return acceptWebSocketHttpTransport(request, dispatch);
             }
             const metrics = new RequestAccessMetrics();
             const database = instrumentD1Database(environment.DIRECTORY_DATABASE, metrics);

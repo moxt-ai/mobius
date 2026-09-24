@@ -58,6 +58,7 @@ export type NativeSessionTurnForkCommand = z.infer<typeof nativeSessionTurnForkC
 const nativeSessionRequestSchema = z.discriminatedUnion("action", [
     z.strictObject({ ...identity, action: z.literal("create") }).readonly(),
     z.strictObject({ ...identity, action: z.literal("linked-history"), targetSessionId: identifier }).readonly(),
+    z.strictObject({ ...identity, action: z.literal("active-turn"), targetSessionId: identifier }).readonly(),
     z.strictObject({ ...identity, action: z.literal("preview"), entryId: identifier }).readonly(),
     z.strictObject({ ...identity, action: z.literal("history"), entryId: identifier }).readonly(),
     z.strictObject({ ...identity, action: z.literal("find"), nativeSessionId: identifier }).readonly(),
@@ -88,6 +89,7 @@ export type NativeSessionRequest = z.infer<typeof nativeSessionRequestSchema>;
 const nativeSessionCommandSchema = z.discriminatedUnion("action", [
     z.strictObject({ ...identity, action: z.literal("create") }).readonly(),
     z.strictObject({ ...identity, action: z.literal("linked-history"), targetSessionId: identifier }).readonly(),
+    z.strictObject({ ...identity, action: z.literal("active-turn"), targetSessionId: identifier }).readonly(),
     z.strictObject({ ...identity, action: z.literal("preview"), entryId: identifier }).readonly(),
     z.strictObject({ ...identity, action: z.literal("history"), entryId: identifier }).readonly(),
     z.strictObject({ ...identity, action: z.literal("find"), nativeSessionId: identifier }).readonly(),
@@ -153,6 +155,25 @@ const nativeSessionResultSchema = z.discriminatedUnion("action", [
             action: z.literal("linked-history"),
             targetSessionId: identifier,
             history: sessionHistorySchema,
+        })
+        .readonly(),
+    z
+        .strictObject({
+            ...resultEnvelope,
+            action: z.literal("active-turn"),
+            targetSessionId: identifier,
+            turn: z
+                .strictObject({
+                    commandId: identifier,
+                    prompt: z.string().max(100_000),
+                    text: z.string().max(100_000),
+                    truncated: z.boolean(),
+                    epoch: identifier,
+                    sequence: z.number().int().nonnegative(),
+                    state: z.literal("running"),
+                })
+                .readonly()
+                .nullable(),
         })
         .readonly(),
     z

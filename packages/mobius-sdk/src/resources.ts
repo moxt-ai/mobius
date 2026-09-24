@@ -1995,17 +1995,6 @@ export function decodeMobiusSessionEvent(value: unknown): MobiusSessionEvent {
         throw invalidResponse("The service returned an invalid Session event");
     }
     const event = decodeCommittedSessionEvent(encoded);
-    const source =
-        event.source.kind === "attempt"
-            ? new MobiusAttemptEventSource(event.source.attemptId, event.source.sourceSeq)
-            : new MobiusRuntimeEventSource(event.source.sourceSeq);
-    return new MobiusSessionEvent(
-        event.cursor,
-        event.eventId,
-        decodeRecordedEvent(event.payload),
-        event.recordedAt,
-        event.sequence,
-        event.sessionId,
-        source,
-    );
+    const payload = decodeRecordedEvent(event.payload);
+    return new MobiusSessionEvent("", "", payload, "", "", event.sessionId, new MobiusRuntimeEventSource(""));
 }

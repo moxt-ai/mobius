@@ -18,6 +18,7 @@ import {
     type AgentInstallFailedEvent,
     type AgentInstallProgressEvent,
     type AgentInstallStartedEvent,
+    type AgentMessageDeltaEvent,
     decodeAgentActivityEvent,
     decodeAgentActivityNarrationEvent,
     decodeAgentContentEvent,
@@ -111,16 +112,19 @@ import {
     SESSION_STARTED_KIND,
     SESSION_USAGE_UPDATED_KIND,
     type SessionCommandsUpdatedEvent,
+    type SessionCompletedEvent,
     type SessionConfigUpdatedEvent,
     type SessionConfigurationSelection,
     type SessionElicitationRequestedEvent,
     type SessionElicitationResolvedEvent,
     type SessionElicitationRespondCommand,
+    type SessionFailedEvent,
     type SessionInfoUpdatedEvent,
     type SessionPermissionRequestedEvent,
     type SessionPermissionResolvedEvent,
     SessionPromptDisposition,
     type SessionReadyEvent,
+    type SessionStartedEvent,
     type SessionUsageUpdatedEvent,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
@@ -149,6 +153,12 @@ const HISTORY_CHANGING_MESSAGE_KINDS: ReadonlySet<string> = new Set([
     SESSION_STARTED_KIND,
 ]);
 
+export type LiveSessionMessage =
+    | SessionStartedEvent
+    | AgentMessageDeltaEvent
+    | SessionCompletedEvent
+    | SessionFailedEvent;
+
 export interface ConnectMobiusClientOptions {
     readonly protocols?: readonly string[];
     readonly onNativeSessionResult?: (event: NativeSessionResult) => void;
@@ -164,6 +174,7 @@ export interface ConnectMobiusClientOptions {
     readonly onElicitation?: (event: SessionElicitationRequestedEvent) => void;
     readonly onElicitationResolved?: (event: SessionElicitationResolvedEvent) => void;
     readonly onHistoryChanged?: () => void;
+    readonly onLiveMessage?: (message: LiveSessionMessage) => void;
     readonly onInfo?: (event: SessionInfoUpdatedEvent) => void;
     readonly onPermission?: (event: SessionPermissionRequestedEvent) => void;
     readonly onPermissionResolved?: (event: SessionPermissionResolvedEvent) => void;
@@ -296,14 +307,6 @@ function readInboundMessage(event: MessageEvent<unknown>): string {
     const committed = decodeCommittedSessionEvent(encoded);
     decodeRecordedSessionEvent(committed.payload);
     return committed.payload;
-}
-
-function readInboundCommittedSequence(event: MessageEvent<unknown>): string {
-    const encoded = readMessageText(event);
-    if (decodeMessageKind(encoded) !== SESSION_EVENT_COMMITTED_KIND) {
-        throw new MobiusClientError("invalid_protocol_message", "Relay sent an uncommitted Session event");
-    }
-    return decodeCommittedSessionEvent(encoded).sequence;
 }
 
 function encodeOutboundMessage(encode: () => string): string {
@@ -893,7 +896,7 @@ export class MobiusClient {
                     if (kind === AGENT_MESSAGE_DELTA_KIND) {
                         const message = decodeAgentMessageDeltaEvent(encoded);
                         if (message.commandId === commandId) {
-                            request.observer?.onDelta?.(message.text, readInboundCommittedSequence(event));
+                            request.observer?.onDelta?.(message.text, String(message.sequence));
                         }
                         return;
                     }
@@ -1134,9 +1137,9 @@ export class MobiusClient {
             } else if (kind === SESSION_ELICITATION_RESOLVED_KIND) {
                 this.#options.onElicitationResolved?.(decodeSessionElicitationResolvedEvent(encoded));
             } else if (kind === SESSION_STARTED_KIND) {
-                decodeSessionStartedEvent(encoded);
+                this.#options.onLiveMessage?.(decodeSessionStartedEvent(encoded));
             } else if (kind === AGENT_MESSAGE_DELTA_KIND) {
-                decodeAgentMessageDeltaEvent(encoded);
+                this.#options.onLiveMessage?.(decodeAgentMessageDeltaEvent(encoded));
             } else if (kind === AGENT_ACTIVITY_KIND) {
                 decodeAgentActivityEvent(encoded);
             } else if (kind === AGENT_ACTIVITY_NARRATION_KIND) {
@@ -1158,9 +1161,9 @@ export class MobiusClient {
             } else if (kind === AGENT_INSTALL_CANCELLED_KIND) {
                 this.#options.onInstallCancelled?.(decodeAgentInstallCancelledEvent(encoded));
             } else if (kind === SESSION_COMPLETED_KIND) {
-                decodeSessionCompletedEvent(encoded);
+                this.#options.onLiveMessage?.(decodeSessionCompletedEvent(encoded));
             } else if (kind === SESSION_FAILED_KIND) {
-                decodeSessionFailedEvent(encoded);
+                this.#options.onLiveMessage?.(decodeSessionFailedEvent(encoded));
             } else if (kind === SESSION_OPERATION_FAILED_KIND) {
                 decodeSessionOperationFailedEvent(encoded);
             } else {

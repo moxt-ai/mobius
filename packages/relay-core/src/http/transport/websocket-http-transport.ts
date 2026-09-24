@@ -1,14 +1,11 @@
-import { encodeCommittedSessionEvent, MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
+import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import { fromByteArray, toByteArray } from "base64-js";
 import { type HttpError, toHttpError } from "../../entity/http-error.ts";
 import { logger } from "../../infra/logger.ts";
-import type { SessionEventReceiver } from "../../infra/session-event-receiver.ts";
 
 const REQUEST_KIND = "http.request";
 const RESPONSE_KIND = "http.response";
 const ERROR_KIND = "http.error";
-const EVENT_SUBSCRIBE_KIND = "session.events.subscribe";
-const EVENT_UNSUBSCRIBE_KIND = "session.events.unsubscribe";
 const MAX_BODY_BYTES = 12_582_912;
 const IDLE_TIMEOUT_MILLISECONDS = 60_000;
 const FORBIDDEN_HEADERS = new Set([
@@ -22,15 +19,6 @@ const FORBIDDEN_HEADERS = new Set([
 ]);
 
 type DispatchRequest = (request: Request) => Promise<Response>;
-export type SubscribeSessionEvents = (
-    request: Request,
-    receive: SessionEventReceiver,
-    signal: AbortSignal,
-) => Promise<{ readonly unsubscribe: () => Promise<void> }>;
-type EventSubscription =
-    | { readonly controller: AbortController; readonly kind: "opening" }
-    | { readonly controller: AbortController; readonly kind: "open"; readonly unsubscribe: () => Promise<void> };
-
 type WebSocketTransportErrorCode =
     | "invalid_headers"
     | "invalid_message"
@@ -155,41 +143,6 @@ function requestIdFromMessage(value: Readonly<Record<string, unknown>>): string 
     return requestId;
 }
 
-function subscriptionId(value: Readonly<Record<string, unknown>>): string {
-    const candidate = string(value, "subscriptionId", 128);
-    if (!/^[a-zA-Z0-9-]{1,128}$/u.test(candidate)) {
-        throw transportError("invalid_message");
-    }
-    return candidate;
-}
-
-function eventSubscriptionRequest(
-    value: Readonly<Record<string, unknown>>,
-    origin: string,
-    browserOrigin: string | null,
-    signal: AbortSignal,
-): { readonly request: Request; readonly subscriptionId: string } {
-    const id = subscriptionId(value);
-    const path = string(value, "path", 8_192);
-    const endpoint = new URL(path, origin);
-    if (
-        !path.startsWith(`${MOBIUS_API_PREFIX}/v1/projects/`) ||
-        !endpoint.pathname.endsWith("/events") ||
-        endpoint.origin !== origin ||
-        endpoint.search.length > 0 ||
-        endpoint.hash.length > 0 ||
-        endpoint.pathname !== path
-    ) {
-        throw transportError("invalid_target");
-    }
-    endpoint.pathname = `${endpoint.pathname.slice(0, -"events".length)}live-event-subscription-target`;
-    const requestHeaders = headers(value["headers"]);
-    if (browserOrigin !== null) {
-        requestHeaders.set("origin", browserOrigin);
-    }
-    return { request: new Request(endpoint, { headers: requestHeaders, signal }), subscriptionId: id };
-}
-
 function requestFromMessage(
     value: Readonly<Record<string, unknown>>,
     requestId: string,
@@ -234,11 +187,7 @@ function responseHeaders(response: Response): readonly (readonly [string, string
     );
 }
 
-export function acceptWebSocketHttpTransport(
-    request: Request,
-    dispatch: DispatchRequest,
-    subscribeSessionEvents: SubscribeSessionEvents,
-): Response {
+export function acceptWebSocketHttpTransport(request: Request, dispatch: DispatchRequest): Response {
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
         return Response.json(
             { error: { code: "websocket_upgrade_required", message: "A WebSocket upgrade is required" } },
@@ -249,7 +198,6 @@ export function acceptWebSocketHttpTransport(
     const client = pair[0];
     const server = pair[1];
     const controller = new AbortController();
-    const subscriptions = new Map<string, EventSubscription>();
     const browserOrigin = request.headers.get("origin");
     let idleTimeout = setTimeout(() => {
         controller.abort(new Error("WebSocket transport became inactive"));
@@ -262,23 +210,12 @@ export function acceptWebSocketHttpTransport(
             server.close(1001, "WebSocket transport idle timeout");
         }, IDLE_TIMEOUT_MILLISECONDS);
     };
-    const unsubscribe = async (id: string): Promise<void> => {
-        const subscription = subscriptions.get(id);
-        subscriptions.delete(id);
-        subscription?.controller.abort(new Error("Session event subscription closed"));
-        if (subscription?.kind === "open") {
-            await subscription.unsubscribe();
-        }
-    };
     server.accept();
     server.addEventListener(
         "close",
         () => {
             clearTimeout(idleTimeout);
             controller.abort(new Error("WebSocket transport closed"));
-            for (const id of subscriptions.keys()) {
-                void unsubscribe(id);
-            }
         },
         { once: true },
     );
@@ -287,9 +224,6 @@ export function acceptWebSocketHttpTransport(
         () => {
             clearTimeout(idleTimeout);
             controller.abort(new Error("WebSocket transport failed"));
-            for (const id of subscriptions.keys()) {
-                void unsubscribe(id);
-            }
         },
         { once: true },
     );
@@ -303,88 +237,6 @@ export function acceptWebSocketHttpTransport(
                 }
                 const decoded: unknown = JSON.parse(event.data);
                 const message = record(decoded);
-                const kind = string(message, "kind", 32);
-                if (kind === EVENT_UNSUBSCRIBE_KIND) {
-                    await unsubscribe(subscriptionId(message));
-                    return;
-                }
-                if (kind === EVENT_SUBSCRIBE_KIND) {
-                    const subscriptionController = new AbortController();
-                    const converted = eventSubscriptionRequest(
-                        message,
-                        new URL(request.url).origin,
-                        browserOrigin,
-                        AbortSignal.any([controller.signal, subscriptionController.signal]),
-                    );
-                    if (subscriptions.has(converted.subscriptionId)) {
-                        throw transportError("invalid_message");
-                    }
-                    const opening: EventSubscription = { controller: subscriptionController, kind: "opening" };
-                    subscriptions.set(converted.subscriptionId, opening);
-                    const receive: SessionEventReceiver = {
-                        receive: async (delivery) => {
-                            if (server.readyState !== WebSocket.OPEN) {
-                                if (delivery.kind === "end") {
-                                    return;
-                                }
-                                throw new Error("The WebSocket transport is closed");
-                            }
-                            server.send(
-                                JSON.stringify(
-                                    delivery.kind === "event"
-                                        ? {
-                                              data: encodeCommittedSessionEvent(delivery.event),
-                                              eventId: delivery.event.cursor,
-                                              kind: "session.events.event",
-                                              subscriptionId: converted.subscriptionId,
-                                          }
-                                        : {
-                                              kind: `session.events.${delivery.kind}`,
-                                              subscriptionId: converted.subscriptionId,
-                                          },
-                                ),
-                            );
-                            touch();
-                            if (delivery.kind === "end") {
-                                subscriptions.delete(converted.subscriptionId);
-                            }
-                        },
-                    };
-                    try {
-                        const subscription = await subscribeSessionEvents(
-                            converted.request,
-                            receive,
-                            converted.request.signal,
-                        );
-                        if (
-                            converted.request.signal.aborted ||
-                            subscriptions.get(converted.subscriptionId) !== opening
-                        ) {
-                            await subscription.unsubscribe();
-                            return;
-                        }
-                        subscriptions.set(converted.subscriptionId, {
-                            controller: subscriptionController,
-                            kind: "open",
-                            unsubscribe: subscription.unsubscribe,
-                        });
-                    } catch (cause) {
-                        subscriptions.delete(converted.subscriptionId);
-                        if (!converted.request.signal.aborted && server.readyState === WebSocket.OPEN) {
-                            const error = toHttpError(cause);
-                            server.send(
-                                JSON.stringify({
-                                    code: error.body.error.code,
-                                    kind: "session.events.error",
-                                    message: error.body.error.message,
-                                    status: error.status,
-                                    subscriptionId: converted.subscriptionId,
-                                }),
-                            );
-                        }
-                    }
-                    return;
-                }
                 requestId = requestIdFromMessage(message);
                 const converted = requestFromMessage(
                     message,

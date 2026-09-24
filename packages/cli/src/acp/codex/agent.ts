@@ -208,6 +208,23 @@ function effortValues(model: CodexModel | undefined): ConfigValue[] {
     }));
 }
 
+function supportedSelection(models: readonly CodexModel[], reportedModel: string, reportedEffort: string) {
+    const model =
+        models.find((candidate) => candidate.id === reportedModel) ??
+        models.find((candidate) => candidate.isDefault === true) ??
+        models[0];
+    if (model === undefined) {
+        return { model: reportedModel, effort: reportedEffort };
+    }
+    const efforts = model.supportedReasoningEfforts ?? [];
+    return {
+        model: model.id,
+        effort: efforts.some((candidate) => candidate.reasoningEffort === reportedEffort)
+            ? reportedEffort
+            : (model.defaultReasoningEffort ?? efforts[0]?.reasoningEffort ?? ""),
+    };
+}
+
 function modelSetting(models: readonly CodexModel[], currentValue: string): SessionConfigOption | null {
     const values = modelValues(models);
     // A model left in config.toml may be absent from the account's catalog. Offer a catalog model
@@ -423,11 +440,11 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 this.#nativeSessionId = created.thread.id;
                 // A new thread always starts in the default mode, so only the model and effort come
                 // from Codex. The mode is re-applied on the first turn.
+                const supported = supportedSelection(this.#models, created.model ?? "", created.reasoningEffort ?? "");
                 this.#selection = {
                     ...this.#selection,
                     collaborationMode: "default",
-                    effort: created.reasoningEffort ?? "",
-                    model: created.model ?? "",
+                    ...supported,
                 };
                 this.#collaborationModeSelected = false;
                 await this.#probeCollaborationMode(context.signal);
@@ -627,10 +644,14 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
         readonly thread: { readonly id: string };
     }): void => {
         this.#nativeSessionId = thread.thread.id;
+        const supported = supportedSelection(
+            this.#models,
+            thread.model ?? this.#selection.model,
+            thread.reasoningEffort ?? this.#selection.effort,
+        );
         this.#selection = {
             ...this.#selection,
-            effort: thread.reasoningEffort ?? this.#selection.effort,
-            model: thread.model ?? this.#selection.model,
+            ...supported,
             fastMode: thread.serviceTier === SERVICE_TIER_FAST,
         };
     };

@@ -21,13 +21,11 @@ import {
     encodeAgentCatalogRefreshCommand,
     encodeAgentSettingsDiscoverCommand,
     encodeSessionCancelCommand,
-    encodeSessionEventAcknowledgement,
     encodeSessionLiveHistoryPageLoad,
     encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
     SESSION_CANCEL_KIND,
     SESSION_COMPLETED_KIND,
-    SESSION_EVENT_ACK_KIND,
     SESSION_EVENT_KIND,
     SESSION_FAILED_KIND,
     SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
@@ -56,13 +54,10 @@ function executableSource(source: string): string {
 
 class ClientFrames {
     #buffered = Buffer.alloc(0);
-    #eventSequence = 0;
     readonly #messages: string[] = [];
     readonly #resolvers: Array<(message: string) => void> = [];
-    readonly #socket: Duplex;
 
     constructor(socket: Duplex) {
-        this.#socket = socket;
         socket.on("data", (chunk: Buffer) => {
             this.#buffered = Buffer.concat([this.#buffered, chunk]);
             this.decode();
@@ -103,21 +98,6 @@ class ClientFrames {
                 continue;
             }
             const message = payload.toString("utf8");
-            if (decodeMessageKind(message) === SESSION_EVENT_KIND) {
-                const envelope = decodeSessionEventEnvelope(message);
-                this.#eventSequence += 1;
-                sendText(
-                    this.#socket,
-                    encodeSessionEventAcknowledgement({
-                        cursor: `cursor-${this.#eventSequence.toString()}`,
-                        duplicate: false,
-                        eventId: envelope.eventId,
-                        kind: SESSION_EVENT_ACK_KIND,
-                        sequence: this.#eventSequence.toString(),
-                        sessionId: envelope.sessionId,
-                    }),
-                );
-            }
             const resolve = this.#resolvers.shift();
             if (resolve === undefined) {
                 this.#messages.push(message);
@@ -831,7 +811,7 @@ if (process.argv.includes("--version")) {
         }
     });
 
-    it("Given a cloud-disabled Codex Session uses an application binding, When Mobius reloads its native history, Then the daemon reads rich history without acquiring another writer", async () => {
+    it("Given a Codex Session uses the Runtime binding, When Mobius reloads native history, Then the daemon reads rich history without acquiring another writer", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-live-history-"));
         const workspace = join(stateDirectory, "workspace");
         const nativeStateDirectory = join(stateDirectory, "native");
@@ -899,12 +879,11 @@ if (process.argv.includes("--version")) {
         try {
             const socket = await socketReady.promise;
             const frames = new ClientFrames(socket);
-            const sessionId = "cloud_disabled_conversation";
-            const applicationBindingId = "binding_application_alpha";
+            const sessionId = "native_history_conversation";
             const prompt: SessionPromptCommand = {
                 additionalDirectoryIds: [],
                 agentId: agent.id,
-                bindingId: applicationBindingId,
+                bindingId: config.bindingId,
                 commandId: "save_native_history",
                 directoryId: "default",
                 disposition: SessionPromptDisposition.Reject,
@@ -928,7 +907,7 @@ if (process.argv.includes("--version")) {
                 encodeSessionLiveHistoryPageLoad({
                     additionalDirectoryIds: [],
                     agentId: agent.id,
-                    bindingId: applicationBindingId,
+                    bindingId: config.bindingId,
                     directoryId: "default",
                     cursor: null,
                     kind: "session.live-history.page.load",

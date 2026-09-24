@@ -43,7 +43,9 @@ interface AcpNarrationState {
     readonly activityId: string;
     readonly activityType: string;
     readonly output: string;
+    readonly originalBytes: number;
     readonly sequence: number;
+    readonly truncated: boolean;
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -491,11 +493,15 @@ export class AcpActivityTracker {
         // on completion. Sending the accumulated text per chunk made the queued event
         // stream quadratic in the length of the narration.
         const previous = this.#narrations.get(key);
+        const previousOutput = previous?.output ?? "";
+        const remaining = Math.max(0, AGENT_ACTIVITY_DETAIL_LIMIT - previousOutput.length);
         this.#narrations.set(key, {
             activityId: identity.id,
             activityType,
-            output: `${previous?.output ?? ""}${text}`,
+            output: `${previousOutput}${text.slice(0, remaining)}`,
+            originalBytes: (previous?.originalBytes ?? 0) + new TextEncoder().encode(text).byteLength,
             sequence: identity.sequence,
+            truncated: (previous?.truncated ?? false) || text.length > remaining,
         });
         if (previous === undefined) {
             await this.#record(key, this.#narrativeSnapshot(identity, activityType, "", "running"));
@@ -702,6 +708,13 @@ export class AcpActivityTracker {
         }
         this.#narrations.delete(key);
         const previous = this.#activities.get(key);
+        const detail: CapturedActivityDetail = narration.truncated
+            ? {
+                  capturedBytes: encodedByteLength({ content: [], input: "", output: narration.output }),
+                  kind: "truncated",
+                  originalBytes: narration.originalBytes,
+              }
+            : captureActivityDetail([], "", narration.output);
         await this.#record(
             key,
             new AcpActivity(
@@ -716,7 +729,7 @@ export class AcpActivityTracker {
                 narration.activityType === "reasoning" ? "Reasoning" : "Progress update",
                 narration.activityType === "reasoning" ? "think" : "",
                 previous?.content ?? [],
-                captureActivityDetail([], "", narration.output),
+                detail,
             ),
         );
     };

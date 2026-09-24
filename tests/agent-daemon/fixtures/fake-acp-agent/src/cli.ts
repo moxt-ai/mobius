@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -145,6 +145,29 @@ function waitForAbort(signal: AbortSignal): Promise<void> {
     }
     return new Promise((resolve) => {
         signal.addEventListener("abort", () => resolve(), { once: true });
+    });
+}
+
+function waitForFile(directory: string, name: string, signal: AbortSignal): Promise<void> {
+    const path = join(directory, name);
+    if (existsSync(path) || signal.aborted) {
+        return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+        const watcher = watch(directory, () => {
+            if (existsSync(path)) {
+                finish();
+            }
+        });
+        const finish = () => {
+            watcher.close();
+            signal.removeEventListener("abort", finish);
+            resolve();
+        };
+        signal.addEventListener("abort", finish, { once: true });
+        if (existsSync(path) || signal.aborted) {
+            finish();
+        }
     });
 }
 
@@ -582,7 +605,9 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
         if (process.argv.includes("--authentication-required")) {
             throw acp.RequestError.authRequired();
         }
-        const sessionId = crypto.randomUUID();
+        const sessionId = process.argv.includes("--opencode-native-id")
+            ? `ses_${crypto.randomUUID().replaceAll("-", "")}`
+            : crypto.randomUUID();
         acquireWriter(sessionId);
         const state = new FakeSessionState(0);
         nativeMetadata.set(sessionId, {
@@ -749,7 +774,12 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
     .onRequest(acp.methods.agent.session.load, async (context) => {
         acquireWriter(context.params.sessionId);
         const directory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
-        if (directory !== undefined && existsSync(join(directory, "pause-load"))) {
+        const pausePath = directory === undefined ? null : join(directory, "pause-load");
+        const pauseTarget = pausePath !== null && existsSync(pausePath) ? readFileSync(pausePath, "utf8").trim() : null;
+        if (
+            directory !== undefined &&
+            (pauseTarget === "" || pauseTarget === "*" || pauseTarget === context.params.sessionId)
+        ) {
             writeFileSync(join(directory, "load-paused"), context.params.sessionId);
             await context.client.notify(acp.methods.client.session.update, {
                 sessionId: context.params.sessionId,
@@ -758,7 +788,27 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                     title: "Loading saved conversation",
                 },
             });
-            await waitForAbort(context.signal);
+            await new Promise<void>((resolve, reject) => {
+                const watcher = watch(directory, () => {
+                    if (!existsSync(join(directory, "pause-load"))) {
+                        cleanup();
+                        resolve();
+                    }
+                });
+                const abort = () => {
+                    cleanup();
+                    reject(context.signal.reason);
+                };
+                const cleanup = () => {
+                    watcher.close();
+                    context.signal.removeEventListener("abort", abort);
+                };
+                context.signal.addEventListener("abort", abort, { once: true });
+                if (!existsSync(join(directory, "pause-load"))) {
+                    cleanup();
+                    resolve();
+                }
+            });
             context.signal.throwIfAborted();
         }
         const state = readPersistedState(context.params.sessionId);
@@ -939,6 +989,17 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
             steeringWaiters.set(context.params.sessionId, steering);
         }
         try {
+            if (prompt === "release before first delta") {
+                const directory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+                if (directory === undefined) {
+                    throw new Error("The controlled Agent state directory is unavailable");
+                }
+                writeFileSync(join(directory, "prompt-paused"), context.params.sessionId);
+                await waitForFile(directory, "resume-turn", cancellation.signal);
+                if (cancellation.signal.aborted) {
+                    return { stopReason: "cancelled" };
+                }
+            }
             await context.client.notify(acp.methods.client.session.update, {
                 sessionId: context.params.sessionId,
                 update: {
@@ -988,9 +1049,73 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                     });
                 }
             }
+            if (prompt === "stream oversized reasoning") {
+                for (let index = 0; index < 8; index += 1) {
+                    await context.client.notify(acp.methods.client.session.update, {
+                        sessionId: context.params.sessionId,
+                        update: {
+                            content: { text: "r".repeat(100_000), type: "text" },
+                            messageId: `reasoning-${turnNumber.toString()}`,
+                            sessionUpdate: "agent_thought_chunk",
+                        },
+                    });
+                }
+            }
             if (prompt === "wait until cancelled") {
                 await waitForAbort(cancellation.signal);
                 return { stopReason: "cancelled" };
+            }
+            if (prompt === "hold after first delta" || prompt === "release after first delta") {
+                await context.client.notify(acp.methods.client.session.update, {
+                    sessionId: context.params.sessionId,
+                    update: {
+                        content: { text: "Partial reply", type: "text" },
+                        messageId: `assistant-${turnNumber.toString()}`,
+                        sessionUpdate: "agent_message_chunk",
+                    },
+                });
+                await context.client.notify(acp.methods.client.session.update, {
+                    sessionId: context.params.sessionId,
+                    update: {
+                        content: {
+                            resource: {
+                                blob: "AQ==",
+                                mimeType: "application/octet-stream",
+                                uri: "file:///partial.bin",
+                            },
+                            type: "resource",
+                        },
+                        messageId: `assistant-${turnNumber.toString()}`,
+                        sessionUpdate: "agent_message_chunk",
+                    },
+                });
+                if (prompt === "hold after first delta") {
+                    await waitForAbort(cancellation.signal);
+                    return { stopReason: "cancelled" };
+                }
+                const directory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+                if (directory === undefined) {
+                    throw new Error("The controlled Agent state directory is unavailable");
+                }
+                await waitForFile(directory, "resume-turn", cancellation.signal);
+                if (cancellation.signal.aborted) {
+                    return { stopReason: "cancelled" };
+                }
+                await context.client.notify(acp.methods.client.session.update, {
+                    sessionId: context.params.sessionId,
+                    update: {
+                        content: { text: " and more", type: "text" },
+                        messageId: `assistant-${turnNumber.toString()}`,
+                        sessionUpdate: "agent_message_chunk",
+                    },
+                });
+                transcript.push({
+                    messageId: `assistant-${turnNumber.toString()}`,
+                    role: "assistant",
+                    text: "Partial reply and more",
+                });
+                persistState(context.params.sessionId, state);
+                return { stopReason: "end_turn" };
             }
             if (prompt === "wait for steering") {
                 const instruction = await steering.promise;
@@ -1007,7 +1132,10 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                 persistState(context.params.sessionId, state);
                 return { stopReason: "end_turn" };
             }
-            const toolCallId = `tool-${turnNumber.toString()}`;
+            const toolCallId =
+                prompt === "generate inline image with reused tool id"
+                    ? "reused-image-tool"
+                    : `tool-${turnNumber.toString()}`;
 
             if (prompt === "report Codex usage" || prompt === "report Claude usage") {
                 await context.client.notify(acp.methods.client.session.update, {
@@ -1145,7 +1273,8 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                                         },
                                     ];
                                 })()
-                              : prompt === "generate inline image"
+                              : prompt === "generate inline image" ||
+                                  prompt === "generate inline image with reused tool id"
                                 ? [
                                       {
                                           content: {

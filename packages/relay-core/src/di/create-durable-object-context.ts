@@ -23,11 +23,6 @@ export function createDurableObjectContext(
             peers: new CloudflareChannelPeers(state),
         },
         utilities: {
-            schedule: async (timestamp, signal) => {
-                signal.throwIfAborted();
-                await state.storage.setAlarm(timestamp);
-                signal.throwIfAborted();
-            },
             waitUntil: (operation) => state.waitUntil(operation),
         },
     });
