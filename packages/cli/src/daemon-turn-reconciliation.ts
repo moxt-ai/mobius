@@ -2,6 +2,11 @@ import { randomUUID } from "node:crypto";
 import {
     ACTIVE_TURN_TEXT_LIMIT,
     type NativeSessionResult,
+    type RecordedSessionEvent,
+    SESSION_ELICITATION_REQUESTED_KIND,
+    SESSION_ELICITATION_RESOLVED_KIND,
+    SESSION_PERMISSION_REQUESTED_KIND,
+    SESSION_PERMISSION_RESOLVED_KIND,
     type SessionCancelCommand,
     type SessionPromptCommand,
 } from "@moxt-ai/mobius-protocol";
@@ -23,6 +28,10 @@ export class ActiveDaemonTurn {
     #text = "";
     #truncated = false;
     #sequence = 0;
+    #interaction: Extract<
+        RecordedSessionEvent,
+        { readonly kind: typeof SESSION_PERMISSION_REQUESTED_KIND | typeof SESSION_ELICITATION_REQUESTED_KIND }
+    > | null = null;
     readonly #epoch = randomUUID();
 
     constructor(command: SessionPromptCommand, attemptId: string) {
@@ -52,6 +61,22 @@ export class ActiveDaemonTurn {
         return { epoch: this.#epoch, sequence: this.#sequence };
     };
 
+    readonly recordInteraction = (event: RecordedSessionEvent): void => {
+        if (event.sessionId !== this.command.sessionId) {
+            return;
+        }
+        if (event.kind === SESSION_PERMISSION_REQUESTED_KIND || event.kind === SESSION_ELICITATION_REQUESTED_KIND) {
+            if (event.commandId === this.command.commandId) {
+                this.#interaction = event;
+            }
+        } else if (
+            (event.kind === SESSION_PERMISSION_RESOLVED_KIND || event.kind === SESSION_ELICITATION_RESOLVED_KIND) &&
+            this.#interaction?.interactionId === event.interactionId
+        ) {
+            this.#interaction = null;
+        }
+    };
+
     readonly snapshot = (): ActiveTurnSnapshot =>
         this.#accepted
             ? {
@@ -60,6 +85,7 @@ export class ActiveDaemonTurn {
                   text: this.#text,
                   truncated: this.#truncated,
                   epoch: this.#epoch,
+                  interaction: this.#interaction,
                   sequence: this.#sequence,
                   state: "running",
               }

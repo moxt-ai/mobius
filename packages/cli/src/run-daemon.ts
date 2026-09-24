@@ -673,6 +673,9 @@ export async function runDaemon(
     const publisher = new DaemonSessionEventPublisher();
     const activeTurns = new Map<string, ActiveDaemonTurn>();
     const recordSessionEvent = (sessionId: string, event: RecordedSessionEvent): void => {
+        for (const turn of activeTurns.values()) {
+            turn.recordInteraction(event);
+        }
         publisher.publish(sessionId, event);
     };
     const sessions = new AcpSessionManager(
