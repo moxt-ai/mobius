@@ -345,6 +345,7 @@ export interface FakeAgentDaemonBehavior {
     readonly sessions?: readonly SessionMetadata[];
     readonly nativeSessionTitle?: (sessionId: string) => string;
     readonly loadNativeHistory?: (sessionId: string, signal: AbortSignal) => Promise<NativeSessionHistory>;
+    readonly beforeActiveTurnSnapshot?: (sessionId: string, signal: AbortSignal) => Promise<void>;
     readonly onPromptCompleted?: (command: SessionPromptCommand, response: string) => void;
     readonly requiredBindingId?: string;
     readonly responseParts?: (command: SessionPromptCommand, turn: number) => readonly string[];
@@ -550,6 +551,8 @@ async function processHappyPathCommand(
                 }),
             );
         } else if (command.action === "active-turn") {
+            await behavior.beforeActiveTurnSnapshot?.(command.targetSessionId, signal);
+            signal.throwIfAborted();
             daemon.send(
                 encodeNativeSessionResult({
                     action: "active-turn",
