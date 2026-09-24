@@ -86,9 +86,10 @@ class RecordingObserver implements AcpSessionObserver {
 function fakeAgent(
     additionalArguments: readonly string[] = [],
     environment: Readonly<Record<string, string>> = {},
+    id = "codex",
 ): LocalAgentDefinition {
     return new LocalAgentDefinition(
-        "codex",
+        id,
         "Codex",
         process.execPath,
         [fakeAgentPath, "--agent-name", "Codex", ...additionalArguments],
@@ -97,7 +98,7 @@ function fakeAgent(
 }
 
 describe("ACP session features", () => {
-    it("Given OpenCode omits its compact command, When Mobius prepares and compacts a session, Then compact is available and completes", async () => {
+    it("Given an ACP Agent has not advertised commands, When Mobius prepares a session, Then it does not invent compact", async () => {
         const manager = new AcpSessionManager();
         const agent = new LocalAgentDefinition("opencode", "OpenCode", process.execPath, [
             fakeAgentPath,
@@ -114,64 +115,51 @@ describe("ACP session features", () => {
                 signal: new AbortController().signal,
             });
 
-            expect(prepared.commands).toEqual([
-                {
-                    description: "Compact the conversation context",
-                    inputHint: "",
-                    name: "compact",
-                },
-            ]);
-            await expect(
-                manager.runPrompt({
+            expect(prepared.commands).toEqual([]);
+        } finally {
+            await manager.close();
+        }
+    });
+
+    it.each(["codex", "claude", "opencode", "oh-my-pi", "pi", "unknown-acp"])(
+        "Given %s advertises compact, When its commands update, Then Mobius preserves the ACP command",
+        async (agentId) => {
+            const observer = new RecordingObserver();
+            const manager = new AcpSessionManager(observer);
+            const agent = fakeAgent(["--advertise-compact-command"], {}, agentId);
+
+            try {
+                await manager.runPrompt({
                     additionalDirectories: [],
                     agent,
-                    commandId: "opencode-compact-command",
+                    commandId: `${agentId}-compact-command`,
                     cwd: process.cwd(),
                     images: [],
                     onActivity: () => Promise.resolve(),
                     onText: () => Promise.resolve(),
-                    prompt: "/compact",
+                    prompt: "advertise commands",
                     resources: [],
-                    sessionId: "opencode-compact-session",
+                    sessionId: `${agentId}-compact-session`,
                     signal: new AbortController().signal,
-                }),
-            ).resolves.toEqual({ stopReason: "end_turn" });
-        } finally {
-            await manager.close();
-        }
-    });
+                });
 
-    it("Given another ACP agent advertises compact, When its commands update, Then Mobius omits the unsupported command", async () => {
-        const observer = new RecordingObserver();
-        const manager = new AcpSessionManager(observer);
-        const agent = fakeAgent(["--advertise-compact-command"]);
-
-        try {
-            await manager.runPrompt({
-                additionalDirectories: [],
-                agent,
-                commandId: "unsupported-compact-command",
-                cwd: process.cwd(),
-                images: [],
-                onActivity: () => Promise.resolve(),
-                onText: () => Promise.resolve(),
-                prompt: "advertise commands",
-                resources: [],
-                sessionId: "unsupported-compact-session",
-                signal: new AbortController().signal,
-            });
-
-            expect(observer.commands.at(-1)?.commands).toEqual([
-                {
-                    description: "Review the current workspace",
-                    inputHint: "optional focus",
-                    name: "review",
-                },
-            ]);
-        } finally {
-            await manager.close();
-        }
-    });
+                expect(observer.commands.at(-1)?.commands).toEqual([
+                    {
+                        description: "Review the current workspace",
+                        inputHint: "optional focus",
+                        name: "review",
+                    },
+                    {
+                        description: "Compact the current conversation",
+                        inputHint: "",
+                        name: "compact",
+                    },
+                ]);
+            } finally {
+                await manager.close();
+            }
+        },
+    );
 
     it("Given a managed Runtime has a login-shell-only Agent environment, When it starts an ACP session, Then the Agent receives that environment", async () => {
         const workspace = await mkdtemp(join(tmpdir(), "mobius-login-shell-workspace-"));

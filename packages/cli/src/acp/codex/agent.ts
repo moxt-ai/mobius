@@ -60,6 +60,7 @@ const MODEL_CATALOG_LIMIT = 1_000;
 // because most models have no speed tier at all.
 const FAST_TIER = "fast";
 const SERVICE_TIER_FAST = "priority";
+const CODEX_COMMANDS = Object.freeze([{ description: "Compact the conversation context", name: "compact" }]);
 
 interface AgentMode {
     readonly approvalsReviewer: string;
@@ -168,6 +169,10 @@ function promptInput(prompt: readonly ContentBlock[]): readonly unknown[] {
         }
     }
     return input;
+}
+
+function isCompactPrompt(prompt: readonly ContentBlock[]): boolean {
+    return prompt.length === 1 && prompt[0]?.type === "text" && prompt[0].text.trim() === "/compact";
 }
 
 function steeringPromptInput(prompt: readonly unknown[]): readonly unknown[] {
@@ -501,6 +506,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 };
                 this.#collaborationModeSelected = false;
                 await this.#probeCollaborationMode(context.signal);
+                await this.#emitAvailableCommands();
                 // The settings Mobius discovers come from this response. Without them the Run
                 // settings panel has nothing to render and saved selections cannot be re-applied.
                 return { configOptions: this.#configOptions(), sessionId: created.thread.id };
@@ -526,6 +532,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 this.#selectRestoredThread(resumed);
                 await this.#probeCollaborationMode(context.signal);
                 await this.#replayHistory(resumed.turns);
+                await this.#emitAvailableCommands();
                 return { configOptions: this.#configOptions() };
             })
             .onRequest(methods.agent.session.fork, async (context) => {
@@ -543,6 +550,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 this.#selectRestoredThread(forked);
                 await this.#probeCollaborationMode(context.signal);
                 await this.#replayHistory(forked.turns);
+                await this.#emitAvailableCommands();
                 return { configOptions: this.#configOptions(), sessionId: forked.thread.id };
             })
             .onRequest(methods.agent.session.resume, async (context) => {
@@ -555,9 +563,13 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 );
                 this.#selectRestoredThread(resumed);
                 await this.#probeCollaborationMode(context.signal);
+                await this.#emitAvailableCommands();
                 return { configOptions: this.#configOptions() };
             })
             .onRequest(methods.agent.session.prompt, async (context) => {
+                if (isCompactPrompt(context.params.prompt)) {
+                    return await this.#compact(context.signal);
+                }
                 return await this.#runTurn(promptInput(context.params.prompt), context.signal);
             })
             .onRequest(
@@ -863,6 +875,13 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
         await connection.client.notify(methods.client.session.update, {
             sessionId: this.#nativeSessionId,
             update,
+        });
+    };
+
+    readonly #emitAvailableCommands = async (): Promise<void> => {
+        await this.#emit({
+            availableCommands: CODEX_COMMANDS.map((command) => ({ ...command })),
+            sessionUpdate: "available_commands_update",
         });
     };
 
@@ -1212,6 +1231,35 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
             if (this.#turn === turn) {
                 turn.turn.id = started.id;
             }
+            return await completion.promise;
+        } finally {
+            signal.removeEventListener("abort", aborted);
+            if (this.#turn === turn) {
+                this.#turn = null;
+                this.#streamedReasoningItemIds.clear();
+            }
+        }
+    };
+
+    readonly #compact = async (signal: AbortSignal): Promise<PromptResponse> => {
+        signal.throwIfAborted();
+        if (this.#turn !== null) {
+            throw new AcpExecutionError("Another prompt is already running in this conversation", {}, "session_busy");
+        }
+        const completion = Promise.withResolvers<PromptResponse>();
+        void completion.promise.catch(() => {});
+        const aborted = (): void => {
+            completion.reject(signal.reason);
+            void this.close().catch((cause: unknown) => {
+                console.error("The cancelled Codex endpoint could not release its process tree", cause);
+            });
+        };
+        signal.addEventListener("abort", aborted, { once: true });
+        const turn: ActiveTurn = { completion, turn: { id: "" } };
+        this.#streamedReasoningItemIds.clear();
+        this.#turn = turn;
+        try {
+            await this.#appServer.request("thread/compact/start", { threadId: this.#nativeSessionId }, signal);
             return await completion.promise;
         } finally {
             signal.removeEventListener("abort", aborted);

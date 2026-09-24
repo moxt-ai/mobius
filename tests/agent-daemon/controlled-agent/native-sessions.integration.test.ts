@@ -156,6 +156,56 @@ async function fixture(
 }
 
 describe("native Agent session boundary", () => {
+    it("Given Mobius owns the Codex ACP adapter, When a Session is prepared and compacted, Then ACP advertises compact and Codex completes it", async () => {
+        const temporary = await realpath(await mkdtemp(join(tmpdir(), "mobius-codex-compact-")));
+        const workspace = join(temporary, "workspace");
+        await mkdir(workspace);
+        const executable = join(temporary, "codex.mjs");
+        const turnServer = new URL("../fixtures/fake-acp-agent/src/turn-app-server.ts", import.meta.url).toString();
+        await writeFile(executable, `#!${process.execPath}\nawait import(${JSON.stringify(turnServer)});\n`, {
+            mode: 0o700,
+        });
+        const agent = new InProcessAcpAgentDefinition(
+            "codex",
+            "Codex",
+            executable,
+            (options) => new CodexAcpAgent(options),
+        );
+        const sessions = new AcpSessionManager();
+        const sessionId = crypto.randomUUID();
+        try {
+            const prepared = await sessions.prepareSession({
+                additionalDirectories: [],
+                agent,
+                cwd: workspace,
+                sessionId,
+                signal: AbortSignal.timeout(20_000),
+            });
+            expect(prepared.commands).toEqual([
+                { description: "Compact the conversation context", inputHint: "", name: "compact" },
+            ]);
+
+            await expect(
+                sessions.runPrompt({
+                    additionalDirectories: [],
+                    agent,
+                    commandId: crypto.randomUUID(),
+                    cwd: workspace,
+                    images: [],
+                    onActivity: async () => {},
+                    onText: async () => {},
+                    prompt: "/compact",
+                    resources: [],
+                    sessionId,
+                    signal: AbortSignal.timeout(20_000),
+                }),
+            ).resolves.toEqual({ stopReason: "end_turn" });
+        } finally {
+            await sessions.close();
+            await rm(temporary, { recursive: true, force: true });
+        }
+    });
+
     it("Given Codex reports an unavailable configured model, When a new chat sends a prompt, Then a catalog model answers", async () => {
         const temporary = await realpath(await mkdtemp(join(tmpdir(), "mobius-codex-model-")));
         const workspace = join(temporary, "workspace");
