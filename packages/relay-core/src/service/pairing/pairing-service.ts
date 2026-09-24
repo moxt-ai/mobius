@@ -1,9 +1,11 @@
 import type {
     AgentCatalogRefreshCommand,
     AgentSettingsDiscoverCommand,
+    FileReadCommand,
     WorkspaceListCommand,
 } from "@moxt-ai/mobius-protocol";
 import { ProjectPermission } from "../../entity/authentication/project-authentication.ts";
+import type { ProjectScope } from "../../entity/do/session.ts";
 import { PairingDirectoryError, VerifiedChannelAccess } from "../../entity/pairing/pairing.ts";
 import type { ChannelGateway } from "../../gateway/channel-gateway.ts";
 import { type OperationTiming, unmeasuredOperationTiming } from "../../infra/operation-timing.ts";
@@ -14,6 +16,7 @@ import {
     requestRuntimeAgentCatalogRefresh,
     requestRuntimeAgentSettings,
     requestRuntimeControl,
+    requestRuntimeFile,
     requestRuntimeWorkspace,
 } from "./runtime-control-request.ts";
 
@@ -105,6 +108,97 @@ export class PairingService {
                 "Close Runtime control host",
                 async () => await this.#pairings.closeControlHost(access, AbortSignal.timeout(15000)),
             );
+        }
+    };
+
+    readonly requestProjectScopeControl = async (
+        scope: ProjectScope,
+        runtimeId: string,
+        command: RuntimeControlCommand,
+        signal: AbortSignal,
+    ) => {
+        const deadline = AbortSignal.any([signal, AbortSignal.timeout(120000)]);
+        const access = await this.#pairings.openProjectScopeControlHost(scope, runtimeId, deadline);
+        try {
+            const response = await this.#channels.acceptHost(
+                access,
+                new Request("https://runtime.internal/host", { headers: { Upgrade: "websocket" } }),
+                deadline,
+            );
+            const socket = response.webSocket;
+            if (socket === null) {
+                throw new PairingDirectoryError("runtime_unavailable", "The Runtime connection is unavailable");
+            }
+            return await requestRuntimeControl(socket, command, deadline);
+        } finally {
+            await this.#pairings.closeControlHost(access, AbortSignal.timeout(15000));
+        }
+    };
+
+    readonly openProjectSessionEventHost = async (
+        scope: ProjectScope,
+        runtimeId: string,
+        signal: AbortSignal,
+    ): Promise<{ readonly close: () => Promise<void>; readonly socket: WebSocket }> => {
+        const access = await this.#pairings.openProjectScopeControlHost(scope, runtimeId, signal);
+        try {
+            const response = await this.#channels.acceptHost(
+                access,
+                new Request("https://runtime.internal/host", { headers: { Upgrade: "websocket" } }),
+                signal,
+            );
+            const socket = response.webSocket;
+            if (socket === null) {
+                throw new PairingDirectoryError("runtime_unavailable", "The Runtime connection is unavailable");
+            }
+            let closed = false;
+            return {
+                socket,
+                close: async () => {
+                    if (closed) {
+                        return;
+                    }
+                    closed = true;
+                    socket.close(1000, "Session event subscription closed");
+                    await this.#pairings.closeControlHost(access, AbortSignal.timeout(15000));
+                },
+            };
+        } catch (cause) {
+            await this.#pairings.closeControlHost(access, AbortSignal.timeout(15000));
+            throw cause;
+        }
+    };
+
+    readonly readProjectSessionFile = async (
+        scope: ProjectScope,
+        runtimeId: string,
+        command: FileReadCommand,
+        signal: AbortSignal,
+    ): Promise<Response> => {
+        const deadline = AbortSignal.any([signal, AbortSignal.timeout(120000)]);
+        const access = await this.#pairings.openProjectScopeControlHost(scope, runtimeId, deadline);
+        try {
+            const response = await this.#channels.acceptHost(
+                access,
+                new Request("https://runtime.internal/host", { headers: { Upgrade: "websocket" } }),
+                deadline,
+            );
+            const socket = response.webSocket;
+            if (socket === null) {
+                throw new PairingDirectoryError("runtime_unavailable", "The Runtime connection is unavailable");
+            }
+            const stream = await requestRuntimeFile(socket, command, deadline);
+            void (async () => {
+                try {
+                    await stream.finished;
+                } finally {
+                    await this.#pairings.closeControlHost(access, AbortSignal.timeout(15000));
+                }
+            })().catch(() => undefined);
+            return stream.response;
+        } catch (cause) {
+            await this.#pairings.closeControlHost(access, AbortSignal.timeout(15000));
+            throw cause;
         }
     };
 

@@ -6,6 +6,8 @@ import { logger } from "../../infra/logger.ts";
 const REQUEST_KIND = "http.request";
 const RESPONSE_KIND = "http.response";
 const ERROR_KIND = "http.error";
+const EVENT_SUBSCRIBE_KIND = "session.events.subscribe";
+const EVENT_UNSUBSCRIBE_KIND = "session.events.unsubscribe";
 const MAX_BODY_BYTES = 12_582_912;
 const IDLE_TIMEOUT_MILLISECONDS = 60_000;
 const FORBIDDEN_HEADERS = new Set([
@@ -198,6 +200,7 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
     const client = pair[0];
     const server = pair[1];
     const controller = new AbortController();
+    const subscriptions = new Map<string, WebSocket>();
     const browserOrigin = request.headers.get("origin");
     let idleTimeout = setTimeout(() => {
         controller.abort(new Error("WebSocket transport became inactive"));
@@ -216,6 +219,10 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
         () => {
             clearTimeout(idleTimeout);
             controller.abort(new Error("WebSocket transport closed"));
+            for (const subscription of subscriptions.values()) {
+                subscription.close(1000, "WebSocket transport closed");
+            }
+            subscriptions.clear();
         },
         { once: true },
     );
@@ -237,6 +244,87 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                 }
                 const decoded: unknown = JSON.parse(event.data);
                 const message = record(decoded);
+                const kind = string(message, "kind", 32);
+                if (kind === EVENT_UNSUBSCRIBE_KIND) {
+                    const subscriptionId = string(message, "subscriptionId", 128);
+                    subscriptions.get(subscriptionId)?.close(1000, "Session event subscription closed");
+                    subscriptions.delete(subscriptionId);
+                    return;
+                }
+                if (kind === EVENT_SUBSCRIBE_KIND) {
+                    const subscriptionId = string(message, "subscriptionId", 128);
+                    if (!/^[a-zA-Z0-9-]{1,128}$/u.test(subscriptionId) || subscriptions.has(subscriptionId)) {
+                        throw transportError("invalid_message");
+                    }
+                    requestId = subscriptionId;
+                    const converted = requestFromMessage(
+                        {
+                            body: "",
+                            headers: message["headers"],
+                            kind: REQUEST_KIND,
+                            method: "GET",
+                            path: message["path"],
+                            requestId: subscriptionId,
+                        },
+                        subscriptionId,
+                        new URL(request.url).origin,
+                        browserOrigin,
+                        controller.signal,
+                    );
+                    const subscriptionHeaders = new Headers(converted.request.headers);
+                    subscriptionHeaders.set("Upgrade", "websocket");
+                    const response = await dispatch(new Request(converted.request, { headers: subscriptionHeaders }));
+                    const subscription = response.webSocket;
+                    if (subscription === null) {
+                        const failure = await response.json().catch(() => null);
+                        const error =
+                            typeof failure === "object" && failure !== null && "error" in failure
+                                ? record(Reflect.get(failure, "error"))
+                                : {};
+                        server.send(
+                            JSON.stringify({
+                                code: typeof error["code"] === "string" ? error["code"] : "session_unavailable",
+                                kind: "session.events.error",
+                                message:
+                                    typeof error["message"] === "string"
+                                        ? error["message"]
+                                        : "The Session event subscription is unavailable",
+                                status: response.status >= 400 ? response.status : 502,
+                                subscriptionId,
+                            }),
+                        );
+                        return;
+                    }
+                    subscriptions.set(subscriptionId, subscription);
+                    const finish = (): void => {
+                        if (subscriptions.delete(subscriptionId) && server.readyState === WebSocket.OPEN) {
+                            server.send(JSON.stringify({ kind: "session.events.end", subscriptionId }));
+                        }
+                    };
+                    subscription.addEventListener("message", (subscriptionEvent) => {
+                        if (
+                            typeof subscriptionEvent.data === "string" &&
+                            server.readyState === WebSocket.OPEN &&
+                            subscriptions.has(subscriptionId)
+                        ) {
+                            server.send(
+                                JSON.stringify({
+                                    data: subscriptionEvent.data,
+                                    eventId: "",
+                                    kind: "session.events.event",
+                                    subscriptionId,
+                                }),
+                            );
+                            touch();
+                        }
+                    });
+                    subscription.addEventListener("close", finish, { once: true });
+                    subscription.addEventListener("error", finish, { once: true });
+                    subscription.accept();
+                    server.send(JSON.stringify({ kind: "session.events.ready", subscriptionId }));
+                    touch();
+                    return;
+                }
                 requestId = requestIdFromMessage(message);
                 const converted = requestFromMessage(
                     message,

@@ -12,6 +12,7 @@ import {
     MOBIUS_API_PREFIX,
     type NativeMessagePage,
     type NativeSessionRequest,
+    type NativeSessionResult,
     type SessionConfigureCommand,
     SessionPromptDisposition,
     type WorkspaceEntriesEvent,
@@ -981,11 +982,16 @@ export class MobiusSessionResources {
             ),
         );
 
-    readonly createAccess = async (sessionId: string, expiresInSeconds: number, signal: AbortSignal) =>
+    readonly createAccess = async (
+        runtimeId: string,
+        sessionId: string,
+        expiresInSeconds: number,
+        signal: AbortSignal,
+    ) =>
         new MobiusSessionAccess(
             await this.#executor.post(
                 sessionPath(this.#projectId, sessionId, "access-credentials"),
-                { expiresInSeconds },
+                { expiresInSeconds, runtimeId },
                 signal,
             ),
         );
@@ -1023,7 +1029,16 @@ export class MobiusSessionResources {
               ]
             | readonly [
                   sessionId: string,
-                  request: Pick<SessionConfigureCommand, "configId" | "value" | "booleanValue" | "valueType">,
+                  request: Pick<
+                      SessionConfigureCommand,
+                      | "additionalDirectoryIds"
+                      | "agentId"
+                      | "booleanValue"
+                      | "configId"
+                      | "directoryId"
+                      | "value"
+                      | "valueType"
+                  >,
                   signal: AbortSignal,
               ]
     ) => {
@@ -1196,6 +1211,59 @@ export class MobiusSessionResources {
             throw new MobiusProtocolError("The service returned invalid native messages", { cause });
         }
     };
+
+    readonly querySessionNativeMessages = async (
+        sessionId: string,
+        identity: {
+            readonly additionalDirectoryIds: readonly string[];
+            readonly agentId: string;
+            readonly directoryId: string;
+        },
+        page: MobiusPageRequest,
+        signal: AbortSignal,
+    ): Promise<NativeMessagePage> => {
+        const path = requestUrl(
+            new URL("https://mobius.invalid/"),
+            sessionPath(this.#projectId, sessionId, "native-messages"),
+        );
+        path.searchParams.set("agentId", identity.agentId);
+        path.searchParams.set("directoryId", identity.directoryId);
+        path.searchParams.set("limit", page.limit.toString());
+        if (page.cursor.length > 0) {
+            path.searchParams.set("cursor", page.cursor);
+        }
+        for (const directoryId of identity.additionalDirectoryIds) {
+            path.searchParams.append("additionalDirectoryId", directoryId);
+        }
+        return decodeNativeMessagePage(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal));
+    };
+
+    readonly readActiveTurn = async (
+        sessionId: string,
+        identity: {
+            readonly additionalDirectoryIds: readonly string[];
+            readonly agentId: string;
+            readonly directoryId: string;
+        },
+        signal: AbortSignal,
+    ): Promise<Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"]> => {
+        const path = requestUrl(
+            new URL("https://mobius.invalid/"),
+            sessionPath(this.#projectId, sessionId, "active-turn"),
+        );
+        path.searchParams.set("agentId", identity.agentId);
+        path.searchParams.set("directoryId", identity.directoryId);
+        for (const directoryId of identity.additionalDirectoryIds) {
+            path.searchParams.append("additionalDirectoryId", directoryId);
+        }
+        const result = decodeNativeSessionResult(
+            JSON.stringify(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal)),
+        );
+        if (result.action !== "active-turn" || result.targetSessionId !== sessionId) {
+            throw new MobiusProtocolError("The service returned an invalid active Turn");
+        }
+        return result.turn;
+    };
 }
 
 export class MobiusTurnResources {
@@ -1209,7 +1277,7 @@ export class MobiusTurnResources {
 
     readonly submit = async (
         sessionId: string,
-        request: SubmitMobiusTurnRequest,
+        request: SubmitMobiusTurnRequest & { readonly agentId?: string; readonly directoryId?: string },
         signal: AbortSignal,
     ): Promise<MobiusTurn> =>
         decodeMobiusTurn(await this.#executor.post(sessionPath(this.#projectId, sessionId, "turns"), request, signal));
@@ -1347,14 +1415,21 @@ export class MobiusInteractionResources {
         interactionId: string,
         request: MobiusInteractionResponseRequest,
         signal: AbortSignal,
-    ): Promise<Interaction> =>
-        decodeMobiusInteraction(
-            await this.#executor.post(
-                sessionPath(this.#projectId, sessionId, `interactions/${encodeURIComponent(interactionId)}/responses`),
-                request,
-                signal,
-            ),
+    ): Promise<void> => {
+        const result = await this.#executor.post(
+            sessionPath(this.#projectId, sessionId, `interactions/${encodeURIComponent(interactionId)}/responses`),
+            request,
+            signal,
         );
+        if (
+            typeof result !== "object" ||
+            result === null ||
+            !("accepted" in result) ||
+            Reflect.get(result, "accepted") !== true
+        ) {
+            throw new MobiusProtocolError("The service returned an invalid Interaction response");
+        }
+    };
 }
 
 export interface MobiusSessionEventObserver {

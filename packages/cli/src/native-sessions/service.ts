@@ -91,45 +91,6 @@ export class NativeSessionService {
                 turn: this.#activeTurn(command),
             };
         }
-        if (command.action === "linked-history") {
-            const nativeSessionId = nativeSessionIdSchema.parse(command.targetSessionId);
-            if (
-                this.#sessions.hasPreparedSession(nativeSessionId, options.agent.id, cwd, additionalDirectories) &&
-                (await this.#sessions.loadLinkedSessionHistory({ ...options, sessionId: nativeSessionId })) === null
-            ) {
-                this.record(command, "native_session_history_read");
-                return {
-                    action: "linked-history",
-                    history: {
-                        status: "available",
-                        messages: [],
-                        truncated: false,
-                        coveredCommandIds: [],
-                        coveredMessageIds: [],
-                    },
-                    kind: "native.session.result",
-                    requestId: command.requestId,
-                    sessionId: command.sessionId,
-                    targetSessionId: command.targetSessionId,
-                };
-            }
-            const history = await nativeSessionAdapter(options.agent.id).linkedHistory({
-                sessions: this.#sessions,
-                directories: this.#directories,
-                bindingId: command.bindingId,
-                options,
-                nativeSessionId,
-            });
-            this.record(command, "native_session_history_read");
-            return {
-                action: "linked-history",
-                history,
-                kind: "native.session.result",
-                requestId: command.requestId,
-                sessionId: command.sessionId,
-                targetSessionId: command.targetSessionId,
-            };
-        }
         if (command.action === "create") {
             if (!supportsNativeChat(options.agent.id)) {
                 throw new AcpExecutionError(
@@ -343,8 +304,7 @@ export class NativeSessionService {
                 deletedSessionIds,
             };
         }
-        const action =
-            command.action === "import-only" ? "import" : command.action === "fork-only" ? "fork" : command.action;
+        const action = command.action;
         if (action === "import" && !prepared.capabilities.loadSession && !prepared.capabilities.resumeSession) {
             throw new AcpExecutionError("This Agent cannot import native sessions", {}, "native_session_unsupported");
         }
@@ -370,7 +330,6 @@ export class NativeSessionService {
                 additionalDirectories: target.additionalDirectories,
             },
             { kind: action, nativeSessionId: target.info.sessionId },
-            command.action !== "import-only" && command.action !== "fork-only",
         );
         signal.throwIfAborted();
         const ready: SessionReadyEvent = {
@@ -395,7 +354,6 @@ export class NativeSessionService {
             ready,
             targetSessionId: command.targetSessionId,
             title: target.info.title ?? "Untitled session",
-            history: opened.history,
         };
     };
 

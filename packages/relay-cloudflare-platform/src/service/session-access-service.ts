@@ -1,4 +1,8 @@
-import { decodeSessionAccessCredential, verifySessionAccessCredential } from "@moxt-ai/mobius-protocol";
+import {
+    decodeSessionAccessCredential,
+    issueSessionAccessCredential,
+    verifySessionAccessCredential,
+} from "@moxt-ai/mobius-protocol";
 import { ProjectAuthenticationError, ProjectPermission } from "@moxt-ai/mobius-relay-core";
 import type { AppCredentialAuthenticationService } from "./app-credential-authentication-service.ts";
 import type { PlatformControlPlaneService } from "./platform-control-plane-service.ts";
@@ -16,9 +20,61 @@ export class SessionAccessService {
         this.#control = control;
     }
 
-    readonly authorizeLiveEvents = async (
+    readonly issue = async (
+        target: SessionAccessTarget,
+        runtimeId: string,
+        appCredential: string,
+        expiresInSeconds: number,
+        signal: AbortSignal,
+    ): Promise<{
+        readonly credential: string;
+        readonly credentialId: string;
+        readonly expiresAt: string;
+        readonly projectId: string;
+        readonly sessionId: string;
+    }> => {
+        if (target.kind !== "session") {
+            throw new ProjectAuthenticationError("project_permission_denied", "A selected Session is required");
+        }
+        if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/u.test(runtimeId)) {
+            throw new ProjectAuthenticationError("invalid_request", "The Runtime identifier is invalid");
+        }
+        if (!Number.isSafeInteger(expiresInSeconds) || expiresInSeconds < 60 || expiresInSeconds > 900) {
+            throw new ProjectAuthenticationError("invalid_request", "The Session credential lifetime is invalid");
+        }
+        await this.#control.authorizePlatformCredential(
+            target.projectId,
+            appCredential,
+            ProjectPermission.SessionWrite,
+            "",
+            signal,
+        );
+        const issuedAtEpochMilliseconds = Date.now();
+        const expiresAtEpochMilliseconds = issuedAtEpochMilliseconds + expiresInSeconds * 1_000;
+        const credential = await issueSessionAccessCredential(appCredential, {
+            expiresAtEpochMilliseconds,
+            issuedAtEpochMilliseconds,
+            projectId: target.projectId,
+            purpose: "session-access",
+            runtimeId,
+            sessionId: target.sessionId,
+        });
+        return {
+            credential,
+            credentialId: `sac_${crypto.randomUUID()}`,
+            expiresAt: new Date(expiresAtEpochMilliseconds).toISOString(),
+            projectId: target.projectId,
+            sessionId: target.sessionId,
+        };
+    };
+
+    readonly authorizeLiveEvents = async (target: SessionAccessTarget, credentialValue: string, signal: AbortSignal) =>
+        await this.authorizeSession(target, credentialValue, ProjectPermission.SessionRead, signal);
+
+    readonly authorizeSession = async (
         target: SessionAccessTarget,
         credentialValue: string,
+        permission: ProjectPermission,
         signal: AbortSignal,
     ): Promise<{
         readonly expiresAtEpochMilliseconds: number;
@@ -54,12 +110,7 @@ export class SessionAccessService {
                 "The credential authorizes only the selected Session",
             );
         }
-        await this.#control.authorizePlatformCredentialRecord(
-            target.projectId,
-            application,
-            ProjectPermission.SessionRead,
-            signal,
-        );
+        await this.#control.authorizePlatformCredentialRecord(target.projectId, application, permission, signal);
         return {
             expiresAtEpochMilliseconds: claims.expiresAtEpochMilliseconds,
             projectId: claims.projectId,

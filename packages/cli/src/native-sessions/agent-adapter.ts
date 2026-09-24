@@ -13,15 +13,11 @@ export interface NativeSessionAdapterContext {
 }
 
 export interface NativeSessionAdapter {
-    readonly linkedHistory: (context: NativeSessionAdapterContext) => Promise<NativeSessionHistory>;
     readonly history: (context: NativeSessionAdapterContext) => Promise<NativeSessionHistory>;
     readonly preview: (context: NativeSessionAdapterContext) => Promise<NativeSessionHistory>;
 }
 
 const genericSessionAdapter: NativeSessionAdapter = {
-    linkedHistory: async () => {
-        throw new AcpExecutionError("This Agent does not support Chat history", {}, "native_session_unsupported");
-    },
     history: async () => {
         throw new AcpExecutionError("Native history is unavailable for this Agent", {}, "native_session_unsupported");
     },

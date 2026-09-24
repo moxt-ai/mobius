@@ -99,16 +99,6 @@ const PROCESS_STOP_TIMEOUT_MILLISECONDS = 1_000;
 const MAX_PRE_SESSION_UPDATES = 100;
 const MAX_PRE_SESSION_UPDATE_BYTES = 1024 * 1024;
 
-export function nativeHistoryNotRetained(): NativeSessionHistory {
-    return {
-        cause: {
-            code: "native_history_not_retained",
-            message: "Native message history is not retained in the cloud for this Session.",
-        },
-        status: "unavailable",
-    };
-}
-
 export interface AcpPrepareOptions {
     readonly additionalDirectories: readonly string[];
     readonly agent: AcpAgentDefinition;

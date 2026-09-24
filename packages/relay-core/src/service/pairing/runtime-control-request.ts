@@ -15,10 +15,13 @@ import {
     decodeMessageKind,
     decodeNativeSessionResult,
     decodeRuntimeStatusEvent,
+    decodeSessionCompletedEvent,
     decodeSessionConfigUpdatedEvent,
+    decodeSessionElicitationResolvedEvent,
     decodeSessionFailedEvent,
     decodeSessionLiveHistoryPageLoaded,
     decodeSessionOperationFailedEvent,
+    decodeSessionPermissionResolvedEvent,
     decodeSessionReadyEvent,
     decodeSessionStartedEvent,
     decodeSessionsQueriedEvent,
@@ -32,10 +35,16 @@ import {
     type FileReadCommand,
     type NativeSessionRequest,
     type NativeSessionResult,
+    type SessionCancelCommand,
+    type SessionCompletedEvent,
     type SessionConfigUpdatedEvent,
     type SessionConfigureCommand,
+    type SessionElicitationResolvedEvent,
+    type SessionElicitationRespondCommand,
     type SessionLiveHistoryPageLoad,
     type SessionLiveHistoryPageLoaded,
+    type SessionPermissionResolvedEvent,
+    type SessionPermissionRespondCommand,
     type SessionPrepareCommand,
     type SessionPromptCommand,
     type SessionQueryCommand,
@@ -51,15 +60,21 @@ export type RuntimeControlCommand =
     | NativeSessionRequest
     | SessionPrepareCommand
     | SessionConfigureCommand
+    | SessionCancelCommand
     | SessionPromptCommand
     | SessionLiveHistoryPageLoad
+    | SessionElicitationRespondCommand
+    | SessionPermissionRespondCommand
     | SessionQueryCommand;
 export type RuntimeControlResult =
     | NativeSessionResult
     | SessionReadyEvent
     | SessionConfigUpdatedEvent
+    | SessionCompletedEvent
     | SessionStartedEvent
     | SessionLiveHistoryPageLoaded
+    | SessionElicitationResolvedEvent
+    | SessionPermissionResolvedEvent
     | SessionsQueriedEvent;
 
 export interface RuntimeFileStream {
@@ -362,7 +377,12 @@ export async function requestRuntimeControl(
     signal: AbortSignal,
 ): Promise<RuntimeControlResult> {
     const deadline = AbortSignal.any([signal, AbortSignal.timeout(120000)]);
-    const requestId = command.kind === "session.prompt" ? command.commandId : command.requestId;
+    const requestId =
+        command.kind === "session.prompt" || command.kind === "session.cancel"
+            ? command.commandId
+            : command.kind === "session.permission.respond" || command.kind === "session.elicitation.respond"
+              ? command.interactionId
+              : command.requestId;
     let cleanup = () => {};
     try {
         deadline.throwIfAborted();
@@ -431,9 +451,21 @@ export async function requestRuntimeControl(
                             ? decodeSessionLiveHistoryPageLoaded(raw)
                             : command.kind === "session.prompt" && kind === "session.started"
                               ? decodeSessionStartedEvent(raw)
-                              : null);
+                              : command.kind === "session.cancel" && kind === "session.completed"
+                                ? decodeSessionCompletedEvent(raw)
+                                : command.kind === "session.permission.respond" &&
+                                    kind === "session.permission.resolved"
+                                  ? decodeSessionPermissionResolvedEvent(raw)
+                                  : command.kind === "session.elicitation.respond" &&
+                                      kind === "session.elicitation.resolved"
+                                    ? decodeSessionElicitationResolvedEvent(raw)
+                                    : null);
                     const resolvedRequestId =
-                        resolved !== null && "requestId" in resolved ? resolved.requestId : resolved?.commandId;
+                        resolved !== null && "requestId" in resolved
+                            ? resolved.requestId
+                            : resolved !== null && "interactionId" in resolved
+                              ? resolved.interactionId
+                              : resolved?.commandId;
                     if (resolved !== null && resolvedRequestId === requestId) {
                         resolve(resolved);
                     }

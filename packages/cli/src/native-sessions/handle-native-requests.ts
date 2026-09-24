@@ -38,7 +38,7 @@ export function createNativeSessionRequestHandler(dependencies: NativeRequestDep
 
     const handle = (command: NativeSessionCommand): void => {
         const previous = [...pending.values()].filter((request) => request.agentId === command.agentId);
-        const parallelRead = command.action === "linked-history" || command.action === "active-turn";
+        const parallelRead = command.action === "active-turn";
         if (
             pending.has(command.requestId) ||
             pending.size >= 4 ||

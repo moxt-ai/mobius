@@ -1832,11 +1832,13 @@ export class MobiusTurnStartedEvent extends MobiusRecordedEvent {
     readonly attemptId: string;
     readonly commandId: string;
     readonly kind = SESSION_STARTED_KIND;
+    readonly prompt: string;
 
-    constructor(sessionId: string, commandId: string, attemptId: string) {
+    constructor(sessionId: string, commandId: string, attemptId: string, prompt: string) {
         super(sessionId);
         this.attemptId = attemptId;
         this.commandId = commandId;
+        this.prompt = prompt;
     }
 }
 
@@ -1946,7 +1948,7 @@ function decodeRecordedEvent(encoded: string): MobiusRecordedEvent {
     const event = decodeRecordedSessionEvent(encoded);
     switch (event.kind) {
         case SESSION_STARTED_KIND:
-            return new MobiusTurnStartedEvent(event.sessionId, event.commandId, event.attemptId);
+            return new MobiusTurnStartedEvent(event.sessionId, event.commandId, event.attemptId, event.prompt);
         case AGENT_MESSAGE_DELTA_KIND:
             return new MobiusAgentMessageEvent(event.sessionId, event.commandId, event.text);
         case AGENT_ACTIVITY_KIND:

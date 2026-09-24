@@ -398,6 +398,7 @@ async function processHappyPathCommand(
     behavior: FakeAgentDaemonBehavior,
     nextTurn: () => number,
     activeTurns: Map<string, ActiveTurn>,
+    sessions: Map<string, SessionMetadata>,
     signal: AbortSignal,
 ): Promise<void> {
     const kind = decodeMessageKind(encoded);
@@ -542,19 +543,6 @@ async function processHappyPathCommand(
                     sessionId: command.sessionId,
                 }),
             );
-        } else if (command.action === "linked-history" && behavior.loadNativeHistory !== undefined) {
-            const history = await behavior.loadNativeHistory(command.targetSessionId, signal);
-            signal.throwIfAborted();
-            daemon.send(
-                encodeNativeSessionResult({
-                    action: "linked-history",
-                    history,
-                    kind: "native.session.result",
-                    requestId: command.requestId,
-                    sessionId: command.sessionId,
-                    targetSessionId: command.targetSessionId,
-                }),
-            );
         } else if (command.action === "active-turn") {
             const active = activeTurns.get(command.targetSessionId);
             const turn =
@@ -586,9 +574,23 @@ async function processHappyPathCommand(
     }
     if (kind === SESSION_QUERY_KIND) {
         const command = decodeSessionQueryCommand(encoded);
+        const entries = new Map((behavior.sessions ?? []).map((entry) => [entry.sessionId, entry]));
+        for (const [sessionId, entry] of sessions) {
+            entries.set(sessionId, entry);
+        }
         daemon.send(
             encodeSessionsQueriedEvent({
-                entries: (behavior.sessions ?? []).filter((entry) => command.sessionIds.includes(entry.sessionId)),
+                entries: command.sessionIds.flatMap((sessionId) => {
+                    const entry = entries.get(sessionId);
+                    return entry === undefined
+                        ? []
+                        : [
+                              {
+                                  ...entry,
+                                  title: behavior.nativeSessionTitle?.(sessionId) ?? entry.title,
+                              },
+                          ];
+                }),
                 kind: "session.queried",
                 requestId: command.requestId,
             }),
@@ -635,6 +637,16 @@ async function processHappyPathCommand(
             daemon.send(encodeDaemonToServiceMessage(ready));
             return;
         }
+        sessions.set(command.sessionId, {
+            additionalDirectories: ready.additionalDirectories,
+            agentId: ready.agentId,
+            directoryId: ready.directoryId,
+            directoryLabel: ready.directoryLabel,
+            prompted: false,
+            sessionId: ready.sessionId,
+            title: "New chat",
+            updatedAt: "1970-01-01T00:00:00.000Z",
+        });
         await daemon.sendSessionEvent(command.sessionId, encodeSessionReadyEvent(ready), signal);
         return;
     }
@@ -658,27 +670,42 @@ async function processHappyPathCommand(
     }
     if (kind === SESSION_LIVE_HISTORY_PAGE_LOAD_KIND) {
         const command = decodeSessionLiveHistoryPageLoad(encoded);
-        const available = behavior.sessions?.some((entry) => entry.sessionId === command.sessionId) === true;
+        const available =
+            sessions.has(command.sessionId) ||
+            behavior.sessions?.some((entry) => entry.sessionId === command.sessionId) === true;
+        const history =
+            behavior.loadNativeHistory === undefined
+                ? null
+                : await behavior.loadNativeHistory(command.sessionId, signal);
+        signal.throwIfAborted();
         daemon.send(
             encodeSessionLiveHistoryPageLoaded({
                 kind: "session.live-history.page.loaded",
-                page: available
-                    ? {
-                          coveredCommandIds: [],
-                          coveredMessageIds: [],
-                          messages: [],
-                          nextCursor: null,
-                          status: "available",
-                          truncated: false,
-                      }
-                    : {
-                          cause: {
-                              code: "native_history_unsupported",
-                              message: "The fake Agent daemon does not provide native message history.",
-                          },
-                          nextCursor: null,
-                          status: "unavailable",
-                      },
+                page:
+                    history?.status === "available"
+                        ? {
+                              ...history,
+                              nextCursor: null,
+                          }
+                        : history?.status === "unavailable"
+                          ? { ...history, nextCursor: null }
+                          : available
+                            ? {
+                                  coveredCommandIds: [],
+                                  coveredMessageIds: [],
+                                  messages: [],
+                                  nextCursor: null,
+                                  status: "available",
+                                  truncated: false,
+                              }
+                            : {
+                                  cause: {
+                                      code: "native_history_unsupported",
+                                      message: "The fake Agent daemon does not provide native message history.",
+                                  },
+                                  nextCursor: null,
+                                  status: "unavailable",
+                              },
                 requestId: command.requestId,
                 sessionId: command.sessionId,
             }),
@@ -693,6 +720,14 @@ async function processHappyPathCommand(
         return;
     }
     const command = decodeSessionPromptCommand(encoded);
+    const session = sessions.get(command.sessionId);
+    if (session !== undefined) {
+        sessions.set(command.sessionId, {
+            ...session,
+            prompted: true,
+            title: session.title === "New chat" ? command.prompt.slice(0, 500) : session.title,
+        });
+    }
     if (behavior.requiredBindingId !== undefined && command.bindingId !== behavior.requiredBindingId) {
         await daemon.sendSessionEvent(
             command.sessionId,
@@ -855,13 +890,22 @@ export function serveFakeAgentDaemon(
     const failure = Promise.withResolvers<never>();
     const tasks = new Set<Promise<void>>();
     const activeTurns = new Map<string, ActiveTurn>();
+    const sessions = new Map<string, SessionMetadata>();
     let turn = 0;
     const nextTurn = (): number => {
         turn += 1;
         return turn;
     };
     const start = (message: string): void => {
-        const task = processHappyPathCommand(daemon, message, behavior, nextTurn, activeTurns, cancellation.signal);
+        const task = processHappyPathCommand(
+            daemon,
+            message,
+            behavior,
+            nextTurn,
+            activeTurns,
+            sessions,
+            cancellation.signal,
+        );
         tasks.add(task);
         void task.then(
             () => tasks.delete(task),
