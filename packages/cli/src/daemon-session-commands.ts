@@ -357,9 +357,7 @@ export async function executeSessionPrepare(
                 sessionId: command.sessionId,
                 runtimeTimings: metrics.snapshot(),
             };
-            // An inspection-only preparation has no Session on the Relay, so this readiness is a reply
-            // rather than a record: committing it would be rejected as an unknown Session and quarantine
-            // an event that can never be replayed. The direct send below still delivers it.
+            // Inspection-only preparation returns readiness to its caller without broadcasting it.
             if (command.transient !== true) {
                 metrics.measureSync("readiness-commit", () => {
                     publisher.publish(command.sessionId, event);

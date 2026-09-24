@@ -12,9 +12,9 @@ export interface NarrationIncrement {
  * Coalesces streaming narration increments into bounded, ordered events.
  *
  * Reasoning and progress activities are rewritten by the Agent once per streamed
- * chunk. Publishing each chunk as its own queued Session event both floods the
- * owning Attempt's replay window and, when the consumer folds the chunks into a
- * snapshot, makes the accumulated text grow quadratically. Buffering per activity
+ * chunk. Publishing each chunk separately saturates the live connection and,
+ * when the consumer folds the chunks into a snapshot, makes the accumulated
+ * text grow quadratically. Buffering per activity
  * for a short window bounds the event rate while preserving text order: the
  * increments of one activity are sequential, so concatenating them reconstructs
  * exactly the narration the Agent produced.
