@@ -551,6 +551,7 @@ async function processHappyPathCommand(
                 }),
             );
         } else if (command.action === "active-turn") {
+            const turn = activeTurns.get(command.targetSessionId) ?? null;
             await behavior.beforeActiveTurnSnapshot?.(command.targetSessionId, signal);
             signal.throwIfAborted();
             daemon.send(
@@ -560,7 +561,7 @@ async function processHappyPathCommand(
                     requestId: command.requestId,
                     sessionId: command.sessionId,
                     targetSessionId: command.targetSessionId,
-                    turn: activeTurns.get(command.targetSessionId) ?? null,
+                    turn,
                 }),
             );
         } else {
