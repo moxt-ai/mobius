@@ -720,6 +720,7 @@ async function processHappyPathCommand(
     activeTurns.set(command.sessionId, {
         commandId: command.commandId,
         epoch,
+        interaction: null,
         prompt: command.prompt,
         sequence: 0,
         state: "running",

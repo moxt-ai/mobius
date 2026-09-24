@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { ProtocolMessageError } from "./codecs/messages.ts";
-import { sessionCapabilitiesSchema, sessionReadyEventSchema } from "./control-messages.ts";
+import {
+    sessionCapabilitiesSchema,
+    sessionElicitationRequestedEventSchema,
+    sessionPermissionRequestedEventSchema,
+    sessionReadyEventSchema,
+} from "./control-messages.ts";
 import { sessionHistorySchema } from "./session-history.ts";
 
 export const NATIVE_SESSION_REQUEST_KIND = "native.session.request";
@@ -170,6 +175,12 @@ const nativeSessionResultSchema = z.discriminatedUnion("action", [
                     text: z.string().max(ACTIVE_TURN_TEXT_LIMIT),
                     truncated: z.boolean(),
                     epoch: identifier,
+                    interaction: z
+                        .discriminatedUnion("kind", [
+                            sessionPermissionRequestedEventSchema,
+                            sessionElicitationRequestedEventSchema,
+                        ])
+                        .nullable(),
                     sequence: z.number().int().nonnegative(),
                     state: z.literal("running"),
                 })

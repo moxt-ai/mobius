@@ -694,7 +694,7 @@ const sessionInfoUpdatedEventSchema = z
 
 export type SessionInfoUpdatedEvent = z.infer<typeof sessionInfoUpdatedEventSchema>;
 
-const sessionPermissionRequestedEventSchema = z
+export const sessionPermissionRequestedEventSchema = z
     .strictObject({
         commandId: IDENTIFIER,
         interactionId: IDENTIFIER,
@@ -733,7 +733,7 @@ const sessionPermissionResolvedEventSchema = z
 
 export type SessionPermissionResolvedEvent = z.infer<typeof sessionPermissionResolvedEventSchema>;
 
-const sessionElicitationRequestedEventSchema = z
+export const sessionElicitationRequestedEventSchema = z
     .strictObject({
         accepted: z.boolean(),
         commandId: IDENTIFIER,
