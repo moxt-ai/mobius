@@ -1,5 +1,4 @@
-import { createHash } from "node:crypto";
-import { DatabaseSync } from "node:sqlite";
+import { createHash, randomUUID } from "node:crypto";
 
 const MAX_TERMINAL_RECEIPTS = 1_024;
 
@@ -12,142 +11,84 @@ export type DaemonExecutionReceipt = Readonly<{
     state: DaemonExecutionState;
 }>;
 
-export class DaemonOperationState {
-    readonly #database: DatabaseSync;
+type StoredExecution = Readonly<{
+    attemptId: string;
+    commandHash: string;
+    sessionId: string;
+    state: DaemonExecutionState;
+}>;
 
-    constructor() {
-        this.#database = new DatabaseSync(":memory:");
-        this.#database.exec(`
-      CREATE TABLE IF NOT EXISTS daemon_turn_receipts (
-        command_id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        command_hash TEXT NOT NULL,
-        attempt_id TEXT NOT NULL,
-        state TEXT NOT NULL CHECK (
-          state IN ('dispatching', 'running', 'succeeded', 'failed', 'cancelled')
-        )
-      ) STRICT;
-    `);
-    }
+function isTerminal(state: DaemonExecutionState): boolean {
+    return state === "succeeded" || state === "failed" || state === "cancelled";
+}
+
+export class DaemonOperationState {
+    readonly #executions = new Map<string, StoredExecution>();
+    #terminalCount = 0;
 
     readonly claimExecution = (commandId: string, sessionId: string, commandJson: string): DaemonExecutionReceipt => {
         const commandHash = createHash("sha256").update(commandJson).digest("hex");
-        this.#database.exec("BEGIN IMMEDIATE");
-        try {
-            const existing = this.#database
-                .prepare(
-                    `SELECT session_id, command_hash, attempt_id, state
-           FROM daemon_turn_receipts WHERE command_id = ?`,
-                )
-                .get(commandId);
-            if (typeof existing === "object" && existing !== null) {
-                const storedSessionId = Reflect.get(existing, "session_id");
-                const storedCommandHash = Reflect.get(existing, "command_hash");
-                const attemptId = Reflect.get(existing, "attempt_id");
-                const state = Reflect.get(existing, "state");
-                if (
-                    storedSessionId !== sessionId ||
-                    storedCommandHash !== commandHash ||
-                    typeof attemptId !== "string" ||
-                    !isDaemonExecutionState(state)
-                ) {
-                    throw new Error("The daemon command identity conflicts with its in-memory receipt");
-                }
-                this.#database.exec("COMMIT");
-                return { attemptId, commandId, kind: "duplicate", state };
+        const existing = this.#executions.get(commandId);
+        if (existing !== undefined) {
+            if (existing.sessionId !== sessionId || existing.commandHash !== commandHash) {
+                throw new Error("The daemon command identity conflicts with its in-memory receipt");
             }
-            const attemptId = crypto.randomUUID();
-            this.#database
-                .prepare(
-                    `INSERT INTO daemon_turn_receipts (
-             command_id, session_id, command_hash, attempt_id, state
-           ) VALUES (?, ?, ?, ?, 'dispatching')`,
-                )
-                .run(commandId, sessionId, commandHash, attemptId);
-            this.#database.exec("COMMIT");
-            return {
-                attemptId,
-                commandId,
-                kind: "accepted",
-                state: "dispatching",
-            };
-        } catch (error) {
-            this.#database.exec("ROLLBACK");
-            throw error;
+            return { attemptId: existing.attemptId, commandId, kind: "duplicate", state: existing.state };
         }
+        const attemptId = randomUUID();
+        this.#executions.set(commandId, { attemptId, commandHash, sessionId, state: "dispatching" });
+        return { attemptId, commandId, kind: "accepted", state: "dispatching" };
     };
 
     readonly transitionExecution = (commandId: string, state: DaemonExecutionState): void => {
-        const row = this.#database
-            .prepare(`SELECT state FROM daemon_turn_receipts WHERE command_id = ?`)
-            .get(commandId);
-        const current = typeof row === "object" && row !== null ? Reflect.get(row, "state") : undefined;
-        if (!isDaemonExecutionState(current)) {
+        const current = this.#executions.get(commandId);
+        if (current === undefined) {
             throw new Error("The daemon execution receipt does not exist");
         }
-        if (current === state) {
+        if (current.state === state) {
             return;
         }
         const allowed =
-            (current === "dispatching" && (state === "running" || state === "failed" || state === "cancelled")) ||
-            (current === "running" && (state === "succeeded" || state === "failed" || state === "cancelled"));
+            (current.state === "dispatching" && (state === "running" || state === "failed" || state === "cancelled")) ||
+            (current.state === "running" && isTerminal(state));
         if (!allowed) {
             throw new Error("The daemon execution transition is invalid");
         }
-        this.#database.prepare(`UPDATE daemon_turn_receipts SET state = ? WHERE command_id = ?`).run(state, commandId);
-        if (state === "succeeded" || state === "failed" || state === "cancelled") {
-            this.#database
-                .prepare(
-                    `DELETE FROM daemon_turn_receipts
-                     WHERE state IN ('succeeded', 'failed', 'cancelled')
-                     AND rowid NOT IN (
-                       SELECT rowid FROM daemon_turn_receipts
-                       WHERE state IN ('succeeded', 'failed', 'cancelled')
-                       ORDER BY rowid DESC LIMIT ?
-                     )`,
-                )
-                .run(MAX_TERMINAL_RECEIPTS);
+        this.#executions.set(commandId, { ...current, state });
+        if (isTerminal(state)) {
+            this.#terminalCount += 1;
+            this.pruneTerminalReceipts();
         }
     };
 
-    /**
-     * The Attempt this live Runtime claimed for a command that has not reached a terminal state.
-     * Receipts disappear when the daemon process exits.
-     */
+    /** Receipts disappear when the daemon process exits. */
     readonly findUnsettledAttemptId = (commandId: string, sessionId: string): string | null => {
-        const row = this.#database
-            .prepare(`SELECT attempt_id, state FROM daemon_turn_receipts WHERE command_id = ? AND session_id = ?`)
-            .get(commandId, sessionId);
-        if (typeof row !== "object" || row === null) {
-            return null;
-        }
-        const attemptId = Reflect.get(row, "attempt_id");
-        const state = Reflect.get(row, "state");
-        if (typeof attemptId !== "string" || attemptId.length === 0 || !isDaemonExecutionState(state)) {
-            return null;
-        }
-        return state === "dispatching" || state === "running" ? attemptId : null;
+        const receipt = this.#executions.get(commandId);
+        return receipt?.sessionId === sessionId && !isTerminal(receipt.state) ? receipt.attemptId : null;
     };
 
     readonly isTerminalExecution = (commandId: string, sessionId: string): boolean => {
-        const row = this.#database
-            .prepare(`SELECT state FROM daemon_turn_receipts WHERE command_id = ? AND session_id = ?`)
-            .get(commandId, sessionId);
-        const state = typeof row === "object" && row !== null ? Reflect.get(row, "state") : undefined;
-        return state === "succeeded" || state === "failed" || state === "cancelled";
+        const receipt = this.#executions.get(commandId);
+        return receipt?.sessionId === sessionId && isTerminal(receipt.state);
     };
 
     readonly close = (): void => {
-        this.#database.close();
+        this.#executions.clear();
+        this.#terminalCount = 0;
     };
-}
 
-function isDaemonExecutionState(value: unknown): value is DaemonExecutionState {
-    return (
-        value === "cancelled" ||
-        value === "dispatching" ||
-        value === "failed" ||
-        value === "running" ||
-        value === "succeeded"
-    );
+    private readonly pruneTerminalReceipts = (): void => {
+        if (this.#terminalCount <= MAX_TERMINAL_RECEIPTS) {
+            return;
+        }
+        for (const [commandId, receipt] of this.#executions) {
+            if (isTerminal(receipt.state)) {
+                this.#executions.delete(commandId);
+                this.#terminalCount -= 1;
+                if (this.#terminalCount <= MAX_TERMINAL_RECEIPTS) {
+                    return;
+                }
+            }
+        }
+    };
 }
