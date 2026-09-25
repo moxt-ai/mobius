@@ -34,7 +34,7 @@ type TurnDispatchState =
     | { readonly kind: "pending" }
     | { readonly kind: "queued"; readonly promotion: PromiseWithResolvers<void> }
     | { readonly kind: "promoted" }
-    | { readonly kind: "accepted" };
+    | { readonly kind: "running" };
 
 export class ActiveDaemonTurn {
     readonly attemptId: string;
@@ -58,11 +58,15 @@ export class ActiveDaemonTurn {
         this.attemptId = attemptId;
         this.command = command;
         this.#controller = new AbortController();
-        this.#dispatch =
-            command.disposition === SessionPromptDisposition.Queue
-                ? { kind: "queued", promotion: Promise.withResolvers<void>() }
-                : { kind: "pending" };
+        this.#dispatch = { kind: "pending" };
     }
+
+    readonly enqueue = (): void => {
+        if (this.#dispatch.kind !== "pending") {
+            throw new Error("Only a pending prompt can enter the queue");
+        }
+        this.#dispatch = { kind: "queued", promotion: Promise.withResolvers<void>() };
+    };
 
     readonly isQueued = (): boolean => this.#dispatch.kind === "queued" && !this.#controller.signal.aborted;
 
@@ -72,8 +76,8 @@ export class ActiveDaemonTurn {
 
     readonly finish = (): void => this.#finished.resolve();
 
-    readonly accept = (): { readonly epoch: string; readonly sequence: 0 } => {
-        this.#dispatch = { kind: "accepted" };
+    readonly activate = (): { readonly epoch: string; readonly sequence: 0 } => {
+        this.#dispatch = { kind: "running" };
         return { epoch: this.#epoch, sequence: 0 };
     };
 
@@ -171,7 +175,7 @@ export class ActiveDaemonTurn {
     };
 
     readonly snapshot = (): ActiveTurnSnapshot =>
-        this.#dispatch.kind === "accepted"
+        this.#dispatch.kind === "running"
             ? {
                   activities: [...this.#activities.values()].sort((left, right) => left.sequence - right.sequence),
                   commandId: decodeIdentifier(this.command.commandId),
@@ -194,7 +198,7 @@ export class ActiveDaemonTurn {
             return "already-requested";
         }
         this.#cancellationRequested = true;
-        if (this.#dispatch.kind !== "accepted") {
+        if (this.#dispatch.kind !== "running") {
             this.#controller.abort(new Error("The queued Agent turn was cancelled"));
             return "pending";
         }

@@ -22,6 +22,7 @@ export async function withRealDaemon(
         readonly workspace: string;
         readonly bindingId: string;
         readonly nextEvent: () => Promise<string>;
+        readonly nextMessage: () => Promise<string>;
     }) => Promise<void>,
 ): Promise<void> {
     const directory = await mkdtemp(join(tmpdir(), `mobius-real-${specification.id}-`));
@@ -56,16 +57,13 @@ export async function withRealDaemon(
             socket = connection;
             connection.on("message", (value) => {
                 const message = value.toString();
-                if (decodeMessageKind(message) !== "session.event") {
-                    return;
-                }
-                const payload = decodeSessionEventEnvelope(message).payload;
+
                 if (waiter === undefined) {
-                    messages.push(payload);
+                    messages.push(message);
                 } else {
                     const pending = waiter;
                     waiter = undefined;
-                    pending.resolve(payload);
+                    pending.resolve(message);
                 }
             });
             connected.resolve();
@@ -88,6 +86,15 @@ export async function withRealDaemon(
         } finally {
             signal.removeEventListener("abort", abortConnection);
         }
+        const nextMessage = async (): Promise<string> => {
+            signal.throwIfAborted();
+            const message = messages.shift();
+            if (message !== undefined) {
+                return message;
+            }
+            waiter = Promise.withResolvers<string>();
+            return await waiter.promise;
+        };
         const sessionId = `real_${specification.id}_${randomUUID()}`;
         await scenario({
             bindingId: config.bindingId,
@@ -99,14 +106,14 @@ export async function withRealDaemon(
                 }
                 socket.send(message);
             },
+            nextMessage,
             nextEvent: async () => {
-                signal.throwIfAborted();
-                const message = messages.shift();
-                if (message !== undefined) {
-                    return message;
+                for (;;) {
+                    const message = await nextMessage();
+                    if (decodeMessageKind(message) === "session.event") {
+                        return decodeSessionEventEnvelope(message).payload;
+                    }
                 }
-                waiter = Promise.withResolvers<string>();
-                return await waiter.promise;
             },
         });
     } finally {

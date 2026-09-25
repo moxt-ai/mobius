@@ -146,6 +146,22 @@ test("Given real Codex and a local model provider, When a queued follow-up is ca
             let text = "";
             while (!completed) {
                 const message = await messages.next();
+                if (decodeMessageKind(message) === "session.queued") {
+                    socket.send(
+                        encodeNativeSessionCommand({
+                            action: "active-turn",
+                            additionalDirectoryIds: [],
+                            agentId: "codex",
+                            bindingId: config.bindingId,
+                            directoryId: `path-${Buffer.from(config.defaultWorkspace).toString("base64url")}`,
+                            kind: "native.session.request",
+                            requestId: "queued_snapshot",
+                            sessionId,
+                            targetSessionId: sessionId,
+                        }),
+                    );
+                    continue;
+                }
                 if (decodeMessageKind(message) === NATIVE_SESSION_RESULT_KIND) {
                     const result = decodeNativeSessionResult(message);
                     if (result.requestId === "queued_snapshot") {
@@ -234,19 +250,6 @@ test("Given real Codex and a local model provider, When a queued follow-up is ca
                             resources: [],
                             sessionId,
                             targetCommandId: commandId,
-                        }),
-                    );
-                    socket.send(
-                        encodeNativeSessionCommand({
-                            action: "active-turn",
-                            additionalDirectoryIds: [],
-                            agentId: "codex",
-                            bindingId: config.bindingId,
-                            directoryId: `path-${Buffer.from(config.defaultWorkspace).toString("base64url")}`,
-                            kind: "native.session.request",
-                            requestId: "queued_snapshot",
-                            sessionId,
-                            targetSessionId: sessionId,
                         }),
                     );
                 } else if (kind === AGENT_MESSAGE_DELTA_KIND) {

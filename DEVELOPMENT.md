@@ -20,6 +20,13 @@ The daemon owns pending prompts in `DaemonTurnRegistry` for its Runtime lifetime
 independently of Relay connections. The native `active-turn` result contains the
 running Turn and the queued prompts (including their original images).
 `session.queue.changed` invalidates the queue projection for all subscribed viewers.
+Queue admission and execution are separate: requests start pending, resolve and
+authorize their workspace, then validate the target and enter the queue before
+`session.queued` is sent. The target command is an admission guard only. Accepted
+prompts wait in Session FIFO order; completing or cancelling an earlier Turn must
+not invalidate later accepted prompts. Cancelling a queued prompt removes only
+that prompt. Queue snapshots contain admitted work, not unvalidated requests.
+
 Clients read `sessions.readSessionExecution` after subscribing, on reconnect, and
 on that notification. Started Turn events remove the corresponding queued entry. They must not reconstruct accepted work from a tab-local
 journal. Queue changes and snapshots are transient; this adds no persisted queue.
