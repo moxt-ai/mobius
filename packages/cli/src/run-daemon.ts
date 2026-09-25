@@ -10,6 +10,7 @@ import {
     decodeServiceToDaemonMessage,
     decodeSessionLiveHistoryLoad,
     decodeSessionLiveHistoryPageLoad,
+    encodeSessionPromptCommand,
     FILE_FAILED_KIND,
     FILE_READ_KIND,
     NATIVE_SESSION_CANCEL_KIND,
@@ -610,11 +611,28 @@ async function runRelayConnection(
                         throw new Error("Unsupported protocol message");
                     }
                     const command = message;
-                    if (activeTurns.has(command.commandId)) {
+                    const receipt = operations.claimExecution(
+                        command.commandId,
+                        command.sessionId,
+                        encodeSessionPromptCommand(command),
+                    );
+                    if (receipt.kind === "conflict") {
+                        const code = "command_identity_conflict";
+                        audit.record({
+                            commandId: command.commandId,
+                            details: { code },
+                            event: "session_prompt_rejected",
+                            sessionId: command.sessionId,
+                        });
+                        send(socket, {
+                            code,
+                            requestId: command.commandId,
+                            kind: "session.operation.failed",
+                            message: "This command identifier was already used for a different request.",
+                            sessionId: command.sessionId,
+                        });
                         return;
                     }
-
-                    const receipt = operations.claimExecution(command.commandId, command.sessionId, encoded);
                     if (receipt.kind === "duplicate") {
                         return;
                     }

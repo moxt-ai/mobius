@@ -1,6 +1,6 @@
 {
     "name": "@moxt-ai/mobius-sdk",
-    "version": "0.0.37",
+    "version": "0.0.38",
     "description": "Unified Mobius TypeScript SDK for browsers and Node.js.",
     "type": "module",
     "types": "./src/index.ts",
