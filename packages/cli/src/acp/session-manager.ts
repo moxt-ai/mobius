@@ -1,3 +1,7 @@
+import { AcpProcessSession } from "./process-session.ts";
+
+export { createWritableAcpStream } from "./process-endpoint.ts";
+
 import type { NativeSessionHistory, SessionConfigOption } from "@moxt-ai/mobius-protocol";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
 import { isNativeChatSessionId } from "../native-sessions/chat-agent.ts";
@@ -28,9 +32,8 @@ export {
     type AcpSessionObserver,
     type AcpSteerOptions,
     type AcpTurnOptions,
-    createWritableAcpStream,
     NullAcpSessionObserver,
-} from "./process-session.ts";
+} from "./session-contracts.ts";
 
 import {
     type AcpAgentSettingsInspectionOptions,
@@ -41,13 +44,12 @@ import {
     type AcpPermissionResponseOptions,
     type AcpPreparedSession,
     type AcpPrepareOptions,
-    AcpProcessSession,
     type AcpPromptResult,
     type AcpSessionObserver,
     type AcpSteerOptions,
     type AcpTurnOptions,
     NullAcpSessionObserver,
-} from "./process-session.ts";
+} from "./session-contracts.ts";
 
 export class AcpSessionManager {
     readonly #processes = new AcpProcessPool();
@@ -600,7 +602,6 @@ export class AcpSessionManager {
                     if (this.#sessions.get(sessionId) === runtime) {
                         this.#sessions.delete(sessionId);
                         this.#processes.releaseClosed(runtime);
-                        this.#processes.notifyChanged();
                     }
                 }
             }

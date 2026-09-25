@@ -1,7 +1,3 @@
-import { AcpEndpoint } from "./process-endpoint.ts";
-
-export { createWritableAcpStream } from "./process-endpoint.ts";
-
 import {
     type CompleteElicitationNotification,
     type ContentBlock,
@@ -40,6 +36,7 @@ import {
     nativeSessionIdSchema,
     nativeSessionPageSchema,
 } from "./native-session.ts";
+import { AcpEndpoint } from "./process-endpoint.ts";
 import { normalizeAcpCapabilities, unsupportedSessionCapabilities } from "./session-capabilities.ts";
 import { type SessionConfigProtocol, SessionConfigProtocolError } from "./session-config/session-config-protocol.ts";
 import { sessionConfigProtocolForAgent } from "./session-config/session-config-registry.ts";
@@ -1215,20 +1212,3 @@ export class AcpProcessSession implements AcpClientHandler {
         });
     };
 }
-
-export {
-    type AcpAgentSettingsInspectionOptions,
-    AcpAgentSettingsSnapshot,
-    type AcpConfigureOptions,
-    type AcpElicitationResponseOptions,
-    type AcpNativeHistoryReader,
-    type AcpPermissionResponseOptions,
-    AcpPreparedSession,
-    type AcpPrepareOptions,
-    type AcpPromptContentOptions,
-    type AcpPromptResult,
-    type AcpSessionObserver,
-    type AcpSteerOptions,
-    type AcpTurnOptions,
-    NullAcpSessionObserver,
-} from "./session-contracts.ts";
