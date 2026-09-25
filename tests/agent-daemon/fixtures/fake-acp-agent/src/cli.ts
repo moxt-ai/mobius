@@ -1133,6 +1133,30 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                 });
             }
 
+            if (prompt === "advertise commands") {
+                await context.client.notify(acp.methods.client.session.update, {
+                    sessionId: context.params.sessionId,
+                    update: {
+                        availableCommands: [
+                            {
+                                description: "Review the current workspace",
+                                input: { hint: "optional focus" },
+                                name: "review",
+                            },
+                            ...(process.argv.includes("--advertise-compact-command")
+                                ? [
+                                      {
+                                          description: "Compact the current conversation",
+                                          name: "compact",
+                                      },
+                                  ]
+                                : []),
+                        ],
+                        sessionUpdate: "available_commands_update",
+                    },
+                });
+            }
+
             if (prompt === "exercise ACP controls") {
                 await context.client.notify(acp.methods.client.session.update, {
                     sessionId: context.params.sessionId,

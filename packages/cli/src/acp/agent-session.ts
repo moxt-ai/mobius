@@ -130,6 +130,7 @@ export class AgentSession implements AcpClientHandler {
         this.#updates = new AgentUpdateStream((notification) => this.#processUpdate(notification));
         this.#additionalDirectories = [...additionalDirectories];
         this.#agentId = agent.id;
+        this.#commands = [];
         this.#cwd = cwd;
         this.#environment = agent.environment;
         this.#getObserver = getObserver;
@@ -1066,7 +1067,7 @@ export class AgentSession implements AcpClientHandler {
                 .filter((command) => command.name.length > 0);
             this.#commands = commands;
             await this.#getObserver().onCommands({
-                commands,
+                commands: this.#commands,
                 kind: SESSION_COMMANDS_UPDATED_KIND,
                 sessionId: this.#mobiusSessionId,
             });

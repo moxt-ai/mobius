@@ -133,9 +133,12 @@ pnpm exec tsx ./index.ts \
 Other useful operations are:
 
 ```sh
+pnpm exec tsx ./index.ts --state-dir="$MOBIUS_MINI_STATE" compact --session="$MOBIUS_TEST_SESSION"
 pnpm exec tsx ./index.ts --state-dir="$MOBIUS_MINI_STATE" list-sessions
 pnpm exec tsx ./index.ts --state-dir="$MOBIUS_MINI_STATE" cancel-turn --session="$MOBIUS_TEST_SESSION" --turn='<turnId>'
 ```
+
+`compact` submits the Agent's advertised compact command. If the selected Agent does not offer compaction, it exits with `compact_unavailable` without sending a prompt.
 
 ## Stop, resume, and clean up
 
