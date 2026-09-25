@@ -1,11 +1,11 @@
 import type { NativeSessionHistory } from "@moxt-ai/mobius-protocol";
-import { AcpExecutionError, type AcpPrepareOptions, type AcpSessionManager } from "../acp/session-manager.ts";
+import { AcpExecutionError, type AcpPrepareOptions, type AgentRuntimeManager } from "../acp/agent-runtime-manager.ts";
 import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
 import { acpSessionAdapter } from "./acp-adapter.ts";
 import { codexSessionAdapter } from "./codex-adapter.ts";
 
 export interface NativeSessionAdapterContext {
-    readonly sessions: AcpSessionManager;
+    readonly sessions: AgentRuntimeManager;
     readonly directories: WorkspaceDirectoryService;
     readonly bindingId: string;
     readonly options: AcpPrepareOptions;

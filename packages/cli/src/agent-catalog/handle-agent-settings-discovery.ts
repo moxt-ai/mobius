@@ -3,8 +3,8 @@ import { WebSocket } from "undici";
 import {
     AcpConfigurationValueUnavailableError,
     AcpExecutionError,
-    type AcpSessionManager,
-} from "../acp/session-manager.ts";
+    type AgentRuntimeManager,
+} from "../acp/agent-runtime-manager.ts";
 import type { AuditStore } from "../audit/audit-store.ts";
 import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
 import type { DaemonConfig } from "../config.ts";
@@ -22,7 +22,7 @@ interface SettingsDiscoveryDependencies {
     readonly config: DaemonConfig;
     readonly directories: WorkspaceDirectoryService;
     readonly audit: AuditStore;
-    readonly sessions: AcpSessionManager;
+    readonly sessions: AgentRuntimeManager;
     readonly diagnostics: RelayConnectionDiagnostics;
     readonly socket: WebSocket;
     readonly signal: AbortSignal;

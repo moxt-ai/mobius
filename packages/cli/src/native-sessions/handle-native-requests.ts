@@ -1,6 +1,6 @@
 import type { NativeSessionCancel, NativeSessionCommand } from "@moxt-ai/mobius-protocol";
 import { WebSocket } from "undici";
-import { AcpExecutionError } from "../acp/session-manager.ts";
+import { AcpExecutionError } from "../acp/agent-runtime-manager.ts";
 import type { AuditStore } from "../audit/audit-store.ts";
 import { operationErrorCode, reportOperationFailure, send } from "../daemon-command-results.ts";
 import type { RelayConnectionDiagnostics } from "../relay-connection/diagnostics.ts";

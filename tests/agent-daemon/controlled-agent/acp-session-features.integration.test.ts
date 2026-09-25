@@ -16,7 +16,7 @@ import type {
 } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it } from "vitest";
 import type { AcpActivity } from "../../../packages/cli/src/acp/activity.ts";
-import { AcpSessionManager, type AcpSessionObserver } from "../../../packages/cli/src/acp/session-manager.ts";
+import { type AcpSessionObserver, AgentRuntimeManager } from "../../../packages/cli/src/acp/agent-runtime-manager.ts";
 import { MemoryAcpSessionStore } from "../../../packages/cli/src/acp/session-store.ts";
 import { createDaemonConfig, DaemonLocalContext, LocalAgentDefinition } from "../../../packages/cli/src/config.ts";
 
@@ -99,7 +99,7 @@ function fakeAgent(
 
 describe("ACP session features", () => {
     it("Given an ACP Agent has not advertised commands, When Mobius prepares a session, Then it does not invent compact", async () => {
-        const manager = new AcpSessionManager();
+        const manager = new AgentRuntimeManager();
         const agent = new LocalAgentDefinition("opencode", "OpenCode", process.execPath, [
             fakeAgentPath,
             "--agent-name",
@@ -125,7 +125,7 @@ describe("ACP session features", () => {
         "Given %s advertises compact, When its commands update, Then Mobius preserves the ACP command",
         async (agentId) => {
             const observer = new RecordingObserver();
-            const manager = new AcpSessionManager(observer);
+            const manager = new AgentRuntimeManager(observer);
             const agent = fakeAgent(["--advertise-compact-command"], {}, agentId);
 
             try {
@@ -165,7 +165,7 @@ describe("ACP session features", () => {
         const workspace = await mkdtemp(join(tmpdir(), "mobius-login-shell-workspace-"));
         const generatedImages = await mkdtemp(join(tmpdir(), "mobius-login-shell-images-"));
         const observer = new RecordingObserver();
-        const manager = new AcpSessionManager(observer);
+        const manager = new AgentRuntimeManager(observer);
         let answer = "";
         const localContext = new DaemonLocalContext(join(workspace, "state"), {
             FAKE_ACP_IMAGE_DIRECTORY: generatedImages,
@@ -212,7 +212,7 @@ describe("ACP session features", () => {
 
     it("Given an ACP tool returns inline image bytes, When Mobius records the tool update, Then it keeps the validated inline raster", async () => {
         const observer = new RecordingObserver();
-        const manager = new AcpSessionManager(observer);
+        const manager = new AgentRuntimeManager(observer);
         const activities: AcpActivity[] = [];
         try {
             await manager.runPrompt({
@@ -246,7 +246,7 @@ describe("ACP session features", () => {
 
     it("Given two Turns reuse a tool ID, When each Turn produces an image, Then the image stays in each tool activity without a separate content event", async () => {
         const observer = new RecordingObserver();
-        const manager = new AcpSessionManager(observer);
+        const manager = new AgentRuntimeManager(observer);
         const activities: AcpActivity[] = [];
         try {
             for (const commandId of ["first-image-turn", "second-image-turn"]) {
@@ -278,7 +278,7 @@ describe("ACP session features", () => {
 
     it("Given an ACP tool returns more than 500,000 characters, When Mobius records the tool update, Then it truncates the visible output at 500,000 characters", async () => {
         const observer = new RecordingObserver();
-        const manager = new AcpSessionManager(observer);
+        const manager = new AgentRuntimeManager(observer);
         const activities: AcpActivity[] = [];
         try {
             await manager.runPrompt({
@@ -309,7 +309,7 @@ describe("ACP session features", () => {
     });
 
     it("Given an Agent streams a long reasoning Turn, When it completes, Then the Runtime receives a bounded snapshot", async () => {
-        const manager = new AcpSessionManager(new RecordingObserver());
+        const manager = new AgentRuntimeManager(new RecordingObserver());
         const activities: AcpActivity[] = [];
         try {
             await manager.runPrompt({
@@ -341,7 +341,7 @@ describe("ACP session features", () => {
     it("Given an ACP agent links a local image in Markdown, When Mobius records the reply, Then it preserves the original path for on-demand reading", async () => {
         const directory = await mkdtemp(join(tmpdir(), "mobius-markdown-image-"));
         const observer = new RecordingObserver();
-        const manager = new AcpSessionManager(observer);
+        const manager = new AgentRuntimeManager(observer);
         const output: string[] = [];
         try {
             await manager.runPrompt({
@@ -375,7 +375,7 @@ describe("ACP session features", () => {
         const workspace = await mkdtemp(join(tmpdir(), "mobius-agent-workspace-"));
         const generatedImages = await mkdtemp(join(tmpdir(), "mobius-agent-generated-images-"));
         const observer = new RecordingObserver();
-        const manager = new AcpSessionManager(observer);
+        const manager = new AgentRuntimeManager(observer);
         const output: string[] = [];
         try {
             await manager.runPrompt({
@@ -409,7 +409,7 @@ describe("ACP session features", () => {
     it("Given an ACP agent returns image and video output, When Mobius records the reply, Then local images stay referenced and inline videos stay inline", async () => {
         const directory = await mkdtemp(join(tmpdir(), "mobius-media-output-"));
         const observer = new RecordingObserver();
-        const manager = new AcpSessionManager(observer);
+        const manager = new AgentRuntimeManager(observer);
         const output: string[] = [];
         try {
             await manager.runPrompt({
@@ -450,7 +450,7 @@ describe("ACP session features", () => {
     });
 
     it("Given an Agent turn is running, When a targeted steering prompt is submitted, Then it is injected into that exact turn and preserves the Agent message anchor", async () => {
-        const manager = new AcpSessionManager();
+        const manager = new AgentRuntimeManager();
         const signal = new AbortController().signal;
         const activityArrived = Promise.withResolvers<void>();
         const output: { readonly messageId: string; readonly text: string }[] = [];
@@ -501,7 +501,7 @@ describe("ACP session features", () => {
     });
 
     it("Given an Agent lacks native prompt queueing, When Mobius dispatches a queued follow-up, Then the Agent executes it as the next turn", async () => {
-        const manager = new AcpSessionManager();
+        const manager = new AgentRuntimeManager();
         const output: string[] = [];
         try {
             const result = await manager.runPrompt({
@@ -540,7 +540,7 @@ describe("ACP session features", () => {
         "Given %s in a final response, When a prompt settles, Then only reported data is preserved without inventing context usage",
         async (scenario, reportsUsage, stopReason) => {
             const observer = new RecordingObserver();
-            const manager = new AcpSessionManager(observer);
+            const manager = new AgentRuntimeManager(observer);
             try {
                 const result = await manager.runPrompt({
                     additionalDirectories: [],
@@ -576,7 +576,7 @@ describe("ACP session features", () => {
         "Given %s final usage, When a prompt completes, Then the runtime preserves validated tokens and quota alongside context usage",
         async (agent) => {
             const observer = new RecordingObserver();
-            const manager = new AcpSessionManager(observer);
+            const manager = new AgentRuntimeManager(observer);
             try {
                 const result = await manager.runPrompt({
                     additionalDirectories: [],
@@ -620,7 +620,7 @@ describe("ACP session features", () => {
 
     it("Given Gemini CLI snake-case quota metadata, When a prompt completes, Then the response succeeds with normalized bounded usage", async () => {
         const observer = new RecordingObserver();
-        const manager = new AcpSessionManager(observer);
+        const manager = new AgentRuntimeManager(observer);
         try {
             const result = await manager.runPrompt({
                 additionalDirectories: [],
@@ -666,7 +666,7 @@ describe("ACP session features", () => {
         "Given malformed final %s, When a prompt completes, Then invalid data is rejected with a sanitized typed failure",
         async (field) => {
             const observer = new RecordingObserver();
-            const manager = new AcpSessionManager(observer);
+            const manager = new AgentRuntimeManager(observer);
             try {
                 await expect(
                     manager.runPrompt({
@@ -700,7 +700,7 @@ describe("ACP session features", () => {
         await mkdir(join(temporaryDirectory, "shared"));
         const observer = new RecordingObserver();
         const store = new MemoryAcpSessionStore();
-        const manager = new AcpSessionManager(observer, store);
+        const manager = new AgentRuntimeManager(observer, store);
         const signal = new AbortController().signal;
 
         try {
@@ -896,7 +896,7 @@ describe("ACP session features", () => {
         const previousState = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
         process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = temporaryDirectory;
         const observer = new RecordingObserver();
-        const manager = new AcpSessionManager(observer);
+        const manager = new AgentRuntimeManager(observer);
         const signal = new AbortController().signal;
 
         try {

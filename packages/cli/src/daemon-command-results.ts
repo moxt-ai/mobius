@@ -5,7 +5,7 @@ import {
     type SessionCancelCommand,
 } from "@moxt-ai/mobius-protocol";
 import { WebSocket } from "undici";
-import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp/session-manager.ts";
+import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp/agent-runtime-manager.ts";
 import { LocalAgentCatalogError } from "./agent-catalog/local-agent.ts";
 import type { AuditStore } from "./audit/audit-store.ts";
 import { LocalAuthorizationError } from "./authorization/local-authorization-error.ts";

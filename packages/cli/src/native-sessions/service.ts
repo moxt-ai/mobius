@@ -9,9 +9,9 @@ import {
     type SessionReadyEvent,
     type WorkspaceEntry,
 } from "@moxt-ai/mobius-protocol";
+import { AcpExecutionError, type AcpPrepareOptions, type AgentRuntimeManager } from "../acp/agent-runtime-manager.ts";
 import type { NativeSessionInfo } from "../acp/native-session.ts";
 import { nativeSessionIdSchema } from "../acp/native-session.ts";
-import { AcpExecutionError, type AcpPrepareOptions, type AcpSessionManager } from "../acp/session-manager.ts";
 import type { AuditStore } from "../audit/audit-store.ts";
 import { LocalAuthorizationError } from "../authorization/local-authorization-error.ts";
 import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
@@ -43,7 +43,7 @@ export class NativeSessionService {
     readonly #cursors = new Map<string, ListedCursor>();
     readonly #config: DaemonConfig;
     readonly #directories: WorkspaceDirectoryService;
-    readonly #sessions: AcpSessionManager;
+    readonly #sessions: AgentRuntimeManager;
     readonly #audit: AuditStore;
     readonly #activeTurn: (
         command: Extract<NativeSessionCommand, { readonly action: "active-turn" }>,
@@ -53,7 +53,7 @@ export class NativeSessionService {
     constructor(
         config: DaemonConfig,
         directories: WorkspaceDirectoryService,
-        sessions: AcpSessionManager,
+        sessions: AgentRuntimeManager,
         audit: AuditStore,
         activeTurn: (
             command: Extract<NativeSessionCommand, { readonly action: "active-turn" }>,

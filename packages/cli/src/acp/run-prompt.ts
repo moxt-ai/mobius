@@ -1,6 +1,6 @@
 import { LocalAgentDefinition } from "../config.ts";
 import type { AcpActivity, AcpActivityNarration } from "./activity.ts";
-import { AcpExecutionError, type AcpPromptResult, AcpSessionManager } from "./session-manager.ts";
+import { AcpExecutionError, type AcpPromptResult, AgentRuntimeManager } from "./agent-runtime-manager.ts";
 
 interface RunAcpPromptOptions {
     readonly agentArguments: readonly string[];
@@ -16,9 +16,9 @@ interface RunAcpPromptOptions {
 export { AcpExecutionError };
 
 export async function runAcpPrompt(options: RunAcpPromptOptions): Promise<AcpPromptResult> {
-    const sessions = new AcpSessionManager();
+    const agentRuntime = new AgentRuntimeManager();
     try {
-        return await sessions.runPrompt({
+        return await agentRuntime.runPrompt({
             additionalDirectories: [],
             agent: new LocalAgentDefinition("test-agent", "Test agent", options.agentCommand, options.agentArguments),
             cwd: options.cwd,
@@ -33,6 +33,6 @@ export async function runAcpPrompt(options: RunAcpPromptOptions): Promise<AcpPro
             signal: options.signal,
         });
     } finally {
-        await sessions.close();
+        await agentRuntime.close();
     }
 }

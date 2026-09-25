@@ -13,8 +13,8 @@ import {
 import {
     AcpConfigurationValueUnavailableError,
     AcpExecutionError,
-    type AcpSessionManager,
-} from "../acp/session-manager.ts";
+    type AgentRuntimeManager,
+} from "../acp/agent-runtime-manager.ts";
 import { agentSettingsAdapterForAgent } from "../agent-catalog/agent-settings-adapter.ts";
 import { discoverOpenCodeModelOptions } from "../agent-catalog/agents/opencode-agent.ts";
 import type { AcpAgentDefinition } from "../agent-catalog/local-agent.ts";
@@ -46,7 +46,7 @@ export async function discoverAgentSettings(
     command: AgentSettingsDiscoverCommand,
     config: DaemonConfig,
     directories: WorkspaceDirectoryService,
-    sessions: AcpSessionManager,
+    sessions: AgentRuntimeManager,
     signal: AbortSignal,
 ): Promise<AgentSettingsDiscovery> {
     const agent = config.catalog.find(command.agentId);
@@ -218,7 +218,7 @@ async function discoverModelEffort(
     selectedOptions: readonly SessionConfigOption[],
     initiallyUnsupportedModels: AcpConfigurationValueUnavailableError[],
     cwd: string,
-    sessions: AcpSessionManager,
+    sessions: AgentRuntimeManager,
     signal: AbortSignal,
 ): Promise<AgentModelEffort> {
     const model = modelOption(initialOptions);

@@ -4,7 +4,7 @@ import {
     type AgentCatalogRefreshCommand,
 } from "@moxt-ai/mobius-protocol";
 import { WebSocket } from "undici";
-import { AcpExecutionError } from "../acp/session-manager.ts";
+import { AcpExecutionError } from "../acp/agent-runtime-manager.ts";
 import type { AuditStore } from "../audit/audit-store.ts";
 import { type DaemonConfig, DaemonLocalContext, withDaemonEnvironment } from "../config.ts";
 import { operationErrorCode, operationErrorMessage, send } from "../daemon-command-results.ts";

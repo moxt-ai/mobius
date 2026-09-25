@@ -1,11 +1,11 @@
-import type { AcpProcessSession } from "./process-session.ts";
+import type { AgentSession } from "./agent-session.ts";
 
-type Resource = { readonly kind: "empty" } | { readonly kind: "ready"; readonly runtime: AcpProcessSession };
+type Resource = { readonly kind: "empty" } | { readonly kind: "ready"; readonly runtime: AgentSession };
 type Lifecycle =
     | Resource
     | {
           readonly kind: "preparing";
-          readonly completion: Promise<AcpProcessSession>;
+          readonly completion: Promise<AgentSession>;
           readonly resource: Resource;
       };
 interface Entry {
@@ -13,12 +13,12 @@ interface Entry {
     readonly users: number;
 }
 interface RetainedSessionEvents {
-    readonly touch: (runtime: AcpProcessSession) => void;
+    readonly touch: (runtime: AgentSession) => void;
     readonly changed: () => void;
 }
 
-/** One independent cache for either execution sessions or history browsers. */
-export class RetainedSessions {
+/** Tracks reusable Agent processes and their preparation/borrow lifetimes. */
+export class RetainedAgentProcesses {
     readonly #entries = new Map<string, Entry>();
     readonly #events: RetainedSessionEvents;
     constructor(events: RetainedSessionEvents) {
@@ -35,11 +35,11 @@ export class RetainedSessions {
     };
     readonly #resource = (entry: Entry): Resource =>
         entry.lifecycle.kind === "preparing" ? entry.lifecycle.resource : entry.lifecycle;
-    readonly get = (id: string): AcpProcessSession | undefined => {
+    readonly get = (id: string): AgentSession | undefined => {
         const resource = this.#resource(this.#entry(id));
         return resource.kind === "ready" ? resource.runtime : undefined;
     };
-    readonly pending = (id: string): Promise<AcpProcessSession> | undefined => {
+    readonly pending = (id: string): Promise<AgentSession> | undefined => {
         const state = this.#entry(id).lifecycle;
         return state.kind === "preparing" ? state.completion : undefined;
     };
@@ -59,18 +59,18 @@ export class RetainedSessions {
             lifecycle: entry.lifecycle.kind === "preparing" ? { ...entry.lifecycle, resource } : resource,
         });
     };
-    readonly retain = (id: string, runtime: AcpProcessSession): void => {
+    readonly retain = (id: string, runtime: AgentSession): void => {
         this.#setResource(id, { kind: "ready", runtime });
     };
-    readonly detach = (id: string, expected: AcpProcessSession): boolean => {
+    readonly detach = (id: string, expected: AgentSession): boolean => {
         if (this.get(id) !== expected) {
             return false;
         }
         this.#setResource(id, { kind: "empty" });
         return true;
     };
-    readonly entries = (): readonly (readonly [string, AcpProcessSession])[] => {
-        const result: (readonly [string, AcpProcessSession])[] = [];
+    readonly entries = (): readonly (readonly [string, AgentSession])[] => {
+        const result: (readonly [string, AgentSession])[] = [];
         for (const id of this.#entries.keys()) {
             const runtime = this.get(id);
             if (runtime !== undefined) {
@@ -79,12 +79,12 @@ export class RetainedSessions {
         }
         return result;
     };
-    readonly prepare = (id: string, start: () => Promise<AcpProcessSession>): Promise<AcpProcessSession> => {
+    readonly prepare = (id: string, start: () => Promise<AgentSession>): Promise<AgentSession> => {
         const pending = this.pending(id);
         if (pending !== undefined) {
             return pending;
         }
-        const completion = Promise.withResolvers<AcpProcessSession>();
+        const completion = Promise.withResolvers<AgentSession>();
         const entry = this.#entry(id);
         this.#write(id, {
             ...entry,
@@ -94,7 +94,7 @@ export class RetainedSessions {
                 resource: this.#resource(entry),
             },
         });
-        const run = async (): Promise<AcpProcessSession> => {
+        const run = async (): Promise<AgentSession> => {
             try {
                 return await start();
             } finally {

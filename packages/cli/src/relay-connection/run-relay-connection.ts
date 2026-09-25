@@ -4,7 +4,7 @@ import {
     RUNTIME_LIVENESS_READY_KIND,
 } from "@moxt-ai/mobius-protocol";
 import { type MessageEvent, WebSocket } from "undici";
-import type { AcpSessionManager } from "../acp/session-manager.ts";
+import type { AgentRuntimeManager } from "../acp/agent-runtime-manager.ts";
 import type { AgentInstallationManager } from "../agent-installation/agent-installation-manager.ts";
 import type { AuditStore } from "../audit/audit-store.ts";
 import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
@@ -39,7 +39,7 @@ export interface RelayConnectionOptions {
     readonly config: DaemonConfig;
     readonly directories: WorkspaceDirectoryService;
     readonly audit: AuditStore;
-    readonly sessions: AcpSessionManager;
+    readonly sessions: AgentRuntimeManager;
     readonly installations: AgentInstallationManager;
     readonly installationObserver: DaemonInstallationObserver;
     readonly nativeSessions: NativeSessionService;

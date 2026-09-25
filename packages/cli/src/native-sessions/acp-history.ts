@@ -1,11 +1,11 @@
 import type { NativeSessionHistory } from "@moxt-ai/mobius-protocol";
-import type { AcpPrepareOptions, AcpSessionManager } from "../acp/session-manager.ts";
-import { AcpExecutionError } from "../acp/session-manager.ts";
+import type { AcpPrepareOptions, AgentRuntimeManager } from "../acp/agent-runtime-manager.ts";
+import { AcpExecutionError } from "../acp/agent-runtime-manager.ts";
 import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
 
 /** ACP session/list verifies ownership before session/load replays saved messages. */
 export async function readAcpHistory(
-    sessions: AcpSessionManager,
+    sessions: AgentRuntimeManager,
     directories: WorkspaceDirectoryService,
     bindingId: string,
     options: AcpPrepareOptions,

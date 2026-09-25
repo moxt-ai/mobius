@@ -4,7 +4,7 @@ import type {
     NativeSessionResult,
 } from "@moxt-ai/mobius-protocol";
 import type { WebSocket } from "undici";
-import type { AcpSessionManager } from "./acp/session-manager.ts";
+import type { AgentRuntimeManager } from "./acp/agent-runtime-manager.ts";
 import type { AuditStore } from "./audit/audit-store.ts";
 import { resolveSessionDirectories } from "./authorization/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
@@ -17,7 +17,7 @@ export async function executeSessionLiveHistoryLoad(
     config: DaemonConfig,
     directories: WorkspaceDirectoryService,
     audit: AuditStore,
-    sessions: AcpSessionManager,
+    sessions: AgentRuntimeManager,
     activeTurn: (sessionId: string) => Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"],
     signal: AbortSignal,
 ): Promise<void> {
@@ -77,7 +77,7 @@ export async function executeSessionLiveHistoryPageLoad(
     config: DaemonConfig,
     directories: WorkspaceDirectoryService,
     audit: AuditStore,
-    sessions: AcpSessionManager,
+    sessions: AgentRuntimeManager,
     activeTurn: (sessionId: string) => Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"],
     signal: AbortSignal,
 ): Promise<void> {
