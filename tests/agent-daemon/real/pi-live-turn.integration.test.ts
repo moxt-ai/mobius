@@ -58,7 +58,13 @@ test("Given the real pi and its production adapter, When two prompts execute thr
                     expect(event.commandId).toBe(commandId);
                     text += event.text;
                 } else if (event.kind === "agent.activity") {
-                    if (event.status === "completed") {
+                    if (event.activityType === "tool" && event.status === "completed") {
+                        const output: unknown = JSON.parse(event.output);
+                        expect(output).toEqual(
+                            expect.arrayContaining([
+                                expect.objectContaining({ type: "terminal", terminalId: expect.any(String) }),
+                            ]),
+                        );
                         toolSucceeded = true;
                     }
                 } else if (event.kind === "session.failed") {

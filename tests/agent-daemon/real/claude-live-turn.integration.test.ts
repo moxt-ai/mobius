@@ -58,7 +58,8 @@ test("Given the real claude and its production adapter, When two prompts execute
                     expect(event.commandId).toBe(commandId);
                     text += event.text;
                 } else if (event.kind === "agent.activity") {
-                    if (event.status === "completed") {
+                    if (event.activityType === "tool" && event.status === "completed") {
+                        expect(event.output).toContain(peer.workspace);
                         toolSucceeded = true;
                     }
                 } else if (event.kind === "session.failed") {

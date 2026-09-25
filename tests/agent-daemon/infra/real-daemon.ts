@@ -19,6 +19,7 @@ export async function withRealDaemon(
     scenario: (peer: {
         readonly send: (message: string) => void;
         readonly sessionId: string;
+        readonly workspace: string;
         readonly bindingId: string;
         readonly nextEvent: () => Promise<string>;
     }) => Promise<void>,
@@ -91,6 +92,7 @@ export async function withRealDaemon(
         await scenario({
             bindingId: config.bindingId,
             sessionId,
+            workspace,
             send: (message) => {
                 if (socket === undefined) {
                     throw new Error("Daemon is not connected");

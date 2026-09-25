@@ -58,7 +58,8 @@ test("Given the real opencode and its production adapter, When two prompts execu
                     expect(event.commandId).toBe(commandId);
                     text += event.text;
                 } else if (event.kind === "agent.activity") {
-                    if (event.status === "completed") {
+                    if (event.activityType === "tool" && event.status === "completed") {
+                        expect(event.output).toContain(peer.workspace);
                         toolSucceeded = true;
                     }
                 } else if (event.kind === "session.failed") {
