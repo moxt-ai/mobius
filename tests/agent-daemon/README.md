@@ -17,9 +17,9 @@ model provider can make its output deterministic without replacing the Agent.
 | Agent | Real daemon acceptance coverage | Existing fixture |
 | --- | --- | --- |
 | Codex | `real/codex-live-turn.integration.test.ts`: real Codex app-server, streaming/tools, queue cancellation, execution snapshots, history and files | `infra/codex.ts` |
-| Claude Code | Not yet implemented; must exercise the real binary and production ACP adapter | `infra/claude.ts` |
-| OpenCode | Not yet implemented; must exercise the real binary and production adapter | `infra/opencode.ts` |
-| Pi | Not yet implemented; must exercise the real binary and production ACP adapter | `infra/pi.ts` |
+| Claude Code | `real/claude-live-turn.integration.test.ts`: real binary and production ACP adapter, shell tool and continued streamed reply | `infra/claude.ts` |
+| OpenCode | `real/opencode-live-turn.integration.test.ts`: real binary and production adapter, shell tool and continued streamed reply | `infra/opencode.ts` |
+| Pi | `real/pi-live-turn.integration.test.ts`: real binary and production ACP adapter, shell tool and continued streamed reply | `infra/pi.ts` |
 
 Fixtures and Agent names in controlled tests are not substitutes for these real
 acceptance scenarios. Add coverage for supported session continuation, queueing,
@@ -28,9 +28,17 @@ or reconnection behavior. State unsupported capabilities explicitly.
 
 ## Running
 
-`pnpm test:agent-daemon:real` currently runs the real Codex suite. It requires
-Codex CLI 0.154.0 on `PATH` or `MOBIUS_TEST_CODEX_PATH`. Its local model provider is
-controlled; it uses no production account, remote model call, or existing session.
+`pnpm test:agent-daemon:real` runs the four real Agent suites. CI installs pinned
+executables and production adapters:
+
+- Codex CLI 0.154.0;
+- Claude Code 2.1.273 and claude-agent-acp 0.73.0;
+- OpenCode 1.18.29;
+- Pi 0.85.0 and pi-acp 0.0.33.
+
+Put them on `PATH`, or set the fixture overrides below (Codex uses
+`MOBIUS_TEST_CODEX_PATH`). Local model providers are controlled; these scenarios
+use no production account, remote model call, or existing user session.
 
 The other fixtures resolve real executables through `PATH` or explicit overrides:
 `MOBIUS_TEST_CLAUDE_PATH` / `MOBIUS_TEST_CLAUDE_ACP_PATH`,
