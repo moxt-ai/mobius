@@ -21,6 +21,7 @@ export async function withRealDaemon(
         readonly sessionId: string;
         readonly workspace: string;
         readonly bindingId: string;
+        readonly signal: AbortSignal;
         readonly nextEvent: () => Promise<string>;
         readonly nextMessage: () => Promise<string>;
     }) => Promise<void>,
@@ -98,6 +99,7 @@ export async function withRealDaemon(
         const sessionId = `real_${specification.id}_${randomUUID()}`;
         await scenario({
             bindingId: config.bindingId,
+            signal,
             sessionId,
             workspace,
             send: (message) => {

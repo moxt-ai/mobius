@@ -35,11 +35,13 @@ cleanup, and fixture plumbing when genuinely identical. Tests must use productio
 adapters; no adapter module replacement, spies, or fabricated Agent responses.
 
 `tests/agent-daemon/README.md` records the actual matrix and prerequisites. Fixture
-code alone is not test coverage. The real suite covers Codex and separate Claude Code, OpenCode, and Pi scenarios.
-The latter verify tool execution and continued streamed replies through production
-discovery and adapters; they do not yet prove every capability listed above. Keep
-the actual coverage matrix explicit rather than treating a smoke journey as complete
-coverage of history, queueing, cancellation, and interactions.
+code alone is not test coverage. Each supported Agent has real tool execution,
+continued streamed replies, native session creation, active cancellation, and
+queued continuation coverage through production discovery and adapters. Codex also
+covers FIFO queue cancellation, execution snapshots, history/files, and native
+continuation after process-capacity eviction. Real permissions/interactions,
+reconnection, and non-Codex history/file coverage remain gaps. Keep the actual
+matrix explicit; controlled protocol scenarios do not establish real compatibility.
 
 ## Commands and verification
 
