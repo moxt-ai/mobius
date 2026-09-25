@@ -436,11 +436,6 @@ async function processHappyPathCommand(
         const command = decodeSessionPromptDispositionCommand(encoded);
         const queued = queuedPrompts.get(command.commandId);
         queuedPrompts.delete(command.commandId);
-        await daemon.sendSessionEvent(
-            command.sessionId,
-            JSON.stringify({ kind: "session.queue.changed", sessionId: command.sessionId }),
-            signal,
-        );
         if (queued !== undefined) {
             await daemon.sendSessionEvent(
                 command.sessionId,
