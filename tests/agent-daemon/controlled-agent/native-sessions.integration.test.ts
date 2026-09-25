@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { NativeSessionCommand, NativeSessionEntry } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it, vi } from "vitest";
+import { AgentRuntimeManager, NullAcpSessionObserver } from "../../../packages/cli/src/acp/agent-runtime-manager.ts";
 import { CodexAcpAgent } from "../../../packages/cli/src/acp/codex/agent.ts";
-import { AcpSessionManager, NullAcpSessionObserver } from "../../../packages/cli/src/acp/session-manager.ts";
 import { MemoryAcpSessionStore } from "../../../packages/cli/src/acp/session-store.ts";
 import { InProcessAcpAgentDefinition } from "../../../packages/cli/src/agent-catalog/local-agent.ts";
 import { AuditStore } from "../../../packages/cli/src/audit/audit-store.ts";
@@ -68,7 +68,7 @@ async function fixture(
     ]);
     const store = new MemoryAcpSessionStore();
     const observer = new NativeSessionObserver();
-    const sessions = new AcpSessionManager(observer, store, { read: async () => null }, sessionIdentity);
+    const sessions = new AgentRuntimeManager(observer, store, { read: async () => null }, sessionIdentity);
     const audit = new AuditStore();
     const config = createDaemonConfig(
         {
@@ -97,7 +97,7 @@ async function fixture(
         additionalDirectories: readonly string[] = [],
         cwd = workspace,
     ): Promise<string> => {
-        const external = new AcpSessionManager();
+        const external = new AgentRuntimeManager();
         const sessionId = crypto.randomUUID();
         const before = new Set(await readdir(native));
         try {
@@ -176,7 +176,7 @@ describe("native Agent session boundary", () => {
             executable,
             (options) => new CodexAcpAgent(options),
         );
-        const sessions = new AcpSessionManager();
+        const sessions = new AgentRuntimeManager();
         let answer = "";
         try {
             const result = await sessions.runPrompt({
@@ -229,7 +229,7 @@ describe("native Agent session boundary", () => {
             (options) => new CodexAcpAgent(options),
         );
         const store = new MemoryAcpSessionStore();
-        const sessions = new AcpSessionManager(new NullAcpSessionObserver(), store, null, sessionIdentity);
+        const sessions = new AgentRuntimeManager(new NullAcpSessionObserver(), store, null, sessionIdentity);
         const audit = new AuditStore();
         const config = createDaemonConfig(
             {
@@ -288,7 +288,7 @@ describe("native Agent session boundary", () => {
             if (created.action !== "create") {
                 throw new Error("Expected a native Agent session");
             }
-            const restarted = new AcpSessionManager(
+            const restarted = new AgentRuntimeManager(
                 new NullAcpSessionObserver(),
                 new MemoryAcpSessionStore(),
                 null,
@@ -639,7 +639,7 @@ describe("native Agent session boundary", () => {
         vi.useFakeTimers({ toFake: ["Date"] });
         vi.setSystemTime(new Date("2026-09-16T00:00:00Z"));
         const f = await fixture("Codex", "exclusive-writer");
-        const external = new AcpSessionManager();
+        const external = new AgentRuntimeManager();
         try {
             await external.runPrompt({
                 agent: f.agent,
@@ -697,7 +697,7 @@ describe("native Agent session boundary", () => {
         vi.useFakeTimers({ toFake: ["Date"] });
         vi.setSystemTime(new Date("2026-09-14T00:00:00Z"));
         const f = await fixture("Codex", "exclusive-writer");
-        const external = new AcpSessionManager();
+        const external = new AgentRuntimeManager();
         try {
             await external.runPrompt({
                 agent: f.agent,

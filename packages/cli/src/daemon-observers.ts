@@ -17,7 +17,7 @@ import {
     type SessionUsageUpdatedEvent,
 } from "@moxt-ai/mobius-protocol";
 import { WebSocket } from "undici";
-import type { AcpSessionObserver } from "./acp/session-manager.ts";
+import type { AcpSessionObserver } from "./acp/agent-runtime-manager.ts";
 import {
     type AgentInstallation,
     CancelledInstallation,

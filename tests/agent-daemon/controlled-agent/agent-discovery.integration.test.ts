@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { AcpSessionManager } from "../../../packages/cli/src/acp/session-manager.ts";
+import { AgentRuntimeManager } from "../../../packages/cli/src/acp/agent-runtime-manager.ts";
 import { formatAgentDiagnostics } from "../../../packages/cli/src/agent-catalog/agent-diagnostics.ts";
 import {
     AvailableAgent,
@@ -431,7 +431,7 @@ if (process.argv.includes("--version")) {
             const firstAgentPath = join(temporaryDirectory, "codex-first");
             const secondAgentPath = join(temporaryDirectory, "codex-second");
             const codexLink = join(temporaryDirectory, "codex");
-            const manager = new AcpSessionManager();
+            const manager = new AgentRuntimeManager();
             try {
                 for (const path of [firstAgentPath, secondAgentPath]) {
                     await writeFile(

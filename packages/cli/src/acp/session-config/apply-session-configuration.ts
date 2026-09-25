@@ -3,7 +3,7 @@ import type { SessionConfigOption, SessionConfigurationSelection } from "@moxt-a
 import { applyAgentLaunchSettings } from "../../agent-catalog/agent-settings-adapter.ts";
 import type { AcpAgentDefinition } from "../../agent-catalog/local-agent.ts";
 import type { AuditStore } from "../../audit/audit-store.ts";
-import { AcpExecutionError, type AcpSessionManager } from "../session-manager.ts";
+import { AcpExecutionError, type AgentRuntimeManager } from "../agent-runtime-manager.ts";
 
 function invalidSessionConfiguration(message: string): AcpExecutionError {
     return new AcpExecutionError(message, {}, "invalid_session_configuration");
@@ -108,7 +108,7 @@ function unavailableSessionConfigurationCategory(selection: SessionConfiguration
 }
 
 async function applySessionConfigurationSelection(
-    sessions: AcpSessionManager,
+    sessions: AgentRuntimeManager,
     audit: AuditStore,
     options: readonly SessionConfigOption[],
     selection: SessionConfigurationSelection,
@@ -193,7 +193,7 @@ async function applySessionConfigurationSelection(
 }
 
 export async function applyCompleteSessionConfiguration(
-    sessions: AcpSessionManager,
+    sessions: AgentRuntimeManager,
     audit: AuditStore,
     initialOptions: readonly SessionConfigOption[],
     selections: readonly SessionConfigurationSelection[],

@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { AcpSessionManager } from "../../../packages/cli/src/acp/session-manager.ts";
+import { AgentRuntimeManager } from "../../../packages/cli/src/acp/agent-runtime-manager.ts";
 import {
     agentSettingsAdapterForAgent,
     applyAgentLaunchSettings,
@@ -15,7 +15,7 @@ const fakeAgentPath = fileURLToPath(new URL("../fixtures/fake-acp-agent/src/cli.
 
 describe("Agent setting capabilities", () => {
     it("Given an Agent reports its reasoning effort as the provider default, When a session is prepared, Then Mobius keeps the effort setting with that current value", async () => {
-        const manager = new AcpSessionManager();
+        const manager = new AgentRuntimeManager();
         const agent = new LocalAgentDefinition("deepseek-harness", "DeepSeek Harness", process.execPath, [
             fakeAgentPath,
             "--effort-provider-default",
@@ -66,7 +66,7 @@ describe("Agent setting capabilities", () => {
     });
 
     it("Given an Agent does not expose adjustable reasoning effort, When a session is prepared, Then Mobius does not invent an effort setting", async () => {
-        const manager = new AcpSessionManager();
+        const manager = new AgentRuntimeManager();
         const agent = new LocalAgentDefinition("deepseek-harness", "DeepSeek Harness", process.execPath, [
             fakeAgentPath,
             "--without-reasoning-effort",
@@ -100,7 +100,7 @@ describe("Agent setting capabilities", () => {
     });
 
     it("Given Pi exposes no approval or sandbox setting, When its session is prepared, Then Mobius exposes no synthetic execution control", async () => {
-        const manager = new AcpSessionManager();
+        const manager = new AgentRuntimeManager();
         const agent = new LocalAgentDefinition("pi", "Pi", process.execPath, [
             fakeAgentPath,
             "--without-model",
@@ -128,7 +128,7 @@ describe("Agent setting capabilities", () => {
     });
 
     it("Given an Agent acknowledges a setting without applying it, When Mobius configures the session, Then the Turn is rejected", async () => {
-        const manager = new AcpSessionManager();
+        const manager = new AgentRuntimeManager();
         const agent = new LocalAgentDefinition("fake", "Fake", process.execPath, [
             fakeAgentPath,
             "--ignore-config-update",

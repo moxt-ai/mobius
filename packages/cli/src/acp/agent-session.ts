@@ -30,6 +30,8 @@ import { embedLocalHistoryImages } from "../native-sessions/history-images.ts";
 import { type ProcessTreeIdentity, revalidateExecutable } from "../process/executable.ts";
 import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp-error.ts";
 import { imageDisplayContent, isProgressMessage, normalizeContentBlock } from "./activity.ts";
+import { AgentConnection } from "./agent-connection.ts";
+import { AgentUpdateStream } from "./agent-update-stream.ts";
 import type { AcpClientHandler } from "./create-client.ts";
 import {
     type NativeSessionOrigin,
@@ -37,7 +39,6 @@ import {
     nativeSessionIdSchema,
     nativeSessionPageSchema,
 } from "./native-session.ts";
-import { AcpEndpoint } from "./process-endpoint.ts";
 import { normalizeAcpCapabilities, unsupportedSessionCapabilities } from "./session-capabilities.ts";
 import { type SessionConfigProtocol, SessionConfigProtocolError } from "./session-config/session-config-protocol.ts";
 import { sessionConfigProtocolForAgent } from "./session-config/session-config-registry.ts";
@@ -65,8 +66,6 @@ import {
 import { isRecord, truncate } from "./value-utils.ts";
 
 const PROCESS_STOP_TIMEOUT_MILLISECONDS = 1_000;
-const MAX_PRE_SESSION_UPDATES = 100;
-const MAX_PRE_SESSION_UPDATE_BYTES = 1024 * 1024;
 
 export { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp-error.ts";
 
@@ -87,8 +86,8 @@ export function recordsEqual(left: Readonly<Record<string, string>>, right: Read
     return leftEntries.length === rightEntries.length && leftEntries.every(([name, value]) => right[name] === value);
 }
 
-export class AcpProcessSession implements AcpClientHandler {
-    readonly #endpoint: AcpEndpoint;
+export class AgentSession implements AcpClientHandler {
+    readonly #connection: AgentConnection;
     readonly #interactions: AcpSessionInteractions;
     readonly #additionalDirectories: readonly string[];
     readonly #agentId: string;
@@ -96,12 +95,11 @@ export class AcpProcessSession implements AcpClientHandler {
     readonly #environment: Readonly<Record<string, string>>;
     readonly #getObserver: () => AcpSessionObserver;
     #mobiusSessionId: string;
-    readonly #preSessionUpdates: SessionNotification[] = [];
+    readonly #updates: AgentUpdateStream;
     readonly #metrics: OperationMetrics;
     readonly #sessionConfigProtocol: SessionConfigProtocol;
     readonly #store: AcpSessionStore;
     readonly #verifiedAgentVersion: string;
-    #preSessionUpdateBytes = 0;
     #agentName = "";
     #agentVersion = "";
     #bufferedAgentText: { readonly chunks: string[]; readonly messageId: string }[] = [];
@@ -109,7 +107,6 @@ export class AcpProcessSession implements AcpClientHandler {
     #commands: readonly SessionCommand[] = [];
     #configRevision = 0;
     #configOptions: readonly SessionConfigOption[] = [];
-    #nativeSessionId = "";
     #prompted = false;
     #nativePrompt: { readonly commandId: string; readonly previousTurnId: string | null } | null = null;
     #replay: { readonly kind: "idle" | "discard" } | { readonly kind: "capture"; readonly history: AcpHistoryReplay } =
@@ -120,7 +117,6 @@ export class AcpProcessSession implements AcpClientHandler {
     #sessionTitle: string | null = null;
     #sessionUpdatedAt = "";
     #turn: AcpTurnState = new IdleAcpTurn();
-    #updateTail: Promise<void> = Promise.resolve();
 
     private constructor(
         agent: AcpAgentDefinition,
@@ -131,6 +127,7 @@ export class AcpProcessSession implements AcpClientHandler {
         store: AcpSessionStore,
         metrics: OperationMetrics,
     ) {
+        this.#updates = new AgentUpdateStream((notification) => this.#processUpdate(notification));
         this.#additionalDirectories = [...additionalDirectories];
         this.#agentId = agent.id;
         this.#cwd = cwd;
@@ -147,16 +144,16 @@ export class AcpProcessSession implements AcpClientHandler {
             assertNativeSession: (sessionId) => this.assertNativeSession(sessionId),
             observer: getObserver,
         });
-        this.#endpoint = new AcpEndpoint(agent, cwd, this);
+        this.#connection = new AgentConnection(agent, cwd, this);
     }
 
     static async #start(
         options: AcpPrepareOptions,
         getObserver: () => AcpSessionObserver,
         store: AcpSessionStore,
-        initialize: (runtime: AcpProcessSession) => Promise<void>,
+        initialize: (runtime: AgentSession) => Promise<void>,
         metrics: OperationMetrics,
-    ): Promise<AcpProcessSession> {
+    ): Promise<AgentSession> {
         for (let attempt = 1; attempt <= 2; attempt += 1) {
             options.signal.throwIfAborted();
             const unchanged = await metrics.measure(
@@ -181,7 +178,7 @@ export class AcpProcessSession implements AcpClientHandler {
             const runtime = metrics.measureSync(
                 "process-spawn",
                 () =>
-                    new AcpProcessSession(
+                    new AgentSession(
                         options.agent,
                         options.cwd,
                         options.additionalDirectories,
@@ -217,8 +214,8 @@ export class AcpProcessSession implements AcpClientHandler {
         getObserver: () => AcpSessionObserver,
         store: AcpSessionStore,
         metrics: OperationMetrics = unmeasuredOperationMetrics,
-    ): Promise<AcpProcessSession> =>
-        await AcpProcessSession.#start(
+    ): Promise<AgentSession> =>
+        await AgentSession.#start(
             options,
             getObserver,
             store,
@@ -230,8 +227,8 @@ export class AcpProcessSession implements AcpClientHandler {
         options: AcpPrepareOptions,
         getObserver: () => AcpSessionObserver,
         store: AcpSessionStore,
-    ): Promise<AcpProcessSession> =>
-        await AcpProcessSession.#start(
+    ): Promise<AgentSession> =>
+        await AgentSession.#start(
             options,
             getObserver,
             store,
@@ -275,20 +272,20 @@ export class AcpProcessSession implements AcpClientHandler {
         this.#replay = { kind: "capture", history };
         try {
             await this.race(
-                this.#endpoint.connection.agent.request(
+                this.#connection.connection.agent.request(
                     methods.agent.session.load,
                     {
                         additionalDirectories: [...this.#additionalDirectories],
                         cwd: this.#cwd,
                         mcpServers: [],
-                        sessionId: this.#nativeSessionId,
+                        sessionId: this.#updates.sessionId(),
                     },
                     { cancellationSignal: signal },
                 ),
                 "ACP agent exited while loading history",
                 signal,
             );
-            await this.#updateTail;
+            await this.#updates.drained();
             signal.throwIfAborted();
             return await embedLocalHistoryImages(await history.snapshot(), signal);
         } finally {
@@ -397,11 +394,11 @@ export class AcpProcessSession implements AcpClientHandler {
     }
 
     async #initializeAgentOperation(signal: AbortSignal): Promise<void> {
-        if (this.#endpoint.inProcessAgent !== null) {
+        if (this.#connection.inProcessAgent !== null) {
             // The ACP agent runs in this process, but it still owns an app-server child that must
             // start and complete its own handshake before the ACP conversation can begin.
             await this.race(
-                this.#endpoint.inProcessAgent.initialize(signal),
+                this.#connection.inProcessAgent.initialize(signal),
                 "The Codex app-server exited during initialization",
                 signal,
             ).catch((cause: unknown) => {
@@ -410,7 +407,7 @@ export class AcpProcessSession implements AcpClientHandler {
             });
         }
         const initialized = await this.race(
-            this.#endpoint.connection.agent.request(
+            this.#connection.connection.agent.request(
                 methods.agent.initialize,
                 {
                     clientCapabilities: {
@@ -492,7 +489,7 @@ export class AcpProcessSession implements AcpClientHandler {
                 "session-fork",
                 async () =>
                     await this.race(
-                        this.#endpoint.connection.agent.request(
+                        this.#connection.connection.agent.request(
                             methods.agent.session.fork,
                             {
                                 sessionId: nativeSessionIdSchema.parse(origin.nativeSessionId),
@@ -508,8 +505,8 @@ export class AcpProcessSession implements AcpClientHandler {
             );
             this.selectNativeSession(forked.sessionId);
             if (
-                this.#nativeSessionId === origin.nativeSessionId ||
-                this.#store.findNative(this.#agentId, this.#nativeSessionId).length > 0
+                this.#updates.sessionId() === origin.nativeSessionId ||
+                this.#store.findNative(this.#agentId, this.#updates.sessionId()).length > 0
             ) {
                 throw new AcpExecutionError(
                     "The Agent did not create an independent fork",
@@ -535,13 +532,13 @@ export class AcpProcessSession implements AcpClientHandler {
                     "session-resume",
                     async () =>
                         await this.race(
-                            this.#endpoint.connection.agent.request(
+                            this.#connection.connection.agent.request(
                                 methods.agent.session.resume,
                                 {
                                     additionalDirectories: [...this.#additionalDirectories],
                                     cwd: this.#cwd,
                                     mcpServers: [],
-                                    sessionId: this.#nativeSessionId,
+                                    sessionId: this.#updates.sessionId(),
                                 },
                                 { cancellationSignal: signal },
                             ),
@@ -556,13 +553,13 @@ export class AcpProcessSession implements AcpClientHandler {
                         "session-load",
                         async () =>
                             await this.race(
-                                this.#endpoint.connection.agent.request(
+                                this.#connection.connection.agent.request(
                                     methods.agent.session.load,
                                     {
                                         additionalDirectories: [...this.#additionalDirectories],
                                         cwd: this.#cwd,
                                         mcpServers: [],
-                                        sessionId: this.#nativeSessionId,
+                                        sessionId: this.#updates.sessionId(),
                                     },
                                     { cancellationSignal: signal },
                                 ),
@@ -571,7 +568,7 @@ export class AcpProcessSession implements AcpClientHandler {
                             ),
                     );
                 } finally {
-                    await this.#updateTail;
+                    await this.#updates.drained();
                     this.#replay = { kind: "idle" };
                 }
             } else {
@@ -596,7 +593,7 @@ export class AcpProcessSession implements AcpClientHandler {
                 "session-new",
                 async () =>
                     await this.race(
-                        this.#endpoint.connection.agent.request(
+                        this.#connection.connection.agent.request(
                             methods.agent.session.new,
                             {
                                 additionalDirectories: [...this.#additionalDirectories],
@@ -613,13 +610,13 @@ export class AcpProcessSession implements AcpClientHandler {
             lifecycleResponse = created;
         }
         this.#configOptions = this.#sessionConfigProtocol.normalizeLifecycle(lifecycleResponse);
-        await this.#updateTail;
+        await this.#updates.drained();
         signal.throwIfAborted();
         this.#store.write(
             new AcpStoredSession(
                 this.#mobiusSessionId,
                 this.#agentId,
-                this.#nativeSessionId,
+                this.#updates.sessionId(),
                 this.#cwd,
                 this.#additionalDirectories,
                 this.#prompted,
@@ -637,7 +634,7 @@ export class AcpProcessSession implements AcpClientHandler {
             );
         }
         const response: unknown = await this.race(
-            this.#endpoint.connection.agent.request(methods.agent.session.list, cursor === null ? {} : { cursor }, {
+            this.#connection.connection.agent.request(methods.agent.session.list, cursor === null ? {} : { cursor }, {
                 cancellationSignal: signal,
             }),
             "ACP agent exited while listing sessions",
@@ -663,7 +660,7 @@ export class AcpProcessSession implements AcpClientHandler {
             );
         }
         await this.race(
-            this.#endpoint.connection.agent.request(
+            this.#connection.connection.agent.request(
                 methods.agent.session.delete,
                 { sessionId: nativeSessionIdSchema.parse(nativeSessionId) },
                 { cancellationSignal: signal },
@@ -673,10 +670,10 @@ export class AcpProcessSession implements AcpClientHandler {
         );
     };
 
-    readonly nativeSessionId = (): string => this.#nativeSessionId;
+    readonly nativeSessionId = (): string => this.#updates.sessionId();
 
     readonly adoptNativeSessionId = (sessionId: string): void => {
-        if (this.#prompted || this.#nativeSessionId !== sessionId) {
+        if (this.#prompted || this.#updates.sessionId() !== sessionId) {
             throw new AcpExecutionError("The new native Session cannot be adopted", {}, "session_identity_mismatch");
         }
         const previousSessionId = this.#mobiusSessionId;
@@ -725,11 +722,11 @@ export class AcpProcessSession implements AcpClientHandler {
             const configured = await this.#sessionConfigProtocol.configure(
                 this.#configOptions,
                 options,
-                this.#nativeSessionId,
+                this.#updates.sessionId(),
                 {
                     request: async (method, params, failureMessage, signal) =>
                         await this.race(
-                            this.#endpoint.connection.agent.request(method, params, {
+                            this.#connection.connection.agent.request(method, params, {
                                 cancellationSignal: signal,
                             }),
                             failureMessage,
@@ -750,7 +747,7 @@ export class AcpProcessSession implements AcpClientHandler {
                     "invalid_session_configuration",
                 );
             }
-            await this.#updateTail;
+            await this.#updates.drained();
             if (this.#configRevision === configRevision) {
                 this.#configOptions = configured;
             }
@@ -820,7 +817,7 @@ export class AcpProcessSession implements AcpClientHandler {
 
     readonly nativeHistoryTurn = (): { readonly commandId: string; readonly nativeTurnId: string } | null => {
         const prompt = this.#nativePrompt;
-        const nativeTurnId = this.#endpoint.inProcessAgent?.nativeTurnId?.() ?? null;
+        const nativeTurnId = this.#connection.inProcessAgent?.nativeTurnId?.() ?? null;
         return prompt === null || nativeTurnId === null || nativeTurnId === prompt.previousTurnId
             ? null
             : { commandId: prompt.commandId, nativeTurnId };
@@ -838,7 +835,7 @@ export class AcpProcessSession implements AcpClientHandler {
             new AcpStoredSession(
                 this.#mobiusSessionId,
                 this.#agentId,
-                this.#nativeSessionId,
+                this.#updates.sessionId(),
                 this.#cwd,
                 this.#additionalDirectories,
                 true,
@@ -856,19 +853,19 @@ export class AcpProcessSession implements AcpClientHandler {
         this.#turn = running;
         this.#nativePrompt = {
             commandId: options.commandId,
-            previousTurnId: this.#endpoint.inProcessAgent?.nativeTurnId?.() ?? null,
+            previousTurnId: this.#connection.inProcessAgent?.nativeTurnId?.() ?? null,
         };
         try {
             const response: unknown = await this.race(
-                this.#endpoint.connection.agent.request(
+                this.#connection.connection.agent.request(
                     methods.agent.session.prompt,
-                    { prompt, sessionId: this.#nativeSessionId },
+                    { prompt, sessionId: this.#updates.sessionId() },
                     { cancellationSignal: options.signal },
                 ),
                 "ACP agent exited during a prompt",
                 options.signal,
             );
-            await this.#updateTail;
+            await this.#updates.drained();
             await this.flushAgentText();
             await running.activities.finish();
             let result: AcpPromptResult;
@@ -919,10 +916,10 @@ export class AcpProcessSession implements AcpClientHandler {
         }
         const prompt = this.buildPrompt(options);
         const response: unknown = await this.race(
-            this.#endpoint.connection.agent.request("_session/steering", {
+            this.#connection.connection.agent.request("_session/steering", {
                 _meta: { steering: { idleBehavior: "promptRequired" } },
                 prompt,
-                sessionId: this.#nativeSessionId,
+                sessionId: this.#updates.sessionId(),
             }),
             "ACP agent exited during steering",
             options.signal,
@@ -956,12 +953,12 @@ export class AcpProcessSession implements AcpClientHandler {
     };
 
     readonly cancel = async (): Promise<void> => {
-        const capturedProcesses = await this.#endpoint.captureProcessTree();
+        const capturedProcesses = await this.#connection.captureProcessTree();
         try {
             await this.#interactions.cancelPendingInteractions();
             if (this.#turn.running) {
-                await this.#endpoint.connection.agent.notify(methods.agent.session.cancel, {
-                    sessionId: this.#nativeSessionId,
+                await this.#connection.connection.agent.notify(methods.agent.session.cancel, {
+                    sessionId: this.#updates.sessionId(),
                 });
             }
         } finally {
@@ -982,51 +979,11 @@ export class AcpProcessSession implements AcpClientHandler {
     readonly onElicitationComplete = (notification: CompleteElicitationNotification) =>
         this.#interactions.onElicitationComplete(notification);
 
-    readonly onUpdate = (notification: SessionNotification): Promise<void> => {
-        if (this.#nativeSessionId.length === 0) {
-            const notificationBytes = Buffer.byteLength(JSON.stringify(notification));
-            if (
-                this.#preSessionUpdates.length >= MAX_PRE_SESSION_UPDATES ||
-                this.#preSessionUpdateBytes + notificationBytes > MAX_PRE_SESSION_UPDATE_BYTES
-            ) {
-                return Promise.reject(
-                    new AcpExecutionError(
-                        "ACP agent sent too many updates before creating its session",
-                        {},
-                        "agent_update_limit",
-                    ),
-                );
-            }
-            this.#preSessionUpdates.push(notification);
-            this.#preSessionUpdateBytes += notificationBytes;
-            return Promise.resolve();
-        }
-        return this.enqueueUpdate(notification);
-    };
+    readonly onUpdate = (notification: SessionNotification): Promise<void> => this.#updates.receive(notification);
 
-    readonly enqueueUpdate = (notification: SessionNotification): Promise<void> => {
-        this.#updateTail = this.#updateTail.then(async () => await this.processUpdate(notification));
-        return this.#updateTail;
-    };
+    readonly selectNativeSession = (sessionId: string): void => this.#updates.select(sessionId);
 
-    readonly selectNativeSession = (sessionId: string): void => {
-        const selected = nativeSessionIdSchema.parse(sessionId);
-        if (this.#nativeSessionId.length > 0 && this.#nativeSessionId !== selected) {
-            throw new AcpExecutionError(
-                "ACP agent attempted to replace the selected session",
-                {},
-                "invalid_agent_session",
-            );
-        }
-        this.#nativeSessionId = selected;
-        const pending = this.#preSessionUpdates.splice(0);
-        this.#preSessionUpdateBytes = 0;
-        for (const notification of pending) {
-            void this.enqueueUpdate(notification);
-        }
-    };
-
-    readonly processUpdate = async (notification: SessionNotification): Promise<void> => {
+    readonly #processUpdate = async (notification: SessionNotification): Promise<void> => {
         this.assertNativeSession(notification.sessionId);
         const update = notification.update;
         if (this.#replay.kind === "capture") {
@@ -1139,12 +1096,12 @@ export class AcpProcessSession implements AcpClientHandler {
             if (Object.hasOwn(update, "updatedAt")) {
                 this.#sessionUpdatedAt = truncate(update.updatedAt ?? "", 128);
             }
-            if (this.#nativeSessionId.length > 0) {
+            if (this.#updates.sessionId().length > 0) {
                 this.#store.write(
                     new AcpStoredSession(
                         this.#mobiusSessionId,
                         this.#agentId,
-                        this.#nativeSessionId,
+                        this.#updates.sessionId(),
                         this.#cwd,
                         this.#additionalDirectories,
                         this.#prompted,
@@ -1177,11 +1134,11 @@ export class AcpProcessSession implements AcpClientHandler {
     readonly close = async (): Promise<void> => {
         try {
             await this.#interactions.cancelPendingInteractions();
-            if (this.#capabilities.closeSession && this.#nativeSessionId.length > 0) {
+            if (this.#capabilities.closeSession && this.#updates.sessionId().length > 0) {
                 try {
-                    await this.#endpoint.connection.agent.request(
+                    await this.#connection.connection.agent.request(
                         methods.agent.session.close,
-                        { sessionId: this.#nativeSessionId },
+                        { sessionId: this.#updates.sessionId() },
                         {
                             cancellationSignal: AbortSignal.timeout(PROCESS_STOP_TIMEOUT_MILLISECONDS),
                         },
@@ -1196,12 +1153,12 @@ export class AcpProcessSession implements AcpClientHandler {
     };
 
     readonly closeProcess = (capturedProcesses: readonly ProcessTreeIdentity[] = []): Promise<void> =>
-        this.#endpoint.closeProcess(capturedProcesses);
+        this.#connection.closeProcess(capturedProcesses);
     readonly race = <T>(operation: Promise<T>, exitMessage: string, signal: AbortSignal): Promise<T> =>
-        this.#endpoint.race(operation, exitMessage, signal);
+        this.#connection.race(operation, exitMessage, signal);
 
     readonly assertNativeSession = (sessionId: string): void => {
-        if (sessionId !== this.#nativeSessionId) {
+        if (sessionId !== this.#updates.sessionId()) {
             throw new AcpExecutionError("ACP agent referenced an unknown session", {}, "invalid_agent_session");
         }
     };

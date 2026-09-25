@@ -35,7 +35,7 @@ import {
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it } from "vitest";
-import { AcpSessionManager } from "../../../packages/cli/src/acp/session-manager.ts";
+import { AgentRuntimeManager } from "../../../packages/cli/src/acp/agent-runtime-manager.ts";
 import { AvailableAgent } from "../../../packages/cli/src/agent-catalog/agent-discovery.ts";
 import { CodexAgentSpecification } from "../../../packages/cli/src/agent-catalog/agents/codex-agent.ts";
 import { discoverLocalAgentInventory } from "../../../packages/cli/src/agent-catalog/discover-local-agents.ts";
@@ -834,7 +834,7 @@ if (process.argv.includes("--version")) {
         if (!(discovered instanceof AvailableAgent)) {
             throw new Error("Codex was not discovered");
         }
-        const manager = new AcpSessionManager();
+        const manager = new AgentRuntimeManager();
         try {
             const run = async (sessionId: string, prompt: string): Promise<void> => {
                 await manager.runPrompt({

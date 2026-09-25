@@ -25,7 +25,7 @@ import {
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-protocol";
 import { WebSocket } from "undici";
-import type { AcpSessionManager } from "./acp/session-manager.ts";
+import type { AgentRuntimeManager } from "./acp/agent-runtime-manager.ts";
 import { createAgentCatalogRefreshHandler } from "./agent-catalog/handle-agent-catalog-refresh.ts";
 import { createAgentSettingsDiscoveryHandler } from "./agent-catalog/handle-agent-settings-discovery.ts";
 import type { AgentInstallationManager } from "./agent-installation/agent-installation-manager.ts";
@@ -48,7 +48,7 @@ export interface DaemonCommandOptions {
     readonly config: DaemonConfig;
     readonly directories: WorkspaceDirectoryService;
     readonly audit: AuditStore;
-    readonly sessions: AcpSessionManager;
+    readonly sessions: AgentRuntimeManager;
     readonly installations: AgentInstallationManager;
     readonly nativeSessions: NativeSessionService;
     readonly operations: DaemonOperationState;

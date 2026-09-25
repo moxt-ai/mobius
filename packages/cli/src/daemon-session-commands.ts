@@ -5,7 +5,7 @@ import type {
     WorkspaceListCommand,
 } from "@moxt-ai/mobius-protocol";
 import type { WebSocket } from "undici";
-import type { AcpSessionManager } from "./acp/session-manager.ts";
+import type { AgentRuntimeManager } from "./acp/agent-runtime-manager.ts";
 import type { AuditStore } from "./audit/audit-store.ts";
 import { resolveSessionDirectories } from "./authorization/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
@@ -48,7 +48,7 @@ export async function executeSessionPrepare(
     config: DaemonConfig,
     directories: WorkspaceDirectoryService,
     audit: AuditStore,
-    sessions: AcpSessionManager,
+    sessions: AgentRuntimeManager,
     signal: AbortSignal,
 ): Promise<void> {
     const metrics = new AccumulatingOperationMetrics();
@@ -164,7 +164,7 @@ export async function executeSessionConfigure(
     config: DaemonConfig,
     directories: WorkspaceDirectoryService,
     audit: AuditStore,
-    sessions: AcpSessionManager,
+    sessions: AgentRuntimeManager,
     signal: AbortSignal,
 ): Promise<void> {
     try {

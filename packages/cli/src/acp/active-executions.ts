@@ -10,7 +10,7 @@ const unreachable = (state: never): never => {
 };
 
 /** Cancellation remains attached to its command until that command finishes. */
-export class SessionExecutions {
+export class ActiveExecutions {
     readonly #entries = new Map<string, Execution>();
     readonly command = (id: string): string | undefined => {
         const state = this.#entries.get(id);

@@ -4,7 +4,7 @@ import {
     type NativeSessionResult,
     SESSION_HISTORY_CHARACTER_LIMIT,
 } from "@moxt-ai/mobius-protocol";
-import { AcpExecutionError } from "../acp/session-manager.ts";
+import { AcpExecutionError } from "../acp/agent-runtime-manager.ts";
 
 type ActiveTurnSnapshot = Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"];
 type AvailableNativeMessagePage = Extract<NativeMessagePage, { readonly status: "available" }>;

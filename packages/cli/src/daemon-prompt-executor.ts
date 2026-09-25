@@ -10,12 +10,12 @@ import {
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import type { AcpActivity } from "./acp/activity.ts";
+import { AcpExecutionError, type AgentRuntimeManager } from "./acp/agent-runtime-manager.ts";
 import {
     agentForSessionConfiguration,
     applyCompleteSessionConfiguration,
     assertAppliedSessionConfiguration,
 } from "./acp/session-config/apply-session-configuration.ts";
-import { AcpExecutionError, type AcpSessionManager } from "./acp/session-manager.ts";
 import type { AuditStore } from "./audit/audit-store.ts";
 import { resolveSessionDirectories } from "./authorization/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
@@ -68,7 +68,7 @@ export interface ExecutePromptOptions {
     readonly config: DaemonConfig;
     readonly directories: WorkspaceDirectoryService;
     readonly audit: AuditStore;
-    readonly sessions: AcpSessionManager;
+    readonly sessions: AgentRuntimeManager;
     readonly attemptId: string;
     readonly activateAttempt: () => { readonly epoch: string; readonly sequence: 0 };
     readonly waitForSessionAvailability: (

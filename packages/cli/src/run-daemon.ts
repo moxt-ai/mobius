@@ -4,7 +4,7 @@ import { styleText } from "node:util";
 
 import { AGENT_INSTALL_REQUEST_KIND, type RecordedSessionEvent } from "@moxt-ai/mobius-protocol";
 
-import { AcpSessionManager } from "./acp/session-manager.ts";
+import { AgentRuntimeManager } from "./acp/agent-runtime-manager.ts";
 import { SqliteAcpSessionStore } from "./acp/session-store.ts";
 import { supportedLocalAgentSpecifications } from "./agent-catalog/discover-local-agents.ts";
 import { AgentIntegrationDefinition } from "./agent-catalog/local-agent.ts";
@@ -129,7 +129,7 @@ export async function runDaemon(
         activeTurns.recordEvent(event);
         publisher.publish(sessionId, event);
     };
-    const sessions = new AcpSessionManager(
+    const agentRuntime = new AgentRuntimeManager(
         new DaemonAcpObserver(recordSessionEvent),
         sessionStore,
         {
@@ -156,24 +156,32 @@ export async function runDaemon(
         config.relayUrl,
         new DaemonDiagnosticLog(stateDirectory),
     );
-    const nativeSessions = new NativeSessionService(config, directories, sessions, audit, async (request, options) => {
-        return await activeTurns.executionSnapshot(async (command) => {
-            if (command.sessionId !== request.targetSessionId || command.agentId !== request.agentId) {
-                return false;
-            }
-            const cwd = await directories.resolve(command.bindingId, command.directoryId, options.signal);
-            const additionalDirectories = await directories.resolveMany(
-                command.bindingId,
-                command.additionalDirectoryIds,
-                options.signal,
-            );
-            return (
-                cwd === options.cwd &&
-                additionalDirectories.length === options.additionalDirectories.length &&
-                additionalDirectories.every((directory, index) => directory === options.additionalDirectories[index])
-            );
-        });
-    });
+    const nativeSessions = new NativeSessionService(
+        config,
+        directories,
+        agentRuntime,
+        audit,
+        async (request, options) => {
+            return await activeTurns.executionSnapshot(async (command) => {
+                if (command.sessionId !== request.targetSessionId || command.agentId !== request.agentId) {
+                    return false;
+                }
+                const cwd = await directories.resolve(command.bindingId, command.directoryId, options.signal);
+                const additionalDirectories = await directories.resolveMany(
+                    command.bindingId,
+                    command.additionalDirectoryIds,
+                    options.signal,
+                );
+                return (
+                    cwd === options.cwd &&
+                    additionalDirectories.length === options.additionalDirectories.length &&
+                    additionalDirectories.every(
+                        (directory, index) => directory === options.additionalDirectories[index],
+                    )
+                );
+            });
+        },
+    );
     const installations = new AgentInstallationManager(
         specifications,
         installationExecutor,
@@ -249,7 +257,7 @@ export async function runDaemon(
                     config,
                     directories,
                     audit,
-                    sessions,
+                    sessions: agentRuntime,
                     installations,
                     installationObserver,
                     nativeSessions,
@@ -293,7 +301,7 @@ export async function runDaemon(
                     await installations.close();
                 } finally {
                     try {
-                        await sessions.close();
+                        await agentRuntime.close();
                     } finally {
                         try {
                             sessionStore.close();

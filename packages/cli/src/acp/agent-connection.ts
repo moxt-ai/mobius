@@ -93,7 +93,7 @@ type EndpointProcess =
     | { readonly kind: "child"; readonly child: ReturnType<typeof spawn> };
 
 /** Owns the transport, termination signal and process tree for one Agent endpoint. */
-export class AcpEndpoint {
+export class AgentConnection {
     readonly connection: ClientConnection;
     readonly termination: Promise<AcpEndpointTermination>;
     readonly #process: EndpointProcess;
