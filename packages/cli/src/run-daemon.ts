@@ -459,6 +459,7 @@ async function runRelayConnection(
                             command,
                             (message) => send(socket, message),
                             connectionController.signal,
+                            sessions.findSessions([command.sessionId])[0]?.cwd ?? null,
                         ).catch((error: unknown) => {
                             if (socket.readyState !== WebSocket.OPEN || connectionController.signal.aborted) {
                                 return;

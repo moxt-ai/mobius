@@ -1,6 +1,6 @@
 import { createReadStream } from "node:fs";
 import { realpath, stat } from "node:fs/promises";
-import { basename, isAbsolute, normalize } from "node:path";
+import { basename, isAbsolute, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
     type DaemonToServiceMessage,
@@ -28,9 +28,17 @@ function requestedPath(value: string): string | null {
     return value;
 }
 
-async function resolveFile(value: string, signal: AbortSignal): Promise<string | null> {
-    const requested = requestedPath(value);
-    if (requested === null || !isAbsolute(requested) || normalize(requested) !== requested) {
+async function resolveFile(
+    value: string,
+    workingDirectory: string | null,
+    signal: AbortSignal,
+): Promise<string | null> {
+    const path = requestedPath(value);
+    if (path === null || (!isAbsolute(path) && workingDirectory === null)) {
+        return null;
+    }
+    const requested = workingDirectory === null ? path : resolve(workingDirectory, path);
+    if (!isAbsolute(requested) || (isAbsolute(path) && normalize(path) !== path)) {
         return null;
     }
     try {
@@ -47,8 +55,9 @@ export async function streamLocalFile(
     command: FileReadCommand,
     send: (message: DaemonToServiceMessage) => void,
     signal: AbortSignal,
+    workingDirectory: string | null,
 ): Promise<void> {
-    const target = await resolveFile(command.path, signal);
+    const target = await resolveFile(command.path, workingDirectory, signal);
     if (target === null) {
         throw new Error("The local file is unavailable");
     }
