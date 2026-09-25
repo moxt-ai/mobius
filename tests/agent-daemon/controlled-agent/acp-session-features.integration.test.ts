@@ -99,7 +99,7 @@ function fakeAgent(
 
 describe("ACP session features", () => {
     it("Given an ACP Agent has not advertised commands, When Mobius prepares a session, Then it does not invent compact", async () => {
-        const manager = new AcpSessionManager();
+        const manager = new AgentRuntimeManager();
         const agent = new LocalAgentDefinition("opencode", "OpenCode", process.execPath, [
             fakeAgentPath,
             "--agent-name",
@@ -125,7 +125,7 @@ describe("ACP session features", () => {
         "Given %s advertises compact, When its commands update, Then Mobius preserves the ACP command",
         async (agentId) => {
             const observer = new RecordingObserver();
-            const manager = new AcpSessionManager(observer);
+            const manager = new AgentRuntimeManager(observer);
             const agent = fakeAgent(["--advertise-compact-command"], {}, agentId);
 
             try {

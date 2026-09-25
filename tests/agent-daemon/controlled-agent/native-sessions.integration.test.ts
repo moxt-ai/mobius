@@ -174,7 +174,7 @@ describe("native Agent session boundary", () => {
             executable,
             (options) => new CodexAcpAgent(options),
         );
-        const sessions = new AcpSessionManager();
+        const sessions = new AgentRuntimeManager();
         const sessionId = crypto.randomUUID();
         try {
             const prepared = await sessions.prepareSession({
