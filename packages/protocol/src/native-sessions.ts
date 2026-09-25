@@ -2,6 +2,7 @@ import { z } from "zod";
 import { ProtocolMessageError } from "./codecs/messages.ts";
 import {
     displayContentSchema,
+    promptImageSchema,
     sessionCapabilitiesSchema,
     sessionElicitationRequestedEventSchema,
     sessionPermissionRequestedEventSchema,
@@ -133,6 +134,17 @@ const nativeSessionResultSchema = z.discriminatedUnion("action", [
             ...resultEnvelope,
             action: z.literal("active-turn"),
             targetSessionId: identifier,
+            queued: z
+                .array(
+                    z
+                        .strictObject({
+                            commandId: identifier,
+                            prompt: z.string().max(100_000),
+                            images: z.array(promptImageSchema).max(8).readonly(),
+                        })
+                        .readonly(),
+                )
+                .readonly(),
             turn: z
                 .strictObject({
                     activities: z.array(activeTurnActivitySchema).max(100).readonly(),

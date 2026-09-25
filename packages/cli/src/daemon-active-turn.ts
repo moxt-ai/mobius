@@ -64,6 +64,8 @@ export class ActiveDaemonTurn {
                 : { kind: "pending" };
     }
 
+    readonly isQueued = (): boolean => this.#dispatch.kind === "queued" && !this.#controller.signal.aborted;
+
     readonly abortDaemon = (): void => {
         this.#controller.abort();
     };

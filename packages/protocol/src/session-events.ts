@@ -81,7 +81,14 @@ const committedEventSchema = z
 export type SessionEventEnvelope = z.infer<typeof eventEnvelopeSchema>;
 export type CommittedSessionEvent = z.infer<typeof committedEventSchema>;
 
+export const SESSION_QUEUE_CHANGED_KIND = "session.queue.changed";
+const sessionQueueChangedSchema = z
+    .strictObject({ kind: z.literal(SESSION_QUEUE_CHANGED_KIND), sessionId: identifierStringSchema })
+    .readonly();
+export type SessionQueueChangedEvent = z.infer<typeof sessionQueueChangedSchema>;
+
 export type RecordedSessionEvent =
+    | SessionQueueChangedEvent
     | AgentActivityEvent
     | AgentActivityNarrationEvent
     | AgentContentEvent
@@ -140,6 +147,8 @@ export const encodeCommittedSessionEvent = (message: CommittedSessionEvent): str
 export function decodeRecordedSessionEvent(encoded: string): RecordedSessionEvent {
     const kind = decodeMessageKind(encoded);
     switch (kind) {
+        case SESSION_QUEUE_CHANGED_KIND:
+            return decode(encoded, sessionQueueChangedSchema);
         case AGENT_ACTIVITY_KIND:
             return decodeAgentActivityEvent(encoded);
         case AGENT_ACTIVITY_NARRATION_KIND:

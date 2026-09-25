@@ -13,3 +13,18 @@ Sessions are handled in the corresponding Runtime Relay. Session content is not 
 Server behavior flows through HTTP or Durable Object routes, services, storage, and the database. The local daemon is the execution boundary for files, processes, and Agent operations. Validate and authorize resolved targets there. Use typed errors across subsystem boundaries, deadlines for finite external operations, and cancellation for streams.
 
 [AGENTS.md](./AGENTS.md) has the engineering rules.
+
+## Live execution ownership
+
+The daemon owns pending prompts in `DaemonTurnRegistry` for its Runtime lifetime,
+independently of Relay connections. The native `active-turn` result contains the
+running Turn and the queued prompts (including their original images).
+`session.queue.changed` invalidates the queue projection for all subscribed viewers.
+Clients read `sessions.readSessionExecution` after subscribing, on reconnect, and
+on that notification. They must not reconstruct accepted work from a tab-local
+journal. Queue changes and snapshots are transient; this adds no persisted queue.
+
+`run-daemon.ts` composes Runtime resources; `run-relay-connection.ts` owns one
+transport; `daemon-command-handler.ts` routes validated commands; the Turn registry
+owns scheduling and cleanup. Prompt execution, authorized workspace resolution,
+session configuration, and native history queries have separate modules.

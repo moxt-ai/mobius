@@ -7,7 +7,7 @@ import { WebSocket } from "undici";
 import { AcpExecutionError } from "../acp/session-manager.ts";
 import type { AuditStore } from "../audit/audit-store.ts";
 import { type DaemonConfig, DaemonLocalContext, withDaemonEnvironment } from "../config.ts";
-import { operationErrorCode, operationErrorMessage, send } from "../daemon-session-commands.ts";
+import { operationErrorCode, operationErrorMessage, send } from "../daemon-command-results.ts";
 import { revalidateExecutable } from "../process/executable.ts";
 import type { RelayConnectionDiagnostics } from "../relay-connection/diagnostics.ts";
 import type { DaemonTimer } from "../relay-connection/timer.ts";

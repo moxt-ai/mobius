@@ -2,92 +2,31 @@ import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { styleText } from "node:util";
 
-import {
-    AGENT_CATALOG_REFRESH_KIND,
-    AGENT_INSTALL_CANCEL_KIND,
-    AGENT_INSTALL_REQUEST_KIND,
-    AGENT_SETTINGS_DISCOVER_KIND,
-    decodeServiceToDaemonMessage,
-    decodeSessionLiveHistoryLoad,
-    decodeSessionLiveHistoryPageLoad,
-    encodeSessionPromptCommand,
-    FILE_FAILED_KIND,
-    FILE_READ_KIND,
-    NATIVE_SESSION_CANCEL_KIND,
-    NATIVE_SESSION_REQUEST_KIND,
-    type RecordedSessionEvent,
-    RUNTIME_HEARTBEAT_ACK_KIND,
-    RUNTIME_LIVENESS_READY_KIND,
-    SESSION_CANCEL_KIND,
-    SESSION_CONFIGURE_KIND,
-    SESSION_ELICITATION_RESPOND_KIND,
-    SESSION_LIVE_HISTORY_LOAD_KIND,
-    SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
-    SESSION_PERMISSION_RESPOND_KIND,
-    SESSION_PREPARE_KIND,
-    SESSION_PROMPT_DISPOSITION_KIND,
-    SESSION_PROMPT_KIND,
-    SESSION_QUERIED_KIND,
-    SESSION_QUERY_KIND,
-    SESSION_QUEUED_KIND,
-    type SessionPromptCommand,
-    SessionPromptDisposition,
-    WORKSPACE_LIST_KIND,
-} from "@moxt-ai/mobius-protocol";
-import { type MessageEvent, WebSocket } from "undici";
+import { AGENT_INSTALL_REQUEST_KIND, type RecordedSessionEvent } from "@moxt-ai/mobius-protocol";
 
 import { AcpSessionManager } from "./acp/session-manager.ts";
 import { SqliteAcpSessionStore } from "./acp/session-store.ts";
 import { supportedLocalAgentSpecifications } from "./agent-catalog/discover-local-agents.ts";
-import { createAgentCatalogRefreshHandler } from "./agent-catalog/handle-agent-catalog-refresh.ts";
-import { createAgentSettingsDiscoveryHandler } from "./agent-catalog/handle-agent-settings-discovery.ts";
 import { AgentIntegrationDefinition } from "./agent-catalog/local-agent.ts";
 import { publishAgentCatalog } from "./agent-catalog/publish-agent-catalog.ts";
 import { AgentInstallationManager } from "./agent-installation/agent-installation-manager.ts";
 import { FixedInstallationExecutor } from "./agent-installation/fixed-installation-executor.ts";
-import { streamLocalFile } from "./artifacts/local-file-streamer.ts";
 import type { AuditStore } from "./audit/audit-store.ts";
 import { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
 import type { DaemonConfig } from "./config.ts";
-import { ActiveDaemonTurn } from "./daemon-active-turn.ts";
 import { DaemonDiagnosticLog } from "./daemon-diagnostic-log.ts";
 import { AuditInstallationEvents, DaemonAcpObserver, DaemonInstallationObserver } from "./daemon-observers.ts";
-import {
-    executePrompt,
-    executeSessionConfigure,
-    executeSessionLiveHistoryLoad,
-    executeSessionLiveHistoryPageLoad,
-    executeSessionPrepare,
-    executeWorkspaceList,
-    reportOperationFailure,
-    send,
-    settleAbandonedTurn,
-} from "./daemon-session-commands.ts";
+import { DaemonTurnRegistry } from "./daemon-turn-registry.ts";
 import { readCodexFullHistory } from "./native-sessions/codex-history.ts";
-import { createNativeSessionRequestHandler } from "./native-sessions/handle-native-requests.ts";
 import { NativeSessionService } from "./native-sessions/service.ts";
-import { connectRelay } from "./relay-connection/connect.ts";
 import { DaemonOperationState } from "./relay-connection/daemon-operation-state.ts";
 import { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
-import { RelayConnectionLiveness } from "./relay-connection/liveness.ts";
-import { isRuntimeRelayRevocation, RuntimeRelayRevokedError } from "./relay-connection/runtime-revocation.ts";
+import { runRelayConnection } from "./relay-connection/run-relay-connection.ts";
+import { RuntimeRelayRevokedError } from "./relay-connection/runtime-revocation.ts";
 import { DaemonSessionEventPublisher } from "./relay-connection/session-event-publisher.ts";
 import { type DaemonTimer, systemDaemonTimer } from "./relay-connection/timer.ts";
 
 const RELAY_RECONNECT_DELAY_MILLISECONDS = 500;
-
-function closeRelaySocket(socket: WebSocket, code: number, reason: string): void {
-    try {
-        socket.close(code, reason);
-    } catch (error) {
-        console.error("Mobius daemon could not close the Relay WebSocket", error);
-        try {
-            socket.close();
-        } catch (fallbackError) {
-            console.error("Mobius daemon could not release the Relay WebSocket", fallbackError);
-        }
-    }
-}
 
 function waitForRelayRetry(signal: AbortSignal, timer: DaemonTimer): Promise<void> {
     if (signal.aborted) {
@@ -162,541 +101,6 @@ export interface RunDaemonOptions {
     readonly resolveAgentCatalogEnvironment?: (signal: AbortSignal) => Promise<Readonly<NodeJS.ProcessEnv>>;
 }
 
-async function runRelayConnection(
-    config: DaemonConfig,
-    directories: WorkspaceDirectoryService,
-    audit: AuditStore,
-    sessions: AcpSessionManager,
-    installations: AgentInstallationManager,
-    installationObserver: DaemonInstallationObserver,
-    nativeSessions: NativeSessionService,
-    operations: DaemonOperationState,
-    publisher: DaemonSessionEventPublisher,
-    activeTurns: Map<string, ActiveDaemonTurn>,
-    connectionEpoch: number,
-    diagnostics: RelayConnectionDiagnostics,
-    onConnected: () => void,
-    signal: AbortSignal,
-    timer: DaemonTimer,
-    resolveAgentCatalogEnvironment: (signal: AbortSignal) => Promise<Readonly<NodeJS.ProcessEnv>>,
-): Promise<void> {
-    const relayUrl = new URL(config.relayUrl);
-    relayUrl.searchParams.set("liveness", "1");
-    const socket = await connectRelay(relayUrl, signal);
-    diagnostics.connectionOpened(connectionEpoch);
-    const connectionController = new AbortController();
-    const handleSettingsDiscovery = createAgentSettingsDiscoveryHandler({
-        config,
-        directories,
-        audit,
-        sessions,
-        diagnostics,
-        socket,
-        signal: connectionController.signal,
-        timer,
-    });
-    const handleCatalogRefresh = createAgentCatalogRefreshHandler({
-        config,
-        audit,
-        diagnostics,
-        socket,
-        signal: connectionController.signal,
-        timer,
-        resolveEnvironment: resolveAgentCatalogEnvironment,
-    });
-    const activeTurnSnapshot = (sessionId: string) => {
-        for (const turn of activeTurns.values()) {
-            if (turn.command.sessionId !== sessionId) {
-                continue;
-            }
-            const snapshot = turn.snapshot();
-            if (snapshot !== null) {
-                return snapshot;
-            }
-        }
-        return null;
-    };
-    const nativeRequestHandler = createNativeSessionRequestHandler({
-        audit,
-        diagnostics,
-        nativeSessions,
-        signal: connectionController.signal,
-        socket,
-        timer,
-    });
-    installationObserver.connect(socket);
-    onConnected();
-
-    try {
-        await new Promise<void>((resolve, reject) => {
-            let finished = false;
-
-            const cleanup = (): void => {
-                connectionLiveness.close();
-                signal.removeEventListener("abort", stop);
-                socket.removeEventListener("close", handleClose);
-                socket.removeEventListener("error", handleError);
-                socket.removeEventListener("message", handleMessage);
-                installationObserver.disconnect(socket);
-                publisher.disconnect(socket);
-                connectionController.abort();
-            };
-
-            const resolveConnection = (): void => {
-                if (finished) {
-                    return;
-                }
-                finished = true;
-                cleanup();
-                resolve();
-            };
-
-            const rejectConnection = (failure: Error): void => {
-                if (finished) {
-                    return;
-                }
-                finished = true;
-                cleanup();
-                reject(failure);
-            };
-
-            const stop = (): void => {
-                diagnostics.connectionClosed(connectionEpoch, 1000, "Daemon stopped", "daemon_stop");
-                closeRelaySocket(socket, 1000, "Daemon stopped");
-                resolveConnection();
-            };
-
-            const failAndClose = (failure: Error, code: number, reason: string, source: string): void => {
-                diagnostics.connectionFailed(connectionEpoch, failure, source);
-                diagnostics.connectionClosed(connectionEpoch, code, reason, source);
-                closeRelaySocket(socket, code, reason);
-                rejectConnection(failure);
-            };
-
-            const waitForTurnCompletion = (turn: ActiveDaemonTurn, waitSignal: AbortSignal): Promise<void> => {
-                waitSignal.throwIfAborted();
-                return new Promise<void>((resolve, reject) => {
-                    let settled = false;
-                    const finish = (
-                        result: { readonly kind: "completed" } | { readonly kind: "failed"; readonly error: unknown },
-                    ): void => {
-                        if (settled) {
-                            return;
-                        }
-                        settled = true;
-                        waitSignal.removeEventListener("abort", onAbort);
-                        if (result.kind === "completed") {
-                            resolve();
-                        } else {
-                            reject(result.error);
-                        }
-                    };
-                    const onAbort = (): void => finish({ error: waitSignal.reason, kind: "failed" });
-                    waitSignal.addEventListener("abort", onAbort, { once: true });
-                    void turn.completion.then(
-                        () => finish({ kind: "completed" }),
-                        (error: unknown) => finish({ error, kind: "failed" }),
-                    );
-                });
-            };
-
-            const waitForSessionAvailability = async (
-                command: SessionPromptCommand,
-                queuedTurn: ActiveDaemonTurn,
-                waitSignal: AbortSignal,
-            ): Promise<
-                | { readonly kind: "available"; readonly disposition: string }
-                | { readonly kind: "busy" }
-                | { readonly kind: "queue-target-unavailable" }
-            > => {
-                if (queuedTurn.effectiveDisposition() === SessionPromptDisposition.Steer) {
-                    return { disposition: SessionPromptDisposition.Steer, kind: "available" };
-                }
-                for (;;) {
-                    const first = [...activeTurns.values()].find(
-                        (turn) =>
-                            turn.command.sessionId === command.sessionId &&
-                            turn.command.disposition !== SessionPromptDisposition.Steer,
-                    );
-                    if (first === undefined || first.command.commandId === command.commandId) {
-                        return command.disposition !== SessionPromptDisposition.Queue ||
-                            operations.isTerminalExecution(command.targetCommandId, command.sessionId)
-                            ? { disposition: queuedTurn.effectiveDisposition(), kind: "available" }
-                            : { kind: "queue-target-unavailable" };
-                    }
-                    if (command.disposition !== SessionPromptDisposition.Queue) {
-                        return { kind: "busy" };
-                    }
-                    if (first.command.commandId !== command.targetCommandId) {
-                        return { kind: "queue-target-unavailable" };
-                    }
-                    const promotion = queuedTurn.queuePromotion();
-                    if (promotion === null) {
-                        throw new Error("The queued prompt cannot be promoted");
-                    }
-                    const decision = await Promise.race([
-                        waitForTurnCompletion(first, waitSignal).then(() => "target-completed" as const),
-                        promotion.then(() => "promoted" as const),
-                    ]);
-                    if (decision === "promoted") {
-                        return { disposition: SessionPromptDisposition.Steer, kind: "available" };
-                    }
-                }
-            };
-
-            const connectionLiveness = new RelayConnectionLiveness(timer, {
-                send: (message) => {
-                    if (socket.readyState !== WebSocket.OPEN) {
-                        return false;
-                    }
-                    try {
-                        send(socket, message);
-                        return true;
-                    } catch (error) {
-                        if (socket.readyState !== WebSocket.OPEN) {
-                            return false;
-                        }
-                        throw error;
-                    }
-                },
-                unresponsive: (heartbeatId, timeoutMilliseconds) => {
-                    diagnostics.heartbeatTimedOut(connectionEpoch, heartbeatId, timeoutMilliseconds);
-                    diagnostics.connectionClosed(
-                        connectionEpoch,
-                        4001,
-                        "Relay liveness check timed out",
-                        "heartbeat_timeout",
-                    );
-                    closeRelaySocket(socket, 4001, "Relay liveness check timed out");
-                    resolveConnection();
-                },
-            });
-
-            signal.addEventListener("abort", stop, { once: true });
-            const handleClose = (event: CloseEvent): void => {
-                diagnostics.connectionClosed(connectionEpoch, event.code, event.reason, "relay");
-                if (isRuntimeRelayRevocation(event.code, event.reason)) {
-                    rejectConnection(new RuntimeRelayRevokedError(event.code, event.reason));
-                    return;
-                }
-                resolveConnection();
-            };
-            const handleError = (event: Event): void => {
-                if (signal.aborted) {
-                    resolveConnection();
-                    return;
-                }
-                const cause = Reflect.get(event, "error");
-                const failure = new Error("Relay WebSocket emitted an error", { cause: cause ?? event });
-                diagnostics.connectionFailed(connectionEpoch, failure, "socket_error");
-                diagnostics.connectionClosed(connectionEpoch, 1006, "WebSocket error", "socket_error");
-                rejectConnection(failure);
-            };
-            const handleMessage = (event: MessageEvent<unknown>): void => {
-                const encoded: unknown = event.data;
-                if (typeof encoded !== "string") {
-                    failAndClose(new Error("Relay sent a non-text message"), 4003, "Text message required", "protocol");
-                    return;
-                }
-
-                try {
-                    const message = decodeServiceToDaemonMessage(encoded);
-                    const kind = message.kind;
-                    if (kind === SESSION_LIVE_HISTORY_LOAD_KIND) {
-                        const command = decodeSessionLiveHistoryLoad(encoded);
-                        void executeSessionLiveHistoryLoad(
-                            socket,
-                            command,
-                            config,
-                            directories,
-                            audit,
-                            sessions,
-                            activeTurnSnapshot,
-                            connectionController.signal,
-                        );
-                        return;
-                    }
-                    if (kind === SESSION_LIVE_HISTORY_PAGE_LOAD_KIND) {
-                        const command = decodeSessionLiveHistoryPageLoad(encoded);
-                        void executeSessionLiveHistoryPageLoad(
-                            socket,
-                            command,
-                            config,
-                            directories,
-                            audit,
-                            sessions,
-                            activeTurnSnapshot,
-                            connectionController.signal,
-                        );
-                        return;
-                    }
-                    if (kind === NATIVE_SESSION_CANCEL_KIND) {
-                        nativeRequestHandler.cancel(message);
-                        return;
-                    }
-                    if (kind === AGENT_SETTINGS_DISCOVER_KIND) {
-                        handleSettingsDiscovery.handle(message);
-                        return;
-                    }
-                    if (kind === AGENT_CATALOG_REFRESH_KIND) {
-                        handleCatalogRefresh.handle(message);
-                        return;
-                    }
-                    if (kind === NATIVE_SESSION_REQUEST_KIND) {
-                        nativeRequestHandler.handle(message);
-                        return;
-                    }
-                    if (kind === RUNTIME_LIVENESS_READY_KIND) {
-                        connectionLiveness.start();
-                        return;
-                    }
-                    if (kind === RUNTIME_HEARTBEAT_ACK_KIND) {
-                        connectionLiveness.acknowledge(message);
-                        return;
-                    }
-                    if (kind === FILE_READ_KIND) {
-                        const command = message;
-                        void streamLocalFile(
-                            command,
-                            (message) => send(socket, message),
-                            connectionController.signal,
-                            sessions.findSessions([command.sessionId])[0]?.cwd ?? null,
-                        ).catch((error: unknown) => {
-                            if (socket.readyState !== WebSocket.OPEN || connectionController.signal.aborted) {
-                                return;
-                            }
-                            send(socket, {
-                                code: "file_unavailable",
-                                kind: FILE_FAILED_KIND,
-                                message: error instanceof Error ? error.message : "The local file is unavailable",
-                                requestId: command.requestId,
-                                sessionId: command.sessionId,
-                            });
-                        });
-                        return;
-                    }
-                    if (kind === SESSION_CANCEL_KIND) {
-                        const cancellation = message;
-                        const turn = activeTurns.get(cancellation.commandId);
-                        if (turn === undefined || !turn.matches(cancellation)) {
-                            settleAbandonedTurn(publisher, operations, audit, cancellation);
-                            return;
-                        }
-                        const cancellationState = turn.requestCancellation();
-                        if (cancellationState === "already-requested") {
-                            return;
-                        }
-                        audit.record({
-                            commandId: cancellation.commandId,
-                            event: "session_cancellation_requested",
-                            sessionId: cancellation.sessionId,
-                        });
-                        if (cancellationState === "pending") {
-                            return;
-                        }
-                        void sessions.cancelPrompt(cancellation.sessionId).catch((error) => {
-                            console.error("Mobius daemon could not cancel the agent turn", error);
-                        });
-                        return;
-                    }
-                    if (kind === SESSION_PROMPT_DISPOSITION_KIND) {
-                        const disposition = message;
-                        const turn = activeTurns.get(disposition.commandId);
-                        if (turn === undefined || !turn.promoteQueuedPrompt(disposition)) {
-                            reportOperationFailure(
-                                socket,
-                                disposition.commandId,
-                                disposition.sessionId,
-                                new Error("The queued prompt is unavailable"),
-                            );
-                        }
-                        return;
-                    }
-                    if (kind === WORKSPACE_LIST_KIND) {
-                        const command = message;
-                        void executeWorkspaceList(socket, command, directories, audit, connectionController.signal);
-                        return;
-                    }
-                    if (kind === SESSION_PREPARE_KIND) {
-                        const command = message;
-                        void executeSessionPrepare(
-                            publisher,
-                            socket,
-                            command,
-                            config,
-                            directories,
-                            audit,
-                            sessions,
-                            connectionController.signal,
-                        );
-                        return;
-                    }
-                    if (kind === SESSION_CONFIGURE_KIND) {
-                        const command = message;
-                        void executeSessionConfigure(
-                            publisher,
-                            socket,
-                            command,
-                            config,
-                            directories,
-                            audit,
-                            sessions,
-                            connectionController.signal,
-                        );
-                        return;
-                    }
-                    if (kind === SESSION_QUERY_KIND) {
-                        const command = message;
-                        void nativeSessions
-                            .querySessions(command.sessionIds, connectionController.signal)
-                            .then((entries) => {
-                                send(socket, {
-                                    entries,
-                                    kind: SESSION_QUERIED_KIND,
-                                    requestId: command.requestId,
-                                });
-                            })
-                            .catch((error: unknown) => {
-                                reportOperationFailure(socket, command.requestId, "", error);
-                            });
-                        return;
-                    }
-                    if (kind === SESSION_PERMISSION_RESPOND_KIND) {
-                        const command = message;
-                        void sessions
-                            .respondPermission(command)
-                            .then(() => {
-                                audit.record({
-                                    commandId: command.interactionId,
-                                    event: "session_permission_resolved",
-                                    sessionId: command.sessionId,
-                                });
-                            })
-                            .catch((error: unknown) => {
-                                reportOperationFailure(socket, command.interactionId, command.sessionId, error);
-                            });
-                        return;
-                    }
-                    if (kind === SESSION_ELICITATION_RESPOND_KIND) {
-                        const command = message;
-                        void sessions
-                            .respondElicitation(command)
-                            .then(() => {
-                                audit.record({
-                                    commandId: command.interactionId,
-                                    event: "session_elicitation_resolved",
-                                    sessionId: command.sessionId,
-                                });
-                            })
-                            .catch((error: unknown) => {
-                                reportOperationFailure(socket, command.interactionId, command.sessionId, error);
-                            });
-                        return;
-                    }
-                    if (kind === AGENT_INSTALL_REQUEST_KIND) {
-                        const command = message;
-                        void installations.request(command, signal).catch((error: unknown) => {
-                            console.error("Mobius Agent integration installation failed", error);
-                        });
-                        return;
-                    }
-                    if (kind === AGENT_INSTALL_CANCEL_KIND) {
-                        const command = message;
-                        void installations.cancel(command.requestId).catch((error: unknown) => {
-                            reportOperationFailure(socket, command.requestId, "", error);
-                        });
-                        return;
-                    }
-                    if (kind !== SESSION_PROMPT_KIND) {
-                        throw new Error("Unsupported protocol message");
-                    }
-                    const command = message;
-                    const receipt = operations.claimExecution(
-                        command.commandId,
-                        command.sessionId,
-                        encodeSessionPromptCommand(command),
-                    );
-                    if (receipt.kind === "conflict") {
-                        const code = "command_identity_conflict";
-                        audit.record({
-                            commandId: command.commandId,
-                            details: { code },
-                            event: "session_prompt_rejected",
-                            sessionId: command.sessionId,
-                        });
-                        send(socket, {
-                            code,
-                            requestId: command.commandId,
-                            kind: "session.operation.failed",
-                            message: "This command identifier was already used for a different request.",
-                            sessionId: command.sessionId,
-                        });
-                        return;
-                    }
-                    if (receipt.kind === "duplicate") {
-                        return;
-                    }
-
-                    const turn = new ActiveDaemonTurn(command, receipt.attemptId);
-                    activeTurns.set(command.commandId, turn);
-                    void executePrompt(
-                        operations,
-                        publisher,
-                        command,
-                        config,
-                        directories,
-                        audit,
-                        sessions,
-                        receipt.attemptId,
-                        turn.accept,
-                        () =>
-                            send(socket, {
-                                commandId: command.commandId,
-                                kind: SESSION_QUEUED_KIND,
-                                sessionId: command.sessionId,
-                            }),
-                        (waitSignal) => waitForSessionAvailability(command, turn, waitSignal),
-                        timer,
-                        turn.signal,
-                        turn.recordEvent,
-                        turn.cancellationRequested,
-                    )
-                        .catch((error: unknown) => {
-                            console.error("Mobius daemon turn failed", error);
-                        })
-                        .finally(() => {
-                            activeTurns.delete(command.commandId);
-                            turn.finish();
-                        });
-                } catch (error) {
-                    console.error("Mobius daemon rejected a message", error);
-                    failAndClose(
-                        new Error("Relay sent an invalid protocol message", { cause: error }),
-                        4008,
-                        "Invalid protocol message",
-                        "protocol",
-                    );
-                }
-            };
-            socket.addEventListener("close", handleClose);
-            socket.addEventListener("error", handleError);
-            socket.addEventListener("message", handleMessage);
-            publisher.connect(socket);
-
-            if (signal.aborted) {
-                stop();
-            }
-        });
-    } finally {
-        connectionController.abort();
-        await Promise.all([
-            nativeRequestHandler.settle(),
-            handleSettingsDiscovery.settle(),
-            handleCatalogRefresh.settle(),
-        ]);
-    }
-}
-
 export async function runDaemon(
     config: DaemonConfig,
     audit: AuditStore,
@@ -720,11 +124,9 @@ export async function runDaemon(
     );
     const operations = new DaemonOperationState();
     const publisher = new DaemonSessionEventPublisher();
-    const activeTurns = new Map<string, ActiveDaemonTurn>();
+    const activeTurns = new DaemonTurnRegistry(operations);
     const recordSessionEvent = (sessionId: string, event: RecordedSessionEvent): void => {
-        for (const turn of activeTurns.values()) {
-            turn.recordEvent(event);
-        }
+        activeTurns.recordEvent(event);
         publisher.publish(sessionId, event);
     };
     const sessions = new AcpSessionManager(
@@ -755,17 +157,16 @@ export async function runDaemon(
         new DaemonDiagnosticLog(stateDirectory),
     );
     const nativeSessions = new NativeSessionService(config, directories, sessions, audit, (request) => {
-        const turn = [...activeTurns.values()].find(
-            (candidate) =>
-                candidate.command.sessionId === request.targetSessionId &&
-                candidate.command.agentId === request.agentId &&
-                candidate.command.directoryId === request.directoryId &&
-                candidate.command.additionalDirectoryIds.length === request.additionalDirectoryIds.length &&
-                candidate.command.additionalDirectoryIds.every(
+        return activeTurns.executionSnapshot(
+            (command) =>
+                command.sessionId === request.targetSessionId &&
+                command.agentId === request.agentId &&
+                command.directoryId === request.directoryId &&
+                command.additionalDirectoryIds.length === request.additionalDirectoryIds.length &&
+                command.additionalDirectoryIds.every(
                     (directoryId, index) => directoryId === request.additionalDirectoryIds[index],
                 ),
         );
-        return turn?.snapshot() ?? null;
     });
     const installations = new AgentInstallationManager(
         specifications,
@@ -838,7 +239,7 @@ export async function runDaemon(
         while (!signal.aborted) {
             connectionEpoch += 1;
             try {
-                await runRelayConnection(
+                await runRelayConnection({
                     config,
                     directories,
                     audit,
@@ -851,7 +252,7 @@ export async function runDaemon(
                     activeTurns,
                     connectionEpoch,
                     diagnostics,
-                    () => {
+                    onConnected: () => {
                         if (catalogPublished) {
                             options.onConnectionStatus?.("online");
                         }
@@ -860,7 +261,7 @@ export async function runDaemon(
                     signal,
                     timer,
                     resolveAgentCatalogEnvironment,
-                );
+                });
             } catch (error) {
                 if (signal.aborted) {
                     return;
@@ -875,11 +276,7 @@ export async function runDaemon(
             await waitForRelayRetry(signal, timer);
         }
     } finally {
-        const turns = [...activeTurns.values()];
-        for (const turn of turns) {
-            turn.abortDaemon();
-        }
-        await Promise.all(turns.map((turn) => turn.completion));
+        await activeTurns.close();
         try {
             await catalogPublication;
         } finally {

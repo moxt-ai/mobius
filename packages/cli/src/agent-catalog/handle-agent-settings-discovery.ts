@@ -13,7 +13,7 @@ import {
     operationErrorCode,
     operationErrorMessage,
     send,
-} from "../daemon-session-commands.ts";
+} from "../daemon-command-results.ts";
 import type { RelayConnectionDiagnostics } from "../relay-connection/diagnostics.ts";
 import type { DaemonTimer } from "../relay-connection/timer.ts";
 import { discoverAgentSettings } from "./discover-agent-settings.ts";
