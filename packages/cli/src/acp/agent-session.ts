@@ -833,7 +833,6 @@ export class AgentSession implements AcpClientHandler {
                 options.signal,
             );
             await this.#updates.drained();
-            await this.#turn.flushText();
             await running.activities.finish();
             let result: AcpPromptResult;
             try {
@@ -978,11 +977,10 @@ export class AgentSession implements AcpClientHandler {
                     );
                 } else {
                     await this.#turn.activities.finishNarrative();
-                    this.#turn.bufferText(update.content.text, truncate(update.messageId ?? "", 255));
+                    await this.#turn.onText(update.content.text, truncate(update.messageId ?? "", 255));
                 }
             } else {
                 await this.#turn.activities.finishNarrative();
-                await this.#turn.flushText();
                 await this.emitAgentContent(
                     normalizeContentBlock(update.content),
                     truncate(update.messageId ?? "", 255),
@@ -1001,7 +999,6 @@ export class AgentSession implements AcpClientHandler {
             return;
         }
         if (update.sessionUpdate === "tool_call") {
-            await this.#turn.recordTextAsProgress();
             await this.#turn.activities.recordToolCall(update);
             return;
         }

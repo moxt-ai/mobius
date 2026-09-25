@@ -16,6 +16,7 @@ import {
     decodeSessionQueryCommand,
     decodeWorkspaceListCommand,
     encodeAgentActivityEvent,
+    encodeAgentActivityNarrationEvent,
     encodeAgentContentEvent,
     encodeAgentMessageDeltaEvent,
     encodeAgentSettingsDiscoveredEvent,
@@ -348,6 +349,7 @@ export interface FakeAgentDaemonBehavior {
     readonly afterSessionStarted?: (command: SessionPromptCommand, signal: AbortSignal) => Promise<void>;
     readonly afterFirstDelta?: (command: SessionPromptCommand, signal: AbortSignal) => Promise<void>;
     readonly afterLastDelta?: (command: SessionPromptCommand, signal: AbortSignal) => Promise<void>;
+    readonly afterFirstNarration?: (command: SessionPromptCommand, signal: AbortSignal) => Promise<void>;
     readonly directoryLabel?: string;
     readonly nativeSessionIds?: ReadonlySet<string>;
     readonly sessions?: readonly SessionMetadata[];
@@ -360,6 +362,7 @@ export interface FakeAgentDaemonBehavior {
     ) => SessionPermissionRequestedEvent | SessionElicitationRequestedEvent | null;
     readonly onPromptCompleted?: (command: SessionPromptCommand, response: string) => void;
     readonly progressText?: (command: SessionPromptCommand) => string;
+    readonly reasoningParts?: (command: SessionPromptCommand) => readonly string[];
     readonly requiredBindingId?: string;
     readonly responseParts?: (command: SessionPromptCommand, turn: number) => readonly string[];
 }
@@ -883,6 +886,77 @@ async function processHappyPathCommand(
                 detail: { content: [], input: "", kind: "recorded", output: progress },
                 kind: "agent.activity",
                 sessionId: command.sessionId,
+            }),
+            signal,
+        );
+    }
+    const reasoningParts = behavior.reasoningParts?.(command) ?? [];
+    if (reasoningParts.length > 0) {
+        const activityId = `fake-reasoning-${turn.toString()}`;
+        const activity = {
+            activityId,
+            activityType: "reasoning",
+            content: [],
+            input: "",
+            locations: [],
+            name: "",
+            output: "",
+            sequence: progress.length > 0 ? 1 : 0,
+            status: "running",
+            title: "Reasoning",
+            toolKind: "",
+        };
+        await daemon.sendSessionEvent(
+            command.sessionId,
+            encodeAgentActivityEvent({
+                ...activity,
+                commandId: command.commandId,
+                detail: { content: [], input: "", kind: "recorded", output: "" },
+                kind: "agent.activity",
+                sessionId: command.sessionId,
+            }),
+            signal,
+        );
+        let output = "";
+        for (const [index, text] of reasoningParts.entries()) {
+            output += text;
+            const current = activeTurns.get(command.sessionId);
+            if (current !== undefined) {
+                activeTurns.set(command.sessionId, {
+                    ...current,
+                    activities: [
+                        ...current.activities.filter((recorded) => recorded.activityId !== activityId),
+                        { ...activity, output },
+                    ],
+                });
+            }
+            await daemon.sendSessionEvent(
+                command.sessionId,
+                encodeAgentActivityNarrationEvent({
+                    activityId,
+                    activityType: "reasoning",
+                    commandId: command.commandId,
+                    kind: "agent.activity.narration",
+                    sequence: activity.sequence,
+                    sessionId: command.sessionId,
+                    text,
+                }),
+                signal,
+            );
+            if (index === 0 && reasoningParts.length > 1) {
+                await behavior.afterFirstNarration?.(command, signal);
+            }
+        }
+        await daemon.sendSessionEvent(
+            command.sessionId,
+            encodeAgentActivityEvent({
+                ...activity,
+                commandId: command.commandId,
+                detail: { content: [], input: "", kind: "recorded", output },
+                kind: "agent.activity",
+                output,
+                sessionId: command.sessionId,
+                status: "completed",
             }),
             signal,
         );

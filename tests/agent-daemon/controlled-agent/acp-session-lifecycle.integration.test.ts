@@ -324,7 +324,7 @@ child.once("exit", (code) => process.exit(code ?? 84));
         expect(secondChunks.join("")).toBe("Codex turn 2: second");
     });
 
-    it("Given OpenCode emits untagged messages before a tool call, When its turn completes, Then Mobius preserves their progress and final-answer boundary", async () => {
+    it("Given OpenCode emits untagged messages before a tool call, When they arrive, Then Mobius streams them without waiting for the tool boundary", async () => {
         const manager = new AgentRuntimeManager();
         const agent = new LocalAgentDefinition("opencode", "OpenCode", process.execPath, [
             fakeAgentPath,
@@ -370,14 +370,14 @@ child.once("exit", (code) => process.exit(code ?? 84));
         expect(timeline).toEqual([
             { activityType: "progress", output: "Gathering context" },
             { activityType: "reasoning", output: "Inspecting the workspace" },
-            {
-                activityType: "progress",
-                output: "Checking the workspace",
-            },
-            { activityType: "progress", output: "Preparing the next tool call" },
             { activityType: "tool", output: '{\n  "name": "mobius-workspace"\n}' },
         ]);
-        expect(responseChunks.join("")).toBe("OpenCode turn 1: interleave untagged progress");
+        expect(responseChunks).toEqual([
+            "Checking the workspace",
+            "Preparing the next tool call",
+            "OpenCode turn 1: ",
+            "interleave untagged progress",
+        ]);
     });
 
     it("Given ten retained Agent conversations, When an eleventh starts, Then the least recently used process is released and its conversation can resume", async () => {
