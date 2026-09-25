@@ -242,7 +242,7 @@ test("Given real Codex and a local model provider, When a queued follow-up is ca
                             additionalDirectoryIds: [],
                             agentId: "codex",
                             bindingId: config.bindingId,
-                            directoryId: "default",
+                            directoryId: `path-${Buffer.from(config.defaultWorkspace).toString("base64url")}`,
                             kind: "native.session.request",
                             requestId: "queued_snapshot",
                             sessionId,
