@@ -13,6 +13,8 @@ import {
     decodeSessionCompletedEvent,
     decodeSessionEventEnvelope,
     decodeSessionLiveHistoryPageLoaded,
+    decodeSessionOperationFailedEvent,
+    decodeSessionPromptCommand,
     decodeSessionStartedEvent,
     encodeFileReadCommand,
     encodeNativeSessionCommand,
@@ -29,6 +31,7 @@ import {
     SESSION_EVENT_KIND,
     SESSION_FAILED_KIND,
     SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
+    SESSION_OPERATION_FAILED_KIND,
     SESSION_STARTED_KIND,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -44,10 +47,13 @@ import { CodexFixture } from "../infra/codex.ts";
 import { FakeOpenAiProvider } from "../providers/openai.ts";
 
 class Messages {
+    readonly #closed = Promise.withResolvers<never>();
     readonly #buffered: string[] = [];
     readonly #waiting: Array<(message: string) => void> = [];
 
     constructor(socket: WebSocket) {
+        void this.#closed.promise.catch(() => {});
+        socket.once("close", () => this.#closed.reject(new Error("The daemon disconnected during the request")));
         socket.on("message", (value) => {
             const message = value.toString();
             const resolve = this.#waiting.shift();
@@ -61,9 +67,12 @@ class Messages {
 
     readonly next = (): Promise<string> => {
         const buffered = this.#buffered.shift();
-        return buffered === undefined
-            ? new Promise<string>((resolve) => this.#waiting.push(resolve))
-            : Promise.resolve(buffered);
+        return Promise.race([
+            this.#closed.promise,
+            buffered === undefined
+                ? new Promise<string>((resolve) => this.#waiting.push(resolve))
+                : Promise.resolve(buffered),
+        ]);
     };
 }
 
@@ -113,22 +122,21 @@ test("Given real Codex and a local model provider, When a queued follow-up is ca
             releaseProvider = Promise.withResolvers<void>();
             const commandId = randomUUID();
             const queuedCommandId = randomUUID();
-            socket.send(
-                encodeSessionPromptCommand({
-                    additionalDirectoryIds: [],
-                    agentId: "codex",
-                    bindingId: config.bindingId,
-                    commandId,
-                    directoryId: "default",
-                    disposition: SessionPromptDisposition.Reject,
-                    images: [],
-                    kind: "session.prompt",
-                    prompt: "Use a shell tool successfully, then reply using the configured model",
-                    resources: [],
-                    sessionId,
-                    targetCommandId: "",
-                }),
-            );
+            const originalPrompt = encodeSessionPromptCommand({
+                additionalDirectoryIds: [],
+                agentId: "codex",
+                bindingId: config.bindingId,
+                commandId,
+                directoryId: "default",
+                disposition: SessionPromptDisposition.Reject,
+                images: [],
+                kind: "session.prompt",
+                prompt: "Use a shell tool successfully, then reply using the configured model",
+                resources: [],
+                sessionId,
+                targetCommandId: "",
+            });
+            socket.send(originalPrompt);
             let started = false;
             let completed = false;
             let sequence = 0;
@@ -260,6 +268,23 @@ test("Given real Codex and a local model provider, When a queued follow-up is ca
             expect(snapshotVerified).toBe(true);
             expect(sequence).toBeGreaterThan(0);
             expect(text).toContain("Codex live reply");
+            const originalCommand = decodeSessionPromptCommand(originalPrompt);
+            socket.send(JSON.stringify(Object.fromEntries(Object.entries(originalCommand).reverse())));
+            socket.send(
+                encodeSessionPromptCommand({ ...originalCommand, prompt: "Conflicting reuse must not execute" }),
+            );
+            for (;;) {
+                const message = await messages.next();
+                if (decodeMessageKind(message) !== SESSION_OPERATION_FAILED_KIND) {
+                    continue;
+                }
+                expect(decodeSessionOperationFailedEvent(message)).toMatchObject({
+                    requestId: commandId,
+                    sessionId,
+                    code: "command_identity_conflict",
+                });
+                break;
+            }
             socket.send(
                 encodeSessionLiveHistoryPageLoad({
                     kind: "session.live-history.page.load",

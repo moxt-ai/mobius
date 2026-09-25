@@ -4,12 +4,14 @@ const MAX_TERMINAL_RECEIPTS = 1_024;
 
 export type DaemonExecutionState = "cancelled" | "dispatching" | "failed" | "running" | "succeeded";
 
-export type DaemonExecutionReceipt = Readonly<{
-    attemptId: string;
-    commandId: string;
-    kind: "accepted" | "duplicate";
-    state: DaemonExecutionState;
-}>;
+export type DaemonExecutionReceipt =
+    | Readonly<{
+          attemptId: string;
+          commandId: string;
+          kind: "accepted" | "duplicate";
+          state: DaemonExecutionState;
+      }>
+    | { readonly kind: "conflict" };
 
 type StoredExecution = Readonly<{
     attemptId: string;
@@ -31,7 +33,7 @@ export class DaemonOperationState {
         const existing = this.#executions.get(commandId);
         if (existing !== undefined) {
             if (existing.sessionId !== sessionId || existing.commandHash !== commandHash) {
-                throw new Error("The daemon command identity conflicts with its in-memory receipt");
+                return { kind: "conflict" };
             }
             return { attemptId: existing.attemptId, commandId, kind: "duplicate", state: existing.state };
         }

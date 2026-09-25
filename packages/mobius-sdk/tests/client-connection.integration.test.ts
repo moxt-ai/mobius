@@ -13,6 +13,7 @@ import {
     encodeRuntimeStatusEvent,
     encodeSessionCompletedEvent,
     encodeSessionConfigUpdatedEvent,
+    encodeSessionOperationFailedEvent,
     encodeSessionPrepareCommand,
     encodeSessionReadyEvent,
     encodeWorkspaceEntriesEvent,
@@ -182,6 +183,32 @@ describe("browser relay connection", () => {
             client = await connecting;
             const firstSocket = await connections.next();
             expect(await nextStatus.next()).toBe(true);
+
+            const conflictingPrompt = client.prompt({
+                agentId: "codex",
+                bindingId: "workspace",
+                commandId: "conflicting-command",
+                prompt: "A different request reused this identifier",
+                sessionId: "session-1",
+            });
+            const conflictResult = conflictingPrompt.then(
+                () => null,
+                (error: unknown) => error,
+            );
+            const conflictingFrame = await clientFrames.next();
+            expect(decodeSessionPromptCommand(conflictingFrame.text).commandId).toBe("conflicting-command");
+            writeServerTextFrame(
+                firstSocket,
+                encodeSessionOperationFailedEvent({
+                    kind: "session.operation.failed",
+                    requestId: "conflicting-command",
+                    sessionId: "session-1",
+                    code: "command_identity_conflict",
+                    message: "This command identifier was already used.",
+                }),
+            );
+            expect(await conflictResult).toMatchObject({ code: "command_identity_conflict" });
+            clientFrames.push(readClientFrame(firstSocket));
 
             const interruptedPrompt = client.prompt({
                 agentId: "codex",
