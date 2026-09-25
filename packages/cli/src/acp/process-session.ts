@@ -2,6 +2,7 @@ import {
     type CompleteElicitationNotification,
     type ContentBlock,
     type CreateElicitationRequest,
+    type CreateElicitationResponse,
     methods,
     PROTOCOL_VERSION,
     type RequestPermissionRequest,
@@ -974,8 +975,10 @@ export class AcpProcessSession implements AcpClientHandler {
         this.#interactions.respondElicitation(options);
     readonly onPermission = (request: RequestPermissionRequest, signal: AbortSignal) =>
         this.#interactions.onPermission(request, signal);
-    readonly onElicitation = (request: CreateElicitationRequest, signal: AbortSignal) =>
-        this.#interactions.onElicitation(request, signal);
+    readonly onElicitation = (
+        request: CreateElicitationRequest,
+        signal: AbortSignal,
+    ): Promise<CreateElicitationResponse> => this.#interactions.onElicitation(request, signal);
     readonly onElicitationComplete = (notification: CompleteElicitationNotification) =>
         this.#interactions.onElicitationComplete(notification);
 
