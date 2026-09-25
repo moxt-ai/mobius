@@ -51,6 +51,13 @@ permission and elicitation responses and their cancellation. `AcpProcessSession`
 owns the session's ACP operations and streamed content. `AcpSessionManager`
 coordinates session preparation, native identity, and execution.
 
+`NativeSessionBrowsers` owns query process preparation, reuse, borrowing, replacement,
+and retirement, including its private observer and in-memory store. It shares the
+capacity pool with execution, but never the execution cache or process. Preview
+continues using an isolated transient process; a preview cannot change the selected
+native session of a retained directory browser. The manager coordinates native
+operation exclusion and linked execution sessions without managing query resources.
+
 Each of the two independent `RetainedSessions` caches owns a single entry per
 session: its resource/preparation lifecycle and its scoped borrower count. The
 execution cache and history-browser cache never share an entry or process.
