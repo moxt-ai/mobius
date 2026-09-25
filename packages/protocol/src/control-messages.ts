@@ -491,7 +491,7 @@ const recordedDisplayContentSchema = z
     })
     .readonly();
 
-const promptImageSchema = z
+export const promptImageSchema = z
     .strictObject({
         data: z.string().min(1).max(4_000_000),
         mimeType: z.string().min(1).max(255),

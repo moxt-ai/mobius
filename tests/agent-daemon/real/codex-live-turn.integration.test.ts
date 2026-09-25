@@ -148,6 +148,22 @@ test("Given real Codex and a local model provider, When a queued follow-up is ca
                 const message = await messages.next();
                 if (decodeMessageKind(message) === NATIVE_SESSION_RESULT_KIND) {
                     const result = decodeNativeSessionResult(message);
+                    if (result.requestId === "queued_snapshot") {
+                        expect(result).toMatchObject({
+                            queued: [
+                                { commandId: queuedCommandId, prompt: "This queued prompt should not run", images: [] },
+                            ],
+                        });
+                        socket.send(
+                            encodeSessionCancelCommand({
+                                commandId: queuedCommandId,
+                                kind: SESSION_CANCEL_KIND,
+                                sessionId,
+                            }),
+                        );
+                        continue;
+                    }
+                    expect(result).toMatchObject({ queued: [] });
                     expect(result.action).toBe("active-turn");
                     if (result.action === "active-turn") {
                         expect(result.turn).toMatchObject({
@@ -221,10 +237,16 @@ test("Given real Codex and a local model provider, When a queued follow-up is ca
                         }),
                     );
                     socket.send(
-                        encodeSessionCancelCommand({
-                            commandId: queuedCommandId,
-                            kind: SESSION_CANCEL_KIND,
+                        encodeNativeSessionCommand({
+                            action: "active-turn",
+                            additionalDirectoryIds: [],
+                            agentId: "codex",
+                            bindingId: config.bindingId,
+                            directoryId: "default",
+                            kind: "native.session.request",
+                            requestId: "queued_snapshot",
                             sessionId,
+                            targetSessionId: sessionId,
                         }),
                     );
                 } else if (kind === AGENT_MESSAGE_DELTA_KIND) {
