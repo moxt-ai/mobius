@@ -21,7 +21,7 @@ independently of Relay connections. The native `active-turn` result contains the
 running Turn and the queued prompts (including their original images).
 `session.queue.changed` invalidates the queue projection for all subscribed viewers.
 Clients read `sessions.readSessionExecution` after subscribing, on reconnect, and
-on that notification. They must not reconstruct accepted work from a tab-local
+on that notification. Started Turn events remove the corresponding queued entry. They must not reconstruct accepted work from a tab-local
 journal. Queue changes and snapshots are transient; this adds no persisted queue.
 
 `run-daemon.ts` composes Runtime resources; `run-relay-connection.ts` owns one

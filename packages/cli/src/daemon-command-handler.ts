@@ -336,13 +336,7 @@ export function createDaemonCommandHandler({
                 audit,
                 sessions,
                 attemptId: receipt.attemptId,
-                activateAttempt: () => {
-                    const accepted = turn.accept();
-                    if (command.disposition === SessionPromptDisposition.Queue) {
-                        queueChanged(command.sessionId);
-                    }
-                    return accepted;
-                },
+                activateAttempt: turn.accept,
                 acknowledgeQueued: () => {
                     queueChanged(command.sessionId);
                     send(socket, {
