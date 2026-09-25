@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,16 +7,21 @@ import { join } from "node:path";
 import {
     AGENT_MESSAGE_DELTA_KIND,
     decodeAgentMessageDeltaEvent,
+    decodeFileChunkEvent,
     decodeMessageKind,
     decodeNativeSessionResult,
     decodeSessionCompletedEvent,
     decodeSessionEventEnvelope,
     decodeSessionLiveHistoryPageLoaded,
     decodeSessionStartedEvent,
+    encodeFileReadCommand,
     encodeNativeSessionCommand,
     encodeSessionCancelCommand,
     encodeSessionLiveHistoryPageLoad,
     encodeSessionPromptCommand,
+    FILE_CHUNK_KIND,
+    FILE_END_KIND,
+    FILE_FAILED_KIND,
     MOBIUS_API_PREFIX,
     NATIVE_SESSION_RESULT_KIND,
     SESSION_CANCEL_KIND,
@@ -283,6 +288,33 @@ test("Given real Codex and a local model provider, When a queued follow-up is ca
                 break;
             }
         }
+        const image = Buffer.from(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+            "base64",
+        );
+        await writeFile(join(workspace, "badge.png"), image);
+        socket.send(
+            encodeFileReadCommand({
+                kind: "file.read",
+                requestId: randomUUID(),
+                sessionId,
+                path: "badge.png",
+                maxBytes: 1024,
+            }),
+        );
+        const chunks: Buffer[] = [];
+        for (;;) {
+            const message = await messages.next();
+            const kind = decodeMessageKind(message);
+            expect(kind).not.toBe(FILE_FAILED_KIND);
+            if (kind === FILE_CHUNK_KIND) {
+                chunks.push(Buffer.from(decodeFileChunkEvent(message).data, "base64"));
+            }
+            if (kind === FILE_END_KIND) {
+                break;
+            }
+        }
+        expect(Buffer.concat(chunks)).toEqual(image);
     } finally {
         releaseProvider.resolve();
         cancellation.abort();
