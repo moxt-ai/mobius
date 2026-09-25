@@ -165,9 +165,25 @@ export function paginateLiveSessionHistory(
             truncated: activeTurn.truncated || activeText.length !== activeTurn.text.length,
         };
     }
+    // Native turn identity, rather than prompt text, tells us whether the source
+    // already contains this turn. Keep its user message (including attachments),
+    // and replace its partial assistant output with the current memory snapshot.
+    const activeUserIndex = history.coveredCommandIds.includes(activeTurn.commandId)
+        ? history.messages.findLastIndex((message) => message.role === "user")
+        : -1;
+    if (activeUserIndex >= 0) {
+        history = {
+            ...history,
+            coveredCommandIds: history.coveredCommandIds.filter((id) => id !== activeTurn.commandId),
+            coveredMessageIds: history.coveredMessageIds.filter(
+                (id) => id !== `${activeTurn.commandId}:user` && id !== `${activeTurn.commandId}:agent`,
+            ),
+            messages: history.messages.slice(0, activeUserIndex + 1),
+        };
+    }
     const latestNativeMessage = history.messages.at(-1);
     const activeMessages =
-        latestNativeMessage?.role === "user" && latestNativeMessage.text === activeTurn.prompt
+        activeUserIndex >= 0 || (latestNativeMessage?.role === "user" && latestNativeMessage.text === activeTurn.prompt)
             ? completeActiveMessages.slice(1)
             : completeActiveMessages;
 

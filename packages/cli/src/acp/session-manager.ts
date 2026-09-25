@@ -1072,7 +1072,11 @@ export class AcpSessionManager {
             const runtime = await this.ensureSession(options);
             const stored = this.#store.read(options.sessionId);
             if (stored instanceof FoundAcpStoredSession && this.#nativeHistoryReader !== null) {
-                const history = await this.#nativeHistoryReader.read(options, stored.session.nativeSessionId);
+                const history = await this.#nativeHistoryReader.read(
+                    options,
+                    stored.session.nativeSessionId,
+                    runtime.nativeHistoryTurn,
+                );
                 if (history !== null) {
                     return history;
                 }

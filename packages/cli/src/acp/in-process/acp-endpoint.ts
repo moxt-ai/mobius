@@ -34,6 +34,8 @@ export interface InProcessAcpEndpoint {
     readonly terminated: Promise<AcpEndpointTermination>;
     /** The ACP agent app the daemon connects its client to. */
     readonly app: () => AgentApp;
+    /** Native identity of the current or most recently started turn, when the vendor exposes one. */
+    readonly nativeTurnId?: () => string | null;
     /** Prepares the backing resources and completes any vendor handshake. */
     readonly initialize: (signal: AbortSignal) => Promise<void>;
     /** Releases the backing resources and every process they started. */

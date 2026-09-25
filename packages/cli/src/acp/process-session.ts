@@ -109,7 +109,11 @@ export interface AcpPrepareOptions {
 }
 
 export interface AcpNativeHistoryReader {
-    readonly read: (options: AcpPrepareOptions, nativeSessionId: string) => Promise<NativeSessionHistory | null>;
+    readonly read: (
+        options: AcpPrepareOptions,
+        nativeSessionId: string,
+        nativeTurn: () => { readonly commandId: string; readonly nativeTurnId: string } | null,
+    ) => Promise<NativeSessionHistory | null>;
 }
 
 export interface AcpAgentSettingsInspectionOptions {
@@ -355,6 +359,7 @@ export class AcpProcessSession implements AcpClientHandler {
     #configOptions: readonly SessionConfigOption[] = [];
     #nativeSessionId = "";
     #prompted = false;
+    #nativePrompt: { readonly commandId: string; readonly previousTurnId: string | null } | null = null;
     #replay: { readonly kind: "idle" | "discard" } | { readonly kind: "capture"; readonly history: AcpHistoryReplay } =
         {
             kind: "idle",
@@ -1104,6 +1109,14 @@ export class AcpProcessSession implements AcpClientHandler {
         return prompt;
     };
 
+    readonly nativeHistoryTurn = (): { readonly commandId: string; readonly nativeTurnId: string } | null => {
+        const prompt = this.#nativePrompt;
+        const nativeTurnId = this.#inProcessAgent?.nativeTurnId?.() ?? null;
+        return prompt === null || nativeTurnId === null || nativeTurnId === prompt.previousTurnId
+            ? null
+            : { commandId: prompt.commandId, nativeTurnId };
+    };
+
     readonly prompt = async (options: AcpTurnOptions): Promise<AcpPromptResult> => {
         if (this.#turn.running) {
             throw new AcpExecutionError("Another prompt is already running in this conversation", {}, "session_busy");
@@ -1132,6 +1145,10 @@ export class AcpProcessSession implements AcpClientHandler {
             this.prepareAgentContent,
         );
         this.#turn = running;
+        this.#nativePrompt = {
+            commandId: options.commandId,
+            previousTurnId: this.#inProcessAgent?.nativeTurnId?.() ?? null,
+        };
         try {
             const response: unknown = await this.race(
                 this.#connection.agent.request(

@@ -125,7 +125,7 @@ input.on("line", (line) => {
             return;
         }
         const rich = Reflect.get(params, "itemsView") === "full";
-        const turns: { error?: unknown; readonly items: unknown[] }[] = [];
+        const turns: { readonly id: string; error?: unknown; readonly items: unknown[] }[] = [];
         for (const message of history) {
             if (typeof message !== "object" || message === null) {
                 throw new Error("Invalid saved message");
@@ -134,6 +134,7 @@ input.on("line", (line) => {
             const images: unknown = Reflect.get(message, "images");
             if (Reflect.get(message, "role") === "user") {
                 turns.push({
+                    id: `turn-${turns.length.toString()}`,
                     items: [
                         {
                             type: "userMessage",
