@@ -191,6 +191,29 @@ input.on("line", (line) => {
         reply(id, {});
         return;
     }
+    if (method === "thread/compact/start") {
+        nextTurn += 1;
+        const threadId = readParam("threadId");
+        const turnId = `compact-${nextTurn.toString()}`;
+        activeTurnId = turnId;
+        reply(id, {});
+        notify("turn/started", { threadId, turn: { id: turnId, items: [], status: "inProgress" } });
+        notify("item/started", {
+            item: { id: `compaction-${nextTurn.toString()}`, type: "contextCompaction" },
+            threadId,
+            turnId,
+        });
+        notify("item/completed", {
+            item: { id: `compaction-${nextTurn.toString()}`, type: "contextCompaction" },
+            threadId,
+            turnId,
+        });
+        notify("turn/completed", {
+            threadId,
+            turn: { id: turnId, items: [], status: "completed" },
+        });
+        return;
+    }
     if (method === "turn/start") {
         if (
             process.env["MOBIUS_FAKE_CODEX_REPORT_UNAVAILABLE_MODEL"] === "1" &&

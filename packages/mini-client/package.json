@@ -9,6 +9,7 @@
     "dependencies": {
         "@moxt-ai/mobius-protocol": "workspace:*",
         "@moxt-ai/mobius-sdk": "workspace:*",
+        "commander": "15.0.0",
         "valibot": "1.5.0"
     },
     "devDependencies": {

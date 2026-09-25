@@ -80,6 +80,9 @@ importers:
       '@moxt-ai/mobius-sdk':
         specifier: workspace:*
         version: link:../mobius-sdk
+      commander:
+        specifier: 15.0.0
+        version: 15.0.0
       valibot:
         specifier: 1.5.0
         version: 1.5.0(typescript@7.0.2)
