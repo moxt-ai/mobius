@@ -49,8 +49,23 @@ evicted. The maximum remains ten processes.
 request cancellation/error translation. `AcpSessionInteractions` owns pending
 permission and elicitation responses and their cancellation. `AcpProcessSession`
 owns the session's ACP operations and streamed content. `AcpSessionManager`
-coordinates session preparation, native identity, and execution; its active-command
-map is the single source for whether a session is executing.
+coordinates session preparation, native identity, and execution.
+
+Each of the two independent `RetainedSessions` caches owns a single entry per
+session: its resource/preparation lifecycle and its scoped borrower count. The
+execution cache and history-browser cache never share an entry or process.
+`prepare` registers the pending operation before starting it and clears it on
+success or failure; replacement can detach the old resource and retain the new
+one while preparation still owns the entry. `use` balances every borrow in a
+`finally` block. Detaching checks resource identity, so stale cleanup cannot
+remove a replacement. An empty entry with no preparation or borrower is removed.
+
+`SessionExecutions` owns one discriminated state per executing/cancelled session:
+running, cancelling, or cancellation received before execution starts. Duplicate
+cancellation joins the same completion. Cancellation stays attached until the
+matching command finishes, preserving the existing early-cancellation behavior.
+Native import/preview/delete exclusion remains keyed by Agent and native session
+in the manager; it is distinct from process borrowing and turn execution.
 
 These boundaries preserve existing public protocol, session storage, cancellation,
 and native-history behavior. Queue ownership remains in `DaemonTurnRegistry`.
