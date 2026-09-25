@@ -36,6 +36,25 @@ transport; `daemon-command-handler.ts` routes validated commands; the Turn regis
 owns scheduling and cleanup. Prompt execution, authorized workspace resolution,
 session configuration, and native history queries have separate modules.
 
+## Agent process ownership
+
+`AcpProcessPool` owns capacity slots from reservation through process shutdown.
+A slot is starting, retained, transient, or retiring; capacity is derived from
+that collection instead of synchronized counters. Retained processes share one
+LRU order. The session manager supplies eligibility and cleanup for execution
+sessions and native-history browsers, so active or borrowed processes cannot be
+evicted. The maximum remains ten processes.
+
+`AcpEndpoint` owns the Agent transport, process tree, termination signal, and
+request cancellation/error translation. `AcpSessionInteractions` owns pending
+permission and elicitation responses and their cancellation. `AcpProcessSession`
+owns the session's ACP operations and streamed content. `AcpSessionManager`
+coordinates session preparation, native identity, and execution; its active-command
+map is the single source for whether a session is executing.
+
+These boundaries preserve existing public protocol, session storage, cancellation,
+and native-history behavior. Queue ownership remains in `DaemonTurnRegistry`.
+
 ## Testing boundaries
 
 Web / Chat tests use real product services and transports with a stateful fake

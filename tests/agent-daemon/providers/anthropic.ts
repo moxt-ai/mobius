@@ -177,7 +177,11 @@ export class FakeAnthropicProvider implements AsyncDisposable {
         return fakeProviderResponse(this.#answer, selectFakeProviderScenario({ input: prompt }));
     }
 
-    static async start(model: string, answer: string): Promise<FakeAnthropicProvider> {
+    static async start(
+        model: string,
+        answer: string,
+        options: { readonly beforeFirstText?: () => Promise<void> } = {},
+    ): Promise<FakeAnthropicProvider> {
         const requests: ProviderRequestDiagnostic[] = [];
         const server = createServer(async (request, response) => {
             let body = "";
@@ -210,6 +214,9 @@ export class FakeAnthropicProvider implements AsyncDisposable {
                     ? { type: "text", text: selectedAnswer }
                     : { type: "tool_use", id: tool.id, name: tool.name, input: tool.input };
             const stopReason = tool === undefined ? "end_turn" : "tool_use";
+            if (tool === undefined) {
+                await options.beforeFirstText?.();
+            }
             if (payload["stream"] === true) {
                 sendStream(response, model, content, responseChunks(selectedAnswer, scenario), stopReason);
                 return;

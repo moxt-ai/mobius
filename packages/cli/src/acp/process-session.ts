@@ -1,47 +1,24 @@
-import { spawn } from "node:child_process";
 import {
-    type ClientConnection,
     type CompleteElicitationNotification,
     type ContentBlock,
     type CreateElicitationRequest,
-    type CreateElicitationResponse,
     methods,
-    ndJsonStream,
     PROTOCOL_VERSION,
-    RequestError,
     type RequestPermissionRequest,
-    type RequestPermissionResponse,
     type SessionNotification,
 } from "@agentclientprotocol/sdk";
 import {
     AGENT_CONTENT_KIND,
-    type AgentContentEvent,
     type AgentDisplayContent,
-    type AgentPromptResponse,
     decodeAgentPromptResponse,
     type NativeSessionHistory,
-    type PromptImage,
-    type PromptResource,
     SESSION_COMMANDS_UPDATED_KIND,
     SESSION_CONFIG_UPDATED_KIND,
-    SESSION_ELICITATION_REQUESTED_KIND,
-    SESSION_ELICITATION_RESOLVED_KIND,
     SESSION_INFO_UPDATED_KIND,
-    SESSION_PERMISSION_REQUESTED_KIND,
-    SESSION_PERMISSION_RESOLVED_KIND,
     SESSION_USAGE_UPDATED_KIND,
     type SessionCapabilities,
     type SessionCommand,
-    type SessionCommandsUpdatedEvent,
     type SessionConfigOption,
-    type SessionConfigUpdatedEvent,
-    type SessionElicitationRequestedEvent,
-    type SessionElicitationResolvedEvent,
-    type SessionInfoUpdatedEvent,
-    type SessionPermissionOption,
-    type SessionPermissionRequestedEvent,
-    type SessionPermissionResolvedEvent,
-    type SessionUsageUpdatedEvent,
 } from "@moxt-ai/mobius-protocol";
 import type { LocalRasterImage } from "../authorization/local-raster.ts";
 import { readInlineRaster, readLocalRaster } from "../authorization/local-raster.ts";
@@ -49,189 +26,46 @@ import { type LocalVideo, readInlineVideo } from "../authorization/local-video.t
 import type { AcpAgentDefinition } from "../config.ts";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
 import { embedLocalHistoryImages } from "../native-sessions/history-images.ts";
-import {
-    captureProcessTree,
-    type ProcessTreeIdentity,
-    revalidateExecutable,
-    stopProcessTree,
-} from "../process/executable.ts";
+import { type ProcessTreeIdentity, revalidateExecutable } from "../process/executable.ts";
 import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp-error.ts";
-import {
-    type AcpActivity,
-    type AcpActivityNarration,
-    imageDisplayContent,
-    isProgressMessage,
-    normalizeContentBlock,
-} from "./activity.ts";
-import { type AcpClientHandler, createAcpClient } from "./create-client.ts";
-import { normalizeElicitationFields, validateElicitationContent } from "./elicitation.ts";
-import {
-    type AcpEndpointTermination,
-    acpEndpointTerminationError,
-    type InProcessAcpEndpoint,
-} from "./in-process/acp-endpoint.ts";
+import { imageDisplayContent, isProgressMessage, normalizeContentBlock } from "./activity.ts";
+import type { AcpClientHandler } from "./create-client.ts";
 import {
     type NativeSessionOrigin,
     type NativeSessionPage,
     nativeSessionIdSchema,
     nativeSessionPageSchema,
 } from "./native-session.ts";
+import { AcpEndpoint } from "./process-endpoint.ts";
 import { normalizeAcpCapabilities, unsupportedSessionCapabilities } from "./session-capabilities.ts";
 import { type SessionConfigProtocol, SessionConfigProtocolError } from "./session-config/session-config-protocol.ts";
 import { sessionConfigProtocolForAgent } from "./session-config/session-config-registry.ts";
-import { AcpHistoryReplay } from "./session-history.ts";
 import {
-    type AcpTurnState,
-    IdleAcpTurn,
-    PendingElicitation,
-    PendingPermission,
-    RunningAcpTurn,
-} from "./session-state.ts";
+    type AcpConfigureOptions,
+    type AcpElicitationResponseOptions,
+    type AcpPermissionResponseOptions,
+    AcpPreparedSession,
+    type AcpPrepareOptions,
+    type AcpPromptContentOptions,
+    type AcpPromptResult,
+    type AcpSessionObserver,
+    type AcpSteerOptions,
+    type AcpTurnOptions,
+} from "./session-contracts.ts";
+import { AcpHistoryReplay } from "./session-history.ts";
+import { AcpSessionInteractions } from "./session-interactions.ts";
+import { type AcpTurnState, IdleAcpTurn, RunningAcpTurn } from "./session-state.ts";
 import {
     type AcpSessionStore,
     AcpStoredSession,
     DeletedAcpStoredSession,
     FoundAcpStoredSession,
 } from "./session-store.ts";
-import { isRecord, readString, truncate } from "./value-utils.ts";
+import { isRecord, truncate } from "./value-utils.ts";
 
 const PROCESS_STOP_TIMEOUT_MILLISECONDS = 1_000;
 const MAX_PRE_SESSION_UPDATES = 100;
 const MAX_PRE_SESSION_UPDATE_BYTES = 1024 * 1024;
-
-export interface AcpPrepareOptions {
-    readonly additionalDirectories: readonly string[];
-    readonly agent: AcpAgentDefinition;
-    readonly cwd: string;
-    readonly sessionId: string;
-    readonly signal: AbortSignal;
-    readonly origin?: NativeSessionOrigin;
-}
-
-export interface AcpNativeHistoryReader {
-    readonly read: (
-        options: AcpPrepareOptions,
-        nativeSessionId: string,
-        nativeTurn: () => { readonly commandId: string; readonly nativeTurnId: string } | null,
-    ) => Promise<NativeSessionHistory | null>;
-}
-
-export interface AcpAgentSettingsInspectionOptions {
-    readonly additionalDirectories: readonly string[];
-    readonly agent: AcpAgentDefinition;
-    readonly cwd: string;
-    readonly model?: string;
-    readonly signal: AbortSignal;
-}
-
-export interface AcpConfigureOptions extends AcpPrepareOptions {
-    readonly booleanValue: boolean;
-    readonly configId: string;
-    readonly requestId: string;
-    readonly value: string;
-    readonly valueType: SessionConfigOption["type"];
-}
-
-interface AcpPromptContentOptions {
-    readonly images: readonly PromptImage[];
-    readonly prompt: string;
-    readonly resources: readonly PromptResource[];
-}
-
-export interface AcpTurnOptions extends AcpPrepareOptions, AcpPromptContentOptions {
-    readonly commandId: string;
-    readonly disposition?: string;
-    readonly onActivity: (activity: AcpActivity) => Promise<void>;
-    /**
-     * Receives streamed narration increments. Optional: without a sink the same text
-     * still arrives once on the completed activity snapshot, just without live updates.
-     */
-    readonly onNarration?: (narration: AcpActivityNarration) => Promise<void>;
-    readonly onText: (text: string, messageId: string) => Promise<void>;
-    readonly targetCommandId?: string;
-}
-
-export interface AcpSteerOptions extends AcpPrepareOptions, AcpPromptContentOptions {
-    readonly commandId: string;
-    readonly targetCommandId: string;
-}
-
-export interface AcpPermissionResponseOptions {
-    readonly interactionId: string;
-    readonly optionId: string;
-    readonly outcome: SessionPermissionResolvedEvent["outcome"];
-    readonly sessionId: string;
-}
-
-export interface AcpElicitationResponseOptions {
-    readonly action: SessionElicitationResolvedEvent["action"];
-    readonly content: string;
-    readonly interactionId: string;
-    readonly sessionId: string;
-}
-
-export type AcpPromptResult = AgentPromptResponse;
-
-export interface AcpSessionObserver {
-    readonly onCommands: (event: SessionCommandsUpdatedEvent) => Promise<void>;
-    readonly onConfig: (event: SessionConfigUpdatedEvent) => Promise<void>;
-    readonly onContent: (event: AgentContentEvent) => Promise<void>;
-    readonly onElicitation: (event: SessionElicitationRequestedEvent) => Promise<void>;
-    readonly onElicitationResolved: (event: SessionElicitationResolvedEvent) => Promise<void>;
-    readonly onInfo: (event: SessionInfoUpdatedEvent) => Promise<void>;
-    readonly onPermission: (event: SessionPermissionRequestedEvent) => Promise<void>;
-    readonly onPermissionResolved: (event: SessionPermissionResolvedEvent) => Promise<void>;
-    readonly onUsage: (event: SessionUsageUpdatedEvent) => Promise<void>;
-}
-
-export class NullAcpSessionObserver implements AcpSessionObserver {
-    readonly onCommands = (): Promise<void> => Promise.resolve();
-    readonly onConfig = (): Promise<void> => Promise.resolve();
-    readonly onContent = (): Promise<void> => Promise.resolve();
-    readonly onElicitation = (): Promise<void> => Promise.resolve();
-    readonly onElicitationResolved = (): Promise<void> => Promise.resolve();
-    readonly onInfo = (): Promise<void> => Promise.resolve();
-    readonly onPermission = (): Promise<void> => Promise.resolve();
-    readonly onPermissionResolved = (): Promise<void> => Promise.resolve();
-    readonly onUsage = (): Promise<void> => Promise.resolve();
-}
-
-export class AcpPreparedSession {
-    readonly agentName: string;
-    readonly agentVersion: string;
-    readonly capabilities: SessionCapabilities;
-    readonly commands: readonly SessionCommand[];
-    readonly configOptions: readonly SessionConfigOption[];
-    readonly restored: boolean;
-
-    constructor(
-        agentName: string,
-        agentVersion: string,
-        capabilities: SessionCapabilities,
-        commands: readonly SessionCommand[],
-        configOptions: readonly SessionConfigOption[],
-        restored: boolean,
-    ) {
-        this.agentName = agentName;
-        this.agentVersion = agentVersion;
-        this.capabilities = capabilities;
-        this.commands = commands;
-        this.configOptions = configOptions;
-        this.restored = restored;
-    }
-}
-
-export class AcpAgentSettingsSnapshot {
-    readonly agentName: string;
-    readonly agentVersion: string;
-    readonly configOptions: readonly SessionConfigOption[];
-
-    constructor(agentName: string, agentVersion: string, configOptions: readonly SessionConfigOption[]) {
-        this.agentName = agentName;
-        this.agentVersion = agentVersion;
-        this.configOptions = configOptions;
-    }
-}
 
 export { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp-error.ts";
 
@@ -240,83 +74,6 @@ class RetryableAcpInitializationError extends AcpExecutionError {
         super("ACP agent initialization failed", { cause });
         this.name = "RetryableAcpInitializationError";
     }
-}
-
-function readableWebStream(input: NodeJS.ReadableStream): ReadableStream<Uint8Array> {
-    let streamOpen = true;
-    return new ReadableStream<Uint8Array>({
-        start(controller) {
-            input.on("data", (chunk: unknown) => {
-                if (!streamOpen) {
-                    return;
-                }
-                if (chunk instanceof Uint8Array) {
-                    controller.enqueue(new Uint8Array(chunk));
-                    return;
-                }
-                streamOpen = false;
-                controller.error(new Error("ACP process produced a non-binary chunk"));
-            });
-            input.once("end", () => {
-                if (!streamOpen) {
-                    return;
-                }
-                streamOpen = false;
-                controller.close();
-            });
-            input.once("error", (error) => {
-                if (!streamOpen) {
-                    return;
-                }
-                streamOpen = false;
-                controller.error(error);
-            });
-        },
-        cancel() {
-            streamOpen = false;
-        },
-    });
-}
-
-export function createWritableAcpStream(output: NodeJS.WritableStream): WritableStream<Uint8Array> {
-    let outputFailure: unknown;
-    const pendingWriteFailures = new Set<(error: unknown) => void>();
-    const fail = (error: unknown): void => {
-        outputFailure = error;
-        for (const reject of pendingWriteFailures) {
-            reject(error);
-        }
-        pendingWriteFailures.clear();
-    };
-    output.on("error", fail);
-    output.once("close", () => {
-        if (outputFailure === undefined) {
-            fail(new Error("ACP process input closed"));
-        }
-    });
-    return new WritableStream<Uint8Array>({
-        write(chunk) {
-            if (outputFailure !== undefined) {
-                return Promise.reject(outputFailure);
-            }
-            return new Promise<void>((resolve, reject) => {
-                pendingWriteFailures.add(reject);
-                output.write(chunk, (error) => {
-                    pendingWriteFailures.delete(reject);
-                    if (error) {
-                        outputFailure = error;
-                        reject(error);
-                        return;
-                    }
-                    if (outputFailure !== undefined) {
-                        reject(outputFailure);
-                        return;
-                    }
-                    resolve();
-                });
-            });
-        },
-    });
 }
 
 export function arraysEqual(left: readonly string[], right: readonly string[]): boolean {
@@ -330,21 +87,15 @@ export function recordsEqual(left: Readonly<Record<string, string>>, right: Read
 }
 
 export class AcpProcessSession implements AcpClientHandler {
+    readonly #endpoint: AcpEndpoint;
+    readonly #interactions: AcpSessionInteractions;
     readonly #additionalDirectories: readonly string[];
-    readonly #acceptedUrlElicitations = new Map<string, string>();
     readonly #agentId: string;
-    readonly #connection: ClientConnection;
     readonly #cwd: string;
     readonly #environment: Readonly<Record<string, string>>;
     readonly #getObserver: () => AcpSessionObserver;
-    readonly #inProcessAgent: InProcessAcpEndpoint | null;
     #mobiusSessionId: string;
-    readonly #pendingElicitations = new Map<string, PendingElicitation>();
-    readonly #pendingPermissions = new Map<string, PendingPermission>();
     readonly #preSessionUpdates: SessionNotification[] = [];
-    // Both topologies report a terminal outcome, even after a prompt's initial RPC is acknowledged.
-    readonly #termination: Promise<AcpEndpointTermination>;
-    readonly #runtimeChild: ReturnType<typeof spawn> | null;
     readonly #metrics: OperationMetrics;
     readonly #sessionConfigProtocol: SessionConfigProtocol;
     readonly #store: AcpSessionStore;
@@ -352,7 +103,7 @@ export class AcpProcessSession implements AcpClientHandler {
     #preSessionUpdateBytes = 0;
     #agentName = "";
     #agentVersion = "";
-    #bufferedAgentText: readonly { readonly chunks: readonly string[]; readonly messageId: string }[] = [];
+    #bufferedAgentText: { readonly chunks: string[]; readonly messageId: string }[] = [];
     #capabilities: SessionCapabilities = unsupportedSessionCapabilities();
     #commands: readonly SessionCommand[] = [];
     #configRevision = 0;
@@ -389,53 +140,13 @@ export class AcpProcessSession implements AcpClientHandler {
         this.#sessionConfigProtocol = sessionConfigProtocolForAgent(agent.id);
         this.#store = store;
         this.#verifiedAgentVersion = agent.agentVersion;
-        if (agent.kind === "in-process-acp") {
-            // Mobius hosts the ACP Agent in-process and drives the vendor's own protocol, so there is
-            // no adapter process to spawn or supervise here. The endpoint owns its own resources.
-            const inProcess = agent.createEndpoint({
-                command: agent.command,
-                cwd,
-                environment: agent.environment,
-            });
-            this.#inProcessAgent = inProcess;
-            this.#runtimeChild = null;
-            this.#termination = inProcess.terminated;
-            this.#connection = createAcpClient(this).connect(inProcess.app());
-            return;
-        }
-        this.#inProcessAgent = null;
-        const child = spawn(agent.adapterPath, [...agent.arguments], {
-            cwd,
-            detached: process.platform !== "win32",
-            env: { ...process.env, ...agent.environment },
-            shell: false,
-            stdio: ["pipe", "pipe", "pipe"],
+        this.#interactions = new AcpSessionInteractions({
+            sessionId: () => this.#mobiusSessionId,
+            commandId: () => this.#turn.commandId,
+            assertNativeSession: (sessionId) => this.assertNativeSession(sessionId),
+            observer: getObserver,
         });
-        this.#runtimeChild = child;
-        const stdin = child.stdin;
-        const stdout = child.stdout;
-        const stderr = child.stderr;
-        if (stdin === null || stdout === null || stderr === null) {
-            child.kill("SIGKILL");
-            throw new AcpExecutionError("ACP process streams are unavailable");
-        }
-        stderr.setEncoding("utf8");
-        stderr.on("data", (chunk: string) => {
-            process.stderr.write(`[${agent.id}-acp] ${chunk}`);
-        });
-        this.#termination = new Promise<AcpEndpointTermination>((resolve) => {
-            child.once("error", (cause) => {
-                resolve({ kind: "failed", error: new AcpExecutionError("The ACP process could not run", { cause }) });
-            });
-            child.once("exit", (code, signal) => {
-                resolve({
-                    kind: "failed",
-                    error: new AcpExecutionError("The ACP process stopped", { cause: { code, signal } }),
-                });
-            });
-        });
-        const stream = ndJsonStream(createWritableAcpStream(stdin), readableWebStream(stdout));
-        this.#connection = createAcpClient(this).connect(stream);
+        this.#endpoint = new AcpEndpoint(agent, cwd, this);
     }
 
     static async #start(
@@ -563,7 +274,7 @@ export class AcpProcessSession implements AcpClientHandler {
         this.#replay = { kind: "capture", history };
         try {
             await this.race(
-                this.#connection.agent.request(
+                this.#endpoint.connection.agent.request(
                     methods.agent.session.load,
                     {
                         additionalDirectories: [...this.#additionalDirectories],
@@ -593,13 +304,10 @@ export class AcpProcessSession implements AcpClientHandler {
     private readonly bufferAgentText = async (text: string, messageId: string): Promise<void> => {
         const previous = this.#bufferedAgentText.at(-1);
         if (previous?.messageId === messageId) {
-            this.#bufferedAgentText = [
-                ...this.#bufferedAgentText.slice(0, -1),
-                { chunks: [...previous.chunks, text], messageId },
-            ];
+            previous.chunks.push(text);
             return;
         }
-        this.#bufferedAgentText = [...this.#bufferedAgentText, { chunks: [text], messageId }];
+        this.#bufferedAgentText.push({ chunks: [text], messageId });
     };
 
     private readonly flushAgentText = async (): Promise<void> => {
@@ -688,11 +396,11 @@ export class AcpProcessSession implements AcpClientHandler {
     }
 
     async #initializeAgentOperation(signal: AbortSignal): Promise<void> {
-        if (this.#inProcessAgent !== null) {
+        if (this.#endpoint.inProcessAgent !== null) {
             // The ACP agent runs in this process, but it still owns an app-server child that must
             // start and complete its own handshake before the ACP conversation can begin.
             await this.race(
-                this.#inProcessAgent.initialize(signal),
+                this.#endpoint.inProcessAgent.initialize(signal),
                 "The Codex app-server exited during initialization",
                 signal,
             ).catch((cause: unknown) => {
@@ -701,7 +409,7 @@ export class AcpProcessSession implements AcpClientHandler {
             });
         }
         const initialized = await this.race(
-            this.#connection.agent.request(
+            this.#endpoint.connection.agent.request(
                 methods.agent.initialize,
                 {
                     clientCapabilities: {
@@ -783,7 +491,7 @@ export class AcpProcessSession implements AcpClientHandler {
                 "session-fork",
                 async () =>
                     await this.race(
-                        this.#connection.agent.request(
+                        this.#endpoint.connection.agent.request(
                             methods.agent.session.fork,
                             {
                                 sessionId: nativeSessionIdSchema.parse(origin.nativeSessionId),
@@ -826,7 +534,7 @@ export class AcpProcessSession implements AcpClientHandler {
                     "session-resume",
                     async () =>
                         await this.race(
-                            this.#connection.agent.request(
+                            this.#endpoint.connection.agent.request(
                                 methods.agent.session.resume,
                                 {
                                     additionalDirectories: [...this.#additionalDirectories],
@@ -847,7 +555,7 @@ export class AcpProcessSession implements AcpClientHandler {
                         "session-load",
                         async () =>
                             await this.race(
-                                this.#connection.agent.request(
+                                this.#endpoint.connection.agent.request(
                                     methods.agent.session.load,
                                     {
                                         additionalDirectories: [...this.#additionalDirectories],
@@ -887,7 +595,7 @@ export class AcpProcessSession implements AcpClientHandler {
                 "session-new",
                 async () =>
                     await this.race(
-                        this.#connection.agent.request(
+                        this.#endpoint.connection.agent.request(
                             methods.agent.session.new,
                             {
                                 additionalDirectories: [...this.#additionalDirectories],
@@ -928,7 +636,7 @@ export class AcpProcessSession implements AcpClientHandler {
             );
         }
         const response: unknown = await this.race(
-            this.#connection.agent.request(methods.agent.session.list, cursor === null ? {} : { cursor }, {
+            this.#endpoint.connection.agent.request(methods.agent.session.list, cursor === null ? {} : { cursor }, {
                 cancellationSignal: signal,
             }),
             "ACP agent exited while listing sessions",
@@ -954,7 +662,7 @@ export class AcpProcessSession implements AcpClientHandler {
             );
         }
         await this.race(
-            this.#connection.agent.request(
+            this.#endpoint.connection.agent.request(
                 methods.agent.session.delete,
                 { sessionId: nativeSessionIdSchema.parse(nativeSessionId) },
                 { cancellationSignal: signal },
@@ -1020,7 +728,7 @@ export class AcpProcessSession implements AcpClientHandler {
                 {
                     request: async (method, params, failureMessage, signal) =>
                         await this.race(
-                            this.#connection.agent.request(method, params, {
+                            this.#endpoint.connection.agent.request(method, params, {
                                 cancellationSignal: signal,
                             }),
                             failureMessage,
@@ -1111,7 +819,7 @@ export class AcpProcessSession implements AcpClientHandler {
 
     readonly nativeHistoryTurn = (): { readonly commandId: string; readonly nativeTurnId: string } | null => {
         const prompt = this.#nativePrompt;
-        const nativeTurnId = this.#inProcessAgent?.nativeTurnId?.() ?? null;
+        const nativeTurnId = this.#endpoint.inProcessAgent?.nativeTurnId?.() ?? null;
         return prompt === null || nativeTurnId === null || nativeTurnId === prompt.previousTurnId
             ? null
             : { commandId: prompt.commandId, nativeTurnId };
@@ -1147,11 +855,11 @@ export class AcpProcessSession implements AcpClientHandler {
         this.#turn = running;
         this.#nativePrompt = {
             commandId: options.commandId,
-            previousTurnId: this.#inProcessAgent?.nativeTurnId?.() ?? null,
+            previousTurnId: this.#endpoint.inProcessAgent?.nativeTurnId?.() ?? null,
         };
         try {
             const response: unknown = await this.race(
-                this.#connection.agent.request(
+                this.#endpoint.connection.agent.request(
                     methods.agent.session.prompt,
                     { prompt, sessionId: this.#nativeSessionId },
                     { cancellationSignal: options.signal },
@@ -1210,7 +918,7 @@ export class AcpProcessSession implements AcpClientHandler {
         }
         const prompt = this.buildPrompt(options);
         const response: unknown = await this.race(
-            this.#connection.agent.request("_session/steering", {
+            this.#endpoint.connection.agent.request("_session/steering", {
                 _meta: { steering: { idleBehavior: "promptRequired" } },
                 prompt,
                 sessionId: this.#nativeSessionId,
@@ -1247,11 +955,11 @@ export class AcpProcessSession implements AcpClientHandler {
     };
 
     readonly cancel = async (): Promise<void> => {
-        const capturedProcesses = this.#runtimeChild === null ? [] : await captureProcessTree(this.#runtimeChild);
+        const capturedProcesses = await this.#endpoint.captureProcessTree();
         try {
-            await this.cancelPendingInteractions();
+            await this.#interactions.cancelPendingInteractions();
             if (this.#turn.running) {
-                await this.#connection.agent.notify(methods.agent.session.cancel, {
+                await this.#endpoint.connection.agent.notify(methods.agent.session.cancel, {
                     sessionId: this.#nativeSessionId,
                 });
             }
@@ -1260,190 +968,16 @@ export class AcpProcessSession implements AcpClientHandler {
         }
     };
 
-    readonly respondPermission = async (options: AcpPermissionResponseOptions): Promise<void> => {
-        const pending = this.#pendingPermissions.get(options.interactionId);
-        if (pending === undefined) {
-            throw new AcpExecutionError(
-                "The permission request is no longer active",
-                {},
-                "permission_request_not_found",
-            );
-        }
-        if (options.outcome === "selected" && !pending.optionIds.has(options.optionId)) {
-            throw new AcpExecutionError(
-                "The selected permission option is unavailable",
-                {},
-                "invalid_permission_response",
-            );
-        }
-        const resolved = options.outcome === "selected" ? pending.select(options.optionId) : pending.cancel();
-        if (!resolved) {
-            throw new AcpExecutionError(
-                "The permission request was already resolved",
-                {},
-                "permission_request_not_found",
-            );
-        }
-        this.#pendingPermissions.delete(options.interactionId);
-        await this.#getObserver().onPermissionResolved({
-            interactionId: options.interactionId,
-            kind: SESSION_PERMISSION_RESOLVED_KIND,
-            optionId: options.outcome === "selected" ? options.optionId : "",
-            outcome: options.outcome,
-            sessionId: this.#mobiusSessionId,
-        });
-    };
-
-    readonly respondElicitation = async (options: AcpElicitationResponseOptions): Promise<void> => {
-        const pending = this.#pendingElicitations.get(options.interactionId);
-        if (pending === undefined) {
-            throw new AcpExecutionError(
-                "The elicitation request is no longer active",
-                {},
-                "elicitation_request_not_found",
-            );
-        }
-        let resolved = false;
-        if (options.action === "accept") {
-            if (pending.elicitationId.length > 0) {
-                resolved = pending.accept({});
-                if (resolved) {
-                    this.#acceptedUrlElicitations.set(pending.elicitationId, pending.interactionId);
-                }
-            } else {
-                resolved = pending.accept(validateElicitationContent(options.content, pending.requestedSchema));
-            }
-        } else if (options.action === "decline") {
-            resolved = pending.decline();
-        } else {
-            resolved = pending.cancel();
-        }
-        if (!resolved) {
-            throw new AcpExecutionError(
-                "The elicitation request was already resolved",
-                {},
-                "elicitation_request_not_found",
-            );
-        }
-        this.#pendingElicitations.delete(options.interactionId);
-        await this.#getObserver().onElicitationResolved({
-            action: options.action,
-            interactionId: options.interactionId,
-            kind: SESSION_ELICITATION_RESOLVED_KIND,
-            sessionId: this.#mobiusSessionId,
-        });
-    };
-
-    readonly onPermission = async (
-        request: RequestPermissionRequest,
-        signal: AbortSignal,
-    ): Promise<RequestPermissionResponse> => {
-        this.assertNativeSession(request.sessionId);
-        const interactionId = `permission-${crypto.randomUUID()}`;
-        const options: SessionPermissionOption[] = request.options.slice(0, 20).map((option) => ({
-            kind: option.kind,
-            name: truncate(option.name, 255),
-            optionId: truncate(option.optionId, 255),
-        }));
-        if (options.length === 0) {
-            throw new AcpExecutionError(
-                "ACP permission request did not provide any choices",
-                {},
-                "invalid_agent_permission_request",
-            );
-        }
-        const pending = new PendingPermission(interactionId, new Set(options.map((option) => option.optionId)));
-        this.#pendingPermissions.set(interactionId, pending);
-        const abort = (): void => {
-            void this.cancelPermission(interactionId);
-        };
-        signal.addEventListener("abort", abort, { once: true });
-        try {
-            await this.#getObserver().onPermission({
-                commandId: this.#turn.commandId,
-                interactionId,
-                kind: SESSION_PERMISSION_REQUESTED_KIND,
-                options,
-                sessionId: this.#mobiusSessionId,
-                title: truncate(request.toolCall.title ?? "Permission required", 500),
-                toolCallId: truncate(request.toolCall.toolCallId, 255),
-                toolKind: truncate(request.toolCall.kind ?? "other", 64),
-            });
-            return await pending.completion.promise;
-        } finally {
-            signal.removeEventListener("abort", abort);
-            this.#pendingPermissions.delete(interactionId);
-        }
-    };
-
-    readonly onElicitation = async (
-        request: CreateElicitationRequest,
-        signal: AbortSignal,
-    ): Promise<CreateElicitationResponse> => {
-        const sessionId = Reflect.get(request, "sessionId");
-        if (typeof sessionId !== "string") {
-            throw new AcpExecutionError(
-                "Mobius only accepts session-scoped ACP elicitations",
-                {},
-                "unsupported_elicitation_scope",
-            );
-        }
-        this.assertNativeSession(sessionId);
-        if (request.mode !== "form" && request.mode !== "url") {
-            throw new AcpExecutionError(
-                "The ACP agent requested an unsupported elicitation mode",
-                {},
-                "unsupported_elicitation_mode",
-            );
-        }
-        const interactionId = `elicitation-${crypto.randomUUID()}`;
-        const schemaValue = Reflect.get(request, "requestedSchema");
-        const requestedSchema = request.mode === "form" ? schemaValue : {};
-        const elicitationIdValue = Reflect.get(request, "elicitationId");
-        const elicitationId =
-            request.mode === "url" && typeof elicitationIdValue === "string" ? truncate(elicitationIdValue, 255) : "";
-        const pending = new PendingElicitation(interactionId, elicitationId, requestedSchema);
-        this.#pendingElicitations.set(interactionId, pending);
-        const abort = (): void => {
-            void this.cancelElicitation(interactionId);
-        };
-        signal.addEventListener("abort", abort, { once: true });
-        try {
-            await this.#getObserver().onElicitation({
-                accepted: false,
-                commandId: this.#turn.commandId,
-                elicitationId,
-                fields: normalizeElicitationFields(requestedSchema),
-                interactionId,
-                kind: SESSION_ELICITATION_REQUESTED_KIND,
-                message: truncate(request.message, 2_000),
-                mode: request.mode,
-                sessionId: this.#mobiusSessionId,
-                url:
-                    request.mode === "url" && typeof Reflect.get(request, "url") === "string"
-                        ? truncate(readString(Reflect.get(request, "url")), 4_096)
-                        : "",
-            });
-            return await pending.completion.promise;
-        } finally {
-            signal.removeEventListener("abort", abort);
-            this.#pendingElicitations.delete(interactionId);
-        }
-    };
-
-    readonly onElicitationComplete = async (notification: CompleteElicitationNotification): Promise<void> => {
-        const interactionId = this.#acceptedUrlElicitations.get(notification.elicitationId);
-        if (interactionId === undefined) {
-            return;
-        }
-        this.#acceptedUrlElicitations.delete(notification.elicitationId);
-        await this.#getObserver().onElicitationResolved({
-            action: "complete",
-            interactionId,
-            kind: SESSION_ELICITATION_RESOLVED_KIND,
-            sessionId: this.#mobiusSessionId,
-        });
-    };
+    readonly respondPermission = (options: AcpPermissionResponseOptions) =>
+        this.#interactions.respondPermission(options);
+    readonly respondElicitation = (options: AcpElicitationResponseOptions) =>
+        this.#interactions.respondElicitation(options);
+    readonly onPermission = (request: RequestPermissionRequest, signal: AbortSignal) =>
+        this.#interactions.onPermission(request, signal);
+    readonly onElicitation = (request: CreateElicitationRequest, signal: AbortSignal) =>
+        this.#interactions.onElicitation(request, signal);
+    readonly onElicitationComplete = (notification: CompleteElicitationNotification) =>
+        this.#interactions.onElicitationComplete(notification);
 
     readonly onUpdate = (notification: SessionNotification): Promise<void> => {
         if (this.#nativeSessionId.length === 0) {
@@ -1639,10 +1173,10 @@ export class AcpProcessSession implements AcpClientHandler {
 
     readonly close = async (): Promise<void> => {
         try {
-            await this.cancelPendingInteractions();
+            await this.#interactions.cancelPendingInteractions();
             if (this.#capabilities.closeSession && this.#nativeSessionId.length > 0) {
                 try {
-                    await this.#connection.agent.request(
+                    await this.#endpoint.connection.agent.request(
                         methods.agent.session.close,
                         { sessionId: this.#nativeSessionId },
                         {
@@ -1658,59 +1192,10 @@ export class AcpProcessSession implements AcpClientHandler {
         }
     };
 
-    readonly closeProcess = async (capturedProcesses: readonly ProcessTreeIdentity[] = []): Promise<void> => {
-        try {
-            if (this.#runtimeChild === null) {
-                // The in-process agent owns its app-server child and its process tree.
-                await this.#inProcessAgent?.close();
-                return;
-            }
-            await stopProcessTree(this.#runtimeChild, capturedProcesses);
-        } finally {
-            this.#connection.close();
-        }
-    };
-
-    readonly race = async <T>(operation: Promise<T>, exitMessage: string, signal: AbortSignal): Promise<T> => {
-        signal.throwIfAborted();
-        let removeAbortListener = (): void => {};
-        const aborted = new Promise<never>((_resolve, reject) => {
-            const rejectAbort = (): void => {
-                reject(signal.reason ?? new Error("ACP request was cancelled"));
-            };
-            signal.addEventListener("abort", rejectAbort, { once: true });
-            removeAbortListener = (): void => {
-                signal.removeEventListener("abort", rejectAbort);
-            };
-        });
-        try {
-            try {
-                return await Promise.race([
-                    operation,
-                    this.#termination.then((termination) => {
-                        const cause = acpEndpointTerminationError(termination);
-                        throw new AcpExecutionError(exitMessage, { cause }, cause.code);
-                    }),
-                    aborted,
-                ]);
-            } catch (error) {
-                signal.throwIfAborted();
-                if (error instanceof RequestError && error.code === -32_000) {
-                    throw new AcpExecutionError(
-                        "Agent authentication is required",
-                        { cause: error },
-                        "authentication_required",
-                    );
-                }
-                if (error instanceof RequestError) {
-                    throw new AcpExecutionError(truncate(error.message, 500), { cause: error }, "acp_agent_error");
-                }
-                throw error;
-            }
-        } finally {
-            removeAbortListener();
-        }
-    };
+    readonly closeProcess = (capturedProcesses: readonly ProcessTreeIdentity[] = []): Promise<void> =>
+        this.#endpoint.closeProcess(capturedProcesses);
+    readonly race = <T>(operation: Promise<T>, exitMessage: string, signal: AbortSignal): Promise<T> =>
+        this.#endpoint.race(operation, exitMessage, signal);
 
     readonly assertNativeSession = (sessionId: string): void => {
         if (sessionId !== this.#nativeSessionId) {
@@ -1725,55 +1210,5 @@ export class AcpProcessSession implements AcpClientHandler {
             requestId: `agent-update-${crypto.randomUUID()}`,
             sessionId: this.#mobiusSessionId,
         });
-    };
-
-    readonly cancelPermission = async (interactionId: string): Promise<void> => {
-        const pending = this.#pendingPermissions.get(interactionId);
-        if (pending === undefined || !pending.cancel()) {
-            return;
-        }
-        this.#pendingPermissions.delete(interactionId);
-        await this.#getObserver().onPermissionResolved({
-            interactionId,
-            kind: SESSION_PERMISSION_RESOLVED_KIND,
-            optionId: "",
-            outcome: "cancelled",
-            sessionId: this.#mobiusSessionId,
-        });
-    };
-
-    readonly cancelElicitation = async (interactionId: string): Promise<void> => {
-        const pending = this.#pendingElicitations.get(interactionId);
-        if (pending === undefined || !pending.cancel()) {
-            return;
-        }
-        this.#pendingElicitations.delete(interactionId);
-        await this.#getObserver().onElicitationResolved({
-            action: "cancel",
-            interactionId,
-            kind: SESSION_ELICITATION_RESOLVED_KIND,
-            sessionId: this.#mobiusSessionId,
-        });
-    };
-
-    readonly cancelPendingInteractions = async (): Promise<void> => {
-        const permissionIds = [...this.#pendingPermissions.keys()];
-        const elicitationIds = [...this.#pendingElicitations.keys()];
-        const acceptedElicitationIds = [...this.#acceptedUrlElicitations.values()];
-        this.#acceptedUrlElicitations.clear();
-        for (const interactionId of permissionIds) {
-            await this.cancelPermission(interactionId);
-        }
-        for (const interactionId of elicitationIds) {
-            await this.cancelElicitation(interactionId);
-        }
-        for (const interactionId of acceptedElicitationIds) {
-            await this.#getObserver().onElicitationResolved({
-                action: "cancel",
-                interactionId,
-                kind: SESSION_ELICITATION_RESOLVED_KIND,
-                sessionId: this.#mobiusSessionId,
-            });
-        }
     };
 }

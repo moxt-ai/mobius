@@ -16,10 +16,23 @@ model provider can make its output deterministic without replacing the Agent.
 
 | Agent | Real daemon acceptance coverage | Existing fixture |
 | --- | --- | --- |
-| Codex | `real/codex-live-turn.integration.test.ts`: real Codex app-server, streaming/tools, queue cancellation, execution snapshots, history and files | `infra/codex.ts` |
-| Claude Code | `real/claude-live-turn.integration.test.ts`: real binary and production ACP adapter, shell tool and continued streamed reply | `infra/claude.ts` |
-| OpenCode | `real/opencode-live-turn.integration.test.ts`: real binary and production adapter, shell tool and continued streamed reply | `infra/opencode.ts` |
-| Pi | `real/pi-live-turn.integration.test.ts`: real binary and production ACP adapter, shell tool and continued streamed reply | `infra/pi.ts` |
+| Codex | Real app-server: streaming/tools, FIFO and queue cancellation, execution snapshots, history/files; native creation, active cancellation and queued continuation; continuation and history after process-capacity eviction | `infra/codex.ts` |
+| Claude Code | Real binary and production ACP adapter: shell tool, continued streamed reply, native creation, active cancellation and queued continuation | `infra/claude.ts` |
+| OpenCode | Real binary and production adapter: shell tool, continued streamed reply, native creation, active cancellation and queued continuation | `infra/opencode.ts` |
+| Pi | Real binary and production ACP adapter: shell tool, continued streamed reply, native creation, active cancellation and queued continuation | `infra/pi.ts` |
+
+Each Agent has its own `real/<agent>-native-recovery.integration.test.ts`.
+These scenarios create a native session through the daemon, complete a first
+prompt, hold the next model response, enqueue another prompt, cancel the active
+prompt, and observe the queued reply completing in that same native session.
+Provider gates are event-driven; no sleep or timing tolerance controls the race.
+`real/codex-process-capacity.integration.test.ts` additionally exceeds the retained
+process capacity, continues the original session, and reads both turns from native
+history through the daemon protocol.
+
+Real history/file and capacity coverage is currently Codex-specific. Real
+permissions/interactions and reconnect coverage across all four Agents remain
+separate gaps; controlled protocol tests do not close those gaps.
 
 Fixtures and Agent names in controlled tests are not substitutes for these real
 acceptance scenarios. Add coverage for supported session continuation, queueing,
@@ -28,7 +41,7 @@ or reconnection behavior. State unsupported capabilities explicitly.
 
 ## Running
 
-`pnpm test:agent-daemon:real` runs the four real Agent suites. CI installs pinned
+`pnpm test:agent-daemon:real` runs ten scenarios across the four real Agents. CI installs pinned
 executables and production adapters:
 
 - Codex CLI 0.154.0;
