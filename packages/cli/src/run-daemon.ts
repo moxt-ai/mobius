@@ -156,17 +156,23 @@ export async function runDaemon(
         config.relayUrl,
         new DaemonDiagnosticLog(stateDirectory),
     );
-    const nativeSessions = new NativeSessionService(config, directories, sessions, audit, (request) => {
-        return activeTurns.executionSnapshot(
-            (command) =>
-                command.sessionId === request.targetSessionId &&
-                command.agentId === request.agentId &&
-                command.directoryId === request.directoryId &&
-                command.additionalDirectoryIds.length === request.additionalDirectoryIds.length &&
-                command.additionalDirectoryIds.every(
-                    (directoryId, index) => directoryId === request.additionalDirectoryIds[index],
-                ),
-        );
+    const nativeSessions = new NativeSessionService(config, directories, sessions, audit, async (request, options) => {
+        return await activeTurns.executionSnapshot(async (command) => {
+            if (command.sessionId !== request.targetSessionId || command.agentId !== request.agentId) {
+                return false;
+            }
+            const cwd = await directories.resolve(command.bindingId, command.directoryId, options.signal);
+            const additionalDirectories = await directories.resolveMany(
+                command.bindingId,
+                command.additionalDirectoryIds,
+                options.signal,
+            );
+            return (
+                cwd === options.cwd &&
+                additionalDirectories.length === options.additionalDirectories.length &&
+                additionalDirectories.every((directory, index) => directory === options.additionalDirectories[index])
+            );
+        });
     });
     const installations = new AgentInstallationManager(
         specifications,

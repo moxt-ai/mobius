@@ -64,17 +64,25 @@ export class DaemonTurnRegistry {
         }
     };
 
-    readonly queued = (
-        matches: (command: SessionPromptCommand) => boolean,
-    ): Extract<NativeSessionResult, { readonly action: "active-turn" }>["queued"] =>
-        [...this.#turns.values()]
-            .filter((turn) => matches(turn.command) && turn.isQueued())
-            .map(({ command }) => ({ commandId: command.commandId, prompt: command.prompt, images: command.images }));
-
-    readonly executionSnapshot = (matches: (command: SessionPromptCommand) => boolean) => ({
-        turn: this.snapshot(matches),
-        queued: this.queued(matches),
-    });
+    readonly executionSnapshot = async (matches: (command: SessionPromptCommand) => Promise<boolean>) => {
+        const matching: ActiveDaemonTurn[] = [];
+        for (const turn of this.#turns.values()) {
+            if (await matches(turn.command)) {
+                matching.push(turn);
+            }
+        }
+        const current = matching.filter((turn) => this.#turns.get(turn.command.commandId) === turn);
+        return {
+            turn: current.map((turn) => turn.snapshot()).find((snapshot) => snapshot !== null) ?? null,
+            queued: current
+                .filter((turn) => turn.isQueued())
+                .map(({ command }) => ({
+                    commandId: command.commandId,
+                    prompt: command.prompt,
+                    images: command.images,
+                })),
+        };
+    };
 
     readonly snapshot = (matches: (command: SessionPromptCommand) => boolean): ActiveTurnSnapshot => {
         for (const turn of this.#turns.values()) {
