@@ -28,3 +28,11 @@ journal. Queue changes and snapshots are transient; this adds no persisted queue
 transport; `daemon-command-handler.ts` routes validated commands; the Turn registry
 owns scheduling and cleanup. Prompt execution, authorized workspace resolution,
 session configuration, and native history queries have separate modules.
+
+## Testing boundaries
+
+Web / Chat tests use real product services and transports with a stateful fake
+daemon. Separate agent-daemon integration tests use the real daemon, real Agent
+executables, and production adapters for Codex, Claude Code, OpenCode, and Pi.
+Keep each Agent's adaptation coverage independent. See [TESTING.md](./TESTING.md)
+for provider exceptions, commands, and the current coverage gaps.
