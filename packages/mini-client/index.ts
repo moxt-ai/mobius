@@ -6,7 +6,9 @@ import { type FileHandle, mkdir, open, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+    decodeSessionCommandsUpdatedEvent,
     RUNTIME_WORKSPACE_BINDING_ID,
+    type SessionCommand,
     type SessionConfigOption,
     type SessionConfigurationSelection,
     SessionPromptDisposition,
@@ -14,6 +16,7 @@ import {
 import { MobiusAppCredentialProvider, MobiusPlatformAppClient } from "@moxt-ai/mobius-sdk/platform";
 import {
     MobiusClient,
+    MobiusControlEvent,
     type MobiusLiveEventSubscription,
     type MobiusLiveSessionEventObserver,
     MobiusPageRequest,
@@ -522,30 +525,66 @@ async function compactCommand(directory: string, flags: ReadonlyMap<string, stri
     const authority = client(state);
     let execution: ClientConnection | undefined;
     try {
-        const ready = await loadSession(authority.service, state.runtimeId, session);
-        const command = ready.commands.find((candidate) => candidate.name.toLowerCase() === "compact");
-        if (command === undefined) {
-            throw new MiniClientError("compact_unavailable", "The selected Agent does not provide context compaction");
-        }
-        const prompt = `/${command.name}`;
         execution = await sessionClient(state, session);
-        const turn = await execution.service.turns.submit(
-            session.sessionId,
-            {
-                additionalDirectoryIds: session.additionalDirectoryIds,
-                content: prompt,
-                disposition: SessionPromptDisposition.Reject,
-                idempotencyKey: identifier("compact"),
-                images: [],
-                resources: [],
-                sessionConfigurations: selections(ready.configOptions),
-                targetCommandId: "",
+        const discoverySignal = AbortSignal.any([shutdown.signal, AbortSignal.timeout(5_000)]);
+        let advertisedCommands: readonly SessionCommand[] = [];
+        let subscription: MobiusLiveEventSubscription | undefined;
+        const observer: MobiusLiveSessionEventObserver = {
+            reconcile: () => Promise.resolve(),
+            receive: (event) => {
+                if (event.payload instanceof MobiusControlEvent && event.payload.kind === "session.commands.updated") {
+                    advertisedCommands = decodeSessionCommandsUpdatedEvent(event.payload.encodedPayload).commands;
+                    return Promise.resolve(
+                        !advertisedCommands.some((candidate) => candidate.name.toLowerCase() === "compact"),
+                    );
+                }
+                return Promise.resolve(true);
             },
-            operationSignal(),
-        );
-        const updated = { ...session, turns: [...session.turns, { prompt, turnId: turn.turnId }] };
-        await writeState(directory, replaceSession(state, updated));
-        output({ command: command.name, sessionId: session.sessionId, state: turn.state, turnId: turn.turnId });
+        };
+        try {
+            subscription = await execution.service.events.subscribeLive(session.sessionId, observer, discoverySignal);
+            const ready = await loadSession(authority.service, state.runtimeId, session);
+            let commands = ready.commands;
+            if (!commands.some((candidate) => candidate.name.toLowerCase() === "compact")) {
+                await subscription.completed;
+                commands = advertisedCommands;
+            }
+            const command = commands.find((candidate) => candidate.name.toLowerCase() === "compact");
+            if (command === undefined) {
+                throw new MiniClientError(
+                    "compact_unavailable",
+                    "The selected Agent does not provide context compaction",
+                );
+            }
+            const prompt = `/${command.name}`;
+            const turn = await execution.service.turns.submit(
+                session.sessionId,
+                {
+                    additionalDirectoryIds: session.additionalDirectoryIds,
+                    content: prompt,
+                    disposition: SessionPromptDisposition.Reject,
+                    idempotencyKey: identifier("compact"),
+                    images: [],
+                    resources: [],
+                    sessionConfigurations: selections(ready.configOptions),
+                    targetCommandId: "",
+                },
+                operationSignal(),
+            );
+            const updated = { ...session, turns: [...session.turns, { prompt, turnId: turn.turnId }] };
+            await writeState(directory, replaceSession(state, updated));
+            output({ command: command.name, sessionId: session.sessionId, state: turn.state, turnId: turn.turnId });
+        } catch (cause) {
+            shutdown.signal.throwIfAborted();
+            if (!discoverySignal.aborted) {
+                throw cause;
+            }
+            throw new MiniClientError("compact_unavailable", "The selected Agent does not provide context compaction", {
+                cause,
+            });
+        } finally {
+            subscription?.close();
+        }
     } finally {
         execution?.close();
         authority.close();
