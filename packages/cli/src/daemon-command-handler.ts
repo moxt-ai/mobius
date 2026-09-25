@@ -336,16 +336,16 @@ export function createDaemonCommandHandler({
                 audit,
                 sessions,
                 attemptId: receipt.attemptId,
-                activateAttempt: turn.accept,
-                acknowledgeQueued: () => {
-                    queueChanged(command.sessionId);
-                    send(socket, {
-                        commandId: command.commandId,
-                        kind: SESSION_QUEUED_KIND,
-                        sessionId: command.sessionId,
-                    });
-                },
-                waitForSessionAvailability: (waitSignal) => activeTurns.waitForAvailability(command, turn, waitSignal),
+                activateAttempt: turn.activate,
+                waitForSessionAvailability: (waitSignal) =>
+                    activeTurns.admitAndWait(turn, waitSignal, () => {
+                        queueChanged(command.sessionId);
+                        send(socket, {
+                            commandId: command.commandId,
+                            kind: SESSION_QUEUED_KIND,
+                            sessionId: command.sessionId,
+                        });
+                    }),
                 timer,
                 signal: turn.signal,
                 recordLiveEvent: turn.recordEvent,

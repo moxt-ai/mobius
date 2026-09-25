@@ -71,7 +71,6 @@ export interface ExecutePromptOptions {
     readonly sessions: AcpSessionManager;
     readonly attemptId: string;
     readonly activateAttempt: () => { readonly epoch: string; readonly sequence: 0 };
-    readonly acknowledgeQueued: () => void;
     readonly waitForSessionAvailability: (
         signal: AbortSignal,
     ) => Promise<
@@ -99,7 +98,6 @@ export async function executePrompt({
     sessions,
     attemptId,
     activateAttempt,
-    acknowledgeQueued,
     waitForSessionAvailability,
     timer,
     signal,
@@ -142,9 +140,6 @@ export async function executePrompt({
         AGENT_TEXT_MAXIMUM_LENGTH,
     );
     try {
-        if (command.disposition === SessionPromptDisposition.Queue) {
-            acknowledgeQueued();
-        }
         const resolved = await resolveSessionDirectories(
             directories,
             command.bindingId,

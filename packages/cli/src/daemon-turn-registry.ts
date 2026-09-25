@@ -105,37 +105,49 @@ export class DaemonTurnRegistry {
         await Promise.all(turns.map((turn) => turn.completion));
     };
 
-    readonly waitForAvailability = async (
-        command: SessionPromptCommand,
-        queuedTurn: ActiveDaemonTurn,
+    readonly admitAndWait = async (
+        turn: ActiveDaemonTurn,
         waitSignal: AbortSignal,
+        onQueued: () => void,
     ): Promise<
         | { readonly kind: "available"; readonly disposition: string }
         | { readonly kind: "busy" }
         | { readonly kind: "queue-target-unavailable" }
     > => {
-        if (queuedTurn.effectiveDisposition() === SessionPromptDisposition.Steer) {
-            return { disposition: SessionPromptDisposition.Steer, kind: "available" };
-        }
-        for (;;) {
-            const first = [...this.#turns.values()].find(
+        const command = turn.command;
+        waitSignal.throwIfAborted();
+        const head = (): ActiveDaemonTurn | undefined =>
+            [...this.#turns.values()].find(
                 (turn) =>
                     turn.command.sessionId === command.sessionId &&
                     turn.command.disposition !== SessionPromptDisposition.Steer,
             );
-            if (first === undefined || first.command.commandId === command.commandId) {
-                return command.disposition !== SessionPromptDisposition.Queue ||
-                    this.#operations.isTerminalExecution(command.targetCommandId, command.sessionId)
-                    ? { disposition: queuedTurn.effectiveDisposition(), kind: "available" }
-                    : { kind: "queue-target-unavailable" };
+        // The target guards admission only. Accepted work belongs to the Session
+        // FIFO and must survive the original target finishing or being cancelled.
+        if (command.disposition === SessionPromptDisposition.Queue) {
+            const target = head();
+            if (
+                (target === turn || target?.command.commandId !== command.targetCommandId) &&
+                !this.#operations.isTerminalExecution(command.targetCommandId, command.sessionId)
+            ) {
+                return { kind: "queue-target-unavailable" };
+            }
+            turn.enqueue();
+            onQueued();
+        }
+        if (turn.effectiveDisposition() === SessionPromptDisposition.Steer) {
+            return { disposition: SessionPromptDisposition.Steer, kind: "available" };
+        }
+        for (;;) {
+            waitSignal.throwIfAborted();
+            const first = head();
+            if (first === undefined || first === turn) {
+                return { disposition: turn.effectiveDisposition(), kind: "available" };
             }
             if (command.disposition !== SessionPromptDisposition.Queue) {
                 return { kind: "busy" };
             }
-            if (first.command.commandId !== command.targetCommandId) {
-                return { kind: "queue-target-unavailable" };
-            }
-            const promotion = queuedTurn.queuePromotion();
+            const promotion = turn.queuePromotion();
             if (promotion === null) {
                 throw new Error("The queued prompt cannot be promoted");
             }
