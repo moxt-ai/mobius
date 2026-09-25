@@ -712,9 +712,17 @@ export async function runDaemon(
         new DaemonAcpObserver(recordSessionEvent),
         sessionStore,
         {
-            read: async (options, nativeSessionId) =>
+            read: async (options, nativeSessionId, nativeTurn) =>
                 options.agent.id === "codex"
-                    ? (await readCodexFullHistory(options.agent, options.cwd, nativeSessionId, options.signal)).history
+                    ? (
+                          await readCodexFullHistory(
+                              options.agent,
+                              options.cwd,
+                              nativeSessionId,
+                              options.signal,
+                              nativeTurn,
+                          )
+                      ).history
                     : null,
         },
         "native",
