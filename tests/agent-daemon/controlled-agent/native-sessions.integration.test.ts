@@ -79,7 +79,10 @@ async function fixture(
         [agent],
     );
     const directories = new WorkspaceDirectoryService("workspace", workspace);
-    const service = new NativeSessionService(config, directories, sessions, audit, () => null);
+    const service = new NativeSessionService(config, directories, sessions, audit, async () => ({
+        turn: null,
+        queued: [],
+    }));
     const identity = {
         additionalDirectoryIds: [],
         agentId: agent.id,
@@ -287,7 +290,10 @@ describe("native Agent session boundary", () => {
             [agent],
         );
         const directories = new WorkspaceDirectoryService("workspace", workspace);
-        const service = new NativeSessionService(config, directories, sessions, audit, () => null);
+        const service = new NativeSessionService(config, directories, sessions, audit, async () => ({
+            turn: null,
+            queued: [],
+        }));
         const identity = {
             additionalDirectoryIds: [],
             agentId: agent.id,

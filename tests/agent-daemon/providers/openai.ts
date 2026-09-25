@@ -470,6 +470,9 @@ export class FakeOpenAiProvider implements AsyncDisposable {
                 }
                 return;
             }
+            if (tool === undefined) {
+                await options.beforeFirstText?.();
+            }
             if (payload["stream"] === false) {
                 sendChatCompletion(response, model, selectedAnswer, tool);
                 return;

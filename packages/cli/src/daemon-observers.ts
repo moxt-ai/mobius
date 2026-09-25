@@ -29,7 +29,7 @@ import {
     SucceededInstallation,
 } from "./agent-installation/agent-installation-manager.ts";
 import type { AuditStore } from "./audit/audit-store.ts";
-import { send } from "./daemon-session-commands.ts";
+import { send } from "./daemon-command-results.ts";
 
 export class DaemonAcpObserver implements AcpSessionObserver {
     readonly #record: (sessionId: string, event: RecordedSessionEvent) => void;

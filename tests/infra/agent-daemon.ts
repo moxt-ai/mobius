@@ -7,6 +7,7 @@ import {
     decodeMessageKind,
     decodeNativeSessionCommand,
     decodeRuntimeHeartbeatEvent,
+    decodeSessionCancelCommand,
     decodeSessionLiveHistoryLoad,
     decodeSessionLiveHistoryPageLoad,
     decodeSessionPrepareCommand,
@@ -410,6 +411,27 @@ async function processHappyPathCommand(
     signal: AbortSignal,
 ): Promise<void> {
     const kind = decodeMessageKind(encoded);
+    if (kind === "session.cancel") {
+        const command = decodeSessionCancelCommand(encoded);
+        if (queuedPrompts.delete(command.commandId)) {
+            await daemon.sendSessionEvent(
+                command.sessionId,
+                encodeSessionCompletedEvent({
+                    commandId: command.commandId,
+                    kind: "session.completed",
+                    sessionId: command.sessionId,
+                    stopReason: "cancelled",
+                }),
+                signal,
+            );
+            await daemon.sendSessionEvent(
+                command.sessionId,
+                JSON.stringify({ kind: "session.queue.changed", sessionId: command.sessionId }),
+                signal,
+            );
+        }
+        return;
+    }
     if (kind === SESSION_PROMPT_DISPOSITION_KIND) {
         const command = decodeSessionPromptDispositionCommand(encoded);
         const queued = queuedPrompts.get(command.commandId);
@@ -586,6 +608,9 @@ async function processHappyPathCommand(
                     requestId: command.requestId,
                     sessionId: command.sessionId,
                     targetSessionId: command.targetSessionId,
+                    queued: [...queuedPrompts.values()]
+                        .filter((entry) => entry.sessionId === command.targetSessionId)
+                        .map((entry) => ({ commandId: entry.commandId, prompt: entry.prompt, images: entry.images })),
                     turn,
                 }),
             );
@@ -752,6 +777,11 @@ async function processHappyPathCommand(
     const command = decodeSessionPromptCommand(encoded);
     if (command.disposition === SessionPromptDisposition.Queue && activeTurns.has(command.sessionId)) {
         queuedPrompts.set(command.commandId, command);
+        await daemon.sendSessionEvent(
+            command.sessionId,
+            JSON.stringify({ kind: "session.queue.changed", sessionId: command.sessionId }),
+            signal,
+        );
         daemon.send(
             encodeSessionQueuedEvent({
                 commandId: command.commandId,

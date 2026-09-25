@@ -47,7 +47,8 @@ export class NativeSessionService {
     readonly #audit: AuditStore;
     readonly #activeTurn: (
         command: Extract<NativeSessionCommand, { readonly action: "active-turn" }>,
-    ) => Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"];
+        options: AcpPrepareOptions,
+    ) => Promise<Pick<Extract<NativeSessionResult, { readonly action: "active-turn" }>, "turn" | "queued">>;
 
     constructor(
         config: DaemonConfig,
@@ -56,7 +57,8 @@ export class NativeSessionService {
         audit: AuditStore,
         activeTurn: (
             command: Extract<NativeSessionCommand, { readonly action: "active-turn" }>,
-        ) => Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"],
+            options: AcpPrepareOptions,
+        ) => Promise<Pick<Extract<NativeSessionResult, { readonly action: "active-turn" }>, "turn" | "queued">>,
     ) {
         this.#config = config;
         this.#directories = directories;
@@ -90,7 +92,7 @@ export class NativeSessionService {
                 requestId: command.requestId,
                 sessionId: command.sessionId,
                 targetSessionId: command.targetSessionId,
-                turn: this.#activeTurn(command),
+                ...(await this.#activeTurn(command, options)),
             };
         }
         if (command.action === "create") {

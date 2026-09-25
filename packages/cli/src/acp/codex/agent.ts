@@ -436,6 +436,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
     #selection: SessionSelection;
     readonly #streamedReasoningItemIds = new Set<string>();
     #turn: ActiveTurn | null = null;
+    #nativeTurnId: string | null = null;
     #updateTail: Promise<void> = Promise.resolve();
 
     constructor(options: InProcessAcpEndpointOptions) {
@@ -606,6 +607,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
 
     /** The ACP agent app Mobius connects its own ACP client to, in-process. */
     readonly app = (): AgentApp => this.#app;
+    readonly nativeTurnId = (): string | null => this.#nativeTurnId;
 
     /** Starts the app-server, performs its handshake, and reads the model catalog Codex offers. */
     readonly initialize = async (signal: AbortSignal): Promise<void> => {
@@ -911,6 +913,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
             const decoded = turnNotificationSchema.safeParse(params);
             if (decoded.success && decoded.data.threadId === this.#nativeSessionId && this.#turn !== null) {
                 this.#turn.turn.id = decoded.data.turn.id;
+                this.#nativeTurnId = decoded.data.turn.id;
             }
             return;
         }
@@ -1180,6 +1183,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
         const turn: ActiveTurn = { completion, turn: { id: "" } };
         this.#streamedReasoningItemIds.clear();
         this.#turn = turn;
+        this.#nativeTurnId = null;
         try {
             // The selection rides on the turn rather than the thread, so a choice made between turns
             // applies to the next one without restarting the conversation. Approval and sandboxing
@@ -1230,6 +1234,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
             );
             if (this.#turn === turn) {
                 turn.turn.id = started.id;
+                this.#nativeTurnId = started.id;
             }
             return await completion.promise;
         } finally {

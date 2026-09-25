@@ -945,6 +945,15 @@ export class MobiusClient {
                         return;
                     }
 
+                    if (kind === SESSION_OPERATION_FAILED_KIND) {
+                        const failure = decodeSessionOperationFailedEvent(encoded);
+                        if (failure.requestId === commandId) {
+                            cleanup();
+                            reject(new MobiusClientError(failure.code, failure.message));
+                        }
+                        return;
+                    }
+
                     if (kind === SESSION_FAILED_KIND) {
                         const message = decodeSessionFailedEvent(encoded);
                         if (message.commandId === commandId) {

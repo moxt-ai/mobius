@@ -36,6 +36,7 @@ const turnsSchema = z.object({
     data: z
         .array(
             z.object({
+                id: z.string().min(1),
                 error: z.unknown().nullish(),
                 items: z.array(z.unknown()).max(100_000),
             }),
@@ -67,6 +68,7 @@ const commandExecutionSchema = z.object({
 
 interface ReadCodexHistoryOptions {
     readonly detail: "messages" | "rich";
+    readonly nativeTurn?: () => { readonly commandId: string; readonly nativeTurnId: string } | null;
 }
 
 interface CodexHistorySnapshot {
@@ -131,6 +133,9 @@ function decodeHistory(
     options: ReadCodexHistoryOptions,
 ): CodexHistorySnapshot {
     const page = turnsSchema.parse(value);
+    const nativeTurn = options.nativeTurn?.();
+    const coveredCommandIds =
+        nativeTurn != null && page.data[0]?.id === nativeTurn.nativeTurnId ? [nativeTurn.commandId] : [];
     const messages: NativeHistoryMessage[] = [];
     let characters = 0;
     let truncated = page.nextCursor != null;
@@ -280,7 +285,7 @@ function decodeHistory(
             status: "available",
             messages,
             truncated,
-            coveredCommandIds: [],
+            coveredCommandIds,
             coveredMessageIds: [],
         },
     };
@@ -518,5 +523,9 @@ export const readCodexFullHistory = async (
     cwd: string,
     nativeSessionId: string,
     signal: AbortSignal,
+    nativeTurn?: ReadCodexHistoryOptions["nativeTurn"],
 ): Promise<CodexHistorySnapshot> =>
-    await readCodexHistoryWithOptions(agent, cwd, nativeSessionId, signal, { detail: "rich" });
+    await readCodexHistoryWithOptions(agent, cwd, nativeSessionId, signal, {
+        detail: "rich",
+        ...(nativeTurn === undefined ? {} : { nativeTurn }),
+    });

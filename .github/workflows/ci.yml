@@ -56,8 +56,17 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
+      - run: pnpm --filter @moxt-ai/mobius build
       - run: pnpm test
-      - run: npm install --global @openai/codex@0.154.0
+      - name: Install real Agents and production adapters
+        run: >-
+          npm install --global
+          @openai/codex@0.154.0
+          @anthropic-ai/claude-code@2.1.273
+          @agentclientprotocol/claude-agent-acp@0.73.0
+          opencode-ai@1.18.29
+          @earendil-works/pi-coding-agent@0.85.0
+          pi-acp@0.0.33
       - run: pnpm test:agent-daemon:real
 
   deploy-cloudflare-platform:

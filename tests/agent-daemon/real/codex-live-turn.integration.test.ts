@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,20 +7,31 @@ import { join } from "node:path";
 import {
     AGENT_MESSAGE_DELTA_KIND,
     decodeAgentMessageDeltaEvent,
+    decodeFileChunkEvent,
     decodeMessageKind,
     decodeNativeSessionResult,
     decodeSessionCompletedEvent,
     decodeSessionEventEnvelope,
+    decodeSessionLiveHistoryPageLoaded,
+    decodeSessionOperationFailedEvent,
+    decodeSessionPromptCommand,
     decodeSessionStartedEvent,
+    encodeFileReadCommand,
     encodeNativeSessionCommand,
     encodeSessionCancelCommand,
+    encodeSessionLiveHistoryPageLoad,
     encodeSessionPromptCommand,
+    FILE_CHUNK_KIND,
+    FILE_END_KIND,
+    FILE_FAILED_KIND,
     MOBIUS_API_PREFIX,
     NATIVE_SESSION_RESULT_KIND,
     SESSION_CANCEL_KIND,
     SESSION_COMPLETED_KIND,
     SESSION_EVENT_KIND,
     SESSION_FAILED_KIND,
+    SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
+    SESSION_OPERATION_FAILED_KIND,
     SESSION_STARTED_KIND,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -36,10 +47,13 @@ import { CodexFixture } from "../infra/codex.ts";
 import { FakeOpenAiProvider } from "../providers/openai.ts";
 
 class Messages {
+    readonly #closed = Promise.withResolvers<never>();
     readonly #buffered: string[] = [];
     readonly #waiting: Array<(message: string) => void> = [];
 
     constructor(socket: WebSocket) {
+        void this.#closed.promise.catch(() => {});
+        socket.once("close", () => this.#closed.reject(new Error("The daemon disconnected during the request")));
         socket.on("message", (value) => {
             const message = value.toString();
             const resolve = this.#waiting.shift();
@@ -53,15 +67,18 @@ class Messages {
 
     readonly next = (): Promise<string> => {
         const buffered = this.#buffered.shift();
-        return buffered === undefined
-            ? new Promise<string>((resolve) => this.#waiting.push(resolve))
-            : Promise.resolve(buffered);
+        return Promise.race([
+            this.#closed.promise,
+            buffered === undefined
+                ? new Promise<string>((resolve) => this.#waiting.push(resolve))
+                : Promise.resolve(buffered),
+        ]);
     };
 }
 
-test("Given real Codex and a local model provider, When a queued follow-up is cancelled during a Turn, Then the active Turn keeps streaming to completion", async () => {
-    const providerEntered = Promise.withResolvers<void>();
-    const releaseProvider = Promise.withResolvers<void>();
+test("Given real Codex and a local model provider, When a queued follow-up is cancelled during a Turn, Then reopening its history shows one active prompt and the Turn keeps streaming to completion", async () => {
+    let providerEntered = Promise.withResolvers<void>();
+    let releaseProvider = Promise.withResolvers<void>();
     const provider = await FakeOpenAiProvider.start("mobius-test-model", "Codex live reply", {
         beforeFirstText: async () => {
             providerEntered.resolve();
@@ -99,11 +116,13 @@ test("Given real Codex and a local model provider, When a queued follow-up is ca
     try {
         const socket = await connected.promise;
         const messages = new Messages(socket);
-        const commandId = randomUUID();
-        const queuedCommandId = randomUUID();
         const sessionId = "new_codex_live_turn";
-        socket.send(
-            encodeSessionPromptCommand({
+        for (const turnNumber of [1, 2]) {
+            providerEntered = Promise.withResolvers<void>();
+            releaseProvider = Promise.withResolvers<void>();
+            const commandId = randomUUID();
+            const queuedCommandId = randomUUID();
+            const originalPrompt = encodeSessionPromptCommand({
                 additionalDirectoryIds: [],
                 agentId: "codex",
                 bindingId: config.bindingId,
@@ -112,118 +131,240 @@ test("Given real Codex and a local model provider, When a queued follow-up is ca
                 disposition: SessionPromptDisposition.Reject,
                 images: [],
                 kind: "session.prompt",
-                prompt: "Reply briefly using the configured model",
+                prompt: "Use a shell tool successfully, then reply using the configured model",
                 resources: [],
                 sessionId,
                 targetCommandId: "",
-            }),
-        );
-        let started = false;
-        let completed = false;
-        let sequence = 0;
-        let epoch: string | undefined;
-        let snapshotVerified = false;
-        let queuedCancelled = false;
-        let text = "";
-        while (!completed) {
-            const message = await messages.next();
-            if (decodeMessageKind(message) === NATIVE_SESSION_RESULT_KIND) {
-                const result = decodeNativeSessionResult(message);
-                expect(result.action).toBe("active-turn");
-                if (result.action === "active-turn") {
-                    expect(result.turn).toMatchObject({
-                        commandId,
-                        epoch: expect.any(String),
-                        interaction: null,
-                        prompt: "Reply briefly using the configured model",
-                        sequence: 0,
-                        state: "running",
-                        text: "",
-                    });
-                }
-                snapshotVerified = true;
-                releaseProvider.resolve();
-                continue;
-            }
-            if (decodeMessageKind(message) !== SESSION_EVENT_KIND) {
-                continue;
-            }
-            const envelope = decodeSessionEventEnvelope(message);
-            const kind = decodeMessageKind(envelope.payload);
-            if (kind === SESSION_STARTED_KIND) {
-                expect(started).toBe(false);
-                expect(decodeSessionStartedEvent(envelope.payload)).toMatchObject({
-                    commandId,
-                    epoch: expect.any(String),
-                    prompt: "Reply briefly using the configured model",
-                    sequence: 0,
-                });
-                started = true;
-                await providerEntered.promise;
-                socket.send(
-                    encodeSessionPromptCommand({
-                        additionalDirectoryIds: [],
-                        agentId: "codex",
-                        bindingId: config.bindingId,
-                        commandId: queuedCommandId,
-                        directoryId: "default",
-                        disposition: SessionPromptDisposition.Queue,
-                        images: [],
-                        kind: "session.prompt",
-                        prompt: "This queued prompt should not run",
-                        resources: [],
-                        sessionId,
-                        targetCommandId: commandId,
-                    }),
-                );
-                socket.send(
-                    encodeSessionCancelCommand({
-                        commandId: queuedCommandId,
-                        kind: SESSION_CANCEL_KIND,
-                        sessionId,
-                    }),
-                );
-            } else if (kind === AGENT_MESSAGE_DELTA_KIND) {
-                expect(started).toBe(true);
-                const delta = decodeAgentMessageDeltaEvent(envelope.payload);
-                expect(delta.commandId).toBe(commandId);
-                expect(delta.sequence).toBe(sequence + 1);
-                expect(epoch === undefined || delta.epoch === epoch).toBe(true);
-                epoch = delta.epoch;
-                sequence = delta.sequence;
-                text += delta.text;
-            } else if (kind === SESSION_COMPLETED_KIND) {
-                const completion = decodeSessionCompletedEvent(envelope.payload);
-                if (completion.commandId === queuedCommandId) {
-                    expect(completion.stopReason).toBe("cancelled");
-                    queuedCancelled = true;
+            });
+            socket.send(originalPrompt);
+            let started = false;
+            let completed = false;
+            let sequence = 0;
+            let epoch: string | undefined;
+            let snapshotVerified = false;
+            let queuedCancelled = false;
+            let text = "";
+            while (!completed) {
+                const message = await messages.next();
+                if (decodeMessageKind(message) === "session.queued") {
                     socket.send(
                         encodeNativeSessionCommand({
                             action: "active-turn",
                             additionalDirectoryIds: [],
                             agentId: "codex",
                             bindingId: config.bindingId,
-                            directoryId: "default",
+                            directoryId: `path-${Buffer.from(config.defaultWorkspace).toString("base64url")}`,
                             kind: "native.session.request",
-                            requestId: randomUUID(),
+                            requestId: "queued_snapshot",
                             sessionId,
                             targetSessionId: sessionId,
                         }),
                     );
-                } else {
-                    expect(completion.commandId).toBe(commandId);
-                    expect(queuedCancelled).toBe(true);
-                    completed = true;
+                    continue;
                 }
-            } else if (kind === SESSION_FAILED_KIND) {
-                throw new Error(`Real Codex Turn failed: ${envelope.payload}`);
+                if (decodeMessageKind(message) === NATIVE_SESSION_RESULT_KIND) {
+                    const result = decodeNativeSessionResult(message);
+                    if (result.requestId === "queued_snapshot") {
+                        expect(result).toMatchObject({
+                            queued: [
+                                { commandId: queuedCommandId, prompt: "This queued prompt should not run", images: [] },
+                            ],
+                        });
+                        socket.send(
+                            encodeSessionCancelCommand({
+                                commandId: queuedCommandId,
+                                kind: SESSION_CANCEL_KIND,
+                                sessionId,
+                            }),
+                        );
+                        continue;
+                    }
+                    expect(result).toMatchObject({ queued: [] });
+                    expect(result.action).toBe("active-turn");
+                    if (result.action === "active-turn") {
+                        expect(result.turn).toMatchObject({
+                            commandId,
+                            epoch: expect.any(String),
+                            interaction: null,
+                            prompt: "Use a shell tool successfully, then reply using the configured model",
+                            sequence: expect.any(Number),
+                            state: "running",
+                            text: "",
+                        });
+                    }
+                    snapshotVerified = true;
+                    socket.send(
+                        encodeSessionLiveHistoryPageLoad({
+                            kind: "session.live-history.page.load",
+                            requestId: randomUUID(),
+                            sessionId,
+                            agentId: "codex",
+                            bindingId: config.bindingId,
+                            directoryId: "default",
+                            additionalDirectoryIds: [],
+                            cursor: null,
+                            limit: 50,
+                        }),
+                    );
+                    continue;
+                }
+                if (decodeMessageKind(message) === SESSION_LIVE_HISTORY_PAGE_LOADED_KIND) {
+                    const { page } = decodeSessionLiveHistoryPageLoaded(message);
+                    expect(page.status).toBe("available");
+                    if (page.status === "available") {
+                        expect(page.messages.filter((item) => item.role === "user")).toHaveLength(turnNumber);
+                        expect(page.messages.filter((item) => item.role === "assistant")).toHaveLength(turnNumber);
+                        expect(
+                            page.messages.some((item) => item.role === "assistant" && item.activities.length > 0),
+                        ).toBe(true);
+                    }
+                    releaseProvider.resolve();
+                    continue;
+                }
+                if (decodeMessageKind(message) !== SESSION_EVENT_KIND) {
+                    continue;
+                }
+                const envelope = decodeSessionEventEnvelope(message);
+                const kind = decodeMessageKind(envelope.payload);
+                if (kind === SESSION_STARTED_KIND) {
+                    expect(started).toBe(false);
+                    expect(decodeSessionStartedEvent(envelope.payload)).toMatchObject({
+                        commandId,
+                        epoch: expect.any(String),
+                        prompt: "Use a shell tool successfully, then reply using the configured model",
+                        sequence: 0,
+                    });
+                    started = true;
+                    await providerEntered.promise;
+                    socket.send(
+                        encodeSessionPromptCommand({
+                            additionalDirectoryIds: [],
+                            agentId: "codex",
+                            bindingId: config.bindingId,
+                            commandId: queuedCommandId,
+                            directoryId: "default",
+                            disposition: SessionPromptDisposition.Queue,
+                            images: [],
+                            kind: "session.prompt",
+                            prompt: "This queued prompt should not run",
+                            resources: [],
+                            sessionId,
+                            targetCommandId: commandId,
+                        }),
+                    );
+                } else if (kind === AGENT_MESSAGE_DELTA_KIND) {
+                    expect(started).toBe(true);
+                    const delta = decodeAgentMessageDeltaEvent(envelope.payload);
+                    expect(delta.commandId).toBe(commandId);
+                    expect(delta.sequence).toBeGreaterThan(sequence);
+                    expect(epoch === undefined || delta.epoch === epoch).toBe(true);
+                    epoch = delta.epoch;
+                    sequence = delta.sequence;
+                    text += delta.text;
+                } else if (kind === SESSION_COMPLETED_KIND) {
+                    const completion = decodeSessionCompletedEvent(envelope.payload);
+                    if (completion.commandId === queuedCommandId) {
+                        expect(completion.stopReason).toBe("cancelled");
+                        queuedCancelled = true;
+                        socket.send(
+                            encodeNativeSessionCommand({
+                                action: "active-turn",
+                                additionalDirectoryIds: [],
+                                agentId: "codex",
+                                bindingId: config.bindingId,
+                                directoryId: "default",
+                                kind: "native.session.request",
+                                requestId: randomUUID(),
+                                sessionId,
+                                targetSessionId: sessionId,
+                            }),
+                        );
+                    } else {
+                        expect(completion.commandId).toBe(commandId);
+                        expect(queuedCancelled).toBe(true);
+                        completed = true;
+                    }
+                } else if (kind === SESSION_FAILED_KIND) {
+                    throw new Error(`Real Codex Turn failed: ${envelope.payload}`);
+                }
+            }
+            expect(started).toBe(true);
+            expect(queuedCancelled).toBe(true);
+            expect(snapshotVerified).toBe(true);
+            expect(sequence).toBeGreaterThan(0);
+            expect(text).toContain("Codex live reply");
+            const originalCommand = decodeSessionPromptCommand(originalPrompt);
+            socket.send(JSON.stringify(Object.fromEntries(Object.entries(originalCommand).reverse())));
+            socket.send(
+                encodeSessionPromptCommand({ ...originalCommand, prompt: "Conflicting reuse must not execute" }),
+            );
+            for (;;) {
+                const message = await messages.next();
+                if (decodeMessageKind(message) !== SESSION_OPERATION_FAILED_KIND) {
+                    continue;
+                }
+                expect(decodeSessionOperationFailedEvent(message)).toMatchObject({
+                    requestId: commandId,
+                    sessionId,
+                    code: "command_identity_conflict",
+                });
+                break;
+            }
+            socket.send(
+                encodeSessionLiveHistoryPageLoad({
+                    kind: "session.live-history.page.load",
+                    requestId: randomUUID(),
+                    sessionId,
+                    agentId: "codex",
+                    bindingId: config.bindingId,
+                    directoryId: "default",
+                    additionalDirectoryIds: [],
+                    cursor: null,
+                    limit: 50,
+                }),
+            );
+            for (;;) {
+                const message = await messages.next();
+                if (decodeMessageKind(message) !== SESSION_LIVE_HISTORY_PAGE_LOADED_KIND) {
+                    continue;
+                }
+                const { page } = decodeSessionLiveHistoryPageLoaded(message);
+                expect(page.status).toBe("available");
+                if (page.status === "available") {
+                    expect(page.messages.filter((item) => item.role === "user")).toHaveLength(turnNumber);
+                    expect(page.messages.filter((item) => item.role === "assistant")).toHaveLength(turnNumber);
+                    expect(page.messages.at(-1)?.text).toContain("Codex live reply");
+                }
+                break;
             }
         }
-        expect(started).toBe(true);
-        expect(queuedCancelled).toBe(true);
-        expect(snapshotVerified).toBe(true);
-        expect(sequence).toBeGreaterThan(0);
-        expect(text).toContain("Codex live reply");
+        const image = Buffer.from(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+            "base64",
+        );
+        await writeFile(join(workspace, "badge.png"), image);
+        socket.send(
+            encodeFileReadCommand({
+                kind: "file.read",
+                requestId: randomUUID(),
+                sessionId,
+                path: "badge.png",
+                maxBytes: 1024,
+            }),
+        );
+        const chunks: Buffer[] = [];
+        for (;;) {
+            const message = await messages.next();
+            const kind = decodeMessageKind(message);
+            expect(kind).not.toBe(FILE_FAILED_KIND);
+            if (kind === FILE_CHUNK_KIND) {
+                chunks.push(Buffer.from(decodeFileChunkEvent(message).data, "base64"));
+            }
+            if (kind === FILE_END_KIND) {
+                break;
+            }
+        }
+        expect(Buffer.concat(chunks)).toEqual(image);
     } finally {
         releaseProvider.resolve();
         cancellation.abort();

@@ -1248,7 +1248,7 @@ export class MobiusSessionResources {
         return decodeNativeMessagePage(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal));
     };
 
-    readonly readActiveTurn = async (
+    readonly readSessionExecution = async (
         sessionId: string,
         identity: {
             readonly additionalDirectoryIds: readonly string[];
@@ -1256,7 +1256,7 @@ export class MobiusSessionResources {
             readonly directoryId: string;
         },
         signal: AbortSignal,
-    ): Promise<Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"]> => {
+    ): Promise<Pick<Extract<NativeSessionResult, { readonly action: "active-turn" }>, "turn" | "queued">> => {
         const path = requestUrl(
             new URL("https://mobius.invalid/"),
             sessionPath(this.#projectId, sessionId, "active-turn"),
@@ -1272,7 +1272,7 @@ export class MobiusSessionResources {
         if (result.action !== "active-turn" || result.targetSessionId !== sessionId) {
             throw new MobiusProtocolError("The service returned an invalid active Turn");
         }
-        return result.turn;
+        return { turn: result.turn, queued: result.queued };
     };
 }
 
