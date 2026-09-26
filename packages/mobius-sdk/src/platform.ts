@@ -6,6 +6,7 @@ import {
     organizationInviteListSchema,
     organizationInvitePreviewSchema,
     organizationInviteRequestSchema,
+    type ProjectLocationHint,
 } from "@moxt-ai/mobius-protocol";
 import { MobiusProtocolError, MobiusValidationError } from "./errors.ts";
 import { type MobiusEndpointOptions, MobiusRequestExecutor, StaticMobiusCredentialProvider } from "./service-client.ts";
@@ -343,7 +344,7 @@ export interface MobiusCreatePlatformProjectRequest {
     readonly clientReference: string;
     readonly displayName: string;
     readonly idempotencyKey: string;
-    readonly locationHint: string;
+    readonly locationHint: ProjectLocationHint;
 }
 
 export interface MobiusIssueAppCredentialRequest {

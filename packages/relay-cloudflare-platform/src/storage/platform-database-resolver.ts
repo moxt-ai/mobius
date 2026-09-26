@@ -1,10 +1,7 @@
+import { isProjectLocationHint } from "@moxt-ai/mobius-protocol";
 import { PairingDirectoryError, type ProjectDatabaseBindings } from "@moxt-ai/mobius-relay-core/contracts";
 import type { SqlDatabase } from "@moxt-ai/mobius-relay-core/database";
-import type {
-    PlatformProjectLocationHint,
-    PlatformProjectPlacement,
-    PlatformProjectPlacementRegistry,
-} from "../entity/platform-control-plane.ts";
+import type { PlatformProjectPlacement, PlatformProjectPlacementRegistry } from "../entity/platform-control-plane.ts";
 import { decodePlatformProjectPlacement, projectBucketLocation } from "../entity/platform-project-id.ts";
 import { ProjectDurableObjectDatabase } from "./project-durable-object-database.ts";
 
@@ -85,24 +82,6 @@ class ProjectDatabaseAdapter implements PlatformProjectDatabase {
     };
 }
 
-const locationHints: ReadonlySet<string> = new Set([
-    "wnam",
-    "enam",
-    "sam",
-    "weur",
-    "eeur",
-    "apac",
-    "apac-ne",
-    "apac-se",
-    "oc",
-    "afr",
-    "me",
-]);
-
-function isPlatformProjectLocationHint(value: string): value is PlatformProjectLocationHint {
-    return locationHints.has(value);
-}
-
 export function platformBucket(bindings: PlatformStorageBindings, id: string): R2Bucket | undefined {
     return id === "apac" ? bindings.R2_BUCKET_APAC : id === "wnam" ? bindings.R2_BUCKET_WNAM : undefined;
 }
@@ -118,7 +97,7 @@ export class PlatformStorageRegistry implements PlatformProjectPlacementRegistry
         platformBucket(this.#bindings, projectBucketLocation(placement.locationHint)) !== undefined;
 
     readonly resolveLocationHint = (locationHint: string): PlatformProjectPlacement | null =>
-        isPlatformProjectLocationHint(locationHint) &&
+        isProjectLocationHint(locationHint) &&
         platformBucket(this.#bindings, projectBucketLocation(locationHint)) !== undefined
             ? { locationHint }
             : null;

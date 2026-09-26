@@ -1,7 +1,6 @@
+import { PROJECT_LOCATION_HINTS } from "@moxt-ai/mobius-protocol";
 import { sql } from "drizzle-orm";
 import { check, index, integer, sqliteTable, text, unique } from "drizzle-orm/sqlite-core";
-
-const locationHints = ["wnam", "enam", "sam", "weur", "eeur", "apac", "apac-ne", "apac-se", "oc", "afr", "me"] as const;
 
 export const platformProject = sqliteTable(
     "platform_projects",
@@ -18,7 +17,7 @@ export const platformProject = sqliteTable(
         updatedAt: integer("updated_at").notNull(),
         suspendedAt: integer("suspended_at"),
         deletedAt: integer("deleted_at"),
-        locationHint: text("location_hint", { enum: locationHints }).notNull().default("apac"),
+        locationHint: text("location_hint", { enum: PROJECT_LOCATION_HINTS }).notNull().default("apac"),
     },
     (table) => [
         check("platform_projects_lifecycle_check", sql`${table.lifecycle} in ('active', 'suspended', 'deleted')`),

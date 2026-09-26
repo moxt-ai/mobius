@@ -1,4 +1,4 @@
-import { isIdentifier, MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
+import { isIdentifier, MOBIUS_API_PREFIX, PROJECT_LOCATION_HINTS } from "@moxt-ai/mobius-protocol";
 import { errorMiddleware, requestTimeoutMiddleware, rethrowHonoError } from "@moxt-ai/mobius-relay-core";
 import { Hono } from "hono";
 import * as v from "valibot";
@@ -29,7 +29,7 @@ const createProjectBody = v.strictObject({
     displayName: requiredString,
     idempotencyKey: requiredString,
     clientReference: v.optional(v.string(), ""),
-    locationHint: requiredString,
+    locationHint: v.picklist(PROJECT_LOCATION_HINTS),
 });
 const issueCredentialBody = v.strictObject({
     permissions: v.array(v.string()),

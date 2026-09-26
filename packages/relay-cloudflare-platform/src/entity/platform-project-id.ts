@@ -1,8 +1,5 @@
-import {
-    PlatformControlPlaneError,
-    type PlatformProjectLocationHint,
-    type PlatformProjectPlacement,
-} from "./platform-control-plane.ts";
+import type { ProjectLocationHint } from "@moxt-ai/mobius-protocol";
+import { PlatformControlPlaneError, type PlatformProjectPlacement } from "./platform-control-plane.ts";
 
 const placements: ReadonlyMap<string, PlatformProjectPlacement> = new Map([
     ["wn", { locationHint: "wnam" }],
@@ -41,7 +38,7 @@ export function decodePlatformProjectPlacement(projectId: string): PlatformProje
     return placements.get(code) ?? null;
 }
 
-export function projectBucketLocation(locationHint: PlatformProjectLocationHint): "apac" | "wnam" {
+export function projectBucketLocation(locationHint: ProjectLocationHint): "apac" | "wnam" {
     return locationHint === "apac" || locationHint === "apac-ne" || locationHint === "apac-se" || locationHint === "oc"
         ? "apac"
         : "wnam";

@@ -1,3 +1,4 @@
+import type { ProjectLocationHint } from "@moxt-ai/mobius-protocol";
 import {
     AuditActorKind,
     type ExternalIdentityAuthenticator,
@@ -96,21 +97,8 @@ export type PlatformPrincipal =
     | { readonly kind: "developer"; readonly identity: VerifiedExternalIdentity };
 
 export interface PlatformProjectPlacement {
-    readonly locationHint: PlatformProjectLocationHint;
+    readonly locationHint: ProjectLocationHint;
 }
-
-export type PlatformProjectLocationHint =
-    | "wnam"
-    | "enam"
-    | "sam"
-    | "weur"
-    | "eeur"
-    | "apac"
-    | "apac-ne"
-    | "apac-se"
-    | "oc"
-    | "afr"
-    | "me";
 
 export interface PlatformProjectPlacementRegistry {
     readonly resolveLocationHint: (locationHint: string) => PlatformProjectPlacement | null;
