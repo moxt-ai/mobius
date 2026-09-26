@@ -55,6 +55,7 @@ import {
     type AcpSteerOptions,
     type AcpTurnOptions,
 } from "./session-contracts.ts";
+import { readAcpSessionFailure } from "./session-failure.ts";
 import { AcpHistoryReplay } from "./session-history.ts";
 import { AcpSessionInteractions } from "./session-interactions.ts";
 import {
@@ -378,6 +379,9 @@ export class AgentSession implements AcpClientHandler {
                 methods.agent.initialize,
                 {
                     clientCapabilities: {
+                        _meta: {
+                            jetbrains: { air: { capabilities: ["sessionFailure"], version: 1 } },
+                        },
                         elicitation: { form: {}, url: {} },
                         plan: {},
                         session: { configOptions: { boolean: {} } },
@@ -844,6 +848,10 @@ export class AgentSession implements AcpClientHandler {
                     "acp_invalid_prompt_response",
                 );
             }
+            const failure = readAcpSessionFailure(response);
+            if (failure !== null) {
+                await running.activities.recordNotice(failure.id, failure.revision, failure.severity, failure.title);
+            }
             if (result.usage != null || result._meta?.quota !== undefined) {
                 await this.#getObserver().onUsage({
                     _meta: result._meta ?? null,
@@ -1053,6 +1061,10 @@ export class AgentSession implements AcpClientHandler {
             return;
         }
         if (update.sessionUpdate === "session_info_update") {
+            const failure = readAcpSessionFailure(update);
+            if (failure !== null && this.#turn.running) {
+                await this.#turn.activities.recordNotice(failure.id, failure.revision, failure.severity, failure.title);
+            }
             if (Object.hasOwn(update, "title")) {
                 this.#sessionTitle = truncate(update.title ?? "", 500);
             }

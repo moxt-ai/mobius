@@ -48,7 +48,7 @@ const DIRECTORY_IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/;
 const MAX_PROMPT_LENGTH = 10_000;
 export const MAX_PROMPT_ATTACHMENT_LENGTH = 6_000_000;
 const MAX_EVENT_TEXT_LENGTH = 100_000;
-const ACTIVITY_TYPES = new Set(["plan", "progress", "reasoning", "tool"]);
+const ACTIVITY_TYPES = new Set(["notice", "plan", "progress", "reasoning", "tool"]);
 // Only narrative activities stream incrementally; tools and plans are replaced wholesale.
 const NARRATION_ACTIVITY_TYPES = new Set(["progress", "reasoning"]);
 const ACTIVITY_STATUSES = new Set(["pending", "running", "completed", "failed"]);

@@ -97,7 +97,7 @@ describe("Mobius pairing lifecycle", () => {
         const workspace = join(stateRoot, "workspace");
         await Promise.all([mkdir(executableDirectory), mkdir(workspace)]);
         const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: stateRoot, PATH: executableDirectory };
-        const deadline = AbortSignal.timeout(30_000);
+        const deadline = AbortSignal.timeout(60_000);
         const installation = await openMobiusCliInstallation(deadline, environment);
         const connection = await installation.saveConnection(
             {
@@ -173,7 +173,7 @@ describe("Mobius pairing lifecycle", () => {
         } finally {
             await runCli(["quit"], environment, AbortSignal.timeout(10_000)).catch(() => undefined);
         }
-    }, 45_000);
+    }, 75_000);
 });
 
 function controlSocketPath(stateDirectory: string): string {

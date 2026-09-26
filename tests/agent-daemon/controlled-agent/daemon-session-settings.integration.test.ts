@@ -207,6 +207,23 @@ async function readReasoningActivity(
     }
 }
 
+async function readNoticeActivity(frames: ClientFrames, sessionId: string, commandId: string) {
+    for (;;) {
+        const message = await frames.next();
+        if (decodeMessageKind(message) !== SESSION_EVENT_KIND) {
+            continue;
+        }
+        const envelope = decodeSessionEventEnvelope(message);
+        if (envelope.sessionId !== sessionId || decodeMessageKind(envelope.payload) !== AGENT_ACTIVITY_KIND) {
+            continue;
+        }
+        const activity = decodeAgentActivityEvent(envelope.payload);
+        if (activity.commandId === commandId && activity.activityType === "notice") {
+            return activity;
+        }
+    }
+}
+
 async function readReasoningNarration(frames: ClientFrames, sessionId: string, commandId: string): Promise<string> {
     for (;;) {
         const message = await frames.next();
@@ -631,6 +648,22 @@ if (process.argv.includes("--version")) {
             expect(
                 await readTerminalSessionResult(frames, reasoningPrompt.sessionId, reasoningPrompt.commandId),
             ).toMatchObject({ kind: SESSION_COMPLETED_KIND });
+
+            const retryPrompt: SessionPromptCommand = {
+                ...inheritedPrompt,
+                commandId: "codex_retry_notice_turn",
+                prompt: "fixture: retry after provider error",
+                sessionId: "codex_retry_notice_conversation",
+            };
+            sendText(await socketReady.promise, encodeSessionPromptCommand(retryPrompt));
+            expect(await readNoticeActivity(frames, retryPrompt.sessionId, retryPrompt.commandId)).toMatchObject({
+                activityType: "notice",
+                output: "Provider temporarily failed; retrying (attempt 2/5).",
+                status: "completed",
+            });
+            expect(await readTerminalSessionResult(frames, retryPrompt.sessionId, retryPrompt.commandId)).toMatchObject(
+                { kind: SESSION_COMPLETED_KIND },
+            );
 
             // Discovery alone is not the fix: a selection has to reach Codex. The app-server names
             // the model and effort each turn ran with, so the answer proves the choice was applied.

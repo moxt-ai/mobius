@@ -271,6 +271,14 @@ input.on("line", (line) => {
             return;
         }
         notify("turn/started", { threadId, turn: { id: turnId, items: [], status: "inProgress" } });
+        if (promptText === "fixture: retry after provider error") {
+            notify("error", {
+                error: { message: "Provider temporarily failed; retrying (attempt 2/5)." },
+                threadId,
+                turnId,
+                willRetry: true,
+            });
+        }
         if (promptText === "fixture: reasoning turn") {
             notify("item/reasoning/summaryTextDelta", {
                 delta: "Planning the implementation",
