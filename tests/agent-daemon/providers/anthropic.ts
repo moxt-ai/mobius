@@ -180,10 +180,10 @@ export class FakeAnthropicProvider implements AsyncDisposable {
     static async start(
         model: string,
         answer: string,
-        options: { readonly beforeFirstText?: () => Promise<void>; readonly failuresBeforeSuccess?: number } = {},
+        options: { readonly beforeFirstText?: () => Promise<void>; readonly disconnectsBeforeSuccess?: number } = {},
     ): Promise<FakeAnthropicProvider> {
         const requests: ProviderRequestDiagnostic[] = [];
-        let failuresRemaining = options.failuresBeforeSuccess ?? 0;
+        let disconnectsRemaining = options.disconnectsBeforeSuccess ?? 0;
         const server = createServer(async (request, response) => {
             let body = "";
             for await (const chunk of request) {
@@ -196,15 +196,9 @@ export class FakeAnthropicProvider implements AsyncDisposable {
                 response.end(JSON.stringify({ input_tokens: 10 }));
                 return;
             }
-            if (failuresRemaining > 0) {
-                failuresRemaining -= 1;
-                response.writeHead(529, { "content-type": "application/json", "retry-after": "0" });
-                response.end(
-                    JSON.stringify({
-                        type: "error",
-                        error: { type: "overloaded_error", message: "Provider overloaded" },
-                    }),
-                );
+            if (disconnectsRemaining > 0) {
+                disconnectsRemaining -= 1;
+                response.destroy();
                 return;
             }
 

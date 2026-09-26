@@ -80,7 +80,7 @@ test("Given the real claude and its production adapter, When two prompts execute
 
 test("Given Claude Code receives a transient provider error, When its production adapter retries, Then the recoverable error reaches the client before the successful reply", async () => {
     await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-6", "CLAUDE_RECOVERED", {
-        failuresBeforeSuccess: 1,
+        disconnectsBeforeSuccess: 1,
     });
     await using agent = await ClaudeFixture.create(provider);
     await withRealDaemon(new ClaudeCodeAgentSpecification(), agent.environment, async (peer) => {
@@ -117,7 +117,7 @@ test("Given Claude Code receives a transient provider error, When its production
                 break;
             }
         }
-        expect(notice.toLowerCase()).toContain("retry");
+        expect(notice.toLowerCase()).toContain("reconnecting");
         expect(text).toContain("CLAUDE_RECOVERED");
     });
 });
