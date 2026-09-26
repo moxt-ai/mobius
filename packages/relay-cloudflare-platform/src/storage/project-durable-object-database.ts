@@ -1,6 +1,6 @@
+import type { ProjectLocationHint } from "@moxt-ai/mobius-protocol";
 import { DatabaseError, type SqlDatabase, type SqlStatement } from "@moxt-ai/mobius-relay-core/database";
 import * as v from "valibot";
-import type { PlatformProjectLocationHint } from "../entity/platform-control-plane.ts";
 import { encodeProjectDurableObjectPath } from "../entity/project-durable-object-path.ts";
 
 const sqlValueSchema = v.union([v.null(), v.string(), v.number()]);
@@ -33,7 +33,7 @@ function decodeRow<Row>(value: unknown): Row {
 async function requestDatabase(
     namespace: DurableObjectNamespace,
     projectId: string,
-    locationHint: PlatformProjectLocationHint,
+    locationHint: ProjectLocationHint,
     operation: Operation,
     signal: AbortSignal,
 ): Promise<unknown> {
@@ -70,13 +70,13 @@ async function requestDatabase(
 class ProjectDurableObjectStatement implements SqlStatement {
     readonly namespace: DurableObjectNamespace;
     readonly projectId: string;
-    readonly locationHint: PlatformProjectLocationHint;
+    readonly locationHint: ProjectLocationHint;
     readonly statement: Statement;
 
     constructor(
         namespace: DurableObjectNamespace,
         projectId: string,
-        locationHint: PlatformProjectLocationHint,
+        locationHint: ProjectLocationHint,
         statement: Statement,
     ) {
         this.namespace = namespace;
@@ -132,9 +132,9 @@ class ProjectDurableObjectStatement implements SqlStatement {
 export class ProjectDurableObjectDatabase implements SqlDatabase {
     readonly #namespace: DurableObjectNamespace;
     readonly #projectId: string;
-    readonly #locationHint: PlatformProjectLocationHint;
+    readonly #locationHint: ProjectLocationHint;
 
-    constructor(namespace: DurableObjectNamespace, projectId: string, locationHint: PlatformProjectLocationHint) {
+    constructor(namespace: DurableObjectNamespace, projectId: string, locationHint: ProjectLocationHint) {
         this.#namespace = namespace;
         this.#projectId = projectId;
         this.#locationHint = locationHint;

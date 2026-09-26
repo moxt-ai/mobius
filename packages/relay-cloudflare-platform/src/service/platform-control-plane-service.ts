@@ -1,3 +1,4 @@
+import type { ProjectLocationHint } from "@moxt-ai/mobius-protocol";
 import {
     AuditActor,
     createRandomToken,
@@ -313,7 +314,11 @@ function decodeObject(encoded: string, message: string): Readonly<Record<string,
     return Object.freeze(Object.fromEntries(Object.entries(value)));
 }
 
-async function requestDigest(display: string, clientReference: string, locationHint: string): Promise<string> {
+async function requestDigest(
+    display: string,
+    clientReference: string,
+    locationHint: ProjectLocationHint,
+): Promise<string> {
     return await hashSecret(JSON.stringify({ clientReference, displayName: display, locationHint }));
 }
 
@@ -631,7 +636,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
         requestedDisplayName: string,
         idempotencyKey: string,
         requestedClientReference: string,
-        locationHint: string,
+        locationHint: ProjectLocationHint,
         signal: AbortSignal,
     ): Promise<object> =>
         await this.provisionProject(
@@ -655,7 +660,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
         requestedDisplayName: string,
         idempotencyKey: string,
         clientReference: string,
-        locationHint: string,
+        locationHint: ProjectLocationHint,
         signal: AbortSignal,
     ): Promise<object> => {
         if (principal.kind === "developer") {
@@ -707,7 +712,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
         requestedDisplayName: string,
         idempotencyKey: string,
         requestedClientReference: string,
-        requestedLocationHint: string,
+        requestedLocationHint: ProjectLocationHint,
         signal: AbortSignal,
     ): Promise<object> => {
         signal.throwIfAborted();
@@ -720,7 +725,8 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
             "client_reference",
         );
         const normalizedDisplayName = displayName(requestedDisplayName);
-        const locationHint = validateIdentifier(requestedLocationHint, "location_hint");
+        validateIdentifier(requestedLocationHint, "location_hint");
+        const locationHint = requestedLocationHint;
         const digest = await requestDigest(normalizedDisplayName, clientReference, locationHint);
         signal.throwIfAborted();
         const existing = await this.#storage.readProjectByIdempotencyKey(app.app_id, normalizedIdempotencyKey, signal);

@@ -1,3 +1,4 @@
+import { PROJECT_LOCATION_HINTS } from "@moxt-ai/mobius-protocol";
 import * as v from "valibot";
 
 const nonNegativeInteger = v.pipe(v.number(), v.safeInteger(), v.minValue(0));
@@ -103,7 +104,7 @@ export const ProjectRowSchema = v.object({
     display_name: v.string(),
     idempotency_key: v.string(),
     lifecycle,
-    location_hint: v.picklist(["wnam", "enam", "sam", "weur", "eeur", "apac", "apac-ne", "apac-se", "oc", "afr", "me"]),
+    location_hint: v.picklist(PROJECT_LOCATION_HINTS),
     project_id: v.string(),
     request_digest: v.string(),
     suspended_at: v.nullable(nonNegativeInteger),
