@@ -7,7 +7,6 @@ import {
     type PermissionOption,
     PROTOCOL_VERSION,
     type PromptResponse,
-    type SessionConfigOption,
     type SessionNotification,
 } from "@agentclientprotocol/sdk";
 
@@ -21,12 +20,10 @@ import {
 } from "../in-process/acp-endpoint.ts";
 import { CodexAppServerClient, type CodexAppServerServerRequest } from "./app-server-client.ts";
 import {
-    type CodexModel,
     commandApprovalParamsSchema,
     fileChangeApprovalParamsSchema,
     type McpElicitationParams,
     mcpElicitationParamsSchema,
-    modelListResponseSchema,
     reasoningTextDeltaParamsSchema,
     requestUserInputParamsSchema,
     threadForkResponseSchema,
@@ -40,94 +37,14 @@ import {
     type UserInputQuestion,
 } from "./app-server-protocol.ts";
 import { agentMessageMeta, decodeThreadItem, reasoningText, toolCallUpdate } from "./items.ts";
+import { CodexSettings } from "./settings.ts";
 
 const APPROVAL_REASON_CHARACTER_LIMIT = 500;
 const APPROVAL_TIMEOUT_MILLISECONDS = 3_600_000;
 const CODEX_AGENT_VERSION = "0.154.0";
 // Listing a directory must answer promptly: it is an interactive browser request, not a turn.
 const SESSION_LIST_TIMEOUT_MILLISECONDS = 30_000;
-// The setting identifiers Mobius matches on. These are the ids the retired
-// `@agentclientprotocol/codex-acp` adapter advertised, so conversations that stored a selection
-// under them keep applying after the move in-process.
-const MODEL_SETTING_ID = "model";
-const REASONING_EFFORT_SETTING_ID = "reasoning_effort";
-const MODE_SETTING_ID = "mode";
-const FAST_MODE_SETTING_ID = "fast-mode";
-const COLLABORATION_MODE_SETTING_ID = "collaboration_mode";
-const MODEL_CATALOG_LIMIT = 1_000;
-// `additionalSpeedTiers` and `serviceTier` are two vocabularies for one concept: a model advertises
-// "fast" while the thread reports the resolved tier as "priority". Fast mode is offered per model,
-// because most models have no speed tier at all.
-const FAST_TIER = "fast";
-const SERVICE_TIER_FAST = "priority";
 const CODEX_COMMANDS = Object.freeze([{ description: "Compact the conversation context", name: "compact" }]);
-
-interface AgentMode {
-    readonly approvalsReviewer: string;
-    readonly approvalPolicy: string;
-    readonly description: string;
-    readonly id: string;
-    readonly name: string;
-    readonly sandboxPolicy: Readonly<Record<string, unknown>>;
-}
-
-const WORKSPACE_WRITE_POLICY: Readonly<Record<string, unknown>> = Object.freeze({
-    excludeSlashTmp: false,
-    excludeTmpdirEnvVar: false,
-    networkAccess: false,
-    type: "workspaceWrite",
-    writableRoots: [],
-});
-
-/**
- * The approval and sandboxing presets Mobius offers, matching the adapter this Agent replaced so an
- * existing conversation's stored selection keeps its meaning. Each preset carries the full policy
- * pair, because Codex takes approval and sandboxing together.
- */
-const READ_ONLY_MODE: AgentMode = Object.freeze({
-    approvalPolicy: "on-request",
-    approvalsReviewer: "user",
-    description: "Always ask to edit external files and use the internet",
-    id: "read-only",
-    name: "Ask for approval",
-    sandboxPolicy: WORKSPACE_WRITE_POLICY,
-});
-const AGENT_MODE: AgentMode = Object.freeze({
-    approvalPolicy: "on-request",
-    approvalsReviewer: "auto_review",
-    description: "Only ask for actions detected as potentially unsafe",
-    id: "agent",
-    name: "Approve for me",
-    sandboxPolicy: WORKSPACE_WRITE_POLICY,
-});
-const FULL_ACCESS_MODE: AgentMode = Object.freeze({
-    approvalPolicy: "never",
-    approvalsReviewer: "user",
-    description: "Unrestricted access to the internet and any file on your computer",
-    id: "agent-full-access",
-    name: "Full access",
-    sandboxPolicy: { type: "dangerFullAccess" },
-});
-
-const AGENT_MODES: readonly AgentMode[] = Object.freeze([READ_ONLY_MODE, AGENT_MODE, FULL_ACCESS_MODE]);
-const DEFAULT_MODE = AGENT_MODE;
-
-/**
- * The mode the session opens in, from the same `INITIAL_AGENT_MODE` variable the adapter this Agent
- * replaced honoured. The default is only a fallback: a host that configured the variable keeps the
- * behavior it had.
- */
-function initialMode(environment: Readonly<Record<string, string>>): string {
-    const requested = environment["INITIAL_AGENT_MODE"];
-    if (requested === undefined) {
-        return DEFAULT_MODE.id;
-    }
-    return AGENT_MODES.some((mode) => mode.id === requested) ? requested : DEFAULT_MODE.id;
-}
-
-function capitalize(value: string): string {
-    return value.length === 0 ? value : value.charAt(0).toUpperCase() + value.slice(1);
-}
 
 /** The choices Mobius offers when the app-server asks it to approve a local side effect. */
 const APPROVAL_OPTIONS: readonly PermissionOption[] = Object.freeze([
@@ -229,159 +146,6 @@ interface ActiveTurn {
     readonly turn: { id: string };
 }
 
-/**
- * The model and reasoning effort this session runs with. Codex reports the pair it resolved from its
- * own configuration on `thread/start`; a `session/set_config_option` replaces either half. Both are
- * sent on `turn/start`, which is how Codex applies them to the turn being started.
- */
-interface SessionSelection {
-    collaborationMode: string;
-    effort: string;
-    fastMode: boolean;
-    mode: string;
-    model: string;
-}
-
-interface ConfigValue {
-    readonly description: string;
-    readonly name: string;
-    readonly value: string;
-}
-
-function modelValues(models: readonly CodexModel[]): ConfigValue[] {
-    return models.map((model) => ({
-        description: model.description ?? "",
-        name: model.displayName ?? model.id,
-        value: model.id,
-    }));
-}
-
-function effortValues(model: CodexModel | undefined): ConfigValue[] {
-    return (model?.supportedReasoningEfforts ?? []).map((option) => ({
-        description: option.description ?? "",
-        name: capitalize(option.reasoningEffort),
-        value: option.reasoningEffort,
-    }));
-}
-
-function supportedSelection(models: readonly CodexModel[], reportedModel: string, reportedEffort: string) {
-    const model =
-        models.find((candidate) => candidate.id === reportedModel) ??
-        models.find((candidate) => candidate.isDefault === true) ??
-        models[0];
-    if (model === undefined) {
-        return { model: reportedModel, effort: reportedEffort };
-    }
-    const efforts = model.supportedReasoningEfforts ?? [];
-    return {
-        model: model.id,
-        effort: efforts.some((candidate) => candidate.reasoningEffort === reportedEffort)
-            ? reportedEffort
-            : (model.defaultReasoningEffort ?? efforts[0]?.reasoningEffort ?? ""),
-    };
-}
-
-function modelSetting(models: readonly CodexModel[], currentValue: string): SessionConfigOption | null {
-    const values = modelValues(models);
-    // A model left in config.toml may be absent from the account's catalog. Offer a catalog model
-    // as the selection so a new Session can start with a model Codex actually supports.
-    const current = values.some((value) => value.value === currentValue)
-        ? currentValue
-        : (models.find((model) => model.isDefault === true)?.id ?? values[0]?.value ?? "");
-    if (current.length === 0) {
-        return null;
-    }
-    return {
-        category: "model",
-        currentValue: current,
-        description: "Model Codex uses for the session",
-        id: MODEL_SETTING_ID,
-        name: "Model",
-        options: values,
-        type: "select",
-    };
-}
-
-function modeSetting(currentValue: string): SessionConfigOption {
-    return {
-        category: "mode",
-        currentValue,
-        description: "Approval and sandboxing preset for the session",
-        id: MODE_SETTING_ID,
-        name: "Mode",
-        options: AGENT_MODES.map((mode) => ({
-            description: mode.description,
-            name: mode.name,
-            value: mode.id,
-        })),
-        type: "select",
-    };
-}
-
-/**
- * How Codex collaborates on subsequent turns. "Build" is Codex's `default` mode; "Plan" makes Codex
- * research and propose a plan before making changes. The ids match the retired
- * `@agentclientprotocol/codex-acp` adapter so a saved selection keeps applying.
- */
-const COLLABORATION_MODES: readonly ConfigValue[] = Object.freeze([
-    { description: "Codex answers and makes changes directly", name: "Build", value: "default" },
-    { description: "Codex plans before making changes", name: "Plan", value: "plan" },
-]);
-
-function collaborationModeSetting(currentValue: string): SessionConfigOption {
-    const current = COLLABORATION_MODES.some((mode) => mode.value === currentValue)
-        ? currentValue
-        : (COLLABORATION_MODES[0]?.value ?? "default");
-    return {
-        category: "collaboration_mode",
-        currentValue: current,
-        description: "How Codex collaborates for subsequent turns",
-        id: COLLABORATION_MODE_SETTING_ID,
-        name: "Collaboration mode",
-        options: [...COLLABORATION_MODES],
-        type: "select",
-    };
-}
-
-/**
- * Fast mode is a toggle, and it is only offered for a model that has a speed tier. A model without
- * one is not a disabled toggle: switching to it removes the setting, which is how the adapter this
- * Agent replaced behaved and why the option disappears rather than greys out.
- */
-function fastModeSetting(model: CodexModel | undefined, enabled: boolean): SessionConfigOption | null {
-    if (model?.additionalSpeedTiers?.includes(FAST_TIER) !== true) {
-        return null;
-    }
-    return {
-        category: "model_config",
-        currentValue: enabled,
-        description: "1.5x speed, increased usage",
-        id: FAST_MODE_SETTING_ID,
-        name: "Fast mode",
-        type: "boolean",
-    };
-}
-
-function effortSetting(model: CodexModel | undefined, currentValue: string): SessionConfigOption | null {
-    const values = effortValues(model);
-    if (values.length === 0) {
-        return null;
-    }
-    const current = values.some((value) => value.value === currentValue) ? currentValue : (values[0]?.value ?? "");
-    if (current.length === 0) {
-        return null;
-    }
-    return {
-        category: "thought_level",
-        currentValue: current,
-        description: "How much reasoning effort the model should use",
-        id: REASONING_EFFORT_SETTING_ID,
-        name: "Reasoning effort",
-        options: values,
-        type: "select",
-    };
-}
-
 function userInputSchema(questions: readonly UserInputQuestion[]): unknown {
     const properties: Record<string, unknown> = {};
     const required: string[] = [];
@@ -421,32 +185,14 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
     readonly terminated: Promise<AcpEndpointTermination>;
     #closePromise: Promise<void> | null = null;
     #connection: AgentConnection | null = null;
-    #models: readonly CodexModel[] = [];
+    readonly #settings: CodexSettings;
     #nativeSessionId = "";
-    // Whether the current turn must carry a policy at all. Until the user picks a mode, Codex's own
-    // configuration decides, so `turn/start` omits the fields and inherits what the host set up.
-    #policySelected = false;
-    // Whether a collaboration mode choice has been made in this session. A restored thread keeps
-    // the mode Codex already persisted, so the first turn does not reset it to Build.
-    #collaborationModeSelected = false;
-    // Whether the app-server accepts collaboration mode on `turn/start`, probed once per
-    // app-server. An older Codex rejects the experimental field, and the setting must disappear
-    // rather than break every turn.
-    #collaborationModeSupported: boolean | null = null;
-    #selection: SessionSelection;
     readonly #streamedReasoningItemIds = new Set<string>();
     #turn: ActiveTurn | null = null;
     #nativeTurnId: string | null = null;
     #updateTail: Promise<void> = Promise.resolve();
 
     constructor(options: InProcessAcpEndpointOptions) {
-        this.#selection = {
-            collaborationMode: "default",
-            effort: "",
-            fastMode: false,
-            mode: initialMode(options.environment),
-            model: "",
-        };
         this.#appServer = new CodexAppServerClient({
             command: options.command,
             cwd: options.cwd,
@@ -460,6 +206,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 },
             },
         });
+        this.#settings = new CodexSettings(this.#appServer, options.environment);
         this.terminated = this.#appServer.terminated;
         void this.terminated.then((termination) => {
             this.#turn?.completion.reject(acpEndpointTerminationError(termination));
@@ -497,29 +244,21 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                     ),
                 );
                 this.#nativeSessionId = created.thread.id;
-                // A new thread always starts in the default mode, so only the model and effort come
-                // from Codex. The mode is re-applied on the first turn.
-                const supported = supportedSelection(this.#models, created.model ?? "", created.reasoningEffort ?? "");
-                this.#selection = {
-                    ...this.#selection,
-                    collaborationMode: "default",
-                    ...supported,
-                };
-                this.#collaborationModeSelected = false;
-                await this.#probeCollaborationMode(context.signal);
+                this.#settings.selectNewThread(created);
+                await this.#settings.probeCollaborationMode(this.#nativeSessionId, context.signal);
                 await this.#emitAvailableCommands();
                 // The settings Mobius discovers come from this response. Without them the Run
                 // settings panel has nothing to render and saved selections cannot be re-applied.
-                return { configOptions: this.#configOptions(), sessionId: created.thread.id };
+                return { configOptions: this.#settings.configOptions(), sessionId: created.thread.id };
             })
             .onRequest(methods.agent.session.setConfigOption, async (context) => {
-                this.#applySelection(context.params.configId, context.params.value);
-                return { configOptions: this.#configOptions() };
+                this.#settings.applySelection(context.params.configId, context.params.value);
+                return { configOptions: this.#settings.configOptions() };
             })
             // Mobius routes a `category: "mode"` selection here rather than through
             // set_config_option, so the mode needs its own entry point.
             .onRequest(methods.agent.session.setMode, async (context) => {
-                this.#applySelection(MODE_SETTING_ID, context.params.modeId);
+                this.#settings.applySelection("mode", context.params.modeId);
                 return {};
             })
             .onRequest(methods.agent.session.load, async (context) => {
@@ -530,11 +269,12 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                         AbortSignal.any([context.signal, AbortSignal.timeout(APPROVAL_TIMEOUT_MILLISECONDS)]),
                     ),
                 );
-                this.#selectRestoredThread(resumed);
-                await this.#probeCollaborationMode(context.signal);
+                this.#nativeSessionId = resumed.thread.id;
+                this.#settings.selectRestoredThread(resumed);
+                await this.#settings.probeCollaborationMode(this.#nativeSessionId, context.signal);
                 await this.#replayHistory(resumed.turns);
                 await this.#emitAvailableCommands();
-                return { configOptions: this.#configOptions() };
+                return { configOptions: this.#settings.configOptions() };
             })
             .onRequest(methods.agent.session.fork, async (context) => {
                 const forked = threadForkResponseSchema.parse(
@@ -548,11 +288,12 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                         AbortSignal.any([context.signal, AbortSignal.timeout(APPROVAL_TIMEOUT_MILLISECONDS)]),
                     ),
                 );
-                this.#selectRestoredThread(forked);
-                await this.#probeCollaborationMode(context.signal);
+                this.#nativeSessionId = forked.thread.id;
+                this.#settings.selectRestoredThread(forked);
+                await this.#settings.probeCollaborationMode(this.#nativeSessionId, context.signal);
                 await this.#replayHistory(forked.turns);
                 await this.#emitAvailableCommands();
-                return { configOptions: this.#configOptions(), sessionId: forked.thread.id };
+                return { configOptions: this.#settings.configOptions(), sessionId: forked.thread.id };
             })
             .onRequest(methods.agent.session.resume, async (context) => {
                 const resumed = threadResumeResponseSchema.parse(
@@ -562,10 +303,11 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                         AbortSignal.any([context.signal, AbortSignal.timeout(APPROVAL_TIMEOUT_MILLISECONDS)]),
                     ),
                 );
-                this.#selectRestoredThread(resumed);
-                await this.#probeCollaborationMode(context.signal);
+                this.#nativeSessionId = resumed.thread.id;
+                this.#settings.selectRestoredThread(resumed);
+                await this.#settings.probeCollaborationMode(this.#nativeSessionId, context.signal);
                 await this.#emitAvailableCommands();
-                return { configOptions: this.#configOptions() };
+                return { configOptions: this.#settings.configOptions() };
             })
             .onRequest(methods.agent.session.prompt, async (context) => {
                 if (isCompactPrompt(context.params.prompt)) {
@@ -612,7 +354,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
     /** Starts the app-server, performs its handshake, and reads the model catalog Codex offers. */
     readonly initialize = async (signal: AbortSignal): Promise<void> => {
         await this.#appServer.initialize(signal);
-        await this.#loadModels(signal);
+        await this.#settings.loadModels(signal);
     };
 
     /**
@@ -641,93 +383,6 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
      * the Run settings panel its model selector; it must not cost the conversation itself, so the
      * turn lifecycle continues without settings rather than failing initialization.
      */
-    readonly #loadModels = async (signal: AbortSignal): Promise<void> => {
-        const models: CodexModel[] = [];
-        let cursor: string | null = null;
-        try {
-            do {
-                const decoded = modelListResponseSchema.parse(
-                    await this.#appServer.request(
-                        "model/list",
-                        { cursor, limit: null },
-                        AbortSignal.any([signal, AbortSignal.timeout(APPROVAL_TIMEOUT_MILLISECONDS)]),
-                    ),
-                );
-                models.push(...decoded.data);
-                cursor = decoded.nextCursor ?? null;
-            } while (cursor !== null && models.length < MODEL_CATALOG_LIMIT);
-        } catch (error) {
-            signal.throwIfAborted();
-            process.stderr.write(`[codex-acp] model catalog unavailable: ${String(error)}\n`);
-        }
-        this.#models = Object.freeze(models.slice(0, MODEL_CATALOG_LIMIT));
-    };
-
-    readonly #model = (id: string): CodexModel | undefined => this.#models.find((model) => model.id === id);
-
-    /**
-     * Learns, once per app-server, whether collaboration mode can be applied. An empty settings
-     * update is a no-op on a supporting Codex; an older Codex answers an error, which costs the
-     * Build/Plan selector alone without changing a restored thread's persisted mode.
-     */
-    readonly #probeCollaborationMode = async (signal: AbortSignal): Promise<void> => {
-        if (this.#collaborationModeSupported !== null) {
-            return;
-        }
-        try {
-            await this.#appServer.request(
-                "thread/settings/update",
-                { threadId: this.#nativeSessionId },
-                AbortSignal.any([signal, AbortSignal.timeout(APPROVAL_TIMEOUT_MILLISECONDS)]),
-            );
-            this.#collaborationModeSupported = true;
-        } catch {
-            signal.throwIfAborted();
-            this.#collaborationModeSupported = false;
-        }
-    };
-
-    /** The ACP settings Mobius discovers and renders in Run settings. */
-    readonly #configOptions = (): SessionConfigOption[] => {
-        const options: SessionConfigOption[] = [];
-        const model = modelSetting(this.#models, this.#selection.model);
-        if (model !== null) {
-            options.push(model);
-        }
-        const effort = effortSetting(this.#model(this.#selection.model), this.#selection.effort);
-        if (effort !== null) {
-            options.push(effort);
-        }
-        const fastMode = fastModeSetting(this.#model(this.#selection.model), this.#selection.fastMode);
-        if (fastMode !== null) {
-            options.push(fastMode);
-        }
-        if (this.#collaborationModeSupported === true) {
-            options.push(collaborationModeSetting(this.#selection.collaborationMode));
-        }
-        options.push(modeSetting(this.#selection.mode));
-        return options;
-    };
-
-    readonly #selectRestoredThread = (thread: {
-        readonly model?: string | null | undefined;
-        readonly reasoningEffort?: string | null | undefined;
-        readonly serviceTier?: string | null | undefined;
-        readonly thread: { readonly id: string };
-    }): void => {
-        this.#nativeSessionId = thread.thread.id;
-        const supported = supportedSelection(
-            this.#models,
-            thread.model ?? this.#selection.model,
-            thread.reasoningEffort ?? this.#selection.effort,
-        );
-        this.#selection = {
-            ...this.#selection,
-            ...supported,
-            fastMode: thread.serviceTier === SERVICE_TIER_FAST,
-        };
-    };
-
     readonly #replayHistory = async (
         turns: readonly { readonly items: readonly unknown[] }[] | null | undefined,
     ): Promise<void> => {
@@ -774,101 +429,6 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
         }
     };
 
-    /**
-     * Applies one `session/set_config_option`. Switching models re-resolves the effort the way Codex
-     * does — the current effort when the new model supports it, otherwise the model's own default —
-     * so the reply never advertises an effort the selected model cannot run.
-     */
-    readonly #applySelection = (configId: string, value: string | boolean): void => {
-        if (configId === FAST_MODE_SETTING_ID) {
-            if (typeof value !== "boolean") {
-                throw new AcpExecutionError(
-                    "The requested Codex setting is invalid",
-                    {},
-                    "invalid_session_configuration",
-                );
-            }
-            // A model without a speed tier has no fast mode, so enabling it there would advertise a
-            // capability the next turn cannot honour.
-            if (value && this.#model(this.#selection.model)?.additionalSpeedTiers?.includes(FAST_TIER) !== true) {
-                throw new AcpExecutionError(
-                    "The selected Codex model has no fast mode",
-                    {},
-                    "invalid_session_configuration",
-                );
-            }
-            this.#selection = { ...this.#selection, fastMode: value };
-            return;
-        }
-        if (typeof value !== "string") {
-            throw new AcpExecutionError("The requested Codex setting is invalid", {}, "invalid_session_configuration");
-        }
-        if (configId === MODE_SETTING_ID) {
-            if (!AGENT_MODES.some((mode) => mode.id === value)) {
-                throw new AcpExecutionError(
-                    "The requested Codex mode is unavailable",
-                    {},
-                    "invalid_session_configuration",
-                );
-            }
-            this.#selection = { ...this.#selection, mode: value };
-            this.#policySelected = true;
-            return;
-        }
-        if (configId === COLLABORATION_MODE_SETTING_ID) {
-            if (!COLLABORATION_MODES.some((mode) => mode.value === value)) {
-                throw new AcpExecutionError(
-                    "The requested Codex collaboration mode is unavailable",
-                    {},
-                    "invalid_session_configuration",
-                );
-            }
-            this.#selection = { ...this.#selection, collaborationMode: value };
-            this.#collaborationModeSelected = true;
-            return;
-        }
-        if (configId === MODEL_SETTING_ID) {
-            if (value === this.#selection.model) {
-                return;
-            }
-            const model = this.#model(value);
-            if (model === undefined) {
-                throw new AcpExecutionError(
-                    "The requested Codex model is unavailable",
-                    {},
-                    "invalid_session_configuration",
-                );
-            }
-            const supported = (model.supportedReasoningEfforts ?? []).map((option) => option.reasoningEffort);
-            const effort = supported.includes(this.#selection.effort)
-                ? this.#selection.effort
-                : (model.defaultReasoningEffort ?? supported[0] ?? "");
-            // Fast mode follows the model: a model with no speed tier drops a fast mode that was on.
-            this.#selection = {
-                ...this.#selection,
-                effort,
-                fastMode: this.#selection.fastMode && model.additionalSpeedTiers?.includes(FAST_TIER) === true,
-                model: value,
-            };
-            return;
-        }
-        if (configId === REASONING_EFFORT_SETTING_ID) {
-            const supported = (this.#model(this.#selection.model)?.supportedReasoningEfforts ?? []).map(
-                (option) => option.reasoningEffort,
-            );
-            if (!supported.includes(value)) {
-                throw new AcpExecutionError(
-                    "The requested Codex reasoning effort is unavailable",
-                    {},
-                    "invalid_session_configuration",
-                );
-            }
-            this.#selection = { ...this.#selection, effort: value };
-            return;
-        }
-        throw new AcpExecutionError("The requested Codex setting is unavailable", {}, "invalid_session_configuration");
-    };
-
     readonly #emit = async (update: SessionNotification["update"]): Promise<void> => {
         const connection = this.#connection;
         if (connection === null || this.#nativeSessionId.length === 0) {
@@ -895,7 +455,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
         }
         await connection.client.notify(methods.client.session.update, {
             sessionId: this.#nativeSessionId,
-            update: { configOptions: this.#configOptions(), sessionUpdate: "config_option_update" },
+            update: { configOptions: this.#settings.configOptions(), sessionUpdate: "config_option_update" },
         });
     };
 
@@ -937,8 +497,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
             const decoded = threadSettingsUpdatedSchema.safeParse(params);
             if (decoded.success && decoded.data.threadId === this.#nativeSessionId) {
                 const mode = decoded.data.threadSettings.collaborationMode?.mode;
-                if (mode !== undefined && mode !== this.#selection.collaborationMode) {
-                    this.#selection = { ...this.#selection, collaborationMode: mode };
+                if (this.#settings.observeCollaborationMode(mode)) {
                     await this.#enqueue(async () => {
                         await this.#emitConfigOptionsUpdate();
                     });
@@ -1188,44 +747,13 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
             // The selection rides on the turn rather than the thread, so a choice made between turns
             // applies to the next one without restarting the conversation. Approval and sandboxing
             // travel as a pair: Codex resolves them together into the mode's single preset.
-            const selection = this.#selection;
-            const mode = AGENT_MODES.find((candidate) => candidate.id === selection.mode) ?? DEFAULT_MODE;
-            const supportsFast = this.#model(selection.model)?.additionalSpeedTiers?.includes(FAST_TIER) === true;
             const started = turnSchema.parse(
                 (
                     (await this.#appServer.request(
                         "turn/start",
                         {
-                            // Until a mode is chosen, `config.toml` decides the sandbox and approval
-                            // policy, and those fields stay off the turn so the host's own setup is
-                            // inherited rather than overridden.
-                            ...(this.#policySelected
-                                ? {
-                                      approvalPolicy: mode.approvalPolicy,
-                                      approvalsReviewer: mode.approvalsReviewer,
-                                      sandboxPolicy: mode.sandboxPolicy,
-                                  }
-                                : {}),
-                            // The collaboration mode rides on the turn: Codex applies it to the
-                            // thread, where it persists until changed. "Build" is Codex's `default`
-                            // mode, so it is only sent once a choice exists to apply.
-                            ...(this.#collaborationModeSupported &&
-                            (selection.collaborationMode !== "default" || this.#collaborationModeSelected)
-                                ? {
-                                      collaborationMode: {
-                                          mode: selection.collaborationMode,
-                                          settings: {
-                                              developer_instructions: null,
-                                              model: selection.model,
-                                              reasoning_effort: selection.effort.length === 0 ? null : selection.effort,
-                                          },
-                                      },
-                                  }
-                                : {}),
-                            ...(selection.effort.length === 0 ? {} : { effort: selection.effort }),
+                            ...this.#settings.turnParameters(),
                             input,
-                            ...(selection.model.length === 0 ? {} : { model: selection.model }),
-                            ...(selection.fastMode && supportsFast ? { serviceTier: SERVICE_TIER_FAST } : {}),
                             threadId: this.#nativeSessionId,
                         },
                         signal,
