@@ -18,9 +18,11 @@ import {
     type InProcessAcpEndpoint,
     type InProcessAcpEndpointOptions,
 } from "../in-process/acp-endpoint.ts";
+import { sessionFailureMeta } from "../session-failure.ts";
 import { CodexAppServerClient, type CodexAppServerServerRequest } from "./app-server-client.ts";
 import {
     commandApprovalParamsSchema,
+    errorNotificationSchema,
     fileChangeApprovalParamsSchema,
     type McpElicitationParams,
     mcpElicitationParamsSchema,
@@ -189,6 +191,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
     #nativeSessionId = "";
     readonly #streamedReasoningItemIds = new Set<string>();
     readonly #streamedAgentMessageItemIds = new Set<string>();
+    readonly #noticeRevisions = new Map<string, number>();
     #turn: ActiveTurn | null = null;
     #nativeTurnId: string | null = null;
     #updateTail: Promise<void> = Promise.resolve();
@@ -470,6 +473,33 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
     };
 
     readonly #onNotification = async (method: string, params: unknown): Promise<void> => {
+        if (method === "error") {
+            const decoded = errorNotificationSchema.safeParse(params);
+            if (
+                decoded.success &&
+                decoded.data.willRetry &&
+                decoded.data.threadId === this.#nativeSessionId &&
+                this.#turn !== null &&
+                decoded.data.turnId === this.#turn.turn.id
+            ) {
+                const id = `codex:${decoded.data.turnId}:error`;
+                const revision = (this.#noticeRevisions.get(id) ?? 0) + 1;
+                this.#noticeRevisions.set(id, revision);
+                await this.#enqueue(async () => {
+                    await this.#emit({
+                        _meta: sessionFailureMeta({
+                            category: "service",
+                            id,
+                            revision,
+                            severity: "warning",
+                            title: decoded.data.error.message,
+                        }),
+                        sessionUpdate: "session_info_update",
+                    });
+                });
+            }
+            return;
+        }
         if (method === "turn/started") {
             const decoded = turnNotificationSchema.safeParse(params);
             if (decoded.success && decoded.data.threadId === this.#nativeSessionId && this.#turn !== null) {

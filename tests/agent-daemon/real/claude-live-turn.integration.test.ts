@@ -77,3 +77,47 @@ test("Given the real claude and its production adapter, When two prompts execute
         }
     });
 });
+
+test("Given Claude Code receives a transient provider error, When its production adapter retries, Then the recoverable error reaches the client before the successful reply", async () => {
+    await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-6", "CLAUDE_RECOVERED", {
+        failuresBeforeSuccess: 1,
+    });
+    await using agent = await ClaudeFixture.create(provider);
+    await withRealDaemon(new ClaudeCodeAgentSpecification(), agent.environment, async (peer) => {
+        const commandId = randomUUID();
+        peer.send(
+            encodeSessionPromptCommand({
+                additionalDirectoryIds: [],
+                agentId: "claude",
+                bindingId: peer.bindingId,
+                commandId,
+                directoryId: "default",
+                disposition: SessionPromptDisposition.Reject,
+                images: [],
+                kind: "session.prompt",
+                prompt: "Recover after a transient overload",
+                resources: [],
+                sessionId: peer.sessionId,
+                targetCommandId: "",
+            }),
+        );
+        let notice = "";
+        let text = "";
+        for (;;) {
+            const event = decodeRecordedSessionEvent(await peer.nextEvent());
+            if (event.kind === "agent.activity" && event.activityType === "notice") {
+                expect(event.commandId).toBe(commandId);
+                expect(event.status).toBe("completed");
+                notice = event.output;
+            } else if (event.kind === "agent.message.delta") {
+                text += event.text;
+            } else if (event.kind === "session.failed") {
+                throw new Error(JSON.stringify(event));
+            } else if (event.kind === "session.completed") {
+                break;
+            }
+        }
+        expect(notice.toLowerCase()).toContain("retry");
+        expect(text).toContain("CLAUDE_RECOVERED");
+    });
+});

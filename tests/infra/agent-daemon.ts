@@ -355,6 +355,7 @@ export interface FakeAgentDaemonBehavior {
     readonly sessions?: readonly SessionMetadata[];
     readonly steering?: boolean;
     readonly nativeSessionTitle?: (sessionId: string) => string;
+    readonly noticeText?: (command: SessionPromptCommand) => string;
     readonly loadNativeHistory?: (sessionId: string, signal: AbortSignal) => Promise<NativeSessionHistory>;
     readonly beforeActiveTurnSnapshot?: (sessionId: string, signal: AbortSignal) => Promise<void>;
     readonly activeInteraction?: (
@@ -925,6 +926,37 @@ async function processHappyPathCommand(
                 ...activity,
                 commandId: command.commandId,
                 detail: { content: [], input: "", kind: "recorded", output: progress },
+                kind: "agent.activity",
+                sessionId: command.sessionId,
+            }),
+            signal,
+        );
+    }
+    const notice = behavior.noticeText?.(command) ?? "";
+    if (notice.length > 0) {
+        const activity = {
+            activityId: `fake-notice-${turn.toString()}`,
+            activityType: "notice",
+            content: [],
+            input: "",
+            locations: [],
+            name: "",
+            output: notice,
+            sequence: progress.length > 0 ? 1 : 0,
+            status: "completed",
+            title: "Agent warning",
+            toolKind: "",
+        };
+        const current = activeTurns.get(command.sessionId);
+        if (current !== undefined) {
+            activeTurns.set(command.sessionId, { ...current, activities: [...current.activities, activity] });
+        }
+        await daemon.sendSessionEvent(
+            command.sessionId,
+            encodeAgentActivityEvent({
+                ...activity,
+                commandId: command.commandId,
+                detail: { content: [], input: "", kind: "recorded", output: notice },
                 kind: "agent.activity",
                 sessionId: command.sessionId,
             }),

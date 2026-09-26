@@ -120,6 +120,7 @@ export class AcpActivityTracker {
     readonly #activities = new Map<string, AcpActivity>();
     readonly #identities = new Map<string, ActivityIdentity>();
     readonly #narrations = new Map<string, AcpNarrationState>();
+    readonly #noticeRevisions = new Map<string, number>();
     readonly #onActivity: (activity: AcpActivity) => Promise<void>;
     readonly #onNarration: (narration: AcpActivityNarration) => Promise<void>;
     readonly #prepareContent: (content: AgentDisplayContent) => Promise<AgentDisplayContent>;
@@ -165,6 +166,36 @@ export class AcpActivityTracker {
         if (text.length > 0) {
             await this.#onNarration(new AcpActivityNarration(identity.id, activityType, identity.sequence, text));
         }
+    };
+
+    readonly recordNotice = async (
+        id: string,
+        revision: number,
+        severity: "error" | "warning",
+        text: string,
+    ): Promise<void> => {
+        const key = `notice:${id}`;
+        if ((this.#noticeRevisions.get(key) ?? 0) >= revision) {
+            return;
+        }
+        await this.finishNarrative();
+        this.#noticeRevisions.set(key, revision);
+        const identity = this.#identity(key);
+        await this.#record(
+            key,
+            new AcpActivity(
+                identity.id,
+                "notice",
+                "",
+                [],
+                "",
+                truncate(text, AGENT_ACTIVITY_DETAIL_LIMIT),
+                identity.sequence,
+                severity === "error" ? "failed" : "completed",
+                severity === "error" ? "Agent error" : "Agent warning",
+                "",
+            ),
+        );
     };
 
     readonly #narrativeSnapshot = (
