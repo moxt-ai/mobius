@@ -340,6 +340,7 @@ const imageBytes = Uint8Array.from(
 const sourceBytes = new TextEncoder().encode("export const generated = true;\n");
 
 export interface FakeAgentDaemonBehavior {
+    readonly toolExecution?: "complete" | "wait-for-cancel";
     readonly agentId?: "codex" | "claude" | "opencode" | "pi";
     readonly agentName?: string;
     readonly additionalAgents?: readonly {
@@ -456,11 +457,18 @@ async function processHappyPathCommand(
     queuedPrompts: Map<string, SessionPromptCommand>,
     sessions: Map<string, SessionMetadata>,
     nativeImports: Map<string, string>,
+    toolCancellations: Map<string, () => void>,
     signal: AbortSignal,
 ): Promise<string | undefined> {
     const kind = decodeMessageKind(encoded);
     if (kind === "session.cancel") {
         const command = decodeSessionCancelCommand(encoded);
+        const cancelTool = toolCancellations.get(command.commandId);
+        const active = activeTurns.get(command.sessionId);
+        if (active?.commandId === command.commandId && cancelTool !== undefined) {
+            cancelTool();
+            return;
+        }
         if (queuedPrompts.delete(command.commandId)) {
             await daemon.sendSessionEvent(
                 command.sessionId,
@@ -1039,6 +1047,31 @@ async function processHappyPathCommand(
             }),
             signal,
         );
+        if (behavior.toolExecution === "wait-for-cancel") {
+            const cancelled = Promise.withResolvers<void>();
+            const abort = (): void => cancelled.reject(signal.reason);
+            toolCancellations.set(command.commandId, () => cancelled.resolve());
+            signal.addEventListener("abort", abort, { once: true });
+            try {
+                signal.throwIfAborted();
+                await cancelled.promise;
+            } finally {
+                signal.removeEventListener("abort", abort);
+                toolCancellations.delete(command.commandId);
+                activeTurns.delete(command.sessionId);
+            }
+            await daemon.sendSessionEvent(
+                command.sessionId,
+                encodeSessionCompletedEvent({
+                    commandId: command.commandId,
+                    kind: "session.completed",
+                    sessionId: command.sessionId,
+                    stopReason: "cancelled",
+                }),
+                signal,
+            );
+            return;
+        }
         await daemon.sendSessionEvent(
             command.sessionId,
             encodeAgentActivityEvent({
@@ -1139,6 +1172,7 @@ export function serveFakeAgentDaemon(
     const queuedPrompts = new Map<string, SessionPromptCommand>();
     const sessions = new Map<string, SessionMetadata>();
     const nativeImports = new Map<string, string>();
+    const toolCancellations = new Map<string, () => void>();
     let turn = 0;
     const nextTurn = (): number => {
         turn += 1;
@@ -1157,6 +1191,7 @@ export function serveFakeAgentDaemon(
                     queuedPrompts,
                     sessions,
                     nativeImports,
+                    toolCancellations,
                     cancellation.signal,
                 );
             }
