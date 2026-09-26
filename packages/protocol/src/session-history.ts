@@ -82,6 +82,8 @@ const assistantHistoryMessage = z
         activities: z.array(nativeMessageActivitySchema).max(100).readonly().default([]),
         content: z.array(displayContentSchema).max(100).readonly().default([]),
         role: z.literal("assistant"),
+        // Absent when the source Agent does not report a terminal outcome.
+        outcome: z.enum(["succeeded", "cancelled", "failed"]).optional(),
         text: z.string().max(SESSION_HISTORY_CHARACTER_LIMIT),
         images: z.array(historyImage).max(8).readonly().optional(),
     })

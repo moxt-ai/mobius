@@ -37,6 +37,7 @@ const turnsSchema = z.object({
         .array(
             z.object({
                 id: z.string().min(1),
+                status: z.enum(["completed", "interrupted", "failed", "inProgress"]),
                 error: z.unknown().nullish(),
                 items: z.array(z.unknown()).max(100_000),
             }),
@@ -127,6 +128,25 @@ function messageSize(message: NativeHistoryMessage): number {
     );
 }
 
+function turnOutcome(
+    status: z.infer<typeof turnsSchema>["data"][number]["status"],
+): Extract<NativeHistoryMessage, { readonly role: "assistant" }>["outcome"] {
+    switch (status) {
+        case "completed":
+            return "succeeded";
+        case "interrupted":
+            return "cancelled";
+        case "failed":
+            return "failed";
+        case "inProgress":
+            return undefined;
+        default: {
+            const unhandled: never = status;
+            throw new Error(`Unknown Codex turn status: ${String(unhandled)}`);
+        }
+    }
+}
+
 function decodeHistory(
     thread: z.infer<typeof threadSchema>["thread"],
     value: unknown,
@@ -140,6 +160,7 @@ function decodeHistory(
     let characters = 0;
     let truncated = page.nextCursor != null;
     for (const turn of page.data.toReversed()) {
+        const outcome = turnOutcome(turn.status);
         const activities: NativeMessageActivity[] = [];
         let sequence = 0;
         let assistantMessageIndex: number | null = null;
@@ -252,15 +273,20 @@ function decodeHistory(
             const assistant = messages[assistantMessageIndex];
             if (assistant?.role === "assistant") {
                 characters -= messageSize(assistant);
-                const updated = { ...assistant, activities: activities.slice(-100) };
+                const updated: NativeHistoryMessage = {
+                    ...assistant,
+                    ...(outcome === undefined ? {} : { outcome }),
+                    activities: activities.slice(-100),
+                };
                 messages[assistantMessageIndex] = updated;
                 characters += messageSize(updated);
             }
-        } else if (activities.length > 0) {
+        } else if (activities.length > 0 || outcome !== undefined) {
             const message: NativeHistoryMessage = {
                 activities: activities.slice(-100),
                 content: [],
                 role: "assistant",
+                ...(outcome === undefined ? {} : { outcome }),
                 text: "",
             };
             messages.push(message);

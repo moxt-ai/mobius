@@ -125,7 +125,12 @@ input.on("line", (line) => {
             return;
         }
         const rich = Reflect.get(params, "itemsView") === "full";
-        const turns: { readonly id: string; error?: unknown; readonly items: unknown[] }[] = [];
+        const turns: {
+            readonly id: string;
+            status: "inProgress" | "completed" | "failed";
+            error?: unknown;
+            readonly items: unknown[];
+        }[] = [];
         for (const message of history) {
             if (typeof message !== "object" || message === null) {
                 throw new Error("Invalid saved message");
@@ -135,6 +140,7 @@ input.on("line", (line) => {
             if (Reflect.get(message, "role") === "user") {
                 turns.push({
                     id: `turn-${turns.length.toString()}`,
+                    status: "inProgress",
                     items: [
                         {
                             type: "userMessage",
@@ -190,7 +196,11 @@ input.on("line", (line) => {
                         turn.error = { message: "Agent could not inspect the optional workspace file" };
                     }
                 }
-                turns.at(-1)?.items.push({ type: "agentMessage", text, phase: "final_answer" });
+                const turn = turns.at(-1);
+                if (turn !== undefined) {
+                    turn.status = turn.error === undefined ? "completed" : "failed";
+                    turn.items.push({ type: "agentMessage", text, phase: "final_answer" });
+                }
             }
         }
         if (method === "thread/read") {

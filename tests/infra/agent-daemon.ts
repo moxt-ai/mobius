@@ -454,6 +454,7 @@ export interface FakeAgentDaemonBehavior {
     readonly activeInteraction?: (
         turn: ActiveTurn,
     ) => SessionPermissionRequestedEvent | SessionElicitationRequestedEvent | null;
+    readonly onPromptCancelled?: (command: SessionPromptCommand) => void;
     readonly onPromptCompleted?: (command: SessionPromptCommand, response: string) => void;
     readonly progressText?: (command: SessionPromptCommand) => string;
     readonly reasoningParts?: (command: SessionPromptCommand) => readonly string[];
@@ -1155,6 +1156,7 @@ async function processHappyPathCommand(
                 toolCancellations.delete(command.commandId);
                 activeTurns.delete(command.sessionId);
             }
+            behavior.onPromptCancelled?.(command);
             await daemon.sendSessionEvent(
                 command.sessionId,
                 encodeSessionCompletedEvent({

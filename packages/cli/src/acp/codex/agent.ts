@@ -190,7 +190,10 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
     readonly #settings: CodexSettings;
     #nativeSessionId = "";
     readonly #streamedReasoningItemIds = new Set<string>();
-    readonly #streamedAgentMessageItemIds = new Set<string>();
+    readonly #agentMessages = new Map<
+        string,
+        { readonly phase: "commentary" | "final_answer" | null | undefined; readonly kind: "started" | "streaming" }
+    >();
     readonly #noticeRevisions = new Map<string, number>();
     #turn: ActiveTurn | null = null;
     #nativeTurnId: string | null = null;
@@ -582,9 +585,11 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 decoded.data.turnId === this.#turn.turn.id &&
                 decoded.data.delta.length > 0
             ) {
-                this.#streamedAgentMessageItemIds.add(decoded.data.itemId);
+                const phase = this.#agentMessages.get(decoded.data.itemId)?.phase;
+                this.#agentMessages.set(decoded.data.itemId, { phase, kind: "streaming" });
                 await this.#enqueue(async () => {
                     await this.#emit({
+                        _meta: agentMessageMeta(phase),
                         content: { text: decoded.data.delta, type: "text" },
                         messageId: decoded.data.itemId,
                         sessionUpdate: "agent_message_chunk",
@@ -603,7 +608,13 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
         if (item.type === "agentMessage") {
             // An item/completed agent message carries the whole text and would duplicate the deltas
             // already streamed for the same item.
-            if (method === "item/started" || this.#streamedAgentMessageItemIds.delete(item.id)) {
+            if (method === "item/started") {
+                this.#agentMessages.set(item.id, { phase: item.phase, kind: "started" });
+                return;
+            }
+            const message = this.#agentMessages.get(item.id);
+            this.#agentMessages.delete(item.id);
+            if (message?.kind === "streaming") {
                 return;
             }
             await this.#enqueue(async () => {
@@ -791,7 +802,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
         // The turn is armed before `turn/start` is sent: a short turn can complete before its own
         // response arrives, and a completion for an unarmed turn would be lost.
         const turn: ActiveTurn = { completion, turn: { id: "" } };
-        this.#streamedAgentMessageItemIds.clear();
+        this.#agentMessages.clear();
         this.#streamedReasoningItemIds.clear();
         this.#turn = turn;
         this.#nativeTurnId = null;
@@ -821,7 +832,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
             signal.removeEventListener("abort", aborted);
             if (this.#turn === turn) {
                 this.#turn = null;
-                this.#streamedAgentMessageItemIds.clear();
+                this.#agentMessages.clear();
                 this.#streamedReasoningItemIds.clear();
             }
         }
