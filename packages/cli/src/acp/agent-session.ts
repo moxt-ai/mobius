@@ -29,7 +29,7 @@ import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/oper
 import { embedLocalHistoryImages } from "../native-sessions/history-images.ts";
 import { type ProcessTreeIdentity, revalidateExecutable } from "../process/executable.ts";
 import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp-error.ts";
-import { imageDisplayContent, isProgressMessage, normalizeContentBlock } from "./activity.ts";
+import { imageDisplayContent, isProgressMessage, normalizeContentBlock } from "./activity-content.ts";
 import { AgentConnection } from "./agent-connection.ts";
 import { AgentUpdateStream } from "./agent-update-stream.ts";
 import type { AcpClientHandler } from "./create-client.ts";
