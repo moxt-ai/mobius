@@ -1,3 +1,4 @@
+import { existsSync, watch } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,6 +28,7 @@ class NativeSessionObserver extends NullAcpSessionObserver {
 async function fixture(
     label: string,
     profile:
+        | "load-only"
         | "supported"
         | "unsupported"
         | "invalid-fork"
@@ -56,6 +58,7 @@ async function fixture(
         "--agent-name",
         label,
         ...(agentId === "opencode" ? ["--opencode-native-id"] : []),
+        ...(profile === "load-only" ? ["--load-only"] : []),
         ...(profile === "unsupported"
             ? ["--no-native-sessions"]
             : profile === "invalid-fork"
@@ -159,6 +162,80 @@ async function fixture(
 }
 
 describe("native Agent session boundary", () => {
+    it("Given shared preparation is loading, When one waiter cancels, Then it fails without cancelling the owner", async () => {
+        const f = await fixture("Claude Code", "load-only");
+        const owner = new AbortController();
+        try {
+            const nativeSessionId = await f.seed("Shared preparation");
+            await writeFile(join(f.native, "pause-load"), "");
+            const options = {
+                agent: f.agent,
+                cwd: f.workspace,
+                additionalDirectories: [],
+                sessionId: "shared-loading",
+                signal: owner.signal,
+                origin: { kind: "import", nativeSessionId },
+            } as const;
+            const paused = Promise.withResolvers<void>();
+            const watcher = watch(f.native, () => {
+                if (existsSync(join(f.native, "load-paused"))) {
+                    watcher.close();
+                    paused.resolve();
+                }
+            });
+            const preparing = f.sessions.prepareSession(options);
+            await paused.promise;
+            const waiter = new AbortController();
+            const cancelled = f.sessions.prepareSession({ ...options, signal: waiter.signal }).then(
+                () => "completed",
+                () => "cancelled",
+            );
+            waiter.abort();
+            await rm(join(f.native, "pause-load"));
+            await preparing;
+            expect(await cancelled).toBe("cancelled");
+        } finally {
+            owner.abort();
+            await f.close();
+        }
+    });
+
+    it("Given preparation is still loading, When the Runtime closes, Then preparation cannot return a live conversation", async () => {
+        const f = await fixture("Claude Code", "load-only");
+        const owner = new AbortController();
+        try {
+            const nativeSessionId = await f.seed("Closing preparation");
+            await writeFile(join(f.native, "pause-load"), "");
+            const paused = Promise.withResolvers<void>();
+            const watcher = watch(f.native, () => {
+                if (existsSync(join(f.native, "load-paused"))) {
+                    watcher.close();
+                    paused.resolve();
+                }
+            });
+            const preparing = f.sessions
+                .prepareSession({
+                    agent: f.agent,
+                    cwd: f.workspace,
+                    additionalDirectories: [],
+                    sessionId: "closing-loading",
+                    signal: owner.signal,
+                    origin: { kind: "import", nativeSessionId },
+                })
+                .then(
+                    () => "completed",
+                    () => "cancelled",
+                );
+            await paused.promise;
+            await f.sessions.close();
+            await rm(join(f.native, "pause-load"), { force: true });
+            expect(await preparing).toBe("cancelled");
+        } finally {
+            owner.abort();
+            await f.close();
+        }
+    });
+
     it("Given Mobius owns the Codex ACP adapter, When a Session is prepared and compacted, Then ACP advertises compact and Codex completes it", async () => {
         const temporary = await realpath(await mkdtemp(join(tmpdir(), "mobius-codex-compact-")));
         const workspace = join(temporary, "workspace");

@@ -106,3 +106,11 @@ These are internal names. CLI package exports, daemon command/event schemas,
 Agent adaptation and native-session identifiers are unchanged. Query and execution
 processes remain distinct, and accepted queued prompts still belong to
 `DaemonTurnRegistry`. Native history remains Agent-owned.
+
+`RuntimeOperations` owns in-flight cancellable requests. Closing the Runtime aborts
+those requests and waits for their resource cleanup before retiring retained
+processes. Preparation borrowers wait with their own cancellation signal; cancelling
+a borrower does not cancel the request that owns the shared preparation. Text chunks
+and activity tracking live in the same `AcpTurnState` and are released together when
+that turn finishes. Codex configuration and model discovery belong to `CodexSettings`;
+its next-turn parameters are consumed by the execution owner.
