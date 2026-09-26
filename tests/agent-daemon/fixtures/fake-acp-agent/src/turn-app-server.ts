@@ -317,16 +317,31 @@ input.on("line", (line) => {
             threadId,
             turnId,
         });
+        const messageId = `message-${nextTurn.toString()}`;
+        const messageText =
+            `Scripted Codex answer (${String(readParam("model"))}/${String(readParam("effort"))}` +
+            `/${String(readParam("approvalPolicy"))}/${String(readParam("serviceTier"))}` +
+            `/${String(activeCollaborationMode)})`;
+        const split = Math.ceil(messageText.length / 2);
+        notify("item/agentMessage/delta", {
+            delta: messageText.slice(0, split),
+            itemId: messageId,
+            threadId,
+            turnId,
+        });
+        notify("item/agentMessage/delta", {
+            delta: messageText.slice(split),
+            itemId: messageId,
+            threadId,
+            turnId,
+        });
         notify("item/completed", {
             item: {
-                id: `message-${nextTurn.toString()}`,
+                id: messageId,
                 phase: "final_answer",
                 // The turn reports what it actually ran with, so a caller can prove a selection
                 // reached the app-server rather than only the settings list.
-                text:
-                    `Scripted Codex answer (${String(readParam("model"))}/${String(readParam("effort"))}` +
-                    `/${String(readParam("approvalPolicy"))}/${String(readParam("serviceTier"))}` +
-                    `/${String(activeCollaborationMode)})`,
+                text: messageText,
                 type: "agentMessage",
             },
             threadId,

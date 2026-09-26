@@ -188,6 +188,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
     readonly #settings: CodexSettings;
     #nativeSessionId = "";
     readonly #streamedReasoningItemIds = new Set<string>();
+    readonly #streamedAgentMessageItemIds = new Set<string>();
     #turn: ActiveTurn | null = null;
     #nativeTurnId: string | null = null;
     #updateTail: Promise<void> = Promise.resolve();
@@ -542,6 +543,26 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
             }
             return;
         }
+        if (method === "item/agentMessage/delta") {
+            const decoded = reasoningTextDeltaParamsSchema.safeParse(params);
+            if (
+                decoded.success &&
+                decoded.data.threadId === this.#nativeSessionId &&
+                this.#turn !== null &&
+                decoded.data.turnId === this.#turn.turn.id &&
+                decoded.data.delta.length > 0
+            ) {
+                this.#streamedAgentMessageItemIds.add(decoded.data.itemId);
+                await this.#enqueue(async () => {
+                    await this.#emit({
+                        content: { text: decoded.data.delta, type: "text" },
+                        messageId: decoded.data.itemId,
+                        sessionUpdate: "agent_message_chunk",
+                    });
+                });
+            }
+            return;
+        }
         if (method !== "item/started" && method !== "item/completed") {
             return;
         }
@@ -552,7 +573,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
         if (item.type === "agentMessage") {
             // An item/completed agent message carries the whole text and would duplicate the deltas
             // already streamed for the same item.
-            if (method === "item/started") {
+            if (method === "item/started" || this.#streamedAgentMessageItemIds.delete(item.id)) {
                 return;
             }
             await this.#enqueue(async () => {
@@ -740,6 +761,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
         // The turn is armed before `turn/start` is sent: a short turn can complete before its own
         // response arrives, and a completion for an unarmed turn would be lost.
         const turn: ActiveTurn = { completion, turn: { id: "" } };
+        this.#streamedAgentMessageItemIds.clear();
         this.#streamedReasoningItemIds.clear();
         this.#turn = turn;
         this.#nativeTurnId = null;
@@ -769,6 +791,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
             signal.removeEventListener("abort", aborted);
             if (this.#turn === turn) {
                 this.#turn = null;
+                this.#streamedAgentMessageItemIds.clear();
                 this.#streamedReasoningItemIds.clear();
             }
         }

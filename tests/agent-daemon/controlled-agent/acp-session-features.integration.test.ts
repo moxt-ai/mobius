@@ -529,6 +529,35 @@ describe("ACP session features", () => {
         }
     });
 
+    it("Given an ACP Agent streams an assistant reply, When message chunks arrive, Then the Runtime receives each increment", async () => {
+        const manager = new AgentRuntimeManager();
+        const output: string[] = [];
+        try {
+            await manager.runPrompt({
+                additionalDirectories: [],
+                agent: fakeAgent(),
+                commandId: "streaming-command",
+                cwd: process.cwd(),
+                images: [],
+                onActivity: () => Promise.resolve(),
+                onText: (text) => {
+                    output.push(text);
+                    return Promise.resolve();
+                },
+                prompt: "stream token burst",
+                resources: [],
+                sessionId: "streaming-session",
+                signal: new AbortController().signal,
+            });
+
+            expect(output).toHaveLength(65);
+            expect(output.join("")).toContain("token-0 token-1 ");
+            expect(output.join("")).toContain("token-62 token-63 ");
+        } finally {
+            await manager.close();
+        }
+    });
+
     it.each([
         ["absent usage", false, "end_turn"],
         ["unknown metadata", false, "end_turn"],

@@ -4,37 +4,6 @@ import { type AcpActivity, type AcpActivityNarration, AcpActivityTracker } from 
 const SESSION_CONTROL_COMMAND_ID = "session-control";
 
 export abstract class AcpTurnState {
-    #bufferedText: { readonly chunks: string[]; readonly messageId: string }[] = [];
-
-    readonly bufferText = (text: string, messageId: string): void => {
-        const previous = this.#bufferedText.at(-1);
-        if (previous?.messageId === messageId) {
-            previous.chunks.push(text);
-        } else {
-            this.#bufferedText.push({ chunks: [text], messageId });
-        }
-    };
-
-    readonly flushText = async (): Promise<void> => {
-        const buffered = this.#bufferedText;
-        this.#bufferedText = [];
-        for (const message of buffered) {
-            for (const chunk of message.chunks) {
-                await this.onText(chunk, message.messageId);
-            }
-        }
-    };
-
-    readonly recordTextAsProgress = async (): Promise<void> => {
-        const buffered = this.#bufferedText;
-        this.#bufferedText = [];
-        for (const message of buffered) {
-            for (const chunk of message.chunks) {
-                await this.activities.recordNarrative("progress", message.messageId, chunk);
-            }
-        }
-    };
-
     abstract readonly commandId: string;
     abstract readonly running: boolean;
     abstract readonly activities: AcpActivityTracker;
