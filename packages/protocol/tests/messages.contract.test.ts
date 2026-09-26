@@ -7,27 +7,15 @@ import {
     type AgentMessageDeltaEvent,
     decodeAgentActivityEvent,
     decodeAgentMessageDeltaEvent,
-    decodeRuntimeHeartbeatAckEvent,
-    decodeRuntimeHeartbeatEvent,
-    decodeRuntimeLivenessReadyEvent,
     decodeSessionCancelCommand,
     decodeSessionEventEnvelope,
     decodeSessionPromptCommand,
     encodeAgentActivityEvent,
-    encodeRuntimeHeartbeatAckEvent,
-    encodeRuntimeHeartbeatEvent,
-    encodeRuntimeLivenessReadyEvent,
     encodeSessionCancelCommand,
     encodeSessionEventEnvelope,
     encodeSessionPromptCommand,
     encodeSessionStartedEvent,
     ProtocolMessageError,
-    RUNTIME_HEARTBEAT_ACK_KIND,
-    RUNTIME_HEARTBEAT_KIND,
-    RUNTIME_LIVENESS_READY_KIND,
-    type RuntimeHeartbeatAckEvent,
-    type RuntimeHeartbeatEvent,
-    type RuntimeLivenessReadyEvent,
     SESSION_CANCEL_KIND,
     SESSION_EVENT_KIND,
     SESSION_PROMPT_KIND,
@@ -49,32 +37,6 @@ describe("live Session event protocol", () => {
         });
         const envelope = { kind: SESSION_EVENT_KIND, payload, sessionId: "session-1" } as const;
         expect(decodeSessionEventEnvelope(encodeSessionEventEnvelope(envelope))).toEqual(envelope);
-    });
-});
-
-describe("runtime liveness protocol", () => {
-    it("Given a liveness-capable relay, When its readiness signal crosses the daemon boundary, Then the capability round-trips exactly", () => {
-        const event: RuntimeLivenessReadyEvent = {
-            kind: RUNTIME_LIVENESS_READY_KIND,
-        };
-
-        expect(decodeRuntimeLivenessReadyEvent(encodeRuntimeLivenessReadyEvent(event))).toEqual(event);
-    });
-
-    it("Given a daemon heartbeat identity, When the relay acknowledges it, Then both messages preserve the same identity", () => {
-        const heartbeat: RuntimeHeartbeatEvent = {
-            heartbeatId: "heartbeat-1",
-            kind: RUNTIME_HEARTBEAT_KIND,
-        };
-        const acknowledgement: RuntimeHeartbeatAckEvent = {
-            heartbeatId: heartbeat.heartbeatId,
-            kind: RUNTIME_HEARTBEAT_ACK_KIND,
-        };
-
-        expect(decodeRuntimeHeartbeatEvent(encodeRuntimeHeartbeatEvent(heartbeat))).toEqual(heartbeat);
-        expect(decodeRuntimeHeartbeatAckEvent(encodeRuntimeHeartbeatAckEvent(acknowledgement))).toEqual(
-            acknowledgement,
-        );
     });
 });
 

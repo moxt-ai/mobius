@@ -64,3 +64,16 @@ do not silently fall back to a controlled Agent or skip compatibility coverage.
 Local tests create fresh databases from committed migrations. Old database
 contents and old schema versions are outside the repository contract. Consumers
 verify Chat integration after updating the Mobius submodule and SDK dependency.
+
+## Avoid duplicate coverage
+
+Keep one controlled ACP scenario for Agent-independent protocol behavior; changing
+only an advertised Agent name does not add compatibility coverage. Real Agent
+scenarios remain separate because they exercise different executables and adapters.
+Use controlled peers for deterministic edge cases, cancellation races, malformed
+responses, and resource limits that real Agents cannot reliably produce.
+
+Prefer observable transport behavior over additional successful codec round trips.
+Keep rejection tests for malformed or unauthorized input. Daemon liveness scenarios
+own readiness and heartbeat exchanges, including reconnect and missing acknowledgements.
+CLI help text and diagnostic timing-field round trips are not dedicated test targets.
