@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import {
-    ACTIVE_TURN_TEXT_LIMIT,
     AGENT_ACTIVITY_KIND,
     AGENT_ACTIVITY_NARRATION_KIND,
     AGENT_CONTENT_KIND,
@@ -46,7 +45,6 @@ export class ActiveDaemonTurn {
     #text = "";
     readonly #activities = new Map<string, NativeMessageActivity>();
     readonly #content = new Map<string, AgentDisplayContent>();
-    #truncated = false;
     #sequence = 0;
     #interaction: Extract<
         RecordedSessionEvent,
@@ -107,21 +105,8 @@ export class ActiveDaemonTurn {
 
     readonly recordEvent = (event: ActiveTurnEventInput): RecordedSessionEvent => {
         if (event.kind === AGENT_MESSAGE_DELTA_KIND) {
-            this.#sequence += 1;
             this.#text += event.text;
-            if (this.#text.length > ACTIVE_TURN_TEXT_LIMIT) {
-                this.#text = this.#text.slice(-ACTIVE_TURN_TEXT_LIMIT);
-                this.#truncated = true;
-            }
-            return {
-                commandId: this.command.commandId,
-                epoch: this.#epoch,
-                kind: AGENT_MESSAGE_DELTA_KIND,
-                messageId: event.messageId,
-                sequence: this.#sequence,
-                sessionId: this.command.sessionId,
-                text: event.text,
-            };
+            return this.updated();
         }
         if (
             event.sessionId !== this.command.sessionId ||
@@ -171,7 +156,23 @@ export class ActiveDaemonTurn {
         ) {
             this.#interaction = null;
         }
+        if (
+            event.kind === AGENT_ACTIVITY_KIND ||
+            event.kind === AGENT_ACTIVITY_NARRATION_KIND ||
+            event.kind === AGENT_CONTENT_KIND
+        ) {
+            return this.updated();
+        }
         return event;
+    };
+
+    private readonly updated = (): RecordedSessionEvent => {
+        this.#sequence += 1;
+        const turn = this.snapshot();
+        if (turn === null) {
+            throw new Error("Only a running turn can publish a snapshot");
+        }
+        return { kind: "session.turn.updated", sessionId: this.command.sessionId, turn };
     };
 
     readonly snapshot = (): ActiveTurnSnapshot =>
@@ -182,7 +183,7 @@ export class ActiveDaemonTurn {
                   content: [...this.#content.values()],
                   prompt: this.command.prompt,
                   text: this.#text,
-                  truncated: this.#truncated,
+                  truncated: false,
                   epoch: this.#epoch,
                   interaction: this.#interaction,
                   sequence: this.#sequence,

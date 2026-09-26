@@ -54,13 +54,14 @@ test("Given the real opencode and its production adapter, When two prompts execu
                             outcome: "selected",
                         }),
                     );
-                } else if (event.kind === "agent.message.delta") {
-                    expect(event.commandId).toBe(commandId);
-                    text += event.text;
-                } else if (event.kind === "agent.activity") {
-                    if (event.activityType === "tool" && event.status === "completed") {
-                        expect(event.output).toContain(peer.workspace);
-                        toolSucceeded = true;
+                } else if (event.kind === "session.turn.updated") {
+                    expect(event.turn.commandId).toBe(commandId);
+                    text = event.turn.text;
+                    for (const activity of event.turn.activities) {
+                        if (activity.activityType === "tool" && activity.status === "completed") {
+                            expect(activity.output).toContain(peer.workspace);
+                            toolSucceeded = true;
+                        }
                     }
                 } else if (event.kind === "session.failed") {
                     throw new Error(JSON.stringify(event));

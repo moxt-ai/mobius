@@ -54,18 +54,19 @@ test("Given the real pi and its production adapter, When two prompts execute thr
                             outcome: "selected",
                         }),
                     );
-                } else if (event.kind === "agent.message.delta") {
-                    expect(event.commandId).toBe(commandId);
-                    text += event.text;
-                } else if (event.kind === "agent.activity") {
-                    if (event.activityType === "tool" && event.status === "completed") {
-                        const output: unknown = JSON.parse(event.output);
-                        expect(output).toEqual(
-                            expect.arrayContaining([
-                                expect.objectContaining({ type: "terminal", terminalId: expect.any(String) }),
-                            ]),
-                        );
-                        toolSucceeded = true;
+                } else if (event.kind === "session.turn.updated") {
+                    expect(event.turn.commandId).toBe(commandId);
+                    text = event.turn.text;
+                    for (const activity of event.turn.activities) {
+                        if (activity.activityType === "tool" && activity.status === "completed") {
+                            const output: unknown = JSON.parse(activity.output);
+                            expect(output).toEqual(
+                                expect.arrayContaining([
+                                    expect.objectContaining({ type: "terminal", terminalId: expect.any(String) }),
+                                ]),
+                            );
+                            toolSucceeded = true;
+                        }
                     }
                 } else if (event.kind === "session.failed") {
                     throw new Error(JSON.stringify(event));

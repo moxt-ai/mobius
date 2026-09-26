@@ -85,8 +85,8 @@ test("Given a real opencode native Session, When the active prompt is cancelled 
                     if (event.kind === "session.failed") {
                         throw new Error(JSON.stringify(event));
                     }
-                    if (event.kind === "agent.message.delta" && event.commandId === commandId) {
-                        text += event.text;
+                    if (event.kind === "session.turn.updated" && event.turn.commandId === commandId) {
+                        text = event.turn.text;
                     }
                     if (event.kind === "session.completed") {
                         expect(event.commandId).toBe(commandId);

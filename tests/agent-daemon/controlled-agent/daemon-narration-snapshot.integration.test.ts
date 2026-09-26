@@ -7,15 +7,15 @@ import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import {
-    AGENT_ACTIVITY_KIND,
-    AGENT_ACTIVITY_NARRATION_KIND,
     decodeMessageKind,
     decodeSessionEventEnvelope,
+    decodeSessionTurnUpdatedEvent,
     encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
     SESSION_COMPLETED_KIND,
     SESSION_EVENT_KIND,
     SESSION_FAILED_KIND,
+    SESSION_TURN_UPDATED_KIND,
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -108,7 +108,7 @@ class ClientFrames {
 }
 
 describe("daemon narration delivery", () => {
-    it("Given an Agent rewrites one reasoning activity for every streamed chunk, When the turn completes, Then the daemon sends bounded increments and a single completed snapshot whose text matches the whole narration", async () => {
+    it("Given an Agent rewrites one reasoning activity for every streamed chunk, When the turn completes, Then versioned cumulative snapshots preserve the whole narration without duplicate text", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-narration-delta-"));
         const workspace = join(stateDirectory, "workspace");
         const nativeStateDirectory = join(stateDirectory, "native");
@@ -184,68 +184,38 @@ describe("daemon narration delivery", () => {
             };
             sendText(socket, encodeSessionPromptCommand(prompt));
 
-            // Every event is acked so the replay window keeps draining, exactly as a
-            // healthy Relay behaves. The narration itself must still stay incremental.
-            let activityCount = 0;
-            let narrationCount = 0;
-            const narrationByActivity = new Map<string, string>();
-            let completedSnapshot = "";
-            let completedActivityId = "";
-            let maxEventBytes = 0;
-            let completed = false;
-            while (!completed) {
+            let version = 0;
+            let narration = "";
+            let completedNarration = false;
+            for (;;) {
                 const message = await frames.next();
                 if (decodeMessageKind(message) !== SESSION_EVENT_KIND) {
                     continue;
                 }
-                const envelope = decodeSessionEventEnvelope(message);
-                maxEventBytes = Math.max(maxEventBytes, Buffer.byteLength(envelope.payload, "utf8"));
-                const kind = decodeMessageKind(envelope.payload);
-                if (kind === AGENT_ACTIVITY_NARRATION_KIND) {
-                    const payload: unknown = JSON.parse(envelope.payload);
-                    narrationCount += 1;
-                    if (typeof payload === "object" && payload !== null) {
-                        const activityId = String(Reflect.get(payload, "activityId"));
-                        narrationByActivity.set(
-                            activityId,
-                            `${narrationByActivity.get(activityId) ?? ""}${String(Reflect.get(payload, "text"))}`,
-                        );
+                const { payload } = decodeSessionEventEnvelope(message);
+                const kind = decodeMessageKind(payload);
+                if (kind === SESSION_TURN_UPDATED_KIND) {
+                    const { turn } = decodeSessionTurnUpdatedEvent(payload);
+                    expect(turn.sequence).toBeGreaterThan(version);
+                    version = turn.sequence;
+                    const reasoning = turn.activities.find((activity) => activity.activityType === "reasoning");
+                    if (reasoning !== undefined) {
+                        expect(reasoning.output.startsWith(narration)).toBe(true);
+                        narration = reasoning.output;
+                        completedNarration = reasoning.status === "completed";
                     }
                 }
-                if (kind === AGENT_ACTIVITY_KIND) {
-                    const payload: unknown = JSON.parse(envelope.payload);
-                    activityCount += 1;
-                    if (
-                        typeof payload === "object" &&
-                        payload !== null &&
-                        Reflect.get(payload, "status") === "completed" &&
-                        Reflect.get(payload, "activityType") === "reasoning"
-                    ) {
-                        completedSnapshot = String(Reflect.get(payload, "output"));
-                        completedActivityId = String(Reflect.get(payload, "activityId"));
-                    }
+                if (kind === SESSION_FAILED_KIND) {
+                    throw new Error(payload);
                 }
-                if (kind === SESSION_COMPLETED_KIND || kind === SESSION_FAILED_KIND) {
-                    completed = true;
+                if (kind === SESSION_COMPLETED_KIND) {
+                    break;
                 }
             }
-
-            // The window of reasoning updates the fixture streams must arrive as
-            // increments, not as one growing snapshot per chunk.
-            expect(narrationCount).toBeGreaterThan(0);
-            // No single durable event may carry the accumulated narration, which is what
-            // made the retained bytes grow quadratically.
-            expect(maxEventBytes).toBeLessThan(8_000);
-            // The completed snapshot carries the whole narration exactly once, and the
-            // increments reach it with no loss or duplication.
-            expect(completedSnapshot).toContain("Inspecting the workspace");
-            expect(completedSnapshot).toContain("step-0");
-            expect(completedSnapshot).toContain("step-63");
-            // The snapshot must fold in exactly the increments that were sent for it.
-            const streamed = narrationByActivity.get(completedActivityId) ?? "";
-            expect(streamed.length).toBeGreaterThan(0);
-            expect(completedSnapshot).toContain(streamed);
-            expect(activityCount).toBeGreaterThan(0);
+            expect(completedNarration).toBe(true);
+            expect(narration).toContain("Inspecting the workspace");
+            expect(narration.split("step-0")).toHaveLength(2);
+            expect(narration.split("step-63")).toHaveLength(2);
         } finally {
             cancellation.abort();
             await daemon;

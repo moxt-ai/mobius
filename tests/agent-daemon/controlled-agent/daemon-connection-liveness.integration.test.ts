@@ -14,13 +14,11 @@ import type { DaemonScheduledTask, DaemonTimer } from "../../../packages/cli/src
 import { runDaemon } from "../../../packages/cli/src/run-daemon.ts";
 
 import {
-    AGENT_ACTIVITY_KIND,
-    AGENT_MESSAGE_DELTA_KIND,
-    decodeAgentActivityEvent,
-    decodeAgentMessageDeltaEvent,
+    type ActiveTurnSnapshot,
     decodeMessageKind,
     decodeRuntimeHeartbeatEvent,
     decodeSessionEventEnvelope,
+    decodeSessionTurnUpdatedEvent,
     encodeRuntimeHeartbeatAckEvent,
     encodeSessionPromptCommand,
     encodeWorkspaceListCommand,
@@ -32,6 +30,7 @@ import {
     SESSION_EVENT_KIND,
     SESSION_PROMPT_KIND,
     SESSION_STARTED_KIND,
+    SESSION_TURN_UPDATED_KIND,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
 } from "../../../packages/protocol/src/index.ts";
@@ -508,7 +507,7 @@ describe("daemon relay connection liveness", () => {
             response.end();
         });
         const sockets = new Set<Duplex>();
-        const activities: Array<ReturnType<typeof decodeAgentActivityEvent>> = [];
+        let activities: ActiveTurnSnapshot["activities"] = [];
         let agentText = "";
         let removeObserver = (): void => undefined;
         let resolveCompleted = (): void => undefined;
@@ -539,12 +538,10 @@ describe("daemon relay connection liveness", () => {
                 }
                 const envelope = decodeSessionEventEnvelope(frame.text);
                 const kind = decodeMessageKind(envelope.payload);
-                if (kind === AGENT_ACTIVITY_KIND) {
-                    activities.push(decodeAgentActivityEvent(envelope.payload));
-                    return;
-                }
-                if (kind === AGENT_MESSAGE_DELTA_KIND) {
-                    agentText += decodeAgentMessageDeltaEvent(envelope.payload).text;
+                if (kind === SESSION_TURN_UPDATED_KIND) {
+                    const { turn } = decodeSessionTurnUpdatedEvent(envelope.payload);
+                    activities = turn.activities;
+                    agentText = turn.text;
                     return;
                 }
                 if (kind === SESSION_COMPLETED_KIND) {
@@ -601,9 +598,8 @@ describe("daemon relay connection liveness", () => {
         try {
             await completed;
             const reasoning = activities.filter((activity) => activity.activityType === "reasoning");
-            expect(activities).toHaveLength(6);
-            expect(reasoning).toHaveLength(2);
-            expect(reasoning.map((activity) => activity.status)).toEqual(["running", "completed"]);
+            expect(reasoning).toHaveLength(1);
+            expect(reasoning.map((activity) => activity.status)).toEqual(["completed"]);
             expect(reasoning.at(-1)?.output).toContain("step-63");
             expect(agentText).toBe("Echo from ACP: stream verbose activity");
         } finally {

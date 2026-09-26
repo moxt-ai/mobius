@@ -7,19 +7,16 @@ import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import {
-    AGENT_ACTIVITY_KIND,
-    AGENT_ACTIVITY_NARRATION_KIND,
     AGENT_CATALOG_REFRESH_KIND,
     AGENT_CATALOG_REFRESHED_KIND,
-    AGENT_MESSAGE_DELTA_KIND,
     AGENT_SETTINGS_DISCOVER_KIND,
     AGENT_SETTINGS_DISCOVERED_KIND,
-    decodeAgentActivityEvent,
     decodeAgentCatalogRefreshedEvent,
     decodeAgentSettingsDiscoveredEvent,
     decodeMessageKind,
     decodeSessionEventEnvelope,
     decodeSessionLiveHistoryPageLoaded,
+    decodeSessionTurnUpdatedEvent,
     encodeAgentCatalogRefreshCommand,
     encodeAgentSettingsDiscoverCommand,
     encodeSessionCancelCommand,
@@ -31,6 +28,7 @@ import {
     SESSION_EVENT_KIND,
     SESSION_FAILED_KIND,
     SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
+    SESSION_TURN_UPDATED_KIND,
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -149,13 +147,15 @@ async function readTerminalSessionResult(
         }
         const kind = decodeMessageKind(envelope.payload);
         const payload: unknown = JSON.parse(envelope.payload);
-        if (commandId.length > 0 && readStringField(payload, "commandId") !== commandId) {
+        if (kind === SESSION_TURN_UPDATED_KIND) {
+            const { turn } = decodeSessionTurnUpdatedEvent(envelope.payload);
+            if (commandId.length === 0 || turn.commandId === commandId) {
+                text = turn.text;
+            }
             continue;
         }
-        // Only the assistant reply contributes to the turn's text. Activities and
-        // narration increments also carry a text-like field for their own decoding.
-        if (kind === AGENT_MESSAGE_DELTA_KIND) {
-            text += readStringField(payload, "text");
+        if (commandId.length > 0 && readStringField(payload, "commandId") !== commandId) {
+            continue;
         }
         if (kind === SESSION_COMPLETED_KIND || kind === SESSION_FAILED_KIND) {
             return new TerminalSessionResult(
@@ -175,11 +175,11 @@ async function readCommandActivity(frames: ClientFrames, sessionId: string, comm
             continue;
         }
         const envelope = decodeSessionEventEnvelope(message);
-        if (envelope.sessionId !== sessionId || decodeMessageKind(envelope.payload) !== AGENT_ACTIVITY_KIND) {
+        if (envelope.sessionId !== sessionId || decodeMessageKind(envelope.payload) !== SESSION_TURN_UPDATED_KIND) {
             continue;
         }
-        const payload: unknown = JSON.parse(envelope.payload);
-        if (readStringField(payload, "commandId") === commandId) {
+        const { turn } = decodeSessionTurnUpdatedEvent(envelope.payload);
+        if (turn.commandId === commandId && turn.activities.length > 0) {
             return;
         }
     }
@@ -197,11 +197,12 @@ async function readReasoningActivity(
             continue;
         }
         const envelope = decodeSessionEventEnvelope(message);
-        if (envelope.sessionId !== sessionId || decodeMessageKind(envelope.payload) !== AGENT_ACTIVITY_KIND) {
+        if (envelope.sessionId !== sessionId || decodeMessageKind(envelope.payload) !== SESSION_TURN_UPDATED_KIND) {
             continue;
         }
-        const activity = decodeAgentActivityEvent(envelope.payload);
-        if (activity.commandId === commandId && activity.activityType === "reasoning" && activity.status === status) {
+        const { turn } = decodeSessionTurnUpdatedEvent(envelope.payload);
+        const activity = turn.activities.find((item) => item.activityType === "reasoning" && item.status === status);
+        if (turn.commandId === commandId && activity !== undefined) {
             return activity;
         }
     }
@@ -214,11 +215,12 @@ async function readNoticeActivity(frames: ClientFrames, sessionId: string, comma
             continue;
         }
         const envelope = decodeSessionEventEnvelope(message);
-        if (envelope.sessionId !== sessionId || decodeMessageKind(envelope.payload) !== AGENT_ACTIVITY_KIND) {
+        if (envelope.sessionId !== sessionId || decodeMessageKind(envelope.payload) !== SESSION_TURN_UPDATED_KIND) {
             continue;
         }
-        const activity = decodeAgentActivityEvent(envelope.payload);
-        if (activity.commandId === commandId && activity.activityType === "notice") {
+        const { turn } = decodeSessionTurnUpdatedEvent(envelope.payload);
+        const activity = turn.activities.find((item) => item.activityType === "notice");
+        if (turn.commandId === commandId && activity !== undefined) {
             return activity;
         }
     }
@@ -231,15 +233,13 @@ async function readReasoningNarration(frames: ClientFrames, sessionId: string, c
             continue;
         }
         const envelope = decodeSessionEventEnvelope(message);
-        if (envelope.sessionId !== sessionId || decodeMessageKind(envelope.payload) !== AGENT_ACTIVITY_NARRATION_KIND) {
+        if (envelope.sessionId !== sessionId || decodeMessageKind(envelope.payload) !== SESSION_TURN_UPDATED_KIND) {
             continue;
         }
-        const payload: unknown = JSON.parse(envelope.payload);
-        if (
-            readStringField(payload, "commandId") === commandId &&
-            readStringField(payload, "activityType") === "reasoning"
-        ) {
-            return readStringField(payload, "text");
+        const { turn } = decodeSessionTurnUpdatedEvent(envelope.payload);
+        const activity = turn.activities.find((item) => item.activityType === "reasoning" && item.output.length > 0);
+        if (turn.commandId === commandId && activity !== undefined) {
+            return activity.output;
         }
     }
 }

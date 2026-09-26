@@ -114,3 +114,22 @@ a borrower does not cancel the request that owns the shared preparation. Text ch
 and activity tracking live in the same `AcpTurnState` and are released together when
 that turn finishes. Codex configuration and model discovery belong to `CodexSettings`;
 its next-turn parameters are consumed by the execution owner.
+
+## Current turn snapshots
+
+Agent text and narration increments stay inside the daemon. `ActiveDaemonTurn`
+accumulates them in memory and emits `session.turn.updated` with the complete text,
+activities, content, epoch, and increasing sequence. Existing coalescers bound the
+publication frequency. Body text is not clipped in the active turn's memory.
+Activity sequence is display order; turn sequence is the content snapshot version.
+
+The `active-turn` query returns the same content snapshot. A subscriber opens the
+stream before reading it and ignores buffered updates at or below its version.
+Native history is used for completed turns; its partial current-turn output must
+not override the daemon snapshot. Final output is flushed before completion and
+turn memory is released by the execution registry. No cloud event log is added.
+
+Web integration tests use a stateful fake daemon speaking this snapshot protocol.
+Real Agent tests verify the production daemon's cumulative output, tool state, and
+native-session recovery. Controlled Agent peers cover burst coalescing and lifecycle
+faults; they do not establish real Agent compatibility.
