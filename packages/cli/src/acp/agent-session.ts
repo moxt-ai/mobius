@@ -31,6 +31,7 @@ import { type ProcessTreeIdentity, revalidateExecutable } from "../process/execu
 import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp-error.ts";
 import { imageDisplayContent, isProgressMessage, normalizeContentBlock } from "./activity-content.ts";
 import { AgentConnection } from "./agent-connection.ts";
+import { type AcpTurnState, IdleAcpTurn, RunningAcpTurn } from "./agent-turn.ts";
 import { AgentUpdateStream } from "./agent-update-stream.ts";
 import type { AcpClientHandler } from "./create-client.ts";
 import {
@@ -56,7 +57,6 @@ import {
 } from "./session-contracts.ts";
 import { AcpHistoryReplay } from "./session-history.ts";
 import { AcpSessionInteractions } from "./session-interactions.ts";
-import { type AcpTurnState, IdleAcpTurn, RunningAcpTurn } from "./session-state.ts";
 import {
     type AcpSessionStore,
     AcpStoredSession,
@@ -102,7 +102,6 @@ export class AgentSession implements AcpClientHandler {
     readonly #verifiedAgentVersion: string;
     #agentName = "";
     #agentVersion = "";
-    #bufferedAgentText: { readonly chunks: string[]; readonly messageId: string }[] = [];
     #capabilities: SessionCapabilities = unsupportedSessionCapabilities();
     #commands: readonly SessionCommand[] = [];
     #configRevision = 0;
@@ -291,39 +290,6 @@ export class AgentSession implements AcpClientHandler {
             return await embedLocalHistoryImages(await history.snapshot(), signal);
         } finally {
             this.#replay = { kind: "idle" };
-        }
-    };
-
-    private readonly emitAgentMessage = async (chunks: readonly string[], messageId: string): Promise<void> => {
-        for (const chunk of chunks) {
-            await this.#turn.onText(chunk, messageId);
-        }
-    };
-
-    private readonly bufferAgentText = async (text: string, messageId: string): Promise<void> => {
-        const previous = this.#bufferedAgentText.at(-1);
-        if (previous?.messageId === messageId) {
-            previous.chunks.push(text);
-            return;
-        }
-        this.#bufferedAgentText.push({ chunks: [text], messageId });
-    };
-
-    private readonly flushAgentText = async (): Promise<void> => {
-        const buffered = this.#bufferedAgentText;
-        this.#bufferedAgentText = [];
-        for (const message of buffered) {
-            await this.emitAgentMessage(message.chunks, message.messageId);
-        }
-    };
-
-    private readonly recordBufferedAgentTextAsProgress = async (): Promise<void> => {
-        const buffered = this.#bufferedAgentText;
-        this.#bufferedAgentText = [];
-        for (const message of buffered) {
-            for (const chunk of message.chunks) {
-                await this.#turn.activities.recordNarrative("progress", message.messageId, chunk);
-            }
         }
     };
 
@@ -867,7 +833,7 @@ export class AgentSession implements AcpClientHandler {
                 options.signal,
             );
             await this.#updates.drained();
-            await this.flushAgentText();
+            await this.#turn.flushText();
             await running.activities.finish();
             let result: AcpPromptResult;
             try {
@@ -899,7 +865,6 @@ export class AgentSession implements AcpClientHandler {
                 cause: error,
             });
         } finally {
-            this.#bufferedAgentText = [];
             this.#turn = new IdleAcpTurn();
         }
     };
@@ -1013,11 +978,11 @@ export class AgentSession implements AcpClientHandler {
                     );
                 } else {
                     await this.#turn.activities.finishNarrative();
-                    await this.bufferAgentText(update.content.text, truncate(update.messageId ?? "", 255));
+                    this.#turn.bufferText(update.content.text, truncate(update.messageId ?? "", 255));
                 }
             } else {
                 await this.#turn.activities.finishNarrative();
-                await this.flushAgentText();
+                await this.#turn.flushText();
                 await this.emitAgentContent(
                     normalizeContentBlock(update.content),
                     truncate(update.messageId ?? "", 255),
@@ -1036,7 +1001,7 @@ export class AgentSession implements AcpClientHandler {
             return;
         }
         if (update.sessionUpdate === "tool_call") {
-            await this.recordBufferedAgentTextAsProgress();
+            await this.#turn.recordTextAsProgress();
             await this.#turn.activities.recordToolCall(update);
             return;
         }

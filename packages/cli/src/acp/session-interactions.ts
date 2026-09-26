@@ -14,12 +14,12 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { AcpExecutionError } from "./acp-error.ts";
 import { normalizeElicitationFields, validateElicitationContent } from "./elicitation.ts";
+import { PendingElicitation, PendingPermission } from "./pending-interactions.ts";
 import type {
     AcpElicitationResponseOptions,
     AcpPermissionResponseOptions,
     AcpSessionObserver,
 } from "./session-contracts.ts";
-import { PendingElicitation, PendingPermission } from "./session-state.ts";
 import { readString, truncate } from "./value-utils.ts";
 
 interface SessionInteractionContext {
