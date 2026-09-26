@@ -273,57 +273,6 @@ child.once("exit", (code) => process.exit(code ?? 84));
         }
     });
 
-    it("Given an active ACP conversation, When a second turn is sent, Then the same Agent session remains alive", async () => {
-        const manager = new AgentRuntimeManager();
-        const agent = new LocalAgentDefinition("codex", "Codex", process.execPath, [
-            fakeAgentPath,
-            "--agent-name",
-            "Codex",
-        ]);
-        const firstChunks: string[] = [];
-        const secondChunks: string[] = [];
-
-        try {
-            await manager.runPrompt({
-                additionalDirectories: [],
-                agent,
-                commandId: "command-first",
-                cwd: process.cwd(),
-                images: [],
-                onActivity: () => Promise.resolve(),
-                onText: (text) => {
-                    firstChunks.push(text);
-                    return Promise.resolve();
-                },
-                prompt: "first",
-                resources: [],
-                sessionId: "browser-conversation",
-                signal: new AbortController().signal,
-            });
-            await manager.runPrompt({
-                additionalDirectories: [],
-                agent,
-                commandId: "command-second",
-                cwd: process.cwd(),
-                images: [],
-                onActivity: () => Promise.resolve(),
-                onText: (text) => {
-                    secondChunks.push(text);
-                    return Promise.resolve();
-                },
-                prompt: "second",
-                resources: [],
-                sessionId: "browser-conversation",
-                signal: new AbortController().signal,
-            });
-        } finally {
-            await manager.close();
-        }
-
-        expect(firstChunks.join("")).toBe("Codex turn 1: first");
-        expect(secondChunks.join("")).toBe("Codex turn 2: second");
-    });
-
     it("Given OpenCode emits untagged messages before a tool call, When they arrive, Then Mobius streams them without waiting for the tool boundary", async () => {
         const manager = new AgentRuntimeManager();
         const agent = new LocalAgentDefinition("opencode", "OpenCode", process.execPath, [
@@ -378,72 +327,6 @@ child.once("exit", (code) => process.exit(code ?? 84));
             "OpenCode turn 1: ",
             "interleave untagged progress",
         ]);
-    });
-
-    it("Given ten retained Agent conversations, When an eleventh starts, Then the least recently used process is released and its conversation can resume", async () => {
-        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-process-lru-"));
-        const store = new MemoryAcpSessionStore();
-        const manager = new AgentRuntimeManager(undefined, store);
-        const agent = new LocalAgentDefinition(
-            "codex",
-            "Codex",
-            process.execPath,
-            [fakeAgentPath, "--agent-name", "Codex", "--exclusive-writer"],
-            { MOBIUS_FAKE_ACP_STATE_DIRECTORY: temporaryDirectory },
-        );
-        const signal = new AbortController().signal;
-        const runTurn = async (sessionId: string, prompt: string): Promise<string> => {
-            const chunks: string[] = [];
-            await manager.runPrompt({
-                additionalDirectories: [],
-                agent,
-                commandId: `${sessionId}-${prompt}`,
-                cwd: temporaryDirectory,
-                images: [],
-                onActivity: () => Promise.resolve(),
-                onText: (text) => {
-                    chunks.push(text);
-                    return Promise.resolve();
-                },
-                prompt,
-                resources: [],
-                sessionId,
-                signal,
-            });
-            return chunks.join("");
-        };
-        const nativeSessionId = (sessionId: string): string => {
-            const stored = store.read(sessionId);
-            if (!(stored instanceof FoundAcpStoredSession)) {
-                throw new Error(`Expected ${sessionId} to have a persisted native session`);
-            }
-            return stored.session.nativeSessionId;
-        };
-        const activeWriterNames = async (): Promise<readonly string[]> =>
-            (await readdir(temporaryDirectory)).filter((name) => name.endsWith(".writer"));
-
-        try {
-            for (let index = 1; index <= 10; index += 1) {
-                await runTurn(`conversation-${index.toString()}`, "first");
-            }
-            await expect(runTurn("conversation-1", "keep recent")).resolves.toBe("Codex turn 2: keep recent");
-            const recentWriter = `${encodeURIComponent(nativeSessionId("conversation-1"))}.writer`;
-            const leastRecentlyUsedWriter = `${encodeURIComponent(nativeSessionId("conversation-2"))}.writer`;
-
-            await expect(runTurn("conversation-11", "first")).resolves.toBe("Codex turn 1: first");
-
-            const writersAfterEviction = await activeWriterNames();
-            expect(writersAfterEviction).toHaveLength(10);
-            expect(writersAfterEviction).toContain(recentWriter);
-            expect(writersAfterEviction).not.toContain(leastRecentlyUsedWriter);
-            await expect(runTurn("conversation-2", "continue after eviction")).resolves.toBe(
-                "Codex turn 2: continue after eviction",
-            );
-            await expect(activeWriterNames()).resolves.toHaveLength(10);
-        } finally {
-            await manager.close();
-            await rm(temporaryDirectory, { force: true, recursive: true });
-        }
     });
 
     it("Given the least recently used conversation has an active turn, When an eleventh conversation starts, Then the active process is retained and the oldest idle process is released", async () => {
@@ -598,68 +481,6 @@ child.once("exit", (code) => process.exit(code ?? 84));
             });
         } finally {
             await manager.close();
-        }
-    });
-
-    it("Given a turn is running, When it is cancelled, Then ACP stops that turn and keeps the session usable", async () => {
-        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-cancel-resume-"));
-        const manager = new AgentRuntimeManager();
-        const agent = new LocalAgentDefinition(
-            "codex",
-            "Codex",
-            process.execPath,
-            [fakeAgentPath, "--agent-name", "Codex"],
-            {
-                MOBIUS_FAKE_ACP_STATE_DIRECTORY: temporaryDirectory,
-            },
-        );
-        const activityStarted = Promise.withResolvers<void>();
-
-        try {
-            const cancelledTurn = manager.runPrompt({
-                additionalDirectories: [],
-                agent,
-                commandId: "command-cancelled",
-                cwd: temporaryDirectory,
-                images: [],
-                onActivity: () => {
-                    activityStarted.resolve();
-                    return Promise.resolve();
-                },
-                onText: () => Promise.resolve(),
-                prompt: "wait until cancelled",
-                resources: [],
-                sessionId: "cancelled-conversation",
-                signal: new AbortController().signal,
-            });
-            await activityStarted.promise;
-
-            await manager.cancelPrompt("cancelled-conversation");
-
-            await expect(cancelledTurn).resolves.toEqual({
-                stopReason: "cancelled",
-            });
-            const nextChunks: string[] = [];
-            await manager.runPrompt({
-                additionalDirectories: [],
-                agent,
-                commandId: "command-continue",
-                cwd: temporaryDirectory,
-                images: [],
-                onActivity: () => Promise.resolve(),
-                onText: (text) => {
-                    nextChunks.push(text);
-                    return Promise.resolve();
-                },
-                prompt: "continue",
-                resources: [],
-                sessionId: "cancelled-conversation",
-                signal: new AbortController().signal,
-            });
-            expect(nextChunks.join("")).toBe("Codex turn 2: continue");
-        } finally {
-            await manager.close();
-            await rm(temporaryDirectory, { force: true, recursive: true });
         }
     });
 

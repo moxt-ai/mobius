@@ -68,3 +68,21 @@ They are not the default Agent behavior suite or proof of real compatibility.
 Use isolated Agent homes/workspaces, production protocol input, observable output,
 event-driven waits, cancellation and finite timeouts. Release all resources on
 success, failure, and cancellation. Do not use real sleeps or polling delays.
+
+## Controlled scenario organization
+
+- `native-session-identity`: assigned/native identity, restart, import, and fork integrity.
+- `native-session-preparation`: shared preparation, shutdown, and exclusive-writer races.
+- `native-session-history`: bounded previews, pagination, and capability differences.
+- `native-session-authorization`: directory authorization, lookup, and unsupported capabilities.
+- `codex-native-commands`: app-server command and unavailable-model responses.
+- `acp-commands-environment`: advertised commands and process environment propagation.
+- `acp-content-limits`: large output, media shapes, and repeated tool identities.
+- `acp-usage`: reported, absent, malformed, and Agent-specific usage formats.
+- `acp-interactions`: targeted steering, permissions, and elicitation correlation.
+
+Fixture modules only create disposable peers and observers; they do not register
+scenarios. Real Agent tests own normal first-prompt, continuation, cancellation
+recovery, and FIFO queue behavior. Controlled restart/history cases remain where
+they exercise distinct native ID formats, loading capabilities, or file layouts;
+they do not establish real Agent compatibility.

@@ -18,7 +18,6 @@ import {
     decodeSessionConfigOptions,
     decodeSessionConfigureCommand,
     decodeSessionElicitationRequestedEvent,
-    decodeSessionOperationFailedEvent,
     decodeSessionPermissionRequestedEvent,
     decodeSessionPrepareCommand,
     decodeSessionReadyEvent,
@@ -30,7 +29,6 @@ import {
     encodeAgentSettingsDiscoveredEvent,
     encodeSessionConfigureCommand,
     encodeSessionElicitationRequestedEvent,
-    encodeSessionOperationFailedEvent,
     encodeSessionPermissionRequestedEvent,
     encodeSessionPrepareCommand,
     encodeSessionReadyEvent,
@@ -53,23 +51,6 @@ import {
     WORKSPACE_LIST_KIND,
     type WorkspaceListCommand,
 } from "../src/index.ts";
-
-it("Given local Session preparation fails after measurable work, When the Runtime reports the failure, Then its bounded timing breakdown crosses the control boundary", () => {
-    const failure = {
-        code: "agent_unavailable",
-        kind: "session.operation.failed",
-        message: "The local Agent is unavailable",
-        requestId: "prepare-1",
-        runtimeTimings: [
-            { durationMilliseconds: 8, name: "workspace-resolve" },
-            { durationMilliseconds: 21, name: "agent-initialize" },
-            { durationMilliseconds: 34, name: "prepare-total" },
-        ],
-        sessionId: "session-1",
-    } as const;
-
-    expect(decodeSessionOperationFailedEvent(encodeSessionOperationFailedEvent(failure))).toEqual(failure);
-});
 
 const modelOption: SessionConfigOption = {
     booleanValue: false,
