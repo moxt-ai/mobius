@@ -29,31 +29,6 @@ export async function createFakeAgentDaemonRuntime(options: {
     const resources = new AsyncDisposableStack();
     const cancellation = new AbortController();
     const signal = AbortSignal.any([options.signal, cancellation.signal]);
-    const agents = [
-        { id: options.behavior?.agentId ?? "codex", name: options.behavior?.agentName ?? "Codex" },
-        ...(options.behavior?.additionalAgents ?? []),
-    ].map((agent) => ({
-        agentSettingsDiscovery: true,
-        sessionTurnConfiguration: true,
-        agentPath: `/fake/${agent.id}`,
-        agentVersion: "fake-agent-daemon",
-        capabilities: {
-            additionalDirectories: true,
-            audioPrompt: false,
-            closeSession: true,
-            deleteSession: true,
-            embeddedContextPrompt: true,
-            imagePrompt: true,
-            listSessions: true,
-            loadSession: true,
-            promptQueueing: false,
-            resumeSession: true,
-            steering: false,
-            unstableForkSession: false,
-        },
-        id: agent.id,
-        label: agent.name,
-    }));
     try {
         const pairing = v.parse(
             runtimePairingSchema,
@@ -77,7 +52,7 @@ export async function createFakeAgentDaemonRuntime(options: {
                 await options.server.request(
                     new Request(`${options.origin}/mobius/api/v1/runtime-pairings/${pairing.pairingId}/redeem`, {
                         body: JSON.stringify({
-                            agents,
+                            agents: fakeAgentCatalog(options.behavior),
                             installableAgents: [],
                             machineName: "Fake Runtime",
                             pairingCode: pairing.pairingCode,
@@ -90,6 +65,73 @@ export async function createFakeAgentDaemonRuntime(options: {
                 )
             ).json(),
         );
+        const connected = resources.use(
+            await connectFakeAgentDaemon({
+                origin: options.origin,
+                runtimeCredential: claim.runtimeCredential,
+                signal,
+                ...(options.behavior === undefined ? {} : { behavior: options.behavior }),
+            }),
+        );
+        const client = new MobiusClient({
+            endpoint: options.origin,
+            projectId: pairing.projectId,
+            credentialProvider: new StaticMobiusCredentialProvider(options.credential),
+            transport: { fetch: async (request: Request) => await options.server.request(request) },
+        });
+        resources.defer(() => cancellation.abort(new Error("Fake Platform Runtime stopped")));
+        const owned = resources.move();
+        return {
+            client,
+            failure: connected.failure,
+            runtimeId: pairing.runtimeId,
+            publishSessionEvent: (sessionId: string, payload: string, eventSignal: AbortSignal) =>
+                connected.publishSessionEvent(sessionId, payload, eventSignal),
+            [Symbol.asyncDispose]: () => owned.disposeAsync(),
+        };
+    } finally {
+        await resources.disposeAsync();
+    }
+}
+
+export function fakeAgentCatalog(behavior?: FakeAgentDaemonBehavior) {
+    return [
+        { id: behavior?.agentId ?? "codex", name: behavior?.agentName ?? "Codex" },
+        ...(behavior?.additionalAgents ?? []),
+    ].map((agent) => ({
+        agentSettingsDiscovery: true,
+        sessionTurnConfiguration: true,
+        agentPath: `/fake/${agent.id}`,
+        agentVersion: "fake-agent-daemon",
+        capabilities: {
+            additionalDirectories: true,
+            audioPrompt: false,
+            closeSession: true,
+            deleteSession: true,
+            embeddedContextPrompt: true,
+            imagePrompt: true,
+            listSessions: true,
+            loadSession: true,
+            promptQueueing: false,
+            resumeSession: true,
+            steering: false,
+            unstableForkSession: false,
+        },
+        id: agent.id,
+        label: agent.name,
+    }));
+}
+
+/** Opens the actual daemon transport with an already redeemed Runtime credential. */
+export async function connectFakeAgentDaemon(options: {
+    readonly origin: string;
+    readonly runtimeCredential: string;
+    readonly signal: AbortSignal;
+    readonly behavior?: FakeAgentDaemonBehavior;
+}) {
+    const resources = new AsyncDisposableStack();
+    const signal = options.signal;
+    try {
         const relayUrl = new URL("/mobius/api/v1/runtimes/connect", options.origin);
         relayUrl.protocol = "ws:";
         const daemon = resources.use(
@@ -97,7 +139,7 @@ export async function createFakeAgentDaemonRuntime(options: {
                 relayUrl,
                 (url) => {
                     const socket = new WebSocket(url, {
-                        headers: { authorization: `Bearer ${claim.runtimeCredential}` },
+                        headers: { authorization: `Bearer ${options.runtimeCredential}` },
                     });
                     return Object.assign(socket, {
                         sendBatch: async (messages: readonly string[]): Promise<void> =>
@@ -124,18 +166,9 @@ export async function createFakeAgentDaemonRuntime(options: {
         const behavior = resources.use(
             serveFakeAgentDaemon(daemon, { ...options.behavior, agentName: options.behavior?.agentName ?? "Codex" }),
         );
-        const client = new MobiusClient({
-            endpoint: options.origin,
-            projectId: pairing.projectId,
-            credentialProvider: new StaticMobiusCredentialProvider(options.credential),
-            transport: { fetch: async (request: Request) => await options.server.request(request) },
-        });
-        resources.defer(() => cancellation.abort(new Error("Fake Platform Runtime stopped")));
         const owned = resources.move();
         return {
-            client,
             failure: behavior.failure,
-            runtimeId: pairing.runtimeId,
             publishSessionEvent: (sessionId: string, payload: string, eventSignal: AbortSignal) =>
                 daemon.sendSessionEvent(sessionId, payload, eventSignal),
             [Symbol.asyncDispose]: () => owned.disposeAsync(),
