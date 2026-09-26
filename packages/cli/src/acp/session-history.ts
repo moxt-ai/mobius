@@ -7,7 +7,8 @@ import {
     SESSION_HISTORY_CHARACTER_LIMIT,
     SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT,
 } from "@moxt-ai/mobius-protocol";
-import { type AcpActivity, AcpActivityTracker, isProgressMessage, normalizeContentBlock } from "./activity.ts";
+import { type AcpActivity, AcpActivityTracker } from "./activity.ts";
+import { isProgressMessage, normalizeContentBlock } from "./activity-content.ts";
 
 type ReplayMessage =
     | {
