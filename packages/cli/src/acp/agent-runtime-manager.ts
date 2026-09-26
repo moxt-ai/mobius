@@ -114,6 +114,7 @@ export class AgentRuntimeManager {
                 const stored = this.#store.read(sessionId);
                 if (
                     stored instanceof FoundAcpStoredSession &&
+                    stored.session.nativeSessionId === sessionId &&
                     isNativeChatSessionId(stored.session.agentId, sessionId)
                 ) {
                     this.#store.remove(sessionId);

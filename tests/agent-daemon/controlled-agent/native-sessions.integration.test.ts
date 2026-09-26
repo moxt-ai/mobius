@@ -71,7 +71,7 @@ async function fixture(
     ]);
     const store = new MemoryAcpSessionStore();
     const observer = new NativeSessionObserver();
-    const sessions = new AgentRuntimeManager(observer, store, { read: async () => null }, sessionIdentity);
+    let sessions = new AgentRuntimeManager(observer, store, { read: async () => null }, sessionIdentity);
     const audit = new AuditStore();
     const config = createDaemonConfig(
         {
@@ -82,7 +82,7 @@ async function fixture(
         [agent],
     );
     const directories = new WorkspaceDirectoryService("workspace", workspace);
-    const service = new NativeSessionService(config, directories, sessions, audit, async () => ({
+    let service = new NativeSessionService(config, directories, sessions, audit, async () => ({
         turn: null,
         queued: [],
     }));
@@ -153,8 +153,20 @@ async function fixture(
         list,
         native,
         seed,
-        service,
-        sessions,
+        get service() {
+            return service;
+        },
+        get sessions() {
+            return sessions;
+        },
+        restart: async () => {
+            await sessions.close();
+            sessions = new AgentRuntimeManager(observer, store, { read: async () => null }, sessionIdentity);
+            service = new NativeSessionService(config, directories, sessions, audit, async () => ({
+                turn: null,
+                queued: [],
+            }));
+        },
         temporary,
         workspace,
         close,
@@ -162,6 +174,46 @@ async function fixture(
 }
 
 describe("native Agent session boundary", () => {
+    it.each(["import", "fork"] satisfies readonly ("import" | "fork")[])(
+        "Given a %s assigned a UUID distinct from its native identity, When the Runtime restarts, Then that conversation remains discoverable and can continue",
+        async (action) => {
+            const f = await fixture("Codex", "supported", "native");
+            try {
+                await f.seed("Original context");
+                const entry = (await f.list()).entries[0];
+                if (entry === undefined) {
+                    throw new Error("Missing native session");
+                }
+                const targetSessionId = crypto.randomUUID();
+                await f.service.execute(
+                    { ...f.identity, action, entryId: entry.entryId, targetSessionId },
+                    new AbortController().signal,
+                );
+                await f.restart();
+                expect(await f.service.querySessions([targetSessionId], new AbortController().signal)).toMatchObject([
+                    { sessionId: targetSessionId },
+                ]);
+                const reply = await f.sessions.runPrompt({
+                    agent: f.agent,
+                    cwd: f.workspace,
+                    additionalDirectories: [],
+                    sessionId: targetSessionId,
+                    commandId: crypto.randomUUID(),
+                    prompt: "Continue original context",
+                    images: [],
+                    resources: [],
+                    signal: new AbortController().signal,
+                    onText: async () => {},
+                    onActivity: async () => {},
+                });
+                expect(reply.stopReason).toBe("end_turn");
+                expect((await f.list()).entries).toHaveLength(action === "fork" ? 2 : 1);
+            } finally {
+                await f.close();
+            }
+        },
+    );
+
     it("Given shared preparation is loading, When one waiter cancels, Then it fails without cancelling the owner", async () => {
         const f = await fixture("Claude Code", "load-only");
         const owner = new AbortController();
