@@ -403,6 +403,50 @@ async function sendFile(daemon: FakeAgentDaemon, encoded: string): Promise<void>
     ]);
 }
 
+function fakeSessionReady(
+    command: {
+        readonly additionalDirectoryIds: readonly string[];
+        readonly agentId: string;
+        readonly directoryId: string;
+        readonly requestId: string;
+    },
+    behavior: FakeAgentDaemonBehavior,
+    sessionId: string,
+    restored: boolean,
+): SessionReadyEvent {
+    return {
+        additionalDirectories: command.additionalDirectoryIds.map((directoryId) => ({
+            directoryId,
+            name: directoryId,
+        })),
+        agentId: command.agentId,
+        agentName: behavior.agentName ?? "Fake Agent",
+        agentVersion: "fake-agent-daemon",
+        capabilities: {
+            additionalDirectories: true,
+            audioPrompt: false,
+            closeSession: true,
+            deleteSession: true,
+            embeddedContextPrompt: true,
+            imagePrompt: true,
+            listSessions: true,
+            loadSession: true,
+            promptQueueing: behavior.steering ?? false,
+            resumeSession: true,
+            steering: behavior.steering ?? false,
+            unstableForkSession: false,
+        },
+        commands: [],
+        configOptions: [],
+        directoryId: command.directoryId,
+        directoryLabel: behavior.directoryLabel ?? "Fake workspace",
+        kind: "session.ready",
+        requestId: command.requestId,
+        restored,
+        sessionId: sessionId,
+    };
+}
+
 async function processHappyPathCommand(
     daemon: FakeAgentDaemon,
     encoded: string,
@@ -411,6 +455,7 @@ async function processHappyPathCommand(
     activeTurns: Map<string, ActiveTurn>,
     queuedPrompts: Map<string, SessionPromptCommand>,
     sessions: Map<string, SessionMetadata>,
+    nativeImports: Map<string, string>,
     signal: AbortSignal,
 ): Promise<string | undefined> {
     const kind = decodeMessageKind(encoded);
@@ -598,6 +643,32 @@ async function processHappyPathCommand(
                     sessionId: command.sessionId,
                 }),
             );
+        } else if (command.action === "import" && behavior.nativeSessionIds?.has(command.entryId)) {
+            const sessionId = nativeImports.get(command.entryId) ?? command.targetSessionId;
+            nativeImports.set(command.entryId, sessionId);
+            const ready = fakeSessionReady(command, behavior, sessionId, true);
+            const title = behavior.nativeSessionTitle?.(command.entryId) ?? "New chat";
+            sessions.set(sessionId, {
+                additionalDirectories: ready.additionalDirectories,
+                agentId: ready.agentId,
+                directoryId: ready.directoryId,
+                directoryLabel: ready.directoryLabel,
+                prompted: true,
+                sessionId,
+                title,
+                updatedAt: "1970-01-01T00:00:00.000Z",
+            });
+            daemon.send(
+                encodeNativeSessionResult({
+                    action: "import",
+                    kind: "native.session.result",
+                    requestId: command.requestId,
+                    sessionId: command.sessionId,
+                    targetSessionId: command.targetSessionId,
+                    ready,
+                    title,
+                }),
+            );
         } else if (command.action === "active-turn") {
             const active = activeTurns.get(command.targetSessionId);
             const turn =
@@ -657,37 +728,7 @@ async function processHappyPathCommand(
     }
     if (kind === SESSION_PREPARE_KIND) {
         const command = decodeSessionPrepareCommand(encoded);
-        const ready: SessionReadyEvent = {
-            additionalDirectories: command.additionalDirectoryIds.map((directoryId) => ({
-                directoryId,
-                name: directoryId,
-            })),
-            agentId: command.agentId,
-            agentName: behavior.agentName ?? "Fake Agent",
-            agentVersion: "fake-agent-daemon",
-            capabilities: {
-                additionalDirectories: true,
-                audioPrompt: false,
-                closeSession: true,
-                deleteSession: true,
-                embeddedContextPrompt: true,
-                imagePrompt: true,
-                listSessions: true,
-                loadSession: true,
-                promptQueueing: behavior.steering ?? false,
-                resumeSession: true,
-                steering: behavior.steering ?? false,
-                unstableForkSession: false,
-            },
-            commands: [],
-            configOptions: [],
-            directoryId: command.directoryId,
-            directoryLabel: behavior.directoryLabel ?? "Fake workspace",
-            kind: "session.ready",
-            requestId: command.requestId,
-            restored: false,
-            sessionId: command.sessionId,
-        };
+        const ready = fakeSessionReady(command, behavior, command.sessionId, false);
         if (command.transient === true) {
             // An inspection-only preparation has no Session on the Relay, so the real daemon answers it
             // with a direct reply rather than a durable event, which could never commit. Sending it as a
@@ -1097,6 +1138,7 @@ export function serveFakeAgentDaemon(
     const activeTurns = new Map<string, ActiveTurn>();
     const queuedPrompts = new Map<string, SessionPromptCommand>();
     const sessions = new Map<string, SessionMetadata>();
+    const nativeImports = new Map<string, string>();
     let turn = 0;
     const nextTurn = (): number => {
         turn += 1;
@@ -1114,6 +1156,7 @@ export function serveFakeAgentDaemon(
                     activeTurns,
                     queuedPrompts,
                     sessions,
+                    nativeImports,
                     cancellation.signal,
                 );
             }
