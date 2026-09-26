@@ -181,47 +181,54 @@ function responsesEvent(response: ServerResponse, type: string, sequenceNumber: 
     );
 }
 
-function sendResponsesText(response: ServerResponse, model: string, answer: string, chunks: readonly string[]): void {
-    const item = {
-        id: "msg_mobius",
+function sendResponsesText(
+    response: ServerResponse,
+    model: string,
+    answer: string,
+    chunks: readonly string[],
+    commentary?: string,
+): void {
+    const messages = [
+        ...(commentary === undefined
+            ? []
+            : [{ phase: "commentary", text: commentary, chunks: [commentary.slice(0, 10), commentary.slice(10)] }]),
+        { phase: "final_answer", text: answer, chunks },
+    ];
+    const output = messages.map((message, index) => ({
+        id: `msg_mobius_${index}`,
         type: "message",
         role: "assistant",
         status: "completed",
-        content: [{ type: "output_text", text: answer, annotations: [] }],
-    };
-    const completed = completedResponse(model, [item]);
-    responsesEvent(response, "response.created", 0, { response: { ...completed, status: "in_progress", output: [] } });
-    responsesEvent(response, "response.output_item.added", 1, { output_index: 0, item: { ...item, content: [] } });
-    responsesEvent(response, "response.content_part.added", 2, {
-        item_id: item.id,
-        output_index: 0,
-        content_index: 0,
-        part: { type: "output_text", text: "", annotations: [] },
+        phase: message.phase,
+        content: [{ type: "output_text", text: message.text, annotations: [] }],
+    }));
+    const completed = completedResponse(model, output);
+    let sequence = 0;
+    responsesEvent(response, "response.created", sequence++, {
+        response: { ...completed, status: "in_progress", output: [] },
     });
-    let sequenceNumber = 3;
-    for (const chunk of chunks) {
-        responsesEvent(response, "response.output_text.delta", sequenceNumber, {
-            item_id: item.id,
-            output_index: 0,
-            content_index: 0,
-            delta: chunk,
+    for (const [index, message] of messages.entries()) {
+        const item = output[index];
+        if (item === undefined) {
+            throw new Error("Missing provider message");
+        }
+        const location = { item_id: item.id, output_index: index, content_index: 0 };
+        responsesEvent(response, "response.output_item.added", sequence++, {
+            output_index: index,
+            item: { ...item, content: [] },
         });
-        sequenceNumber += 1;
+        responsesEvent(response, "response.content_part.added", sequence++, {
+            ...location,
+            part: { type: "output_text", text: "", annotations: [] },
+        });
+        for (const chunk of message.chunks) {
+            responsesEvent(response, "response.output_text.delta", sequence++, { ...location, delta: chunk });
+        }
+        responsesEvent(response, "response.output_text.done", sequence++, { ...location, text: message.text });
+        responsesEvent(response, "response.content_part.done", sequence++, { ...location, part: item.content[0] });
+        responsesEvent(response, "response.output_item.done", sequence++, { output_index: index, item });
     }
-    responsesEvent(response, "response.output_text.done", sequenceNumber, {
-        item_id: item.id,
-        output_index: 0,
-        content_index: 0,
-        text: answer,
-    });
-    responsesEvent(response, "response.content_part.done", sequenceNumber + 1, {
-        item_id: item.id,
-        output_index: 0,
-        content_index: 0,
-        part: item.content[0],
-    });
-    responsesEvent(response, "response.output_item.done", sequenceNumber + 2, { output_index: 0, item });
-    responsesEvent(response, "response.completed", sequenceNumber + 3, { response: completed });
+    responsesEvent(response, "response.completed", sequence, { response: completed });
     response.end();
 }
 
@@ -404,7 +411,11 @@ export class FakeOpenAiProvider implements AsyncDisposable {
     static async start(
         model: string,
         answer: string,
-        options: { readonly beforeFirstText?: () => Promise<void>; readonly fallbackPrompt?: string } = {},
+        options: {
+            readonly beforeFirstText?: () => Promise<void>;
+            readonly fallbackPrompt?: string;
+            readonly commentary?: string;
+        } = {},
     ): Promise<FakeOpenAiProvider> {
         const requests: ProviderRequestDiagnostic[] = [];
         const fallbackScenario =
@@ -464,7 +475,7 @@ export class FakeOpenAiProvider implements AsyncDisposable {
                 response.writeHead(200, responseHeaders());
                 if (tool === undefined) {
                     await options.beforeFirstText?.();
-                    sendResponsesText(response, model, selectedAnswer, selectedChunks);
+                    sendResponsesText(response, model, selectedAnswer, selectedChunks, options.commentary);
                 } else {
                     sendResponsesToolCall(response, model, tool);
                 }

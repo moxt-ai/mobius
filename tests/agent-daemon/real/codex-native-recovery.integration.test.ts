@@ -3,9 +3,11 @@ import {
     decodeMessageKind,
     decodeNativeSessionResult,
     decodeRecordedSessionEvent,
+    decodeSessionLiveHistoryPageLoaded,
     decodeSessionQueuedEvent,
     encodeNativeSessionCommand,
     encodeSessionCancelCommand,
+    encodeSessionLiveHistoryPageLoad,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -125,6 +127,33 @@ test("Given a real codex native Session, When the active prompt is cancelled wit
             holdResponse = false;
             release.resolve();
             expect(await finish(queued, "end_turn")).toContain("NATIVE_RECOVERY_REPLY");
+            peer.send(
+                encodeSessionLiveHistoryPageLoad({
+                    kind: "session.live-history.page.load",
+                    requestId: randomUUID(),
+                    sessionId: nativeId,
+                    agentId: "codex",
+                    bindingId: peer.bindingId,
+                    directoryId: "default",
+                    additionalDirectoryIds: [],
+                    cursor: null,
+                    limit: 50,
+                }),
+            );
+            for (;;) {
+                const message = await peer.nextMessage();
+                if (decodeMessageKind(message) !== "session.live-history.page.loaded") {
+                    continue;
+                }
+                const { page } = decodeSessionLiveHistoryPageLoaded(message);
+                expect(page.status).toBe("available");
+                if (page.status === "available") {
+                    expect(page.messages).toContainEqual(
+                        expect.objectContaining({ role: "assistant", outcome: "cancelled" }),
+                    );
+                }
+                break;
+            }
         });
     } finally {
         release.resolve();

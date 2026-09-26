@@ -80,6 +80,7 @@ test("Given real Codex and a local model provider, When a queued follow-up is ca
     let providerEntered = Promise.withResolvers<void>();
     let releaseProvider = Promise.withResolvers<void>();
     const provider = await FakeOpenAiProvider.start("mobius-test-model", "Codex live reply", {
+        commentary: "Checking the live progress boundary.",
         beforeFirstText: async () => {
             providerEntered.resolve();
             await releaseProvider.promise;
@@ -261,6 +262,16 @@ test("Given real Codex and a local model provider, When a queued follow-up is ca
                     epoch = turn.epoch;
                     sequence = turn.sequence;
                     text = turn.text;
+                    expect(text).not.toContain("Checking the live progress boundary.");
+                    if (text.length > 0) {
+                        expect(
+                            turn.activities.some(
+                                (activity) =>
+                                    activity.activityType === "progress" &&
+                                    activity.output === "Checking the live progress boundary.",
+                            ),
+                        ).toBe(true);
+                    }
                 } else if (kind === SESSION_COMPLETED_KIND) {
                     const completion = decodeSessionCompletedEvent(envelope.payload);
                     if (completion.commandId === queuedCommandId) {
