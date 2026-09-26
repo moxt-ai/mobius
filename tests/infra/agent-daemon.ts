@@ -409,7 +409,7 @@ async function processHappyPathCommand(
     queuedPrompts: Map<string, SessionPromptCommand>,
     sessions: Map<string, SessionMetadata>,
     signal: AbortSignal,
-): Promise<void> {
+): Promise<string | undefined> {
     const kind = decodeMessageKind(encoded);
     if (kind === "session.cancel") {
         const command = decodeSessionCancelCommand(encoded);
@@ -1005,6 +1005,12 @@ async function processHappyPathCommand(
         }),
         signal,
     );
+    const next = [...queuedPrompts.values()].find((entry) => entry.sessionId === command.sessionId);
+    if (next !== undefined) {
+        queuedPrompts.delete(next.commandId);
+        return JSON.stringify(next);
+    }
+    return undefined;
 }
 
 export function serveFakeAgentDaemon(
@@ -1023,16 +1029,21 @@ export function serveFakeAgentDaemon(
         return turn;
     };
     const start = (message: string): void => {
-        const task = processHappyPathCommand(
-            daemon,
-            message,
-            behavior,
-            nextTurn,
-            activeTurns,
-            queuedPrompts,
-            sessions,
-            cancellation.signal,
-        );
+        const task = (async () => {
+            let pending: string | undefined = message;
+            while (pending !== undefined) {
+                pending = await processHappyPathCommand(
+                    daemon,
+                    pending,
+                    behavior,
+                    nextTurn,
+                    activeTurns,
+                    queuedPrompts,
+                    sessions,
+                    cancellation.signal,
+                );
+            }
+        })();
         tasks.add(task);
         void task.then(
             () => tasks.delete(task),
