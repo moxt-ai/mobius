@@ -5,8 +5,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
-    AGENT_MESSAGE_DELTA_KIND,
-    decodeAgentMessageDeltaEvent,
     decodeFileChunkEvent,
     decodeMessageKind,
     decodeNativeSessionResult,
@@ -16,6 +14,7 @@ import {
     decodeSessionOperationFailedEvent,
     decodeSessionPromptCommand,
     decodeSessionStartedEvent,
+    decodeSessionTurnUpdatedEvent,
     encodeFileReadCommand,
     encodeNativeSessionCommand,
     encodeSessionCancelCommand,
@@ -33,6 +32,7 @@ import {
     SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
     SESSION_OPERATION_FAILED_KIND,
     SESSION_STARTED_KIND,
+    SESSION_TURN_UPDATED_KIND,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { expect, test } from "vitest";
@@ -252,15 +252,15 @@ test("Given real Codex and a local model provider, When a queued follow-up is ca
                             targetCommandId: commandId,
                         }),
                     );
-                } else if (kind === AGENT_MESSAGE_DELTA_KIND) {
+                } else if (kind === SESSION_TURN_UPDATED_KIND) {
                     expect(started).toBe(true);
-                    const delta = decodeAgentMessageDeltaEvent(envelope.payload);
-                    expect(delta.commandId).toBe(commandId);
-                    expect(delta.sequence).toBeGreaterThan(sequence);
-                    expect(epoch === undefined || delta.epoch === epoch).toBe(true);
-                    epoch = delta.epoch;
-                    sequence = delta.sequence;
-                    text += delta.text;
+                    const { turn } = decodeSessionTurnUpdatedEvent(envelope.payload);
+                    expect(turn.commandId).toBe(commandId);
+                    expect(turn.sequence).toBeGreaterThan(sequence);
+                    expect(epoch === undefined || turn.epoch === epoch).toBe(true);
+                    epoch = turn.epoch;
+                    sequence = turn.sequence;
+                    text = turn.text;
                 } else if (kind === SESSION_COMPLETED_KIND) {
                     const completion = decodeSessionCompletedEvent(envelope.payload);
                     if (completion.commandId === queuedCommandId) {

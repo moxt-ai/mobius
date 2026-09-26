@@ -14,7 +14,6 @@ import { sessionHistorySchema } from "./session-history.ts";
 export const NATIVE_SESSION_REQUEST_KIND = "native.session.request";
 export const NATIVE_SESSION_RESULT_KIND = "native.session.result";
 export const NATIVE_SESSION_CANCEL_KIND = "native.session.cancel";
-export const ACTIVE_TURN_TEXT_LIMIT = 1_000_000;
 
 const directoryId = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/);
 const envelope = {
@@ -36,6 +35,24 @@ const activeTurnActivitySchema = z
         toolKind: z.string().max(64),
     })
     .readonly();
+export const activeTurnSnapshotSchema = z
+    .strictObject({
+        activities: z.array(activeTurnActivitySchema).readonly(),
+        commandId: identifier,
+        content: z.array(displayContentSchema).readonly(),
+        prompt: z.string().max(100_000),
+        text: z.string(),
+        truncated: z.boolean(),
+        epoch: identifier,
+        interaction: z
+            .discriminatedUnion("kind", [sessionPermissionRequestedEventSchema, sessionElicitationRequestedEventSchema])
+            .nullable(),
+        sequence: z.number().int().nonnegative(),
+        state: z.literal("running"),
+    })
+    .readonly();
+export type ActiveTurnSnapshot = z.infer<typeof activeTurnSnapshotSchema>;
+
 const identity = {
     ...envelope,
     kind: z.literal(NATIVE_SESSION_REQUEST_KIND),
@@ -145,26 +162,7 @@ const nativeSessionResultSchema = z.discriminatedUnion("action", [
                         .readonly(),
                 )
                 .readonly(),
-            turn: z
-                .strictObject({
-                    activities: z.array(activeTurnActivitySchema).max(100).readonly(),
-                    commandId: identifier,
-                    content: z.array(displayContentSchema).max(100).readonly(),
-                    prompt: z.string().max(100_000),
-                    text: z.string().max(ACTIVE_TURN_TEXT_LIMIT),
-                    truncated: z.boolean(),
-                    epoch: identifier,
-                    interaction: z
-                        .discriminatedUnion("kind", [
-                            sessionPermissionRequestedEventSchema,
-                            sessionElicitationRequestedEventSchema,
-                        ])
-                        .nullable(),
-                    sequence: z.number().int().nonnegative(),
-                    state: z.literal("running"),
-                })
-                .readonly()
-                .nullable(),
+            turn: activeTurnSnapshotSchema.nullable(),
         })
         .readonly(),
     z

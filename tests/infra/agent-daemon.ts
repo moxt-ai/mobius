@@ -1,11 +1,11 @@
 import {
-    ACTIVE_TURN_TEXT_LIMIT,
     AGENT_SETTINGS_DISCOVER_KIND,
     decodeAgentSettingsDiscoverCommand,
     decodeFileReadCommand,
     decodeIdentifier,
     decodeMessageKind,
     decodeNativeSessionCommand,
+    decodeRecordedSessionEvent,
     decodeRuntimeHeartbeatEvent,
     decodeSessionCancelCommand,
     decodeSessionLiveHistoryLoad,
@@ -25,6 +25,7 @@ import {
     encodeFileChunkEvent,
     encodeFileEndEvent,
     encodeNativeSessionResult,
+    encodeRecordedSessionEvent,
     encodeRuntimeHeartbeatAckEvent,
     encodeSessionCompletedEvent,
     encodeSessionEventEnvelope,
@@ -109,6 +110,7 @@ async function waitFor<T>(operation: Promise<T>, signal: AbortSignal): Promise<T
 
 /** A stateful peer at the public daemon/server protocol boundary. */
 export class FakeAgentDaemon implements AsyncDisposable {
+    readonly activeTurns = new Map<string, ActiveTurn>();
     readonly #closed: Promise<void>;
     #closeCode = 1006;
     #closeReason = "Connection closed unexpectedly";
@@ -316,6 +318,95 @@ export class FakeAgentDaemon implements AsyncDisposable {
 
     readonly sendSessionEvent = async (sessionId: string, payload: string, signal?: AbortSignal): Promise<void> => {
         signal?.throwIfAborted();
+        const event = decodeRecordedSessionEvent(payload);
+        if (event.kind === "session.started" && !this.activeTurns.has(sessionId)) {
+            this.activeTurns.set(sessionId, {
+                activities: [],
+                commandId: event.commandId,
+                content: [],
+                epoch: event.epoch,
+                interaction: null,
+                prompt: event.prompt,
+                sequence: 0,
+                state: "running",
+                text: "",
+                truncated: false,
+            });
+        }
+        const current = this.activeTurns.get(sessionId);
+        if (current !== undefined && "commandId" in event && current.commandId === event.commandId) {
+            let next = current;
+            if (event.kind === "agent.message.delta") {
+                next = { ...current, text: current.text + event.text };
+            } else if (event.kind === "agent.activity") {
+                const {
+                    activityId,
+                    activityType,
+                    content,
+                    input,
+                    locations,
+                    name,
+                    output,
+                    sequence,
+                    status,
+                    title,
+                    toolKind,
+                } = event;
+                next = {
+                    ...current,
+                    activities: [
+                        ...current.activities.filter((item) => item.activityId !== activityId),
+                        {
+                            activityId,
+                            activityType,
+                            content,
+                            input,
+                            locations,
+                            name,
+                            output,
+                            sequence,
+                            status,
+                            title,
+                            toolKind,
+                        },
+                    ],
+                };
+            } else if (event.kind === "agent.activity.narration") {
+                const previous = current.activities.find((item) => item.activityId === event.activityId);
+                next = {
+                    ...current,
+                    activities: [
+                        ...current.activities.filter((item) => item.activityId !== event.activityId),
+                        {
+                            activityId: event.activityId,
+                            activityType: event.activityType,
+                            content: previous?.content ?? [],
+                            input: previous?.input ?? "",
+                            locations: previous?.locations ?? [],
+                            name: previous?.name ?? "",
+                            output: (previous?.output ?? "") + event.text,
+                            sequence: event.sequence,
+                            status: "running",
+                            title: previous?.title ?? "Reasoning",
+                            toolKind: previous?.toolKind ?? "",
+                        },
+                    ],
+                };
+            } else if (event.kind === "agent.content") {
+                next = { ...current, content: [...current.content, event.content] };
+            }
+            if (next !== current) {
+                next = { ...next, sequence: current.sequence + 1 };
+                this.activeTurns.set(sessionId, next);
+                payload = encodeRecordedSessionEvent({ kind: "session.turn.updated", sessionId, turn: next });
+            }
+        }
+        if (
+            (event.kind === "session.completed" || event.kind === "session.failed") &&
+            current?.commandId === event.commandId
+        ) {
+            this.activeTurns.delete(sessionId);
+        }
         this.#socket.send(encodeSessionEventEnvelope({ kind: SESSION_EVENT_KIND, payload, sessionId }));
     };
 
@@ -351,6 +442,7 @@ export interface FakeAgentDaemonBehavior {
     readonly afterFirstDelta?: (command: SessionPromptCommand, signal: AbortSignal) => Promise<void>;
     readonly afterLastDelta?: (command: SessionPromptCommand, signal: AbortSignal) => Promise<void>;
     readonly afterFirstNarration?: (command: SessionPromptCommand, signal: AbortSignal) => Promise<void>;
+    readonly afterLastNarration?: (command: SessionPromptCommand, signal: AbortSignal) => Promise<void>;
     readonly directoryLabel?: string;
     readonly nativeSessionIds?: ReadonlySet<string>;
     readonly sessions?: readonly SessionMetadata[];
@@ -883,18 +975,6 @@ async function processHappyPathCommand(
     const turn = nextTurn();
     const createsImage = command.prompt.toLowerCase().includes("image");
     const epoch = command.commandId;
-    activeTurns.set(command.sessionId, {
-        activities: [],
-        commandId: decodeIdentifier(command.commandId),
-        content: [],
-        epoch: decodeIdentifier(epoch),
-        interaction: null,
-        prompt: command.prompt,
-        sequence: 0,
-        state: "running",
-        text: "",
-        truncated: false,
-    });
     await daemon.sendSessionEvent(
         command.sessionId,
         encodeSessionStartedEvent({
@@ -924,10 +1004,6 @@ async function processHappyPathCommand(
             title: "Progress update",
             toolKind: "",
         };
-        const current = activeTurns.get(command.sessionId);
-        if (current !== undefined) {
-            activeTurns.set(command.sessionId, { ...current, activities: [activity] });
-        }
         await daemon.sendSessionEvent(
             command.sessionId,
             encodeAgentActivityEvent({
@@ -955,10 +1031,6 @@ async function processHappyPathCommand(
             title: "Agent warning",
             toolKind: "",
         };
-        const current = activeTurns.get(command.sessionId);
-        if (current !== undefined) {
-            activeTurns.set(command.sessionId, { ...current, activities: [...current.activities, activity] });
-        }
         await daemon.sendSessionEvent(
             command.sessionId,
             encodeAgentActivityEvent({
@@ -1001,16 +1073,6 @@ async function processHappyPathCommand(
         let output = "";
         for (const [index, text] of reasoningParts.entries()) {
             output += text;
-            const current = activeTurns.get(command.sessionId);
-            if (current !== undefined) {
-                activeTurns.set(command.sessionId, {
-                    ...current,
-                    activities: [
-                        ...current.activities.filter((recorded) => recorded.activityId !== activityId),
-                        { ...activity, output },
-                    ],
-                });
-            }
             await daemon.sendSessionEvent(
                 command.sessionId,
                 encodeAgentActivityNarrationEvent({
@@ -1028,6 +1090,7 @@ async function processHappyPathCommand(
                 await behavior.afterFirstNarration?.(command, signal);
             }
         }
+        await behavior.afterLastNarration?.(command, signal);
         await daemon.sendSessionEvent(
             command.sessionId,
             encodeAgentActivityEvent({
@@ -1132,15 +1195,6 @@ async function processHappyPathCommand(
         }`,
     ];
     for (const [index, text] of parts.entries()) {
-        const current = activeTurns.get(command.sessionId);
-        if (current !== undefined) {
-            activeTurns.set(command.sessionId, {
-                ...current,
-                sequence: index + 1,
-                text: `${current.text}${text}`.slice(-ACTIVE_TURN_TEXT_LIMIT),
-                truncated: current.truncated || current.text.length + text.length > ACTIVE_TURN_TEXT_LIMIT,
-            });
-        }
         await daemon.sendSessionEvent(
             command.sessionId,
             encodeAgentMessageDeltaEvent({
@@ -1200,7 +1254,7 @@ export function serveFakeAgentDaemon(
     const cancellation = new AbortController();
     const failure = Promise.withResolvers<never>();
     const tasks = new Set<Promise<void>>();
-    const activeTurns = new Map<string, ActiveTurn>();
+    const activeTurns = daemon.activeTurns;
     const queuedPrompts = new Map<string, SessionPromptCommand>();
     const sessions = new Map<string, SessionMetadata>();
     const nativeImports = new Map<string, string>();

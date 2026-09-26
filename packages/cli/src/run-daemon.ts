@@ -126,8 +126,7 @@ export async function runDaemon(
     const publisher = new DaemonSessionEventPublisher();
     const activeTurns = new DaemonTurnRegistry(operations);
     const recordSessionEvent = (sessionId: string, event: RecordedSessionEvent): void => {
-        activeTurns.recordEvent(event);
-        publisher.publish(sessionId, event);
+        publisher.publish(sessionId, activeTurns.recordEvent(event));
     };
     const agentRuntime = new AgentRuntimeManager(
         new DaemonAcpObserver(recordSessionEvent),

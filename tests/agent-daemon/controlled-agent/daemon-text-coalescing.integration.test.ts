@@ -7,14 +7,7 @@ import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import {
-    AGENT_ACTIVITY_KIND,
-    AGENT_ACTIVITY_NARRATION_KIND,
-    AGENT_CONTENT_KIND,
-    AGENT_MESSAGE_DELTA_KIND,
-    decodeAgentActivityEvent,
-    decodeAgentActivityNarrationEvent,
-    decodeAgentContentEvent,
-    decodeAgentMessageDeltaEvent,
+    type ActiveTurnSnapshot,
     decodeMessageKind,
     decodeNativeSessionResult,
     decodeSessionCompletedEvent,
@@ -24,6 +17,7 @@ import {
     decodeSessionLiveHistoryPageLoaded,
     decodeSessionQueuedEvent,
     decodeSessionStartedEvent,
+    decodeSessionTurnUpdatedEvent,
     encodeNativeSessionRequest,
     encodeSessionCancelCommand,
     encodeSessionLiveHistoryLoad,
@@ -41,6 +35,7 @@ import {
     SESSION_PROMPT_DISPOSITION_KIND,
     SESSION_QUEUED_KIND,
     SESSION_STARTED_KIND,
+    SESSION_TURN_UPDATED_KIND,
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -223,11 +218,11 @@ describe("daemon assistant text coalescing", () => {
                 }
                 const envelope = decodeSessionEventEnvelope(message);
                 const kind = decodeMessageKind(envelope.payload);
-                if (kind === AGENT_MESSAGE_DELTA_KIND) {
-                    const payload: unknown = JSON.parse(envelope.payload);
-                    expect(payload).toMatchObject({ epoch: expect.any(String), sequence: expect.any(Number) });
+                if (kind === SESSION_TURN_UPDATED_KIND) {
+                    const { turn } = decodeSessionTurnUpdatedEvent(envelope.payload);
+                    expect(turn).toMatchObject({ epoch: expect.any(String), sequence: expect.any(Number) });
                     deltaCount += 1;
-                    deltaText += typeof payload === "object" && payload !== null ? Reflect.get(payload, "text") : "";
+                    deltaText = turn.text;
                 }
                 if (kind === SESSION_COMPLETED_KIND || kind === SESSION_FAILED_KIND) {
                     completed = true;
@@ -237,7 +232,7 @@ describe("daemon assistant text coalescing", () => {
             // Every burst token must survive, in order, with no duplication.
             const expectedBurst = Array.from({ length: 64 }, (_value, index) => `token-${index.toString()} `).join("");
             expect(deltaText).toContain(expectedBurst);
-            // A burst of 64 chunks must not become 64 durable events.
+            // A burst of 64 chunks must not become 64 network updates.
             expect(deltaCount).toBeGreaterThan(0);
             expect(deltaCount).toBeLessThan(64);
         } finally {
@@ -332,16 +327,16 @@ describe("daemon assistant text coalescing", () => {
             };
             sendText(socket, encodeSessionPromptCommand(prompt));
             let output = "";
-            let firstDelta: ReturnType<typeof decodeAgentMessageDeltaEvent> | null = null;
+            let firstDelta: ActiveTurnSnapshot | null = null;
             let lastSequence = 0;
             while (output.length < 200_000) {
                 const message = await next();
-                if (decodeMessageKind(message) === AGENT_MESSAGE_DELTA_KIND) {
-                    const delta = decodeAgentMessageDeltaEvent(message);
+                if (decodeMessageKind(message) === SESSION_TURN_UPDATED_KIND) {
+                    const delta = decodeSessionTurnUpdatedEvent(message).turn;
                     firstDelta ??= delta;
                     expect(delta.sequence).toBe(lastSequence + 1);
                     lastSequence = delta.sequence;
-                    output += delta.text;
+                    output = delta.text;
                 }
             }
             expect(output).toBe("x".repeat(200_000));
@@ -557,33 +552,23 @@ describe("daemon assistant text coalescing", () => {
                 started = await next();
             } while (decodeMessageKind(started) !== SESSION_STARTED_KIND);
             const firstStarted = decodeSessionStartedEvent(started);
-            let activity: string;
-            do {
-                activity = await next();
-            } while (decodeMessageKind(activity) !== AGENT_ACTIVITY_KIND);
-            const activeActivity = decodeAgentActivityEvent(activity);
-            const { activeContent, activeNarration, activeTool } = await (async () => {
-                let content: ReturnType<typeof decodeAgentContentEvent> | null = null;
-                let narration: ReturnType<typeof decodeAgentActivityNarrationEvent> | null = null;
-                let tool: ReturnType<typeof decodeAgentActivityEvent> | null = null;
+            const { activeActivity, activeContent, activeNarration, activeTool } = await (async () => {
                 for (;;) {
                     const event = await next();
-                    const kind = decodeMessageKind(event);
-                    if (kind === AGENT_ACTIVITY_NARRATION_KIND) {
-                        const candidate = decodeAgentActivityNarrationEvent(event);
-                        if (candidate.activityType === "reasoning") {
-                            narration = candidate;
-                        }
-                    } else if (kind === AGENT_ACTIVITY_KIND) {
-                        const candidate = decodeAgentActivityEvent(event);
-                        if (candidate.locations.length > 0 && candidate.status === "completed") {
-                            tool = candidate;
-                        }
-                    } else if (kind === AGENT_CONTENT_KIND) {
-                        content = decodeAgentContentEvent(event);
+                    if (decodeMessageKind(event) !== SESSION_TURN_UPDATED_KIND) {
+                        continue;
                     }
-                    if (content !== null && narration !== null && tool !== null) {
-                        return { activeContent: content, activeNarration: narration, activeTool: tool };
+                    const { turn } = decodeSessionTurnUpdatedEvent(event);
+                    const activeActivity = turn.activities[0];
+                    const activeContent = turn.content[0];
+                    const activeNarration = turn.activities.find(
+                        (item) => item.activityType === "reasoning" && item.output.length > 0,
+                    );
+                    const activeTool = turn.activities.find(
+                        (item) => item.locations.length > 0 && item.status === "completed",
+                    );
+                    if (activeActivity && activeContent && activeNarration && activeTool) {
+                        return { activeActivity, activeContent, activeNarration, activeTool };
                     }
                 }
             })();
@@ -611,7 +596,7 @@ describe("daemon assistant text coalescing", () => {
                     commandId: prompt.commandId,
                     epoch: firstStarted.epoch,
                     prompt: prompt.prompt,
-                    sequence: firstStarted.sequence,
+                    sequence: expect.any(Number),
                     text: "",
                     truncated: false,
                     activities: expect.arrayContaining([
@@ -621,7 +606,7 @@ describe("daemon assistant text coalescing", () => {
                         }),
                         expect.objectContaining({
                             activityType: "reasoning",
-                            output: activeNarration.text,
+                            output: activeNarration.output,
                         }),
                         expect.objectContaining({
                             activityId: activeTool.activityId,
@@ -629,7 +614,7 @@ describe("daemon assistant text coalescing", () => {
                             status: "completed",
                         }),
                     ]),
-                    content: [activeContent.content],
+                    content: [activeContent],
                 },
             });
             sendText(
@@ -659,7 +644,7 @@ describe("daemon assistant text coalescing", () => {
                             }),
                             expect.objectContaining({
                                 activityType: "reasoning",
-                                output: activeNarration.text,
+                                output: activeNarration.output,
                             }),
                             expect.objectContaining({
                                 activityId: activeTool.activityId,
@@ -667,7 +652,7 @@ describe("daemon assistant text coalescing", () => {
                                 status: "completed",
                             }),
                         ]),
-                        content: [activeContent.content],
+                        content: [activeContent],
                         role: "assistant",
                     },
                 ],
@@ -701,7 +686,7 @@ describe("daemon assistant text coalescing", () => {
                             }),
                             expect.objectContaining({
                                 activityType: "reasoning",
-                                output: activeNarration.text,
+                                output: activeNarration.output,
                             }),
                             expect.objectContaining({
                                 activityId: activeTool.activityId,
@@ -709,7 +694,7 @@ describe("daemon assistant text coalescing", () => {
                                 status: "completed",
                             }),
                         ]),
-                        content: [activeContent.content],
+                        content: [activeContent],
                         role: "assistant",
                     },
                 ],

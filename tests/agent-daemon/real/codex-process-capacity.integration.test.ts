@@ -73,8 +73,8 @@ test("Given a real Codex conversation, When more Sessions are opened than the da
                 if (event.kind === "session.failed") {
                     throw new Error(JSON.stringify(event));
                 }
-                if (event.kind === "agent.message.delta") {
-                    output += event.text;
+                if (event.kind === "session.turn.updated") {
+                    output = event.turn.text;
                 }
                 if (event.kind === "session.completed") {
                     expect(event.commandId).toBe(commandId);

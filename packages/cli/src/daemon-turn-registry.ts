@@ -58,10 +58,14 @@ export class DaemonTurnRegistry {
         turn.finish();
     };
 
-    readonly recordEvent = (event: RecordedSessionEvent): void => {
-        for (const turn of this.#turns.values()) {
-            turn.recordEvent(event);
+    readonly recordEvent = (event: RecordedSessionEvent): RecordedSessionEvent => {
+        if ("commandId" in event) {
+            const turn = this.#turns.get(event.commandId);
+            if (turn !== undefined && turn.command.sessionId === event.sessionId) {
+                return turn.recordEvent(event);
+            }
         }
+        return event;
     };
 
     readonly executionSnapshot = async (matches: (command: SessionPromptCommand) => Promise<boolean>) => {
