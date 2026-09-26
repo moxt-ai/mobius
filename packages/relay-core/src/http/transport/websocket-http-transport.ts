@@ -10,6 +10,7 @@ const EVENT_SUBSCRIBE_KIND = "session.events.subscribe";
 const EVENT_UNSUBSCRIBE_KIND = "session.events.unsubscribe";
 const MAX_BODY_BYTES = 12_582_912;
 const IDLE_TIMEOUT_MILLISECONDS = 60_000;
+const LIVE_EVENT_HEARTBEAT_MILLISECONDS = 30_000;
 const FORBIDDEN_HEADERS = new Set([
     "connection",
     "content-length",
@@ -210,6 +211,7 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
         controller.abort(new Error("WebSocket transport became inactive"));
         server.close(1001, "WebSocket transport idle timeout");
     }, IDLE_TIMEOUT_MILLISECONDS);
+    let heartbeatTimeout: ReturnType<typeof setTimeout> | null = null;
     const touch = (): void => {
         clearTimeout(idleTimeout);
         idleTimeout = setTimeout(() => {
@@ -217,11 +219,35 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
             server.close(1001, "WebSocket transport idle timeout");
         }, IDLE_TIMEOUT_MILLISECONDS);
     };
+    const scheduleHeartbeat = (): void => {
+        if (heartbeatTimeout !== null) {
+            clearTimeout(heartbeatTimeout);
+            heartbeatTimeout = null;
+        }
+        if (subscriptions.size === 0 || server.readyState !== WebSocket.OPEN) {
+            return;
+        }
+        heartbeatTimeout = setTimeout(() => {
+            heartbeatTimeout = null;
+            if (server.readyState !== WebSocket.OPEN) {
+                return;
+            }
+            for (const subscriptionId of subscriptions.keys()) {
+                server.send(JSON.stringify({ kind: "session.events.heartbeat", subscriptionId }));
+            }
+            touch();
+            scheduleHeartbeat();
+        }, LIVE_EVENT_HEARTBEAT_MILLISECONDS);
+    };
     server.accept();
     server.addEventListener(
         "close",
         () => {
             clearTimeout(idleTimeout);
+            if (heartbeatTimeout !== null) {
+                clearTimeout(heartbeatTimeout);
+                heartbeatTimeout = null;
+            }
             for (const subscription of subscriptions.values()) {
                 if (subscription.kind === "pending") {
                     subscription.controller.abort(new Error("WebSocket transport closed"));
@@ -240,6 +266,10 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
         "error",
         () => {
             clearTimeout(idleTimeout);
+            if (heartbeatTimeout !== null) {
+                clearTimeout(heartbeatTimeout);
+                heartbeatTimeout = null;
+            }
         },
         { once: true },
     );
@@ -267,6 +297,7 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                         subscription.socket.close(1000, "Session event subscription closed");
                     }
                     subscriptions.delete(subscriptionId);
+                    scheduleHeartbeat();
                     return;
                 }
                 if (kind === EVENT_SUBSCRIBE_KIND) {
@@ -291,12 +322,14 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                         subscriptionController.signal,
                     );
                     subscriptions.set(subscriptionId, { controller: subscriptionController, kind: "pending" });
+                    scheduleHeartbeat();
                     const subscriptionHeaders = new Headers(converted.request.headers);
                     subscriptionHeaders.set("Upgrade", "websocket");
                     const response = await dispatch(new Request(converted.request, { headers: subscriptionHeaders }));
                     const subscription = response.webSocket;
                     if (subscription === null) {
                         subscriptions.delete(subscriptionId);
+                        scheduleHeartbeat();
                         const failure = await response.json().catch(() => null);
                         const error =
                             typeof failure === "object" && failure !== null && "error" in failure
@@ -329,6 +362,7 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                             subscriptions.delete(subscriptionId) &&
                             server.readyState === WebSocket.OPEN
                         ) {
+                            scheduleHeartbeat();
                             server.send(JSON.stringify({ kind: "session.events.end", subscriptionId }));
                         }
                     };

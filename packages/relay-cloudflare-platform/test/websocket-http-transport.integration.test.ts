@@ -1,5 +1,5 @@
 import { acceptWebSocketHttpTransport, SessionRuntimeError } from "@moxt-ai/mobius-relay-core";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 
 class FailingDaemonBoundary {
     requests = 0;
@@ -127,6 +127,50 @@ it("Given an established event subscription, When the browser transport closes, 
 
     await closed;
     expect(requestSignal.aborted).toBe(false);
+});
+
+it("Given an established event subscription is quiet, When the transport idle deadline passes, Then the browser remains connected", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-26T00:00:00.000Z"));
+    try {
+        const daemon = new SubscriptionDaemonBoundary();
+        const response = acceptWebSocketHttpTransport(
+            new Request("https://platform.test/mobius/api/v1/transport", {
+                headers: { Upgrade: "websocket" },
+            }),
+            daemon.fetch,
+        );
+        const socket = response.webSocket;
+        if (socket === null) {
+            throw new Error("Expected a WebSocket transport response");
+        }
+        socket.accept();
+        const ready = nextMessage(socket);
+        socket.send(
+            JSON.stringify({
+                headers: [],
+                kind: "session.events.subscribe",
+                path: "/mobius/api/v1/projects/project/sessions/session/events",
+                subscriptionId: "subscription-1",
+            }),
+        );
+        expect(JSON.parse(await ready)).toMatchObject({
+            kind: "session.events.ready",
+            subscriptionId: "subscription-1",
+        });
+
+        const heartbeat = nextMessage(socket);
+        await vi.advanceTimersByTimeAsync(60_001);
+
+        expect(JSON.parse(await heartbeat)).toEqual({
+            kind: "session.events.heartbeat",
+            subscriptionId: "subscription-1",
+        });
+        expect(socket.readyState).toBe(WebSocket.OPEN);
+        socket.close(1000, "Test complete");
+    } finally {
+        vi.useRealTimers();
+    }
 });
 
 it("Given a finite request is in flight, When the browser transport closes, Then the dispatched request can finish without disconnecting its downstream transport", async () => {
