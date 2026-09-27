@@ -79,6 +79,8 @@ Pairing starts or reuses one detached Mobius manager for the current user. If th
 installed CLI version changes, the next `mobius pair` or `mobius start` command
 stops the old manager and launches the matching version.
 
+Run `mobius start` without options to ensure the detached daemon is running.
+
 The daemon saves pairing credentials and connection preferences. Current turns,
 delivery receipts, and pending events stay in process memory and disappear on a
 restart. Codex owns its native conversation files; Mobius Chat saves which native
@@ -92,6 +94,7 @@ Manage saved Runtime pairings by their local Connection ID:
 mobius pair list
 mobius pair list --output-json=/path/to/existing-file.json
 mobius pair stop --connection <connection-id>
+mobius start
 mobius start --connection <connection-id>
 mobius pair remove --connection <connection-id>
 mobius quit

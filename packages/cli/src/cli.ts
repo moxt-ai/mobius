@@ -32,6 +32,10 @@ interface ConnectionOptions {
     readonly connection: string;
 }
 
+interface StartOptions {
+    readonly connection?: string;
+}
+
 interface PairListOptions {
     readonly outputJson?: string;
 }
@@ -248,18 +252,24 @@ function createProgram(): Command {
 
     program
         .command("start")
-        .description("start the manager and activate a saved connection")
-        .addOption(valueOption("--connection <connection-id>", "saved Runtime connection identifier", true))
-        .action(async (options: ConnectionOptions) => {
+        .description("ensure the daemon is running and optionally activate a saved connection")
+        .addOption(valueOption("--connection <connection-id>", "saved Runtime connection identifier"))
+        .action(async (options: StartOptions) => {
             const installation = await openMobiusCliInstallation(shutdown.signal, process.env);
             const response = await requestManager(
                 installation,
                 packageMetadata.version,
-                { arguments: ["--connection", options.connection], kind: "start" },
+                options.connection === undefined
+                    ? { kind: "list" }
+                    : { arguments: ["--connection", options.connection], kind: "start" },
                 shutdown.signal,
             );
             if (response.kind === "error") {
                 throw new Error(response.message);
+            }
+            if (options.connection === undefined && response.kind === "listed") {
+                process.stdout.write("Mobius daemon is running.\n");
+                return;
             }
             if (response.kind !== "ready") {
                 throw new Error("The Mobius manager returned an unexpected response");
