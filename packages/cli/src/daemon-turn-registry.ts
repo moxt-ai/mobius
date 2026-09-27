@@ -1,6 +1,8 @@
 import {
     type NativeSessionResult,
     type RecordedSessionEvent,
+    SESSION_ELICITATION_RESOLVED_KIND,
+    SESSION_PERMISSION_RESOLVED_KIND,
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -63,6 +65,13 @@ export class DaemonTurnRegistry {
             const turn = this.#turns.get(event.commandId);
             if (turn !== undefined && turn.command.sessionId === event.sessionId) {
                 return turn.recordEvent(event);
+            }
+        }
+        if (event.kind === SESSION_PERMISSION_RESOLVED_KIND || event.kind === SESSION_ELICITATION_RESOLVED_KIND) {
+            for (const turn of this.#turns.values()) {
+                if (turn.matchesInteraction(event.interactionId, event.sessionId)) {
+                    return turn.recordEvent(event);
+                }
             }
         }
         return event;

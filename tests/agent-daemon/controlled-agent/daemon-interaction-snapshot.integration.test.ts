@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,9 +19,12 @@ import {
     encodeSessionQueryCommand,
     MOBIUS_API_PREFIX,
     NATIVE_SESSION_RESULT_KIND,
+    SESSION_COMPLETED_KIND,
     SESSION_ELICITATION_REQUESTED_KIND,
+    SESSION_ELICITATION_RESOLVED_KIND,
     SESSION_EVENT_KIND,
     SESSION_PERMISSION_REQUESTED_KIND,
+    SESSION_PERMISSION_RESOLVED_KIND,
     SESSION_QUERIED_KIND,
     SESSION_READY_KIND,
     SessionPromptDisposition,
@@ -62,7 +65,7 @@ class Messages {
     };
 }
 
-test("Given a real daemon with an Agent waiting for permission and input, When a viewer asks for the active Turn, Then each pending interaction appears in its snapshot", async () => {
+test("Given an Agent resolves interactions and remains active, When a viewer asks for the active Turn, Then resolved interactions do not appear in its snapshot", async () => {
     const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-interaction-snapshot-"));
     const workspace = join(stateDirectory, "workspace");
     await mkdir(workspace);
@@ -81,7 +84,11 @@ test("Given a real daemon with an Agent waiting for permission and input, When a
         "Claude Code",
         process.execPath,
         [fakeAgentPath, "--agent-name", "Claude Code"],
-        { MOBIUS_FAKE_ACP_STATE_DIRECTORY: join(stateDirectory, "agent") },
+        {
+            MOBIUS_FAKE_ACP_PAUSE_AFTER_PERMISSION: "1",
+            MOBIUS_FAKE_ACP_PAUSE_AFTER_ELICITATION: "1",
+            MOBIUS_FAKE_ACP_STATE_DIRECTORY: join(stateDirectory, "agent"),
+        },
     );
     const config = createDaemonConfig(
         { channelId: "interaction", defaultWorkspace: workspace, relayUrl },
@@ -144,6 +151,12 @@ test("Given a real daemon with an Agent waiting for permission and input, When a
                 sessionId,
             }),
         );
+        await messages.nextKind(SESSION_PERMISSION_RESOLVED_KIND);
+        expect(await snapshot("resolved_permission_snapshot")).toMatchObject({
+            action: "active-turn",
+            turn: { interaction: null },
+        });
+        await writeFile(join(stateDirectory, "agent", "resume-after-permission"), "");
         const elicitation = decodeSessionElicitationRequestedEvent(
             await messages.nextKind(SESSION_ELICITATION_REQUESTED_KIND),
         );
@@ -160,6 +173,13 @@ test("Given a real daemon with an Agent waiting for permission and input, When a
                 sessionId,
             }),
         );
+        await messages.nextKind(SESSION_ELICITATION_RESOLVED_KIND);
+        expect(await snapshot("resolved_elicitation_snapshot")).toMatchObject({
+            action: "active-turn",
+            turn: { interaction: null },
+        });
+        await writeFile(join(stateDirectory, "agent", "resume-after-elicitation"), "");
+        await messages.nextKind(SESSION_COMPLETED_KIND);
     } finally {
         cancellation.abort();
         await daemon;
