@@ -27,19 +27,10 @@ import {
     reportFailure,
 } from "./daemon-command-results.ts";
 import { resolvePromptArtifacts } from "./prompt-artifact-resolver.ts";
-import {
-    AGENT_ACTIVITY_COALESCING_MILLISECONDS,
-    CoalescingDaemonActivityPublisher,
-} from "./relay-connection/coalescing-activity-publisher.ts";
-import { CoalescingNarrationPublisher } from "./relay-connection/coalescing-narration-publisher.ts";
-import { CoalescingTextPublisher } from "./relay-connection/coalescing-text-publisher.ts";
+import { CoalescingAgentEventPublisher } from "./relay-connection/coalescing-agent-event-publisher.ts";
 import type { DaemonOperationState } from "./relay-connection/daemon-operation-state.ts";
 import type { DaemonSessionEventPublisher } from "./relay-connection/session-event-publisher.ts";
 import type { DaemonTimer } from "./relay-connection/timer.ts";
-
-const AGENT_TEXT_COALESCING_MILLISECONDS = 100;
-// Mirrors the protocol's per-event text limit; larger deltas are rejected by the codec.
-const AGENT_TEXT_MAXIMUM_LENGTH = 100_000;
 
 function daemonActivity(command: DaemonTurnCommand, activity: AcpActivity): AgentActivityEvent {
     return {
@@ -104,39 +95,29 @@ export async function executePrompt({
     recordLiveEvent,
     cancellationRequested,
 }: ExecutePromptOptions): Promise<void> {
-    const text = new CoalescingTextPublisher(
-        timer,
-        (messageId, delta) => {
+    const events = new CoalescingAgentEventPublisher(timer, (event) => {
+        if (event.kind === "text") {
             publisher.publish(
                 command.sessionId,
-                recordLiveEvent({ kind: AGENT_MESSAGE_DELTA_KIND, messageId, text: delta }),
+                recordLiveEvent({ kind: AGENT_MESSAGE_DELTA_KIND, messageId: event.messageId, text: event.text }),
             );
-        },
-        AGENT_TEXT_COALESCING_MILLISECONDS,
-        AGENT_TEXT_MAXIMUM_LENGTH,
-    );
-    const narration = new CoalescingNarrationPublisher(
-        timer,
-        (increment) => {
-            const event: RecordedSessionEvent = {
-                activityId: increment.activityId,
-                activityType: increment.activityType,
+            return;
+        }
+        if (event.kind === "narration") {
+            const recorded: RecordedSessionEvent = {
+                activityId: event.increment.activityId,
+                activityType: event.increment.activityType,
                 commandId: command.commandId,
                 kind: AGENT_ACTIVITY_NARRATION_KIND,
-                sequence: increment.sequence,
+                sequence: event.increment.sequence,
                 sessionId: command.sessionId,
-                text: increment.text,
+                text: event.increment.text,
             };
-            publisher.publish(command.sessionId, recordLiveEvent(event));
-        },
-        AGENT_ACTIVITY_COALESCING_MILLISECONDS,
-        AGENT_TEXT_MAXIMUM_LENGTH,
-    );
-    const activities = new CoalescingDaemonActivityPublisher(timer, (activity) => {
-        text.flush();
-        narration.flush();
-        const event = daemonActivity(command, activity);
-        publisher.publish(command.sessionId, recordLiveEvent(event));
+            publisher.publish(command.sessionId, recordLiveEvent(recorded));
+            return;
+        }
+        const activity = daemonActivity(command, event.activity);
+        publisher.publish(command.sessionId, recordLiveEvent(activity));
     });
     try {
         const resolved = await resolveSessionDirectories(
@@ -233,17 +214,9 @@ export async function executePrompt({
                 cwd: resolved.cwd,
                 disposition: availability.disposition,
                 images: attachments.images,
-                onActivity: activities.record,
-                onNarration: (increment) => {
-                    text.flush();
-                    narration.record(increment);
-                    return Promise.resolve();
-                },
-                onText: (delta, messageId) => {
-                    narration.flush();
-                    text.record(messageId, delta);
-                    return Promise.resolve();
-                },
+                onActivity: events.recordActivity,
+                onNarration: events.recordNarration,
+                onText: events.recordText,
                 prompt: command.prompt,
                 resources: attachments.resources,
                 sessionId: command.sessionId,
@@ -253,9 +226,7 @@ export async function executePrompt({
             stopReason = result.stopReason;
         }
 
-        text.flush();
-        narration.flush();
-        activities.flush();
+        events.flush();
         publisher.publish(command.sessionId, {
             commandId: command.commandId,
             kind: SESSION_COMPLETED_KIND,
@@ -269,9 +240,7 @@ export async function executePrompt({
             sessionId: command.sessionId,
         });
     } catch (error) {
-        text.flush();
-        narration.flush();
-        activities.flush();
+        events.flush();
         if (signal.aborted && cancellationRequested()) {
             publisher.publish(command.sessionId, {
                 commandId: command.commandId,
