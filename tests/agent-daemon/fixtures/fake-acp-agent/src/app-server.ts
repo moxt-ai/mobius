@@ -169,29 +169,33 @@ input.on("line", (line) => {
                 if (rich) {
                     const richToolCount = Reflect.get(message, "richToolCount");
                     const richToolOutput = Reflect.get(message, "richToolOutput");
+                    const itemsBefore = Reflect.get(message, "itemsBefore");
+                    const scriptedBefore = Array.isArray(itemsBefore) ? itemsBefore : null;
                     turns.at(-1)?.items.push(
-                        {
-                            type: "reasoning",
-                            id: `reasoning-${turns.length.toString()}`,
-                            summary: ["Inspecting the workspace"],
-                            content: [],
-                        },
-                        {
-                            type: "agentMessage",
-                            id: `commentary-${turns.length.toString()}`,
-                            text: "I’ll inspect the saved workspace context.",
-                            phase: "commentary",
-                        },
-                        {
-                            type: "commandExecution",
-                            id: `command-${turns.length.toString()}`,
-                            command: "cat package.json",
-                            cwd: Reflect.get(saved, "cwd"),
-                            status: "completed",
-                            commandActions: [],
-                            aggregatedOutput: '{"name":"fixture"}',
-                            exitCode: 0,
-                        },
+                        ...(scriptedBefore ?? [
+                            {
+                                type: "reasoning",
+                                id: `reasoning-${turns.length.toString()}`,
+                                summary: ["Inspecting the workspace"],
+                                content: [],
+                            },
+                            {
+                                type: "agentMessage",
+                                id: `commentary-${turns.length.toString()}`,
+                                text: "I’ll inspect the saved workspace context.",
+                                phase: "commentary",
+                            },
+                            {
+                                type: "commandExecution",
+                                id: `command-${turns.length.toString()}`,
+                                command: "cat package.json",
+                                cwd: Reflect.get(saved, "cwd"),
+                                status: "completed",
+                                commandActions: [],
+                                aggregatedOutput: '{"name":"fixture"}',
+                                exitCode: 0,
+                            },
+                        ]),
                     );
                     if (
                         typeof richToolCount === "number" &&
@@ -214,7 +218,7 @@ input.on("line", (line) => {
                         }
                     }
                     const turn = turns.at(-1);
-                    if (turn !== undefined) {
+                    if (turn !== undefined && scriptedBefore === null) {
                         turn.error = { message: "Agent could not inspect the optional workspace file" };
                     }
                 }
@@ -222,6 +226,10 @@ input.on("line", (line) => {
                 if (turn !== undefined) {
                     turn.status = turn.error === undefined ? "completed" : "failed";
                     turn.items.push({ type: "agentMessage", text, phase: "final_answer" });
+                    const itemsAfter = Reflect.get(message, "itemsAfter");
+                    if (rich && Array.isArray(itemsAfter)) {
+                        turn.items.push(...itemsAfter);
+                    }
                 }
             }
         }

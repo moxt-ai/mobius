@@ -231,8 +231,14 @@ function decodeHistory(
     for (const turn of page.data.toReversed()) {
         const outcome = turnOutcome(turn.status);
         const activities: NativeMessageActivity[] = [];
+        let assignedActivityCount = 0;
         let sequence = 0;
         let assistantMessageIndex: number | null = null;
+        const activitySlice = (): readonly NativeMessageActivity[] => {
+            const assigned = activities.slice(assignedActivityCount).slice(-100);
+            assignedActivityCount = activities.length;
+            return assigned;
+        };
         for (const item of turn.items) {
             const { type } = itemTypeSchema.parse(item);
             let message: NativeHistoryMessage;
@@ -273,7 +279,7 @@ function decodeHistory(
                     }
                     continue;
                 }
-                message = { activities: activities.slice(-100), content: [], role: "assistant", text: agent.text };
+                message = { activities: activitySlice(), content: [], role: "assistant", text: agent.text };
             } else if (type === "reasoning" && options.detail === "rich") {
                 const reasoning = reasoningSchema.parse(item);
                 const output = (reasoning.summary.length > 0 ? reasoning.summary : reasoning.content).join("\n\n");
@@ -338,6 +344,17 @@ function decodeHistory(
                 }),
             );
         }
+        if (options.detail === "rich" && activities.length > assignedActivityCount) {
+            const message: NativeHistoryMessage = {
+                activities: activitySlice(),
+                content: [],
+                role: "assistant",
+                text: "",
+            };
+            messages.push(message);
+            assistantMessageIndex = messages.length - 1;
+            characters += messageSize(message);
+        }
         if (assistantMessageIndex !== null) {
             const assistant = messages[assistantMessageIndex];
             if (assistant?.role === "assistant") {
@@ -345,7 +362,6 @@ function decodeHistory(
                 const updated: NativeHistoryMessage = {
                     ...assistant,
                     ...(outcome === undefined ? {} : { outcome }),
-                    activities: activities.slice(-100),
                 };
                 const fitted = fitHistoryMessage(updated);
                 truncated ||= fitted.truncated;

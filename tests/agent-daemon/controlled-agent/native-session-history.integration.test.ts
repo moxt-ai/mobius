@@ -183,14 +183,87 @@ describe("native session history", () => {
                 new AbortController().signal,
             );
 
-            expect(result.history).toMatchObject({
-                status: "available",
-                messages: [
-                    { role: "user", text: "Keep this prompt visible" },
-                    { role: "assistant", text: "Keep this final response visible" },
-                ],
-                truncated: true,
-            });
+            if (result.history.status !== "available") {
+                throw new Error("Expected available native history");
+            }
+            expect(result.history.truncated).toBe(true);
+            expect(
+                result.history.messages.some(
+                    (message) => message.role === "user" && message.text === "Keep this prompt visible",
+                ),
+            ).toBe(true);
+            expect(
+                result.history.messages.some(
+                    (message) => message.role === "assistant" && message.text === "Keep this final response visible",
+                ),
+            ).toBe(true);
+        } finally {
+            await f.close();
+        }
+    });
+
+    it("Given Codex records assistant text before a tool call, When Chat reads rich native history, Then the tool stays after that text", async () => {
+        const f = await codexFixture();
+        try {
+            const threadId = crypto.randomUUID();
+            await writeFile(
+                join(f.native, `${encodeURIComponent(threadId)}.json`),
+                JSON.stringify({
+                    cwd: f.workspace,
+                    title: "Timeline ordering",
+                    history: [
+                        { role: "user", text: "Fix the assistant timeline" },
+                        {
+                            role: "assistant",
+                            text: "I will inspect the timeline first.",
+                            itemsBefore: [],
+                            itemsAfter: [
+                                {
+                                    type: "commandExecution",
+                                    id: "read-session-presentation",
+                                    command:
+                                        "sed -n '1,220p' packages/web/src/view-models/chat/session-presentation.ts",
+                                    cwd: f.workspace,
+                                    status: "completed",
+                                    commandActions: [{ type: "read" }],
+                                    aggregatedOutput: "export function historySessionPresentation() {}",
+                                    exitCode: 0,
+                                },
+                            ],
+                        },
+                    ],
+                }),
+            );
+            const entry = (await f.list()).entries[0];
+            if (entry === undefined) {
+                throw new Error("Missing native conversation");
+            }
+            const result = await f.service.execute(
+                { ...f.identity, action: "history", entryId: entry.entryId },
+                new AbortController().signal,
+            );
+            if (result.action !== "history" || result.history.status !== "available") {
+                throw new Error("Expected available native history");
+            }
+
+            expect(result.history.messages).toMatchObject([
+                { role: "user", text: "Fix the assistant timeline" },
+                {
+                    role: "assistant",
+                    text: "I will inspect the timeline first.",
+                    activities: [],
+                },
+                {
+                    role: "assistant",
+                    text: "",
+                    activities: [
+                        {
+                            activityType: "tool",
+                            title: "sed -n '1,220p' packages/web/src/view-models/chat/session-presentation.ts",
+                        },
+                    ],
+                },
+            ]);
         } finally {
             await f.close();
         }
