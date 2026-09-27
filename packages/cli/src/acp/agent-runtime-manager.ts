@@ -2,7 +2,7 @@ import { ActiveExecutions } from "./active-executions.ts";
 import { AgentQueryProcesses } from "./agent-query-processes.ts";
 import { AgentSession } from "./agent-session.ts";
 import { RetainedAgentProcesses } from "./retained-agent-processes.ts";
-import { RuntimeOperations, waitForPreparation } from "./runtime-operations.ts";
+import { RuntimeOperations, waitForSharedOperation } from "./runtime-operations.ts";
 
 export { createWritableAcpStream } from "./agent-connection.ts";
 
@@ -246,7 +246,7 @@ export class AgentRuntimeManager {
             if (pending !== undefined) {
                 const runtime = await metrics.measure(
                     "session-preparation-wait",
-                    async () => await waitForPreparation(pending, options.signal),
+                    async () => await waitForSharedOperation(pending, options.signal),
                 );
                 if (runtime.belongsTo(options.agent.id, options.cwd, options.additionalDirectories)) {
                     this.#executionProcesses.touch(options.sessionId, runtime);
@@ -355,7 +355,7 @@ export class AgentRuntimeManager {
         this.#operations.run(options, async (options) => {
             const pending = this.#executionProcesses.pending(options.sessionId);
             if (pending !== undefined) {
-                await waitForPreparation(pending, options.signal);
+                await waitForSharedOperation(pending, options.signal);
                 return await this.prepareExecutionSession(options);
             }
             const existing = this.#executionProcesses.get(options.sessionId);
@@ -416,7 +416,7 @@ export class AgentRuntimeManager {
             }
             const pending = this.#executionProcesses.pending(options.sessionId);
             if (pending !== undefined) {
-                await waitForPreparation(pending, options.signal);
+                await waitForSharedOperation(pending, options.signal);
             }
             if (this.#executions.command(options.sessionId) !== options.targetCommandId) {
                 throw new AcpExecutionError("The target turn is no longer active", {}, "steering_target_unavailable");
