@@ -76,7 +76,7 @@ class Messages {
     };
 }
 
-test("Given real Codex and a local model provider, When a queued follow-up is cancelled during a Turn, Then reopening its history shows one active prompt and the Turn keeps streaming to completion", async () => {
+test("Given real Codex emits a tool, commentary, and final text, When the completed Session history is reopened, Then its timeline remains chronological", async () => {
     let providerEntered = Promise.withResolvers<void>();
     let releaseProvider = Promise.withResolvers<void>();
     const provider = await FakeOpenAiProvider.start("mobius-test-model", "Codex live reply", {
@@ -342,8 +342,34 @@ test("Given real Codex and a local model provider, When a queued follow-up is ca
                 expect(page.status).toBe("available");
                 if (page.status === "available") {
                     expect(page.messages.filter((item) => item.role === "user")).toHaveLength(turnNumber);
-                    expect(page.messages.filter((item) => item.role === "assistant")).toHaveLength(turnNumber);
-                    expect(page.messages.at(-1)?.text).toContain("Codex live reply");
+                    const firstUserIndex = page.messages.findIndex((item) => item.role === "user");
+                    const nextUserIndex = page.messages.findIndex(
+                        (item, index) => index > firstUserIndex && item.role === "user",
+                    );
+                    const firstTurn = page.messages.slice(
+                        firstUserIndex + 1,
+                        nextUserIndex < 0 ? page.messages.length : nextUserIndex,
+                    );
+                    const toolIndex = firstTurn.findIndex(
+                        (item) =>
+                            item.role === "assistant" &&
+                            item.activities.some((activity) => activity.activityType === "tool"),
+                    );
+                    const commentaryIndex = firstTurn.findIndex(
+                        (item) =>
+                            item.role === "assistant" &&
+                            item.activities.some(
+                                (activity) =>
+                                    activity.activityType === "progress" &&
+                                    activity.output === "Checking the live progress boundary.",
+                            ),
+                    );
+                    const finalIndex = firstTurn.findIndex(
+                        (item) => item.role === "assistant" && item.text.includes("Codex live reply"),
+                    );
+                    expect(toolIndex).toBeGreaterThanOrEqual(0);
+                    expect(commentaryIndex).toBeGreaterThan(toolIndex);
+                    expect(finalIndex).toBeGreaterThan(commentaryIndex);
                 }
                 break;
             }

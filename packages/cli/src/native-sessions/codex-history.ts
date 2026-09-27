@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import {
+    type AgentDisplayContent,
     type NativeHistoryMessage,
     type NativeMessageActivity,
     type NativeSessionHistory,
@@ -48,14 +49,20 @@ const turnsSchema = z.object({
 const itemTypeSchema = z.object({ type: z.string().min(1).max(80) });
 const userMessageSchema = z.object({
     content: z.array(z.unknown()).max(10_000),
+    type: z.literal("userMessage"),
 });
 const textSchema = z.object({ text: z.string() });
 const imageSchema = z.object({ url: z.string() });
-const agentMessageSchema = textSchema.extend({ phase: z.string().nullish() });
+const agentMessageSchema = textSchema.extend({
+    id: z.string().optional(),
+    phase: z.string().nullish(),
+    type: z.literal("agentMessage"),
+});
 const reasoningSchema = z.object({
     id: z.string(),
     summary: z.array(z.string()).max(10_000),
     content: z.array(z.string()).max(10_000),
+    type: z.literal("reasoning"),
 });
 const commandExecutionSchema = z.object({
     id: z.string(),
@@ -65,7 +72,44 @@ const commandExecutionSchema = z.object({
     commandActions: z.array(z.object({ type: z.string() }).passthrough()).max(100),
     aggregatedOutput: z.string().nullish(),
     exitCode: z.number().int().nullish(),
+    type: z.literal("commandExecution"),
 });
+const fileChangeSchema = z.object({
+    changes: z.array(z.object({ diff: z.string(), path: z.string() })).max(10_000),
+    id: z.string(),
+    status: z.string(),
+    type: z.literal("fileChange"),
+});
+const mcpToolCallSchema = z.object({
+    arguments: z.unknown().optional(),
+    error: z.unknown().nullish(),
+    id: z.string(),
+    result: z.unknown().nullish(),
+    server: z.string(),
+    status: z.string(),
+    tool: z.string(),
+    type: z.literal("mcpToolCall"),
+});
+const dynamicToolCallSchema = z.object({
+    arguments: z.unknown().optional(),
+    contentItems: z.array(z.unknown()).max(10_000).nullish(),
+    id: z.string(),
+    namespace: z.string().nullish(),
+    status: z.string(),
+    tool: z.string(),
+    type: z.literal("dynamicToolCall"),
+});
+const planSchema = z.object({ id: z.string(), text: z.string(), type: z.literal("plan") });
+const historyItemSchema = z.discriminatedUnion("type", [
+    userMessageSchema,
+    agentMessageSchema,
+    reasoningSchema,
+    commandExecutionSchema,
+    fileChangeSchema,
+    mcpToolCallSchema,
+    dynamicToolCallSchema,
+    planSchema,
+]);
 
 interface ReadCodexHistoryOptions {
     readonly detail: "messages" | "rich";
@@ -119,6 +163,36 @@ function errorMessage(value: unknown): string {
     return JSON.stringify(value) ?? "Codex stopped before completing this turn.";
 }
 
+function formatted(value: unknown): string {
+    if (value === undefined) {
+        return "";
+    }
+    if (typeof value === "string") {
+        return value;
+    }
+    return JSON.stringify(value) ?? "";
+}
+
+function toolStatus(status: string): string {
+    return status === "inProgress" ? "running" : status === "completed" ? "completed" : "failed";
+}
+
+function diffDisplayContent(path: string, newText: string): AgentDisplayContent {
+    return {
+        artifactId: "",
+        data: "",
+        mimeType: "",
+        name: "",
+        newText,
+        oldText: "",
+        path,
+        terminalId: "",
+        text: "",
+        type: "diff",
+        uri: "",
+    };
+}
+
 function messageSize(message: NativeHistoryMessage): number {
     return (
         message.text.length +
@@ -168,11 +242,14 @@ function fitActivities(
     return activities.map((activity) => fitActivity(activity, maximumActivityCharacters));
 }
 
-function fitHistoryMessage(message: NativeHistoryMessage): {
+function fitHistoryMessage(
+    message: NativeHistoryMessage,
+    maximumCharacters = SESSION_HISTORY_MESSAGE_CHARACTER_LIMIT,
+): {
     readonly message: NativeHistoryMessage;
     readonly truncated: boolean;
 } {
-    const text = message.text.slice(-SESSION_HISTORY_MESSAGE_CHARACTER_LIMIT);
+    const text = message.text.slice(-maximumCharacters);
     if (message.role === "user") {
         return {
             message: { ...message, text },
@@ -183,13 +260,12 @@ function fitHistoryMessage(message: NativeHistoryMessage): {
     let activities = message.activities;
     const content = message.content;
     let fitted: NativeHistoryMessage = { ...message, activities, content, text };
-    if (messageSize(fitted) > SESSION_HISTORY_MESSAGE_CHARACTER_LIMIT && activities.length > 0) {
-        const maximumCharacters =
-            SESSION_HISTORY_MESSAGE_CHARACTER_LIMIT - text.length - JSON.stringify(content).length;
-        activities = fitActivities(activities, maximumCharacters);
+    if (messageSize(fitted) > maximumCharacters && activities.length > 0) {
+        const maximumActivityCharacters = maximumCharacters - text.length - JSON.stringify(content).length;
+        activities = fitActivities(activities, maximumActivityCharacters);
         fitted = { ...fitted, activities };
     }
-    const excess = Math.max(0, messageSize(fitted) - SESSION_HISTORY_MESSAGE_CHARACTER_LIMIT);
+    const excess = Math.max(0, messageSize(fitted) - maximumCharacters);
     if (excess > 0) {
         const maximumTextLength = Math.max(0, fitted.text.length - excess);
         fitted = {
@@ -238,21 +314,37 @@ function decodeHistory(
     let truncated = page.nextCursor != null;
     for (const turn of page.data.toReversed()) {
         const outcome = turnOutcome(turn.status);
-        const activities: NativeMessageActivity[] = [];
-        let assignedActivityCount = 0;
+        const turnMessageCharacterLimit = Math.max(
+            1,
+            Math.floor(SESSION_HISTORY_CHARACTER_LIMIT / Math.max(1, turn.items.length + (turn.error == null ? 0 : 1))),
+        );
         let sequence = 0;
         let assistantMessageIndex: number | null = null;
-        const activitySlice = (): readonly NativeMessageActivity[] => {
-            const assigned = activities.slice(assignedActivityCount).slice(-100);
-            assignedActivityCount = activities.length;
-            return assigned;
+        const append = (message: NativeHistoryMessage): void => {
+            const fitted = fitHistoryMessage(message, turnMessageCharacterLimit);
+            if (
+                fitted.message.text.length === 0 &&
+                (fitted.message.images?.length ?? 0) === 0 &&
+                (fitted.message.role === "user" ||
+                    (fitted.message.activities.length === 0 && fitted.message.content.length === 0))
+            ) {
+                return;
+            }
+            truncated ||= fitted.truncated;
+            messages.push(fitted.message);
+            if (fitted.message.role === "assistant") {
+                assistantMessageIndex = messages.length - 1;
+            }
+            characters += messageSize(fitted.message);
         };
         for (const item of turn.items) {
-            const { type } = itemTypeSchema.parse(item);
-            let message: NativeHistoryMessage;
-            if (type === "userMessage") {
-                const { content } = userMessageSchema.parse(item);
-                const text = content
+            const decoded = historyItemSchema.safeParse(item);
+            if (!decoded.success) {
+                continue;
+            }
+            const historyItem = decoded.data;
+            if (historyItem.type === "userMessage") {
+                const text = historyItem.content
                     .map((block) => {
                         const { type } = itemTypeSchema.parse(block);
                         if (type === "text") {
@@ -264,104 +356,177 @@ function decodeHistory(
                         return "[Attachment]";
                     })
                     .join("");
-                message = {
+                append({
                     role: "user",
                     text,
-                };
-            } else if (type === "agentMessage") {
-                const agent = agentMessageSchema.parse(item);
-                if (agent.phase === "commentary") {
-                    if (options.detail === "rich" && agent.text.length > 0) {
-                        activities.push(
-                            activity(`progress-${sequence.toString()}`, "progress", sequence, {
-                                input: "",
-                                locations: [],
-                                name: "",
-                                output: agent.text,
-                                status: "completed",
-                                title: "Progress",
-                                toolKind: "",
-                            }),
-                        );
+                });
+            } else if (historyItem.type === "agentMessage") {
+                if (historyItem.phase === "commentary") {
+                    if (options.detail === "rich" && historyItem.text.length > 0) {
+                        append({
+                            activities: [
+                                activity(historyItem.id ?? `progress-${sequence.toString()}`, "progress", sequence, {
+                                    input: "",
+                                    locations: [],
+                                    name: "",
+                                    output: historyItem.text,
+                                    status: "completed",
+                                    title: "Progress",
+                                    toolKind: "",
+                                }),
+                            ],
+                            content: [],
+                            role: "assistant",
+                            text: "",
+                        });
                         sequence += 1;
                     }
                     continue;
                 }
-                message = { activities: activitySlice(), content: [], role: "assistant", text: agent.text };
-            } else if (type === "reasoning" && options.detail === "rich") {
-                const reasoning = reasoningSchema.parse(item);
-                const output = (reasoning.summary.length > 0 ? reasoning.summary : reasoning.content).join("\n\n");
+                append({ activities: [], content: [], role: "assistant", text: historyItem.text });
+            } else if (historyItem.type === "reasoning" && options.detail === "rich") {
+                const output = (historyItem.summary.length > 0 ? historyItem.summary : historyItem.content).join(
+                    "\n\n",
+                );
                 if (output.length > 0) {
-                    activities.push(
-                        activity(reasoning.id, "reasoning", sequence, {
+                    append({
+                        activities: [
+                            activity(historyItem.id, "reasoning", sequence, {
+                                input: "",
+                                locations: [],
+                                name: "",
+                                output,
+                                status: "completed",
+                                title: "Reasoning",
+                                toolKind: "",
+                            }),
+                        ],
+                        content: [],
+                        role: "assistant",
+                        text: "",
+                    });
+                    sequence += 1;
+                }
+            } else if (historyItem.type === "commandExecution" && options.detail === "rich") {
+                const action = historyItem.commandActions[0]?.type ?? "execute";
+                append({
+                    activities: [
+                        activity(historyItem.id, "tool", sequence, {
+                            input: JSON.stringify({ command: historyItem.command, cwd: historyItem.cwd }),
+                            locations: [historyItem.cwd],
+                            name: "",
+                            output: JSON.stringify({
+                                formatted_output: historyItem.aggregatedOutput ?? "",
+                                ...(historyItem.exitCode == null ? {} : { exit_code: historyItem.exitCode }),
+                            }),
+                            status: toolStatus(historyItem.status),
+                            title: historyItem.command,
+                            toolKind: action,
+                        }),
+                    ],
+                    content: [],
+                    role: "assistant",
+                    text: "",
+                });
+                sequence += 1;
+            } else if (historyItem.type === "fileChange" && options.detail === "rich") {
+                const paths = historyItem.changes.map((change) => change.path);
+                const content = historyItem.changes.map(
+                    (change): AgentDisplayContent => diffDisplayContent(change.path, change.diff),
+                );
+                append({
+                    activities: [
+                        activity(historyItem.id, "tool", sequence, {
+                            input: JSON.stringify({ changes: paths }),
+                            locations: paths,
+                            name: "",
+                            output: "",
+                            status: toolStatus(historyItem.status),
+                            title: paths.join(", "),
+                            toolKind: "edit",
+                        }),
+                    ].map((entry) => ({ ...entry, content })),
+                    content: [],
+                    role: "assistant",
+                    text: "",
+                });
+                sequence += 1;
+            } else if (historyItem.type === "mcpToolCall" && options.detail === "rich") {
+                append({
+                    activities: [
+                        activity(historyItem.id, "tool", sequence, {
+                            input: formatted(historyItem.arguments),
+                            locations: [],
+                            name: historyItem.tool,
+                            output: formatted(historyItem.error ?? historyItem.result),
+                            status: toolStatus(historyItem.status),
+                            title: `${historyItem.server}/${historyItem.tool}`,
+                            toolKind: "other",
+                        }),
+                    ],
+                    content: [],
+                    role: "assistant",
+                    text: "",
+                });
+                sequence += 1;
+            } else if (historyItem.type === "dynamicToolCall" && options.detail === "rich") {
+                append({
+                    activities: [
+                        activity(historyItem.id, "tool", sequence, {
+                            input: formatted(historyItem.arguments),
+                            locations: [],
+                            name: historyItem.tool,
+                            output: formatted(historyItem.contentItems),
+                            status: toolStatus(historyItem.status),
+                            title:
+                                historyItem.namespace == null
+                                    ? historyItem.tool
+                                    : `${historyItem.namespace}/${historyItem.tool}`,
+                            toolKind: "other",
+                        }),
+                    ],
+                    content: [],
+                    role: "assistant",
+                    text: "",
+                });
+                sequence += 1;
+            } else if (historyItem.type === "plan" && options.detail === "rich") {
+                append({
+                    activities: [
+                        activity(historyItem.id, "plan", sequence, {
                             input: "",
                             locations: [],
                             name: "",
-                            output,
+                            output: historyItem.text,
                             status: "completed",
-                            title: "Reasoning",
+                            title: "Plan",
                             toolKind: "",
                         }),
-                    );
-                    sequence += 1;
-                }
-                continue;
-            } else if (type === "commandExecution" && options.detail === "rich") {
-                const command = commandExecutionSchema.parse(item);
-                const action = command.commandActions[0]?.type ?? "execute";
-                activities.push(
-                    activity(command.id, "tool", sequence, {
-                        input: JSON.stringify({ command: command.command, cwd: command.cwd }),
-                        locations: [command.cwd],
-                        name: "",
-                        output: JSON.stringify({
-                            formatted_output: command.aggregatedOutput ?? "",
-                            ...(command.exitCode == null ? {} : { exit_code: command.exitCode }),
-                        }),
-                        status: command.status === "completed" ? "completed" : "failed",
-                        title: command.command,
-                        toolKind: action,
-                    }),
-                );
+                    ],
+                    content: [],
+                    role: "assistant",
+                    text: "",
+                });
                 sequence += 1;
-                continue;
-            } else {
-                continue;
             }
-            const fitted = fitHistoryMessage(message);
-            if (fitted.message.text.length === 0 && (fitted.message.images?.length ?? 0) === 0) {
-                continue;
-            }
-            truncated ||= fitted.truncated;
-            messages.push(fitted.message);
-            if (message.role === "assistant") {
-                assistantMessageIndex = messages.length - 1;
-            }
-            characters += messageSize(fitted.message);
         }
         if (options.detail === "rich" && turn.error != null) {
-            activities.push(
-                activity(`agent-error-${sequence.toString()}`, "tool", sequence, {
-                    input: "",
-                    locations: [],
-                    name: "",
-                    output: errorMessage(turn.error),
-                    status: "failed",
-                    title: "Agent error",
-                    toolKind: "other",
-                }),
-            );
-        }
-        if (options.detail === "rich" && activities.length > assignedActivityCount) {
-            const message: NativeHistoryMessage = {
-                activities: activitySlice(),
+            append({
+                activities: [
+                    activity(`agent-error-${sequence.toString()}`, "tool", sequence, {
+                        input: "",
+                        locations: [],
+                        name: "",
+                        output: errorMessage(turn.error),
+                        status: "failed",
+                        title: "Agent error",
+                        toolKind: "other",
+                    }),
+                ],
                 content: [],
                 role: "assistant",
                 text: "",
-            };
-            messages.push(message);
-            assistantMessageIndex = messages.length - 1;
-            characters += messageSize(message);
+            });
         }
         if (assistantMessageIndex !== null) {
             const assistant = messages[assistantMessageIndex];
@@ -371,20 +536,20 @@ function decodeHistory(
                     ...assistant,
                     ...(outcome === undefined ? {} : { outcome }),
                 };
-                const fitted = fitHistoryMessage(updated);
+                const fitted = fitHistoryMessage(updated, turnMessageCharacterLimit);
                 truncated ||= fitted.truncated;
                 messages[assistantMessageIndex] = fitted.message;
                 characters += messageSize(fitted.message);
             }
-        } else if (activities.length > 0 || outcome !== undefined) {
+        } else if (outcome !== undefined) {
             const message: NativeHistoryMessage = {
-                activities: activities.slice(-100),
+                activities: [],
                 content: [],
                 role: "assistant",
                 ...(outcome === undefined ? {} : { outcome }),
                 text: "",
             };
-            const fitted = fitHistoryMessage(message);
+            const fitted = fitHistoryMessage(message, turnMessageCharacterLimit);
             truncated ||= fitted.truncated;
             messages.push(fitted.message);
             characters += messageSize(fitted.message);

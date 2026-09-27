@@ -278,7 +278,7 @@ describe("native session history", () => {
         }
     });
 
-    it("Given Codex records assistant text before a tool call, When Chat reads rich native history, Then the tool stays after that text", async () => {
+    it("Given Codex records text, command, file change, and trailing text, When Chat reads rich native history, Then every item stays ordered", async () => {
         const f = await codexFixture();
         try {
             const threadId = crypto.randomUUID();
@@ -304,6 +304,24 @@ describe("native session history", () => {
                                     commandActions: [{ type: "read" }],
                                     aggregatedOutput: "export function historySessionPresentation() {}",
                                     exitCode: 0,
+                                },
+                                {
+                                    type: "fileChange",
+                                    id: "edit-session-presentation",
+                                    status: "completed",
+                                    changes: [
+                                        {
+                                            diff: "+export function orderedHistory() {}",
+                                            kind: "update",
+                                            path: "packages/web/src/view-models/chat/session-presentation.ts",
+                                        },
+                                    ],
+                                },
+                                {
+                                    type: "agentMessage",
+                                    id: "timeline-complete",
+                                    text: "The timeline is fixed.",
+                                    phase: "final_answer",
                                 },
                             ],
                         },
@@ -338,6 +356,22 @@ describe("native session history", () => {
                             title: "sed -n '1,220p' packages/web/src/view-models/chat/session-presentation.ts",
                         },
                     ],
+                },
+                {
+                    role: "assistant",
+                    text: "",
+                    activities: [
+                        {
+                            activityType: "tool",
+                            title: "packages/web/src/view-models/chat/session-presentation.ts",
+                            toolKind: "edit",
+                        },
+                    ],
+                },
+                {
+                    role: "assistant",
+                    text: "The timeline is fixed.",
+                    activities: [],
                 },
             ]);
         } finally {
