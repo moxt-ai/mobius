@@ -10,7 +10,7 @@ import {
 } from "./control-messages.ts";
 import { identifierStringSchema as identifier } from "./identifier.ts";
 import {
-    assistantHistoryMessageSchema,
+    SESSION_HISTORY_CHARACTER_LIMIT,
     SESSION_HISTORY_MESSAGE_LIMIT,
     sessionHistorySchema,
 } from "./session-history.ts";
@@ -39,6 +39,27 @@ const activeTurnActivitySchema = z
         toolKind: z.string().max(64),
     })
     .readonly();
+const activeTurnUserMessageSchema = z
+    .strictObject({
+        id: identifier,
+        images: z.array(promptImageSchema).max(8).readonly().optional(),
+        role: z.literal("user"),
+        text: z.string().max(SESSION_HISTORY_CHARACTER_LIMIT),
+    })
+    .readonly();
+const activeTurnAssistantMessageSchema = z
+    .strictObject({
+        activities: z.array(activeTurnActivitySchema).max(100).readonly().default([]),
+        content: z.array(displayContentSchema).max(100).readonly().default([]),
+        id: identifier,
+        role: z.literal("assistant"),
+        text: z.string().max(SESSION_HISTORY_CHARACTER_LIMIT),
+    })
+    .readonly();
+const activeTurnMessageSchema = z.discriminatedUnion("role", [
+    activeTurnUserMessageSchema,
+    activeTurnAssistantMessageSchema,
+]);
 export const activeTurnSnapshotSchema = z
     .strictObject({
         activities: z.array(activeTurnActivitySchema).readonly(),
@@ -51,12 +72,13 @@ export const activeTurnSnapshotSchema = z
         interaction: z
             .discriminatedUnion("kind", [sessionPermissionRequestedEventSchema, sessionElicitationRequestedEventSchema])
             .nullable(),
-        messages: z.array(assistantHistoryMessageSchema).max(SESSION_HISTORY_MESSAGE_LIMIT).readonly(),
+        messages: z.array(activeTurnMessageSchema).max(SESSION_HISTORY_MESSAGE_LIMIT).readonly(),
         sequence: z.number().int().nonnegative(),
         state: z.literal("running"),
     })
     .readonly();
 export type ActiveTurnSnapshot = z.infer<typeof activeTurnSnapshotSchema>;
+export type ActiveTurnMessage = z.infer<typeof activeTurnMessageSchema>;
 
 const identity = {
     ...envelope,

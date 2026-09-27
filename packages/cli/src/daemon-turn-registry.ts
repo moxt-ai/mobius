@@ -77,6 +77,11 @@ export class DaemonTurnRegistry {
         return event;
     };
 
+    readonly recordSteeringPrompt = (command: SessionPromptCommand): RecordedSessionEvent | null => {
+        const target = this.#turns.get(command.targetCommandId);
+        return target?.recordSteeringPrompt(command) ?? null;
+    };
+
     readonly executionSnapshot = async (matches: (command: SessionPromptCommand) => Promise<boolean>) => {
         const matching: ActiveDaemonTurn[] = [];
         for (const turn of this.#turns.values()) {

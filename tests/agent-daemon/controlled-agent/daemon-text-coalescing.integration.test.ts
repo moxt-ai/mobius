@@ -239,8 +239,10 @@ describe("daemon assistant text coalescing", () => {
                     const firstMessageIndex = turn.messages.findIndex(
                         (message) => message.text === "Checking the workspace",
                     );
-                    const toolIndex = turn.messages.findIndex((message) =>
-                        message.activities.some((activity) => activity.activityType === "tool"),
+                    const toolIndex = turn.messages.findIndex(
+                        (message) =>
+                            message.role === "assistant" &&
+                            message.activities.some((activity) => activity.activityType === "tool"),
                     );
                     const finalMessageIndex = turn.messages.findIndex((message) =>
                         message.text.includes("OpenCode turn 1: interleave progress and hold"),
@@ -299,7 +301,18 @@ describe("daemon assistant text coalescing", () => {
             if (page.status !== "available") {
                 throw new Error("Expected live history");
             }
-            expect(page.messages.slice(1)).toEqual(latest.messages);
+            expect(page.messages).toEqual(
+                latest.messages.map((message) =>
+                    message.role === "user"
+                        ? { role: "user", text: message.text }
+                        : {
+                              activities: message.activities,
+                              content: message.content,
+                              role: "assistant",
+                              text: message.text,
+                          },
+                ),
+            );
 
             sendText(
                 fixture.socket,
@@ -960,14 +973,30 @@ describe("daemon assistant text coalescing", () => {
                     sessionId,
                 }),
             );
+            let steeredSnapshot: ActiveTurnSnapshot | null = null;
             do {
                 result = await next();
+                if (decodeMessageKind(result) === SESSION_TURN_UPDATED_KIND) {
+                    steeredSnapshot = decodeSessionTurnUpdatedEvent(result).turn;
+                }
             } while (
                 !(
                     decodeMessageKind(result) === SESSION_STARTED_KIND &&
                     decodeSessionStartedEvent(result).commandId === queuedPrompt.commandId
                 )
             );
+            if (steeredSnapshot === null) {
+                throw new Error("Expected the active Turn snapshot to include the steering prompt");
+            }
+            expect(steeredSnapshot.messages.map((message) => ({ role: message.role, text: message.text }))).toEqual([
+                { role: "user", text: prompt.prompt },
+                ...steeredSnapshot.messages
+                    .filter((message) => message.role === "assistant")
+                    .map((message) => ({ role: message.role, text: message.text })),
+                { role: "user", text: queuedPrompt.prompt },
+            ]);
+            expect(steeredSnapshot.messages.at(0)).toMatchObject({ id: prompt.commandId });
+            expect(steeredSnapshot.messages.at(-1)).toMatchObject({ id: queuedPrompt.commandId });
             do {
                 result = await next();
             } while (
