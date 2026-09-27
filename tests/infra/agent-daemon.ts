@@ -491,6 +491,10 @@ export interface FakeAgentDaemonBehavior {
     }[];
     readonly afterSessionStarted?: (command: SessionPromptCommand, signal: AbortSignal) => Promise<void>;
     readonly afterFirstDelta?: (command: SessionPromptCommand, signal: AbortSignal) => Promise<void>;
+    readonly activityAfterFirstDelta?: (
+        command: SessionPromptCommand,
+        turn: number,
+    ) => ActiveTurn["activities"][number] | null;
     readonly afterLastDelta?: (command: SessionPromptCommand, signal: AbortSignal) => Promise<void>;
     readonly afterFirstNarration?: (command: SessionPromptCommand, signal: AbortSignal) => Promise<void>;
     readonly afterLastNarration?: (command: SessionPromptCommand, signal: AbortSignal) => Promise<void>;
@@ -1262,6 +1266,27 @@ async function processHappyPathCommand(
             }),
             signal,
         );
+        if (index === 0) {
+            const activity = behavior.activityAfterFirstDelta?.(command, turn) ?? null;
+            if (activity !== null) {
+                await daemon.sendSessionEvent(
+                    command.sessionId,
+                    encodeAgentActivityEvent({
+                        ...activity,
+                        commandId: command.commandId,
+                        detail: {
+                            content: activity.content,
+                            input: activity.input,
+                            kind: "recorded",
+                            output: activity.output,
+                        },
+                        kind: "agent.activity",
+                        sessionId: command.sessionId,
+                    }),
+                    signal,
+                );
+            }
+        }
         if (index === 0 && parts.length > 1) {
             await behavior.afterFirstDelta?.(command, signal);
         }
