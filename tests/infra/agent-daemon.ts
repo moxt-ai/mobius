@@ -513,6 +513,7 @@ export interface FakeAgentDaemonBehavior {
     readonly onPromptCancelled?: (command: SessionPromptCommand) => void;
     readonly onPromptCompleted?: (command: SessionPromptCommand, response: string) => void;
     readonly progressText?: (command: SessionPromptCommand) => string;
+    readonly queuedTurnStartsWithoutPriorCompletion?: boolean;
     readonly reasoningParts?: (command: SessionPromptCommand) => readonly string[];
     readonly requiredBindingId?: string;
     readonly responseParts?: (command: SessionPromptCommand, turn: number) => readonly string[];
@@ -608,6 +609,7 @@ async function processHappyPathCommand(
     sessions: Map<string, SessionMetadata>,
     nativeImports: Map<string, string>,
     toolCancellations: Map<string, () => void>,
+    prestartedCommands: Set<string>,
     signal: AbortSignal,
 ): Promise<string | undefined> {
     const kind = decodeMessageKind(encoded);
@@ -977,7 +979,11 @@ async function processHappyPathCommand(
         return;
     }
     const command = decodeSessionPromptCommand(encoded);
-    if (command.disposition === SessionPromptDisposition.Queue && activeTurns.has(command.sessionId)) {
+    if (
+        command.disposition === SessionPromptDisposition.Queue &&
+        activeTurns.has(command.sessionId) &&
+        !prestartedCommands.has(command.commandId)
+    ) {
         queuedPrompts.set(command.commandId, command);
         await daemon.sendSessionEvent(
             command.sessionId,
@@ -1015,7 +1021,7 @@ async function processHappyPathCommand(
         );
         return;
     }
-    if (activeTurns.has(command.sessionId)) {
+    if (activeTurns.has(command.sessionId) && !prestartedCommands.has(command.commandId)) {
         await daemon.sendSessionEvent(
             command.sessionId,
             encodeSessionFailedEvent({
@@ -1032,19 +1038,21 @@ async function processHappyPathCommand(
     const turn = nextTurn();
     const createsImage = command.prompt.toLowerCase().includes("image");
     const epoch = command.commandId;
-    await daemon.sendSessionEvent(
-        command.sessionId,
-        encodeSessionStartedEvent({
-            attemptId: `fake-attempt-${turn.toString()}`,
-            commandId: command.commandId,
-            epoch,
-            kind: SESSION_STARTED_KIND,
-            prompt: command.prompt,
-            sequence: 0,
-            sessionId: command.sessionId,
-        }),
-        signal,
-    );
+    if (!prestartedCommands.delete(command.commandId)) {
+        await daemon.sendSessionEvent(
+            command.sessionId,
+            encodeSessionStartedEvent({
+                attemptId: `fake-attempt-${turn.toString()}`,
+                commandId: command.commandId,
+                epoch,
+                kind: SESSION_STARTED_KIND,
+                prompt: command.prompt,
+                sequence: 0,
+                sessionId: command.sessionId,
+            }),
+            signal,
+        );
+    }
     await behavior.afterSessionStarted?.(command, signal);
     const progress = behavior.progressText?.(command) ?? "";
     if (progress.length > 0) {
@@ -1308,17 +1316,54 @@ async function processHappyPathCommand(
     }
     activeTurns.delete(command.sessionId);
     behavior.onPromptCompleted?.(command, parts.join(""));
-    await daemon.sendSessionEvent(
-        command.sessionId,
-        encodeSessionCompletedEvent({
-            commandId: command.commandId,
-            kind: "session.completed",
-            sessionId: command.sessionId,
-            stopReason: "end_turn",
-        }),
-        signal,
-    );
     const next = [...queuedPrompts.values()].find((entry) => entry.sessionId === command.sessionId);
+    const promotesWithoutCompletion = behavior.queuedTurnStartsWithoutPriorCompletion === true && next !== undefined;
+    if (promotesWithoutCompletion && next !== undefined) {
+        queuedPrompts.delete(next.commandId);
+        activeTurns.set(command.sessionId, {
+            activities: [],
+            commandId: next.commandId,
+            content: [],
+            epoch: next.commandId,
+            interaction: null,
+            prompt: next.prompt,
+            sequence: 0,
+            state: "running",
+            text: "",
+            truncated: false,
+        });
+        await daemon.sendSessionEvent(
+            command.sessionId,
+            JSON.stringify({ kind: "session.queue.changed", sessionId: command.sessionId }),
+            signal,
+        );
+        await daemon.sendSessionEvent(
+            command.sessionId,
+            encodeSessionStartedEvent({
+                attemptId: `fake-prestarted-${next.commandId}`,
+                commandId: next.commandId,
+                epoch: next.commandId,
+                kind: SESSION_STARTED_KIND,
+                prompt: next.prompt,
+                sequence: 0,
+                sessionId: command.sessionId,
+            }),
+            signal,
+        );
+        prestartedCommands.add(next.commandId);
+    }
+    if (!promotesWithoutCompletion) {
+        await daemon.sendSessionEvent(
+            command.sessionId,
+            encodeSessionCompletedEvent({
+                commandId: command.commandId,
+                kind: "session.completed",
+                sessionId: command.sessionId,
+                stopReason: "end_turn",
+            }),
+            signal,
+        );
+    }
     if (next !== undefined) {
         queuedPrompts.delete(next.commandId);
         return JSON.stringify(next);
@@ -1338,6 +1383,7 @@ export function serveFakeAgentDaemon(
     const sessions = new Map<string, SessionMetadata>();
     const nativeImports = new Map<string, string>();
     const toolCancellations = new Map<string, () => void>();
+    const prestartedCommands = new Set<string>();
     let turn = 0;
     const nextTurn = (): number => {
         turn += 1;
@@ -1357,6 +1403,7 @@ export function serveFakeAgentDaemon(
                     sessions,
                     nativeImports,
                     toolCancellations,
+                    prestartedCommands,
                     cancellation.signal,
                 );
             }

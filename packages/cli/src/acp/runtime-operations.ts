@@ -34,8 +34,8 @@ export class RuntimeOperations {
     };
 }
 
-/** A cancelled borrower stops waiting without cancelling a shared preparation. */
-export async function waitForPreparation<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
+/** A cancelled borrower stops waiting without cancelling a shared operation. */
+export async function waitForSharedOperation<T>(pending: Promise<T>, signal: AbortSignal): Promise<T> {
     signal.throwIfAborted();
     const cancelled = Promise.withResolvers<never>();
     const abort = (): void => cancelled.reject(signal.reason);

@@ -223,6 +223,7 @@ const nativeHistory = new Map<
         }[];
     }[]
 >();
+const replayedSessionHistory = new Set<string>();
 
 const nativeMetadata = new Map<
     string,
@@ -779,7 +780,12 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
         }
         const state = readPersistedState(context.params.sessionId);
         sessions.set(context.params.sessionId, state);
-        for (const message of nativeHistory.get(context.params.sessionId) ?? []) {
+        const history =
+            process.argv.includes("--replay-history-once") && replayedSessionHistory.has(context.params.sessionId)
+                ? []
+                : (nativeHistory.get(context.params.sessionId) ?? []);
+        replayedSessionHistory.add(context.params.sessionId);
+        for (const message of history) {
             if (message.role === "assistant") {
                 const replayId = message.messageId;
                 await context.client.notify(acp.methods.client.session.update, {
@@ -1359,6 +1365,16 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                 if (permission.outcome.outcome !== "selected") {
                     return { stopReason: "cancelled" };
                 }
+                if (process.env["MOBIUS_FAKE_ACP_PAUSE_AFTER_PERMISSION"] === "1") {
+                    const directory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+                    if (directory === undefined) {
+                        throw new Error("The controlled Agent state directory is unavailable");
+                    }
+                    await waitForFile(directory, "resume-after-permission", cancellation.signal);
+                    if (cancellation.signal.aborted) {
+                        return { stopReason: "cancelled" };
+                    }
+                }
 
                 const elicitation = await context.client.request(acp.methods.client.elicitation.create, {
                     message: "Choose the branch to verify",
@@ -1387,6 +1403,16 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                         ? Reflect.get(elicitation.content, "branch")
                         : undefined;
                 selectedBranch = typeof branch === "string" ? branch : "";
+                if (process.env["MOBIUS_FAKE_ACP_PAUSE_AFTER_ELICITATION"] === "1") {
+                    const directory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+                    if (directory === undefined) {
+                        throw new Error("The controlled Agent state directory is unavailable");
+                    }
+                    await waitForFile(directory, "resume-after-elicitation", cancellation.signal);
+                    if (cancellation.signal.aborted) {
+                        return { stopReason: "cancelled" };
+                    }
+                }
 
                 await context.client.notify(acp.methods.client.session.update, {
                     sessionId: context.params.sessionId,

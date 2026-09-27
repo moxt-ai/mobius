@@ -25,6 +25,7 @@ export async function fixture(
     label: string,
     profile:
         | "load-only"
+        | "replay-history-once"
         | "supported"
         | "unsupported"
         | "invalid-fork"
@@ -55,6 +56,7 @@ export async function fixture(
         label,
         ...(agentId === "opencode" ? ["--opencode-native-id"] : []),
         ...(profile === "load-only" ? ["--load-only"] : []),
+        ...(profile === "replay-history-once" ? ["--load-only", "--replay-history-once"] : []),
         ...(profile === "unsupported"
             ? ["--no-native-sessions"]
             : profile === "invalid-fork"

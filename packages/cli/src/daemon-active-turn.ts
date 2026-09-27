@@ -285,6 +285,9 @@ export class ActiveDaemonTurn {
     readonly matches = (cancellation: SessionCancelCommand): boolean =>
         cancellation.commandId === this.command.commandId && cancellation.sessionId === this.command.sessionId;
 
+    readonly matchesInteraction = (interactionId: string, sessionId: string): boolean =>
+        this.command.sessionId === sessionId && this.#interaction?.interactionId === interactionId;
+
     readonly requestCancellation = (): "already-requested" | "pending" | "running" => {
         if (this.#cancellationRequested) {
             return "already-requested";
