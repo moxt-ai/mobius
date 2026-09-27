@@ -130,6 +130,29 @@ function messageSize(message: NativeHistoryMessage): number {
 
 const SESSION_HISTORY_MESSAGE_CHARACTER_LIMIT = Math.floor(SESSION_HISTORY_CHARACTER_LIMIT / 2);
 
+function jsonArraySuffix<T>(values: readonly T[], maximumCharacters: number): readonly T[] {
+    const brackets = 2;
+    if (maximumCharacters < brackets) {
+        return [];
+    }
+    let characters = brackets;
+    let start = values.length;
+    for (let index = values.length - 1; index >= 0; index -= 1) {
+        const value = values[index];
+        if (value === undefined) {
+            continue;
+        }
+        const separator = start === values.length ? 0 : 1;
+        const nextCharacters = characters + JSON.stringify([value]).length - brackets + separator;
+        if (nextCharacters > maximumCharacters) {
+            break;
+        }
+        characters = nextCharacters;
+        start = index;
+    }
+    return values.slice(start);
+}
+
 function fitHistoryMessage(message: NativeHistoryMessage): {
     readonly message: NativeHistoryMessage;
     readonly truncated: boolean;
@@ -145,12 +168,16 @@ function fitHistoryMessage(message: NativeHistoryMessage): {
     let activities = message.activities;
     let content = message.content;
     let fitted: NativeHistoryMessage = { ...message, activities, content, text };
-    while (messageSize(fitted) > SESSION_HISTORY_MESSAGE_CHARACTER_LIMIT && activities.length > 0) {
-        activities = activities.slice(1);
+    if (messageSize(fitted) > SESSION_HISTORY_MESSAGE_CHARACTER_LIMIT && activities.length > 0) {
+        const maximumCharacters =
+            SESSION_HISTORY_MESSAGE_CHARACTER_LIMIT - text.length - JSON.stringify(content).length;
+        activities = jsonArraySuffix(activities, maximumCharacters);
         fitted = { ...fitted, activities };
     }
-    while (messageSize(fitted) > SESSION_HISTORY_MESSAGE_CHARACTER_LIMIT && content.length > 0) {
-        content = content.slice(1);
+    if (messageSize(fitted) > SESSION_HISTORY_MESSAGE_CHARACTER_LIMIT && content.length > 0) {
+        const maximumCharacters =
+            SESSION_HISTORY_MESSAGE_CHARACTER_LIMIT - text.length - JSON.stringify(activities).length;
+        content = jsonArraySuffix(content, maximumCharacters);
         fitted = { ...fitted, content };
     }
     const excess = Math.max(0, messageSize(fitted) - SESSION_HISTORY_MESSAGE_CHARACTER_LIMIT);
