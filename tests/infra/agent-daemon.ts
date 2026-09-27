@@ -348,7 +348,7 @@ export class FakeAgentDaemon implements AsyncDisposable {
                               {
                                   activities: [],
                                   content: [],
-                                  id: `fake-message-${current.sequence.toString()}`,
+                                  id: `${current.commandId}-message-${current.sequence.toString()}`,
                                   role: "assistant" as const,
                                   text: event.text,
                               },
@@ -396,7 +396,7 @@ export class FakeAgentDaemon implements AsyncDisposable {
                                   {
                                       activities: [activity],
                                       content: [],
-                                      id: `fake-message-${current.messages.length.toString()}`,
+                                      id: `${current.commandId}-message-${current.messages.length.toString()}`,
                                       role: "assistant" as const,
                                       text: "",
                                   },
@@ -440,7 +440,7 @@ export class FakeAgentDaemon implements AsyncDisposable {
                                   {
                                       activities: [activity],
                                       content: [],
-                                      id: `fake-message-${current.messages.length.toString()}`,
+                                      id: `${current.commandId}-message-${current.messages.length.toString()}`,
                                       role: "assistant" as const,
                                       text: "",
                                   },
@@ -463,7 +463,7 @@ export class FakeAgentDaemon implements AsyncDisposable {
                                   {
                                       activities: [],
                                       content: [event.content],
-                                      id: `fake-message-${current.messages.length.toString()}`,
+                                      id: `${current.commandId}-message-${current.messages.length.toString()}`,
                                       role: "assistant",
                                       text: "",
                                   },
@@ -548,6 +548,51 @@ export interface FakeAgentDaemonBehavior {
 }
 
 type ActiveTurn = NonNullable<Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"]>;
+
+function historyWithActiveTurn(
+    history: NativeSessionHistory | null,
+    active: ActiveTurn | undefined,
+): NativeSessionHistory | null {
+    if (active === undefined) {
+        return history;
+    }
+    const activeMessages: Extract<NativeSessionHistory, { readonly status: "available" }>["messages"] =
+        active.messages.map((message) =>
+            message.role === "user"
+                ? { role: "user", text: message.text }
+                : {
+                      activities: message.activities,
+                      content: message.content,
+                      role: "assistant",
+                      text: message.text,
+                  },
+        );
+    const available =
+        history?.status === "available"
+            ? history
+            : {
+                  coveredCommandIds: [],
+                  coveredMessageIds: [],
+                  messages: [],
+                  status: "available" as const,
+                  truncated: false,
+              };
+    const activeRoot = activeMessages.find((message) => message.role === "user");
+    const activeRootIndex =
+        activeRoot === undefined
+            ? -1
+            : available.messages.findLastIndex(
+                  (message) => message.role === "user" && message.text === activeRoot.text,
+              );
+    return {
+        ...available,
+        coveredCommandIds: [active.commandId, ...available.coveredCommandIds.filter((id) => id !== active.commandId)],
+        messages: [
+            ...(activeRootIndex < 0 ? available.messages : available.messages.slice(0, activeRootIndex)),
+            ...activeMessages,
+        ],
+    };
+}
 
 export interface RunningFakeAgentDaemon extends AsyncDisposable {
     /** Rejects when the fake cannot continue serving the protocol. */
@@ -986,17 +1031,18 @@ async function processHappyPathCommand(
                 ? null
                 : await behavior.loadNativeHistory(command.sessionId, signal);
         signal.throwIfAborted();
+        const liveHistory = historyWithActiveTurn(history, activeTurns.get(command.sessionId));
         daemon.send(
             encodeSessionLiveHistoryPageLoaded({
                 kind: "session.live-history.page.loaded",
                 page:
-                    history?.status === "available"
+                    liveHistory?.status === "available"
                         ? {
-                              ...history,
+                              ...liveHistory,
                               nextCursor: null,
                           }
-                        : history?.status === "unavailable"
-                          ? { ...history, nextCursor: null }
+                        : liveHistory?.status === "unavailable"
+                          ? { ...liveHistory, nextCursor: null }
                           : available
                             ? {
                                   coveredCommandIds: [],
