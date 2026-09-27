@@ -1,4 +1,5 @@
-import { readdir, readFile, writeFile } from "node:fs/promises";
+import { existsSync, watch } from "node:fs";
+import { readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { readCodexFullHistory } from "../../../packages/cli/src/native-sessions/codex-history.ts";
@@ -87,6 +88,75 @@ describe("native session history", () => {
                 expect(history.messages).not.toContainEqual({ role: "user", text: "Question 30" });
             }
         } finally {
+            await f.close();
+        }
+    });
+
+    it("Given OpenCode emits persisted history only on the first session load, When Chat requests history after preparation, Then Runtime returns messages from that load", async () => {
+        const f = await fixture("OpenCode", "replay-history-once");
+        const signal = new AbortController().signal;
+        try {
+            await f.seed("Persisted OpenCode message");
+            const entry = (await f.list()).entries[0];
+            if (entry === undefined) {
+                throw new Error("Missing OpenCode conversation");
+            }
+            const sessionId = "restored-opencode-session";
+            await f.service.execute(
+                { ...f.identity, action: "import", entryId: entry.entryId, targetSessionId: sessionId },
+                signal,
+            );
+
+            const history = await f.sessions.loadSessionHistory({
+                additionalDirectories: [],
+                agent: f.agent,
+                cwd: f.workspace,
+                sessionId,
+                signal,
+            });
+
+            expect(history).toMatchObject({
+                status: "available",
+                messages: expect.arrayContaining([{ role: "user", text: "Persisted OpenCode message" }]),
+            });
+        } finally {
+            await f.close();
+        }
+    });
+
+    it("Given two clients request OpenCode history while its first session load is in progress, When that load completes, Then both clients receive the same history", async () => {
+        const f = await fixture("OpenCode", "replay-history-once", "native");
+        const signal = new AbortController().signal;
+        try {
+            const sessionId = await f.seed("Shared OpenCode history");
+            await writeFile(join(f.native, "pause-load"), "");
+            const paused = Promise.withResolvers<void>();
+            const watcher = watch(f.native, () => {
+                if (existsSync(join(f.native, "load-paused"))) {
+                    watcher.close();
+                    paused.resolve();
+                }
+            });
+            const options = {
+                additionalDirectories: [],
+                agent: f.agent,
+                cwd: f.workspace,
+                sessionId,
+                signal,
+            };
+            const first = f.sessions.loadSessionHistory(options);
+            await paused.promise;
+            const second = f.sessions.loadSessionHistory(options);
+            await rm(join(f.native, "pause-load"));
+
+            for (const history of await Promise.all([first, second])) {
+                expect(history).toMatchObject({
+                    status: "available",
+                    messages: expect.arrayContaining([{ role: "user", text: "Shared OpenCode history" }]),
+                });
+            }
+        } finally {
+            await rm(join(f.native, "pause-load"), { force: true });
             await f.close();
         }
     });

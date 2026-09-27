@@ -3,7 +3,7 @@ import { AcpExecutionError } from "./acp-error.ts";
 import type { AgentProcessPool } from "./agent-process-pool.ts";
 import { AgentSession } from "./agent-session.ts";
 import { RetainedAgentProcesses } from "./retained-agent-processes.ts";
-import { waitForPreparation } from "./runtime-operations.ts";
+import { waitForSharedOperation } from "./runtime-operations.ts";
 import { type AcpPreparedSession, type AcpPrepareOptions, NullAcpSessionObserver } from "./session-contracts.ts";
 import { MemoryAcpSessionStore } from "./session-store.ts";
 
@@ -58,7 +58,7 @@ export class AgentQueryProcesses {
     readonly prepare = async (options: AcpPrepareOptions): Promise<AcpPreparedSession> => {
         const pending = this.#processesByQuery.pending(options.sessionId);
         if (pending !== undefined) {
-            const runtime = await waitForPreparation(pending, options.signal);
+            const runtime = await waitForSharedOperation(pending, options.signal);
             if (runtime.belongsTo(options.agent.id, options.cwd, options.additionalDirectories)) {
                 this.#processesByQuery.touch(options.sessionId, runtime);
                 return runtime.prepared();

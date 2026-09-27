@@ -40,6 +40,7 @@ import {
     nativeSessionIdSchema,
     nativeSessionPageSchema,
 } from "./native-session.ts";
+import { waitForSharedOperation } from "./runtime-operations.ts";
 import { normalizeAcpCapabilities, unsupportedSessionCapabilities } from "./session-capabilities.ts";
 import { type SessionConfigProtocol, SessionConfigProtocolError } from "./session-config/session-config-protocol.ts";
 import { sessionConfigProtocolForAgent } from "./session-config/session-config-registry.ts";
@@ -77,6 +78,21 @@ class RetryableAcpInitializationError extends AcpExecutionError {
     }
 }
 
+type SessionLoadState =
+    | { readonly kind: "not-requested" }
+    | {
+          readonly completion: Promise<LoadedSession>;
+          readonly history: AcpHistoryReplay;
+          readonly kind: "capturing";
+      }
+    | LoadedSession;
+
+interface LoadedSession {
+    readonly history: AcpHistoryReplay;
+    readonly kind: "loaded";
+    readonly response: unknown;
+}
+
 export function arraysEqual(left: readonly string[], right: readonly string[]): boolean {
     return left.length === right.length && left.every((value, index) => value === right[index]);
 }
@@ -109,10 +125,7 @@ export class AgentSession implements AcpClientHandler {
     #configOptions: readonly SessionConfigOption[] = [];
     #prompted = false;
     #nativePrompt: { readonly commandId: string; readonly previousTurnId: string | null } | null = null;
-    #replay: { readonly kind: "idle" | "discard" } | { readonly kind: "capture"; readonly history: AcpHistoryReplay } =
-        {
-            kind: "idle",
-        };
+    #sessionLoad: SessionLoadState = { kind: "not-requested" };
     #restored = false;
     #sessionTitle: string | null = null;
     #sessionUpdatedAt = "";
@@ -269,30 +282,47 @@ export class AgentSession implements AcpClientHandler {
                 },
             };
         }
-        const history = new AcpHistoryReplay();
-        this.#replay = { kind: "capture", history };
-        try {
-            await this.race(
-                this.#connection.connection.agent.request(
-                    methods.agent.session.load,
-                    {
-                        additionalDirectories: [...this.#additionalDirectories],
-                        cwd: this.#cwd,
-                        mcpServers: [],
-                        sessionId: this.#updates.sessionId(),
-                    },
-                    { cancellationSignal: signal },
-                ),
-                "ACP agent exited while loading history",
-                signal,
-            );
-            await this.#updates.drained();
-            signal.throwIfAborted();
-            return await embedLocalHistoryImages(await history.snapshot(), signal);
-        } finally {
-            this.#replay = { kind: "idle" };
-        }
+        const loaded = await this.#loadSession(signal, "ACP agent exited while loading history");
+        return await embedLocalHistoryImages(await loaded.history.snapshot(), signal);
     };
+
+    async #loadSession(signal: AbortSignal, exitMessage: string): Promise<LoadedSession> {
+        if (this.#sessionLoad.kind === "loaded") {
+            return this.#sessionLoad;
+        }
+        if (this.#sessionLoad.kind === "capturing") {
+            return await waitForSharedOperation(this.#sessionLoad.completion, signal);
+        }
+        const history = new AcpHistoryReplay();
+        const completion = Promise.resolve().then(async (): Promise<LoadedSession> => {
+            try {
+                const response = await this.race(
+                    this.#connection.connection.agent.request(
+                        methods.agent.session.load,
+                        {
+                            additionalDirectories: [...this.#additionalDirectories],
+                            cwd: this.#cwd,
+                            mcpServers: [],
+                            sessionId: this.#updates.sessionId(),
+                        },
+                        { cancellationSignal: signal },
+                    ),
+                    exitMessage,
+                    signal,
+                );
+                await this.#updates.drained();
+                signal.throwIfAborted();
+                const loaded = { history, kind: "loaded", response } satisfies LoadedSession;
+                this.#sessionLoad = loaded;
+                return loaded;
+            } catch (cause) {
+                this.#sessionLoad = { kind: "not-requested" };
+                throw cause;
+            }
+        });
+        this.#sessionLoad = { completion, history, kind: "capturing" };
+        return await completion;
+    }
 
     private readonly prepareAgentContent = async (content: AgentDisplayContent): Promise<AgentDisplayContent> => {
         if (content.type === "image" && content.uri.length > 0) {
@@ -518,30 +548,10 @@ export class AgentSession implements AcpClientHandler {
                         ),
                 );
             } else if (this.#capabilities.loadSession) {
-                this.#replay = { kind: "discard" };
-                try {
-                    lifecycleResponse = await this.#metrics.measure(
-                        "session-load",
-                        async () =>
-                            await this.race(
-                                this.#connection.connection.agent.request(
-                                    methods.agent.session.load,
-                                    {
-                                        additionalDirectories: [...this.#additionalDirectories],
-                                        cwd: this.#cwd,
-                                        mcpServers: [],
-                                        sessionId: this.#updates.sessionId(),
-                                    },
-                                    { cancellationSignal: signal },
-                                ),
-                                "ACP agent exited while loading a session",
-                                signal,
-                            ),
-                    );
-                } finally {
-                    await this.#updates.drained();
-                    this.#replay = { kind: "idle" };
-                }
+                lifecycleResponse = await this.#metrics.measure(
+                    "session-load",
+                    async () => (await this.#loadSession(signal, "ACP agent exited while loading a session")).response,
+                );
             } else {
                 throw new AcpExecutionError(
                     "The ACP agent cannot restore its persisted session",
@@ -959,11 +969,11 @@ export class AgentSession implements AcpClientHandler {
     readonly #processUpdate = async (notification: SessionNotification): Promise<void> => {
         this.assertNativeSession(notification.sessionId);
         const update = notification.update;
-        if (this.#replay.kind === "capture") {
-            await this.#replay.history.record(update);
+        if (this.#sessionLoad.kind !== "not-requested") {
+            await this.#sessionLoad.history.record(update);
         }
         if (
-            this.#replay.kind !== "idle" &&
+            this.#sessionLoad.kind === "capturing" &&
             (update.sessionUpdate === "user_message_chunk" ||
                 update.sessionUpdate === "agent_message_chunk" ||
                 update.sessionUpdate === "agent_thought_chunk" ||
