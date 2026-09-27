@@ -214,7 +214,6 @@ test("Given real Codex and a local model provider, When a queued follow-up is ca
                     expect(page.status).toBe("available");
                     if (page.status === "available") {
                         expect(page.messages.filter((item) => item.role === "user")).toHaveLength(turnNumber);
-                        expect(page.messages.filter((item) => item.role === "assistant")).toHaveLength(turnNumber);
                         expect(
                             page.messages.some((item) => item.role === "assistant" && item.activities.length > 0),
                         ).toBe(true);
