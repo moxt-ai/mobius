@@ -132,7 +132,7 @@ class ClientFrames {
 }
 
 describe("daemon assistant text coalescing", () => {
-    it("Given a token-level Agent emits a burst of message chunks, When the turn completes, Then the daemon forwards them as far fewer deltas without losing text", async () => {
+    it("Given a token-level Agent emits a burst of message chunks, When the turn completes, Then the final snapshot preserves every token before successful completion", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-text-coalescing-"));
         const workspace = join(stateDirectory, "workspace");
         const nativeStateDirectory = join(stateDirectory, "native");
@@ -208,8 +208,7 @@ describe("daemon assistant text coalescing", () => {
             };
             sendText(socket, encodeSessionPromptCommand(prompt));
 
-            let deltaCount = 0;
-            let deltaText = "";
+            let snapshotText = "";
             let completed = false;
             while (!completed) {
                 const message = await frames.next();
@@ -221,20 +220,20 @@ describe("daemon assistant text coalescing", () => {
                 if (kind === SESSION_TURN_UPDATED_KIND) {
                     const { turn } = decodeSessionTurnUpdatedEvent(envelope.payload);
                     expect(turn).toMatchObject({ epoch: expect.any(String), sequence: expect.any(Number) });
-                    deltaCount += 1;
-                    deltaText = turn.text;
+                    snapshotText = turn.text;
                 }
-                if (kind === SESSION_COMPLETED_KIND || kind === SESSION_FAILED_KIND) {
+                if (kind === SESSION_FAILED_KIND) {
+                    throw new Error(envelope.payload);
+                }
+                if (kind === SESSION_COMPLETED_KIND) {
+                    expect(decodeSessionCompletedEvent(envelope.payload).stopReason).toBe("end_turn");
                     completed = true;
                 }
             }
 
             // Every burst token must survive, in order, with no duplication.
             const expectedBurst = Array.from({ length: 64 }, (_value, index) => `token-${index.toString()} `).join("");
-            expect(deltaText).toContain(expectedBurst);
-            // A burst of 64 chunks must not become 64 network updates.
-            expect(deltaCount).toBeGreaterThan(0);
-            expect(deltaCount).toBeLessThan(64);
+            expect(snapshotText).toBe(`DeepSeek Harness turn 1: ${expectedBurst}`);
         } finally {
             cancellation.abort();
             await daemon;

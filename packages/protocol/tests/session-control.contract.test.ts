@@ -4,72 +4,35 @@ import {
     AGENT_CONTENT_KIND,
     AGENT_INSTALL_REQUEST_KIND,
     AGENT_SETTINGS_DISCOVER_KIND,
-    AGENT_SETTINGS_DISCOVERED_KIND,
     type AgentContentEvent,
     type AgentDisplayContent,
-    type AgentInstallRequestCommand,
     type AgentSettingsDiscoverCommand,
-    type AgentSettingsDiscoveredEvent,
     decodeAgentContentEvent,
     decodeAgentInstallRequestCommand,
     decodeAgentSettingsDiscoverCommand,
-    decodeAgentSettingsDiscoveredEvent,
     decodeNativeSessionHistory,
     decodeSessionConfigOptions,
     decodeSessionConfigureCommand,
     decodeSessionElicitationRequestedEvent,
     decodeSessionPermissionRequestedEvent,
     decodeSessionPrepareCommand,
-    decodeSessionReadyEvent,
     decodeSessionUsageUpdatedEvent,
-    decodeWorkspaceListCommand,
     encodeAgentContentEvent,
-    encodeAgentInstallRequestCommand,
-    encodeAgentSettingsDiscoverCommand,
-    encodeAgentSettingsDiscoveredEvent,
     encodeSessionConfigureCommand,
     encodeSessionElicitationRequestedEvent,
     encodeSessionPermissionRequestedEvent,
-    encodeSessionPrepareCommand,
-    encodeSessionReadyEvent,
     encodeSessionUsageUpdatedEvent,
-    encodeWorkspaceListCommand,
     ProtocolMessageError,
     SESSION_CONFIGURE_KIND,
     SESSION_ELICITATION_REQUESTED_KIND,
     SESSION_PERMISSION_REQUESTED_KIND,
     SESSION_PREPARE_KIND,
-    SESSION_READY_KIND,
     SESSION_USAGE_UPDATED_KIND,
-    type SessionConfigOption,
     type SessionConfigureCommand,
     type SessionElicitationRequestedEvent,
     type SessionPermissionRequestedEvent,
-    type SessionPrepareCommand,
-    type SessionReadyEvent,
     type SessionUsageUpdatedEvent,
-    WORKSPACE_LIST_KIND,
-    type WorkspaceListCommand,
 } from "../src/index.ts";
-
-const modelOption: SessionConfigOption = {
-    booleanValue: false,
-    category: "model",
-    currentValue: "codex-1",
-    description: "Model used for this session",
-    id: "model",
-    name: "Model",
-    type: "select",
-    values: [
-        {
-            description: "Fast coding model",
-            groupId: "",
-            groupName: "",
-            name: "Codex 1",
-            value: "codex-1",
-        },
-    ],
-};
 
 it("Given incoming saved history contains an unsafe or oversized image, When the history is decoded, Then the protocol rejects it with a typed failure", () => {
     for (const image of [
@@ -206,62 +169,13 @@ describe("ACP session control protocol contract", () => {
         }
     });
 
-    it("Given a supported Agent, When Web requests integration installation, Then only its request and Agent identifiers cross the boundary", () => {
-        const command: AgentInstallRequestCommand = {
-            agentId: "codex",
-            kind: AGENT_INSTALL_REQUEST_KIND,
-            requestId: "install-1",
-        };
-        expect(decodeAgentInstallRequestCommand(encodeAgentInstallRequestCommand(command))).toEqual(command);
-    });
-
-    it("Given a paired local Agent, When its settings are discovered, Then the protocol contains no Session identity", () => {
+    it("Given a settings discovery request includes remote Session or directory fields, When decoded, Then the authority overrides are rejected", () => {
         const command: AgentSettingsDiscoverCommand = {
             agentId: "codex",
             kind: AGENT_SETTINGS_DISCOVER_KIND,
             model: "codex-1",
             requestId: "settings-1",
         };
-        const discovered: AgentSettingsDiscoveredEvent = {
-            agentId: "codex",
-            agentName: "Codex",
-            agentVersion: "codex 1.0.0",
-            kind: AGENT_SETTINGS_DISCOVERED_KIND,
-            modelEffort: {
-                effortSettingId: "reasoning_effort",
-                modelSettingId: "model",
-                resolution: "complete",
-                unsupportedModelIds: ["retired-codex"],
-                valuesByModel: {
-                    "codex-1": [
-                        {
-                            description: "Balanced reasoning",
-                            groupId: "",
-                            groupName: "",
-                            name: "Medium",
-                            value: "medium",
-                        },
-                    ],
-                },
-            },
-            requestId: "settings-1",
-            settings: [
-                {
-                    booleanValue: false,
-                    category: modelOption.category,
-                    defaultValue: modelOption.currentValue,
-                    description: modelOption.description,
-                    id: modelOption.id,
-                    name: modelOption.name,
-                    type: modelOption.type,
-                    values: modelOption.values,
-                },
-            ],
-            settingsRevision: "a".repeat(64),
-        };
-
-        expect(decodeAgentSettingsDiscoverCommand(encodeAgentSettingsDiscoverCommand(command))).toEqual(command);
-        expect(decodeAgentSettingsDiscoveredEvent(encodeAgentSettingsDiscoveredEvent(discovered))).toEqual(discovered);
         expect(() =>
             decodeAgentSettingsDiscoverCommand(JSON.stringify({ ...command, sessionId: "session-1" })),
         ).toThrowError(ProtocolMessageError);
@@ -296,49 +210,6 @@ describe("ACP session control protocol contract", () => {
                 }),
             ),
         ).toThrowError(ProtocolMessageError);
-    });
-
-    it("Given an authorized directory handle, When a session is prepared, Then capabilities and dynamic configuration round-trip", () => {
-        const command: SessionPrepareCommand = {
-            additionalDirectoryIds: [],
-            agentId: "codex",
-            bindingId: "workspace",
-            directoryId: "default",
-            kind: SESSION_PREPARE_KIND,
-            requestId: "request-1",
-            sessionId: "session-1",
-        };
-        const ready: SessionReadyEvent = {
-            additionalDirectories: [],
-            agentId: "codex",
-            agentName: "Codex ACP",
-            agentVersion: "1.8.0",
-            capabilities: {
-                additionalDirectories: true,
-                audioPrompt: false,
-                closeSession: true,
-                deleteSession: true,
-                embeddedContextPrompt: true,
-                imagePrompt: true,
-                listSessions: true,
-                loadSession: true,
-                promptQueueing: true,
-                resumeSession: true,
-                steering: true,
-                unstableForkSession: false,
-            },
-            commands: [],
-            configOptions: [modelOption],
-            directoryId: "default",
-            directoryLabel: "mobius",
-            kind: SESSION_READY_KIND,
-            requestId: "request-1",
-            restored: false,
-            sessionId: "session-1",
-        };
-
-        expect(decodeSessionPrepareCommand(encodeSessionPrepareCommand(command))).toEqual(command);
-        expect(decodeSessionReadyEvent(encodeSessionReadyEvent(ready))).toEqual(ready);
     });
 
     it("Given a remote client, When it attempts to send an absolute directory, Then the protocol rejects the authority bypass", () => {
@@ -466,19 +337,6 @@ describe("ACP session control protocol contract", () => {
         };
 
         expect(decodeAgentContentEvent(encodeAgentContentEvent(event))).toEqual(event);
-    });
-});
-
-describe("workspace directory protocol", () => {
-    it("Given a paired machine, When the browser requests Home, Then it sends a directory handle instead of a local path", () => {
-        const command: WorkspaceListCommand = {
-            bindingId: "workspace",
-            directoryId: "home",
-            kind: WORKSPACE_LIST_KIND,
-            requestId: "directory-request-1",
-        };
-
-        expect(decodeWorkspaceListCommand(encodeWorkspaceListCommand(command))).toEqual(command);
     });
 });
 

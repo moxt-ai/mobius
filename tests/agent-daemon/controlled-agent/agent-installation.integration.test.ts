@@ -9,7 +9,6 @@ import { describe, expect, it } from "vitest";
 
 import { CodexAgentSpecification } from "../../../packages/cli/src/agent-catalog/discover-local-agents.ts";
 import {
-    AgentIntegrationDefinition,
     LocalAgentCatalog,
     LocalAgentDefinition,
     MissingAgentDefinition,
@@ -236,45 +235,6 @@ describe("local Agent integration installation", () => {
             // Agent is ready the moment its binary is, so no install stage runs at all.
             expect(observer.states.filter((state) => state instanceof RunningInstallation)).toEqual([]);
             expect(audit.events).not.toContain("agent_adapter_verified");
-            expect(audit.events).not.toContain("agent_adapter_verified");
-        } finally {
-            await rm(stateDirectory, { force: true, recursive: true });
-        }
-    });
-
-    it("Given Codex is installed, When the user installs the integration, Then Mobius verifies the in-process Agent without installing any adapter", async () => {
-        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-integration-in-process-"));
-        const executableDirectory = join(stateDirectory, "external");
-        const agentPath = join(executableDirectory, "codex");
-        const catalog = new LocalAgentCatalog(
-            [],
-            [new AgentIntegrationDefinition("codex", "Codex", agentPath, "codex 0.153.0")],
-        );
-        const adapterInstaller = new StatefulAdapterInstaller(stateDirectory);
-        const observer = new RecordingInstallationObserver();
-        const audit = new RecordingInstallationAudit();
-
-        try {
-            await writeExternalCodexAgent(agentPath);
-            const manager = createManager(
-                stateDirectory,
-                executableDirectory,
-                catalog,
-                adapterInstaller,
-                observer,
-                audit,
-            );
-
-            await expect(
-                manager.request(request("install-in-process"), new AbortController().signal),
-            ).resolves.toBeInstanceOf(SucceededInstallation);
-
-            // The app-server handshake is proof enough: Mobius publishes the Agent without ever
-            // needing an adapter install stage.
-            expect(adapterInstaller.installedAgentIds).toEqual([]);
-            expect(catalog.read().agents[0]?.agentIdentity.requestedPath).toBe(agentPath);
-            expect(catalog.read().agents[0]).toMatchObject({ kind: "in-process-acp" });
-            expect(observer.states.filter((state) => state instanceof RunningInstallation)).toEqual([]);
         } finally {
             await rm(stateDirectory, { force: true, recursive: true });
         }

@@ -6,7 +6,8 @@ import { codexFixture } from "./codex-native-fixture.ts";
 import { fixture } from "./native-session-fixture.ts";
 
 describe("native session history", () => {
-    it.each(["Claude Code", "OpenCode", "Pi"])(
+    // Keep distinct native identity/history paths; Pi uses the same ACP fixture path as Claude.
+    it.each(["Claude Code", "OpenCode"])(
         "Given a saved %s conversation, When Chat opens its history, Then Runtime returns the native messages",
         async (agentName) => {
             const f = await fixture(agentName);

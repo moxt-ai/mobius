@@ -33,8 +33,6 @@ import {
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it } from "vitest";
-import { AgentRuntimeManager } from "../../../packages/cli/src/acp/agent-runtime-manager.ts";
-import { AvailableAgent } from "../../../packages/cli/src/agent-catalog/agent-discovery.ts";
 import { CodexAgentSpecification } from "../../../packages/cli/src/agent-catalog/agents/codex-agent.ts";
 import { discoverLocalAgentInventory } from "../../../packages/cli/src/agent-catalog/discover-local-agents.ts";
 import { LocalAgentDefinition } from "../../../packages/cli/src/agent-catalog/local-agent.ts";
@@ -825,94 +823,6 @@ if (process.argv.includes("--version")) {
             audit.close();
             await daemon;
             await rm(stateDirectory, { force: true, recursive: true });
-        }
-    });
-
-    it("Given Codex runs as an in-process Agent, When Mobius lists, resumes, and steers native sessions, Then each reaches the Codex app-server", async () => {
-        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-codex-native-sessions-"));
-        const executableDirectory = join(temporaryDirectory, "external");
-        const nativeStateDirectory = join(temporaryDirectory, "native");
-        const codexPath = join(executableDirectory, "codex");
-        await Promise.all([
-            mkdir(executableDirectory, { mode: 0o700, recursive: true }),
-            mkdir(nativeStateDirectory, { recursive: true }),
-        ]);
-        await writeFile(
-            codexPath,
-            executableSource(`
-if (process.argv.includes("--version")) {
-  process.stdout.write("codex 0.153.0\\n");
-} else if (process.argv.includes("app-server")) {
-  await import(${JSON.stringify(turnAppServerUrl)});
-} else {
-  process.exit(80);
-}
-`),
-            { mode: 0o700 },
-        );
-        await chmod(codexPath, 0o700);
-
-        // The in-process Agent and every app-server it starts inherit their environment from this
-        // process, and discovery does not forward this fixture variable, so it is set here for the
-        // duration of the test.
-        const previousState = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
-        process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = nativeStateDirectory;
-        const inventory = await discoverLocalAgentInventory({
-            defaultWorkspace: temporaryDirectory,
-            environment: { MOBIUS_STATE_DIRECTORY: temporaryDirectory, PATH: executableDirectory },
-            signal: new AbortController().signal,
-            specifications: [new CodexAgentSpecification()],
-        });
-        const discovered = inventory.available[0];
-        if (!(discovered instanceof AvailableAgent)) {
-            throw new Error("Codex was not discovered");
-        }
-        const manager = new AgentRuntimeManager();
-        try {
-            const run = async (sessionId: string, prompt: string): Promise<void> => {
-                await manager.runPrompt({
-                    additionalDirectories: [],
-                    agent: discovered.agent,
-                    commandId: `${sessionId}-${prompt}`,
-                    cwd: temporaryDirectory,
-                    images: [],
-                    onActivity: () => Promise.resolve(),
-                    onText: () => Promise.resolve(),
-                    prompt,
-                    resources: [],
-                    sessionId,
-                    signal: new AbortController().signal,
-                });
-            };
-
-            const browseOptions = {
-                additionalDirectories: [],
-                agent: discovered.agent,
-                cwd: temporaryDirectory,
-                sessionId: "native_session_browser",
-                signal: new AbortController().signal,
-            };
-
-            // A conversation becomes a native thread the app-server knows about.
-            await run("native_session_conversation", "first");
-            const listed = await manager.listNativeSessions(browseOptions, null);
-            expect(listed.sessions).toHaveLength(1);
-            const nativeSessionId = listed.sessions[0]?.sessionId ?? "";
-            expect(nativeSessionId).toMatch(/^thread-/u);
-            // The fixture reports a preview and unix-second timestamps; Mobius needs an ISO instant.
-            expect(listed.sessions[0]).toMatchObject({
-                cwd: temporaryDirectory,
-                title: "Scripted turn",
-            });
-            expect(listed.sessions[0]?.updatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
-        } finally {
-            await manager.close();
-            if (previousState === undefined) {
-                delete process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
-            } else {
-                process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = previousState;
-            }
-            await rm(temporaryDirectory, { force: true, recursive: true });
         }
     });
 

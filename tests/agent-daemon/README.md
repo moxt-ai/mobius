@@ -86,3 +86,29 @@ scenarios. Real Agent tests own normal first-prompt, continuation, cancellation
 recovery, and FIFO queue behavior. Controlled restart/history cases remain where
 they exercise distinct native ID formats, loading capabilities, or file layouts;
 they do not establish real Agent compatibility.
+
+## Coverage retained after duplicate pruning
+
+- Real Codex native recovery and process-capacity scenarios own ordinary discovery,
+  continuation and native listing. Controlled discovery keeps missing/unsupported
+  executables, authentication, backend exit and path-resolution failures.
+- The installation journey covers an absent Codex becoming available and verified;
+  a second already-installed Codex success scenario is unnecessary. Managed download
+  integrity, environment proxying, catalog refresh and installation-state isolation
+  remain independent risks.
+- Controlled native identity/history scenarios retain Codex's app-server path,
+  Claude's ACP path and OpenCode's distinct native ID shape. A Pi label on the same
+  ACP peer adds no coverage. Real Pi scenarios remain independent compatibility tests;
+  real non-Codex history coverage is still a gap.
+- Token bursts assert complete output before successful completion, without fixing
+  the number of network snapshots. Large active-turn recovery, cancellation, steering,
+  narration and interaction snapshots remain covered.
+- Settings/model translation, backend faults, compact commands, exclusive history
+  writers, fork identity and authorization stay controlled until another production
+  boundary proves those same risks.
+
+Protocol success round trips for event envelopes, prompt queue/steer, cancellation,
+installation, session preparation and workspace listing are exercised by daemon,
+SDK or hosting integrations. Contract tests retain rejection cases and rich payload
+shapes not otherwise fully asserted. Resource-model contracts remain because their
+public record variants do not all have equivalent integration coverage.

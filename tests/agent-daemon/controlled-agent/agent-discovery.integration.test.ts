@@ -338,52 +338,6 @@ child.once("exit", (code) => process.exit(code ?? 93));
         }
     });
 
-    it("Given PATH contains a Codex binary whose app-server answers, When discovery runs, Then Codex is discovered as the in-process Agent that owns the app-server conversation", async () => {
-        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-agent-in-process-"));
-        const externalDirectory = join(stateDirectory, "external");
-        const agentPath = join(externalDirectory, "codex");
-        const specification = new CodexAgentSpecification();
-        try {
-            await mkdir(externalDirectory, { mode: 0o700, recursive: true });
-            await writeFile(
-                agentPath,
-                executableSource(`
-if (process.argv.includes("--version")) {
-  process.stdout.write("codex 0.153.0\\n");
-} else if (process.argv.includes("app-server")) {
-  await import(${JSON.stringify(turnAppServerUrl)});
-} else {
-  process.exit(80);
-}
-`),
-                { mode: 0o700 },
-            );
-            await chmod(agentPath, 0o700);
-
-            const inventory = await discoverLocalAgentInventory({
-                defaultWorkspace: repositoryRoot,
-                environment: {
-                    MOBIUS_STATE_DIRECTORY: stateDirectory,
-                    PATH: externalDirectory,
-                },
-                signal: new AbortController().signal,
-                specifications: [specification],
-            });
-
-            expect(inventory.unavailable).toEqual([]);
-            expect(inventory.available).toHaveLength(1);
-            const discovered = inventory.available[0];
-            if (!(discovered instanceof AvailableAgent)) {
-                throw new Error("Codex was not discovered");
-            }
-            expect(discovered.agent.kind).toBe("in-process-acp");
-            expect(discovered.agent.command).toBe(await realpath(agentPath));
-            expect(discovered.agent.agentIdentity.realPath).toBe(await realpath(agentPath));
-        } finally {
-            await rm(stateDirectory, { force: true, recursive: true });
-        }
-    });
-
     it("Given Codex initializes but exits while listing models, When discovery runs, Then the dead backend is unavailable", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-agent-readiness-exit-"));
         const agentPath = join(stateDirectory, "codex");
