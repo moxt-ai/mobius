@@ -61,6 +61,7 @@ import {
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-protocol";
+import { mergeLiveSessionHistory } from "../../packages/cli/src/native-sessions/live-history-page.ts";
 
 interface SocketEvent {
     readonly code?: number;
@@ -112,6 +113,7 @@ async function waitFor<T>(operation: Promise<T>, signal: AbortSignal): Promise<T
 /** A stateful peer at the public daemon/server protocol boundary. */
 export class FakeAgentDaemon implements AsyncDisposable {
     readonly activeTurns = new Map<string, ActiveTurn>();
+    readonly completedHistories = new Map<string, NativeSessionHistory>();
     readonly #closed: Promise<void>;
     #closeCode = 1006;
     #closeReason = "Connection closed unexpectedly";
@@ -348,7 +350,7 @@ export class FakeAgentDaemon implements AsyncDisposable {
                               {
                                   activities: [],
                                   content: [],
-                                  id: `${current.commandId}-message-${current.sequence.toString()}`,
+                                  id: crypto.randomUUID(),
                                   role: "assistant" as const,
                                   text: event.text,
                               },
@@ -396,7 +398,7 @@ export class FakeAgentDaemon implements AsyncDisposable {
                                   {
                                       activities: [activity],
                                       content: [],
-                                      id: `${current.commandId}-message-${current.messages.length.toString()}`,
+                                      id: crypto.randomUUID(),
                                       role: "assistant" as const,
                                       text: "",
                                   },
@@ -440,7 +442,7 @@ export class FakeAgentDaemon implements AsyncDisposable {
                                   {
                                       activities: [activity],
                                       content: [],
-                                      id: `${current.commandId}-message-${current.messages.length.toString()}`,
+                                      id: crypto.randomUUID(),
                                       role: "assistant" as const,
                                       text: "",
                                   },
@@ -463,7 +465,7 @@ export class FakeAgentDaemon implements AsyncDisposable {
                                   {
                                       activities: [],
                                       content: [event.content],
-                                      id: `${current.commandId}-message-${current.messages.length.toString()}`,
+                                      id: crypto.randomUUID(),
                                       role: "assistant",
                                       text: "",
                                   },
@@ -484,6 +486,42 @@ export class FakeAgentDaemon implements AsyncDisposable {
             (event.kind === "session.completed" || event.kind === "session.failed") &&
             current?.commandId === event.commandId
         ) {
+            const previous = this.completedHistories.get(sessionId);
+            const available =
+                previous?.status === "available"
+                    ? previous
+                    : {
+                          coveredCommandIds: [],
+                          coveredMessageIds: [],
+                          messages: [],
+                          status: "available" as const,
+                          truncated: false,
+                      };
+            const lastAssistantIndex = current.messages.findLastIndex((message) => message.role === "assistant");
+            const outcome =
+                event.kind === "session.failed"
+                    ? ("failed" as const)
+                    : event.stopReason === "cancelled"
+                      ? ("cancelled" as const)
+                      : ("succeeded" as const);
+            this.completedHistories.set(sessionId, {
+                ...available,
+                coveredCommandIds: [current.commandId, ...available.coveredCommandIds],
+                messages: [
+                    ...available.messages,
+                    ...current.messages.map((message, index) =>
+                        message.role === "user"
+                            ? { images: nativeHistoryImages(message.images), role: "user" as const, text: message.text }
+                            : {
+                                  activities: message.activities,
+                                  content: message.content,
+                                  outcome: index === lastAssistantIndex ? outcome : undefined,
+                                  role: "assistant" as const,
+                                  text: message.text,
+                              },
+                    ),
+                ],
+            });
             this.activeTurns.delete(sessionId);
         }
         this.#socket.send(encodeSessionEventEnvelope({ kind: SESSION_EVENT_KIND, payload, sessionId }));
@@ -548,50 +586,25 @@ export interface FakeAgentDaemonBehavior {
 }
 
 type ActiveTurn = NonNullable<Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"]>;
+type NativeHistoryUserMessage = Extract<
+    Extract<NativeSessionHistory, { readonly status: "available" }>["messages"][number],
+    { readonly role: "user" }
+>;
 
-function historyWithActiveTurn(
-    history: NativeSessionHistory | null,
-    active: ActiveTurn | undefined,
-): NativeSessionHistory | null {
-    if (active === undefined) {
-        return history;
-    }
-    const activeMessages: Extract<NativeSessionHistory, { readonly status: "available" }>["messages"] =
-        active.messages.map((message) =>
-            message.role === "user"
-                ? { role: "user", text: message.text }
-                : {
-                      activities: message.activities,
-                      content: message.content,
-                      role: "assistant",
-                      text: message.text,
-                  },
-        );
-    const available =
-        history?.status === "available"
-            ? history
-            : {
-                  coveredCommandIds: [],
-                  coveredMessageIds: [],
-                  messages: [],
-                  status: "available" as const,
-                  truncated: false,
-              };
-    const activeRoot = activeMessages.find((message) => message.role === "user");
-    const activeRootIndex =
-        activeRoot === undefined
-            ? -1
-            : available.messages.findLastIndex(
-                  (message) => message.role === "user" && message.text === activeRoot.text,
-              );
-    return {
-        ...available,
-        coveredCommandIds: [active.commandId, ...available.coveredCommandIds.filter((id) => id !== active.commandId)],
-        messages: [
-            ...(activeRootIndex < 0 ? available.messages : available.messages.slice(0, activeRootIndex)),
-            ...activeMessages,
-        ],
-    };
+function nativeHistoryImages(
+    images: readonly { readonly data: string; readonly mimeType: string; readonly name: string }[] | undefined,
+): NativeHistoryUserMessage["images"] {
+    return images?.flatMap((image) => {
+        switch (image.mimeType) {
+            case "image/gif":
+            case "image/jpeg":
+            case "image/png":
+            case "image/webp":
+                return [{ data: image.data, mimeType: image.mimeType, name: image.name }];
+            default:
+                return [];
+        }
+    });
 }
 
 export interface RunningFakeAgentDaemon extends AsyncDisposable {
@@ -1028,10 +1041,25 @@ async function processHappyPathCommand(
             behavior.sessions?.some((entry) => entry.sessionId === command.sessionId) === true;
         const history =
             behavior.loadNativeHistory === undefined
-                ? null
+                ? (daemon.completedHistories.get(command.sessionId) ?? null)
                 : await behavior.loadNativeHistory(command.sessionId, signal);
         signal.throwIfAborted();
-        const liveHistory = historyWithActiveTurn(history, activeTurns.get(command.sessionId));
+        const activeTurn = activeTurns.get(command.sessionId);
+        const baseHistory: NativeSessionHistory | null =
+            history ??
+            (available
+                ? {
+                      coveredCommandIds: [],
+                      coveredMessageIds: [],
+                      messages: [],
+                      status: "available",
+                      truncated: false,
+                  }
+                : null);
+        const liveHistory =
+            baseHistory === null || activeTurn === undefined
+                ? baseHistory
+                : mergeLiveSessionHistory(baseHistory, activeTurn, command.sessionId);
         daemon.send(
             encodeSessionLiveHistoryPageLoaded({
                 kind: "session.live-history.page.loaded",
@@ -1313,7 +1341,6 @@ async function processHappyPathCommand(
             } finally {
                 signal.removeEventListener("abort", abort);
                 toolCancellations.delete(command.commandId);
-                activeTurns.delete(command.sessionId);
             }
             behavior.onPromptCancelled?.(command);
             await daemon.sendSessionEvent(
@@ -1409,7 +1436,6 @@ async function processHappyPathCommand(
             signal,
         );
     }
-    activeTurns.delete(command.sessionId);
     behavior.onPromptCompleted?.(command, parts.join(""));
     const next = [...queuedPrompts.values()].find((entry) => entry.sessionId === command.sessionId);
     const promotesWithoutCompletion = behavior.queuedTurnStartsWithoutPriorCompletion === true && next !== undefined;
