@@ -91,6 +91,38 @@ describe("native session history", () => {
         }
     });
 
+    it("Given OpenCode replays a persisted Session only while restoring it, When Chat loads its history, Then Runtime returns the retained messages", async () => {
+        const f = await fixture("OpenCode", "replay-history-once");
+        const signal = new AbortController().signal;
+        try {
+            await f.seed("Persisted OpenCode message");
+            const entry = (await f.list()).entries[0];
+            if (entry === undefined) {
+                throw new Error("Missing OpenCode conversation");
+            }
+            const sessionId = "restored-opencode-session";
+            await f.service.execute(
+                { ...f.identity, action: "import", entryId: entry.entryId, targetSessionId: sessionId },
+                signal,
+            );
+
+            const history = await f.sessions.loadSessionHistory({
+                additionalDirectories: [],
+                agent: f.agent,
+                cwd: f.workspace,
+                sessionId,
+                signal,
+            });
+
+            expect(history).toMatchObject({
+                status: "available",
+                messages: expect.arrayContaining([{ role: "user", text: "Persisted OpenCode message" }]),
+            });
+        } finally {
+            await f.close();
+        }
+    });
+
     it("Given saved Codex threads, When its directory is listed through the in-process Agent, Then every thread becomes an authorized entry whose history previews", async () => {
         const f = await codexFixture();
         try {

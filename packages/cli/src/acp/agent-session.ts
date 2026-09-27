@@ -77,6 +77,11 @@ class RetryableAcpInitializationError extends AcpExecutionError {
     }
 }
 
+type HistoryReplayState =
+    | { readonly kind: "empty" }
+    | { readonly history: AcpHistoryReplay; readonly kind: "capturing" }
+    | { readonly history: AcpHistoryReplay; readonly kind: "retained" };
+
 export function arraysEqual(left: readonly string[], right: readonly string[]): boolean {
     return left.length === right.length && left.every((value, index) => value === right[index]);
 }
@@ -109,10 +114,7 @@ export class AgentSession implements AcpClientHandler {
     #configOptions: readonly SessionConfigOption[] = [];
     #prompted = false;
     #nativePrompt: { readonly commandId: string; readonly previousTurnId: string | null } | null = null;
-    #replay: { readonly kind: "idle" | "discard" } | { readonly kind: "capture"; readonly history: AcpHistoryReplay } =
-        {
-            kind: "idle",
-        };
+    #historyReplay: HistoryReplayState = { kind: "empty" };
     #restored = false;
     #sessionTitle: string | null = null;
     #sessionUpdatedAt = "";
@@ -269,8 +271,11 @@ export class AgentSession implements AcpClientHandler {
                 },
             };
         }
+        if (this.#historyReplay.kind === "retained") {
+            return await embedLocalHistoryImages(await this.#historyReplay.history.snapshot(), signal);
+        }
         const history = new AcpHistoryReplay();
-        this.#replay = { kind: "capture", history };
+        this.#historyReplay = { history, kind: "capturing" };
         try {
             await this.race(
                 this.#connection.connection.agent.request(
@@ -288,9 +293,11 @@ export class AgentSession implements AcpClientHandler {
             );
             await this.#updates.drained();
             signal.throwIfAborted();
+            this.#historyReplay = { history, kind: "retained" };
             return await embedLocalHistoryImages(await history.snapshot(), signal);
-        } finally {
-            this.#replay = { kind: "idle" };
+        } catch (cause) {
+            this.#historyReplay = { kind: "empty" };
+            throw cause;
         }
     };
 
@@ -518,7 +525,8 @@ export class AgentSession implements AcpClientHandler {
                         ),
                 );
             } else if (this.#capabilities.loadSession) {
-                this.#replay = { kind: "discard" };
+                const history = new AcpHistoryReplay();
+                this.#historyReplay = { history, kind: "capturing" };
                 try {
                     lifecycleResponse = await this.#metrics.measure(
                         "session-load",
@@ -538,9 +546,11 @@ export class AgentSession implements AcpClientHandler {
                                 signal,
                             ),
                     );
-                } finally {
                     await this.#updates.drained();
-                    this.#replay = { kind: "idle" };
+                    this.#historyReplay = { history, kind: "retained" };
+                } catch (cause) {
+                    this.#historyReplay = { kind: "empty" };
+                    throw cause;
                 }
             } else {
                 throw new AcpExecutionError(
@@ -959,11 +969,11 @@ export class AgentSession implements AcpClientHandler {
     readonly #processUpdate = async (notification: SessionNotification): Promise<void> => {
         this.assertNativeSession(notification.sessionId);
         const update = notification.update;
-        if (this.#replay.kind === "capture") {
-            await this.#replay.history.record(update);
+        if (this.#historyReplay.kind !== "empty") {
+            await this.#historyReplay.history.record(update);
         }
         if (
-            this.#replay.kind !== "idle" &&
+            this.#historyReplay.kind === "capturing" &&
             (update.sessionUpdate === "user_message_chunk" ||
                 update.sessionUpdate === "agent_message_chunk" ||
                 update.sessionUpdate === "agent_thought_chunk" ||

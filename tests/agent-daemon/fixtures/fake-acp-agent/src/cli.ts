@@ -223,6 +223,7 @@ const nativeHistory = new Map<
         }[];
     }[]
 >();
+const replayedSessionHistory = new Set<string>();
 
 const nativeMetadata = new Map<
     string,
@@ -779,7 +780,12 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
         }
         const state = readPersistedState(context.params.sessionId);
         sessions.set(context.params.sessionId, state);
-        for (const message of nativeHistory.get(context.params.sessionId) ?? []) {
+        const history =
+            process.argv.includes("--replay-history-once") && replayedSessionHistory.has(context.params.sessionId)
+                ? []
+                : (nativeHistory.get(context.params.sessionId) ?? []);
+        replayedSessionHistory.add(context.params.sessionId);
+        for (const message of history) {
             if (message.role === "assistant") {
                 const replayId = message.messageId;
                 await context.client.notify(acp.methods.client.session.update, {
