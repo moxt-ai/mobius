@@ -77,10 +77,10 @@ class RetryableAcpInitializationError extends AcpExecutionError {
     }
 }
 
-type HistoryReplayState =
-    | { readonly kind: "empty" }
+type SessionLoadState =
+    | { readonly kind: "not-requested" }
     | { readonly history: AcpHistoryReplay; readonly kind: "capturing" }
-    | { readonly history: AcpHistoryReplay; readonly kind: "retained" };
+    | { readonly history: AcpHistoryReplay; readonly kind: "loaded" };
 
 export function arraysEqual(left: readonly string[], right: readonly string[]): boolean {
     return left.length === right.length && left.every((value, index) => value === right[index]);
@@ -114,7 +114,7 @@ export class AgentSession implements AcpClientHandler {
     #configOptions: readonly SessionConfigOption[] = [];
     #prompted = false;
     #nativePrompt: { readonly commandId: string; readonly previousTurnId: string | null } | null = null;
-    #historyReplay: HistoryReplayState = { kind: "empty" };
+    #sessionLoad: SessionLoadState = { kind: "not-requested" };
     #restored = false;
     #sessionTitle: string | null = null;
     #sessionUpdatedAt = "";
@@ -271,13 +271,23 @@ export class AgentSession implements AcpClientHandler {
                 },
             };
         }
-        if (this.#historyReplay.kind === "retained") {
-            return await embedLocalHistoryImages(await this.#historyReplay.history.snapshot(), signal);
+        if (this.#sessionLoad.kind === "not-requested") {
+            await this.#loadSession(signal, "ACP agent exited while loading history");
+        }
+        if (this.#sessionLoad.kind !== "loaded") {
+            throw new AcpExecutionError("The ACP session load is already in progress", {}, "session_busy");
+        }
+        return await embedLocalHistoryImages(await this.#sessionLoad.history.snapshot(), signal);
+    };
+
+    async #loadSession(signal: AbortSignal, exitMessage: string): Promise<unknown> {
+        if (this.#sessionLoad.kind !== "not-requested") {
+            throw new AcpExecutionError("The ACP session was already loaded", {}, "session_busy");
         }
         const history = new AcpHistoryReplay();
-        this.#historyReplay = { history, kind: "capturing" };
+        this.#sessionLoad = { history, kind: "capturing" };
         try {
-            await this.race(
+            const response = await this.race(
                 this.#connection.connection.agent.request(
                     methods.agent.session.load,
                     {
@@ -288,18 +298,18 @@ export class AgentSession implements AcpClientHandler {
                     },
                     { cancellationSignal: signal },
                 ),
-                "ACP agent exited while loading history",
+                exitMessage,
                 signal,
             );
             await this.#updates.drained();
             signal.throwIfAborted();
-            this.#historyReplay = { history, kind: "retained" };
-            return await embedLocalHistoryImages(await history.snapshot(), signal);
+            this.#sessionLoad = { history, kind: "loaded" };
+            return response;
         } catch (cause) {
-            this.#historyReplay = { kind: "empty" };
+            this.#sessionLoad = { kind: "not-requested" };
             throw cause;
         }
-    };
+    }
 
     private readonly prepareAgentContent = async (content: AgentDisplayContent): Promise<AgentDisplayContent> => {
         if (content.type === "image" && content.uri.length > 0) {
@@ -525,33 +535,10 @@ export class AgentSession implements AcpClientHandler {
                         ),
                 );
             } else if (this.#capabilities.loadSession) {
-                const history = new AcpHistoryReplay();
-                this.#historyReplay = { history, kind: "capturing" };
-                try {
-                    lifecycleResponse = await this.#metrics.measure(
-                        "session-load",
-                        async () =>
-                            await this.race(
-                                this.#connection.connection.agent.request(
-                                    methods.agent.session.load,
-                                    {
-                                        additionalDirectories: [...this.#additionalDirectories],
-                                        cwd: this.#cwd,
-                                        mcpServers: [],
-                                        sessionId: this.#updates.sessionId(),
-                                    },
-                                    { cancellationSignal: signal },
-                                ),
-                                "ACP agent exited while loading a session",
-                                signal,
-                            ),
-                    );
-                    await this.#updates.drained();
-                    this.#historyReplay = { history, kind: "retained" };
-                } catch (cause) {
-                    this.#historyReplay = { kind: "empty" };
-                    throw cause;
-                }
+                lifecycleResponse = await this.#metrics.measure(
+                    "session-load",
+                    async () => await this.#loadSession(signal, "ACP agent exited while loading a session"),
+                );
             } else {
                 throw new AcpExecutionError(
                     "The ACP agent cannot restore its persisted session",
@@ -969,11 +956,11 @@ export class AgentSession implements AcpClientHandler {
     readonly #processUpdate = async (notification: SessionNotification): Promise<void> => {
         this.assertNativeSession(notification.sessionId);
         const update = notification.update;
-        if (this.#historyReplay.kind !== "empty") {
-            await this.#historyReplay.history.record(update);
+        if (this.#sessionLoad.kind !== "not-requested") {
+            await this.#sessionLoad.history.record(update);
         }
         if (
-            this.#historyReplay.kind === "capturing" &&
+            this.#sessionLoad.kind === "capturing" &&
             (update.sessionUpdate === "user_message_chunk" ||
                 update.sessionUpdate === "agent_message_chunk" ||
                 update.sessionUpdate === "agent_thought_chunk" ||

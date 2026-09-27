@@ -91,7 +91,7 @@ describe("native session history", () => {
         }
     });
 
-    it("Given OpenCode replays a persisted Session only while restoring it, When Chat loads its history, Then Runtime returns the retained messages", async () => {
+    it("Given OpenCode emits persisted history only on the first session load, When Chat requests history after preparation, Then Runtime returns messages from that load", async () => {
         const f = await fixture("OpenCode", "replay-history-once");
         const signal = new AbortController().signal;
         try {
