@@ -1326,6 +1326,7 @@ async function processHappyPathCommand(
             content: [],
             epoch: next.commandId,
             interaction: null,
+            messages: [],
             prompt: next.prompt,
             sequence: 0,
             state: "running",
