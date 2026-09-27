@@ -1,6 +1,7 @@
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { readCodexFullHistory } from "../../../packages/cli/src/native-sessions/codex-history.ts";
 import { codexFixture } from "./codex-native-fixture.ts";
 
 import { fixture } from "./native-session-fixture.ts";
@@ -148,6 +149,47 @@ describe("native session history", () => {
                         { role: "user", text: "Question 15" },
                     ]),
                 },
+            });
+        } finally {
+            await f.close();
+        }
+    });
+
+    it("Given a Codex turn with rich tool output larger than the history budget, When Chat restores it, Then the user and final response remain visible", async () => {
+        const f = await codexFixture();
+        try {
+            const nativeSessionId = crypto.randomUUID();
+            await writeFile(
+                join(f.native, `${encodeURIComponent(nativeSessionId)}.json`),
+                JSON.stringify({
+                    cwd: f.workspace,
+                    title: "Large rich Codex conversation",
+                    history: [
+                        { role: "user", text: "Keep this prompt visible" },
+                        {
+                            role: "assistant",
+                            text: "Keep this final response visible",
+                            richToolCount: 4,
+                            richToolOutput: "x".repeat(100_000),
+                        },
+                    ],
+                }),
+            );
+
+            const result = await readCodexFullHistory(
+                f.agent,
+                f.workspace,
+                nativeSessionId,
+                new AbortController().signal,
+            );
+
+            expect(result.history).toMatchObject({
+                status: "available",
+                messages: [
+                    { role: "user", text: "Keep this prompt visible" },
+                    { role: "assistant", text: "Keep this final response visible" },
+                ],
+                truncated: true,
             });
         } finally {
             await f.close();

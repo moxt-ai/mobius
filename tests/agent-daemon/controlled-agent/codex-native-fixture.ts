@@ -78,5 +78,5 @@ export async function codexFixture(sessionIdentity: "assigned" | "native" = "ass
         }
         await rm(temporary, { recursive: true, force: true });
     };
-    return { identity, list, native, seed, service, workspace, close };
+    return { agent, identity, list, native, seed, service, workspace, close };
 }

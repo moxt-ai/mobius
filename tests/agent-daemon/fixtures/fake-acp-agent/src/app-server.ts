@@ -167,6 +167,8 @@ input.on("line", (line) => {
                 });
             } else {
                 if (rich) {
+                    const richToolCount = Reflect.get(message, "richToolCount");
+                    const richToolOutput = Reflect.get(message, "richToolOutput");
                     turns.at(-1)?.items.push(
                         {
                             type: "reasoning",
@@ -191,6 +193,26 @@ input.on("line", (line) => {
                             exitCode: 0,
                         },
                     );
+                    if (
+                        typeof richToolCount === "number" &&
+                        Number.isInteger(richToolCount) &&
+                        richToolCount > 0 &&
+                        richToolCount <= 100 &&
+                        typeof richToolOutput === "string"
+                    ) {
+                        for (let index = 0; index < richToolCount; index += 1) {
+                            turns.at(-1)?.items.push({
+                                type: "commandExecution",
+                                id: `large-command-${turns.length.toString()}-${index.toString()}`,
+                                command: "generate large output",
+                                cwd: Reflect.get(saved, "cwd"),
+                                status: "completed",
+                                commandActions: [],
+                                aggregatedOutput: richToolOutput,
+                                exitCode: 0,
+                            });
+                        }
+                    }
                     const turn = turns.at(-1);
                     if (turn !== undefined) {
                         turn.error = { message: "Agent could not inspect the optional workspace file" };

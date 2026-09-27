@@ -128,6 +128,48 @@ function messageSize(message: NativeHistoryMessage): number {
     );
 }
 
+const SESSION_HISTORY_MESSAGE_CHARACTER_LIMIT = Math.floor(SESSION_HISTORY_CHARACTER_LIMIT / 2);
+
+function fitHistoryMessage(message: NativeHistoryMessage): {
+    readonly message: NativeHistoryMessage;
+    readonly truncated: boolean;
+} {
+    const text = message.text.slice(-SESSION_HISTORY_MESSAGE_CHARACTER_LIMIT);
+    if (message.role === "user") {
+        return {
+            message: { ...message, text },
+            truncated: text.length < message.text.length,
+        };
+    }
+
+    let activities = message.activities;
+    let content = message.content;
+    let fitted: NativeHistoryMessage = { ...message, activities, content, text };
+    while (messageSize(fitted) > SESSION_HISTORY_MESSAGE_CHARACTER_LIMIT && activities.length > 0) {
+        activities = activities.slice(1);
+        fitted = { ...fitted, activities };
+    }
+    while (messageSize(fitted) > SESSION_HISTORY_MESSAGE_CHARACTER_LIMIT && content.length > 0) {
+        content = content.slice(1);
+        fitted = { ...fitted, content };
+    }
+    const excess = Math.max(0, messageSize(fitted) - SESSION_HISTORY_MESSAGE_CHARACTER_LIMIT);
+    if (excess > 0) {
+        const maximumTextLength = Math.max(0, fitted.text.length - excess);
+        fitted = {
+            ...fitted,
+            text: maximumTextLength === 0 ? "" : fitted.text.slice(-maximumTextLength),
+        };
+    }
+    return {
+        message: fitted,
+        truncated:
+            fitted.text.length < message.text.length ||
+            activities.length < message.activities.length ||
+            content.length < message.content.length,
+    };
+}
+
 function turnOutcome(
     status: z.infer<typeof turnsSchema>["data"][number]["status"],
 ): Extract<NativeHistoryMessage, { readonly role: "assistant" }>["outcome"] {
@@ -245,16 +287,16 @@ function decodeHistory(
             } else {
                 continue;
             }
-            const text = message.text.slice(-SESSION_HISTORY_CHARACTER_LIMIT);
-            if (text.length === 0 && (message.images?.length ?? 0) === 0) {
+            const fitted = fitHistoryMessage(message);
+            if (fitted.message.text.length === 0 && (fitted.message.images?.length ?? 0) === 0) {
                 continue;
             }
-            truncated ||= text.length < message.text.length;
-            messages.push({ ...message, text });
+            truncated ||= fitted.truncated;
+            messages.push(fitted.message);
             if (message.role === "assistant") {
                 assistantMessageIndex = messages.length - 1;
             }
-            characters += messageSize({ ...message, text });
+            characters += messageSize(fitted.message);
         }
         if (options.detail === "rich" && turn.error != null) {
             activities.push(
@@ -278,8 +320,10 @@ function decodeHistory(
                     ...(outcome === undefined ? {} : { outcome }),
                     activities: activities.slice(-100),
                 };
-                messages[assistantMessageIndex] = updated;
-                characters += messageSize(updated);
+                const fitted = fitHistoryMessage(updated);
+                truncated ||= fitted.truncated;
+                messages[assistantMessageIndex] = fitted.message;
+                characters += messageSize(fitted.message);
             }
         } else if (activities.length > 0 || outcome !== undefined) {
             const message: NativeHistoryMessage = {
@@ -289,8 +333,10 @@ function decodeHistory(
                 ...(outcome === undefined ? {} : { outcome }),
                 text: "",
             };
-            messages.push(message);
-            characters += messageSize(message);
+            const fitted = fitHistoryMessage(message);
+            truncated ||= fitted.truncated;
+            messages.push(fitted.message);
+            characters += messageSize(fitted.message);
         }
         while (
             messages.length >
