@@ -47,6 +47,7 @@ const CODEX_AGENT_VERSION = "0.154.0";
 // Listing a directory must answer promptly: it is an interactive browser request, not a turn.
 const SESSION_LIST_TIMEOUT_MILLISECONDS = 30_000;
 const CODEX_COMMANDS = Object.freeze([{ description: "Compact the conversation context", name: "compact" }]);
+const COMPACT_COMPLETED_MESSAGE = "Context compacted.";
 
 /** The choices Mobius offers when the app-server asks it to approve a local side effect. */
 const APPROVAL_OPTIONS: readonly PermissionOption[] = Object.freeze([
@@ -857,7 +858,15 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
         this.#turn = turn;
         try {
             await this.#appServer.request("thread/compact/start", { threadId: this.#nativeSessionId }, signal);
-            return await completion.promise;
+            const result = await completion.promise;
+            if (result.stopReason !== "cancelled") {
+                await this.#emit({
+                    content: { text: COMPACT_COMPLETED_MESSAGE, type: "text" },
+                    messageId: turn.turn.id.length > 0 ? turn.turn.id : "compact-completed",
+                    sessionUpdate: "agent_message_chunk",
+                });
+            }
+            return result;
         } finally {
             signal.removeEventListener("abort", aborted);
             if (this.#turn === turn) {

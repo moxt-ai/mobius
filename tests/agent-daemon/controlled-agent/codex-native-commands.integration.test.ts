@@ -24,6 +24,7 @@ describe("codex native commands", () => {
         );
         const sessions = new AgentRuntimeManager();
         const sessionId = crypto.randomUUID();
+        let compactText = "";
         try {
             const prepared = await sessions.prepareSession({
                 additionalDirectories: [],
@@ -44,13 +45,16 @@ describe("codex native commands", () => {
                     cwd: workspace,
                     images: [],
                     onActivity: async () => {},
-                    onText: async () => {},
+                    onText: async (text) => {
+                        compactText += text;
+                    },
                     prompt: "/compact",
                     resources: [],
                     sessionId,
                     signal: AbortSignal.timeout(20_000),
                 }),
             ).resolves.toEqual({ stopReason: "end_turn" });
+            expect(compactText).toBe("Context compacted.");
         } finally {
             await sessions.close();
             await rm(temporary, { recursive: true, force: true });

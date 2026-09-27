@@ -51,6 +51,7 @@ import {
     SESSION_PROMPT_KIND,
     SESSION_QUERY_KIND,
     SESSION_STARTED_KIND,
+    type SessionCommand,
     type SessionElicitationRequestedEvent,
     type SessionMetadata,
     type SessionPermissionRequestedEvent,
@@ -445,6 +446,7 @@ export interface FakeAgentDaemonBehavior {
     readonly afterLastNarration?: (command: SessionPromptCommand, signal: AbortSignal) => Promise<void>;
     readonly directoryLabel?: string;
     readonly nativeSessionIds?: ReadonlySet<string>;
+    readonly commands?: readonly SessionCommand[];
     readonly sessions?: readonly SessionMetadata[];
     readonly steering?: boolean;
     readonly nativeSessionTitle?: (sessionId: string) => string;
@@ -531,7 +533,7 @@ function fakeSessionReady(
             steering: behavior.steering ?? false,
             unstableForkSession: false,
         },
-        commands: [],
+        commands: behavior.commands ?? [],
         configOptions: [],
         directoryId: command.directoryId,
         directoryLabel: behavior.directoryLabel ?? "Fake workspace",
