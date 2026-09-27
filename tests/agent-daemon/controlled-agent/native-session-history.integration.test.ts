@@ -34,6 +34,62 @@ describe("native session history", () => {
         },
     );
 
+    it("Given a long OpenCode Session, When Runtime previews or loads its native messages, Then both return the latest 50 messages", async () => {
+        const f = await fixture("OpenCode");
+        const sessionId = "long-working-session";
+        try {
+            for (let index = 1; index <= 55; index += 1) {
+                await f.sessions.runPrompt({
+                    additionalDirectories: [],
+                    agent: f.agent,
+                    commandId: `command-${index.toString()}`,
+                    cwd: f.workspace,
+                    images: [],
+                    onActivity: async () => {},
+                    onText: async () => {},
+                    prompt: `Question ${index.toString()}`,
+                    resources: [],
+                    sessionId,
+                    signal: new AbortController().signal,
+                });
+            }
+
+            const entry = (await f.list()).entries[0];
+            if (entry === undefined) {
+                throw new Error("Missing OpenCode conversation");
+            }
+            const preview = await f.service.execute(
+                { ...f.identity, action: "preview", entryId: entry.entryId },
+                new AbortController().signal,
+            );
+            const loaded = await f.sessions.loadSessionHistory({
+                additionalDirectories: [],
+                agent: f.agent,
+                cwd: f.workspace,
+                sessionId,
+                signal: new AbortController().signal,
+            });
+
+            for (const history of [preview.action === "preview" ? preview.history : null, loaded]) {
+                expect(history).toMatchObject({
+                    status: "available",
+                    messages: expect.arrayContaining([
+                        { role: "user", text: "Question 31" },
+                        { role: "user", text: "Question 55" },
+                    ]),
+                    truncated: true,
+                });
+                if (history?.status !== "available") {
+                    throw new Error("Expected OpenCode native messages");
+                }
+                expect(history.messages).toHaveLength(50);
+                expect(history.messages).not.toContainEqual({ role: "user", text: "Question 30" });
+            }
+        } finally {
+            await f.close();
+        }
+    });
+
     it("Given saved Codex threads, When its directory is listed through the in-process Agent, Then every thread becomes an authorized entry whose history previews", async () => {
         const f = await codexFixture();
         try {

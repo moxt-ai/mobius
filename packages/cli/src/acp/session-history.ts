@@ -5,7 +5,6 @@ import {
     type NativeMessageActivity,
     type NativeSessionHistory,
     SESSION_HISTORY_CHARACTER_LIMIT,
-    SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT,
 } from "@moxt-ai/mobius-protocol";
 import { type AcpActivity, AcpActivityTracker } from "./activity.ts";
 import { isProgressMessage, normalizeContentBlock } from "./activity-content.ts";
@@ -24,6 +23,7 @@ type ReplayMessage =
 
 const HISTORY_ACTIVITY_FIELD_LIMIT = 100_000;
 const HISTORY_ACTIVITY_LIMIT = 100;
+const HISTORY_MESSAGE_LIMIT = 50;
 
 function historyActivity(activity: AcpActivity): NativeMessageActivity {
     return {
@@ -75,6 +75,7 @@ export class AcpHistoryReplay {
         () => Promise.resolve(),
     );
     #lastMessageId: string | null = null;
+    #firstMessageIndex = 0;
     #characters = 0;
     #truncated = false;
 
@@ -173,24 +174,26 @@ export class AcpHistoryReplay {
 
     readonly snapshot = async (): Promise<NativeSessionHistory> => {
         await this.#activityTracker.finish();
-        const messages: NativeHistoryMessage[] = this.#messages.map((message): NativeHistoryMessage => {
-            if (message.role === "user") {
-                return message;
-            }
-            const activities = message.activityIds.flatMap((id) => {
-                const activity = this.#activities.get(id);
-                return activity === undefined ? [] : [historyActivity(activity)];
+        const messages: NativeHistoryMessage[] = this.#messages
+            .slice(this.#firstMessageIndex)
+            .map((message): NativeHistoryMessage => {
+                if (message.role === "user") {
+                    return message;
+                }
+                const activities = message.activityIds.flatMap((id) => {
+                    const activity = this.#activities.get(id);
+                    return activity === undefined ? [] : [historyActivity(activity)];
+                });
+                if (activities.length > HISTORY_ACTIVITY_LIMIT) {
+                    this.#truncated = true;
+                }
+                return {
+                    role: "assistant",
+                    text: message.text,
+                    content: message.content.slice(0, 100),
+                    activities: activities.slice(-HISTORY_ACTIVITY_LIMIT),
+                };
             });
-            if (activities.length > HISTORY_ACTIVITY_LIMIT) {
-                this.#truncated = true;
-            }
-            return {
-                role: "assistant",
-                text: message.text,
-                content: message.content.slice(0, 100),
-                activities: activities.slice(-HISTORY_ACTIVITY_LIMIT),
-            };
-        });
         while (historyContentCharacters(messages) > SESSION_HISTORY_CHARACTER_LIMIT) {
             const richIndex = messages.findIndex(
                 (message) =>
@@ -245,14 +248,19 @@ export class AcpHistoryReplay {
 
     private readonly trimMessages = (): void => {
         while (
-            this.#messages.length > SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT ||
+            this.#messages.length - this.#firstMessageIndex > HISTORY_MESSAGE_LIMIT ||
             this.#characters > SESSION_HISTORY_CHARACTER_LIMIT
         ) {
-            const removed = this.#messages.shift();
+            const removed = this.#messages[this.#firstMessageIndex];
             if (removed !== undefined) {
                 this.#characters -= removed.text.length;
+                this.#firstMessageIndex += 1;
             }
             this.#truncated = true;
+        }
+        if (this.#firstMessageIndex >= HISTORY_MESSAGE_LIMIT) {
+            this.#messages.splice(0, this.#firstMessageIndex);
+            this.#firstMessageIndex = 0;
         }
     };
 }
