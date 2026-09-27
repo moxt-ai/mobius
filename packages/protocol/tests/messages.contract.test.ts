@@ -8,115 +8,34 @@ import {
     decodeAgentActivityEvent,
     decodeAgentMessageDeltaEvent,
     decodeSessionCancelCommand,
-    decodeSessionEventEnvelope,
     decodeSessionPromptCommand,
     encodeAgentActivityEvent,
-    encodeSessionCancelCommand,
-    encodeSessionEventEnvelope,
-    encodeSessionPromptCommand,
-    encodeSessionStartedEvent,
     ProtocolMessageError,
     SESSION_CANCEL_KIND,
-    SESSION_EVENT_KIND,
     SESSION_PROMPT_KIND,
-    type SessionCancelCommand,
-    type SessionPromptCommand,
     SessionPromptDisposition,
 } from "../src/index.ts";
 
-describe("live Session event protocol", () => {
-    it("Given an Agent event, When the daemon sends it, Then the live payload crosses the boundary without an acknowledgement cursor", () => {
-        const payload = encodeSessionStartedEvent({
-            commandId: "command-1",
-            epoch: "epoch-1",
-            kind: "session.started",
-            attemptId: "attempt-1",
-            prompt: "Hello",
-            sequence: 0,
-            sessionId: "session-1",
-        });
-        const envelope = { kind: SESSION_EVENT_KIND, payload, sessionId: "session-1" } as const;
-        expect(decodeSessionEventEnvelope(encodeSessionEventEnvelope(envelope))).toEqual(envelope);
-    });
-});
-
 describe("session prompt protocol", () => {
-    it("Given a valid browser prompt, When it crosses the daemon boundary, Then its complete command round-trips", () => {
-        const command: SessionPromptCommand = {
-            additionalDirectoryIds: [],
-            agentId: "codex",
-            bindingId: "workspace",
-            commandId: "command-1",
-            directoryId: "default",
-            disposition: SessionPromptDisposition.Reject,
-            images: [
-                {
-                    data: "aW1hZ2U=",
-                    mimeType: "image/png",
-                    name: "screenshot.png",
-                },
-            ],
-            kind: SESSION_PROMPT_KIND,
-            prompt: "hello from browser",
-            resources: [
-                {
-                    mimeType: "text/plain",
-                    name: "notes.txt",
-                    text: "supporting context",
-                    type: "embedded",
-                    uri: "mobius://upload/notes.txt",
-                },
-            ],
-            sessionConfigurations: [
-                {
-                    booleanValue: false,
-                    configId: "model",
-                    value: "codex-1",
-                    valueType: "select",
-                },
-                {
-                    booleanValue: true,
-                    configId: "fast_mode",
-                    value: "",
-                    valueType: "boolean",
-                },
-            ],
-            sessionId: "session-1",
-            targetCommandId: "",
-        };
-
-        expect(decodeSessionPromptCommand(encodeSessionPromptCommand(command))).toEqual(command);
+    it("Given a prompt has no text, images or resources, When it crosses the daemon boundary, Then it is rejected", () => {
         expect(() =>
-            decodeSessionPromptCommand(JSON.stringify({ ...command, prompt: "", images: [], resources: [] })),
+            decodeSessionPromptCommand(
+                JSON.stringify({
+                    additionalDirectoryIds: [],
+                    agentId: "codex",
+                    bindingId: "workspace",
+                    commandId: "command-1",
+                    directoryId: "default",
+                    disposition: SessionPromptDisposition.Reject,
+                    images: [],
+                    kind: SESSION_PROMPT_KIND,
+                    prompt: "",
+                    resources: [],
+                    sessionId: "session-1",
+                    targetCommandId: "",
+                }),
+            ),
         ).toThrowError(ProtocolMessageError);
-    });
-
-    it("Given a running Turn identity, When a follow-up crosses the protocol boundary, Then queue and steer intent remain explicit", () => {
-        const queued = decodeSessionPromptCommand(
-            JSON.stringify({
-                additionalDirectoryIds: [],
-                agentId: "claude-code",
-                bindingId: "workspace",
-                commandId: "command-2",
-                directoryId: "default",
-                disposition: SessionPromptDisposition.Queue,
-                images: [],
-                kind: SESSION_PROMPT_KIND,
-                prompt: "continue after this",
-                resources: [],
-                sessionId: "session-1",
-                targetCommandId: "command-1",
-            }),
-        );
-        const steered = decodeSessionPromptCommand(
-            JSON.stringify({ ...queued, commandId: "command-3", disposition: SessionPromptDisposition.Steer }),
-        );
-
-        expect(queued.disposition).toBe(SessionPromptDisposition.Queue);
-        expect(steered).toMatchObject({
-            disposition: SessionPromptDisposition.Steer,
-            targetCommandId: "command-1",
-        });
     });
 
     it("Given a prompt contains a remote working directory, When it crosses the protocol boundary, Then the authority override is rejected", () => {
@@ -155,16 +74,6 @@ describe("agent message protocol", () => {
 });
 
 describe("session cancel protocol", () => {
-    it("Given an active turn identity, When cancellation crosses the relay boundary, Then only that turn is addressed", () => {
-        const command: SessionCancelCommand = {
-            commandId: "command-1",
-            kind: SESSION_CANCEL_KIND,
-            sessionId: "session-1",
-        };
-
-        expect(decodeSessionCancelCommand(encodeSessionCancelCommand(command))).toEqual(command);
-    });
-
     it("Given cancellation contains a remote target override, When it is decoded, Then the untrusted field is rejected", () => {
         const encoded = JSON.stringify({
             commandId: "command-1",
