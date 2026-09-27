@@ -79,8 +79,8 @@ and native-history behavior. Queue ownership remains in `DaemonTurnRegistry`.
 
 ## Testing boundaries
 
-Web / Chat tests use real product services and transports with a stateful fake
-daemon. Separate agent-daemon integration tests use the real daemon, real Agent
+Web / Chat tests use real product services, transports, and daemon with a stateful
+controlled Agent harness. Separate compatibility tests use the real Agent
 executables, and production adapters for Codex, Claude Code, OpenCode, and Pi.
 Keep each Agent's adaptation coverage independent. See [TESTING.md](./TESTING.md)
 for provider exceptions, commands, and the current coverage gaps.
@@ -132,7 +132,7 @@ Native history is used for completed turns; its partial current-turn output must
 not override the daemon snapshot. Final output is flushed before completion and
 turn memory is released by the execution registry. No cloud event log is added.
 
-Web integration tests use a stateful fake daemon speaking this snapshot protocol.
+Web integration tests run the production daemon and control only its Agent harness.
 Real Agent tests verify the production daemon's cumulative output, tool state, and
 native-session recovery. Controlled Agent peers cover burst coalescing and lifecycle
 faults; they do not establish real Agent compatibility.

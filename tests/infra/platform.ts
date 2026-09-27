@@ -1,13 +1,13 @@
 import { MobiusOidcCredentialProvider, MobiusPlatformDeveloperClient } from "@moxt-ai/mobius-sdk/platform";
-import type { FakeAgentDaemonBehavior } from "./agent-daemon.ts";
+import type { FakeAgentHarnessDefinition } from "./agent-harness.ts";
 import { FakeClerk } from "./clerk.ts";
 import { createTestMobiusPlatformBindings } from "./cloudflare.ts";
-import { createFakeAgentDaemonRuntime } from "./platform-agent-daemon.ts";
+import { createFakeAgentHarnessRuntime } from "./platform-agent-harness.ts";
 
 /** Starts the production Platform boundary with isolated local Cloudflare storage. */
 export async function startTestPlatform(options: { readonly allowedOrigins?: ReadonlySet<string> } = {}) {
     const cancellation = new AbortController();
-    const runtimes: Awaited<ReturnType<typeof createFakeAgentDaemonRuntime>>[] = [];
+    const runtimes: AsyncDisposable[] = [];
     const bindings = await createTestMobiusPlatformBindings(options.allowedOrigins);
     try {
         const clerk = new FakeClerk();
@@ -44,10 +44,15 @@ export async function startTestPlatform(options: { readonly allowedOrigins?: Rea
             baseUrl: bindings.origin,
             developer,
             developerToken,
-            connectAgent: async (projectId: string, behavior?: FakeAgentDaemonBehavior) => {
-                const runtime = await createFakeAgentDaemonRuntime({
-                    ...(behavior === undefined ? {} : { behavior }),
+            connectAgent: async (
+                projectId: string,
+                harnesses?: readonly FakeAgentHarnessDefinition[],
+                nativeSessionIds?: ReadonlySet<string>,
+            ) => {
+                const runtime = await createFakeAgentHarnessRuntime({
                     credential,
+                    ...(harnesses === undefined ? {} : { harnesses }),
+                    ...(nativeSessionIds === undefined ? {} : { nativeSessionIds }),
                     origin: bindings.origin,
                     projectId,
                     server: app,

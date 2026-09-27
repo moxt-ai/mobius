@@ -3,11 +3,11 @@
 ## Test boundary contract
 
 Use real production components wherever possible. Web / Chat tests run the real
-application, router, stores, SDK, Chat, Platform, Runtime relay, transports, and
-storage. Their one product replacement is a stateful **fake daemon**, connected
-through the production daemon protocol port. This makes queueing, reconnects,
-multiple viewers, history, images, and errors deterministic. Do not substitute a
-fake API transport, Platform response table, or fake ACP Agent for this boundary.
+application, router, stores, SDK, Chat, Platform, Runtime relay, production daemon,
+transports, and storage. Their one external replacement is a stateful controlled
+**Agent harness**, connected through the production adapter. The daemon continues
+to own queueing, reconnects, snapshots, history, cancellation, and errors. Do not
+substitute a fake daemon, API transport, or Platform response table.
 
 Test Agent compatibility separately in `tests/agent-daemon`: run the **real daemon,
 real Agent executable, and production adapter**. Codex, Claude Code, OpenCode, and
