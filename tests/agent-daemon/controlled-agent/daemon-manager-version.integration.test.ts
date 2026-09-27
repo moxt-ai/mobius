@@ -21,6 +21,27 @@ afterEach(async () => {
 });
 
 describe("Mobius manager version compatibility", () => {
+    it("Given the daemon is stopped, When the user runs mobius start, Then the daemon is running without requiring a connection", async () => {
+        const stateRoot = await mkdtemp(join(tmpdir(), "mobius-manager-start-"));
+        temporaryDirectories.push(stateRoot);
+        const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: stateRoot };
+
+        try {
+            const started = await runCli(["start"], environment, AbortSignal.timeout(15_000));
+
+            expect(started.code).toBe(0);
+            expect(started.stderr).toBe("");
+            expect(started.stdout).toContain(`Starting mobius daemon ${cliPackage.version}\n`);
+            expect(started.stdout).toContain(`Mobius daemon ${cliPackage.version} started\n`);
+            expect(started.stdout).toContain("Mobius daemon is running.\n");
+
+            const ensured = await runCli(["start"], environment, AbortSignal.timeout(15_000));
+            expect(ensured).toEqual({ code: 0, stderr: "", stdout: "Mobius daemon is running.\n" });
+        } finally {
+            await runCli(["quit"], environment, AbortSignal.timeout(10_000)).catch(() => undefined);
+        }
+    });
+
     it.skipIf(process.platform === "win32")(
         "Given an older manager owns the installation, When the current CLI lists pairings, Then it replaces the manager before serving the command",
         async () => {
