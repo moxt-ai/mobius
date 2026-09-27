@@ -130,27 +130,42 @@ function messageSize(message: NativeHistoryMessage): number {
 
 const SESSION_HISTORY_MESSAGE_CHARACTER_LIMIT = Math.floor(SESSION_HISTORY_CHARACTER_LIMIT / 2);
 
-function jsonArraySuffix<T>(values: readonly T[], maximumCharacters: number): readonly T[] {
-    const brackets = 2;
-    if (maximumCharacters < brackets) {
-        return [];
-    }
-    let characters = brackets;
-    let start = values.length;
-    for (let index = values.length - 1; index >= 0; index -= 1) {
-        const value = values[index];
-        if (value === undefined) {
-            continue;
+function fitActivity(activity: NativeMessageActivity, maximumCharacters: number): NativeMessageActivity {
+    const truncate = (limit: number): NativeMessageActivity => ({
+        ...activity,
+        input: bounded(activity.input, limit),
+        locations: activity.locations.map((location) => bounded(location, Math.max(1, limit))),
+        name: bounded(activity.name, limit),
+        output: bounded(activity.output, limit),
+        title: bounded(activity.title, limit),
+        toolKind: bounded(activity.toolKind, limit),
+    });
+    let minimum = 1;
+    let maximum = 100_000;
+    let fitted = truncate(0);
+    while (minimum <= maximum) {
+        const limit = Math.floor((minimum + maximum) / 2);
+        const candidate = truncate(limit);
+        if (JSON.stringify(candidate).length <= maximumCharacters) {
+            fitted = candidate;
+            minimum = limit + 1;
+        } else {
+            maximum = limit - 1;
         }
-        const separator = start === values.length ? 0 : 1;
-        const nextCharacters = characters + JSON.stringify([value]).length - brackets + separator;
-        if (nextCharacters > maximumCharacters) {
-            break;
-        }
-        characters = nextCharacters;
-        start = index;
     }
-    return values.slice(start);
+    return fitted;
+}
+
+function fitActivities(
+    activities: readonly NativeMessageActivity[],
+    maximumCharacters: number,
+): readonly NativeMessageActivity[] {
+    if (activities.length === 0) {
+        return activities;
+    }
+    const arrayCharacters = 2 + activities.length - 1;
+    const maximumActivityCharacters = Math.floor(Math.max(0, maximumCharacters - arrayCharacters) / activities.length);
+    return activities.map((activity) => fitActivity(activity, maximumActivityCharacters));
 }
 
 function fitHistoryMessage(message: NativeHistoryMessage): {
@@ -166,19 +181,13 @@ function fitHistoryMessage(message: NativeHistoryMessage): {
     }
 
     let activities = message.activities;
-    let content = message.content;
+    const content = message.content;
     let fitted: NativeHistoryMessage = { ...message, activities, content, text };
     if (messageSize(fitted) > SESSION_HISTORY_MESSAGE_CHARACTER_LIMIT && activities.length > 0) {
         const maximumCharacters =
             SESSION_HISTORY_MESSAGE_CHARACTER_LIMIT - text.length - JSON.stringify(content).length;
-        activities = jsonArraySuffix(activities, maximumCharacters);
+        activities = fitActivities(activities, maximumCharacters);
         fitted = { ...fitted, activities };
-    }
-    if (messageSize(fitted) > SESSION_HISTORY_MESSAGE_CHARACTER_LIMIT && content.length > 0) {
-        const maximumCharacters =
-            SESSION_HISTORY_MESSAGE_CHARACTER_LIMIT - text.length - JSON.stringify(activities).length;
-        content = jsonArraySuffix(content, maximumCharacters);
-        fitted = { ...fitted, content };
     }
     const excess = Math.max(0, messageSize(fitted) - SESSION_HISTORY_MESSAGE_CHARACTER_LIMIT);
     if (excess > 0) {
@@ -192,8 +201,7 @@ function fitHistoryMessage(message: NativeHistoryMessage): {
         message: fitted,
         truncated:
             fitted.text.length < message.text.length ||
-            activities.length < message.activities.length ||
-            content.length < message.content.length,
+            JSON.stringify(activities).length < JSON.stringify(message.activities).length,
     };
 }
 

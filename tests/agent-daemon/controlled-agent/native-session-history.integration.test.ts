@@ -155,7 +155,7 @@ describe("native session history", () => {
         }
     });
 
-    it("Given a Codex turn with rich tool output larger than the history budget, When Chat restores it, Then the user and final response remain visible", async () => {
+    it("Given a Codex turn with rich tool output larger than the history budget, When Chat restores it, Then every activity remains with truncated output", async () => {
         const f = await codexFixture();
         try {
             const nativeSessionId = crypto.randomUUID();
@@ -197,6 +197,12 @@ describe("native session history", () => {
                     (message) => message.role === "assistant" && message.text === "Keep this final response visible",
                 ),
             ).toBe(true);
+            const largeActivities = result.history.messages
+                .flatMap((message) => (message.role === "assistant" ? message.activities : []))
+                .filter((activity) => activity.activityId.startsWith("large-command-"));
+            expect(largeActivities).toHaveLength(4);
+            expect(largeActivities.every((activity) => activity.output.length < 100_000)).toBe(true);
+            expect(largeActivities.every((activity) => activity.output.length > 0)).toBe(true);
         } finally {
             await f.close();
         }
