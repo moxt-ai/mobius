@@ -1,6 +1,7 @@
 import { readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { readCodexFullHistory } from "../../../packages/cli/src/native-sessions/codex-history.ts";
 import { codexFixture } from "./codex-native-fixture.ts";
 
 import { fixture } from "./native-session-fixture.ts";
@@ -149,6 +150,126 @@ describe("native session history", () => {
                     ]),
                 },
             });
+        } finally {
+            await f.close();
+        }
+    });
+
+    it("Given a Codex turn with rich tool output larger than the history budget, When Chat restores it, Then every activity remains with truncated output", async () => {
+        const f = await codexFixture();
+        try {
+            const nativeSessionId = crypto.randomUUID();
+            await writeFile(
+                join(f.native, `${encodeURIComponent(nativeSessionId)}.json`),
+                JSON.stringify({
+                    cwd: f.workspace,
+                    title: "Large rich Codex conversation",
+                    history: [
+                        { role: "user", text: "Keep this prompt visible" },
+                        {
+                            role: "assistant",
+                            text: "Keep this final response visible",
+                            richToolCount: 4,
+                            richToolOutput: "x".repeat(100_000),
+                        },
+                    ],
+                }),
+            );
+
+            const result = await readCodexFullHistory(
+                f.agent,
+                f.workspace,
+                nativeSessionId,
+                new AbortController().signal,
+            );
+
+            if (result.history.status !== "available") {
+                throw new Error("Expected available native history");
+            }
+            expect(result.history.truncated).toBe(true);
+            expect(
+                result.history.messages.some(
+                    (message) => message.role === "user" && message.text === "Keep this prompt visible",
+                ),
+            ).toBe(true);
+            expect(
+                result.history.messages.some(
+                    (message) => message.role === "assistant" && message.text === "Keep this final response visible",
+                ),
+            ).toBe(true);
+            const largeActivities = result.history.messages
+                .flatMap((message) => (message.role === "assistant" ? message.activities : []))
+                .filter((activity) => activity.activityId.startsWith("large-command-"));
+            expect(largeActivities).toHaveLength(4);
+            expect(largeActivities.every((activity) => activity.output.length < 100_000)).toBe(true);
+            expect(largeActivities.every((activity) => activity.output.length > 0)).toBe(true);
+        } finally {
+            await f.close();
+        }
+    });
+
+    it("Given Codex records assistant text before a tool call, When Chat reads rich native history, Then the tool stays after that text", async () => {
+        const f = await codexFixture();
+        try {
+            const threadId = crypto.randomUUID();
+            await writeFile(
+                join(f.native, `${encodeURIComponent(threadId)}.json`),
+                JSON.stringify({
+                    cwd: f.workspace,
+                    title: "Timeline ordering",
+                    history: [
+                        { role: "user", text: "Fix the assistant timeline" },
+                        {
+                            role: "assistant",
+                            text: "I will inspect the timeline first.",
+                            itemsBefore: [],
+                            itemsAfter: [
+                                {
+                                    type: "commandExecution",
+                                    id: "read-session-presentation",
+                                    command:
+                                        "sed -n '1,220p' packages/web/src/view-models/chat/session-presentation.ts",
+                                    cwd: f.workspace,
+                                    status: "completed",
+                                    commandActions: [{ type: "read" }],
+                                    aggregatedOutput: "export function historySessionPresentation() {}",
+                                    exitCode: 0,
+                                },
+                            ],
+                        },
+                    ],
+                }),
+            );
+            const entry = (await f.list()).entries[0];
+            if (entry === undefined) {
+                throw new Error("Missing native conversation");
+            }
+            const result = await f.service.execute(
+                { ...f.identity, action: "history", entryId: entry.entryId },
+                new AbortController().signal,
+            );
+            if (result.action !== "history" || result.history.status !== "available") {
+                throw new Error("Expected available native history");
+            }
+
+            expect(result.history.messages).toMatchObject([
+                { role: "user", text: "Fix the assistant timeline" },
+                {
+                    role: "assistant",
+                    text: "I will inspect the timeline first.",
+                    activities: [],
+                },
+                {
+                    role: "assistant",
+                    text: "",
+                    activities: [
+                        {
+                            activityType: "tool",
+                            title: "sed -n '1,220p' packages/web/src/view-models/chat/session-presentation.ts",
+                        },
+                    ],
+                },
+            ]);
         } finally {
             await f.close();
         }

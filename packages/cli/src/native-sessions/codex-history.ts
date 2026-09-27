@@ -128,6 +128,83 @@ function messageSize(message: NativeHistoryMessage): number {
     );
 }
 
+const SESSION_HISTORY_MESSAGE_CHARACTER_LIMIT = Math.floor(SESSION_HISTORY_CHARACTER_LIMIT / 2);
+
+function fitActivity(activity: NativeMessageActivity, maximumCharacters: number): NativeMessageActivity {
+    const truncate = (limit: number): NativeMessageActivity => ({
+        ...activity,
+        input: bounded(activity.input, limit),
+        locations: activity.locations.map((location) => bounded(location, Math.max(1, limit))),
+        name: bounded(activity.name, limit),
+        output: bounded(activity.output, limit),
+        title: bounded(activity.title, limit),
+        toolKind: bounded(activity.toolKind, limit),
+    });
+    let minimum = 1;
+    let maximum = 100_000;
+    let fitted = truncate(0);
+    while (minimum <= maximum) {
+        const limit = Math.floor((minimum + maximum) / 2);
+        const candidate = truncate(limit);
+        if (JSON.stringify(candidate).length <= maximumCharacters) {
+            fitted = candidate;
+            minimum = limit + 1;
+        } else {
+            maximum = limit - 1;
+        }
+    }
+    return fitted;
+}
+
+function fitActivities(
+    activities: readonly NativeMessageActivity[],
+    maximumCharacters: number,
+): readonly NativeMessageActivity[] {
+    if (activities.length === 0) {
+        return activities;
+    }
+    const arrayCharacters = 2 + activities.length - 1;
+    const maximumActivityCharacters = Math.floor(Math.max(0, maximumCharacters - arrayCharacters) / activities.length);
+    return activities.map((activity) => fitActivity(activity, maximumActivityCharacters));
+}
+
+function fitHistoryMessage(message: NativeHistoryMessage): {
+    readonly message: NativeHistoryMessage;
+    readonly truncated: boolean;
+} {
+    const text = message.text.slice(-SESSION_HISTORY_MESSAGE_CHARACTER_LIMIT);
+    if (message.role === "user") {
+        return {
+            message: { ...message, text },
+            truncated: text.length < message.text.length,
+        };
+    }
+
+    let activities = message.activities;
+    const content = message.content;
+    let fitted: NativeHistoryMessage = { ...message, activities, content, text };
+    if (messageSize(fitted) > SESSION_HISTORY_MESSAGE_CHARACTER_LIMIT && activities.length > 0) {
+        const maximumCharacters =
+            SESSION_HISTORY_MESSAGE_CHARACTER_LIMIT - text.length - JSON.stringify(content).length;
+        activities = fitActivities(activities, maximumCharacters);
+        fitted = { ...fitted, activities };
+    }
+    const excess = Math.max(0, messageSize(fitted) - SESSION_HISTORY_MESSAGE_CHARACTER_LIMIT);
+    if (excess > 0) {
+        const maximumTextLength = Math.max(0, fitted.text.length - excess);
+        fitted = {
+            ...fitted,
+            text: maximumTextLength === 0 ? "" : fitted.text.slice(-maximumTextLength),
+        };
+    }
+    return {
+        message: fitted,
+        truncated:
+            fitted.text.length < message.text.length ||
+            JSON.stringify(activities).length < JSON.stringify(message.activities).length,
+    };
+}
+
 function turnOutcome(
     status: z.infer<typeof turnsSchema>["data"][number]["status"],
 ): Extract<NativeHistoryMessage, { readonly role: "assistant" }>["outcome"] {
@@ -162,8 +239,14 @@ function decodeHistory(
     for (const turn of page.data.toReversed()) {
         const outcome = turnOutcome(turn.status);
         const activities: NativeMessageActivity[] = [];
+        let assignedActivityCount = 0;
         let sequence = 0;
         let assistantMessageIndex: number | null = null;
+        const activitySlice = (): readonly NativeMessageActivity[] => {
+            const assigned = activities.slice(assignedActivityCount).slice(-100);
+            assignedActivityCount = activities.length;
+            return assigned;
+        };
         for (const item of turn.items) {
             const { type } = itemTypeSchema.parse(item);
             let message: NativeHistoryMessage;
@@ -204,7 +287,7 @@ function decodeHistory(
                     }
                     continue;
                 }
-                message = { activities: activities.slice(-100), content: [], role: "assistant", text: agent.text };
+                message = { activities: activitySlice(), content: [], role: "assistant", text: agent.text };
             } else if (type === "reasoning" && options.detail === "rich") {
                 const reasoning = reasoningSchema.parse(item);
                 const output = (reasoning.summary.length > 0 ? reasoning.summary : reasoning.content).join("\n\n");
@@ -245,16 +328,16 @@ function decodeHistory(
             } else {
                 continue;
             }
-            const text = message.text.slice(-SESSION_HISTORY_CHARACTER_LIMIT);
-            if (text.length === 0 && (message.images?.length ?? 0) === 0) {
+            const fitted = fitHistoryMessage(message);
+            if (fitted.message.text.length === 0 && (fitted.message.images?.length ?? 0) === 0) {
                 continue;
             }
-            truncated ||= text.length < message.text.length;
-            messages.push({ ...message, text });
+            truncated ||= fitted.truncated;
+            messages.push(fitted.message);
             if (message.role === "assistant") {
                 assistantMessageIndex = messages.length - 1;
             }
-            characters += messageSize({ ...message, text });
+            characters += messageSize(fitted.message);
         }
         if (options.detail === "rich" && turn.error != null) {
             activities.push(
@@ -269,6 +352,17 @@ function decodeHistory(
                 }),
             );
         }
+        if (options.detail === "rich" && activities.length > assignedActivityCount) {
+            const message: NativeHistoryMessage = {
+                activities: activitySlice(),
+                content: [],
+                role: "assistant",
+                text: "",
+            };
+            messages.push(message);
+            assistantMessageIndex = messages.length - 1;
+            characters += messageSize(message);
+        }
         if (assistantMessageIndex !== null) {
             const assistant = messages[assistantMessageIndex];
             if (assistant?.role === "assistant") {
@@ -276,10 +370,11 @@ function decodeHistory(
                 const updated: NativeHistoryMessage = {
                     ...assistant,
                     ...(outcome === undefined ? {} : { outcome }),
-                    activities: activities.slice(-100),
                 };
-                messages[assistantMessageIndex] = updated;
-                characters += messageSize(updated);
+                const fitted = fitHistoryMessage(updated);
+                truncated ||= fitted.truncated;
+                messages[assistantMessageIndex] = fitted.message;
+                characters += messageSize(fitted.message);
             }
         } else if (activities.length > 0 || outcome !== undefined) {
             const message: NativeHistoryMessage = {
@@ -289,8 +384,10 @@ function decodeHistory(
                 ...(outcome === undefined ? {} : { outcome }),
                 text: "",
             };
-            messages.push(message);
-            characters += messageSize(message);
+            const fitted = fitHistoryMessage(message);
+            truncated ||= fitted.truncated;
+            messages.push(fitted.message);
+            characters += messageSize(fitted.message);
         }
         while (
             messages.length >

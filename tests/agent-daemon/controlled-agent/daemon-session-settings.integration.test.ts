@@ -926,36 +926,33 @@ if (process.argv.includes("--version")) {
                     directoryId: "default",
                     cursor: null,
                     kind: "session.live-history.page.load",
-                    limit: 1,
+                    limit: 50,
                     requestId,
                     sessionId,
                 }),
             );
-            await expect(readSessionLiveHistoryPage(frames, requestId)).resolves.toMatchObject({
-                page: {
-                    messages: expect.arrayContaining([
-                        expect.objectContaining({
-                            activities: expect.arrayContaining([
-                                expect.objectContaining({
-                                    activityType: "reasoning",
-                                    output: "Inspecting the workspace",
-                                }),
-                                expect.objectContaining({ activityType: "tool", title: "cat package.json" }),
-                                expect.objectContaining({
-                                    activityType: "tool",
-                                    output: "Agent could not inspect the optional workspace file",
-                                    status: "failed",
-                                    title: "Agent error",
-                                }),
-                            ]),
-                            role: "assistant",
-                            text: "Echo from ACP: private conversation",
-                        }),
-                    ]),
-                    status: "available",
-                },
-                sessionId,
-            });
+            const history = await readSessionLiveHistoryPage(frames, requestId);
+            expect(history).toMatchObject({ page: { status: "available" }, sessionId });
+            if (history.page.status !== "available") {
+                throw new Error("Expected available native history");
+            }
+            const assistantMessages = history.page.messages.filter((message) => message.role === "assistant");
+            expect(assistantMessages.map((message) => message.text)).toContain("Echo from ACP: private conversation");
+            expect(assistantMessages.flatMap((message) => message.activities)).toEqual(
+                expect.arrayContaining([
+                    expect.objectContaining({
+                        activityType: "reasoning",
+                        output: "Inspecting the workspace",
+                    }),
+                    expect.objectContaining({ activityType: "tool", title: "cat package.json" }),
+                    expect.objectContaining({
+                        activityType: "tool",
+                        output: "Agent could not inspect the optional workspace file",
+                        status: "failed",
+                        title: "Agent error",
+                    }),
+                ]),
+            );
         } finally {
             cancellation.abort();
             await daemon;

@@ -167,32 +167,58 @@ input.on("line", (line) => {
                 });
             } else {
                 if (rich) {
+                    const richToolCount = Reflect.get(message, "richToolCount");
+                    const richToolOutput = Reflect.get(message, "richToolOutput");
+                    const itemsBefore = Reflect.get(message, "itemsBefore");
+                    const scriptedBefore = Array.isArray(itemsBefore) ? itemsBefore : null;
                     turns.at(-1)?.items.push(
-                        {
-                            type: "reasoning",
-                            id: `reasoning-${turns.length.toString()}`,
-                            summary: ["Inspecting the workspace"],
-                            content: [],
-                        },
-                        {
-                            type: "agentMessage",
-                            id: `commentary-${turns.length.toString()}`,
-                            text: "I’ll inspect the saved workspace context.",
-                            phase: "commentary",
-                        },
-                        {
-                            type: "commandExecution",
-                            id: `command-${turns.length.toString()}`,
-                            command: "cat package.json",
-                            cwd: Reflect.get(saved, "cwd"),
-                            status: "completed",
-                            commandActions: [],
-                            aggregatedOutput: '{"name":"fixture"}',
-                            exitCode: 0,
-                        },
+                        ...(scriptedBefore ?? [
+                            {
+                                type: "reasoning",
+                                id: `reasoning-${turns.length.toString()}`,
+                                summary: ["Inspecting the workspace"],
+                                content: [],
+                            },
+                            {
+                                type: "agentMessage",
+                                id: `commentary-${turns.length.toString()}`,
+                                text: "I’ll inspect the saved workspace context.",
+                                phase: "commentary",
+                            },
+                            {
+                                type: "commandExecution",
+                                id: `command-${turns.length.toString()}`,
+                                command: "cat package.json",
+                                cwd: Reflect.get(saved, "cwd"),
+                                status: "completed",
+                                commandActions: [],
+                                aggregatedOutput: '{"name":"fixture"}',
+                                exitCode: 0,
+                            },
+                        ]),
                     );
+                    if (
+                        typeof richToolCount === "number" &&
+                        Number.isInteger(richToolCount) &&
+                        richToolCount > 0 &&
+                        richToolCount <= 100 &&
+                        typeof richToolOutput === "string"
+                    ) {
+                        for (let index = 0; index < richToolCount; index += 1) {
+                            turns.at(-1)?.items.push({
+                                type: "commandExecution",
+                                id: `large-command-${turns.length.toString()}-${index.toString()}`,
+                                command: "generate large output",
+                                cwd: Reflect.get(saved, "cwd"),
+                                status: "completed",
+                                commandActions: [],
+                                aggregatedOutput: richToolOutput,
+                                exitCode: 0,
+                            });
+                        }
+                    }
                     const turn = turns.at(-1);
-                    if (turn !== undefined) {
+                    if (turn !== undefined && scriptedBefore === null) {
                         turn.error = { message: "Agent could not inspect the optional workspace file" };
                     }
                 }
@@ -200,6 +226,10 @@ input.on("line", (line) => {
                 if (turn !== undefined) {
                     turn.status = turn.error === undefined ? "completed" : "failed";
                     turn.items.push({ type: "agentMessage", text, phase: "final_answer" });
+                    const itemsAfter = Reflect.get(message, "itemsAfter");
+                    if (rich && Array.isArray(itemsAfter)) {
+                        turn.items.push(...itemsAfter);
+                    }
                 }
             }
         }
