@@ -77,7 +77,7 @@ const userHistoryMessage = z
         images: z.array(historyImage).max(8).readonly().optional(),
     })
     .readonly();
-const assistantHistoryMessage = z
+export const assistantHistoryMessageSchema = z
     .strictObject({
         activities: z.array(nativeMessageActivitySchema).max(100).readonly().default([]),
         content: z.array(displayContentSchema).max(100).readonly().default([]),
@@ -88,7 +88,7 @@ const assistantHistoryMessage = z
         images: z.array(historyImage).max(8).readonly().optional(),
     })
     .readonly();
-const historyMessage = z.discriminatedUnion("role", [userHistoryMessage, assistantHistoryMessage]);
+const historyMessage = z.discriminatedUnion("role", [userHistoryMessage, assistantHistoryMessageSchema]);
 
 const availableSessionHistoryObjectSchema = z.strictObject({
     status: z.literal("available"),

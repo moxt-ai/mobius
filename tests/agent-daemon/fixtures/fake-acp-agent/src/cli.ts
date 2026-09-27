@@ -1043,7 +1043,7 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                 prompt === "hold after large output"
             ) {
                 if (prompt === "hold after large output") {
-                    for (let index = 0; index < 20; index += 1) {
+                    for (let index = 0; index < 30; index += 1) {
                         await context.client.notify(acp.methods.client.session.update, {
                             sessionId: context.params.sessionId,
                             update: {
@@ -1203,7 +1203,7 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                 });
             }
 
-            if (prompt === "interleave untagged progress") {
+            if (prompt === "interleave untagged progress" || prompt === "interleave progress and hold") {
                 await context.client.notify(acp.methods.client.session.update, {
                     sessionId: context.params.sessionId,
                     update: {
@@ -1584,6 +1584,10 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                         },
                     });
                 }
+            }
+            if (prompt === "interleave progress and hold") {
+                await waitForAbort(cancellation.signal);
+                return { stopReason: "cancelled" };
             }
 
             transcript.push({

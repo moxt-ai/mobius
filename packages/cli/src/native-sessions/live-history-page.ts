@@ -9,6 +9,7 @@ import { AcpExecutionError } from "../acp/agent-runtime-manager.ts";
 type ActiveTurnSnapshot = Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"];
 type AvailableNativeMessagePage = Extract<NativeMessagePage, { readonly status: "available" }>;
 type AvailableNativeSessionHistory = Extract<NativeSessionHistory, { readonly status: "available" }>;
+type ActiveAssistantMessage = NonNullable<ActiveTurnSnapshot>["messages"][number];
 
 interface LiveHistoryCoveredTurnRange {
     readonly assistantEndIndex: number;
@@ -71,6 +72,39 @@ function historyMessageCharacters(message: AvailableNativeSessionHistory["messag
             ? JSON.stringify(message.activities).length + JSON.stringify(message.content).length
             : 0)
     );
+}
+
+function boundedActiveMessages(
+    messages: readonly ActiveAssistantMessage[],
+    messageLimit: number,
+    characterLimit: number,
+): { readonly characters: number; readonly messages: readonly ActiveAssistantMessage[]; readonly truncated: boolean } {
+    const selected: ActiveAssistantMessage[] = [];
+    let remainingCharacters = characterLimit;
+    for (let index = messages.length - 1; index >= 0 && selected.length < messageLimit; index -= 1) {
+        const message = messages[index];
+        if (message === undefined) {
+            break;
+        }
+        const characters = historyMessageCharacters(message);
+        if (characters <= remainingCharacters) {
+            selected.unshift(message);
+            remainingCharacters -= characters;
+            continue;
+        }
+        const structuredCharacters = characters - message.text.length;
+        if (selected.length === 0 && structuredCharacters <= remainingCharacters) {
+            const textCharacters = remainingCharacters - structuredCharacters;
+            selected.unshift({ ...message, text: textCharacters === 0 ? "" : message.text.slice(-textCharacters) });
+            remainingCharacters = 0;
+        }
+        break;
+    }
+    return {
+        characters: characterLimit - remainingCharacters,
+        messages: selected,
+        truncated: selected.length !== messages.length,
+    };
 }
 
 function paginateAcpSessionHistory(
@@ -138,31 +172,19 @@ export function paginateLiveSessionHistory(
         return paginateAcpSessionHistory(history, sessionId, cursor, limit);
     }
 
-    const activeMessageOverhead = 4;
-    const activeStructuredCharacters =
-        JSON.stringify(activeTurn.activities).length + JSON.stringify(activeTurn.content).length;
-    const maximumActiveTextLength = Math.max(
-        0,
-        SESSION_HISTORY_CHARACTER_LIMIT - activeTurn.prompt.length - activeStructuredCharacters - activeMessageOverhead,
-    );
-    const activeText = activeTurn.text.slice(-maximumActiveTextLength);
-    const completeActiveMessages = [
-        { role: "user" as const, text: activeTurn.prompt },
-        {
-            activities: activeTurn.activities,
-            content: activeTurn.content,
-            role: "assistant" as const,
-            text: activeText,
-        },
-    ];
     if (history.status === "unavailable") {
+        const bounded = boundedActiveMessages(
+            activeTurn.messages,
+            Math.max(0, limit - 1),
+            Math.max(0, SESSION_HISTORY_CHARACTER_LIMIT - activeTurn.prompt.length),
+        );
         return {
             coveredCommandIds: [],
             coveredMessageIds: [],
-            messages: completeActiveMessages,
+            messages: [{ role: "user", text: activeTurn.prompt }, ...bounded.messages],
             nextCursor: null,
             status: "available",
-            truncated: activeTurn.truncated || activeText.length !== activeTurn.text.length,
+            truncated: activeTurn.truncated || bounded.truncated,
         };
     }
     // Native turn identity, rather than prompt text, tells us whether the source
@@ -182,18 +204,22 @@ export function paginateLiveSessionHistory(
         };
     }
     const latestNativeMessage = history.messages.at(-1);
-    const activeMessages =
-        activeUserIndex >= 0 || (latestNativeMessage?.role === "user" && latestNativeMessage.text === activeTurn.prompt)
-            ? completeActiveMessages.slice(1)
-            : completeActiveMessages;
+    const includeActivePrompt =
+        activeUserIndex < 0 &&
+        !(latestNativeMessage?.role === "user" && latestNativeMessage.text === activeTurn.prompt);
+    const bounded = boundedActiveMessages(
+        activeTurn.messages,
+        Math.max(0, limit - (includeActivePrompt ? 1 : 0)),
+        Math.max(0, SESSION_HISTORY_CHARACTER_LIMIT - (includeActivePrompt ? activeTurn.prompt.length : 0)),
+    );
+    const activeMessages = [
+        ...(includeActivePrompt ? [{ role: "user" as const, text: activeTurn.prompt }] : []),
+        ...bounded.messages,
+    ];
 
     let historicalMessageCount = 0;
     let remainingCharacters =
-        SESSION_HISTORY_CHARACTER_LIMIT -
-        activeText.length -
-        activeMessageOverhead -
-        activeStructuredCharacters -
-        (activeMessages.length === completeActiveMessages.length ? activeTurn.prompt.length : 0);
+        SESSION_HISTORY_CHARACTER_LIMIT - bounded.characters - (includeActivePrompt ? activeTurn.prompt.length : 0);
     const historicalMessageLimit = Math.max(0, limit - activeMessages.length);
     for (
         let index = history.messages.length - 1;
@@ -226,7 +252,7 @@ export function paginateLiveSessionHistory(
     return {
         ...page,
         messages: [...page.messages, ...activeMessages],
-        truncated: page.truncated || activeTurn.truncated || activeText.length !== activeTurn.text.length,
+        truncated: page.truncated || activeTurn.truncated || bounded.truncated,
     };
 }
 

@@ -327,6 +327,7 @@ export class FakeAgentDaemon implements AsyncDisposable {
                 content: [],
                 epoch: event.epoch,
                 interaction: null,
+                messages: [],
                 prompt: event.prompt,
                 sequence: 0,
                 state: "running",
@@ -338,7 +339,15 @@ export class FakeAgentDaemon implements AsyncDisposable {
         if (current !== undefined && "commandId" in event && current.commandId === event.commandId) {
             let next = current;
             if (event.kind === "agent.message.delta") {
-                next = { ...current, text: current.text + event.text };
+                const latest = current.messages.at(-1);
+                const messages =
+                    latest !== undefined && latest.activities.length === 0 && latest.content.length === 0
+                        ? [...current.messages.slice(0, -1), { ...latest, text: `${latest.text}${event.text}` }]
+                        : [
+                              ...current.messages,
+                              { activities: [], content: [], role: "assistant" as const, text: event.text },
+                          ];
+                next = { ...current, messages, text: current.text + event.text };
             } else if (event.kind === "agent.activity") {
                 const {
                     activityId,
@@ -353,48 +362,89 @@ export class FakeAgentDaemon implements AsyncDisposable {
                     title,
                     toolKind,
                 } = event;
+                const activity = {
+                    activityId,
+                    activityType,
+                    content,
+                    input,
+                    locations,
+                    name,
+                    output,
+                    sequence,
+                    status,
+                    title,
+                    toolKind,
+                };
+                const messageIndex = current.messages.findIndex((message) =>
+                    message.activities.some((item) => item.activityId === activityId),
+                );
                 next = {
                     ...current,
-                    activities: [
-                        ...current.activities.filter((item) => item.activityId !== activityId),
-                        {
-                            activityId,
-                            activityType,
-                            content,
-                            input,
-                            locations,
-                            name,
-                            output,
-                            sequence,
-                            status,
-                            title,
-                            toolKind,
-                        },
-                    ],
+                    activities: [...current.activities.filter((item) => item.activityId !== activityId), activity],
+                    messages:
+                        messageIndex < 0
+                            ? [
+                                  ...current.messages,
+                                  { activities: [activity], content: [], role: "assistant" as const, text: "" },
+                              ]
+                            : current.messages.map((message, index) =>
+                                  index === messageIndex ? { ...message, activities: [activity] } : message,
+                              ),
                 };
             } else if (event.kind === "agent.activity.narration") {
                 const previous = current.activities.find((item) => item.activityId === event.activityId);
+                const activity = {
+                    activityId: event.activityId,
+                    activityType: event.activityType,
+                    content: previous?.content ?? [],
+                    input: previous?.input ?? "",
+                    locations: previous?.locations ?? [],
+                    name: previous?.name ?? "",
+                    output: (previous?.output ?? "") + event.text,
+                    sequence: event.sequence,
+                    status: "running",
+                    title: previous?.title ?? "Reasoning",
+                    toolKind: previous?.toolKind ?? "",
+                };
+                const messageIndex = current.messages.findIndex((message) =>
+                    message.activities.some((item) => item.activityId === event.activityId),
+                );
                 next = {
                     ...current,
                     activities: [
                         ...current.activities.filter((item) => item.activityId !== event.activityId),
-                        {
-                            activityId: event.activityId,
-                            activityType: event.activityType,
-                            content: previous?.content ?? [],
-                            input: previous?.input ?? "",
-                            locations: previous?.locations ?? [],
-                            name: previous?.name ?? "",
-                            output: (previous?.output ?? "") + event.text,
-                            sequence: event.sequence,
-                            status: "running",
-                            title: previous?.title ?? "Reasoning",
-                            toolKind: previous?.toolKind ?? "",
-                        },
+                        activity,
                     ],
+                    messages:
+                        messageIndex < 0
+                            ? [
+                                  ...current.messages,
+                                  { activities: [activity], content: [], role: "assistant" as const, text: "" },
+                              ]
+                            : current.messages.map((message, index) =>
+                                  index === messageIndex ? { ...message, activities: [activity] } : message,
+                              ),
                 };
             } else if (event.kind === "agent.content") {
-                next = { ...current, content: [...current.content, event.content] };
+                const latest = current.messages.at(-1);
+                next = {
+                    ...current,
+                    content: [...current.content, event.content],
+                    messages:
+                        latest === undefined
+                            ? [
+                                  {
+                                      activities: [],
+                                      content: [event.content],
+                                      role: "assistant",
+                                      text: "",
+                                  },
+                              ]
+                            : [
+                                  ...current.messages.slice(0, -1),
+                                  { ...latest, content: [...latest.content, event.content] },
+                              ],
+                };
             }
             if (next !== current) {
                 next = { ...next, sequence: current.sequence + 1 };
@@ -441,6 +491,10 @@ export interface FakeAgentDaemonBehavior {
     }[];
     readonly afterSessionStarted?: (command: SessionPromptCommand, signal: AbortSignal) => Promise<void>;
     readonly afterFirstDelta?: (command: SessionPromptCommand, signal: AbortSignal) => Promise<void>;
+    readonly activityAfterFirstDelta?: (
+        command: SessionPromptCommand,
+        turn: number,
+    ) => ActiveTurn["activities"][number] | null;
     readonly afterLastDelta?: (command: SessionPromptCommand, signal: AbortSignal) => Promise<void>;
     readonly afterFirstNarration?: (command: SessionPromptCommand, signal: AbortSignal) => Promise<void>;
     readonly afterLastNarration?: (command: SessionPromptCommand, signal: AbortSignal) => Promise<void>;
@@ -1220,6 +1274,27 @@ async function processHappyPathCommand(
             }),
             signal,
         );
+        if (index === 0) {
+            const activity = behavior.activityAfterFirstDelta?.(command, turn) ?? null;
+            if (activity !== null) {
+                await daemon.sendSessionEvent(
+                    command.sessionId,
+                    encodeAgentActivityEvent({
+                        ...activity,
+                        commandId: command.commandId,
+                        detail: {
+                            content: activity.content,
+                            input: activity.input,
+                            kind: "recorded",
+                            output: activity.output,
+                        },
+                        kind: "agent.activity",
+                        sessionId: command.sessionId,
+                    }),
+                    signal,
+                );
+            }
+        }
         if (index === 0 && parts.length > 1) {
             await behavior.afterFirstDelta?.(command, signal);
         }
@@ -1251,6 +1326,7 @@ async function processHappyPathCommand(
             content: [],
             epoch: next.commandId,
             interaction: null,
+            messages: [],
             prompt: next.prompt,
             sequence: 0,
             state: "running",

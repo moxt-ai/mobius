@@ -7,11 +7,14 @@ import {
     type AgentDisplayContent,
     type AgentMessageDeltaEvent,
     decodeIdentifier,
+    type NativeHistoryMessage,
     type NativeMessageActivity,
     type NativeSessionResult,
     type RecordedSessionEvent,
     SESSION_ELICITATION_REQUESTED_KIND,
     SESSION_ELICITATION_RESOLVED_KIND,
+    SESSION_HISTORY_CHARACTER_LIMIT,
+    SESSION_HISTORY_MESSAGE_LIMIT,
     SESSION_PERMISSION_REQUESTED_KIND,
     SESSION_PERMISSION_RESOLVED_KIND,
     type SessionCancelCommand,
@@ -21,6 +24,7 @@ import {
 } from "@moxt-ai/mobius-protocol";
 
 type ActiveTurnSnapshot = Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"];
+type ActiveAssistantMessage = Extract<NativeHistoryMessage, { readonly role: "assistant" }>;
 type ActiveTurnEventInput =
     | {
           readonly kind: typeof AGENT_MESSAGE_DELTA_KIND;
@@ -28,6 +32,15 @@ type ActiveTurnEventInput =
           readonly text: string;
       }
     | Exclude<RecordedSessionEvent, AgentMessageDeltaEvent>;
+
+type ActiveTimelineEntry =
+    | {
+          readonly kind: "message";
+          readonly messageId: string;
+          readonly text: string;
+          readonly content: ReadonlyMap<string, AgentDisplayContent>;
+      }
+    | { readonly kind: "activity"; readonly activityId: string };
 
 type TurnDispatchState =
     | { readonly kind: "pending" }
@@ -45,6 +58,7 @@ export class ActiveDaemonTurn {
     #text = "";
     readonly #activities = new Map<string, NativeMessageActivity>();
     readonly #content = new Map<string, AgentDisplayContent>();
+    #timeline: readonly ActiveTimelineEntry[] = [];
     #sequence = 0;
     #interaction: Extract<
         RecordedSessionEvent,
@@ -106,6 +120,7 @@ export class ActiveDaemonTurn {
     readonly recordEvent = (event: ActiveTurnEventInput): RecordedSessionEvent => {
         if (event.kind === AGENT_MESSAGE_DELTA_KIND) {
             this.#text += event.text;
+            this.appendMessageText(event.messageId, event.text);
             return this.updated();
         }
         if (
@@ -115,6 +130,9 @@ export class ActiveDaemonTurn {
             return event;
         }
         if (event.kind === AGENT_ACTIVITY_KIND) {
+            if (!this.#activities.has(event.activityId)) {
+                this.#timeline = [...this.#timeline, { activityId: event.activityId, kind: "activity" }];
+            }
             this.#activities.set(event.activityId, {
                 activityId: event.activityId,
                 activityType: event.activityType,
@@ -130,6 +148,9 @@ export class ActiveDaemonTurn {
             });
         } else if (event.kind === AGENT_ACTIVITY_NARRATION_KIND) {
             const previous = this.#activities.get(event.activityId);
+            if (previous === undefined) {
+                this.#timeline = [...this.#timeline, { activityId: event.activityId, kind: "activity" }];
+            }
             this.#activities.set(event.activityId, {
                 activityId: event.activityId,
                 activityType: event.activityType,
@@ -145,6 +166,26 @@ export class ActiveDaemonTurn {
             });
         } else if (event.kind === AGENT_CONTENT_KIND) {
             this.#content.set(event.contentId, event.content);
+            const target = this.#timeline.findLastIndex(
+                (entry) => entry.kind === "message" && entry.messageId === event.messageId,
+            );
+            if (target < 0) {
+                this.#timeline = [
+                    ...this.#timeline,
+                    {
+                        content: new Map([[event.contentId, event.content]]),
+                        kind: "message",
+                        messageId: event.messageId,
+                        text: "",
+                    },
+                ];
+            } else {
+                this.#timeline = this.#timeline.map((entry, index) =>
+                    index === target && entry.kind === "message"
+                        ? { ...entry, content: new Map([...entry.content, [event.contentId, event.content]]) }
+                        : entry,
+                );
+            }
         } else if (
             event.kind === SESSION_PERMISSION_REQUESTED_KIND ||
             event.kind === SESSION_ELICITATION_REQUESTED_KIND
@@ -166,6 +207,51 @@ export class ActiveDaemonTurn {
         return event;
     };
 
+    private appendMessageText(messageId: string, text: string): void {
+        let remaining = text;
+        while (remaining.length > 0) {
+            const latest = this.#timeline.at(-1);
+            if (latest?.kind === "message" && latest.messageId === messageId) {
+                const available = SESSION_HISTORY_CHARACTER_LIMIT - latest.text.length;
+                if (available > 0) {
+                    this.#timeline = [
+                        ...this.#timeline.slice(0, -1),
+                        { ...latest, text: `${latest.text}${remaining.slice(0, available)}` },
+                    ];
+                    remaining = remaining.slice(available);
+                    continue;
+                }
+            }
+            this.#timeline = [
+                ...this.#timeline,
+                {
+                    content: new Map(),
+                    kind: "message",
+                    messageId,
+                    text: remaining.slice(0, SESSION_HISTORY_CHARACTER_LIMIT),
+                },
+            ];
+            remaining = remaining.slice(SESSION_HISTORY_CHARACTER_LIMIT);
+        }
+    }
+
+    private timelineMessages(): readonly ActiveAssistantMessage[] {
+        return this.#timeline.flatMap((entry): readonly ActiveAssistantMessage[] => {
+            if (entry.kind === "message") {
+                return [
+                    {
+                        activities: [],
+                        content: [...entry.content.values()],
+                        role: "assistant",
+                        text: entry.text,
+                    },
+                ];
+            }
+            const activity = this.#activities.get(entry.activityId);
+            return activity === undefined ? [] : [{ activities: [activity], content: [], role: "assistant", text: "" }];
+        });
+    }
+
     private readonly updated = (): RecordedSessionEvent => {
         this.#sequence += 1;
         const turn = this.snapshot();
@@ -175,21 +261,26 @@ export class ActiveDaemonTurn {
         return { kind: "session.turn.updated", sessionId: this.command.sessionId, turn };
     };
 
-    readonly snapshot = (): ActiveTurnSnapshot =>
-        this.#dispatch.kind === "running"
-            ? {
-                  activities: [...this.#activities.values()].sort((left, right) => left.sequence - right.sequence),
-                  commandId: decodeIdentifier(this.command.commandId),
-                  content: [...this.#content.values()],
-                  prompt: this.command.prompt,
-                  text: this.#text,
-                  truncated: false,
-                  epoch: this.#epoch,
-                  interaction: this.#interaction,
-                  sequence: this.#sequence,
-                  state: "running",
-              }
-            : null;
+    readonly snapshot = (): ActiveTurnSnapshot => {
+        if (this.#dispatch.kind !== "running") {
+            return null;
+        }
+        const completeMessages = this.timelineMessages();
+        const messages = completeMessages.slice(-SESSION_HISTORY_MESSAGE_LIMIT);
+        return {
+            activities: [...this.#activities.values()].sort((left, right) => left.sequence - right.sequence),
+            commandId: decodeIdentifier(this.command.commandId),
+            content: [...this.#content.values()],
+            prompt: this.command.prompt,
+            text: this.#text,
+            truncated: messages.length !== completeMessages.length,
+            epoch: this.#epoch,
+            interaction: this.#interaction,
+            messages,
+            sequence: this.#sequence,
+            state: "running",
+        };
+    };
 
     readonly matches = (cancellation: SessionCancelCommand): boolean =>
         cancellation.commandId === this.command.commandId && cancellation.sessionId === this.command.sessionId;
