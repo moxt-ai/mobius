@@ -118,9 +118,11 @@ its next-turn parameters are consumed by the execution owner.
 ## Current turn snapshots
 
 Agent text and narration increments stay inside the daemon. `ActiveDaemonTurn`
-accumulates them in memory and emits `session.turn.updated` with the complete text,
-activities, content, epoch, and increasing sequence. Existing coalescers bound the
-publication frequency. Body text is not clipped in the active turn's memory.
+accumulates them in memory and emits `session.turn.updated` with the ordered assistant
+messages alongside the aggregate text, activities, content, epoch, and increasing
+sequence. Existing coalescers bound the publication frequency. A new activity keeps
+its first timeline position while later status updates replace its value. Body text
+is not clipped in the active turn's memory.
 Activity sequence is display order; turn sequence is the content snapshot version.
 
 The `active-turn` query returns the same content snapshot. A subscriber opens the

@@ -348,6 +348,7 @@ describe("browser relay connection", () => {
                 content: [],
                 epoch: "epoch-1",
                 interaction: null,
+                messages: [{ activities: [], content: [], role: "assistant" as const, text: "Hello" }],
                 prompt: prompt.prompt,
                 sequence: 1,
                 state: "running" as const,
@@ -368,7 +369,15 @@ describe("browser relay connection", () => {
                 }),
             );
             await expect(deltas.next()).resolves.toEqual(new ObservedDelta("Hello", "1"));
-            for (const turn of [snapshot, { ...snapshot, sequence: 2, text: "Hello world" }]) {
+            for (const turn of [
+                snapshot,
+                {
+                    ...snapshot,
+                    messages: [{ activities: [], content: [], role: "assistant" as const, text: "Hello world" }],
+                    sequence: 2,
+                    text: "Hello world",
+                },
+            ]) {
                 writeServerTextFrame(
                     socket,
                     encodeCommittedSessionEvent({

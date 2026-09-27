@@ -9,7 +9,11 @@ import {
     sessionReadyEventSchema,
 } from "./control-messages.ts";
 import { identifierStringSchema as identifier } from "./identifier.ts";
-import { sessionHistorySchema } from "./session-history.ts";
+import {
+    assistantHistoryMessageSchema,
+    SESSION_HISTORY_MESSAGE_LIMIT,
+    sessionHistorySchema,
+} from "./session-history.ts";
 
 export const NATIVE_SESSION_REQUEST_KIND = "native.session.request";
 export const NATIVE_SESSION_RESULT_KIND = "native.session.result";
@@ -47,6 +51,7 @@ export const activeTurnSnapshotSchema = z
         interaction: z
             .discriminatedUnion("kind", [sessionPermissionRequestedEventSchema, sessionElicitationRequestedEventSchema])
             .nullable(),
+        messages: z.array(assistantHistoryMessageSchema).max(SESSION_HISTORY_MESSAGE_LIMIT).readonly(),
         sequence: z.number().int().nonnegative(),
         state: z.literal("running"),
     })

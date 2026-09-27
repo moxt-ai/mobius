@@ -30,6 +30,7 @@ import {
     SESSION_COMPLETED_KIND,
     SESSION_EVENT_KIND,
     SESSION_FAILED_KIND,
+    SESSION_HISTORY_CHARACTER_LIMIT,
     SESSION_LIVE_HISTORY_LOADED_KIND,
     SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
     SESSION_PROMPT_DISPOSITION_KIND,
@@ -131,7 +132,207 @@ class ClientFrames {
     };
 }
 
+async function startControlledDaemon(): Promise<{
+    readonly agent: LocalAgentDefinition;
+    readonly close: () => Promise<void>;
+    readonly config: ReturnType<typeof createDaemonConfig>;
+    readonly frames: ClientFrames;
+    readonly socket: Duplex;
+}> {
+    const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-timeline-"));
+    const workspace = join(stateDirectory, "workspace");
+    const nativeStateDirectory = join(stateDirectory, "native");
+    await Promise.all([mkdir(workspace), mkdir(nativeStateDirectory)]);
+    const socketReady = Promise.withResolvers<Duplex>();
+    const relaySockets = new Set<Duplex>();
+    const relay = createServer((_request, response) => {
+        response.writeHead(404);
+        response.end();
+    });
+    relay.on("connection", (socket) => {
+        relaySockets.add(socket);
+        socket.once("close", () => relaySockets.delete(socket));
+        socket.on("error", () => undefined);
+    });
+    relay.on("upgrade", (request, socket) => {
+        const key = request.headers["sec-websocket-key"];
+        if (typeof key !== "string") {
+            socket.destroy();
+            return;
+        }
+        const accept = createHash("sha1").update(`${key}${websocketGuid}`).digest("base64");
+        socket.write(
+            "HTTP/1.1 101 Switching Protocols\r\n" +
+                "Connection: Upgrade\r\n" +
+                "Upgrade: websocket\r\n" +
+                `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+        );
+        socketReady.resolve(socket);
+    });
+    await listen(relay);
+    const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
+    relayUrl.searchParams.set("token", "d".repeat(43));
+    const agent = new LocalAgentDefinition(
+        "opencode",
+        "OpenCode",
+        process.execPath,
+        [fakeAgentPath, "--agent-name", "OpenCode"],
+        { MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory },
+    );
+    const config = createDaemonConfig(
+        { channelId: "channel_alpha", defaultWorkspace: workspace, relayUrl },
+        [agent],
+        [],
+        new DaemonLocalContext(stateDirectory),
+    );
+    const cancellation = new AbortController();
+    const audit = new AuditStore();
+    const daemon = runDaemon(config, audit, cancellation.signal);
+    const socket = await socketReady.promise;
+    return {
+        agent,
+        config,
+        frames: new ClientFrames(socket),
+        socket,
+        close: async () => {
+            cancellation.abort();
+            await daemon;
+            audit.close();
+            for (const relaySocket of relaySockets) {
+                relaySocket.destroy();
+            }
+            await new Promise<void>((resolve) => relay.close(() => resolve()));
+            await rm(stateDirectory, { force: true, recursive: true });
+        },
+    };
+}
+
 describe("daemon assistant text coalescing", () => {
+    it("Given Agent text surrounds a tool call, When live history is reopened, Then the timeline keeps the true event order", async () => {
+        const fixture = await startControlledDaemon();
+        try {
+            const prompt: SessionPromptCommand = {
+                additionalDirectoryIds: [],
+                agentId: fixture.agent.id,
+                bindingId: fixture.config.bindingId,
+                commandId: "ordered_timeline_turn",
+                directoryId: "default",
+                disposition: SessionPromptDisposition.Reject,
+                images: [],
+                kind: "session.prompt",
+                prompt: "interleave progress and hold",
+                resources: [],
+                sessionId: "ordered_timeline_session",
+                targetCommandId: "",
+            };
+            sendText(fixture.socket, encodeSessionPromptCommand(prompt));
+            let latest: ActiveTurnSnapshot;
+            for (;;) {
+                const frame = await fixture.frames.next();
+                if (decodeMessageKind(frame) !== SESSION_EVENT_KIND) {
+                    continue;
+                }
+                const payload = decodeSessionEventEnvelope(frame).payload;
+                const kind = decodeMessageKind(payload);
+                if (kind === SESSION_TURN_UPDATED_KIND) {
+                    const turn = decodeSessionTurnUpdatedEvent(payload).turn;
+                    const firstMessageIndex = turn.messages.findIndex(
+                        (message) => message.text === "Checking the workspace",
+                    );
+                    const toolIndex = turn.messages.findIndex((message) =>
+                        message.activities.some((activity) => activity.activityType === "tool"),
+                    );
+                    const finalMessageIndex = turn.messages.findIndex((message) =>
+                        message.text.includes("OpenCode turn 1: interleave progress and hold"),
+                    );
+                    if (firstMessageIndex >= 0 && toolIndex > firstMessageIndex && finalMessageIndex > toolIndex) {
+                        latest = turn;
+                        break;
+                    }
+                } else if (kind === SESSION_FAILED_KIND) {
+                    throw new Error(payload);
+                }
+            }
+            sendText(
+                fixture.socket,
+                encodeNativeSessionRequest({
+                    action: "active-turn",
+                    additionalDirectoryIds: [],
+                    agentId: fixture.agent.id,
+                    bindingId: fixture.config.bindingId,
+                    directoryId: "default",
+                    kind: "native.session.request",
+                    requestId: "reopened_active_turn",
+                    sessionId: prompt.sessionId,
+                    targetSessionId: prompt.sessionId,
+                }),
+            );
+            let result: string;
+            do {
+                result = await fixture.frames.next();
+            } while (decodeMessageKind(result) !== NATIVE_SESSION_RESULT_KIND);
+            const reopened = decodeNativeSessionResult(result);
+            if (reopened.action !== "active-turn" || reopened.turn === null) {
+                throw new Error("Expected the reopened active Turn");
+            }
+            expect(reopened.turn.messages).toEqual(latest.messages);
+
+            sendText(
+                fixture.socket,
+                encodeSessionLiveHistoryPageLoad({
+                    additionalDirectoryIds: [],
+                    agentId: fixture.agent.id,
+                    bindingId: fixture.config.bindingId,
+                    cursor: null,
+                    directoryId: "default",
+                    kind: "session.live-history.page.load",
+                    limit: 50,
+                    requestId: "reopened_ordered_history",
+                    sessionId: prompt.sessionId,
+                }),
+            );
+            do {
+                result = await fixture.frames.next();
+            } while (decodeMessageKind(result) !== SESSION_LIVE_HISTORY_PAGE_LOADED_KIND);
+            const page = decodeSessionLiveHistoryPageLoaded(result).page;
+            expect(page).toMatchObject({ status: "available" });
+            if (page.status !== "available") {
+                throw new Error("Expected live history");
+            }
+            expect(page.messages.slice(1)).toEqual(latest.messages);
+
+            sendText(
+                fixture.socket,
+                encodeSessionCancelCommand({
+                    commandId: prompt.commandId,
+                    kind: SESSION_CANCEL_KIND,
+                    sessionId: prompt.sessionId,
+                }),
+            );
+            for (;;) {
+                const frame = await fixture.frames.next();
+                if (decodeMessageKind(frame) !== SESSION_EVENT_KIND) {
+                    continue;
+                }
+                const payload = decodeSessionEventEnvelope(frame).payload;
+                if (
+                    decodeMessageKind(payload) === SESSION_COMPLETED_KIND &&
+                    decodeSessionCompletedEvent(payload).commandId === prompt.commandId
+                ) {
+                    break;
+                }
+                if (
+                    decodeMessageKind(payload) === SESSION_FAILED_KIND &&
+                    decodeSessionFailedEvent(payload).commandId === prompt.commandId
+                ) {
+                    throw new Error(payload);
+                }
+            }
+        } finally {
+            await fixture.close();
+        }
+    }, 30_000);
+
     it("Given a token-level Agent emits a burst of message chunks, When the turn completes, Then the final snapshot preserves every token before successful completion", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-text-coalescing-"));
         const workspace = join(stateDirectory, "workspace");
@@ -328,7 +529,7 @@ describe("daemon assistant text coalescing", () => {
             let output = "";
             let firstDelta: ActiveTurnSnapshot | null = null;
             let lastSequence = 0;
-            while (output.length < 200_000) {
+            while (output.length < 300_000) {
                 const message = await next();
                 if (decodeMessageKind(message) === SESSION_TURN_UPDATED_KIND) {
                     const delta = decodeSessionTurnUpdatedEvent(message).turn;
@@ -338,7 +539,7 @@ describe("daemon assistant text coalescing", () => {
                     output = delta.text;
                 }
             }
-            expect(output).toBe("x".repeat(200_000));
+            expect(output).toBe("x".repeat(300_000));
             if (firstDelta === null) {
                 throw new Error("Expected a live Agent text delta");
             }
@@ -390,13 +591,28 @@ describe("daemon assistant text coalescing", () => {
             do {
                 result = await next();
             } while (decodeMessageKind(result) !== SESSION_LIVE_HISTORY_PAGE_LOADED_KIND);
-            expect(decodeSessionLiveHistoryPageLoaded(result).page).toMatchObject({
-                status: "available",
-                messages: [
-                    { role: "user", text: prompt.prompt },
-                    { role: "assistant", text: output },
-                ],
-            });
+            const activePage = decodeSessionLiveHistoryPageLoaded(result).page;
+            expect(activePage).toMatchObject({ status: "available" });
+            if (activePage.status !== "available") {
+                throw new Error("Expected active native history");
+            }
+            expect(activePage.messages[0]).toMatchObject({ role: "user", text: prompt.prompt });
+            const activeText = activePage.messages
+                .flatMap((message) => (message.role === "assistant" ? [message.text] : []))
+                .join("");
+            expect(output.endsWith(activeText)).toBe(true);
+            expect(activeText.length).toBeLessThan(output.length);
+            expect(
+                activePage.messages.reduce(
+                    (characters, message) =>
+                        characters +
+                        message.text.length +
+                        (message.role === "assistant"
+                            ? JSON.stringify(message.activities).length + JSON.stringify(message.content).length
+                            : 0),
+                    0,
+                ),
+            ).toBeLessThanOrEqual(SESSION_HISTORY_CHARACTER_LIMIT);
             sendText(socket, encodeSessionPromptCommand({ ...prompt, commandId: "second_burst_turn" }));
             let rejected: string;
             for (;;) {
@@ -631,31 +847,36 @@ describe("daemon assistant text coalescing", () => {
             do {
                 result = await next();
             } while (decodeMessageKind(result) !== SESSION_LIVE_HISTORY_LOADED_KIND);
-            expect(decodeSessionLiveHistoryLoaded(result).history).toMatchObject({
-                status: "available",
-                messages: [
-                    { role: "user", text: prompt.prompt },
-                    {
-                        activities: expect.arrayContaining([
-                            expect.objectContaining({
-                                activityId: activeActivity.activityId,
-                                locations: activeActivity.locations,
-                            }),
-                            expect.objectContaining({
-                                activityType: "reasoning",
-                                output: activeNarration.output,
-                            }),
-                            expect.objectContaining({
-                                activityId: activeTool.activityId,
-                                locations: activeTool.locations,
-                                status: "completed",
-                            }),
-                        ]),
-                        content: [activeContent],
-                        role: "assistant",
-                    },
-                ],
-            });
+            const activeHistory = decodeSessionLiveHistoryLoaded(result).history;
+            expect(activeHistory).toMatchObject({ status: "available" });
+            if (activeHistory.status !== "available") {
+                throw new Error("Expected active Session history");
+            }
+            expect(activeHistory.messages[0]).toMatchObject({ role: "user", text: prompt.prompt });
+            const historyActivities = activeHistory.messages.flatMap((message) =>
+                message.role === "assistant" ? message.activities : [],
+            );
+            const historyContent = activeHistory.messages.flatMap((message) =>
+                message.role === "assistant" ? message.content : [],
+            );
+            expect(historyActivities).toEqual(
+                expect.arrayContaining([
+                    expect.objectContaining({
+                        activityId: activeActivity.activityId,
+                        locations: activeActivity.locations,
+                    }),
+                    expect.objectContaining({
+                        activityType: "reasoning",
+                        output: activeNarration.output,
+                    }),
+                    expect.objectContaining({
+                        activityId: activeTool.activityId,
+                        locations: activeTool.locations,
+                        status: "completed",
+                    }),
+                ]),
+            );
+            expect(historyContent).toContainEqual(activeContent);
             sendText(
                 socket,
                 encodeSessionLiveHistoryPageLoad({
@@ -673,31 +894,18 @@ describe("daemon assistant text coalescing", () => {
             do {
                 result = await next();
             } while (decodeMessageKind(result) !== SESSION_LIVE_HISTORY_PAGE_LOADED_KIND);
-            expect(decodeSessionLiveHistoryPageLoaded(result).page).toMatchObject({
-                status: "available",
-                messages: [
-                    { role: "user", text: prompt.prompt },
-                    {
-                        activities: expect.arrayContaining([
-                            expect.objectContaining({
-                                activityId: activeActivity.activityId,
-                                locations: activeActivity.locations,
-                            }),
-                            expect.objectContaining({
-                                activityType: "reasoning",
-                                output: activeNarration.output,
-                            }),
-                            expect.objectContaining({
-                                activityId: activeTool.activityId,
-                                locations: activeTool.locations,
-                                status: "completed",
-                            }),
-                        ]),
-                        content: [activeContent],
-                        role: "assistant",
-                    },
-                ],
-            });
+            const activePage = decodeSessionLiveHistoryPageLoaded(result).page;
+            expect(activePage).toMatchObject({ status: "available" });
+            if (activePage.status !== "available") {
+                throw new Error("Expected active Session history page");
+            }
+            expect(activePage.messages[0]).toMatchObject({ role: "user", text: prompt.prompt });
+            expect(
+                activePage.messages.flatMap((message) => (message.role === "assistant" ? message.activities : [])),
+            ).toEqual(historyActivities);
+            expect(
+                activePage.messages.flatMap((message) => (message.role === "assistant" ? message.content : [])),
+            ).toEqual(historyContent);
             const cancelledQueuedPrompt: SessionPromptCommand = {
                 ...prompt,
                 commandId: "cancelled_queued_follow_up",

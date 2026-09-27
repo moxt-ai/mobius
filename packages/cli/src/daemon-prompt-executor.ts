@@ -104,6 +104,17 @@ export async function executePrompt({
     recordLiveEvent,
     cancellationRequested,
 }: ExecutePromptOptions): Promise<void> {
+    const text = new CoalescingTextPublisher(
+        timer,
+        (messageId, delta) => {
+            publisher.publish(
+                command.sessionId,
+                recordLiveEvent({ kind: AGENT_MESSAGE_DELTA_KIND, messageId, text: delta }),
+            );
+        },
+        AGENT_TEXT_COALESCING_MILLISECONDS,
+        AGENT_TEXT_MAXIMUM_LENGTH,
+    );
     const narration = new CoalescingNarrationPublisher(
         timer,
         (increment) => {
@@ -122,23 +133,11 @@ export async function executePrompt({
         AGENT_TEXT_MAXIMUM_LENGTH,
     );
     const activities = new CoalescingDaemonActivityPublisher(timer, (activity) => {
-        if (activity.status !== "pending" && activity.status !== "running") {
-            narration.flush();
-        }
+        text.flush();
+        narration.flush();
         const event = daemonActivity(command, activity);
         publisher.publish(command.sessionId, recordLiveEvent(event));
     });
-    const text = new CoalescingTextPublisher(
-        timer,
-        (messageId, delta) => {
-            publisher.publish(
-                command.sessionId,
-                recordLiveEvent({ kind: AGENT_MESSAGE_DELTA_KIND, messageId, text: delta }),
-            );
-        },
-        AGENT_TEXT_COALESCING_MILLISECONDS,
-        AGENT_TEXT_MAXIMUM_LENGTH,
-    );
     try {
         const resolved = await resolveSessionDirectories(
             directories,
@@ -236,10 +235,12 @@ export async function executePrompt({
                 images: attachments.images,
                 onActivity: activities.record,
                 onNarration: (increment) => {
+                    text.flush();
                     narration.record(increment);
                     return Promise.resolve();
                 },
                 onText: (delta, messageId) => {
+                    narration.flush();
                     text.record(messageId, delta);
                     return Promise.resolve();
                 },
