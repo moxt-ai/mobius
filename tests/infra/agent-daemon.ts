@@ -348,7 +348,7 @@ export class FakeAgentDaemon implements AsyncDisposable {
                               {
                                   activities: [],
                                   content: [],
-                                  id: `fake-message-${current.sequence.toString()}`,
+                                  id: `${current.commandId}-message-${current.sequence.toString()}`,
                                   role: "assistant" as const,
                                   text: event.text,
                               },
@@ -396,7 +396,7 @@ export class FakeAgentDaemon implements AsyncDisposable {
                                   {
                                       activities: [activity],
                                       content: [],
-                                      id: `fake-message-${current.messages.length.toString()}`,
+                                      id: `${current.commandId}-message-${current.messages.length.toString()}`,
                                       role: "assistant" as const,
                                       text: "",
                                   },
@@ -440,7 +440,7 @@ export class FakeAgentDaemon implements AsyncDisposable {
                                   {
                                       activities: [activity],
                                       content: [],
-                                      id: `fake-message-${current.messages.length.toString()}`,
+                                      id: `${current.commandId}-message-${current.messages.length.toString()}`,
                                       role: "assistant" as const,
                                       text: "",
                                   },
@@ -463,7 +463,7 @@ export class FakeAgentDaemon implements AsyncDisposable {
                                   {
                                       activities: [],
                                       content: [event.content],
-                                      id: `fake-message-${current.messages.length.toString()}`,
+                                      id: `${current.commandId}-message-${current.messages.length.toString()}`,
                                       role: "assistant",
                                       text: "",
                                   },
