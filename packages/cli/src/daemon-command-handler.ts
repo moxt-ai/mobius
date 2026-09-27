@@ -349,6 +349,7 @@ export function createDaemonCommandHandler({
                 timer,
                 signal: turn.signal,
                 recordLiveEvent: turn.recordEvent,
+                recordSteeringPrompt: () => activeTurns.recordSteeringPrompt(command),
                 cancellationRequested: turn.cancellationRequested,
             })
                 .catch((error: unknown) => {

@@ -76,6 +76,7 @@ export interface ExecutePromptOptions {
             | { readonly kind: typeof AGENT_MESSAGE_DELTA_KIND; readonly messageId: string; readonly text: string }
             | Exclude<RecordedSessionEvent, { readonly kind: typeof AGENT_MESSAGE_DELTA_KIND }>,
     ) => RecordedSessionEvent;
+    readonly recordSteeringPrompt: () => RecordedSessionEvent | null;
     readonly cancellationRequested: () => boolean;
 }
 
@@ -93,6 +94,7 @@ export async function executePrompt({
     timer,
     signal,
     recordLiveEvent,
+    recordSteeringPrompt,
     cancellationRequested,
 }: ExecutePromptOptions): Promise<void> {
     const events = new CoalescingAgentEventPublisher(timer, (event) => {
@@ -180,6 +182,17 @@ export async function executePrompt({
             sessionId: command.sessionId,
         });
         operations.transitionExecution(command.commandId, "running");
+        if (availability.disposition === SessionPromptDisposition.Steer) {
+            const updated = recordSteeringPrompt();
+            if (updated === null) {
+                throw new AcpExecutionError(
+                    "The steering target is unavailable",
+                    {},
+                    "prompt_queue_target_unavailable",
+                );
+            }
+            publisher.publish(command.sessionId, updated);
+        }
         const stream = activateAttempt();
         publisher.publish(command.sessionId, {
             commandId: command.commandId,

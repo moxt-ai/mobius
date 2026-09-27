@@ -7,7 +7,6 @@ import {
     type AgentDisplayContent,
     type AgentMessageDeltaEvent,
     decodeIdentifier,
-    type NativeHistoryMessage,
     type NativeMessageActivity,
     type NativeSessionResult,
     type RecordedSessionEvent,
@@ -24,7 +23,7 @@ import {
 } from "@moxt-ai/mobius-protocol";
 
 type ActiveTurnSnapshot = Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"];
-type ActiveAssistantMessage = Extract<NativeHistoryMessage, { readonly role: "assistant" }>;
+type ActiveTurnMessage = NonNullable<ActiveTurnSnapshot>["messages"][number];
 type ActiveTurnEventInput =
     | {
           readonly kind: typeof AGENT_MESSAGE_DELTA_KIND;
@@ -36,11 +35,18 @@ type ActiveTurnEventInput =
 type ActiveTimelineEntry =
     | {
           readonly kind: "message";
-          readonly messageId: string;
+          readonly id: string;
+          readonly sourceMessageId: string;
           readonly text: string;
           readonly content: ReadonlyMap<string, AgentDisplayContent>;
       }
-    | { readonly kind: "activity"; readonly activityId: string };
+    | { readonly kind: "activity"; readonly activityId: string; readonly id: string }
+    | {
+          readonly kind: "user";
+          readonly id: string;
+          readonly images: SessionPromptCommand["images"];
+          readonly text: string;
+      };
 
 type TurnDispatchState =
     | { readonly kind: "pending" }
@@ -58,7 +64,7 @@ export class ActiveDaemonTurn {
     #text = "";
     readonly #activities = new Map<string, NativeMessageActivity>();
     readonly #content = new Map<string, AgentDisplayContent>();
-    #timeline: readonly ActiveTimelineEntry[] = [];
+    #timeline: readonly ActiveTimelineEntry[];
     #sequence = 0;
     #interaction: Extract<
         RecordedSessionEvent,
@@ -71,6 +77,9 @@ export class ActiveDaemonTurn {
         this.command = command;
         this.#controller = new AbortController();
         this.#dispatch = { kind: "pending" };
+        this.#timeline = [
+            { id: decodeIdentifier(command.commandId), images: command.images, kind: "user", text: command.prompt },
+        ];
     }
 
     readonly enqueue = (): void => {
@@ -131,7 +140,10 @@ export class ActiveDaemonTurn {
         }
         if (event.kind === AGENT_ACTIVITY_KIND) {
             if (!this.#activities.has(event.activityId)) {
-                this.#timeline = [...this.#timeline, { activityId: event.activityId, kind: "activity" }];
+                this.#timeline = [
+                    ...this.#timeline,
+                    { activityId: event.activityId, id: decodeIdentifier(randomUUID()), kind: "activity" },
+                ];
             }
             this.#activities.set(event.activityId, {
                 activityId: event.activityId,
@@ -149,7 +161,10 @@ export class ActiveDaemonTurn {
         } else if (event.kind === AGENT_ACTIVITY_NARRATION_KIND) {
             const previous = this.#activities.get(event.activityId);
             if (previous === undefined) {
-                this.#timeline = [...this.#timeline, { activityId: event.activityId, kind: "activity" }];
+                this.#timeline = [
+                    ...this.#timeline,
+                    { activityId: event.activityId, id: decodeIdentifier(randomUUID()), kind: "activity" },
+                ];
             }
             this.#activities.set(event.activityId, {
                 activityId: event.activityId,
@@ -167,15 +182,16 @@ export class ActiveDaemonTurn {
         } else if (event.kind === AGENT_CONTENT_KIND) {
             this.#content.set(event.contentId, event.content);
             const target = this.#timeline.findLastIndex(
-                (entry) => entry.kind === "message" && entry.messageId === event.messageId,
+                (entry) => entry.kind === "message" && entry.sourceMessageId === event.messageId,
             );
             if (target < 0) {
                 this.#timeline = [
                     ...this.#timeline,
                     {
                         content: new Map([[event.contentId, event.content]]),
+                        id: decodeIdentifier(randomUUID()),
                         kind: "message",
-                        messageId: event.messageId,
+                        sourceMessageId: event.messageId,
                         text: "",
                     },
                 ];
@@ -211,7 +227,7 @@ export class ActiveDaemonTurn {
         let remaining = text;
         while (remaining.length > 0) {
             const latest = this.#timeline.at(-1);
-            if (latest?.kind === "message" && latest.messageId === messageId) {
+            if (latest?.kind === "message" && latest.sourceMessageId === messageId) {
                 const available = SESSION_HISTORY_CHARACTER_LIMIT - latest.text.length;
                 if (available > 0) {
                     this.#timeline = [
@@ -226,8 +242,9 @@ export class ActiveDaemonTurn {
                 ...this.#timeline,
                 {
                     content: new Map(),
+                    id: decodeIdentifier(randomUUID()),
                     kind: "message",
-                    messageId,
+                    sourceMessageId: messageId,
                     text: remaining.slice(0, SESSION_HISTORY_CHARACTER_LIMIT),
                 },
             ];
@@ -235,20 +252,41 @@ export class ActiveDaemonTurn {
         }
     }
 
-    private timelineMessages(): readonly ActiveAssistantMessage[] {
-        return this.#timeline.flatMap((entry): readonly ActiveAssistantMessage[] => {
+    readonly recordSteeringPrompt = (command: SessionPromptCommand): RecordedSessionEvent | null => {
+        if (
+            this.#dispatch.kind !== "running" ||
+            command.sessionId !== this.command.sessionId ||
+            command.targetCommandId !== this.command.commandId
+        ) {
+            return null;
+        }
+        this.#timeline = [
+            ...this.#timeline,
+            { id: decodeIdentifier(command.commandId), images: command.images, kind: "user", text: command.prompt },
+        ];
+        return this.updated();
+    };
+
+    private timelineMessages(): readonly ActiveTurnMessage[] {
+        return this.#timeline.flatMap((entry): readonly ActiveTurnMessage[] => {
+            if (entry.kind === "user") {
+                return [{ id: entry.id, images: entry.images, role: "user", text: entry.text }];
+            }
             if (entry.kind === "message") {
                 return [
                     {
                         activities: [],
                         content: [...entry.content.values()],
+                        id: entry.id,
                         role: "assistant",
                         text: entry.text,
                     },
                 ];
             }
             const activity = this.#activities.get(entry.activityId);
-            return activity === undefined ? [] : [{ activities: [activity], content: [], role: "assistant", text: "" }];
+            return activity === undefined
+                ? []
+                : [{ activities: [activity], content: [], id: entry.id, role: "assistant", text: "" }];
         });
     }
 

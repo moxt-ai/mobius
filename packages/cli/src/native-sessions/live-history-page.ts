@@ -1,4 +1,5 @@
 import {
+    type NativeHistoryMessage,
     type NativeMessagePage,
     type NativeSessionHistory,
     type NativeSessionResult,
@@ -9,7 +10,7 @@ import { AcpExecutionError } from "../acp/agent-runtime-manager.ts";
 type ActiveTurnSnapshot = Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"];
 type AvailableNativeMessagePage = Extract<NativeMessagePage, { readonly status: "available" }>;
 type AvailableNativeSessionHistory = Extract<NativeSessionHistory, { readonly status: "available" }>;
-type ActiveAssistantMessage = NonNullable<ActiveTurnSnapshot>["messages"][number];
+type ActiveTurnMessage = NonNullable<ActiveTurnSnapshot>["messages"][number];
 
 interface LiveHistoryCoveredTurnRange {
     readonly assistantEndIndex: number;
@@ -75,11 +76,11 @@ function historyMessageCharacters(message: AvailableNativeSessionHistory["messag
 }
 
 function boundedActiveMessages(
-    messages: readonly ActiveAssistantMessage[],
+    messages: readonly NativeHistoryMessage[],
     messageLimit: number,
     characterLimit: number,
-): { readonly characters: number; readonly messages: readonly ActiveAssistantMessage[]; readonly truncated: boolean } {
-    const selected: ActiveAssistantMessage[] = [];
+): { readonly characters: number; readonly messages: readonly NativeHistoryMessage[]; readonly truncated: boolean } {
+    const selected: NativeHistoryMessage[] = [];
     let remainingCharacters = characterLimit;
     for (let index = messages.length - 1; index >= 0 && selected.length < messageLimit; index -= 1) {
         const message = messages[index];
@@ -105,6 +106,17 @@ function boundedActiveMessages(
         messages: selected,
         truncated: selected.length !== messages.length,
     };
+}
+
+function nativeActiveMessage(message: ActiveTurnMessage): NativeHistoryMessage {
+    return message.role === "user"
+        ? { role: "user", text: message.text }
+        : {
+              activities: message.activities,
+              content: message.content,
+              role: "assistant",
+              text: message.text,
+          };
 }
 
 function paginateAcpSessionHistory(
@@ -174,25 +186,37 @@ export function paginateLiveSessionHistory(
 
     if (history.status === "unavailable") {
         const bounded = boundedActiveMessages(
-            activeTurn.messages,
-            Math.max(0, limit - 1),
-            Math.max(0, SESSION_HISTORY_CHARACTER_LIMIT - activeTurn.prompt.length),
+            activeTurn.messages.map(nativeActiveMessage),
+            limit,
+            SESSION_HISTORY_CHARACTER_LIMIT,
         );
         return {
             coveredCommandIds: [],
             coveredMessageIds: [],
-            messages: [{ role: "user", text: activeTurn.prompt }, ...bounded.messages],
+            messages: bounded.messages,
             nextCursor: null,
             status: "available",
             truncated: activeTurn.truncated || bounded.truncated,
         };
     }
-    // Native turn identity, rather than prompt text, tells us whether the source
-    // already contains this turn. Keep its user message (including attachments),
-    // and replace its partial assistant output with the current memory snapshot.
-    const activeUserIndex = history.coveredCommandIds.includes(activeTurn.commandId)
-        ? history.messages.findLastIndex((message) => message.role === "user")
+    // Native turn identity tells us whether the source contains this turn. The
+    // native format has no message IDs, so its root prompt locates the boundary
+    // before any steering prompts. Keep that root (including attachments), then
+    // replace the rest with the authoritative in-memory timeline.
+    const activeRoot = activeTurn.messages.find(
+        (message) => message.role === "user" && message.id === activeTurn.commandId,
+    );
+    const coveredActiveRoot = history.coveredCommandIds.includes(activeTurn.commandId);
+    const matchingActiveUserIndex = coveredActiveRoot
+        ? history.messages.findLastIndex(
+              (message) => message.role === "user" && message.text === (activeRoot?.text ?? activeTurn.prompt),
+          )
         : -1;
+    const activeUserIndex =
+        matchingActiveUserIndex >= 0
+            ? matchingActiveUserIndex
+            : (liveHistoryCoveredTurnRanges(history).find((range) => range.commandId === activeTurn.commandId)
+                  ?.userIndex ?? -1);
     if (activeUserIndex >= 0) {
         history = {
             ...history,
@@ -204,23 +228,18 @@ export function paginateLiveSessionHistory(
         };
     }
     const latestNativeMessage = history.messages.at(-1);
-    const includeActivePrompt =
-        activeUserIndex < 0 &&
-        !(latestNativeMessage?.role === "user" && latestNativeMessage.text === activeTurn.prompt);
-    const bounded = boundedActiveMessages(
-        activeTurn.messages,
-        Math.max(0, limit - (includeActivePrompt ? 1 : 0)),
-        Math.max(0, SESSION_HISTORY_CHARACTER_LIMIT - (includeActivePrompt ? activeTurn.prompt.length : 0)),
-    );
-    const activeMessages = [
-        ...(includeActivePrompt ? [{ role: "user" as const, text: activeTurn.prompt }] : []),
-        ...bounded.messages,
-    ];
+    const firstActiveMessage = activeTurn.messages[0];
+    const preserveNativeRoot =
+        activeUserIndex >= 0 ||
+        (firstActiveMessage?.role === "user" &&
+            latestNativeMessage?.role === "user" &&
+            latestNativeMessage.text === firstActiveMessage.text);
+    const activeMessages = activeTurn.messages.slice(preserveNativeRoot ? 1 : 0).map(nativeActiveMessage);
+    const bounded = boundedActiveMessages(activeMessages, limit, SESSION_HISTORY_CHARACTER_LIMIT);
 
     let historicalMessageCount = 0;
-    let remainingCharacters =
-        SESSION_HISTORY_CHARACTER_LIMIT - bounded.characters - (includeActivePrompt ? activeTurn.prompt.length : 0);
-    const historicalMessageLimit = Math.max(0, limit - activeMessages.length);
+    let remainingCharacters = SESSION_HISTORY_CHARACTER_LIMIT - bounded.characters;
+    const historicalMessageLimit = Math.max(0, limit - bounded.messages.length);
     for (
         let index = history.messages.length - 1;
         index >= 0 && historicalMessageCount < historicalMessageLimit;
@@ -251,7 +270,7 @@ export function paginateLiveSessionHistory(
             : paginateAcpSessionHistory(history, sessionId, null, historicalMessageCount);
     return {
         ...page,
-        messages: [...page.messages, ...activeMessages],
+        messages: [...page.messages, ...bounded.messages],
         truncated: page.truncated || activeTurn.truncated || bounded.truncated,
     };
 }

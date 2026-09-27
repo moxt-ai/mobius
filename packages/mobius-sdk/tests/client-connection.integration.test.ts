@@ -348,7 +348,10 @@ describe("browser relay connection", () => {
                 content: [],
                 epoch: "epoch-1",
                 interaction: null,
-                messages: [{ activities: [], content: [], role: "assistant" as const, text: "Hello" }],
+                messages: [
+                    { id: prompt.commandId, role: "user" as const, text: prompt.prompt },
+                    { activities: [], content: [], id: "message-1", role: "assistant" as const, text: "Hello" },
+                ],
                 prompt: prompt.prompt,
                 sequence: 1,
                 state: "running" as const,
@@ -373,7 +376,16 @@ describe("browser relay connection", () => {
                 snapshot,
                 {
                     ...snapshot,
-                    messages: [{ activities: [], content: [], role: "assistant" as const, text: "Hello world" }],
+                    messages: [
+                        { id: prompt.commandId, role: "user" as const, text: prompt.prompt },
+                        {
+                            activities: [],
+                            content: [],
+                            id: "message-1",
+                            role: "assistant" as const,
+                            text: "Hello world",
+                        },
+                    ],
                     sequence: 2,
                     text: "Hello world",
                 },

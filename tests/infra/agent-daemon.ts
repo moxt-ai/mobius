@@ -327,7 +327,7 @@ export class FakeAgentDaemon implements AsyncDisposable {
                 content: [],
                 epoch: event.epoch,
                 interaction: null,
-                messages: [],
+                messages: [{ id: event.commandId, role: "user", text: event.prompt }],
                 prompt: event.prompt,
                 sequence: 0,
                 state: "running",
@@ -341,11 +341,17 @@ export class FakeAgentDaemon implements AsyncDisposable {
             if (event.kind === "agent.message.delta") {
                 const latest = current.messages.at(-1);
                 const messages =
-                    latest !== undefined && latest.activities.length === 0 && latest.content.length === 0
+                    latest?.role === "assistant" && latest.activities.length === 0 && latest.content.length === 0
                         ? [...current.messages.slice(0, -1), { ...latest, text: `${latest.text}${event.text}` }]
                         : [
                               ...current.messages,
-                              { activities: [], content: [], role: "assistant" as const, text: event.text },
+                              {
+                                  activities: [],
+                                  content: [],
+                                  id: `fake-message-${current.sequence.toString()}`,
+                                  role: "assistant" as const,
+                                  text: event.text,
+                              },
                           ];
                 next = { ...current, messages, text: current.text + event.text };
             } else if (event.kind === "agent.activity") {
@@ -375,8 +381,10 @@ export class FakeAgentDaemon implements AsyncDisposable {
                     title,
                     toolKind,
                 };
-                const messageIndex = current.messages.findIndex((message) =>
-                    message.activities.some((item) => item.activityId === activityId),
+                const messageIndex = current.messages.findIndex(
+                    (message) =>
+                        message.role === "assistant" &&
+                        message.activities.some((item) => item.activityId === activityId),
                 );
                 next = {
                     ...current,
@@ -385,10 +393,18 @@ export class FakeAgentDaemon implements AsyncDisposable {
                         messageIndex < 0
                             ? [
                                   ...current.messages,
-                                  { activities: [activity], content: [], role: "assistant" as const, text: "" },
+                                  {
+                                      activities: [activity],
+                                      content: [],
+                                      id: `fake-message-${current.messages.length.toString()}`,
+                                      role: "assistant" as const,
+                                      text: "",
+                                  },
                               ]
                             : current.messages.map((message, index) =>
-                                  index === messageIndex ? { ...message, activities: [activity] } : message,
+                                  index === messageIndex && message.role === "assistant"
+                                      ? { ...message, activities: [activity] }
+                                      : message,
                               ),
                 };
             } else if (event.kind === "agent.activity.narration") {
@@ -406,8 +422,10 @@ export class FakeAgentDaemon implements AsyncDisposable {
                     title: previous?.title ?? "Reasoning",
                     toolKind: previous?.toolKind ?? "",
                 };
-                const messageIndex = current.messages.findIndex((message) =>
-                    message.activities.some((item) => item.activityId === event.activityId),
+                const messageIndex = current.messages.findIndex(
+                    (message) =>
+                        message.role === "assistant" &&
+                        message.activities.some((item) => item.activityId === event.activityId),
                 );
                 next = {
                     ...current,
@@ -419,10 +437,18 @@ export class FakeAgentDaemon implements AsyncDisposable {
                         messageIndex < 0
                             ? [
                                   ...current.messages,
-                                  { activities: [activity], content: [], role: "assistant" as const, text: "" },
+                                  {
+                                      activities: [activity],
+                                      content: [],
+                                      id: `fake-message-${current.messages.length.toString()}`,
+                                      role: "assistant" as const,
+                                      text: "",
+                                  },
                               ]
                             : current.messages.map((message, index) =>
-                                  index === messageIndex ? { ...message, activities: [activity] } : message,
+                                  index === messageIndex && message.role === "assistant"
+                                      ? { ...message, activities: [activity] }
+                                      : message,
                               ),
                 };
             } else if (event.kind === "agent.content") {
@@ -431,11 +457,13 @@ export class FakeAgentDaemon implements AsyncDisposable {
                     ...current,
                     content: [...current.content, event.content],
                     messages:
-                        latest === undefined
+                        latest?.role !== "assistant"
                             ? [
+                                  ...current.messages,
                                   {
                                       activities: [],
                                       content: [event.content],
+                                      id: `fake-message-${current.messages.length.toString()}`,
                                       role: "assistant",
                                       text: "",
                                   },
@@ -645,6 +673,27 @@ async function processHappyPathCommand(
         const queued = queuedPrompts.get(command.commandId);
         queuedPrompts.delete(command.commandId);
         if (queued !== undefined) {
+            const active = activeTurns.get(command.sessionId);
+            if (active !== undefined && active.commandId === queued.targetCommandId) {
+                const updated = {
+                    ...active,
+                    messages: [
+                        ...active.messages,
+                        { id: queued.commandId, images: queued.images, role: "user" as const, text: queued.prompt },
+                    ],
+                    sequence: active.sequence + 1,
+                };
+                activeTurns.set(command.sessionId, updated);
+                await daemon.sendSessionEvent(
+                    command.sessionId,
+                    encodeRecordedSessionEvent({
+                        kind: "session.turn.updated",
+                        sessionId: command.sessionId,
+                        turn: updated,
+                    }),
+                    signal,
+                );
+            }
             await daemon.sendSessionEvent(
                 command.sessionId,
                 encodeSessionStartedEvent({
@@ -1326,7 +1375,7 @@ async function processHappyPathCommand(
             content: [],
             epoch: next.commandId,
             interaction: null,
-            messages: [],
+            messages: [{ id: next.commandId, role: "user", text: next.prompt }],
             prompt: next.prompt,
             sequence: 0,
             state: "running",
