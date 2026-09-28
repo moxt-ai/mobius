@@ -3,6 +3,7 @@ import {
     type LocalAgentInventory,
     MissingAdapter,
     type UnavailableAgent,
+    UnsupportedAgentVersion,
 } from "./agent-discovery.ts";
 
 class AvailableAgentDiagnostic {
@@ -46,13 +47,48 @@ class UnavailableAgentDiagnostic {
     }
 }
 
-class AgentDiagnostics {
-    readonly available: readonly AvailableAgentDiagnostic[];
-    readonly unavailable: readonly UnavailableAgentDiagnostic[];
+class UnsupportedAgentVersionDiagnostic extends UnavailableAgentDiagnostic {
+    readonly agentVersion: string;
+    readonly minimumSupportedVersion: string;
 
-    constructor(inventory: LocalAgentInventory) {
-        this.available = inventory.available.map((discovery) => new AvailableAgentDiagnostic(discovery));
-        this.unavailable = inventory.unavailable.map((discovery) => new UnavailableAgentDiagnostic(discovery));
+    constructor(discovery: UnsupportedAgentVersion) {
+        super(discovery);
+        this.agentVersion = discovery.agent.agentVersion;
+        this.minimumSupportedVersion = discovery.minimumSupportedVersion;
+    }
+}
+
+type TimedDiagnostic<T> = T & { readonly detectionMilliseconds: number };
+
+function withDetectionTime<T extends object>(
+    diagnostic: T,
+    detectionMilliseconds: number,
+    verbose: boolean,
+): T | TimedDiagnostic<T> {
+    return verbose ? { ...diagnostic, detectionMilliseconds } : diagnostic;
+}
+
+function unavailableDiagnostic(discovery: UnavailableAgent): UnavailableAgentDiagnostic {
+    return discovery instanceof UnsupportedAgentVersion
+        ? new UnsupportedAgentVersionDiagnostic(discovery)
+        : new UnavailableAgentDiagnostic(discovery);
+}
+
+class AgentDiagnostics {
+    readonly available: readonly (AvailableAgentDiagnostic | TimedDiagnostic<AvailableAgentDiagnostic>)[];
+    readonly unavailable: readonly (UnavailableAgentDiagnostic | TimedDiagnostic<UnavailableAgentDiagnostic>)[];
+
+    constructor(inventory: LocalAgentInventory, verbose: boolean) {
+        this.available = inventory.available.map((discovery) =>
+            withDetectionTime(
+                new AvailableAgentDiagnostic(discovery),
+                inventory.detectionMillisecondsFor(discovery),
+                verbose,
+            ),
+        );
+        this.unavailable = inventory.unavailable.map((discovery) =>
+            withDetectionTime(unavailableDiagnostic(discovery), inventory.detectionMillisecondsFor(discovery), verbose),
+        );
     }
 }
 
@@ -60,8 +96,15 @@ function humanLine(label: string, status: string, detail: string): string {
     return `${label.padEnd(13)} ${status.padEnd(17)} ${detail}`.trimEnd();
 }
 
-export function formatAgentDiagnostics(inventory: LocalAgentInventory, json: boolean): string {
-    const diagnostics = new AgentDiagnostics(inventory);
+function detectionSuffix(diagnostic: object): string {
+    if (!("detectionMilliseconds" in diagnostic) || typeof diagnostic.detectionMilliseconds !== "number") {
+        return "";
+    }
+    return `   detection=${Math.round(diagnostic.detectionMilliseconds).toString()}ms`;
+}
+
+export function formatAgentDiagnostics(inventory: LocalAgentInventory, json: boolean, verbose = false): string {
+    const diagnostics = new AgentDiagnostics(inventory, verbose);
     if (json) {
         return `${JSON.stringify(diagnostics, null, 2)}\n`;
     }
@@ -69,11 +112,17 @@ export function formatAgentDiagnostics(inventory: LocalAgentInventory, json: boo
     const lines: string[] = [];
     for (const available of diagnostics.available) {
         lines.push(
-            humanLine(available.label, available.status, `${available.agentVersion}   ${available.adapterVersion}`),
+            humanLine(
+                available.label,
+                available.status,
+                `${available.agentVersion}   ${available.adapterVersion}${detectionSuffix(available)}`,
+            ),
         );
     }
     for (const unavailable of diagnostics.unavailable) {
-        lines.push(humanLine(unavailable.label, unavailable.status, unavailable.message));
+        lines.push(
+            humanLine(unavailable.label, unavailable.status, `${unavailable.message}${detectionSuffix(unavailable)}`),
+        );
         if (unavailable.recoveryCommand.length > 0) {
             lines.push(
                 unavailable.code === "authentication_required"

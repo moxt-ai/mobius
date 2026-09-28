@@ -71,6 +71,23 @@ export class AgentProbeFailed extends UnavailableAgent {
     }
 }
 
+export class UnsupportedAgentVersion extends UnavailableInstalledAgent {
+    readonly code = "agent_version_unsupported";
+    readonly message: string;
+    readonly minimumSupportedVersion: string;
+    readonly status = "unsupported_version";
+
+    constructor(
+        specification: LocalAgentSpecification,
+        agent: AgentIntegrationDefinition,
+        minimumSupportedVersion: string,
+    ) {
+        super(specification, agent);
+        this.minimumSupportedVersion = minimumSupportedVersion;
+        this.message = `Agent version ${agent.agentVersion} is below the minimum supported version ${minimumSupportedVersion}`;
+    }
+}
+
 export class IntegrationProbeFailed extends UnavailableInstalledAgent {
     readonly code: string;
     readonly message: string;
@@ -109,13 +126,28 @@ export class AuthenticationRequiredAgent extends UnavailableInstalledAgent {
     }
 }
 
+export class AgentDiscoveryResult {
+    readonly detectionMilliseconds: number;
+    readonly discovery: AgentDiscovery;
+
+    constructor(discovery: AgentDiscovery, detectionMilliseconds: number) {
+        if (!Number.isFinite(detectionMilliseconds) || detectionMilliseconds < 0) {
+            throw new Error("The Agent detection duration is invalid");
+        }
+        this.detectionMilliseconds = Math.round(detectionMilliseconds * 1_000) / 1_000;
+        this.discovery = discovery;
+    }
+}
+
 export class LocalAgentInventory {
     readonly available: readonly AvailableAgent[];
     readonly discoveries: readonly AgentDiscovery[];
     readonly installable: readonly InstallableAgentDefinition[];
+    readonly results: readonly AgentDiscoveryResult[];
     readonly unavailable: readonly UnavailableAgent[];
 
-    constructor(discoveries: readonly AgentDiscovery[]) {
+    constructor(results: readonly AgentDiscoveryResult[]) {
+        const discoveries = results.map((result) => result.discovery);
         const available: AvailableAgent[] = [];
         const unavailable: UnavailableAgent[] = [];
         for (const discovery of discoveries) {
@@ -136,8 +168,18 @@ export class LocalAgentInventory {
                     : new MissingAgentDefinition(discovery.specification.id, discovery.specification.label),
             ),
         );
+        this.results = Object.freeze([...results]);
         this.unavailable = Object.freeze(unavailable);
     }
+
+    readonly detectionMillisecondsFor = (discovery: AgentDiscovery): number => {
+        for (const result of this.results) {
+            if (result.discovery === discovery) {
+                return result.detectionMilliseconds;
+            }
+        }
+        throw new Error("The Agent discovery result is unavailable");
+    };
 
     readonly readyAgents = (): readonly AcpAgentDefinition[] => this.available.map((discovery) => discovery.agent);
 }

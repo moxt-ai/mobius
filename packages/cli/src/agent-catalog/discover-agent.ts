@@ -13,6 +13,7 @@ import {
     MissingAgent,
     type UnavailableAgent,
     type UnavailableInstalledAgent,
+    UnsupportedAgentVersion,
 } from "./agent-discovery.ts";
 import type { LocalAgentDiscoveryContext } from "./agent-discovery-context.ts";
 import { AgentProbeError } from "./agent-probe-error.ts";
@@ -133,16 +134,20 @@ export async function discoverAgent(
             );
             continue;
         }
-        if (!supportedVersion) {
-            continue;
-        }
-
         const installedAgent = new AgentIntegrationDefinition(
             specification.id,
             specification.label,
             agent.identity.requestedPath,
             agentVersion,
         );
+        if (!supportedVersion) {
+            lastFailure = new UnsupportedAgentVersion(
+                specification,
+                installedAgent,
+                specification.minimumSupportedAgentVersion,
+            );
+            continue;
+        }
         // An in-process Agent is its own adapter: `resolveAdapterExecutables` already returned the
         // Agent executable, so an empty adapter list never means "install an adapter" here.
         if (adapters.length === 0 && !(specification instanceof InProcessAcpAgentDefinition)) {

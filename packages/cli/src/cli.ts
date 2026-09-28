@@ -141,7 +141,8 @@ function createProgram(): Command {
         .command("agents")
         .description("show detected, missing, and integration-ready Agents")
         .option("--json", "write the Agent inventory as JSON")
-        .action(async (options: Readonly<{ json?: boolean }>) => {
+        .option("--verbose", "include per-Agent detection timing")
+        .action(async (options: Readonly<{ json?: boolean; verbose?: boolean }>) => {
             const installation = await openMobiusCliInstallation(shutdown.signal, process.env);
             const localContext = new DaemonLocalContext(installation.stateDirectory, process.env);
             const defaultWorkspace = loadDefaultWorkspace(localContext.environment);
@@ -151,7 +152,7 @@ function createProgram(): Command {
                 environment: localContext.environment,
                 signal: shutdown.signal,
             });
-            process.stdout.write(formatAgentDiagnostics(inventory, options.json === true));
+            process.stdout.write(formatAgentDiagnostics(inventory, options.json === true, options.verbose === true));
         });
 
     program.command("__manager", { hidden: true }).action(async () => {

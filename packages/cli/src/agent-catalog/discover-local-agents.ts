@@ -1,4 +1,4 @@
-import { LocalAgentInventory } from "./agent-discovery.ts";
+import { AgentDiscoveryResult, LocalAgentInventory } from "./agent-discovery.ts";
 import type { LocalAgentDiscoveryContext } from "./agent-discovery-context.ts";
 import type { LocalAgentSpecification } from "./agent-specification.ts";
 import { supportedLocalAgentSpecifications } from "./agents/supported-agent-specifications.ts";
@@ -18,6 +18,7 @@ export { WorkBuddyAgentSpecification } from "./agents/workbuddy-agent.ts";
 export { resolveAgentExecutable } from "./executable-discovery.ts";
 
 export interface DiscoverLocalAgentInventoryOptions extends LocalAgentDiscoveryContext {
+    readonly monotonicTimeMilliseconds?: () => number;
     readonly specifications?: readonly LocalAgentSpecification[];
 }
 
@@ -25,8 +26,13 @@ export async function discoverLocalAgentInventory(
     options: DiscoverLocalAgentInventoryOptions,
 ): Promise<LocalAgentInventory> {
     const specifications = options.specifications ?? supportedLocalAgentSpecifications();
-    const discoveries = await Promise.all(
-        specifications.map(async (specification) => await discoverAgent(specification, options)),
+    const monotonicTimeMilliseconds = options.monotonicTimeMilliseconds ?? (() => performance.now());
+    const results = await Promise.all(
+        specifications.map(async (specification) => {
+            const startedAt = monotonicTimeMilliseconds();
+            const discovery = await discoverAgent(specification, options);
+            return new AgentDiscoveryResult(discovery, monotonicTimeMilliseconds() - startedAt);
+        }),
     );
-    return new LocalAgentInventory(discoveries);
+    return new LocalAgentInventory(results);
 }

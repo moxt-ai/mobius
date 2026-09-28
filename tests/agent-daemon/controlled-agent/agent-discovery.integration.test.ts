@@ -40,9 +40,10 @@ describe("local Agent discovery", () => {
         vi.useRealTimers();
     });
 
-    it("Given an installed OpenCode below the supported version, When discovery runs, Then the Agent is unavailable", async () => {
+    it("Given an installed OpenCode below the supported version, When verbose discovery runs, Then the CLI reports both versions and detection time", async () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-old-opencode-"));
         const executable = join(temporaryDirectory, "opencode");
+        const monotonicTimes = [100, 125];
         try {
             await writeFile(executable, executableSource('process.stdout.write("1.18.28\\n");'), { mode: 0o700 });
             await chmod(executable, 0o700);
@@ -50,14 +51,37 @@ describe("local Agent discovery", () => {
             const inventory = await discoverLocalAgentInventory({
                 defaultWorkspace: temporaryDirectory,
                 environment: { PATH: temporaryDirectory },
+                monotonicTimeMilliseconds: () => monotonicTimes.shift() ?? 125,
                 signal: new AbortController().signal,
                 specifications: [new OpenCodeAgentSpecification()],
             });
 
             expect(inventory.available).toEqual([]);
             expect(inventory.unavailable).toEqual([
-                expect.objectContaining({ code: "agent_not_found", status: "missing_agent" }),
+                expect.objectContaining({
+                    agent: expect.objectContaining({ agentVersion: "1.18.28" }),
+                    code: "agent_version_unsupported",
+                    minimumSupportedVersion: OPENCODE_MANAGED_VERSION,
+                    status: "unsupported_version",
+                }),
             ]);
+            expect(JSON.parse(formatAgentDiagnostics(inventory, true, true))).toEqual({
+                available: [],
+                unavailable: [
+                    {
+                        agentVersion: "1.18.28",
+                        code: "agent_version_unsupported",
+                        detectionMilliseconds: 25,
+                        id: "opencode",
+                        label: "OpenCode",
+                        message: `Agent version 1.18.28 is below the minimum supported version ${OPENCODE_MANAGED_VERSION}`,
+                        minimumSupportedVersion: OPENCODE_MANAGED_VERSION,
+                        recoveryCommand: "",
+                        status: "unsupported_version",
+                    },
+                ],
+            });
+            expect(formatAgentDiagnostics(inventory, false, true)).toContain("detection=25ms");
         } finally {
             await rm(temporaryDirectory, { force: true, recursive: true });
         }
