@@ -18,11 +18,13 @@
     "dependencies": {
         "@moxt-ai/mobius-protocol": "workspace:*",
         "@moxt-ai/mobius-relay-core": "workspace:*",
+        "drizzle-orm": "^0.45.2",
         "hono": "^4.13.8"
     },
     "devDependencies": {
         "@cloudflare/vitest-plugin": "^1.1.12",
         "@cloudflare/workers-types": "^5.20260918.1",
+        "@moxt-ai/mobius-sdk": "workspace:*",
         "wrangler": "^4.134.0"
     }
 }

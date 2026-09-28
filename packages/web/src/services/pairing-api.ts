@@ -1,26 +1,31 @@
-import { RUNTIME_WORKSPACE_BINDING_ID, type SessionMetadata } from "@moxt-ai/mobius-protocol";
 import {
     AGENT_ACTIVITY_DETAIL_LIMIT,
     decodeAgentDisplayContentValue,
-    decodeMobiusAgentCapabilities,
     decodePromptImagesValue,
     decodePromptResourcesValue,
     decodeRecordedAgentContentValue,
     type Interaction,
     MAX_LOCAL_AGENT_DIRECTORY_ENTRIES,
     MobiusAgentIntegrationDescriptor,
+    MobiusChannelAccessClient,
     MobiusClient,
     MobiusError,
+    MobiusExpiredRuntimePairingStatus,
     MobiusMissingAgentDescriptor,
     MobiusPageRequest,
+    MobiusPairedRuntimePairingStatus,
+    MobiusPendingRuntimePairingStatus,
+    type MobiusRedeemedChannelCredential,
     type MobiusRuntimeDescriptor,
     type MobiusRuntimePairing,
     MobiusRuntimePairingRequest,
     type MobiusRuntimePairingStatus,
     type MobiusSession,
-    mobiusApiUrl,
+    MobiusStandaloneCredentialProvider,
     type NativeSessionHistory,
+    RUNTIME_WORKSPACE_BINDING_ID,
     type SessionElicitationRequestedEvent,
+    type SessionMetadata,
     type SessionPermissionRequestedEvent,
     StaticMobiusCredentialProvider,
 } from "@moxt-ai/mobius-sdk";
@@ -41,7 +46,6 @@ import {
     IndeterminateRecordedTurn,
     type InstallableAgentOption,
     isIdentifier,
-    isPairingCode,
     isToken,
     LegacyChannelCredentialAuthority,
     LinkedChannelCredentialAuthority,
@@ -81,6 +85,20 @@ const TOOL_KINDS = new Set([
     "think",
 ]);
 
+let standaloneCredentialProviderState:
+    | { readonly origin: string; readonly provider: MobiusStandaloneCredentialProvider }
+    | undefined;
+
+export function standaloneProjectCredentialProvider(): MobiusStandaloneCredentialProvider {
+    const origin = window.location.origin;
+    if (standaloneCredentialProviderState?.origin === origin) {
+        return standaloneCredentialProviderState.provider;
+    }
+    const provider = new MobiusStandaloneCredentialProvider({ endpoint: origin });
+    standaloneCredentialProviderState = { origin, provider };
+    return provider;
+}
+
 export type ActivityDetailResult =
     | {
           readonly artifactId: string;
@@ -100,83 +118,6 @@ export type ActivityDetailResult =
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-async function requestJson(
-    url: URL,
-    init: RequestInit,
-    signal: AbortSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MILLISECONDS),
-): Promise<unknown> {
-    let response: Response;
-    try {
-        response = await fetch(url, {
-            ...init,
-            signal,
-        });
-    } catch (error) {
-        if (signal.aborted) {
-            throw error;
-        }
-        throw new PairingApiError("relay_unavailable", "The pairing relay could not be reached.", { cause: error });
-    }
-
-    let value: unknown;
-    try {
-        value = await response.json();
-    } catch (error) {
-        if (signal.aborted) {
-            throw error;
-        }
-        throw new PairingApiError("invalid_relay_response", "The pairing relay returned an invalid response.", {
-            cause: error,
-        });
-    }
-    if (!response.ok) {
-        if (isRecord(value) && isRecord(value["error"])) {
-            const code = value["error"]["code"];
-            const message = value["error"]["message"];
-            if (typeof code === "string" && typeof message === "string") {
-                throw new PairingApiError(code, message);
-            }
-        }
-        throw new PairingApiError("pairing_failed", "The pairing relay rejected the request.");
-    }
-    return value;
-}
-
-async function requestEmpty(
-    url: URL,
-    init: RequestInit,
-    signal: AbortSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MILLISECONDS),
-): Promise<void> {
-    let response: Response;
-    try {
-        response = await fetch(url, { ...init, signal });
-    } catch (error) {
-        if (signal.aborted) {
-            throw error;
-        }
-        throw new PairingApiError("relay_unavailable", "The pairing relay could not be reached.", { cause: error });
-    }
-    if (response.ok) {
-        return;
-    }
-    let value: unknown;
-    try {
-        value = await response.json();
-    } catch (error) {
-        throw new PairingApiError("invalid_relay_response", "The pairing relay returned an invalid response.", {
-            cause: error,
-        });
-    }
-    if (isRecord(value) && isRecord(value["error"])) {
-        const code = value["error"]["code"];
-        const message = value["error"]["message"];
-        if (typeof code === "string" && typeof message === "string") {
-            throw new PairingApiError(code, message);
-        }
-    }
-    throw new PairingApiError("pairing_failed", "The pairing relay rejected the request.");
 }
 
 function readDate(value: unknown, field: string): Date {
@@ -387,195 +328,6 @@ function decodeRecordedActivities(value: unknown): readonly RecordedActivity[] {
     return activities;
 }
 
-function decodeAgents(value: unknown): readonly AgentOption[] {
-    if (!Array.isArray(value) || value.length > MAX_LOCAL_AGENT_DIRECTORY_ENTRIES) {
-        throw new PairingApiError("invalid_relay_response", "The relay returned an invalid agent directory.");
-    }
-    const agents: AgentOption[] = [];
-    const identifiers = new Set<string>();
-    for (const candidate of value) {
-        if (
-            !isRecord(candidate) ||
-            Object.keys(candidate).length < 5 ||
-            Object.keys(candidate).length > 8 ||
-            !Object.hasOwn(candidate, "agentPath") ||
-            !Object.hasOwn(candidate, "agentVersion") ||
-            !Object.hasOwn(candidate, "capabilities") ||
-            !Object.hasOwn(candidate, "id") ||
-            !Object.hasOwn(candidate, "label") ||
-            Object.keys(candidate).some(
-                (key) =>
-                    key !== "agentPath" &&
-                    key !== "agentVersion" &&
-                    key !== "agentSettingsDiscovery" &&
-                    key !== "capabilities" &&
-                    key !== "id" &&
-                    key !== "label" &&
-                    key !== "sessionTurnConfiguration",
-            ) ||
-            (Object.hasOwn(candidate, "agentSettingsDiscovery") &&
-                typeof candidate["agentSettingsDiscovery"] !== "boolean") ||
-            (Object.hasOwn(candidate, "sessionTurnConfiguration") &&
-                typeof candidate["sessionTurnConfiguration"] !== "boolean")
-        ) {
-            throw new PairingApiError("invalid_relay_response", "The relay returned an invalid agent directory.");
-        }
-        const capabilities = decodeMobiusAgentCapabilities(candidate["capabilities"]);
-        const id = candidate["id"];
-        const label = candidate["label"];
-        const agentPath = candidate["agentPath"];
-        const agentVersion = candidate["agentVersion"];
-        if (
-            typeof agentPath !== "string" ||
-            agentPath.trim().length === 0 ||
-            agentPath.length > 4_096 ||
-            typeof agentVersion !== "string" ||
-            agentVersion.trim().length === 0 ||
-            agentVersion.length > 128 ||
-            typeof id !== "string" ||
-            !isIdentifier(id) ||
-            identifiers.has(id) ||
-            typeof label !== "string" ||
-            label.trim().length === 0 ||
-            label.length > 80
-        ) {
-            throw new PairingApiError("invalid_relay_response", "The relay returned an invalid agent directory.");
-        }
-        identifiers.add(id);
-        agents.push(
-            new AgentOption(
-                id,
-                label.trim(),
-                agentPath,
-                agentVersion.trim(),
-                capabilities,
-                candidate["agentSettingsDiscovery"] === true,
-                candidate["sessionTurnConfiguration"] === true,
-            ),
-        );
-    }
-    return agents;
-}
-
-function decodeInstallableAgents(value: unknown): readonly InstallableAgentOption[] {
-    if (!Array.isArray(value) || value.length > MAX_LOCAL_AGENT_DIRECTORY_ENTRIES) {
-        throw new PairingApiError(
-            "invalid_relay_response",
-            "The relay returned an invalid installable Agent directory.",
-        );
-    }
-    const agents: InstallableAgentOption[] = [];
-    const identifiers = new Set<string>();
-    for (const candidate of value) {
-        if (!isRecord(candidate)) {
-            throw new PairingApiError(
-                "invalid_relay_response",
-                "The relay returned an invalid installable Agent directory.",
-            );
-        }
-        const id = candidate["id"];
-        const label = candidate["label"];
-        if (
-            typeof id !== "string" ||
-            !isIdentifier(id) ||
-            identifiers.has(id) ||
-            typeof label !== "string" ||
-            label.trim().length === 0 ||
-            label.length > 80
-        ) {
-            throw new PairingApiError(
-                "invalid_relay_response",
-                "The relay returned an invalid installable Agent directory.",
-            );
-        }
-        identifiers.add(id);
-        const status = candidate["status"];
-        if (
-            status === "agent_not_installed" &&
-            Object.keys(candidate).length === 3 &&
-            Object.hasOwn(candidate, "id") &&
-            Object.hasOwn(candidate, "label") &&
-            Object.hasOwn(candidate, "status")
-        ) {
-            agents.push(new MissingAgentOption(id, label.trim()));
-            continue;
-        }
-        if (
-            status === "integration_not_installed" &&
-            Object.keys(candidate).length === 5 &&
-            Object.hasOwn(candidate, "agentPath") &&
-            Object.hasOwn(candidate, "agentVersion") &&
-            Object.hasOwn(candidate, "id") &&
-            Object.hasOwn(candidate, "label") &&
-            Object.hasOwn(candidate, "status")
-        ) {
-            const agentPath = candidate["agentPath"];
-            const agentVersion = candidate["agentVersion"];
-            if (
-                typeof agentPath !== "string" ||
-                agentPath.trim().length === 0 ||
-                agentPath.length > 4_096 ||
-                typeof agentVersion !== "string" ||
-                agentVersion.trim().length === 0 ||
-                agentVersion.length > 128
-            ) {
-                throw new PairingApiError(
-                    "invalid_relay_response",
-                    "The relay returned an invalid installable Agent directory.",
-                );
-            }
-            agents.push(new AgentIntegrationOption(id, label.trim(), agentPath, agentVersion.trim()));
-            continue;
-        }
-        throw new PairingApiError(
-            "invalid_relay_response",
-            "The relay returned an invalid installable Agent directory.",
-        );
-    }
-    return agents;
-}
-
-function decodeCreatedPairing(value: unknown): CreatedPairing {
-    if (!isRecord(value)) {
-        throw new PairingApiError("invalid_relay_response", "The relay returned an invalid pairing request.");
-    }
-    const pairingId = value["pairingId"];
-    const pairingCode = value["pairingCode"];
-    const pollToken = value["pollToken"];
-    const channelId = value["channelId"];
-    const hostToken = value["hostToken"];
-    const projectId = value["projectId"];
-    const runtimeId = value["runtimeId"];
-    if (
-        typeof pairingId !== "string" ||
-        !isIdentifier(pairingId) ||
-        typeof pairingCode !== "string" ||
-        !isPairingCode(pairingCode) ||
-        typeof pollToken !== "string" ||
-        !isToken(pollToken) ||
-        typeof channelId !== "string" ||
-        !isIdentifier(channelId) ||
-        typeof hostToken !== "string" ||
-        !isToken(hostToken) ||
-        typeof projectId !== "string" ||
-        !isIdentifier(projectId) ||
-        typeof runtimeId !== "string" ||
-        !isIdentifier(runtimeId)
-    ) {
-        throw new PairingApiError("invalid_relay_response", "The relay returned an invalid pairing request.");
-    }
-    return new CreatedPairing(
-        pairingId,
-        pairingCode,
-        pollToken,
-        channelId,
-        readDate(value["expiresAt"], "expiry time"),
-        hostToken,
-        projectId,
-        runtimeId,
-    );
-}
-
 abstract class BrowserChannelCredential {
     abstract readonly authority: string;
     readonly hostToken: string;
@@ -652,12 +404,6 @@ function saveBrowserChannelCredential(channelId: string, credential: BrowserChan
             projectId: credential.projectId,
         }),
     );
-}
-
-function saveChannelCredential(pairing: CreatedPairing): void {
-    const credential = new OwnerBrowserChannelCredential(pairing.hostToken, pairing.projectId);
-    saveBrowserChannelCredential(pairing.channelId, credential);
-    saveProjectOwnerCredential(pairing.channelId, credential);
 }
 
 function saveProjectOwnerCredential(ownerChannelId: string, credential: BrowserChannelCredential): void {
@@ -740,66 +486,6 @@ function readChannelCredential(channelId: string): BrowserChannelCredential {
     throw new PairingApiError("channel_credential_invalid", "The saved channel credential is invalid.");
 }
 
-function decodeCreatedChannelAccessGrant(value: unknown): CreatedChannelAccessGrant {
-    if (!isRecord(value)) {
-        throw new PairingApiError("invalid_relay_response", "The relay returned an invalid access link.");
-    }
-    const grantId = value["grantId"];
-    const grantSecret = value["grantSecret"];
-    if (
-        typeof grantId !== "string" ||
-        !isIdentifier(grantId) ||
-        typeof grantSecret !== "string" ||
-        !isToken(grantSecret)
-    ) {
-        throw new PairingApiError("invalid_relay_response", "The relay returned an invalid access link.");
-    }
-    return new CreatedChannelAccessGrant(grantId, grantSecret, readDate(value["expiresAt"], "access link expiry time"));
-}
-
-function decodeLinkedChannelDevices(value: unknown): readonly LinkedChannelDevice[] {
-    if (!isRecord(value) || !Array.isArray(value["devices"])) {
-        throw new PairingApiError("invalid_relay_response", "The relay returned an invalid linked device list.");
-    }
-    const devices: LinkedChannelDevice[] = [];
-    const credentialIds = new Set<string>();
-    for (const candidate of value["devices"]) {
-        if (!isRecord(candidate)) {
-            throw new PairingApiError("invalid_relay_response", "The relay returned an invalid linked device.");
-        }
-        const credentialId = candidate["credentialId"];
-        if (typeof credentialId !== "string" || !isIdentifier(credentialId) || credentialIds.has(credentialId)) {
-            throw new PairingApiError("invalid_relay_response", "The relay returned an invalid linked device.");
-        }
-        credentialIds.add(credentialId);
-        devices.push(
-            new LinkedChannelDevice(
-                credentialId,
-                readDate(candidate["createdAt"], "linked device creation time"),
-                readDate(candidate["lastUsedAt"], "linked device activity time"),
-            ),
-        );
-    }
-    return devices;
-}
-
-function decodeRedeemedChannelCredential(value: unknown, expectedChannelId: string): BrowserChannelCredential {
-    if (!isRecord(value) || value["channelId"] !== expectedChannelId) {
-        throw new PairingApiError("invalid_relay_response", "The relay returned an invalid channel credential.");
-    }
-    const hostToken = value["hostToken"];
-    const projectId = value["projectId"];
-    if (
-        typeof hostToken !== "string" ||
-        !isToken(hostToken) ||
-        typeof projectId !== "string" ||
-        !isIdentifier(projectId)
-    ) {
-        throw new PairingApiError("invalid_relay_response", "The relay returned an invalid channel credential.");
-    }
-    return new LinkedBrowserChannelCredential(hostToken, projectId);
-}
-
 abstract class ChannelAccessFragmentState {}
 
 class MissingChannelAccessFragment extends ChannelAccessFragmentState {}
@@ -851,22 +537,17 @@ async function hasUsableChannelCredential(channelId: string, cancellationSignal:
         }
         throw error;
     }
-    const endpoint = mobiusApiUrl(window.location.origin, `/channels/${encodeURIComponent(channelId)}`);
+    const client = publicServiceClient(credential);
     try {
-        await requestJson(
-            endpoint,
-            {
-                headers: { authorization: `Bearer ${credential.hostToken}` },
-                method: "GET",
-            },
-            requestSignal(cancellationSignal),
-        );
+        await client.channels.read(channelId, requestSignal(cancellationSignal));
         return true;
     } catch (error) {
-        if (error instanceof PairingApiError && error.code === "unauthorized") {
+        if (error instanceof MobiusError && error.code === "unauthorized") {
             return false;
         }
-        throw error;
+        return throwPublicApiFailure(error);
+    } finally {
+        client.close();
     }
 }
 
@@ -874,60 +555,34 @@ function requestSignal(cancellationSignal: AbortSignal): AbortSignal {
     return AbortSignal.any([cancellationSignal, AbortSignal.timeout(REQUEST_TIMEOUT_MILLISECONDS)]);
 }
 
-function decodeChannelConnection(
-    value: unknown,
+type ConnectionDescriptor = Pick<
+    MobiusRuntimeDescriptor,
+    "agents" | "channelId" | "installableAgents" | "machineName" | "projectId" | "runtimeId" | "workspaceName"
+>;
+
+function channelConnection(
+    channel: ConnectionDescriptor,
     expectedChannelId: string,
     credential: BrowserChannelCredential,
 ): ChannelConnection {
-    if (!isRecord(value)) {
+    if (channel.channelId !== expectedChannelId) {
         throw new PairingApiError("invalid_relay_response", "The relay returned an invalid channel.");
     }
-    const channelId = value["channelId"];
-    const runtimeId = value["runtimeId"];
-    if (
-        typeof channelId !== "string" ||
-        !isIdentifier(channelId) ||
-        channelId !== expectedChannelId ||
-        typeof runtimeId !== "string" ||
-        !isIdentifier(runtimeId)
-    ) {
-        throw new PairingApiError("invalid_relay_response", "The relay returned an invalid channel.");
-    }
-    if (value["projectId"] !== credential.projectId) {
-        throw new PairingApiError("invalid_relay_response", "The relay returned a channel from another project.");
-    }
-    const agents = decodeAgents(value["agents"]);
-    const installableAgents = decodeInstallableAgents(value["installableAgents"]);
-    if (
-        agents.length + installableAgents.length === 0 ||
-        agents.length + installableAgents.length > MAX_LOCAL_AGENT_DIRECTORY_ENTRIES ||
-        installableAgents.some((agent) => agents.some((available) => available.id === agent.id))
-    ) {
-        throw new PairingApiError("invalid_relay_response", "The relay returned an invalid Agent catalog.");
-    }
-    return new ChannelConnection(
-        agents,
-        channelId,
+    return descriptorConnection(
+        channel,
+        credential,
         credential instanceof ProjectOwnerBrowserCredential
             ? new ProjectRuntimeCredentialAuthority(credential.ownerChannelId)
             : channelCredentialAuthority(credential),
-        readString(value["machineName"], "machine name", 120),
-        readString(value["workspaceName"], "workspace name", 120),
-        credential.hostToken,
-        credential.projectId,
-        runtimeId,
-        installableAgents,
+        channel.channelId,
     );
 }
 
 function runtimeConnection(
-    runtime: MobiusRuntimeDescriptor,
+    runtime: ConnectionDescriptor,
     credential: BrowserChannelCredential,
     accessChannelId: string,
 ): ChannelConnection {
-    if (runtime.projectId !== credential.projectId) {
-        throw new PairingApiError("invalid_relay_response", "The relay returned a Runtime from another Project.");
-    }
     if (
         !(credential instanceof ProjectOwnerBrowserCredential) &&
         !(credential instanceof LinkedBrowserChannelCredential)
@@ -936,6 +591,23 @@ function runtimeConnection(
             "runtime_access_denied",
             "This browser cannot address another Runtime in the Project.",
         );
+    }
+    return descriptorConnection(
+        runtime,
+        credential,
+        connectionCredentialAuthority(credential, accessChannelId),
+        accessChannelId,
+    );
+}
+
+function descriptorConnection(
+    runtime: ConnectionDescriptor,
+    credential: BrowserChannelCredential,
+    authority: ChannelCredentialAuthority,
+    accessChannelId: string,
+): ChannelConnection {
+    if (runtime.projectId !== credential.projectId) {
+        throw new PairingApiError("invalid_relay_response", "The relay returned a Runtime from another Project.");
     }
     const agents = runtime.agents.map(
         (agent) =>
@@ -968,7 +640,7 @@ function runtimeConnection(
     return new ChannelConnection(
         agents,
         runtime.channelId,
-        connectionCredentialAuthority(credential, accessChannelId),
+        authority,
         runtime.machineName,
         runtime.workspaceName,
         credential.hostToken,
@@ -1128,44 +800,67 @@ function decodeRecordedTurn(value: unknown): RecordedTurn {
     throw new PairingApiError("invalid_relay_response", "The relay returned an invalid conversation history state.");
 }
 
-export async function createBrowserPairing(signal: AbortSignal, token: string | null): Promise<CreatedPairing> {
-    const pairing = decodeCreatedPairing(
-        await requestJson(
-            mobiusApiUrl(window.location.origin, "/pairings"),
-            {
-                method: "POST",
-                headers: token === null ? {} : { Authorization: `Bearer ${token}` },
-            },
+export async function createBrowserPairing(signal: AbortSignal): Promise<CreatedPairing> {
+    const provider = standaloneProjectCredentialProvider();
+    const credential = await provider.browserCredential(requestSignal(signal));
+    const client = new MobiusClient({
+        credentialProvider: provider,
+        endpoint: window.location.origin,
+        projectId: credential.projectId,
+    });
+    try {
+        const pairing = await client.runtimePairings.create(
+            new MobiusRuntimePairingRequest(`web-${crypto.randomUUID()}`),
             requestSignal(signal),
-        ),
-    );
-    saveChannelCredential(pairing);
-    return pairing;
+        );
+        const browserCredential = new ProjectOwnerBrowserCredential(
+            credential.token,
+            credential.projectId,
+            pairing.channelId,
+        );
+        saveProjectOwnerCredential(pairing.channelId, browserCredential);
+        return new CreatedPairing(
+            pairing.pairingId,
+            pairing.pairingCode,
+            pairing.channelId,
+            new Date(pairing.expiresAt),
+            credential.token,
+            pairing.projectId,
+            pairing.runtimeId,
+        );
+    } catch (error) {
+        return throwPublicApiFailure(error);
+    } finally {
+        client.close();
+    }
 }
 
-export async function readBrowserPairingStatus(pairing: CreatedPairing): Promise<BrowserPairingStatus> {
-    const endpoint = mobiusApiUrl(window.location.origin, `/pairings/${encodeURIComponent(pairing.pairingId)}`);
-    endpoint.searchParams.set("token", pairing.pollToken);
-    const value = await requestJson(endpoint, { method: "GET" });
-    if (!isRecord(value) || typeof value["status"] !== "string") {
-        throw new PairingApiError("invalid_relay_response", "The relay returned an invalid pairing status.");
+export async function readBrowserPairingStatus(
+    pairing: CreatedPairing,
+    cancellationSignal: AbortSignal,
+): Promise<BrowserPairingStatus> {
+    const credential = new ProjectOwnerBrowserCredential(pairing.browserToken, pairing.projectId, pairing.channelId);
+    const client = publicServiceClient(credential);
+    try {
+        const status = await client.runtimePairings.read(pairing.pairingId, requestSignal(cancellationSignal));
+        if (status instanceof MobiusPendingRuntimePairingStatus) {
+            return new WaitingBrowserPairingStatus(new Date(status.expiresAt));
+        }
+        if (status instanceof MobiusExpiredRuntimePairingStatus) {
+            return new ExpiredBrowserPairingStatus();
+        }
+        if (status instanceof MobiusPairedRuntimePairingStatus) {
+            return new ConnectedBrowserPairingStatus(runtimeConnection(status, credential, pairing.channelId));
+        }
+        throw new PairingApiError("runtime_pairing_revoked", "The Runtime pairing was revoked.");
+    } catch (error) {
+        if (error instanceof PairingApiError) {
+            throw error;
+        }
+        return throwPublicApiFailure(error);
+    } finally {
+        client.close();
     }
-    if (value["status"] === "pending") {
-        return new WaitingBrowserPairingStatus(readDate(value["expiresAt"], "expiry time"));
-    }
-    if (value["status"] === "expired") {
-        return new ExpiredBrowserPairingStatus();
-    }
-    if (value["status"] !== "paired") {
-        throw new PairingApiError("invalid_relay_response", "The relay returned an unknown pairing status.");
-    }
-    return new ConnectedBrowserPairingStatus(
-        decodeChannelConnection(
-            value,
-            pairing.channelId,
-            new ProjectOwnerBrowserCredential(pairing.hostToken, pairing.projectId, pairing.channelId),
-        ),
-    );
 }
 
 export async function createChannelAccessGrant(
@@ -1173,17 +868,15 @@ export async function createChannelAccessGrant(
     cancellationSignal: AbortSignal,
 ): Promise<CreatedChannelAccessGrant> {
     const credential = readChannelCredential(channelId);
-    const endpoint = mobiusApiUrl(window.location.origin, `/channels/${encodeURIComponent(channelId)}/access-grants`);
-    return decodeCreatedChannelAccessGrant(
-        await requestJson(
-            endpoint,
-            {
-                headers: { authorization: `Bearer ${credential.hostToken}` },
-                method: "POST",
-            },
-            requestSignal(cancellationSignal),
-        ),
-    );
+    const client = publicServiceClient(credential);
+    try {
+        const grant = await client.channels.createAccessGrant(channelId, requestSignal(cancellationSignal));
+        return new CreatedChannelAccessGrant(grant.grantId, grant.grantSecret, new Date(grant.expiresAt));
+    } catch (error) {
+        return throwPublicApiFailure(error);
+    } finally {
+        client.close();
+    }
 }
 
 /**
@@ -1195,17 +888,17 @@ export async function readAccessChannelDevices(
     cancellationSignal: AbortSignal,
 ): Promise<readonly LinkedChannelDevice[]> {
     const credential = readChannelCredential(channelId);
-    const endpoint = mobiusApiUrl(window.location.origin, `/channels/${encodeURIComponent(channelId)}/linked-devices`);
-    return decodeLinkedChannelDevices(
-        await requestJson(
-            endpoint,
-            {
-                headers: { authorization: `Bearer ${credential.hostToken}` },
-                method: "GET",
-            },
-            requestSignal(cancellationSignal),
-        ),
-    );
+    const client = publicServiceClient(credential);
+    try {
+        return (await client.channels.listLinkedDevices(channelId, requestSignal(cancellationSignal))).map(
+            (device) =>
+                new LinkedChannelDevice(device.credentialId, new Date(device.createdAt), new Date(device.lastUsedAt)),
+        );
+    } catch (error) {
+        return throwPublicApiFailure(error);
+    } finally {
+        client.close();
+    }
 }
 
 export async function redeemChannelAccessGrantFromLocation(
@@ -1222,22 +915,18 @@ export async function redeemChannelAccessGrantFromLocation(
     if (await hasUsableChannelCredential(channelId, cancellationSignal)) {
         return;
     }
-    const endpoint = mobiusApiUrl(
-        window.location.origin,
-        `/channels/${encodeURIComponent(channelId)}/access-grants/${encodeURIComponent(fragment.grantId)}/redeem`,
-    );
-    const credential = decodeRedeemedChannelCredential(
-        await requestJson(
-            endpoint,
-            {
-                body: JSON.stringify({ grantSecret: fragment.grantSecret }),
-                headers: { "content-type": "application/json" },
-                method: "POST",
-            },
+    let redeemed: MobiusRedeemedChannelCredential;
+    try {
+        redeemed = await new MobiusChannelAccessClient({ endpoint: window.location.origin }).redeem(
+            channelId,
+            fragment.grantId,
+            fragment.grantSecret,
             requestSignal(cancellationSignal),
-        ),
-        channelId,
-    );
+        );
+    } catch (error) {
+        return throwPublicApiFailure(error);
+    }
+    const credential = new LinkedBrowserChannelCredential(redeemed.hostToken, redeemed.projectId);
     try {
         saveBrowserChannelCredential(channelId, credential);
     } catch (cause) {
@@ -1255,18 +944,14 @@ export async function revokeLinkedChannelDevice(
     cancellationSignal: AbortSignal,
 ): Promise<void> {
     const credential = readChannelCredential(channelId);
-    const endpoint = mobiusApiUrl(
-        window.location.origin,
-        `/channels/${encodeURIComponent(channelId)}/linked-devices/${encodeURIComponent(credentialId)}`,
-    );
-    await requestEmpty(
-        endpoint,
-        {
-            headers: { authorization: `Bearer ${credential.hostToken}` },
-            method: "DELETE",
-        },
-        requestSignal(cancellationSignal),
-    );
+    const client = publicServiceClient(credential);
+    try {
+        await client.channels.revokeLinkedDevice(channelId, credentialId, requestSignal(cancellationSignal));
+    } catch (error) {
+        throwPublicApiFailure(error);
+    } finally {
+        client.close();
+    }
 }
 
 export async function readChannelConnection(
@@ -1274,19 +959,15 @@ export async function readChannelConnection(
     cancellationSignal: AbortSignal = new AbortController().signal,
 ): Promise<ChannelConnection> {
     const credential = readChannelCredential(channelId);
-    const endpoint = mobiusApiUrl(window.location.origin, `/channels/${encodeURIComponent(channelId)}`);
-    return decodeChannelConnection(
-        await requestJson(
-            endpoint,
-            {
-                headers: { authorization: `Bearer ${credential.hostToken}` },
-                method: "GET",
-            },
-            requestSignal(cancellationSignal),
-        ),
-        channelId,
-        credential,
-    );
+    const client = publicServiceClient(credential);
+    try {
+        const channel = await client.channels.read(channelId, requestSignal(cancellationSignal));
+        return channelConnection(channel, channelId, credential);
+    } catch (error) {
+        return throwPublicApiFailure(error);
+    } finally {
+        client.close();
+    }
 }
 
 export async function readProjectRuntimeConnection(
@@ -1295,7 +976,7 @@ export async function readProjectRuntimeConnection(
     cancellationSignal: AbortSignal = new AbortController().signal,
     requestedAccessChannelId: string = "",
 ): Promise<ChannelConnection> {
-    const credential = projectCredential(requestedAccessChannelId, projectId);
+    const credential = await resolveProjectCredential(requestedAccessChannelId, projectId, cancellationSignal);
     // The channel that owns device access is a property of the resolved credential, not of the
     // navigation state: a reload or deep link drops `location.state`, and an empty channel would
     // render an access link that matches no channel.
@@ -1486,7 +1167,10 @@ export async function readSessionArtifactBytes(
 
 function publicServiceClient(credential: BrowserChannelCredential): MobiusClient {
     return new MobiusClient({
-        credentialProvider: new StaticMobiusCredentialProvider(credential.hostToken),
+        credentialProvider:
+            credential instanceof ProjectOwnerBrowserCredential && credential.projectId === "standalone"
+                ? standaloneProjectCredentialProvider()
+                : new StaticMobiusCredentialProvider(credential.hostToken),
         endpoint: window.location.origin,
         projectId: credential.projectId,
     });
@@ -1510,6 +1194,33 @@ function projectCredential(channelId: string, projectId: string): BrowserChannel
     return credential;
 }
 
+async function resolveProjectCredential(
+    channelId: string,
+    projectId: string,
+    signal: AbortSignal,
+): Promise<BrowserChannelCredential> {
+    if (projectId !== "standalone") {
+        return projectCredential(channelId, projectId);
+    }
+    const credential = await standaloneProjectCredentialProvider().browserCredential(requestSignal(signal));
+    let ownerChannelId = isIdentifier(channelId) ? channelId : "standalone";
+    try {
+        ownerChannelId = readProjectOwnerCredential(projectId).ownerChannelId;
+    } catch (error) {
+        if (
+            !(error instanceof PairingApiError) ||
+            (error.code !== "project_owner_credential_missing" && error.code !== "project_owner_credential_invalid")
+        ) {
+            throw error;
+        }
+    }
+    const resolved = new ProjectOwnerBrowserCredential(credential.token, credential.projectId, ownerChannelId);
+    if (ownerChannelId !== "standalone") {
+        saveProjectOwnerCredential(ownerChannelId, resolved);
+    }
+    return resolved;
+}
+
 function throwPublicApiFailure(error: unknown): never {
     if (error instanceof MobiusError) {
         throw new PairingApiError(error.code, error.message, { cause: error });
@@ -1522,7 +1233,7 @@ export async function readRuntimeManagementAccess(
     projectId: string,
     cancellationSignal: AbortSignal,
 ): Promise<RuntimeManagementAccess> {
-    const credential = projectCredential(channelId, projectId);
+    const credential = await resolveProjectCredential(channelId, projectId, cancellationSignal);
     if (credential instanceof ProjectOwnerBrowserCredential) {
         return new OwnerRuntimeManagementAccess();
     }
@@ -1559,7 +1270,7 @@ export async function createProjectRuntimePairing(
     idempotencyKey: string,
     cancellationSignal: AbortSignal,
 ): Promise<MobiusRuntimePairing> {
-    const client = publicServiceClient(projectCredential(channelId, projectId));
+    const client = publicServiceClient(await resolveProjectCredential(channelId, projectId, cancellationSignal));
     try {
         return await client.runtimePairings.create(
             new MobiusRuntimePairingRequest(idempotencyKey),
@@ -1578,7 +1289,7 @@ export async function readProjectRuntimePairing(
     pairingId: string,
     cancellationSignal: AbortSignal,
 ): Promise<MobiusRuntimePairingStatus> {
-    const client = publicServiceClient(projectCredential(channelId, projectId));
+    const client = publicServiceClient(await resolveProjectCredential(channelId, projectId, cancellationSignal));
     try {
         return await client.runtimePairings.read(pairingId, requestSignal(cancellationSignal));
     } catch (error) {
@@ -1593,7 +1304,7 @@ export async function readProjectRuntimes(
     projectId: string,
     cancellationSignal: AbortSignal,
 ): Promise<readonly MobiusRuntimeDescriptor[]> {
-    const client = publicServiceClient(projectCredential(channelId, projectId));
+    const client = publicServiceClient(await resolveProjectCredential(channelId, projectId, cancellationSignal));
     try {
         return await client.runtimes.list(requestSignal(cancellationSignal));
     } catch (error) {
@@ -1609,7 +1320,7 @@ export async function revokeProjectRuntime(
     runtimeId: string,
     cancellationSignal: AbortSignal,
 ): Promise<void> {
-    const client = publicServiceClient(projectCredential(channelId, projectId));
+    const client = publicServiceClient(await resolveProjectCredential(channelId, projectId, cancellationSignal));
     try {
         await client.runtimes.revoke(runtimeId, requestSignal(cancellationSignal));
     } catch (error) {
@@ -1623,7 +1334,11 @@ function connectionCredential(connection: ChannelConnection): BrowserChannelCred
     if (connection.credentialAuthority instanceof ProjectRuntimeCredentialAuthority) {
         // The Project Runtime host socket was opened with the credential the route resolved, so history
         // reads reuse that same credential rather than the selected machine's own channel file.
-        return projectCredential(connection.credentialAuthority.accessChannelId, connection.projectId);
+        return new ProjectOwnerBrowserCredential(
+            connection.hostToken,
+            connection.projectId,
+            connection.credentialAuthority.accessChannelId,
+        );
     }
     if (connection.credentialAuthority instanceof OwnerChannelCredentialAuthority) {
         return new OwnerBrowserChannelCredential(connection.hostToken, connection.projectId);

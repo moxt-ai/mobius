@@ -10,6 +10,7 @@ export {
     type LiveSessionMessage,
     MobiusClient as MobiusChannelClient,
     MobiusClientError as MobiusChannelError,
+    type MobiusRelayUrlProvider,
     type PermissionResponseRequest,
     type PromptObserver,
     type PromptRequest,

@@ -29,16 +29,21 @@ import {
     MobiusTimeoutError,
     MobiusValidationError,
 } from "./errors.ts";
+import { MobiusPublicRequestExecutor } from "./public-request.ts";
 import {
     type CancelMobiusTurnRequest,
     type ConfigureMobiusSessionRequest,
     type CreateMobiusSessionRequest,
     decodeMobiusAttempt,
     decodeMobiusBrowserCredential,
+    decodeMobiusChannelAccessGrant,
+    decodeMobiusChannelDescriptor,
     decodeMobiusEventPage,
     decodeMobiusInteraction,
     decodeMobiusInteractionList,
+    decodeMobiusLinkedChannelDeviceList,
     decodeMobiusMessagePage,
+    decodeMobiusRedeemedChannelCredential,
     decodeMobiusRuntimeList,
     decodeMobiusRuntimePairing,
     decodeMobiusRuntimePairingStatus,
@@ -53,11 +58,15 @@ import {
     decodeRuntimeDescriptor,
     type MobiusBrowserCredential,
     type MobiusBrowserCredentialRequest,
+    type MobiusChannelAccessGrant,
+    type MobiusChannelDescriptor,
     type MobiusEventPage,
     type MobiusInteractionResponseRequest,
+    type MobiusLinkedChannelDevice,
     type MobiusMessagePage,
     MobiusPageRequest,
     MobiusPairedRuntimePairingStatus,
+    type MobiusRedeemedChannelCredential,
     type MobiusRuntimeDescriptor,
     type MobiusRuntimePairing,
     MobiusRuntimePairingLifecycle,
@@ -769,6 +778,95 @@ export class MobiusCredentialResources {
             projectPath(this.#projectId, `browser-credentials/${encodeURIComponent(credentialId)}`),
             signal,
         );
+    };
+}
+
+export class MobiusChannelResources {
+    readonly #executor: MobiusRequestExecutor;
+
+    constructor(executor: MobiusRequestExecutor) {
+        this.#executor = executor;
+    }
+
+    readonly createAccessGrant = async (channelId: string, signal: AbortSignal): Promise<MobiusChannelAccessGrant> => {
+        if (!isIdentifier(channelId)) {
+            throw new MobiusValidationError("The channel identifier is invalid");
+        }
+        return decodeMobiusChannelAccessGrant(
+            await this.#executor.post(`channels/${encodeURIComponent(channelId)}/access-grants`, {}, signal),
+        );
+    };
+
+    readonly listLinkedDevices = async (
+        channelId: string,
+        signal: AbortSignal,
+    ): Promise<readonly MobiusLinkedChannelDevice[]> => {
+        if (!isIdentifier(channelId)) {
+            throw new MobiusValidationError("The channel identifier is invalid");
+        }
+        return decodeMobiusLinkedChannelDeviceList(
+            await this.#executor.get(`channels/${encodeURIComponent(channelId)}/linked-devices`, signal),
+        );
+    };
+
+    readonly read = async (channelId: string, signal: AbortSignal): Promise<MobiusChannelDescriptor> => {
+        if (!isIdentifier(channelId)) {
+            throw new MobiusValidationError("The channel identifier is invalid");
+        }
+        return decodeMobiusChannelDescriptor(
+            await this.#executor.get(`channels/${encodeURIComponent(channelId)}`, signal),
+        );
+    };
+
+    readonly revokeLinkedDevice = async (
+        channelId: string,
+        credentialId: string,
+        signal: AbortSignal,
+    ): Promise<void> => {
+        if (!isIdentifier(channelId) || !isIdentifier(credentialId)) {
+            throw new MobiusValidationError("The linked channel device identifier is invalid");
+        }
+        await this.#executor.deleteEmpty(
+            `channels/${encodeURIComponent(channelId)}/linked-devices/${encodeURIComponent(credentialId)}`,
+            signal,
+        );
+    };
+}
+
+export interface MobiusChannelAccessClientOptions {
+    readonly endpoint: string;
+    readonly observeResponse?: (metadata: MobiusResponseMetadata) => void;
+    readonly operationTimeoutMilliseconds?: number;
+    readonly transport?: MobiusHttpTransport;
+}
+
+export class MobiusChannelAccessClient {
+    readonly #requests: MobiusPublicRequestExecutor;
+
+    constructor(options: MobiusChannelAccessClientOptions) {
+        this.#requests = new MobiusPublicRequestExecutor(options);
+    }
+
+    readonly redeem = async (
+        channelId: string,
+        grantId: string,
+        grantSecret: string,
+        signal: AbortSignal,
+    ): Promise<MobiusRedeemedChannelCredential> => {
+        if (!isIdentifier(channelId) || !isIdentifier(grantId) || !/^[a-zA-Z0-9_-]{32,256}$/.test(grantSecret)) {
+            throw new MobiusValidationError("The channel access grant is invalid");
+        }
+        const credential = decodeMobiusRedeemedChannelCredential(
+            await this.#requests.post(
+                `channels/${encodeURIComponent(channelId)}/access-grants/${encodeURIComponent(grantId)}/redeem`,
+                { grantSecret },
+                signal,
+            ),
+        );
+        if (credential.channelId !== channelId) {
+            throw new MobiusProtocolError("The service returned a credential for another channel");
+        }
+        return credential;
     };
 }
 
@@ -2007,6 +2105,7 @@ export class MobiusEventResources {
 export class MobiusClient {
     readonly attempts: MobiusAttemptResources;
     readonly capabilities: MobiusCapabilityResources;
+    readonly channels: MobiusChannelResources;
     readonly credentials: MobiusCredentialResources;
     readonly events: MobiusEventResources;
     readonly interactions: MobiusInteractionResources;
@@ -2024,6 +2123,7 @@ export class MobiusClient {
         );
         this.attempts = new MobiusAttemptResources(executor, options.projectId);
         this.capabilities = new MobiusCapabilityResources(executor);
+        this.channels = new MobiusChannelResources(executor);
         this.credentials = new MobiusCredentialResources(executor, options.projectId);
         this.events = new MobiusEventResources(executor, options.projectId, reconnectAttempts);
         this.interactions = new MobiusInteractionResources(executor, options.projectId);

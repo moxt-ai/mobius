@@ -128,17 +128,19 @@ describe("browser relay connection", () => {
         vi.useRealTimers();
     });
 
-    it("Given an online browser connection is interrupted, When the relay becomes reachable again, Then the client reconnects without replaying the interrupted command", async () => {
+    it("Given an online browser connection with an expiring credential, When it reconnects after expiry, Then it resolves a fresh relay URL without replaying the interrupted command", async () => {
         const relay = createServer();
         const sockets = new Set<Duplex>();
         const connections = new ValueFeed<Duplex>();
         const clientFrames = new ValueFeed<Promise<ClientWebSocketFrame>>();
+        const upgradeUrls = new ValueFeed<string>();
         relay.on("connection", (socket) => {
             sockets.add(socket);
             socket.once("close", () => sockets.delete(socket));
             socket.on("error", () => undefined);
         });
         relay.on("upgrade", (request, socket) => {
+            upgradeUrls.push(request.url ?? "");
             const key = request.headers["sec-websocket-key"];
             if (typeof key !== "string") {
                 socket.destroy();
@@ -166,6 +168,7 @@ describe("browser relay connection", () => {
 
         vi.useFakeTimers({ toFake: ["Date", "clearTimeout", "setTimeout"] });
         vi.setSystemTime(new Date("2026-09-07T00:00:00.000Z"));
+        const credentialExpiresAt = Date.now() + 60 * 60 * 1_000;
         const statuses: boolean[] = [];
         const nextStatus = new ValueFeed<boolean>();
         const reconnecting = new ValueFeed<string>();
@@ -178,11 +181,16 @@ describe("browser relay connection", () => {
                     statuses.push(online);
                     nextStatus.push(online);
                 },
-                relayUrl: `ws://127.0.0.1:${readPort(relay).toString()}`,
+                relayUrl: async (signal) => {
+                    signal.throwIfAborted();
+                    const token = Date.now() >= credentialExpiresAt ? "refreshed-credential" : "initial-credential";
+                    return `ws://127.0.0.1:${readPort(relay).toString()}/?token=${token}`;
+                },
             });
             await vi.advanceTimersByTimeAsync(0);
             client = await connecting;
             const firstSocket = await connections.next();
+            expect(await upgradeUrls.next()).toBe("/?token=initial-credential");
             expect(await nextStatus.next()).toBe(true);
 
             const conflictingPrompt = client.prompt({
@@ -227,6 +235,7 @@ describe("browser relay connection", () => {
             expect(decodeMessageKind(firstFrame.text)).toBe(SESSION_PROMPT_KIND);
             expect(decodeSessionPromptCommand(firstFrame.text).commandId).toBe("interrupted-command");
 
+            vi.setSystemTime(new Date(credentialExpiresAt + 1));
             closeServerSocket(firstSocket);
             expect(await reconnecting.next()).toBe("reconnecting");
             expect(statuses).toEqual([true]);
@@ -237,6 +246,7 @@ describe("browser relay connection", () => {
             const reconnectedSocket = connections.next();
             await vi.advanceTimersByTimeAsync(10_000);
             expect(await reconnectedSocket).not.toBe(firstSocket);
+            expect(await upgradeUrls.next()).toBe("/?token=refreshed-credential");
             expect(await nextStatus.next()).toBe(true);
             expect(statuses).toEqual([true, true]);
 
