@@ -993,7 +993,10 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer {
                 lastUsedAt: iso(row.last_used_at),
                 overlapEndsAt: typeof row.overlap_ends_at === "number" ? iso(row.overlap_ends_at) : "",
                 permissions: permissionValues(permissions(row.permissions_json)),
-                projectIds: await this.#storage.listCredentialProjectIds(row.credential_id, signal),
+                projectIds:
+                    row.all_projects === 1
+                        ? []
+                        : await this.#storage.listCredentialProjectIds(row.credential_id, signal),
                 publicCredentialId: row.public_credential_id,
                 replacedByCredentialId: row.replaced_by_credential_id ?? "",
                 revision: row.revision,
