@@ -9,12 +9,12 @@ import {
     type Attempt,
     decodeAgentDisplayContentValue,
     decodeAttempt,
-    decodeCommittedSessionEvent,
     decodeIdentifier,
     decodeInteraction,
     decodePromptImagesValue,
     decodePromptResourcesValue,
     decodeRecordedSessionEvent,
+    decodeSessionEventEnvelope,
     decodeTurn,
     type Identifier,
     type Interaction,
@@ -2120,7 +2120,7 @@ export function decodeMobiusSessionEvent(value: unknown): MobiusSessionEvent {
     if (typeof encoded !== "string") {
         throw invalidResponse("The service returned an invalid Session event");
     }
-    const event = decodeCommittedSessionEvent(encoded);
+    const event = decodeSessionEventEnvelope(encoded);
     const payload = decodeRecordedEvent(event.payload);
     return new MobiusSessionEvent("", "", payload, "", "", event.sessionId, new MobiusRuntimeEventSource(""));
 }

@@ -1,5 +1,4 @@
 import {
-    decodeCommittedSessionEvent,
     decodeFileReadCommand,
     decodeMessageKind,
     decodeNativeSessionRequest,
@@ -7,6 +6,7 @@ import {
     decodeSessionCancelCommand,
     decodeSessionConfigureCommand,
     decodeSessionElicitationRespondCommand,
+    decodeSessionEventEnvelope,
     decodeSessionLiveHistoryPageLoad,
     decodeSessionPermissionRespondCommand,
     decodeSessionPromptCommand,
@@ -665,9 +665,9 @@ export function createPlatformApplication(
                         }
                         return;
                     }
-                    if (kind === "session.event.committed") {
-                        const committed = decodeCommittedSessionEvent(event.data);
-                        if (committed.sessionId === context.req.param("sessionId")) {
+                    if (kind === "session.event") {
+                        const envelope = decodeSessionEventEnvelope(event.data);
+                        if (envelope.sessionId === context.req.param("sessionId")) {
                             server.send(event.data);
                         }
                     }
