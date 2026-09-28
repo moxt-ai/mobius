@@ -12,6 +12,8 @@ import {
     SESSION_CANCEL_KIND,
     SESSION_CONFIGURE_KIND,
     SESSION_ELICITATION_RESPOND_KIND,
+    SESSION_LIST_KIND,
+    SESSION_LISTED_KIND,
     SESSION_LIVE_HISTORY_LOAD_KIND,
     SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
     SESSION_PERMISSION_RESPOND_KIND,
@@ -232,6 +234,22 @@ export function createDaemonCommandHandler({
             if (kind === SESSION_CONFIGURE_KIND) {
                 const command = message;
                 void executeSessionConfigure(publisher, socket, command, config, directories, audit, sessions, signal);
+                return;
+            }
+            if (kind === SESSION_LIST_KIND) {
+                const command = message;
+                void nativeSessions
+                    .listSessions(command.limit, signal)
+                    .then((entries) => {
+                        send(socket, {
+                            entries,
+                            kind: SESSION_LISTED_KIND,
+                            requestId: command.requestId,
+                        });
+                    })
+                    .catch((error: unknown) => {
+                        reportOperationFailure(socket, command.requestId, "", error);
+                    });
                 return;
             }
             if (kind === SESSION_QUERY_KIND) {

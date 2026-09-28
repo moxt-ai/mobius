@@ -25,6 +25,7 @@ import {
     decodeSessionCancelCommand,
     decodeSessionConfigureCommand,
     decodeSessionElicitationRespondCommand,
+    decodeSessionListCommand,
     decodeSessionLiveHistoryLoad,
     decodeSessionLiveHistoryPageLoad,
     decodeSessionPermissionRespondCommand,
@@ -55,6 +56,8 @@ import {
     SESSION_ELICITATION_RESPOND_KIND,
     SESSION_EVENT_KIND,
     SESSION_FAILED_KIND,
+    SESSION_LIST_KIND,
+    SESSION_LISTED_KIND,
     SESSION_LIVE_HISTORY_LOAD_KIND,
     SESSION_LIVE_HISTORY_LOADED_KIND,
     SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
@@ -456,6 +459,8 @@ export class ChannelActor {
                 return;
             case SESSION_QUERIED_KIND:
                 return;
+            case SESSION_LISTED_KIND:
+                return;
             case SESSION_QUEUED_KIND:
                 return;
             case NATIVE_SESSION_RESULT_KIND:
@@ -513,6 +518,10 @@ export class ChannelActor {
             }
             case SESSION_QUERY_KIND: {
                 const command = decodeSessionQueryCommand(message);
+                return { message: command, requestId: command.requestId, sessionId: "" };
+            }
+            case SESSION_LIST_KIND: {
+                const command = decodeSessionListCommand(message);
                 return { message: command, requestId: command.requestId, sessionId: "" };
             }
             case SESSION_CONFIGURE_KIND: {

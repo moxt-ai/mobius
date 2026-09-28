@@ -6,6 +6,7 @@ export default defineConfig({
         fileParallelism: true,
         maxWorkers: 4,
         include: [
+            "tests/**/*.contract.test.ts",
             "tests/**/*.integration.test.ts",
             "packages/*/tests/**/*.contract.test.ts",
             "packages/*/tests/**/*.integration.test.ts",
