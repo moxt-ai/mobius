@@ -30,7 +30,6 @@ import {
     decodeAgentInstallRequestCommand,
     decodeAgentInstallStartedEvent,
     decodeAgentMessageDeltaEvent,
-    decodeCommittedSessionEvent,
     decodeDaemonToServiceMessage,
     decodeFileBeginEvent,
     decodeFileChunkEvent,
@@ -51,6 +50,7 @@ import {
     decodeSessionElicitationRequestedEvent,
     decodeSessionElicitationResolvedEvent,
     decodeSessionElicitationRespondCommand,
+    decodeSessionEventEnvelope,
     decodeSessionFailedEvent,
     decodeSessionInfoUpdatedEvent,
     decodeSessionLiveHistoryPageLoaded,
@@ -101,7 +101,7 @@ import {
     SESSION_ELICITATION_REQUESTED_KIND,
     SESSION_ELICITATION_RESOLVED_KIND,
     SESSION_ELICITATION_RESPOND_KIND,
-    SESSION_EVENT_COMMITTED_KIND,
+    SESSION_EVENT_KIND,
     SESSION_FAILED_KIND,
     SESSION_INFO_UPDATED_KIND,
     SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
@@ -320,12 +320,12 @@ function readMessageText(event: MessageEvent<unknown>): string {
 
 function readInboundMessage(event: MessageEvent<unknown>): string {
     const encoded = readMessageText(event);
-    if (decodeMessageKind(encoded) !== SESSION_EVENT_COMMITTED_KIND) {
+    if (decodeMessageKind(encoded) !== SESSION_EVENT_KIND) {
         return encoded;
     }
-    const committed = decodeCommittedSessionEvent(encoded);
-    decodeRecordedSessionEvent(committed.payload);
-    return committed.payload;
+    const envelope = decodeSessionEventEnvelope(encoded);
+    decodeRecordedSessionEvent(envelope.payload);
+    return envelope.payload;
 }
 
 function encodeOutboundMessage(encode: () => string): string {

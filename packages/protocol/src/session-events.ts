@@ -58,7 +58,6 @@ import {
 } from "./messages.ts";
 import { activeTurnSnapshotSchema } from "./native-sessions.ts";
 export const SESSION_EVENT_KIND = "session.event";
-export const SESSION_EVENT_COMMITTED_KIND = "session.event.committed";
 
 const MAX_RECORDED_EVENT_LENGTH = 8 * 1024 * 1024;
 
@@ -70,16 +69,7 @@ const eventEnvelopeSchema = z
     })
     .readonly();
 
-const committedEventSchema = z
-    .strictObject({
-        kind: z.literal(SESSION_EVENT_COMMITTED_KIND),
-        payload: z.string().min(2).max(MAX_RECORDED_EVENT_LENGTH),
-        sessionId: identifierStringSchema,
-    })
-    .readonly();
-
 export type SessionEventEnvelope = z.infer<typeof eventEnvelopeSchema>;
-export type CommittedSessionEvent = z.infer<typeof committedEventSchema>;
 
 export const SESSION_QUEUE_CHANGED_KIND = "session.queue.changed";
 const sessionQueueChangedSchema = z
@@ -150,12 +140,6 @@ export const decodeSessionEventEnvelope = (encoded: string): SessionEventEnvelop
 
 export const encodeSessionEventEnvelope = (message: SessionEventEnvelope): string =>
     encode(message, eventEnvelopeSchema);
-
-export const decodeCommittedSessionEvent = (encoded: string): CommittedSessionEvent =>
-    decode(encoded, committedEventSchema);
-
-export const encodeCommittedSessionEvent = (message: CommittedSessionEvent): string =>
-    encode(message, committedEventSchema);
 
 export function decodeRecordedSessionEvent(encoded: string): RecordedSessionEvent {
     const kind = decodeMessageKind(encoded);

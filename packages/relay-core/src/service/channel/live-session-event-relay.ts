@@ -1,8 +1,6 @@
 import {
-    type CommittedSessionEvent,
     type DaemonToServiceMessage,
-    encodeCommittedSessionEvent,
-    SESSION_EVENT_COMMITTED_KIND,
+    encodeSessionEventEnvelope,
     validateSessionEventEnvelope,
 } from "@moxt-ai/mobius-protocol";
 import type { ChannelPeers } from "./channel-actor.ts";
@@ -20,12 +18,7 @@ export class LiveSessionEventRelay {
     ): void => {
         validateSessionEventEnvelope(envelope);
         signal.throwIfAborted();
-        const committed: CommittedSessionEvent = {
-            kind: SESSION_EVENT_COMMITTED_KIND,
-            payload: envelope.payload,
-            sessionId: envelope.sessionId,
-        };
-        const message = encodeCommittedSessionEvent(committed);
+        const message = encodeSessionEventEnvelope(envelope);
         for (const host of this.#peers.hosts()) {
             try {
                 host.send(message);

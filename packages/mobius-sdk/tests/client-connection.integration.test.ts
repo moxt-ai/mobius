@@ -9,17 +9,16 @@ import {
     decodeSessionPromptCommand,
     decodeWorkspaceListCommand,
     encodeAgentMessageDeltaEvent,
-    encodeCommittedSessionEvent,
     encodeRecordedSessionEvent,
     encodeRuntimeStatusEvent,
     encodeSessionCompletedEvent,
     encodeSessionConfigUpdatedEvent,
+    encodeSessionEventEnvelope,
     encodeSessionOperationFailedEvent,
     encodeSessionPrepareCommand,
     encodeSessionReadyEvent,
     encodeWorkspaceEntriesEvent,
     RUNTIME_STATUS_KIND,
-    SESSION_EVENT_COMMITTED_KIND,
     SESSION_PROMPT_KIND,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
@@ -375,8 +374,8 @@ describe("browser relay connection", () => {
             });
             writeServerTextFrame(
                 socket,
-                encodeCommittedSessionEvent({
-                    kind: SESSION_EVENT_COMMITTED_KIND,
+                encodeSessionEventEnvelope({
+                    kind: "session.event",
                     payload: deltaPayload,
                     sessionId: prompt.sessionId,
                 }),
@@ -402,8 +401,8 @@ describe("browser relay connection", () => {
             ]) {
                 writeServerTextFrame(
                     socket,
-                    encodeCommittedSessionEvent({
-                        kind: SESSION_EVENT_COMMITTED_KIND,
+                    encodeSessionEventEnvelope({
+                        kind: "session.event",
                         payload: encodeRecordedSessionEvent({
                             kind: "session.turn.updated",
                             sessionId: prompt.sessionId,
@@ -416,8 +415,8 @@ describe("browser relay connection", () => {
             await expect(deltas.next()).resolves.toEqual(new ObservedDelta(" world", "2"));
             writeServerTextFrame(
                 socket,
-                encodeCommittedSessionEvent({
-                    kind: SESSION_EVENT_COMMITTED_KIND,
+                encodeSessionEventEnvelope({
+                    kind: "session.event",
                     payload: encodeSessionCompletedEvent({
                         commandId: prompt.commandId,
                         kind: "session.completed",
@@ -448,7 +447,7 @@ describe("browser relay connection", () => {
         }
     });
 
-    it("Given agent preparation control messages, When no conversation history changes, Then the history observer waits for a committed session event", async () => {
+    it("Given agent preparation control messages, When no conversation history changes, Then the history observer waits for a live session event", async () => {
         const relay = createServer();
         const sockets = new Set<Duplex>();
         const connections = new ValueFeed<Duplex>();
@@ -560,8 +559,8 @@ describe("browser relay connection", () => {
 
             writeServerTextFrame(
                 socket,
-                encodeCommittedSessionEvent({
-                    kind: SESSION_EVENT_COMMITTED_KIND,
+                encodeSessionEventEnvelope({
+                    kind: "session.event",
                     payload: encodeAgentMessageDeltaEvent({
                         commandId: "command-1",
                         epoch: "epoch-1",

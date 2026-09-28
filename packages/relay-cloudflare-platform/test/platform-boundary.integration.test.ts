@@ -2,8 +2,8 @@ import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
     AGENT_MESSAGE_DELTA_KIND,
-    decodeCommittedSessionEvent,
     decodeServiceToDaemonMessage,
+    decodeSessionEventEnvelope,
     decodeSessionPromptCommand,
     encodeSessionEventEnvelope,
     encodeSessionPromptCommand,
@@ -473,13 +473,13 @@ describe.sequential("Platform Session-only boundary", () => {
                 sessionId,
             });
             daemon.send(answer);
-            const received = decodeCommittedSessionEvent(await hostMessages.next());
+            const received = decodeSessionEventEnvelope(await hostMessages.next());
             expect(received.payload).toContain("local answer");
             expect(received).not.toHaveProperty("cursor");
             expect(received).not.toHaveProperty("sequence");
             // A retransmission remains a live event; the viewer uses the Runtime's epoch and sequence.
             daemon.send(answer);
-            expect(decodeCommittedSessionEvent(await hostMessages.next()).payload).toContain("local answer");
+            expect(decodeSessionEventEnvelope(await hostMessages.next()).payload).toContain("local answer");
             const browserAccess = await responseJson(
                 await worker.fetch(
                     new Request(
@@ -518,7 +518,7 @@ describe.sequential("Platform Session-only boundary", () => {
                 subscriptionId: "subscription-1",
             });
             daemon.send(answer);
-            expect(decodeCommittedSessionEvent(await hostMessages.next()).payload).toContain("local answer");
+            expect(decodeSessionEventEnvelope(await hostMessages.next()).payload).toContain("local answer");
             expect(JSON.parse(await transportMessages.next())).toMatchObject({
                 data: expect.stringContaining("local answer"),
                 eventId: "",

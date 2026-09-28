@@ -7,7 +7,6 @@ import {
     decodeAgentCatalogRefreshFailedEvent,
     decodeAgentSettingsDiscoveredEvent,
     decodeAgentSettingsDiscoveryFailedEvent,
-    decodeCommittedSessionEvent,
     decodeFileBeginEvent,
     decodeFileChunkEvent,
     decodeFileEndEvent,
@@ -18,6 +17,7 @@ import {
     decodeSessionCompletedEvent,
     decodeSessionConfigUpdatedEvent,
     decodeSessionElicitationResolvedEvent,
+    decodeSessionEventEnvelope,
     decodeSessionFailedEvent,
     decodeSessionLiveHistoryPageLoaded,
     decodeSessionOperationFailedEvent,
@@ -261,8 +261,8 @@ export async function requestRuntimeAgentSettings(
                         return;
                     }
                     const raw =
-                        decodeMessageKind(event.data) === "session.event.committed"
-                            ? decodeCommittedSessionEvent(event.data).payload
+                        decodeMessageKind(event.data) === "session.event"
+                            ? decodeSessionEventEnvelope(event.data).payload
                             : event.data;
                     const kind = decodeMessageKind(raw);
                     if (kind === "runtime.status") {
@@ -330,8 +330,8 @@ export async function requestRuntimeAgentCatalogRefresh(
                         return;
                     }
                     const raw =
-                        decodeMessageKind(event.data) === "session.event.committed"
-                            ? decodeCommittedSessionEvent(event.data).payload
+                        decodeMessageKind(event.data) === "session.event"
+                            ? decodeSessionEventEnvelope(event.data).payload
                             : event.data;
                     const kind = decodeMessageKind(raw);
                     if (kind === "runtime.status") {
@@ -418,8 +418,8 @@ export async function requestRuntimeControl(
                         return;
                     }
                     const raw =
-                        decodeMessageKind(event.data) === "session.event.committed"
-                            ? decodeCommittedSessionEvent(event.data).payload
+                        decodeMessageKind(event.data) === "session.event"
+                            ? decodeSessionEventEnvelope(event.data).payload
                             : event.data;
                     const kind = decodeMessageKind(raw);
                     if (kind === "runtime.status") {
@@ -535,8 +535,8 @@ export async function requestRuntimeWorkspace(
                         return;
                     }
                     const raw =
-                        decodeMessageKind(event.data) === "session.event.committed"
-                            ? decodeCommittedSessionEvent(event.data).payload
+                        decodeMessageKind(event.data) === "session.event"
+                            ? decodeSessionEventEnvelope(event.data).payload
                             : event.data;
                     const kind = decodeMessageKind(raw);
                     if (kind === "session.failed") {
