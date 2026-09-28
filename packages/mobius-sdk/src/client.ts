@@ -1,5 +1,4 @@
 import {
-    type ActiveTurnSnapshot,
     AGENT_ACTIVITY_KIND,
     AGENT_ACTIVITY_NARRATION_KIND,
     AGENT_CONTENT_KIND,
@@ -12,6 +11,7 @@ import {
     AGENT_INSTALL_STARTED_KIND,
     AGENT_MESSAGE_DELTA_KIND,
     type AgentActivityEvent,
+    type AgentActivityNarrationEvent,
     type AgentContentEvent,
     type AgentInstallCancelledEvent,
     type AgentInstallCompletedEvent,
@@ -62,7 +62,6 @@ import {
     decodeSessionPromptCommand,
     decodeSessionReadyEvent,
     decodeSessionStartedEvent,
-    decodeSessionTurnUpdatedEvent,
     decodeSessionUsageUpdatedEvent,
     decodeWorkspaceEntriesEvent,
     decodeWorkspaceListCommand,
@@ -113,7 +112,6 @@ import {
     SESSION_PROMPT_KIND,
     SESSION_READY_KIND,
     SESSION_STARTED_KIND,
-    SESSION_TURN_UPDATED_KIND,
     SESSION_USAGE_UPDATED_KIND,
     type SessionCommandsUpdatedEvent,
     type SessionCompletedEvent,
@@ -143,7 +141,6 @@ const OPERATION_TIMEOUT_MILLISECONDS = 120_000;
 const INSTALLATION_TIMEOUT_MILLISECONDS = 11 * 60 * 1_000;
 const TERMINAL_RELAY_CLOSE_CODES: ReadonlySet<number> = new Set([1002, 1003, 1007, 1008, 4003, 4008]);
 const HISTORY_CHANGING_MESSAGE_KINDS: ReadonlySet<string> = new Set([
-    SESSION_TURN_UPDATED_KIND,
     AGENT_ACTIVITY_KIND,
     AGENT_ACTIVITY_NARRATION_KIND,
     AGENT_CONTENT_KIND,
@@ -167,7 +164,6 @@ export type LiveSessionMessage =
 export type MobiusRelayUrlProvider = (signal: AbortSignal) => Promise<string>;
 
 export interface ConnectMobiusClientOptions {
-    readonly onSnapshot?: (turn: ActiveTurnSnapshot) => void;
     readonly protocols?: readonly string[];
     readonly onNativeSessionResult?: (event: NativeSessionResult) => void;
     readonly onActivity?: () => void;
@@ -197,10 +193,10 @@ export interface ConnectMobiusClientOptions {
 }
 
 export interface PromptObserver {
-    readonly onSnapshot?: (turn: ActiveTurnSnapshot) => void;
     readonly onActivity?: (activity: AgentActivityEvent) => void;
     readonly onContent?: (content: AgentContentEvent) => void;
     readonly onDelta?: (text: string, committedSequence: string) => void;
+    readonly onNarration?: (narration: AgentActivityNarrationEvent) => void;
     readonly onStarted?: (attemptId: string) => void;
 }
 
@@ -887,8 +883,6 @@ export class MobiusClient {
             }),
         );
         let cleanupPrompt = (): void => undefined;
-        let snapshot: ActiveTurnSnapshot | null = null;
-
         const result = new Promise<PromptResult>((resolve, reject) => {
             const cleanup = (): void => {
                 this.#socket.removeEventListener("message", handleMessage);
@@ -916,40 +910,34 @@ export class MobiusClient {
                         return;
                     }
 
-                    if (kind === SESSION_TURN_UPDATED_KIND) {
-                        const { turn } = decodeSessionTurnUpdatedEvent(encoded);
-                        if (
-                            turn.commandId !== commandId ||
-                            (snapshot !== null && snapshot.epoch === turn.epoch && snapshot.sequence >= turn.sequence)
-                        ) {
-                            return;
+                    if (kind === AGENT_MESSAGE_DELTA_KIND) {
+                        const message = decodeAgentMessageDeltaEvent(encoded);
+                        if (message.commandId === commandId) {
+                            request.observer?.onDelta?.(message.text, String(message.sequence));
                         }
-                        const previousText = snapshot?.text ?? "";
-                        snapshot = turn;
-                        request.observer?.onSnapshot?.(turn);
-                        // Prompt observers start before submission, so their text callbacks
-                        // receive only the suffix of each authoritative cumulative update.
-                        if (turn.text.length > previousText.length) {
-                            request.observer?.onDelta?.(turn.text.slice(previousText.length), String(turn.sequence));
+                        return;
+                    }
+
+                    if (kind === AGENT_ACTIVITY_KIND) {
+                        const message = decodeAgentActivityEvent(encoded);
+                        if (message.commandId === commandId) {
+                            request.observer?.onActivity?.(message);
                         }
-                        for (const activity of turn.activities) {
-                            request.observer?.onActivity?.({
-                                ...activity,
-                                commandId,
-                                sessionId,
-                                kind: AGENT_ACTIVITY_KIND,
-                                detail: { kind: "unrecorded" },
-                            });
+                        return;
+                    }
+
+                    if (kind === AGENT_ACTIVITY_NARRATION_KIND) {
+                        const message = decodeAgentActivityNarrationEvent(encoded);
+                        if (message.commandId === commandId) {
+                            request.observer?.onNarration?.(message);
                         }
-                        for (const [index, content] of turn.content.entries()) {
-                            request.observer?.onContent?.({
-                                kind: AGENT_CONTENT_KIND,
-                                commandId,
-                                sessionId,
-                                content,
-                                contentId: `${commandId}-${index}`,
-                                messageId: commandId,
-                            });
+                        return;
+                    }
+
+                    if (kind === AGENT_CONTENT_KIND) {
+                        const message = decodeAgentContentEvent(encoded);
+                        if (message.commandId === commandId) {
+                            request.observer?.onContent?.(message);
                         }
                         return;
                     }
@@ -1177,8 +1165,6 @@ export class MobiusClient {
                 this.#options.onElicitationResolved?.(decodeSessionElicitationResolvedEvent(encoded));
             } else if (kind === SESSION_STARTED_KIND) {
                 this.#options.onLiveMessage?.(decodeSessionStartedEvent(encoded));
-            } else if (kind === SESSION_TURN_UPDATED_KIND) {
-                this.#options.onSnapshot?.(decodeSessionTurnUpdatedEvent(encoded).turn);
             } else if (kind === AGENT_MESSAGE_DELTA_KIND) {
                 this.#options.onLiveMessage?.(decodeAgentMessageDeltaEvent(encoded));
             } else if (kind === AGENT_ACTIVITY_KIND) {

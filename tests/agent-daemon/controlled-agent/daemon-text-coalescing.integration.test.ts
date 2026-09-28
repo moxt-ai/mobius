@@ -7,7 +7,14 @@ import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import {
-    type ActiveTurnSnapshot,
+    AGENT_ACTIVITY_KIND,
+    AGENT_ACTIVITY_NARRATION_KIND,
+    AGENT_CONTENT_KIND,
+    AGENT_MESSAGE_DELTA_KIND,
+    decodeAgentActivityEvent,
+    decodeAgentActivityNarrationEvent,
+    decodeAgentContentEvent,
+    decodeAgentMessageDeltaEvent,
     decodeMessageKind,
     decodeNativeSessionResult,
     decodeSessionCompletedEvent,
@@ -17,7 +24,6 @@ import {
     decodeSessionLiveHistoryPageLoaded,
     decodeSessionQueuedEvent,
     decodeSessionStartedEvent,
-    decodeSessionTurnUpdatedEvent,
     encodeNativeSessionRequest,
     encodeSessionCancelCommand,
     encodeSessionLiveHistoryLoad,
@@ -36,7 +42,6 @@ import {
     SESSION_PROMPT_DISPOSITION_KIND,
     SESSION_QUEUED_KIND,
     SESSION_STARTED_KIND,
-    SESSION_TURN_UPDATED_KIND,
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -226,7 +231,7 @@ describe("daemon assistant text coalescing", () => {
                 targetCommandId: "",
             };
             sendText(fixture.socket, encodeSessionPromptCommand(prompt));
-            let latest: ActiveTurnSnapshot;
+            const observedOrder: string[] = [];
             for (;;) {
                 const frame = await fixture.frames.next();
                 if (decodeMessageKind(frame) !== SESSION_EVENT_KIND) {
@@ -234,27 +239,25 @@ describe("daemon assistant text coalescing", () => {
                 }
                 const payload = decodeSessionEventEnvelope(frame).payload;
                 const kind = decodeMessageKind(payload);
-                if (kind === SESSION_TURN_UPDATED_KIND) {
-                    const turn = decodeSessionTurnUpdatedEvent(payload).turn;
-                    const firstMessageIndex = turn.messages.findIndex(
-                        (message) => message.text === "Checking the workspace",
-                    );
-                    const toolIndex = turn.messages.findIndex(
-                        (message) =>
-                            message.role === "assistant" &&
-                            message.activities.some((activity) => activity.activityType === "tool"),
-                    );
-                    const finalMessageIndex = turn.messages.findIndex((message) =>
-                        message.text.includes("OpenCode turn 1: interleave progress and hold"),
-                    );
-                    if (firstMessageIndex >= 0 && toolIndex > firstMessageIndex && finalMessageIndex > toolIndex) {
-                        latest = turn;
+                if (kind === AGENT_MESSAGE_DELTA_KIND) {
+                    const delta = decodeAgentMessageDeltaEvent(payload);
+                    if (delta.text.includes("Checking the workspace")) {
+                        observedOrder.push("first-message");
+                    }
+                    if (delta.text.includes("OpenCode turn 1: interleave progress and hold")) {
+                        observedOrder.push("final-message");
                         break;
+                    }
+                } else if (kind === AGENT_ACTIVITY_KIND) {
+                    const activity = decodeAgentActivityEvent(payload);
+                    if (activity.activityType === "tool" && activity.status === "completed") {
+                        observedOrder.push("tool");
                     }
                 } else if (kind === SESSION_FAILED_KIND) {
                     throw new Error(payload);
                 }
             }
+            expect(observedOrder).toEqual(["first-message", "tool", "final-message"]);
             sendText(
                 fixture.socket,
                 encodeNativeSessionRequest({
@@ -277,7 +280,19 @@ describe("daemon assistant text coalescing", () => {
             if (reopened.action !== "active-turn" || reopened.turn === null) {
                 throw new Error("Expected the reopened active Turn");
             }
-            expect(reopened.turn.messages).toEqual(latest.messages);
+            const latest = reopened.turn;
+            const firstMessageIndex = latest.messages.findIndex((message) => message.text === "Checking the workspace");
+            const toolIndex = latest.messages.findIndex(
+                (message) =>
+                    message.role === "assistant" &&
+                    message.activities.some((activity) => activity.activityType === "tool"),
+            );
+            const finalMessageIndex = latest.messages.findIndex((message) =>
+                message.text.includes("OpenCode turn 1: interleave progress and hold"),
+            );
+            expect(firstMessageIndex).toBeGreaterThanOrEqual(0);
+            expect(toolIndex).toBeGreaterThan(firstMessageIndex);
+            expect(finalMessageIndex).toBeGreaterThan(toolIndex);
 
             sendText(
                 fixture.socket,
@@ -346,7 +361,7 @@ describe("daemon assistant text coalescing", () => {
         }
     }, 30_000);
 
-    it("Given a token-level Agent emits a burst of message chunks, When the turn completes, Then the final snapshot preserves every token before successful completion", async () => {
+    it("Given a token-level Agent emits a burst of message chunks, When the turn completes, Then bounded live deltas preserve every token without cumulative snapshots", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-text-coalescing-"));
         const workspace = join(stateDirectory, "workspace");
         const nativeStateDirectory = join(stateDirectory, "native");
@@ -422,7 +437,8 @@ describe("daemon assistant text coalescing", () => {
             };
             sendText(socket, encodeSessionPromptCommand(prompt));
 
-            let snapshotText = "";
+            let streamedText = "";
+            let receivedCumulativeSnapshot = false;
             let completed = false;
             while (!completed) {
                 const message = await frames.next();
@@ -431,10 +447,13 @@ describe("daemon assistant text coalescing", () => {
                 }
                 const envelope = decodeSessionEventEnvelope(message);
                 const kind = decodeMessageKind(envelope.payload);
-                if (kind === SESSION_TURN_UPDATED_KIND) {
-                    const { turn } = decodeSessionTurnUpdatedEvent(envelope.payload);
-                    expect(turn).toMatchObject({ epoch: expect.any(String), sequence: expect.any(Number) });
-                    snapshotText = turn.text;
+                if (kind === AGENT_MESSAGE_DELTA_KIND) {
+                    const delta = decodeAgentMessageDeltaEvent(envelope.payload);
+                    expect(delta).toMatchObject({ epoch: expect.any(String), sequence: expect.any(Number) });
+                    streamedText += delta.text;
+                }
+                if (kind === "session.turn.updated") {
+                    receivedCumulativeSnapshot = true;
                 }
                 if (kind === SESSION_FAILED_KIND) {
                     throw new Error(envelope.payload);
@@ -447,7 +466,8 @@ describe("daemon assistant text coalescing", () => {
 
             // Every burst token must survive, in order, with no duplication.
             const expectedBurst = Array.from({ length: 64 }, (_value, index) => `token-${index.toString()} `).join("");
-            expect(snapshotText).toBe(`DeepSeek Harness turn 1: ${expectedBurst}`);
+            expect(streamedText).toBe(`DeepSeek Harness turn 1: ${expectedBurst}`);
+            expect(receivedCumulativeSnapshot).toBe(false);
         } finally {
             cancellation.abort();
             await daemon;
@@ -540,16 +560,16 @@ describe("daemon assistant text coalescing", () => {
             };
             sendText(socket, encodeSessionPromptCommand(prompt));
             let output = "";
-            let firstDelta: ActiveTurnSnapshot | null = null;
+            let firstDelta: ReturnType<typeof decodeAgentMessageDeltaEvent> | null = null;
             let lastSequence = 0;
             while (output.length < 300_000) {
                 const message = await next();
-                if (decodeMessageKind(message) === SESSION_TURN_UPDATED_KIND) {
-                    const delta = decodeSessionTurnUpdatedEvent(message).turn;
+                if (decodeMessageKind(message) === AGENT_MESSAGE_DELTA_KIND) {
+                    const delta = decodeAgentMessageDeltaEvent(message);
                     firstDelta ??= delta;
-                    expect(delta.sequence).toBe(lastSequence + 1);
+                    expect(delta.sequence).toBeGreaterThan(lastSequence);
                     lastSequence = delta.sequence;
-                    output = delta.text;
+                    output += delta.text;
                 }
             }
             expect(output).toBe("x".repeat(300_000));
@@ -578,14 +598,27 @@ describe("daemon assistant text coalescing", () => {
                 throw new Error("Expected an active Turn snapshot");
             }
             expect(active.turn.sequence).toBe(lastSequence);
-            expect(active.turn.text.length).toBe(output.length);
-            expect(active.turn.text).toBe(output);
+            const recoveredOutput = active.turn.messages
+                .flatMap((message) => (message.role === "assistant" ? [message.text] : []))
+                .join("");
+            expect(output.endsWith(recoveredOutput)).toBe(true);
+            expect(recoveredOutput.length).toBeLessThan(output.length);
+            expect(
+                active.turn.messages.reduce(
+                    (characters, message) =>
+                        characters +
+                        message.text.length +
+                        (message.role === "assistant"
+                            ? JSON.stringify(message.activities).length + JSON.stringify(message.content).length
+                            : 0),
+                    0,
+                ),
+            ).toBeLessThanOrEqual(SESSION_HISTORY_CHARACTER_LIMIT);
             expect(active.turn).toMatchObject({
                 commandId: prompt.commandId,
                 epoch: firstDelta.epoch,
-                prompt: prompt.prompt,
                 sequence: expect.any(Number),
-                truncated: false,
+                truncated: true,
             });
             sendText(
                 socket,
@@ -609,7 +642,7 @@ describe("daemon assistant text coalescing", () => {
             if (activePage.status !== "available") {
                 throw new Error("Expected active native history");
             }
-            expect(activePage.messages[0]).toMatchObject({ role: "user", text: prompt.prompt });
+            expect(activePage.truncated).toBe(true);
             const activeText = activePage.messages
                 .flatMap((message) => (message.role === "assistant" ? [message.text] : []))
                 .join("");
@@ -780,23 +813,32 @@ describe("daemon assistant text coalescing", () => {
                 started = await next();
             } while (decodeMessageKind(started) !== SESSION_STARTED_KIND);
             const firstStarted = decodeSessionStartedEvent(started);
-            const { activeActivity, activeContent, activeNarration, activeTool } = await (async () => {
+            const { activeActivity, activeContent, activeTool } = await (async () => {
+                let activeActivity: ReturnType<typeof decodeAgentActivityEvent> | null = null;
+                let activeContent: ReturnType<typeof decodeAgentContentEvent> | null = null;
+                let activeNarration = "";
+                let activeTool: ReturnType<typeof decodeAgentActivityEvent> | null = null;
                 for (;;) {
                     const event = await next();
-                    if (decodeMessageKind(event) !== SESSION_TURN_UPDATED_KIND) {
-                        continue;
+                    const kind = decodeMessageKind(event);
+                    if (kind === AGENT_ACTIVITY_KIND) {
+                        const activity = decodeAgentActivityEvent(event);
+                        activeActivity ??= activity;
+                        if (activity.locations.length > 0 && activity.status === "completed") {
+                            activeTool = activity;
+                        }
+                    } else if (kind === AGENT_ACTIVITY_NARRATION_KIND) {
+                        activeNarration += decodeAgentActivityNarrationEvent(event).text;
+                    } else if (kind === AGENT_CONTENT_KIND) {
+                        activeContent = decodeAgentContentEvent(event);
                     }
-                    const { turn } = decodeSessionTurnUpdatedEvent(event);
-                    const activeActivity = turn.activities[0];
-                    const activeContent = turn.content[0];
-                    const activeNarration = turn.activities.find(
-                        (item) => item.activityType === "reasoning" && item.output.length > 0,
-                    );
-                    const activeTool = turn.activities.find(
-                        (item) => item.locations.length > 0 && item.status === "completed",
-                    );
-                    if (activeActivity && activeContent && activeNarration && activeTool) {
-                        return { activeActivity, activeContent, activeNarration, activeTool };
+                    if (
+                        activeActivity !== null &&
+                        activeContent !== null &&
+                        activeNarration.length > 0 &&
+                        activeTool !== null
+                    ) {
+                        return { activeActivity, activeContent: activeContent.content, activeTool };
                     }
                 }
             })();
@@ -823,28 +865,37 @@ describe("daemon assistant text coalescing", () => {
                 turn: {
                     commandId: prompt.commandId,
                     epoch: firstStarted.epoch,
-                    prompt: prompt.prompt,
                     sequence: expect.any(Number),
-                    text: "",
                     truncated: false,
-                    activities: expect.arrayContaining([
-                        expect.objectContaining({
-                            activityId: activeActivity.activityId,
-                            locations: activeActivity.locations,
-                        }),
-                        expect.objectContaining({
-                            activityType: "reasoning",
-                            output: activeNarration.output,
-                        }),
-                        expect.objectContaining({
-                            activityId: activeTool.activityId,
-                            locations: activeTool.locations,
-                            status: "completed",
-                        }),
-                    ]),
-                    content: [activeContent],
                 },
             });
+            if (active.action !== "active-turn" || active.turn === null) {
+                throw new Error("Expected an active Turn snapshot");
+            }
+            const recoveredActivities = active.turn.messages.flatMap((message) =>
+                message.role === "assistant" ? message.activities : [],
+            );
+            const recoveredContent = active.turn.messages.flatMap((message) =>
+                message.role === "assistant" ? message.content : [],
+            );
+            expect(recoveredActivities).toEqual(
+                expect.arrayContaining([
+                    expect.objectContaining({
+                        activityId: activeActivity.activityId,
+                        locations: activeActivity.locations,
+                    }),
+                    expect.objectContaining({
+                        activityType: "reasoning",
+                        output: expect.stringContaining("Inspecting the workspace"),
+                    }),
+                    expect.objectContaining({
+                        activityId: activeTool.activityId,
+                        locations: activeTool.locations,
+                        status: "completed",
+                    }),
+                ]),
+            );
+            expect(recoveredContent).toContainEqual(activeContent);
             sendText(
                 socket,
                 encodeSessionLiveHistoryLoad({
@@ -880,7 +931,7 @@ describe("daemon assistant text coalescing", () => {
                     }),
                     expect.objectContaining({
                         activityType: "reasoning",
-                        output: activeNarration.output,
+                        output: expect.stringContaining("Inspecting the workspace"),
                     }),
                     expect.objectContaining({
                         activityId: activeTool.activityId,
@@ -973,46 +1024,47 @@ describe("daemon assistant text coalescing", () => {
                     sessionId,
                 }),
             );
-            let steeredSnapshot: ActiveTurnSnapshot | null = null;
             do {
                 result = await next();
-                if (decodeMessageKind(result) === SESSION_TURN_UPDATED_KIND) {
-                    steeredSnapshot = decodeSessionTurnUpdatedEvent(result).turn;
-                }
             } while (
                 !(
                     decodeMessageKind(result) === SESSION_STARTED_KIND &&
                     decodeSessionStartedEvent(result).commandId === queuedPrompt.commandId
                 )
             );
-            if (steeredSnapshot === null) {
-                throw new Error("Expected the active Turn snapshot to include the steering prompt");
-            }
-            expect(steeredSnapshot.messages.map((message) => ({ role: message.role, text: message.text }))).toEqual([
-                { role: "user", text: prompt.prompt },
-                ...steeredSnapshot.messages
-                    .filter((message) => message.role === "assistant")
-                    .map((message) => ({ role: message.role, text: message.text })),
-                { role: "user", text: queuedPrompt.prompt },
-            ]);
-            expect(steeredSnapshot.messages.at(0)).toMatchObject({ id: prompt.commandId });
-            expect(steeredSnapshot.messages.at(-1)).toMatchObject({ id: queuedPrompt.commandId });
-            do {
+            expect(decodeSessionStartedEvent(result)).toMatchObject({
+                commandId: queuedPrompt.commandId,
+                prompt: queuedPrompt.prompt,
+            });
+            let steeringCompleted = false;
+            let steeredText = "";
+            while (!steeredText.includes(`Steered: ${queuedPrompt.prompt}`)) {
                 result = await next();
-            } while (
-                !(
+                if (decodeMessageKind(result) === AGENT_MESSAGE_DELTA_KIND) {
+                    const delta = decodeAgentMessageDeltaEvent(result);
+                    if (delta.commandId === prompt.commandId) {
+                        steeredText += delta.text;
+                    }
+                } else if (decodeMessageKind(result) === SESSION_COMPLETED_KIND) {
+                    const completed = decodeSessionCompletedEvent(result);
+                    if (completed.commandId === queuedPrompt.commandId) {
+                        expect(completed.stopReason).toBe("steered");
+                        steeringCompleted = true;
+                    }
+                } else if (decodeMessageKind(result) === SESSION_FAILED_KIND) {
+                    throw new Error(result);
+                }
+            }
+            while (!steeringCompleted) {
+                result = await next();
+                if (
                     decodeMessageKind(result) === SESSION_COMPLETED_KIND &&
                     decodeSessionCompletedEvent(result).commandId === queuedPrompt.commandId
-                ) &&
-                !(
-                    decodeMessageKind(result) === SESSION_FAILED_KIND &&
-                    decodeSessionFailedEvent(result).commandId === queuedPrompt.commandId
-                )
-            );
-            expect(decodeSessionCompletedEvent(result)).toMatchObject({
-                commandId: queuedPrompt.commandId,
-                stopReason: "steered",
-            });
+                ) {
+                    expect(decodeSessionCompletedEvent(result).stopReason).toBe("steered");
+                    steeringCompleted = true;
+                }
+            }
             sendText(
                 socket,
                 encodeSessionCancelCommand({ commandId: prompt.commandId, kind: SESSION_CANCEL_KIND, sessionId }),

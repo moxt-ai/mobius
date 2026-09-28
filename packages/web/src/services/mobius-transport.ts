@@ -59,6 +59,7 @@ import {
     OwnerChannelCredentialAuthority,
     ProjectRuntimeCredentialAuthority,
     RecordedActivity,
+    RecordedActivityNarration,
 } from "@/domain/channel";
 import {
     type Conversation,
@@ -1363,8 +1364,19 @@ async function sendObservedPrompt(
                             ),
                         );
                 },
+                onContent: (content) => {
+                    useChatStore.getState().recordAgentContent(content);
+                },
                 onDelta: (text, committedSequence) => {
                     useChatStore.getState().appendAgentText(turn, text, committedSequence);
+                },
+                onNarration: (narration) => {
+                    useChatStore
+                        .getState()
+                        .recordAgentActivityNarration(
+                            turn,
+                            new RecordedActivityNarration(narration.activityId, narration.text),
+                        );
                 },
                 onStarted: (startedAttemptId) => {
                     attemptId = startedAttemptId;

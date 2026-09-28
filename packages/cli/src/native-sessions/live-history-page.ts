@@ -82,6 +82,7 @@ function boundedActiveMessages(
 ): { readonly characters: number; readonly messages: readonly NativeHistoryMessage[]; readonly truncated: boolean } {
     const selected: NativeHistoryMessage[] = [];
     let remainingCharacters = characterLimit;
+    let truncated = false;
     for (let index = messages.length - 1; index >= 0 && selected.length < messageLimit; index -= 1) {
         const message = messages[index];
         if (message === undefined) {
@@ -94,17 +95,18 @@ function boundedActiveMessages(
             continue;
         }
         const structuredCharacters = characters - message.text.length;
-        if (selected.length === 0 && structuredCharacters <= remainingCharacters) {
+        if (structuredCharacters <= remainingCharacters) {
             const textCharacters = remainingCharacters - structuredCharacters;
             selected.unshift({ ...message, text: textCharacters === 0 ? "" : message.text.slice(-textCharacters) });
             remainingCharacters = 0;
+            truncated = true;
         }
         break;
     }
     return {
         characters: characterLimit - remainingCharacters,
         messages: selected,
-        truncated: selected.length !== messages.length,
+        truncated: truncated || selected.length !== messages.length,
     };
 }
 
@@ -207,11 +209,10 @@ export function paginateLiveSessionHistory(
         (message) => message.role === "user" && message.id === activeTurn.commandId,
     );
     const coveredActiveRoot = history.coveredCommandIds.includes(activeTurn.commandId);
-    const matchingActiveUserIndex = coveredActiveRoot
-        ? history.messages.findLastIndex(
-              (message) => message.role === "user" && message.text === (activeRoot?.text ?? activeTurn.prompt),
-          )
-        : -1;
+    const matchingActiveUserIndex =
+        coveredActiveRoot && activeRoot !== undefined
+            ? history.messages.findLastIndex((message) => message.role === "user" && message.text === activeRoot.text)
+            : -1;
     const activeUserIndex =
         matchingActiveUserIndex >= 0
             ? matchingActiveUserIndex

@@ -62,11 +62,7 @@ const activeTurnMessageSchema = z.discriminatedUnion("role", [
 ]);
 export const activeTurnSnapshotSchema = z
     .strictObject({
-        activities: z.array(activeTurnActivitySchema).readonly(),
         commandId: identifier,
-        content: z.array(displayContentSchema).readonly(),
-        prompt: z.string().max(100_000),
-        text: z.string(),
         truncated: z.boolean(),
         epoch: identifier,
         interaction: z
@@ -76,7 +72,20 @@ export const activeTurnSnapshotSchema = z
         sequence: z.number().int().nonnegative(),
         state: z.literal("running"),
     })
-    .readonly();
+    .readonly()
+    .refine(
+        (snapshot) =>
+            snapshot.messages.reduce(
+                (total, message) =>
+                    total +
+                    message.text.length +
+                    (message.role === "assistant"
+                        ? JSON.stringify(message.activities).length + JSON.stringify(message.content).length
+                        : 0),
+                0,
+            ) <= SESSION_HISTORY_CHARACTER_LIMIT,
+        "Active Turn snapshot content is too large",
+    );
 export type ActiveTurnSnapshot = z.infer<typeof activeTurnSnapshotSchema>;
 export type ActiveTurnMessage = z.infer<typeof activeTurnMessageSchema>;
 

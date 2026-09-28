@@ -9,7 +9,6 @@ import {
     decodeSessionPromptCommand,
     decodeWorkspaceListCommand,
     encodeAgentMessageDeltaEvent,
-    encodeRecordedSessionEvent,
     encodeRuntimeStatusEvent,
     encodeSessionCompletedEvent,
     encodeSessionConfigUpdatedEvent,
@@ -293,7 +292,7 @@ describe("browser relay connection", () => {
         }
     });
 
-    it("Given cumulative turn snapshots, When a prompt observer receives an overlapping snapshot, Then it delivers each text suffix once", async () => {
+    it("Given bounded live text events, When a prompt observer receives them, Then it delivers each delta once", async () => {
         const relay = createServer();
         const sockets = new Set<Duplex>();
         const connections = new ValueFeed<Duplex>();
@@ -351,67 +350,36 @@ describe("browser relay connection", () => {
             });
             const frame = await clientFrames.next();
             const prompt = decodeSessionPromptCommand(frame.text);
-            const snapshot = {
-                activities: [],
-                commandId: prompt.commandId,
-                content: [],
-                epoch: "epoch-1",
-                interaction: null,
-                messages: [
-                    { id: prompt.commandId, role: "user" as const, text: prompt.prompt },
-                    { activities: [], content: [], id: "message-1", role: "assistant" as const, text: "Hello" },
-                ],
-                prompt: prompt.prompt,
-                sequence: 1,
-                state: "running" as const,
-                text: "Hello",
-                truncated: false,
-            };
-            const deltaPayload = encodeRecordedSessionEvent({
-                kind: "session.turn.updated",
-                sessionId: prompt.sessionId,
-                turn: snapshot,
-            });
-            writeServerTextFrame(
-                socket,
-                encodeSessionEventEnvelope({
-                    kind: "session.event",
-                    payload: deltaPayload,
-                    sessionId: prompt.sessionId,
-                }),
-            );
-            await expect(deltas.next()).resolves.toEqual(new ObservedDelta("Hello", "1"));
-            for (const turn of [
-                snapshot,
+            for (const delta of [
                 {
-                    ...snapshot,
-                    messages: [
-                        { id: prompt.commandId, role: "user" as const, text: prompt.prompt },
-                        {
-                            activities: [],
-                            content: [],
-                            id: "message-1",
-                            role: "assistant" as const,
-                            text: "Hello world",
-                        },
-                    ],
+                    commandId: prompt.commandId,
+                    epoch: "epoch-1",
+                    kind: "agent.message.delta" as const,
+                    messageId: "message-1",
+                    sequence: 1,
+                    sessionId: prompt.sessionId,
+                    text: "Hello",
+                },
+                {
+                    commandId: prompt.commandId,
+                    epoch: "epoch-1",
+                    kind: "agent.message.delta" as const,
+                    messageId: "message-1",
                     sequence: 2,
-                    text: "Hello world",
+                    sessionId: prompt.sessionId,
+                    text: " world",
                 },
             ]) {
                 writeServerTextFrame(
                     socket,
                     encodeSessionEventEnvelope({
                         kind: "session.event",
-                        payload: encodeRecordedSessionEvent({
-                            kind: "session.turn.updated",
-                            sessionId: prompt.sessionId,
-                            turn,
-                        }),
+                        payload: encodeAgentMessageDeltaEvent(delta),
                         sessionId: prompt.sessionId,
                     }),
                 );
             }
+            await expect(deltas.next()).resolves.toEqual(new ObservedDelta("Hello", "1"));
             await expect(deltas.next()).resolves.toEqual(new ObservedDelta(" world", "2"));
             writeServerTextFrame(
                 socket,

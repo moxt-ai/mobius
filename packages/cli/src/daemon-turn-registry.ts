@@ -77,9 +77,9 @@ export class DaemonTurnRegistry {
         return event;
     };
 
-    readonly recordSteeringPrompt = (command: SessionPromptCommand): RecordedSessionEvent | null => {
+    readonly recordSteeringPrompt = (command: SessionPromptCommand): boolean => {
         const target = this.#turns.get(command.targetCommandId);
-        return target?.recordSteeringPrompt(command) ?? null;
+        return target?.recordSteeringPrompt(command) ?? false;
     };
 
     readonly executionSnapshot = async (matches: (command: SessionPromptCommand) => Promise<boolean>) => {

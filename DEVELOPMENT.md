@@ -115,22 +115,23 @@ and activity tracking live in the same `AcpTurnState` and are released together 
 that turn finishes. Codex configuration and model discovery belong to `CodexSettings`;
 its next-turn parameters are consumed by the execution owner.
 
-## Current turn snapshots
+## Live events and current turn recovery
 
-Agent text and narration increments stay inside the daemon. `ActiveDaemonTurn`
-accumulates them in memory and emits `session.turn.updated` with the ordered assistant
-messages alongside the aggregate text, activities, content, epoch, and increasing
-sequence. One ordered coalescer bounds the publication frequency while combining
-only compatible adjacent Agent events. A new activity keeps its first timeline
-position while later status updates replace its value. Body text is not clipped in
-the active turn's memory.
-Activity sequence is display order; turn sequence is the content snapshot version.
+The daemon publishes bounded `agent.message.delta`, `agent.activity`,
+`agent.activity.narration`, and `agent.content` events while a Turn runs. One
+ordered coalescer bounds publication frequency while combining only compatible
+adjacent Agent events. Live events never carry the complete accumulated Turn.
 
-The `active-turn` query returns the same content snapshot. A subscriber opens the
-stream before reading it and ignores buffered updates at or below its version.
-Native history is used for completed turns; its partial current-turn output must
-not override the daemon snapshot. Final output is flushed before completion and
-turn memory is released by the execution registry. No cloud event log is added.
+`ActiveDaemonTurn` separately accumulates an ordered in-memory recovery snapshot.
+The snapshot has one canonical `messages` timeline; it does not duplicate prompt,
+text, activities, or content in parallel top-level fields. The `active-turn` and
+live-history queries read that snapshot only on demand for a
+new viewer, refresh, or reconciliation. A new activity keeps its first timeline
+position while later status updates replace its value. Activity sequence is display
+order; Turn sequence versions the recovery snapshot. Native history is used for
+completed Turns; its partial current-turn output must not override the daemon
+snapshot. Final output is flushed before completion and Turn memory is released by
+the execution registry. No cloud event log is added.
 
 Web integration tests run the production daemon and control only its Agent harness.
 Real Agent tests verify the production daemon's cumulative output, tool state, and

@@ -102,11 +102,7 @@ export interface AgentMessageDeltaEvent {
     readonly text: string;
 }
 
-/**
- * Internal Agent narration increment. The daemon accumulates these into its
- * current turn and publishes versioned session.turn.updated snapshots to viewers.
- * sequence orders activities; it is not a narration cursor or a snapshot version.
- */
+/** A bounded Agent narration increment. Sequence orders activities, not narration chunks. */
 export interface AgentActivityNarrationEvent {
     readonly activityId: string;
     readonly activityType: string;

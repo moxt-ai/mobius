@@ -54,6 +54,44 @@ type TurnDispatchState =
     | { readonly kind: "promoted" }
     | { readonly kind: "running" };
 
+function activeMessageCharacters(message: ActiveTurnMessage): number {
+    return (
+        message.text.length +
+        (message.role === "assistant"
+            ? JSON.stringify(message.activities).length + JSON.stringify(message.content).length
+            : 0)
+    );
+}
+
+function boundedRecoveryMessages(messages: readonly ActiveTurnMessage[]): {
+    readonly messages: readonly ActiveTurnMessage[];
+    readonly truncated: boolean;
+} {
+    const selected: ActiveTurnMessage[] = [];
+    let remainingCharacters = SESSION_HISTORY_CHARACTER_LIMIT;
+    let truncated = false;
+    for (let index = messages.length - 1; index >= 0 && selected.length < SESSION_HISTORY_MESSAGE_LIMIT; index -= 1) {
+        const message = messages[index];
+        if (message === undefined) {
+            break;
+        }
+        const characters = activeMessageCharacters(message);
+        if (characters <= remainingCharacters) {
+            selected.unshift(message);
+            remainingCharacters -= characters;
+            continue;
+        }
+        const structuredCharacters = characters - message.text.length;
+        if (structuredCharacters <= remainingCharacters) {
+            const textCharacters = remainingCharacters - structuredCharacters;
+            selected.unshift({ ...message, text: textCharacters === 0 ? "" : message.text.slice(-textCharacters) });
+            truncated = true;
+        }
+        break;
+    }
+    return { messages: selected, truncated: truncated || selected.length !== messages.length };
+}
+
 export class ActiveDaemonTurn {
     readonly attemptId: string;
     readonly command: SessionPromptCommand;
@@ -61,10 +99,9 @@ export class ActiveDaemonTurn {
     readonly #finished = Promise.withResolvers<void>();
     #cancellationRequested = false;
     #dispatch: TurnDispatchState;
-    #text = "";
     readonly #activities = new Map<string, NativeMessageActivity>();
-    readonly #content = new Map<string, AgentDisplayContent>();
     #timeline: readonly ActiveTimelineEntry[];
+    #truncated = false;
     #sequence = 0;
     #interaction: Extract<
         RecordedSessionEvent,
@@ -128,9 +165,18 @@ export class ActiveDaemonTurn {
 
     readonly recordEvent = (event: ActiveTurnEventInput): RecordedSessionEvent => {
         if (event.kind === AGENT_MESSAGE_DELTA_KIND) {
-            this.#text += event.text;
+            const sequence = this.advance();
             this.appendMessageText(event.messageId, event.text);
-            return this.updated();
+            this.trimRecoveryState();
+            return {
+                commandId: this.command.commandId,
+                epoch: this.#epoch,
+                kind: AGENT_MESSAGE_DELTA_KIND,
+                messageId: event.messageId,
+                sequence,
+                sessionId: this.command.sessionId,
+                text: event.text,
+            };
         }
         if (
             event.sessionId !== this.command.sessionId ||
@@ -180,7 +226,6 @@ export class ActiveDaemonTurn {
                 toolKind: previous?.toolKind ?? "",
             });
         } else if (event.kind === AGENT_CONTENT_KIND) {
-            this.#content.set(event.contentId, event.content);
             const target = this.#timeline.findLastIndex(
                 (entry) => entry.kind === "message" && entry.sourceMessageId === event.messageId,
             );
@@ -218,7 +263,8 @@ export class ActiveDaemonTurn {
             event.kind === AGENT_ACTIVITY_NARRATION_KIND ||
             event.kind === AGENT_CONTENT_KIND
         ) {
-            return this.updated();
+            this.advance();
+            this.trimRecoveryState();
         }
         return event;
     };
@@ -252,19 +298,21 @@ export class ActiveDaemonTurn {
         }
     }
 
-    readonly recordSteeringPrompt = (command: SessionPromptCommand): RecordedSessionEvent | null => {
+    readonly recordSteeringPrompt = (command: SessionPromptCommand): boolean => {
         if (
             this.#dispatch.kind !== "running" ||
             command.sessionId !== this.command.sessionId ||
             command.targetCommandId !== this.command.commandId
         ) {
-            return null;
+            return false;
         }
         this.#timeline = [
             ...this.#timeline,
             { id: decodeIdentifier(command.commandId), images: command.images, kind: "user", text: command.prompt },
         ];
-        return this.updated();
+        this.advance();
+        this.trimRecoveryState();
+        return true;
     };
 
     private timelineMessages(): readonly ActiveTurnMessage[] {
@@ -290,28 +338,49 @@ export class ActiveDaemonTurn {
         });
     }
 
-    private readonly updated = (): RecordedSessionEvent => {
-        this.#sequence += 1;
-        const turn = this.snapshot();
-        if (turn === null) {
-            throw new Error("Only a running turn can publish a snapshot");
+    private trimRecoveryState(): void {
+        const complete = this.timelineMessages();
+        const bounded = boundedRecoveryMessages(complete);
+        if (!bounded.truncated) {
+            return;
         }
-        return { kind: "session.turn.updated", sessionId: this.command.sessionId, turn };
+        this.#truncated = true;
+        const retained = new Map(bounded.messages.map((message) => [message.id, message]));
+        const removedActivityIds: string[] = [];
+        this.#timeline = this.#timeline.flatMap((entry): readonly ActiveTimelineEntry[] => {
+            const message = retained.get(entry.id);
+            if (message === undefined) {
+                if (entry.kind === "activity") {
+                    removedActivityIds.push(entry.activityId);
+                }
+                return [];
+            }
+            if (entry.kind === "message" || entry.kind === "user") {
+                return [{ ...entry, text: message.text }];
+            }
+            return [entry];
+        });
+        for (const activityId of removedActivityIds) {
+            this.#activities.delete(activityId);
+        }
+    }
+
+    private readonly advance = (): number => {
+        if (this.#dispatch.kind !== "running") {
+            throw new Error("Only a running turn can advance its snapshot");
+        }
+        this.#sequence += 1;
+        return this.#sequence;
     };
 
     readonly snapshot = (): ActiveTurnSnapshot => {
         if (this.#dispatch.kind !== "running") {
             return null;
         }
-        const completeMessages = this.timelineMessages();
-        const messages = completeMessages.slice(-SESSION_HISTORY_MESSAGE_LIMIT);
+        const messages = this.timelineMessages();
         return {
-            activities: [...this.#activities.values()].sort((left, right) => left.sequence - right.sequence),
             commandId: decodeIdentifier(this.command.commandId),
-            content: [...this.#content.values()],
-            prompt: this.command.prompt,
-            text: this.#text,
-            truncated: messages.length !== completeMessages.length,
+            truncated: this.#truncated,
             epoch: this.#epoch,
             interaction: this.#interaction,
             messages,
