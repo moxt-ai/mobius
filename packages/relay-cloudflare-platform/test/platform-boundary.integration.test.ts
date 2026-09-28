@@ -67,6 +67,35 @@ function credentialHeaders(credential: string): Headers {
     return new Headers({ authorization: `Bearer ${credential}`, "content-type": "application/json" });
 }
 
+class UnavailableProjectNamespace implements DurableObjectNamespace {
+    readonly #source: DurableObjectNamespace;
+    #accessCount = 0;
+
+    constructor(source: DurableObjectNamespace) {
+        this.#source = source;
+    }
+
+    get accessCount(): number {
+        return this.#accessCount;
+    }
+
+    readonly newUniqueId: DurableObjectNamespace["newUniqueId"] = (options) => this.#source.newUniqueId(options);
+
+    readonly idFromName: DurableObjectNamespace["idFromName"] = (name) => this.#source.idFromName(name);
+
+    readonly idFromString: DurableObjectNamespace["idFromString"] = (id) => this.#source.idFromString(id);
+
+    readonly get: DurableObjectNamespace["get"] = (id, options) => this.#source.get(id, options);
+
+    readonly getByName: DurableObjectNamespace["getByName"] = () => {
+        this.#accessCount += 1;
+        throw new Error("Project storage must not be accessed");
+    };
+
+    readonly jurisdiction: DurableObjectNamespace["jurisdiction"] = (jurisdiction) =>
+        new UnavailableProjectNamespace(this.#source.jurisdiction(jurisdiction));
+}
+
 class SocketMessages {
     readonly #messages: string[] = [];
     readonly #resolvers: Array<(message: string) => void> = [];
@@ -215,6 +244,72 @@ describe.sequential("Platform Session-only boundary", () => {
             400,
         );
         expect(retired).toMatchObject({ error: { code: "project_permission_invalid" } });
+    });
+
+    it("Given an all-Projects AppCredential and an unavailable Project, When the developer lists credentials, Then the credential is returned without accessing Project storage", async () => {
+        const worker = createTestMobiusPlatformApp(
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
+            createPlatformGateways,
+        );
+        const environment = bindings();
+        const tenants = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/platform/tenants`, {
+                    headers: developerHeaders(),
+                }),
+                environment,
+            ),
+            200,
+        );
+        const values = tenants["tenants"];
+        if (!Array.isArray(values) || values.length === 0) {
+            throw new Error("Expected a Platform tenant");
+        }
+        const tenantId = text(record(values[0]), "tenantId");
+        const app = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps`, {
+                    body: JSON.stringify({ displayName: "All Projects App", tenantId }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const appId = text(app, "appId");
+        const defaultCredentialId = text(record(app["defaultCredential"]), "credentialId");
+        await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${appId}/projects`, {
+                    body: JSON.stringify({
+                        displayName: "Unavailable Project",
+                        idempotencyKey: "unavailable-project",
+                        locationHint: "apac",
+                    }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const unavailableProjects = new UnavailableProjectNamespace(environment.PROJECT_RELAY);
+
+        const listed = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${appId}/credentials`, {
+                    headers: developerHeaders(),
+                }),
+                { ...environment, PROJECT_RELAY: unavailableProjects },
+            ),
+            200,
+        );
+
+        expect(listed).toMatchObject({
+            credentials: [{ allProjects: true, credentialId: defaultCredentialId, projectIds: [] }],
+        });
+        expect(unavailableProjects.accessCount).toBe(0);
     });
 
     it("Given a linked Codex Runtime, When Chat reads its Agents, sends a prompt, and the Runtime reconnects, Then the Runtime-scoped Agents, answer, and connection status arrive without cloud Session storage", async () => {
