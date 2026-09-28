@@ -35,7 +35,7 @@
         "test:agent-daemon": "pnpm test:agent-daemon:controlled",
         "test:agent-daemon:controlled": "pnpm --filter @moxt-ai/mobius-fake-acp-agent build && vitest run --config vitest.agent-daemon.config.ts tests/agent-daemon/controlled-agent --maxWorkers=4",
         "test:agent-daemon:real": "vitest run --config vitest.agent-daemon.config.ts tests/agent-daemon/real --maxWorkers=2",
-        "test:ci:client": "pnpm test:agent-daemon:controlled && vitest run packages/protocol/tests packages/mobius-sdk/tests",
+        "test:ci:client": "pnpm test:agent-daemon:controlled && vitest run packages/protocol/tests packages/mobius-sdk/tests tests/runtime-session-directory.contract.test.ts",
         "test:ci:relay": "pnpm test:integration:platform",
         "test:ci:hosting": "pnpm test:integration:platform && pnpm test:integration:standalone",
         "test:changed": "vitest run --changed=origin/main",

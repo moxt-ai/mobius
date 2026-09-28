@@ -3,6 +3,7 @@ import {
     decodeAgentSettingsDiscoverCommand,
     decodeNativeSessionRequest,
     decodeSessionConfigureCommand,
+    decodeSessionListCommand,
     decodeSessionLiveHistoryPageLoad,
     decodeSessionPrepareCommand,
     decodeSessionPromptCommand,
@@ -56,6 +57,9 @@ const nativeMessagesSchema = v.strictObject({
 const sessionQuerySchema = v.strictObject({
     sessionIds: v.pipe(v.array(identifier), v.minLength(1), v.maxLength(500)),
 });
+const sessionListQuerySchema = v.strictObject({
+    limit: v.pipe(v.string(), v.regex(/^[1-9][0-9]{0,2}$/), v.transform(Number), v.safeInteger(), v.maxValue(500)),
+});
 const submitTurnSchema = v.strictObject({
     ...sessionIdentitySchema.entries,
     content: v.string(),
@@ -100,6 +104,25 @@ export function createProjectRuntimeRoutes() {
             );
             context.header("Cache-Control", "no-store");
             return context.json(runtime);
+        })
+        .get("/projects/:projectId/runtimes/:runtimeId/sessions", async (context) => {
+            const query = validated(sessionListQuerySchema, { limit: context.req.query("limit") ?? "100" });
+            const command = decodeSessionListCommand(
+                JSON.stringify({
+                    kind: "session.list",
+                    limit: query.limit,
+                    requestId: crypto.randomUUID(),
+                }),
+            );
+            const result = await context.env.services.runtimePairings.requestControl(
+                validateIdentifier(context.req.param("projectId"), "project_id"),
+                validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
+                bearerToken(context.req.raw),
+                command,
+                context.req.raw.signal,
+            );
+            context.header("Cache-Control", "no-store");
+            return context.json(result);
         })
         .post(
             "/projects/:projectId/runtimes/:runtimeId/sessions/query",

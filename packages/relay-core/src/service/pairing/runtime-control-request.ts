@@ -25,6 +25,7 @@ import {
     decodeSessionQueuedEvent,
     decodeSessionReadyEvent,
     decodeSessionStartedEvent,
+    decodeSessionsListedEvent,
     decodeSessionsQueriedEvent,
     decodeWorkspaceEntriesEvent,
     encodeNativeSessionRequest,
@@ -42,6 +43,7 @@ import {
     type SessionConfigureCommand,
     type SessionElicitationResolvedEvent,
     type SessionElicitationRespondCommand,
+    type SessionListCommand,
     type SessionLiveHistoryPageLoad,
     type SessionLiveHistoryPageLoaded,
     type SessionPermissionResolvedEvent,
@@ -53,6 +55,7 @@ import {
     type SessionQueuedEvent,
     type SessionReadyEvent,
     type SessionStartedEvent,
+    type SessionsListedEvent,
     type SessionsQueriedEvent,
     type WorkspaceEntriesEvent,
     type WorkspaceListCommand,
@@ -69,6 +72,7 @@ export type RuntimeControlCommand =
     | SessionLiveHistoryPageLoad
     | SessionElicitationRespondCommand
     | SessionPermissionRespondCommand
+    | SessionListCommand
     | SessionQueryCommand;
 export type RuntimeControlResult =
     | NativeSessionResult
@@ -80,6 +84,7 @@ export type RuntimeControlResult =
     | SessionLiveHistoryPageLoaded
     | SessionElicitationResolvedEvent
     | SessionPermissionResolvedEvent
+    | SessionsListedEvent
     | SessionsQueriedEvent;
 
 export interface RuntimeFileStream {
@@ -444,13 +449,15 @@ export async function requestRuntimeControl(
                     const result =
                         command.kind === "native.session.request" && kind === "native.session.result"
                             ? decodeNativeSessionResult(raw)
-                            : command.kind === "session.query" && kind === "session.queried"
-                              ? decodeSessionsQueriedEvent(raw)
-                              : command.kind === "session.prepare" && kind === "session.ready"
-                                ? decodeSessionReadyEvent(raw)
-                                : command.kind === "session.configure" && kind === "session.config.updated"
-                                  ? decodeSessionConfigUpdatedEvent(raw)
-                                  : null;
+                            : command.kind === "session.list" && kind === "session.listed"
+                              ? decodeSessionsListedEvent(raw)
+                              : command.kind === "session.query" && kind === "session.queried"
+                                ? decodeSessionsQueriedEvent(raw)
+                                : command.kind === "session.prepare" && kind === "session.ready"
+                                  ? decodeSessionReadyEvent(raw)
+                                  : command.kind === "session.configure" && kind === "session.config.updated"
+                                    ? decodeSessionConfigUpdatedEvent(raw)
+                                    : null;
                     const resolved =
                         result ??
                         (command.kind === "session.live-history.page.load" &&

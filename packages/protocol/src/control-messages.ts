@@ -8,6 +8,8 @@ export const WORKSPACE_LIST_KIND = "workspace.list";
 export const WORKSPACE_ENTRIES_KIND = "workspace.entries";
 export const SESSION_PREPARE_KIND = "session.prepare";
 export const SESSION_READY_KIND = "session.ready";
+export const SESSION_LIST_KIND = "session.list";
+export const SESSION_LISTED_KIND = "session.listed";
 export const SESSION_QUERY_KIND = "session.query";
 export const SESSION_QUERIED_KIND = "session.queried";
 export const SESSION_CONFIGURE_KIND = "session.configure";
@@ -70,6 +72,26 @@ const sessionMetadataSchema = z
     .readonly();
 
 export type SessionMetadata = z.infer<typeof sessionMetadataSchema>;
+
+const sessionListCommandSchema = z
+    .strictObject({
+        kind: z.literal(SESSION_LIST_KIND),
+        limit: z.number().int().positive().max(500),
+        requestId: IDENTIFIER,
+    })
+    .readonly();
+
+export type SessionListCommand = z.infer<typeof sessionListCommandSchema>;
+
+const sessionsListedEventSchema = z
+    .strictObject({
+        entries: z.array(sessionMetadataSchema).max(500).readonly(),
+        kind: z.literal(SESSION_LISTED_KIND),
+        requestId: IDENTIFIER,
+    })
+    .readonly();
+
+export type SessionsListedEvent = z.infer<typeof sessionsListedEventSchema>;
 
 const sessionQueryCommandSchema = z
     .strictObject({
@@ -976,6 +998,14 @@ export const decodeWorkspaceEntriesEvent = (encoded: string): WorkspaceEntriesEv
     decode(encoded, workspaceEntriesEventSchema);
 export const encodeWorkspaceEntriesEvent = (message: WorkspaceEntriesEvent): string =>
     encode(message, workspaceEntriesEventSchema);
+export const decodeSessionListCommand = (encoded: string): SessionListCommand =>
+    decode(encoded, sessionListCommandSchema);
+export const encodeSessionListCommand = (message: SessionListCommand): string =>
+    encode(message, sessionListCommandSchema);
+export const decodeSessionsListedEvent = (encoded: string): SessionsListedEvent =>
+    decode(encoded, sessionsListedEventSchema);
+export const encodeSessionsListedEvent = (message: SessionsListedEvent): string =>
+    encode(message, sessionsListedEventSchema);
 export const decodeSessionQueryCommand = (encoded: string): SessionQueryCommand =>
     decode(encoded, sessionQueryCommandSchema);
 export const encodeSessionQueryCommand = (message: SessionQueryCommand): string =>

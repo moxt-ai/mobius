@@ -12,6 +12,7 @@ import {
 import { AcpExecutionError, type AcpPrepareOptions, type AgentRuntimeManager } from "../acp/agent-runtime-manager.ts";
 import type { NativeSessionInfo } from "../acp/native-session.ts";
 import { nativeSessionIdSchema } from "../acp/native-session.ts";
+import type { AcpStoredSession } from "../acp/session-store.ts";
 import type { AuditStore } from "../audit/audit-store.ts";
 import { LocalAuthorizationError } from "../authorization/local-authorization-error.ts";
 import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
@@ -361,12 +362,21 @@ export class NativeSessionService {
         };
     };
 
+    readonly listSessions = async (limit: number, signal: AbortSignal): Promise<readonly SessionMetadata[]> =>
+        await this.describeSessions(this.#sessions.listSessions(limit), signal);
+
     readonly querySessions = async (
         sessionIds: readonly string[],
         signal: AbortSignal,
+    ): Promise<readonly SessionMetadata[]> =>
+        await this.describeSessions(this.#sessions.findSessions(sessionIds), signal);
+
+    private readonly describeSessions = async (
+        sessions: readonly AcpStoredSession[],
+        signal: AbortSignal,
     ): Promise<readonly SessionMetadata[]> => {
         const entries: SessionMetadata[] = [];
-        for (const session of this.#sessions.findSessions(sessionIds)) {
+        for (const session of sessions) {
             signal.throwIfAborted();
             const directory = await this.#directories.identify(this.#config.bindingId, session.cwd, signal);
             const additionalDirectories = [];

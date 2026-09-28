@@ -6,6 +6,7 @@ import {
     decodeNativeSessionResult,
     decodeSessionConfigUpdatedEvent,
     decodeSessionReadyEvent,
+    decodeSessionsListedEvent,
     decodeSessionsQueriedEvent,
     decodeWorkspaceEntriesEvent,
     type Interaction,
@@ -862,6 +863,20 @@ export class MobiusRuntimeResources {
                 ),
             ),
         ).entries;
+
+    readonly listSessions = async (runtimeId: string, limit: number, signal: AbortSignal) => {
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
+            throw new MobiusValidationError("The Runtime Session list limit is invalid");
+        }
+        const path = requestUrl(
+            new URL("https://mobius.invalid/"),
+            projectPath(this.#projectId, `runtimes/${encodeURIComponent(runtimeId)}/sessions`),
+        );
+        path.searchParams.set("limit", limit.toString());
+        return decodeSessionsListedEvent(
+            JSON.stringify(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal)),
+        ).entries;
+    };
 
     readonly findNativeSessionByNativeSessionId = async (
         runtimeId: string,

@@ -1,3 +1,4 @@
+import { RUNTIME_WORKSPACE_BINDING_ID, type SessionMetadata } from "@moxt-ai/mobius-protocol";
 import {
     AGENT_ACTIVITY_DETAIL_LIMIT,
     decodeAgentDisplayContentValue,
@@ -1651,9 +1652,21 @@ async function readConnectionDirectoryWithSignal(
     connection: ChannelConnection,
     signal: AbortSignal,
 ): Promise<ChannelHistory> {
-    void connection;
-    signal.throwIfAborted();
-    return new ChannelHistory([], []);
+    const client = publicServiceClient(connectionCredential(connection));
+    try {
+        const entries = await client.runtimes.listSessions(connection.runtimeId, 100, signal);
+        signal.throwIfAborted();
+        return new ChannelHistory(
+            [],
+            entries
+                .filter((entry) => entry.prompted)
+                .map((entry) => recordedSessionFromRuntimeMetadata(connection, entry, null)),
+        );
+    } catch (error) {
+        return throwPublicApiFailure(error);
+    } finally {
+        client.close();
+    }
 }
 
 async function _readConnectionDirectoryWithClient(
@@ -1697,30 +1710,33 @@ async function readSessionHistoryWithSignal(
             },
             signal,
         );
-        return new ChannelHistory(
-            [],
-            [
-                new RecordedSession(
-                    entry.agentId,
-                    "workspace",
-                    1,
-                    entry.directoryId,
-                    connection.runtimeId,
-                    entry.sessionId,
-                    entry.title,
-                    entry.updatedAt,
-                    nativeHistory,
-                    [],
-                    [],
-                    additionalDirectoryIds,
-                ),
-            ],
-        );
+        return new ChannelHistory([], [recordedSessionFromRuntimeMetadata(connection, entry, nativeHistory)]);
     } catch (error) {
         return throwPublicApiFailure(error);
     } finally {
         client.close();
     }
+}
+
+function recordedSessionFromRuntimeMetadata(
+    connection: ChannelConnection,
+    entry: SessionMetadata,
+    nativeHistory: NativeSessionHistory | null,
+): RecordedSession {
+    return new RecordedSession(
+        entry.agentId,
+        RUNTIME_WORKSPACE_BINDING_ID,
+        1,
+        entry.directoryId,
+        connection.runtimeId,
+        entry.sessionId,
+        entry.title,
+        entry.updatedAt,
+        nativeHistory,
+        [],
+        [],
+        entry.additionalDirectories.map((directory) => directory.directoryId),
+    );
 }
 
 async function readRuntimeNativeSessionHistory(

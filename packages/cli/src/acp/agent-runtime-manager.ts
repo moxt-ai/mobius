@@ -552,6 +552,12 @@ export class AgentRuntimeManager {
             return stored instanceof FoundAcpStoredSession ? [stored.session] : [];
         });
 
+    readonly listSessions = (limit: number) =>
+        this.#store
+            .list()
+            .filter((session) => session.prompted)
+            .slice(0, limit);
+
     readonly findLinkedSessions = (agentId: string, nativeSessionId: string) =>
         this.#store.findNative(agentId, nativeSessionId);
 
