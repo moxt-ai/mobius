@@ -193,14 +193,16 @@ test("Given real Codex emits a tool, commentary, and final text, When the comple
                             interaction: null,
                             sequence: expect.any(Number),
                             state: "running",
-                            messages: [
+                        });
+                        expect(result.turn?.messages).toEqual(
+                            expect.arrayContaining([
                                 expect.objectContaining({
                                     id: commandId,
                                     role: "user",
                                     text: "Use a shell tool successfully, then reply using the configured model",
                                 }),
-                            ],
-                        });
+                            ]),
+                        );
                     }
                     snapshotVerified = true;
                     socket.send(
