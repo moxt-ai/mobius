@@ -52,7 +52,7 @@ Make illegal states unrepresentable.
 - Integration tests must exercise only user behavior through mouse or keyboard operations. Direct access to stores in tests is forbidden.
 - Integration tests must bootstrap and render the entire application. Rendering individual React components or views in an integration test is forbidden.
 - Tests must select elements with shared `data-testid.ts` constants and `getByTestId`. `getByRole`, `querySelector`, and ad hoc test IDs are forbidden.
-- Test boundaries follow `TESTING.md`: Web / Chat tests keep product services and transports real and replace only the local daemon with a stateful fake. Separate agent-daemon tests use the real daemon, real Agent executable, and production adapter for each supported Agent. Controlled ACP peers cannot establish real Agent compatibility.
+- Test boundaries follow `TESTING.md`: Web / Chat tests keep the production daemon, product services, and transports real and replace only the external Agent harness with a stateful controlled executable. Separate compatibility tests use each real Agent executable and production adapter. Controlled ACP peers cannot establish Agent compatibility.
 - Except for deterministic fake timers, mocks, spies, stubs, monkey patching, module replacement, and canned request interceptors are prohibited. If a real external dependency cannot be used safely or deterministically, inject a stateful fake through its production port.
 - Tests involving time must use fake timers with an explicit system time. Every test is prohibited from using real sleeps, wall-clock time, polling delays, or timing tolerances.
 - Assert externally observable results, not private control flow, collaborator calls, or implementation details.

@@ -3,8 +3,8 @@
 ## Ownership
 
 These tests cover the real local daemon together with each real Agent and its
-production adapter. Web / Chat tests independently use a stateful fake daemon
-with real product services; they do not test Agent adapter compatibility. See
+production adapter. Web / Chat tests independently use the production daemon with
+a controlled Agent harness; they do not test Agent adapter compatibility. See
 [the testing guide](../../TESTING.md) for the shared boundary contract.
 
 Use separate Agent scenarios because native APIs, adapters, history, cancellation,

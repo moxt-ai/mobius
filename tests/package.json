@@ -7,12 +7,12 @@
         "typecheck": "tsc --project tsconfig.json && tsc --project agent-daemon/tsconfig.json"
     },
     "exports": {
-        "./agent-daemon": "./infra/agent-daemon.ts",
+        "./agent-harness": "./infra/agent-harness.ts",
         "./app": "./infra/app.ts",
         "./clerk": "./infra/clerk.ts",
         "./cloudflare": "./infra/cloudflare.ts",
         "./platform": "./infra/platform.ts",
-        "./platform-agent-daemon": "./infra/platform-agent-daemon.ts",
+        "./platform-agent-harness": "./infra/platform-agent-harness.ts",
         "./server": "./infra/server.ts"
     },
     "dependencies": {
