@@ -164,6 +164,8 @@ export type LiveSessionMessage =
     | SessionCompletedEvent
     | SessionFailedEvent;
 
+export type MobiusRelayUrlProvider = (signal: AbortSignal) => Promise<string>;
+
 export interface ConnectMobiusClientOptions {
     readonly onSnapshot?: (turn: ActiveTurnSnapshot) => void;
     readonly protocols?: readonly string[];
@@ -191,7 +193,7 @@ export interface ConnectMobiusClientOptions {
     readonly onUnavailable?: () => void;
     readonly onUsage?: (event: SessionUsageUpdatedEvent) => void;
     readonly onWorkspace?: (event: WorkspaceEntriesEvent) => void;
-    readonly relayUrl: string;
+    readonly relayUrl: string | MobiusRelayUrlProvider;
 }
 
 export interface PromptObserver {
@@ -382,6 +384,7 @@ function waitForOpen(socket: ReconnectingWebSocket): Promise<void> {
 }
 
 export class MobiusClient {
+    readonly #connectionController: AbortController | null;
     readonly #onActivity: () => void;
     readonly #onHistoryChanged: () => void;
     readonly #onProtocolError: (error: MobiusClientError) => void;
@@ -389,7 +392,12 @@ export class MobiusClient {
     readonly #options: ConnectMobiusClientOptions;
     readonly #socket: ReconnectingWebSocket;
 
-    constructor(socket: ReconnectingWebSocket, options: ConnectMobiusClientOptions) {
+    constructor(
+        socket: ReconnectingWebSocket,
+        options: ConnectMobiusClientOptions,
+        connectionController: AbortController | null = null,
+    ) {
+        this.#connectionController = connectionController;
         this.#options = options;
         this.#onActivity = options.onActivity ?? (() => undefined);
         this.#onHistoryChanged = options.onHistoryChanged ?? (() => undefined);
@@ -1093,6 +1101,9 @@ export class MobiusClient {
     };
 
     readonly close = (): void => {
+        this.#connectionController?.abort(
+            new MobiusClientError("connection_closed", "The browser relay connection was closed"),
+        );
         this.#socket.removeEventListener("message", this.#handleChannelMessage);
         this.#socket.removeEventListener("close", this.#handleClose);
         this.#socket.close(1000, "Host closed");
@@ -1229,14 +1240,20 @@ export class MobiusClient {
 }
 
 export async function connectMobiusClient(options: ConnectMobiusClientOptions): Promise<MobiusClient> {
-    const socket = new ReconnectingWebSocket(options.relayUrl, [...(options.protocols ?? [])], {
+    const connectionController = new AbortController();
+    const configuredRelayUrl = options.relayUrl;
+    const relayUrl =
+        typeof configuredRelayUrl === "string"
+            ? configuredRelayUrl
+            : async (): Promise<string> => await configuredRelayUrl(connectionController.signal);
+    const socket = new ReconnectingWebSocket(relayUrl, [...(options.protocols ?? [])], {
         connectionTimeout: CONNECTION_TIMEOUT_MILLISECONDS,
         maxEnqueuedMessages: 0,
         maxReconnectionDelay: MAX_RECONNECTION_DELAY_MILLISECONDS,
         minReconnectionDelay: MIN_RECONNECTION_DELAY_MILLISECONDS * (1 + Math.random()),
         shouldReconnectOnClose: shouldReconnectAfterClose,
     });
-    const client = new MobiusClient(socket, options);
+    const client = new MobiusClient(socket, options, connectionController);
 
     try {
         await client.ready();

@@ -41,6 +41,16 @@ export class PairingService {
         signal: AbortSignal,
     ) => this.#pairings.createProjectRuntimePairing(projectId, token, idempotencyKey, signal);
 
+    readonly createBrowserCredential = (
+        projectId: string,
+        token: string,
+        lifetimeMilliseconds: number,
+        signal: AbortSignal,
+    ) => this.#pairings.createBrowserCredential(projectId, token, lifetimeMilliseconds, signal);
+
+    readonly revokeBrowserCredential = (projectId: string, credentialId: string, token: string, signal: AbortSignal) =>
+        this.#pairings.revokeBrowserCredential(projectId, credentialId, token, signal);
+
     readonly listProjectRuntimes = async (projectId: string, token: string, signal: AbortSignal) => {
         const channels = await this.#pairings.listProjectRuntimes(projectId, token, signal);
         return await Promise.all(

@@ -455,6 +455,86 @@ export function decodeMobiusBrowserCredential(value: unknown): MobiusBrowserCred
     );
 }
 
+export class MobiusChannelAccessGrant {
+    readonly expiresAt: string;
+    readonly grantId: string;
+    readonly grantSecret: string;
+
+    constructor(grantId: string, grantSecret: string, expiresAt: string) {
+        this.expiresAt = expiresAt;
+        this.grantId = grantId;
+        this.grantSecret = grantSecret;
+    }
+}
+
+export function decodeMobiusChannelAccessGrant(value: unknown): MobiusChannelAccessGrant {
+    const grant = record(value, "channel access grant");
+    const grantSecret = stringField(grant, "grantSecret", 256);
+    if (!/^[a-zA-Z0-9_-]{32,256}$/.test(grantSecret)) {
+        throw invalidResponse("The service returned an invalid channel access grant");
+    }
+    return new MobiusChannelAccessGrant(
+        identifierField(grant, "grantId"),
+        grantSecret,
+        validateTimestamp(stringField(grant, "expiresAt", 128), "expiresAt"),
+    );
+}
+
+export class MobiusLinkedChannelDevice {
+    readonly createdAt: string;
+    readonly credentialId: string;
+    readonly lastUsedAt: string;
+
+    constructor(credentialId: string, createdAt: string, lastUsedAt: string) {
+        this.createdAt = createdAt;
+        this.credentialId = credentialId;
+        this.lastUsedAt = lastUsedAt;
+    }
+}
+
+function decodeMobiusLinkedChannelDevice(value: unknown): MobiusLinkedChannelDevice {
+    const device = record(value, "linked channel device");
+    return new MobiusLinkedChannelDevice(
+        identifierField(device, "credentialId"),
+        validateTimestamp(stringField(device, "createdAt", 128), "createdAt"),
+        validateTimestamp(stringField(device, "lastUsedAt", 128), "lastUsedAt"),
+    );
+}
+
+export function decodeMobiusLinkedChannelDeviceList(value: unknown): readonly MobiusLinkedChannelDevice[] {
+    const response = record(value, "linked channel device list");
+    const devices = arrayField(response, "devices", 1_000).map(decodeMobiusLinkedChannelDevice);
+    if (new Set(devices.map((device) => device.credentialId)).size !== devices.length) {
+        throw invalidResponse("The service returned duplicate linked channel devices");
+    }
+    return devices;
+}
+
+export class MobiusRedeemedChannelCredential {
+    readonly channelId: string;
+    readonly hostToken: string;
+    readonly projectId: string;
+
+    constructor(channelId: string, hostToken: string, projectId: string) {
+        this.channelId = channelId;
+        this.hostToken = hostToken;
+        this.projectId = projectId;
+    }
+}
+
+export function decodeMobiusRedeemedChannelCredential(value: unknown): MobiusRedeemedChannelCredential {
+    const credential = record(value, "redeemed channel credential");
+    const hostToken = stringField(credential, "hostToken", 256);
+    if (!/^[a-zA-Z0-9_-]{32,256}$/.test(hostToken)) {
+        throw invalidResponse("The service returned an invalid channel credential");
+    }
+    return new MobiusRedeemedChannelCredential(
+        identifierField(credential, "channelId"),
+        hostToken,
+        identifierField(credential, "projectId"),
+    );
+}
+
 export class MobiusAgentDescriptor {
     readonly agentPath: string;
     readonly agentVersion: string;
@@ -639,6 +719,47 @@ export class MobiusRuntimeDescriptor {
         this.runtimeId = runtimeId;
         this.workspaceName = workspaceName;
     }
+}
+
+export class MobiusChannelDescriptor {
+    readonly agents: readonly MobiusAgentDescriptor[];
+    readonly channelId: string;
+    readonly installableAgents: readonly MobiusInstallableAgentDescriptor[];
+    readonly machineName: string;
+    readonly projectId: string;
+    readonly runtimeId: string;
+    readonly workspaceName: string;
+
+    constructor(
+        agents: readonly MobiusAgentDescriptor[],
+        channelId: string,
+        installableAgents: readonly MobiusInstallableAgentDescriptor[],
+        machineName: string,
+        projectId: string,
+        runtimeId: string,
+        workspaceName: string,
+    ) {
+        this.agents = agents;
+        this.channelId = channelId;
+        this.installableAgents = installableAgents;
+        this.machineName = machineName;
+        this.projectId = projectId;
+        this.runtimeId = runtimeId;
+        this.workspaceName = workspaceName;
+    }
+}
+
+export function decodeMobiusChannelDescriptor(value: unknown): MobiusChannelDescriptor {
+    const channel = record(value, "channel descriptor");
+    return new MobiusChannelDescriptor(
+        arrayField(channel, "agents", 100).map(decodeAgentDescriptor),
+        identifierField(channel, "channelId"),
+        arrayField(channel, "installableAgents", 100).map(decodeInstallableAgentDescriptor),
+        stringField(channel, "machineName", 255),
+        identifierField(channel, "projectId"),
+        identifierField(channel, "runtimeId"),
+        stringField(channel, "workspaceName", 255),
+    );
 }
 
 export function decodeRuntimeDescriptor(value: unknown): MobiusRuntimeDescriptor {

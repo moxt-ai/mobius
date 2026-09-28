@@ -30,6 +30,7 @@ export type {
     SessionElicitationRequestedEvent,
     SessionElicitationResolvedEvent,
     SessionInfoUpdatedEvent,
+    SessionMetadata,
     SessionPermissionRequestedEvent,
     SessionPermissionResolvedEvent,
     SessionPromptUsageUpdatedEvent,
@@ -71,6 +72,7 @@ export {
     type NativeSessionHistory,
     parseMobiusApiPrefix,
     parseNativeHistoryText,
+    RUNTIME_WORKSPACE_BINDING_ID,
     SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -78,5 +80,6 @@ export * from "./errors.ts";
 export * from "./project-authentication.ts";
 export * from "./resources.ts";
 export * from "./service-client.ts";
+export * from "./standalone.ts";
 export * from "./transport/http-transport.ts";
 export * from "./transport/ws-transport.ts";

@@ -11,6 +11,7 @@ import {
 import { StandaloneDatabaseResolver } from "./standalone-database-resolver.ts";
 import { RuntimeRelay } from "./standalone-durable-objects.ts";
 import { StandaloneProjectAuthentication } from "./standalone-project-authentication.ts";
+import { StandaloneProjectAuthenticationStorage } from "./standalone-project-authentication-storage.ts";
 import { StandaloneProjectStorageDirectory } from "./standalone-project-storage-directory.ts";
 
 export interface StandaloneRelayBindings {
@@ -26,56 +27,20 @@ export interface StandaloneWorker {
 const application = createMobiusApplication();
 
 export function createStandaloneWorker(): StandaloneWorker {
-    const standalone: StandaloneWorker = {
+    const standaloneWorker: StandaloneWorker = {
         fetch: async (request, environment) => {
             const requestUrl = new URL(request.url);
-            const pairingPrefix = `${MOBIUS_API_PREFIX}/pairings`;
-            if (requestUrl.pathname === pairingPrefix || requestUrl.pathname.startsWith(`${pairingPrefix}/`)) {
-                const pairingId = requestUrl.pathname.slice(`${pairingPrefix}/`.length);
-                const target =
-                    request.method === "POST"
-                        ? `${MOBIUS_API_PREFIX}/v1/projects/standalone/runtime-pairings`
-                        : `${MOBIUS_API_PREFIX}/v1/projects/standalone/runtime-pairings/${encodeURIComponent(pairingId)}`;
-                const forwarded = new Request(
-                    new URL(target, request.url),
-                    request.method === "POST"
-                        ? {
-                              body: JSON.stringify({ idempotencyKey: `browser-${crypto.randomUUID()}` }),
-                              headers: {
-                                  authorization: `Bearer ${environment.MOBIUS_STANDALONE_TOKEN}`,
-                                  "content-type": "application/json",
-                              },
-                              method: request.method,
-                          }
-                        : {
-                              headers: { authorization: `Bearer ${environment.MOBIUS_STANDALONE_TOKEN}` },
-                              method: request.method,
-                          },
-                );
-                const response = await standalone.fetch(forwarded, environment);
-                if (!response.ok || request.method !== "POST") {
-                    return response;
-                }
-                const pairing: unknown = await response.json();
-                if (typeof pairing !== "object" || pairing === null) {
-                    return new Response("The standalone pairing response is invalid", { status: 502 });
-                }
-                return Response.json(
-                    { ...pairing, hostToken: environment.MOBIUS_STANDALONE_TOKEN },
-                    {
-                        status: response.status,
-                        headers: { "server-timing": response.headers.get("server-timing") ?? "" },
-                    },
-                );
-            }
-            if (new URL(request.url).pathname === `${MOBIUS_API_PREFIX}/v1/transport`) {
+            if (requestUrl.pathname === `${MOBIUS_API_PREFIX}/v1/transport`) {
                 const dispatch = async (forwarded: Request): Promise<Response> =>
-                    await standalone.fetch(forwarded, environment);
+                    await standaloneWorker.fetch(forwarded, environment);
                 return acceptWebSocketHttpTransport(request, dispatch);
             }
             const metrics = new RequestAccessMetrics();
             const database = instrumentD1Database(environment.DIRECTORY_DATABASE, metrics);
-            const authentication = new StandaloneProjectAuthentication(environment.MOBIUS_STANDALONE_TOKEN);
+            const authentication = new StandaloneProjectAuthentication(
+                environment.MOBIUS_STANDALONE_TOKEN,
+                new StandaloneProjectAuthenticationStorage(D1DatabaseAdapter.from(database)),
+            );
             const context = createWorkerContext({
                 applications: authentication,
                 authorization: authentication,
@@ -87,10 +52,26 @@ export function createStandaloneWorker(): StandaloneWorker {
                     channel: new CloudflareChannelRuntime({ gateways: { runtimeRelay: environment.RUNTIME_RELAY } }),
                 },
             });
+            if (
+                request.method === "POST" &&
+                requestUrl.pathname === `${MOBIUS_API_PREFIX}/v1/standalone/browser-credentials`
+            ) {
+                const response = Response.json(
+                    await context.services.runtimePairings.createBrowserCredential(
+                        "standalone",
+                        environment.MOBIUS_STANDALONE_TOKEN,
+                        60 * 60 * 1_000,
+                        request.signal,
+                    ),
+                    { status: 201 },
+                );
+                response.headers.set("Cache-Control", "no-store");
+                return metrics.appendServerTiming(response);
+            }
             return metrics.appendServerTiming(await application.fetch(request, context));
         },
     };
-    return standalone;
+    return standaloneWorker;
 }
 
 const worker: ExportedHandler<StandaloneRelayBindings> = createStandaloneWorker();

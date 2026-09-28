@@ -1,4 +1,12 @@
 import { env } from "cloudflare:workers";
+import {
+    MobiusBrowserCredentialRequest,
+    MobiusClient,
+    type MobiusHttpTransport,
+    MobiusRuntimePairingRequest,
+    MobiusStandaloneCredentialProvider,
+    StaticMobiusCredentialProvider,
+} from "@moxt-ai/mobius-sdk";
 import { describe, expect, it } from "vitest";
 import { createStandaloneWorker } from "../src/worker.ts";
 
@@ -19,6 +27,56 @@ function nextMessage(socket: WebSocket): Promise<unknown> {
 }
 
 describe("Standalone Relay", () => {
+    it("Given the Standalone Web app, When it bootstraps browser access, Then it can create a Runtime pairing without receiving the deployment credential", async () => {
+        const worker = createStandaloneWorker();
+        const transport: MobiusHttpTransport = {
+            fetch: async (request) => await worker.fetch(request, env),
+        };
+        const provider = new MobiusStandaloneCredentialProvider({
+            endpoint: "https://standalone.test",
+            transport,
+        });
+        const client = new MobiusClient({
+            credentialProvider: provider,
+            endpoint: "https://standalone.test",
+            projectId: "standalone",
+            transport,
+        });
+        const credential = await provider.browserCredential(AbortSignal.timeout(5_000));
+        expect(credential.projectId).toBe("standalone");
+        expect(credential.token).not.toBe(env.MOBIUS_STANDALONE_TOKEN);
+
+        const pairing = await client.runtimePairings.create(
+            new MobiusRuntimePairingRequest("browser-machine"),
+            AbortSignal.timeout(5_000),
+        );
+        expect(pairing.projectId).toBe("standalone");
+        await expect(
+            client.credentials.issue(new MobiusBrowserCredentialRequest(60), AbortSignal.timeout(5_000)),
+        ).rejects.toMatchObject({ code: "project_permission_denied" });
+
+        const owner = new MobiusClient({
+            credentialProvider: new StaticMobiusCredentialProvider(env.MOBIUS_STANDALONE_TOKEN),
+            endpoint: "https://standalone.test",
+            projectId: "standalone",
+            transport,
+        });
+        const delegated = await owner.credentials.issue(
+            new MobiusBrowserCredentialRequest(60),
+            AbortSignal.timeout(5_000),
+        );
+        expect(delegated.token).not.toBe(env.MOBIUS_STANDALONE_TOKEN);
+        await owner.credentials.revoke(delegated.credentialId, AbortSignal.timeout(5_000));
+
+        const compatibilityRoute = await worker.fetch(
+            new Request("https://standalone.test/mobius/api/pairings", { method: "POST" }),
+            env,
+        );
+        expect(compatibilityRoute.status).toBe(404);
+        owner.close();
+        client.close();
+    });
+
     it("Given a self-hosted Relay, When its owner creates a Runtime pairing, Then the pairing is usable without Platform credentials", async () => {
         const worker = createStandaloneWorker();
         const url = "https://standalone.test/mobius/api/v1/projects/standalone/runtime-pairings";

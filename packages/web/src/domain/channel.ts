@@ -680,31 +680,28 @@ export class ChannelHistory {
 }
 
 export class CreatedPairing {
+    readonly browserToken: string;
     readonly channelId: string;
     readonly expiresAt: Date;
     readonly pairingCode: string;
     readonly pairingId: string;
-    readonly pollToken: string;
-    readonly hostToken: string;
     readonly projectId: string;
     readonly runtimeId: string;
 
     constructor(
         pairingId: string,
         pairingCode: string,
-        pollToken: string,
         channelId: string,
         expiresAt: Date,
-        hostToken: string,
+        browserToken: string,
         projectId: string,
         runtimeId: string,
     ) {
+        this.browserToken = browserToken;
         this.pairingId = pairingId;
         this.pairingCode = pairingCode;
-        this.pollToken = pollToken;
         this.channelId = channelId;
         this.expiresAt = expiresAt;
-        this.hostToken = hostToken;
         this.projectId = projectId;
         this.runtimeId = runtimeId;
     }

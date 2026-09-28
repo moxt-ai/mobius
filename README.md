@@ -41,7 +41,15 @@ pnpm dev:cloudflare:standalone
 ```
 
 The local command applies the committed D1 migration before starting Wrangler. The
-credential file is ignored by Git. To pair a machine, send
+credential file is ignored by Git. The bundled Web app never receives this deployment
+credential. It uses `MobiusStandaloneCredentialProvider` to obtain a short-lived,
+Project-scoped browser credential, then uses `MobiusClient` for Runtime pairing,
+Runtime discovery, Session history, and Session operations. The provider refreshes
+the credential before expiry, and the live channel resolves it again before every
+WebSocket reconnect. The old standalone
+`POST /mobius/api/pairings` browser compatibility route is not available.
+
+For an operator-driven pairing, send
 `POST /mobius/api/v1/projects/standalone/runtime-pairings` with a bearer token and
 `{"idempotencyKey":"my-machine"}`. For the local deployment:
 
@@ -59,11 +67,12 @@ The response supplies `pairingId` and `pairingCode` for the existing CLI:
 pnpm mobius pair --url http://127.0.0.1:8787 --pairing <pairingId> --code <pairingCode>
 ```
 
-Use the same bearer credential for Project and Session API requests. The SDK's
-WebSocket transport is available at `/mobius/api/v1/transport`. Keep the
-credential private: it grants full access to this Standalone Project. A connected
-local Runtime supplies Session history; the Worker does not keep historical
-content after its Session object hibernates. The Standalone Worker has no
+Operator clients can use the same deployment credential for Project and Session API
+requests. Keep it private: it grants full access to this Standalone Project. Browser
+apps should follow the bundled Web app and use the Standalone SDK credential provider
+instead. The SDK's WebSocket transport is available at `/mobius/api/v1/transport`.
+A connected local Runtime supplies Session history; the Worker does not keep
+historical content after its Session object hibernates. The Standalone Worker has no
 Platform identity, App, or organization routes.
 
 The repository deploys the production Standalone Worker to

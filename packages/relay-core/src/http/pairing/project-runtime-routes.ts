@@ -15,7 +15,12 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { Hono } from "hono";
 import * as v from "valibot";
-import { PairingDirectoryError, validateIdentifier } from "../../entity/pairing/pairing.ts";
+import {
+    MAX_BROWSER_CREDENTIAL_LIFETIME_MILLISECONDS,
+    MIN_BROWSER_CREDENTIAL_LIFETIME_MILLISECONDS,
+    PairingDirectoryError,
+    validateIdentifier,
+} from "../../entity/pairing/pairing.ts";
 import { assertExactKeys, bearerToken, readString } from "../../infra/relay-http.ts";
 import { bodyParser } from "../middleware/body-parser.ts";
 import { errorMiddleware, rethrowHonoError } from "../middleware/error-middleware.ts";
@@ -60,6 +65,14 @@ const sessionQuerySchema = v.strictObject({
 const sessionListQuerySchema = v.strictObject({
     limit: v.pipe(v.string(), v.regex(/^[1-9][0-9]{0,2}$/), v.transform(Number), v.safeInteger(), v.maxValue(500)),
 });
+const browserCredentialSchema = v.strictObject({
+    expiresInSeconds: v.pipe(
+        v.number(),
+        v.safeInteger(),
+        v.minValue(MIN_BROWSER_CREDENTIAL_LIFETIME_MILLISECONDS / 1_000),
+        v.maxValue(MAX_BROWSER_CREDENTIAL_LIFETIME_MILLISECONDS / 1_000),
+    ),
+});
 const submitTurnSchema = v.strictObject({
     ...sessionIdentitySchema.entries,
     content: v.string(),
@@ -86,6 +99,27 @@ export function createProjectRuntimeRoutes() {
     return new Hono<RelayHttpEnvironment>()
         .onError(rethrowHonoError)
         .use("*", errorMiddleware)
+        .post("/projects/:projectId/browser-credentials", bodyParser<RelayHttpEnvironment>(), async (context) => {
+            const body = validated(browserCredentialSchema, context.req.valid("json"));
+            return context.json(
+                await context.env.services.runtimePairings.createBrowserCredential(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    bearerToken(context.req.raw),
+                    body.expiresInSeconds * 1_000,
+                    context.req.raw.signal,
+                ),
+                201,
+            );
+        })
+        .delete("/projects/:projectId/browser-credentials/:credentialId", async (context) => {
+            await context.env.services.runtimePairings.revokeBrowserCredential(
+                validateIdentifier(context.req.param("projectId"), "project_id"),
+                validateIdentifier(context.req.param("credentialId"), "credential_id"),
+                bearerToken(context.req.raw),
+                context.req.raw.signal,
+            );
+            return new Response(null, { status: 204 });
+        })
         .get("/projects/:projectId/runtimes", async (context) => {
             const runtimes = await context.env.services.runtimePairings.listProjectRuntimes(
                 validateIdentifier(context.req.param("projectId"), "project_id"),
