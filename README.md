@@ -67,11 +67,12 @@ content after its Session object hibernates. The Standalone Worker has no
 Platform identity, App, or organization routes.
 
 The repository deploys the production Standalone Worker to
-`https://mobius-standalone.moxt.ai` after `main` passes CI. The workflow applies
-the committed `packages/relay-core/migrations/d1` migrations to the dedicated
-production D1 database, deploys the Worker and Web assets with the
-`MOBIUS_STANDALONE_TOKEN` GitHub environment secret, and verifies the deployed
-page. Self-hosted deployments need their own bearer credential and D1 binding.
+`https://mobius-standalone.moxt.ai` after `main` passes CI. The workflow deploys
+the Worker and Web assets with the `MOBIUS_STANDALONE_TOKEN` GitHub environment
+secret and verifies the deployed page. The dedicated production D1 database is
+provisioned from the committed `packages/relay-core/migrations/d1` migrations;
+apply any new D1 migration before merging the Worker change that uses it.
+Self-hosted deployments need their own bearer credential and D1 binding.
 
 ## Local Runtime connections
 

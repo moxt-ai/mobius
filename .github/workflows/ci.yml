@@ -222,11 +222,6 @@ jobs:
             exit 1
           fi
           pnpm --filter @moxt-ai/mobius-web build
-          pnpm --dir packages/relay-cloudflare-standalone exec wrangler d1 migrations apply \
-            DIRECTORY_DATABASE \
-            --config wrangler.jsonc \
-            --env production \
-            --remote
           umask 077
           secrets_file="$(mktemp "$RUNNER_TEMP/worker-secrets.XXXXXX.json")"
           trap 'rm -f "$secrets_file"' EXIT
