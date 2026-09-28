@@ -1,11 +1,38 @@
 {
     "$schema": "../../node_modules/wrangler/config-schema.json",
-    "name": "mobius-standalone",
+    "name": "mobius-standalone-local",
     "main": "src/worker.ts",
     "compatibility_date": "2026-09-03",
     "durable_objects": {
         "bindings": [{ "name": "RUNTIME_RELAY", "class_name": "RuntimeRelay" }]
     },
     "migrations": [{ "tag": "standalone-initial", "new_sqlite_classes": ["RuntimeRelay"] }],
-    "d1_databases": [{ "binding": "DIRECTORY_DATABASE", "migrations_dir": "../relay-core/migrations/d1" }]
+    "d1_databases": [{ "binding": "DIRECTORY_DATABASE", "migrations_dir": "../relay-core/migrations/d1" }],
+    "assets": {
+        "directory": "../web/dist",
+        "not_found_handling": "single-page-application",
+        "run_worker_first": ["/mobius/api/*"]
+    },
+    "observability": {
+        "enabled": true
+    },
+    "env": {
+        "production": {
+            "name": "mobius-standalone-production",
+            "workers_dev": false,
+            "preview_urls": false,
+            "routes": [{ "pattern": "mobius-standalone.moxt.ai", "custom_domain": true }],
+            "durable_objects": {
+                "bindings": [{ "name": "RUNTIME_RELAY", "class_name": "RuntimeRelay" }]
+            },
+            "d1_databases": [
+                {
+                    "binding": "DIRECTORY_DATABASE",
+                    "database_name": "mobius-standalone-production-directory-wnam",
+                    "database_id": "8b67ba69-121b-4851-82e8-55495a1bf578",
+                    "migrations_dir": "../relay-core/migrations/d1"
+                }
+            ]
+        }
+    }
 }

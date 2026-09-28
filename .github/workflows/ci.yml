@@ -181,3 +181,81 @@ jobs:
           done
           echo "The Platform page was unavailable after deployment propagation" >&2
           exit 1
+
+  deploy-cloudflare-standalone:
+    name: Deploy Standalone (production)
+    if: >-
+      !cancelled() &&
+      needs.validate.result == 'success' &&
+      github.repository == 'moxt-ai/mobius' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: production
+      url: https://mobius-standalone.moxt.ai
+    concurrency:
+      group: deploy-mobius-standalone-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+      - run: pnpm install --frozen-lockfile
+      - name: Deploy Mobius Standalone
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          MOBIUS_STANDALONE_TOKEN: ${{ secrets.MOBIUS_STANDALONE_TOKEN }}
+        shell: bash
+        run: |
+          if [[ "${#MOBIUS_STANDALONE_TOKEN}" -lt 32 ]]; then
+            echo "MOBIUS_STANDALONE_TOKEN must contain at least 32 characters" >&2
+            exit 1
+          fi
+          pnpm --filter @moxt-ai/mobius-web build
+          pnpm --dir packages/relay-cloudflare-standalone exec wrangler d1 migrations apply \
+            DIRECTORY_DATABASE \
+            --config wrangler.jsonc \
+            --env production \
+            --remote
+          umask 077
+          secrets_file="$(mktemp "$RUNNER_TEMP/worker-secrets.XXXXXX.json")"
+          trap 'rm -f "$secrets_file"' EXIT
+          jq --null-input \
+            --arg token "$MOBIUS_STANDALONE_TOKEN" \
+            '{MOBIUS_STANDALONE_TOKEN: $token}' > "$secrets_file"
+          pnpm --dir packages/relay-cloudflare-standalone exec wrangler deploy \
+            --config wrangler.jsonc \
+            --env production \
+            --secrets-file "$secrets_file" \
+            --message "GitHub ${GITHUB_REPOSITORY}@${GITHUB_SHA}"
+      - name: Verify Standalone page
+        env:
+          STANDALONE_ORIGIN: https://mobius-standalone.moxt.ai
+        shell: bash
+        run: |
+          for attempt in {1..6}; do
+            if curl \
+              --fail \
+              --show-error \
+              --silent \
+              --connect-timeout 5 \
+              --max-time 15 \
+              "$STANDALONE_ORIGIN/" | grep -Fq '<title>Mobius Agent Chat</title>'; then
+              exit 0
+            fi
+            if [[ "$attempt" -lt 6 ]]; then
+              sleep 5
+            fi
+          done
+          echo "The Standalone page was unavailable after deployment propagation" >&2
+          exit 1

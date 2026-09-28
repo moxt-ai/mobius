@@ -28,6 +28,46 @@ const application = createMobiusApplication();
 export function createStandaloneWorker(): StandaloneWorker {
     const standalone: StandaloneWorker = {
         fetch: async (request, environment) => {
+            const requestUrl = new URL(request.url);
+            const pairingPrefix = `${MOBIUS_API_PREFIX}/pairings`;
+            if (requestUrl.pathname === pairingPrefix || requestUrl.pathname.startsWith(`${pairingPrefix}/`)) {
+                const pairingId = requestUrl.pathname.slice(`${pairingPrefix}/`.length);
+                const target =
+                    request.method === "POST"
+                        ? `${MOBIUS_API_PREFIX}/v1/projects/standalone/runtime-pairings`
+                        : `${MOBIUS_API_PREFIX}/v1/projects/standalone/runtime-pairings/${encodeURIComponent(pairingId)}`;
+                const forwarded = new Request(
+                    new URL(target, request.url),
+                    request.method === "POST"
+                        ? {
+                              body: JSON.stringify({ idempotencyKey: `browser-${crypto.randomUUID()}` }),
+                              headers: {
+                                  authorization: `Bearer ${environment.MOBIUS_STANDALONE_TOKEN}`,
+                                  "content-type": "application/json",
+                              },
+                              method: request.method,
+                          }
+                        : {
+                              headers: { authorization: `Bearer ${environment.MOBIUS_STANDALONE_TOKEN}` },
+                              method: request.method,
+                          },
+                );
+                const response = await standalone.fetch(forwarded, environment);
+                if (!response.ok || request.method !== "POST") {
+                    return response;
+                }
+                const pairing: unknown = await response.json();
+                if (typeof pairing !== "object" || pairing === null) {
+                    return new Response("The standalone pairing response is invalid", { status: 502 });
+                }
+                return Response.json(
+                    { ...pairing, hostToken: environment.MOBIUS_STANDALONE_TOKEN },
+                    {
+                        status: response.status,
+                        headers: { "server-timing": response.headers.get("server-timing") ?? "" },
+                    },
+                );
+            }
             if (new URL(request.url).pathname === `${MOBIUS_API_PREFIX}/v1/transport`) {
                 const dispatch = async (forwarded: Request): Promise<Response> =>
                     await standalone.fetch(forwarded, environment);

@@ -66,12 +66,12 @@ local Runtime supplies Session history; the Worker does not keep historical
 content after its Session object hibernates. The Standalone Worker has no
 Platform identity, App, or organization routes.
 
-For a self-hosted deployment, configure `MOBIUS_STANDALONE_TOKEN` as a Wrangler
-secret, provision the `DIRECTORY_DATABASE` D1 binding, apply
-`packages/relay-core/migrations/d1`, and deploy the Worker from
-`packages/relay-cloudflare-standalone`. No deployment automation is configured.
-
-No staging or production deployment workflow is configured.
+The repository deploys the production Standalone Worker to
+`https://mobius-standalone.moxt.ai` after `main` passes CI. The workflow applies
+the committed `packages/relay-core/migrations/d1` migrations to the dedicated
+production D1 database, deploys the Worker and Web assets with the
+`MOBIUS_STANDALONE_TOKEN` GitHub environment secret, and verifies the deployed
+page. Self-hosted deployments need their own bearer credential and D1 binding.
 
 ## Local Runtime connections
 

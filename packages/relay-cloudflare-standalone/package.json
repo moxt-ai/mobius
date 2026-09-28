@@ -8,8 +8,8 @@
     },
     "scripts": {
         "prebuild": "pnpm --dir ../.. db:codegen",
-        "build": "wrangler deploy --dry-run --config wrangler.jsonc --outdir dist",
-        "dev": "wrangler d1 migrations apply DIRECTORY_DATABASE --local --config wrangler.jsonc && wrangler dev --config wrangler.jsonc",
+        "build": "pnpm --filter @moxt-ai/mobius-web build && wrangler deploy --dry-run --config wrangler.jsonc --outdir dist",
+        "dev": "pnpm --filter @moxt-ai/mobius-web build && wrangler d1 migrations apply DIRECTORY_DATABASE --local --config wrangler.jsonc && wrangler dev --config wrangler.jsonc",
         "pretest:integration": "pnpm --dir ../.. db:codegen",
         "pretypecheck": "pnpm --dir ../.. db:codegen",
         "test:integration": "vitest run --config vitest.config.ts --max-workers=1 --no-isolate",
