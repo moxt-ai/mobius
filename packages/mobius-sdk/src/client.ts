@@ -31,6 +31,7 @@ import {
     decodeAgentInstallStartedEvent,
     decodeAgentMessageDeltaEvent,
     decodeCommittedSessionEvent,
+    decodeDaemonToServiceMessage,
     decodeFileBeginEvent,
     decodeFileChunkEvent,
     decodeFileEndEvent,
@@ -41,6 +42,7 @@ import {
     decodeNativeSessionResult,
     decodeRecordedSessionEvent,
     decodeRuntimeStatusEvent,
+    decodeServiceToDaemonMessage,
     decodeSessionCancelCommand,
     decodeSessionCommandsUpdatedEvent,
     decodeSessionCompletedEvent,
@@ -1195,7 +1197,22 @@ export class MobiusClient {
             } else if (kind === SESSION_OPERATION_FAILED_KIND) {
                 decodeSessionOperationFailedEvent(encoded);
             } else {
-                throw new MobiusClientError("invalid_protocol_message", "Relay sent an unsupported message kind");
+                try {
+                    decodeServiceToDaemonMessage(encoded);
+                } catch (serviceMessageError) {
+                    try {
+                        decodeDaemonToServiceMessage(encoded);
+                    } catch (daemonMessageError) {
+                        throw new AggregateError(
+                            [serviceMessageError, daemonMessageError],
+                            "Relay sent an unsupported message kind",
+                        );
+                    }
+                }
+                // Runtime control requests use short-lived sibling host sockets. The Relay mirrors those
+                // messages to this host as well, so validate and ignore control traffic that belongs to
+                // another requester instead of surfacing a protocol failure or scheduling a history sync.
+                return;
             }
             this.#onActivity();
             if (HISTORY_CHANGING_MESSAGE_KINDS.has(kind)) {
