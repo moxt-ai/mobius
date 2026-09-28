@@ -336,8 +336,6 @@ export class OwnerChannelCredentialAuthority extends ChannelCredentialAuthority 
 
 export class LinkedChannelCredentialAuthority extends ChannelCredentialAuthority {}
 
-export class LegacyChannelCredentialAuthority extends ChannelCredentialAuthority {}
-
 /**
  * Addresses one Runtime of a Project rather than a single channel. The selected Runtime's host socket is
  * reached through the Project Runtime route, so the relay routes it to that machine's Durable Object

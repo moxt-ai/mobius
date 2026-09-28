@@ -156,7 +156,7 @@ function ChannelWorkspace({
     const channelIndexOpen = location.pathname === routes.rootPath;
     const accessOpen = routes.access.kind === "available" && location.pathname === routes.access.path;
     const runtimesOpen = location.pathname === routes.runtimesPath;
-    const settingsOpen = location.pathname === routes.settingsPath || routes.isSessionSettingsPath(location.pathname);
+    const settingsOpen = routes.isSessionSettingsPath(location.pathname);
     const managementPageOpen = accessOpen || runtimesOpen || settingsOpen;
     const [sidebarLayout, setSidebarLayout] = useState<DesktopSidebarLayoutState>(initialSidebarLayout);
 
@@ -215,11 +215,11 @@ function ChannelWorkspace({
     const createAndOpenConversation = useCallback((): void => {
         createConversation();
         const store = useChatStore.getState();
-        for (const conversation of store.conversations) {
-            if (conversation.id === store.activeConversationId) {
-                void navigate(routes.sessionPath(conversation.sessionId));
-                return;
-            }
+        const conversation = store.conversations.find(
+            (candidate) => candidate.id === store.activeConversationId && candidate.isDraft,
+        );
+        if (conversation !== undefined) {
+            void navigate(routes.newSessionPath);
         }
     }, [createConversation, navigate, routes]);
 
@@ -493,24 +493,58 @@ function ChannelIndexRoute() {
     const { routes } = useOutletContext<ChatProps>();
     const activeConversationId = useChatStore((state) => state.activeConversationId);
     const conversations = useChatStore((state) => state.conversations);
-    const sessionId = conversations.find((conversation) => conversation.id === activeConversationId)?.sessionId;
-    if (sessionId === undefined) {
+    const conversation = conversations.find((candidate) => candidate.id === activeConversationId);
+    if (conversation === undefined) {
         return (
             <ChannelContentError message="This channel does not have a Session to open." title="Session unavailable" />
         );
     }
-    return <Navigate replace to={routes.sessionPath(sessionId)} />;
+    return (
+        <Navigate
+            replace
+            to={conversation.isDraft ? routes.newSessionPath : routes.sessionPath(conversation.sessionId)}
+        />
+    );
 }
 
-function LegacyAgentSettingsRoute() {
+function NewSessionRoute() {
     const context = useOutletContext<ChatProps>();
     const activeConversationId = useChatStore((state) => state.activeConversationId);
     const conversations = useChatStore((state) => state.conversations);
-    const sessionId = conversations.find((conversation) => conversation.id === activeConversationId)?.sessionId;
-    if (sessionId !== undefined) {
-        return <Navigate replace to={context.routes.sessionSettingsPath(sessionId)} />;
+    const createConversation = useChatStore((state) => state.createConversation);
+    const selectConversation = useChatStore((state) => state.selectConversation);
+    const navigate = useNavigate();
+    const initialDraft = conversations.find((candidate) => candidate.isDraft);
+    const [conversationId, setConversationId] = useState(() => initialDraft?.id ?? "");
+    const conversation = conversations.find((candidate) => candidate.id === conversationId);
+
+    useLayoutEffect(() => {
+        if (conversationId.length > 0) {
+            return;
+        }
+        createConversation();
+        const created = useChatStore.getState().conversations.find((candidate) => candidate.isDraft);
+        if (created !== undefined) {
+            setConversationId(created.id);
+        }
+    }, [conversationId, createConversation]);
+
+    useLayoutEffect(() => {
+        if (conversation !== undefined && conversation.id !== activeConversationId) {
+            selectConversation(conversation.id);
+        }
+    }, [activeConversationId, conversation, selectConversation]);
+
+    useEffect(() => {
+        if (conversation !== undefined && !conversation.isDraft) {
+            void navigate(context.routes.sessionPath(conversation.sessionId), { replace: true });
+        }
+    }, [context.routes, conversation, navigate]);
+
+    if (conversation === undefined || conversation.id !== activeConversationId) {
+        return <SessionLoadingState />;
     }
-    return <AgentSettingsRoutePage />;
+    return <Outlet context={context} />;
 }
 
 function SessionRoute() {
@@ -676,7 +710,10 @@ function AppRoutes() {
                 <Route element={<ChannelIndexRoute />} index />
                 <Route element={<ChannelAccessRoutePage />} path="access" />
                 <Route element={<RuntimeManagementRoutePage />} path="runtimes" />
-                <Route element={<LegacyAgentSettingsRoute />} path="settings" />
+                <Route element={<NewSessionRoute />} path="sessions/new">
+                    <Route element={<ConversationRoutePage />} index />
+                    <Route element={<AgentSettingsRoutePage />} path="settings" />
+                </Route>
                 <Route element={<SessionRoute />} path="sessions/:sessionId">
                     <Route element={<ConversationRoutePage />} index />
                     <Route element={<AgentSettingsRoutePage />} path="settings" />
@@ -686,7 +723,10 @@ function AppRoutes() {
             <Route element={<ProjectRuntimeRoute />} path="/projects/:projectId/runtimes/:runtimeId">
                 <Route element={<ChannelIndexRoute />} index />
                 <Route element={<RuntimeManagementRoutePage />} path="machines" />
-                <Route element={<LegacyAgentSettingsRoute />} path="settings" />
+                <Route element={<NewSessionRoute />} path="sessions/new">
+                    <Route element={<ConversationRoutePage />} index />
+                    <Route element={<AgentSettingsRoutePage />} path="settings" />
+                </Route>
                 <Route element={<SessionRoute />} path="sessions/:sessionId">
                     <Route element={<ConversationRoutePage />} index />
                     <Route element={<AgentSettingsRoutePage />} path="settings" />

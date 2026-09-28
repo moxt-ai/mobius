@@ -33,10 +33,6 @@ function channelRuntimesRoutePath(channelId: string): string {
     return `${channelRoutePath(channelId)}/runtimes`;
 }
 
-function channelSettingsRoutePath(channelId: string): string {
-    return `${channelRoutePath(channelId)}/settings`;
-}
-
 export function projectRuntimeRoutePath(projectId: string, runtimeId: string): string {
     return `/projects/${encodeURIComponent(projectId)}/runtimes/${encodeURIComponent(runtimeId)}`;
 }
@@ -51,9 +47,10 @@ export type ChannelAccessSettings =
 
 export abstract class WorkspaceRoutePaths {
     abstract readonly access: ChannelAccessSettings;
+    abstract readonly newSessionPath: string;
+    abstract readonly newSessionSettingsPath: string;
     abstract readonly rootPath: string;
     abstract readonly runtimesPath: string;
-    abstract readonly settingsPath: string;
     abstract readonly isSessionSettingsPath: (path: string) => boolean;
     abstract readonly sessionPath: (sessionId: string) => string;
     abstract readonly sessionSettingsPath: (sessionId: string) => string;
@@ -61,16 +58,18 @@ export abstract class WorkspaceRoutePaths {
 
 export class ChannelWorkspaceRoutePaths extends WorkspaceRoutePaths {
     readonly access: ChannelAccessSettings;
+    readonly newSessionPath: string;
+    readonly newSessionSettingsPath: string;
     readonly rootPath: string;
     readonly runtimesPath: string;
-    readonly settingsPath: string;
 
     constructor(channelId: string) {
         super();
         this.access = { kind: "available", path: channelAccessRoutePath(channelId) };
         this.rootPath = channelRoutePath(channelId);
+        this.newSessionPath = `${this.rootPath}/sessions/new`;
+        this.newSessionSettingsPath = `${this.newSessionPath}/settings`;
         this.runtimesPath = channelRuntimesRoutePath(channelId);
-        this.settingsPath = channelSettingsRoutePath(channelId);
     }
 
     readonly isSessionSettingsPath = (path: string): boolean =>
@@ -83,22 +82,24 @@ export class ChannelWorkspaceRoutePaths extends WorkspaceRoutePaths {
 
 export class ProjectRuntimeWorkspaceRoutePaths extends WorkspaceRoutePaths {
     readonly access: ChannelAccessSettings;
+    readonly newSessionPath: string;
+    readonly newSessionSettingsPath: string;
     readonly rootPath: string;
     readonly runtimesPath: string;
-    readonly settingsPath: string;
 
     constructor(projectId: string, runtimeId: string, accessChannelId: string) {
         super();
         // Standalone authenticates the browser at the Project boundary. Its token cannot mint or
-        // administer the legacy per-channel access grants, so do not advertise a route that will
+        // administer channel access grants, so do not advertise a route that will
         // always reject that credential.
         this.access =
             projectId !== "standalone" && isIdentifier(accessChannelId)
                 ? { kind: "available", path: channelAccessRoutePath(accessChannelId) }
                 : { kind: "unavailable" };
         this.rootPath = projectRuntimeRoutePath(projectId, runtimeId);
+        this.newSessionPath = `${this.rootPath}/sessions/new`;
+        this.newSessionSettingsPath = `${this.newSessionPath}/settings`;
         this.runtimesPath = `${this.rootPath}/machines`;
-        this.settingsPath = `${this.rootPath}/settings`;
     }
 
     readonly isSessionSettingsPath = (path: string): boolean =>

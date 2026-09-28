@@ -203,17 +203,19 @@ function ConnectedMobiusChat({
                     New chat
                 </Button>
                 <nav aria-label="Mobius conversations" className="mt-3 grid gap-1">
-                    {conversations.map((conversation) => (
-                        <button
-                            aria-current={conversation.id === activeConversationId ? "page" : undefined}
-                            className="min-h-10 truncate rounded-lg px-3 text-left text-sm hover:bg-black/5 aria-[current=page]:bg-black/8"
-                            key={conversation.id}
-                            onClick={() => selectConversation(conversation.id)}
-                            type="button"
-                        >
-                            {conversation.title}
-                        </button>
-                    ))}
+                    {conversations
+                        .filter((conversation) => !conversation.isDraft)
+                        .map((conversation) => (
+                            <button
+                                aria-current={conversation.id === activeConversationId ? "page" : undefined}
+                                className="min-h-10 truncate rounded-lg px-3 text-left text-sm hover:bg-black/5 aria-[current=page]:bg-black/8"
+                                key={conversation.id}
+                                onClick={() => selectConversation(conversation.id)}
+                                type="button"
+                            >
+                                {conversation.title}
+                            </button>
+                        ))}
                 </nav>
             </aside>
             <section className="flex min-w-0 flex-1 flex-col" aria-label="Mobius chat">

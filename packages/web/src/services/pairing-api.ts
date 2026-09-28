@@ -47,7 +47,6 @@ import {
     type InstallableAgentOption,
     isIdentifier,
     isToken,
-    LegacyChannelCredentialAuthority,
     LinkedChannelCredentialAuthority,
     LinkedChannelDevice,
     MissingAgentOption,
@@ -347,10 +346,6 @@ class LinkedBrowserChannelCredential extends BrowserChannelCredential {
     readonly authority = "linked";
 }
 
-class LegacyBrowserChannelCredential extends BrowserChannelCredential {
-    readonly authority = "legacy";
-}
-
 class ProjectOwnerBrowserCredential extends BrowserChannelCredential {
     readonly authority = "project-owner";
     readonly ownerChannelId: string;
@@ -382,9 +377,6 @@ function channelCredentialAuthority(credential: BrowserChannelCredential): Chann
     }
     if (credential instanceof LinkedBrowserChannelCredential) {
         return new LinkedChannelCredentialAuthority();
-    }
-    if (credential instanceof LegacyBrowserChannelCredential) {
-        return new LegacyChannelCredentialAuthority();
     }
     throw new PairingApiError("channel_credential_invalid", "The saved channel credential is invalid.");
 }
@@ -479,9 +471,6 @@ function readChannelCredential(channelId: string): BrowserChannelCredential {
     }
     if (authority === "linked") {
         return new LinkedBrowserChannelCredential(hostToken, projectId);
-    }
-    if (authority === undefined) {
-        return new LegacyBrowserChannelCredential(hostToken, projectId);
     }
     throw new PairingApiError("channel_credential_invalid", "The saved channel credential is invalid.");
 }
@@ -1244,24 +1233,7 @@ export async function readRuntimeManagementAccess(
     if (credential instanceof LinkedBrowserChannelCredential) {
         return new ReadOnlyRuntimeManagementAccess();
     }
-    try {
-        await readAccessChannelDevices(channelId, cancellationSignal);
-        saveBrowserChannelCredential(
-            channelId,
-            new OwnerBrowserChannelCredential(credential.hostToken, credential.projectId),
-        );
-        saveProjectOwnerCredential(channelId, credential);
-        return new OwnerRuntimeManagementAccess();
-    } catch (error) {
-        if (error instanceof PairingApiError && error.code === "owner_access_required") {
-            saveBrowserChannelCredential(
-                channelId,
-                new LinkedBrowserChannelCredential(credential.hostToken, credential.projectId),
-            );
-            return new ReadOnlyRuntimeManagementAccess();
-        }
-        throw error;
-    }
+    throw new PairingApiError("channel_credential_invalid", "The saved channel credential is invalid.");
 }
 
 export async function createProjectRuntimePairing(
@@ -1345,9 +1317,6 @@ function connectionCredential(connection: ChannelConnection): BrowserChannelCred
     }
     if (connection.credentialAuthority instanceof LinkedChannelCredentialAuthority) {
         return new LinkedBrowserChannelCredential(connection.hostToken, connection.projectId);
-    }
-    if (connection.credentialAuthority instanceof LegacyChannelCredentialAuthority) {
-        return new LegacyBrowserChannelCredential(connection.hostToken, connection.projectId);
     }
     throw new PairingApiError("channel_credential_invalid", "The saved channel credential is invalid.");
 }

@@ -1,7 +1,6 @@
 import type { SessionConfigOption } from "@moxt-ai/mobius-sdk";
 
 const SESSION_CONFIG_PREFERENCE_PREFIX = "mobius:session-config-preferences:";
-const LEGACY_SESSION_MODEL_PREFERENCE_PREFIX = "mobius:session-model-preferences:";
 const SESSION_CONFIG_SELECTION_PREFIX = "mobius:session-config-selections:";
 const MAXIMUM_PREFERENCES = 128;
 const MAXIMUM_SELECTED_SESSIONS = 128;
@@ -105,14 +104,28 @@ function readStoredPreferences(key: string): readonly SessionConfigPreference[] 
 
 export function readSessionConfigPreferences(channelId: string, agentId: string): readonly SessionConfigPreference[] {
     try {
-        const preferences = readStoredPreferences(storageKey(SESSION_CONFIG_PREFERENCE_PREFIX, channelId, agentId));
-        if (preferences.length > 0) {
-            return preferences;
-        }
-        return readStoredPreferences(storageKey(LEGACY_SESSION_MODEL_PREFERENCE_PREFIX, channelId, agentId));
+        return readStoredPreferences(storageKey(SESSION_CONFIG_PREFERENCE_PREFIX, channelId, agentId));
     } catch {
         return [];
     }
+}
+
+/** Applies valid saved choices to a newly inspected draft without creating or configuring a Relay Session. */
+export function applySessionConfigPreferences(
+    options: readonly SessionConfigOption[],
+    preferences: readonly SessionConfigPreference[],
+): readonly SessionConfigOption[] {
+    const preferencesById = new Map(preferences.map((preference) => [preference.configId, preference]));
+    return options.map((option) => {
+        const preference = preferencesById.get(option.id);
+        if (option.type === "boolean") {
+            return preference?.valueType === "boolean" ? { ...option, booleanValue: preference.booleanValue } : option;
+        }
+        return preference?.valueType === "select" &&
+            option.values.some((candidate) => candidate.value === preference.value)
+            ? { ...option, currentValue: preference.value }
+            : option;
+    });
 }
 
 export function saveSessionConfigPreferences(
@@ -137,7 +150,6 @@ export function saveSessionConfigPreferences(
             storageKey(SESSION_CONFIG_PREFERENCE_PREFIX, channelId, agentId),
             JSON.stringify(preferences),
         );
-        window.localStorage.removeItem(storageKey(LEGACY_SESSION_MODEL_PREFERENCE_PREFIX, channelId, agentId));
     } catch {}
 }
 

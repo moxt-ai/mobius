@@ -55,7 +55,6 @@ import {
 } from "@moxt-ai/mobius-sdk/channel";
 import {
     type ChannelConnection,
-    LegacyChannelCredentialAuthority,
     LinkedChannelCredentialAuthority,
     OwnerChannelCredentialAuthority,
     ProjectRuntimeCredentialAuthority,
@@ -75,7 +74,11 @@ import {
     readProjectRuntimeConnection,
     standaloneProjectCredentialProvider,
 } from "@/services/pairing-api";
-import { readSessionConfigPreferences, saveSessionConfigPreferences } from "@/services/session-config-preferences";
+import {
+    applySessionConfigPreferences,
+    readSessionConfigPreferences,
+    saveSessionConfigPreferences,
+} from "@/services/session-config-preferences";
 import { selectActiveConversation, useChatStore } from "@/store/chat-store";
 
 async function createRelayUrl(connection: ChannelConnection, signal: AbortSignal): Promise<string> {
@@ -213,10 +216,7 @@ async function connectBrowserServiceClients(connection: ChannelConnection): Prom
         // Project Runtime instead keeps using its refreshable scoped provider for Runtime services.
         return new DirectBrowserServiceClients(issuer);
     }
-    if (
-        !(connection.credentialAuthority instanceof OwnerChannelCredentialAuthority) &&
-        !(connection.credentialAuthority instanceof LegacyChannelCredentialAuthority)
-    ) {
+    if (!(connection.credentialAuthority instanceof OwnerChannelCredentialAuthority)) {
         issuer.close();
         throw new MobiusChannelError("channel_credential_invalid", "The channel credential authority is invalid");
     }
@@ -235,13 +235,6 @@ async function connectBrowserServiceClients(connection: ChannelConnection): Prom
             }),
         );
     } catch (error) {
-        if (
-            connection.credentialAuthority instanceof LegacyChannelCredentialAuthority &&
-            error instanceof MobiusApiError &&
-            error.code === "owner_access_required"
-        ) {
-            return new DirectBrowserServiceClients(issuer);
-        }
         issuer.close();
         throw error;
     }
@@ -276,6 +269,7 @@ abstract class TransportConnection {
         signal: AbortSignal,
     ) => Promise<WorkspaceEntriesEvent>;
     abstract readonly permission: (request: PermissionResponseRequest) => Promise<void>;
+    abstract readonly rememberDraftConfig: (agentId: string, options: readonly SessionConfigOption[]) => void;
     abstract readonly prepare: (request: SessionPrepareRequest, signal: AbortSignal) => Promise<SessionReadyEvent>;
     abstract readonly prompt: (request: PromptRequest) => Promise<PromptResult>;
     abstract readonly steerQueuedTurn: (request: CancelRequest) => Promise<void>;
@@ -315,6 +309,8 @@ class DisconnectedTransport extends TransportConnection {
     readonly installAgent = (): Promise<void> => this.notInitialized();
 
     readonly permission = (): Promise<void> => this.notInitialized();
+
+    readonly rememberDraftConfig = (): void => {};
 
     readonly prepare = (): Promise<SessionReadyEvent> => this.notInitialized();
 
@@ -647,6 +643,10 @@ class ConnectedTransport extends TransportConnection {
         useChatStore.getState().resolveSessionPermission(request.interactionId, request.sessionId);
     };
 
+    readonly rememberDraftConfig = (agentId: string, options: readonly SessionConfigOption[]): void => {
+        saveSessionConfigPreferences(this.#channelId, agentId, options);
+    };
+
     readonly prepare = async (request: SessionPrepareRequest, signal: AbortSignal): Promise<SessionReadyEvent> => {
         signal.throwIfAborted();
         const requestId = request.requestId ?? crypto.randomUUID();
@@ -655,11 +655,22 @@ class ConnectedTransport extends TransportConnection {
             const client = await this.#client;
             signal.throwIfAborted();
             const ready = await client.prepareSession({ ...request, requestId }, signal);
-            if (ready.restored || request.transient === true) {
+            if (ready.restored) {
                 // Saved run settings are replayed as a Session configuration, which is a durable Session
-                // event and needs a Session the Relay holds. An inspection-only preparation deliberately
-                // has none, so the Agent keeps whatever the user picks when the first prompt is sent.
+                // event and needs a Session the Relay holds.
                 return ready;
+            }
+            if (request.transient === true) {
+                // A New chat is only a browser draft. Restore its saved choices into the inspection result
+                // locally so selecting settings cannot create or configure a Relay Session before the first
+                // prompt. The prompt carries this snapshot when it materializes the Session.
+                return {
+                    ...ready,
+                    configOptions: applySessionConfigPreferences(
+                        ready.configOptions,
+                        readSessionConfigPreferences(this.#channelId, request.agentId),
+                    ),
+                };
             }
             const preferenceOrder = new Map(
                 ready.configOptions.map((option) => [option.id, sessionConfigurationPriority(option.category)]),
@@ -1032,19 +1043,11 @@ export async function prepareActiveSession(expectedSessionId = ""): Promise<void
     ) {
         return;
     }
-    // A conversation this browser created and has not sent anything to yet is not a Session the user has
-    // started, so preparing it must not put it in the Relay directory: an abandoned draft would be
-    // listed as a real Session and count against the project's Session quota.
-    //
-    // That only holds for an Agent that discovers its settings. Such an Agent keeps the user's selections
-    // in the browser and receives them with the first prompt, so nothing about the draft has to be
-    // recorded. Any other Agent is configured through a Session configuration, which the Relay records
-    // against a Session, so its draft keeps the Session that `prepare` creates.
-    const agent = initialStore.agents.find((candidate) => candidate.id === conversation.agentId);
-    const defersSettingsToFirstPrompt =
-        agent?.agentSettingsDiscovery === true && agent?.sessionTurnConfiguration === true;
-    // `isDraft` is read here because preparing the conversation is what stops it being a draft.
-    const transient = conversation.isDraft && defersSettingsToFirstPrompt;
+    // A browser draft may inspect Agent capabilities and settings, but it is not a Session the user has
+    // started. Keep every draft preparation transient so abandoning /sessions/new cannot add a Relay
+    // directory entry or consume the Project's Session quota. The first prompt carries the inspected
+    // configuration snapshot and materializes the Session.
+    const transient = conversation.isDraft;
     initialStore.setSessionPreparing(conversation.sessionId);
     try {
         const ready = await transport.prepare(
@@ -1228,6 +1231,20 @@ export async function configureSessionOption(
     }
     if (currentOption.type === "boolean" && currentOption.booleanValue === booleanValue) {
         return { kind: "ignored" };
+    }
+    if (conversation.isDraft) {
+        const configOptions = conversation.session.configOptions.map((candidate) => {
+            if (candidate.id !== currentOption.id || candidate.type !== currentOption.type) {
+                return candidate;
+            }
+            return candidate.type === "boolean"
+                ? { ...candidate, booleanValue }
+                : { ...candidate, currentValue: value };
+        });
+        store.applyDraftSessionConfig(configOptions);
+        transport.rememberDraftConfig(conversation.agentId, configOptions);
+        store.setErrorMessage("");
+        return { kind: "applied" };
     }
     try {
         await transport.configure(

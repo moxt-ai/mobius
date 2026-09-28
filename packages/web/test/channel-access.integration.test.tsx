@@ -17,7 +17,7 @@ setupWebIntegrationEnvironment();
 describe.sequential("Channel access boundaries", () => {
     it("Given an owned paired Channel, When device access is opened from the conversation sidebar, Then it appears outside Agent settings", async () => {
         const paired = await openPairedApplication({
-            path: (channelId) => `/channels/${encodeURIComponent(channelId)}/settings`,
+            path: (channelId) => `/channels/${encodeURIComponent(channelId)}/sessions/new/settings`,
         });
         const accessPath = `/channels/${encodeURIComponent(paired.channelId)}/access`;
 
@@ -40,6 +40,31 @@ describe.sequential("Channel access boundaries", () => {
                 await screen.findByRole("button", {
                     name: "Create one-time access link",
                 }),
+            ).toBeTruthy();
+        } finally {
+            await paired.close();
+        }
+    });
+
+    it("Given a saved Channel credential has no authority, When Web opens the Channel, Then the obsolete credential is rejected", async () => {
+        const paired = await openPairedApplication();
+
+        try {
+            cleanup();
+            await closeMobiusTransport();
+            window.localStorage.clear();
+            window.localStorage.setItem(
+                `mobius:channel-credential:${paired.channelId}`,
+                JSON.stringify({
+                    hostToken: paired.credential.hostToken,
+                    projectId: paired.credential.projectId,
+                }),
+            );
+            window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
+            createTestApplication();
+
+            expect(
+                await screen.findByText("channel_credential_invalid: The saved channel credential is invalid."),
             ).toBeTruthy();
         } finally {
             await paired.close();

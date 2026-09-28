@@ -582,13 +582,18 @@ function WorkspacePickerControl({
 
 export function WorkspacePicker() {
     const conversation = useChatStore(selectActiveConversation);
+    const agent = useChatStore((state) => state.agents.find((candidate) => candidate.id === conversation.agentId));
     const selectPrimaryDirectory = useChatStore((state) => state.selectPrimaryDirectory);
     const setErrorMessage = useChatStore((state) => state.setErrorMessage);
     const toggleAdditionalDirectory = useChatStore((state) => state.toggleAdditionalDirectory);
     return (
         <WorkspacePickerControl
             additionalDirectories={conversation.additionalDirectories}
-            canAddAdditionalDirectories={conversation.session.capabilities.additionalDirectories}
+            canAddAdditionalDirectories={
+                conversation.isDraft
+                    ? (agent?.capabilities.additionalDirectories ?? false)
+                    : conversation.session.capabilities.additionalDirectories
+            }
             directoryId={conversation.directoryId}
             directoryLabel={conversation.directoryLabel}
             listDirectories={listWorkspace}
