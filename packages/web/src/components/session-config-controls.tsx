@@ -299,6 +299,7 @@ interface SessionConfigControlsViewProps {
     readonly options: readonly SessionConfigOption[];
     readonly settingsLoading: boolean;
     readonly statusLabel: string;
+    readonly waitingForFirstPrompt: boolean;
 }
 
 function SessionConfigControlsView({
@@ -315,6 +316,7 @@ function SessionConfigControlsView({
     options,
     settingsLoading,
     statusLabel,
+    waitingForFirstPrompt,
 }: SessionConfigControlsViewProps) {
     const [open, setOpen] = useState(false);
     const [panelLayout, setPanelLayout] = useState<SessionConfigPanelLayout>(PENDING_PANEL_LAYOUT);
@@ -594,6 +596,10 @@ function SessionConfigControlsView({
                                         ))}
                                     </div>
                                 )
+                            ) : waitingForFirstPrompt ? (
+                                <p className="px-3 py-8 text-center text-xs leading-5 text-muted-foreground">
+                                    Run settings will load when you send the first message.
+                                </p>
                             ) : (
                                 <div
                                     aria-live="polite"
@@ -679,7 +685,7 @@ export function SessionConfigControls() {
             directoryLabel={conversation.directoryLabel}
             failure={failure}
             isPreparing={conversation.session.isPreparing}
-            isReady={ready && cacheReady}
+            isReady={(ready || (conversation.isDraft && settingsSupported)) && cacheReady}
             isRunning={conversation.isRunning}
             onConfigure={async (option, value, booleanValue) => {
                 if (settingsSupported && loadedSettings !== undefined) {
@@ -717,7 +723,7 @@ export function SessionConfigControls() {
                 loadSettings(true);
             }}
             onRetry={() => {
-                if (!ready) {
+                if (!ready && !conversation.isDraft) {
                     void prepareActiveSession(conversation.sessionId);
                 }
                 loadSettings(true);
@@ -725,6 +731,7 @@ export function SessionConfigControls() {
             options={options}
             settingsLoading={settingsLoading}
             statusLabel={settingsLoading ? "Loading agent settings" : conversation.session.label}
+            waitingForFirstPrompt={conversation.isDraft && !settingsSupported && !ready}
         />
     );
 }

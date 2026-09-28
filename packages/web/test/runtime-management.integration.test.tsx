@@ -104,7 +104,7 @@ setupWebIntegrationEnvironment();
 describe.sequential("Project Runtime management", () => {
     it("Given an owned Project with two paired machines, When the user starts a chat on the second machine, Then its Agent responds in a Project Runtime route", async () => {
         const paired = await openPairedApplication({
-            path: (channelId) => `/channels/${encodeURIComponent(channelId)}/settings`,
+            path: (channelId) => `/channels/${encodeURIComponent(channelId)}/sessions/new/settings`,
         });
         const additionalDaemons: FakeAgentDaemon[] = [];
 
@@ -160,7 +160,7 @@ describe.sequential("Project Runtime management", () => {
 
     it("Given the owner is already in a Project Runtime, When the browser reloads that URL without navigation state, Then device access still opens the owning channel", async () => {
         const paired = await openPairedApplication({
-            path: (channelId) => `/channels/${encodeURIComponent(channelId)}/settings`,
+            path: (channelId) => `/channels/${encodeURIComponent(channelId)}/sessions/new/settings`,
         });
         const additionalDaemons: FakeAgentDaemon[] = [];
 
@@ -222,7 +222,7 @@ describe.sequential("Project Runtime management", () => {
 
     it("Given another paired machine has no ready Agent, When the owner opens it, Then Web enters that Runtime and shows Agent setup", async () => {
         const paired = await openPairedApplication({
-            path: (channelId) => `/channels/${encodeURIComponent(channelId)}/settings`,
+            path: (channelId) => `/channels/${encodeURIComponent(channelId)}/sessions/new/settings`,
         });
         const additionalDaemons: FakeAgentDaemon[] = [];
 
@@ -271,7 +271,7 @@ describe.sequential("Project Runtime management", () => {
         signal,
     }) => {
         const paired = await openPairedApplication({
-            path: (channelId) => `/channels/${encodeURIComponent(channelId)}/settings`,
+            path: (channelId) => `/channels/${encodeURIComponent(channelId)}/sessions/new/settings`,
         });
         const additionalDaemons: FakeAgentDaemon[] = [];
 
@@ -379,7 +379,7 @@ describe.sequential("Project Runtime management", () => {
 
     it("Given a browser linked by one-time access, When it opens another paired machine, Then that machine's Agent responds", async () => {
         const paired = await openPairedApplication({
-            path: (channelId) => `/channels/${encodeURIComponent(channelId)}/settings`,
+            path: (channelId) => `/channels/${encodeURIComponent(channelId)}/sessions/new/settings`,
         });
         const additionalDaemons: FakeAgentDaemon[] = [];
 

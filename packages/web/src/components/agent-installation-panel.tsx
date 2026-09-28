@@ -162,7 +162,7 @@ export function AgentInstallationPage() {
                 </p>
                 <Link
                     className="mx-auto mt-4 inline-flex min-h-11 items-center gap-2 rounded-lg px-3 text-xs font-medium text-muted-foreground no-underline transition-colors duration-150 hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
-                    to={routes.settingsPath}
+                    to={routes.newSessionSettingsPath}
                 >
                     <Settings aria-hidden="true" className="size-3.5" />
                     Open Agent settings

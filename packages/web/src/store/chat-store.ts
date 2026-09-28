@@ -10,6 +10,7 @@ import type {
     PromptImage,
     PromptResource,
     SessionCommandsUpdatedEvent,
+    SessionConfigOption,
     SessionConfigUpdatedEvent,
     SessionElicitationRequestedEvent,
     SessionElicitationResolvedEvent,
@@ -69,6 +70,7 @@ export interface ChatStore {
     readonly addDraftResource: (resource: PromptResource) => void;
     readonly applySessionCommands: (event: SessionCommandsUpdatedEvent) => void;
     readonly applySessionConfig: (event: SessionConfigUpdatedEvent) => void;
+    readonly applyDraftSessionConfig: (configOptions: readonly SessionConfigOption[]) => void;
     readonly applySessionElicitation: (event: SessionElicitationRequestedEvent) => void;
     readonly applySessionInfo: (event: SessionInfoUpdatedEvent) => void;
     readonly applySessionPermission: (event: SessionPermissionRequestedEvent) => void;
@@ -546,6 +548,20 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
                     : conversation,
             ),
         }));
+    },
+    applyDraftSessionConfig: (configOptions) => {
+        set((state) => {
+            const conversation = readActiveConversation(state);
+            if (!conversation.isDraft || !(conversation.session instanceof ReadySessionState)) {
+                return {};
+            }
+            return {
+                conversations: replaceConversation(
+                    state.conversations,
+                    conversation.withSession(conversation.session.withConfig(configOptions)),
+                ),
+            };
+        });
     },
     applySessionConfig: (event) => {
         set((state) => ({

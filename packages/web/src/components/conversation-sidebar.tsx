@@ -86,9 +86,10 @@ export function ConversationSidebar({
     // is empty until an Agent reports `session.info.updated`, so a row the user merely opened was the
     // only one holding a timestamp and jumped to the head on the next render.
     //
-    // A conversation with no listing is one this browser created and has not sent anything to yet. It
-    // belongs above the listed Sessions rather than at the end, because an empty string would otherwise
-    // compare as the oldest activity. Otherwise the newer activity sorts first.
+    // A newly sent conversation may render before the Relay directory refresh gives it a listing time.
+    // It belongs above the listed Sessions rather than at the end, because an empty string would otherwise
+    // compare as the oldest activity. Unsent drafts are filtered out below. Otherwise the newer activity
+    // sorts first.
     //
     // Equal timestamps keep the store's order instead of manufacturing one from the Session identifier.
     // The Relay tells the two apart by Session id, but here that identifier is a generated UUID, so
@@ -99,14 +100,21 @@ export function ConversationSidebar({
         }
         return right.listedAt.localeCompare(left.listedAt);
     };
-    const runningConversations = conversations.filter((conversation) => conversation.isRunning).sort(byMostRecent);
-    const recentConversations = conversations.filter((conversation) => !conversation.isRunning).sort(byMostRecent);
+    const runningConversations = conversations
+        .filter((conversation) => !conversation.isDraft && conversation.isRunning)
+        .sort(byMostRecent);
+    const recentConversations = conversations
+        .filter((conversation) => !conversation.isDraft && !conversation.isRunning)
+        .sort(byMostRecent);
     const displayWidth = sidebarDisplayWidth(layout);
     const access = routes.access;
     const runtimesPath = routes.runtimesPath;
     const activeSessionId = conversations.find((conversation) => conversation.id === activeConversationId)?.sessionId;
+    const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId);
     const settingsPath =
-        activeSessionId === undefined ? routes.settingsPath : routes.sessionSettingsPath(activeSessionId);
+        activeSessionId === undefined || activeConversation?.isDraft === true
+            ? routes.newSessionSettingsPath
+            : routes.sessionSettingsPath(activeSessionId);
 
     const closeSidebar = useCallback((): void => {
         if (!sidebarOpen) {
@@ -279,6 +287,7 @@ export function ConversationSidebar({
                     <div className="px-3 pt-2 pb-3">
                         <Button
                             className="h-11 w-full justify-start rounded-[10px] border-black/9 bg-white px-2.5 text-[13px] font-medium shadow-[0_1px_2px_rgba(0,0,0,0.03)] hover:bg-background lg:h-10"
+                            data-testid={dataTestId.newChat}
                             disabled={agents.length === 0}
                             onClick={() => {
                                 onCreateConversation();

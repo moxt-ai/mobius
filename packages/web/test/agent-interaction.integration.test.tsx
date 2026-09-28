@@ -95,14 +95,15 @@ describe.sequential("Agent interaction boundaries", () => {
         const paired = await openReadyApplication();
 
         try {
-            const prepare = paired.preparation;
+            expect(paired.preparation.transient).toBe(true);
 
             const promptInput = await screen.findByRole("combobox", {
                 name: "Message the local agent",
             });
-            const sessionPath = `/channels/${encodeURIComponent(paired.channelId)}/sessions/${encodeURIComponent(prepare.sessionId)}`;
+            const channelPath = `/channels/${encodeURIComponent(paired.channelId)}`;
+            const draftPath = `${channelPath}/sessions/new`;
             await waitFor(() => {
-                expect(window.location.pathname).toBe(sessionPath);
+                expect(window.location.pathname).toBe(draftPath);
             });
             fireEvent.change(promptInput, {
                 target: { value: "Keep this draft while viewing settings" },
@@ -110,7 +111,7 @@ describe.sequential("Agent interaction boundaries", () => {
 
             fireEvent.click(screen.getByRole("link", { name: "Agent settings" }));
             await screen.findByRole("heading", { level: 1, name: "Agent settings" });
-            expect(window.location.pathname).toBe(`${sessionPath}/settings`);
+            expect(window.location.pathname).toBe(`${draftPath}/settings`);
             expect(screen.getByText("codex 0.153.0")).toBeTruthy();
             expect(screen.getByText("/usr/local/bin/codex")).toBeTruthy();
 
@@ -119,7 +120,7 @@ describe.sequential("Agent interaction boundaries", () => {
                 name: "Message the local agent",
             });
             expect(screen.getByDisplayValue("Keep this draft while viewing settings")).toBe(restoredPromptInput);
-            expect(window.location.pathname).toBe(sessionPath);
+            expect(window.location.pathname).toBe(draftPath);
         } finally {
             await paired.close();
         }
@@ -705,7 +706,7 @@ describe.sequential("Agent interaction boundaries", () => {
         }
     });
 
-    it("Given one New chat already exists, When a user requests New chat from another conversation, Then the existing draft is reopened without creating another", async () => {
+    it("Given an existing conversation, When the user opens New chat and sends the first prompt, Then the draft stays out of Recents at sessions/new until that prompt creates the Session", async () => {
         const paired = await openPairedApplication();
 
         try {
@@ -716,46 +717,41 @@ describe.sequential("Agent interaction boundaries", () => {
             const sidebar = screen.getByRole("complementary", {
                 name: "Conversation sidebar",
             });
-            fireEvent.click(within(sidebar).getByRole("button", { name: /New chat.*⌘ N/ }));
-            const draftPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, draftPreparation);
-            const draftPath = `/channels/${encodeURIComponent(paired.channelId)}/sessions/${encodeURIComponent(draftPreparation.sessionId)}`;
-            await waitFor(() => {
-                expect(window.location.pathname).toBe(draftPath);
-            });
-            fireEvent.change(
-                await screen.findByRole("combobox", {
-                    name: "Message the local agent",
-                }),
-                { target: { value: "Keep the existing New chat draft" } },
-            );
-
             const conversations = screen.getByRole("navigation", {
                 name: "Conversations",
             });
-            fireEvent.click(
-                within(conversations).getByRole("link", {
-                    name: /Existing conversation/,
-                }),
-            );
-            await screen.findByRole("heading", {
-                level: 1,
-                name: "Existing conversation",
-            });
+            expect(within(conversations).getAllByTestId(dataTestId.conversationLink)).toHaveLength(1);
 
-            fireEvent.click(within(sidebar).getByRole("button", { name: /New chat.*⌘ N/ }));
-
+            fireEvent.click(within(sidebar).getByTestId(dataTestId.newChat));
+            const draftPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            expect(draftPreparation.transient).toBe(true);
+            await sendReadySession(paired.daemon, draftPreparation);
+            const draftPath = `/channels/${encodeURIComponent(paired.channelId)}/sessions/new`;
             await waitFor(() => {
                 expect(window.location.pathname).toBe(draftPath);
             });
-            expect(screen.getByDisplayValue("Keep the existing New chat draft")).toBeTruthy();
-            expect(within(conversations).getAllByRole("link", { name: /New chat/ })).toHaveLength(1);
+            expect(within(conversations).getAllByTestId(dataTestId.conversationLink)).toHaveLength(1);
+            expect(within(conversations).queryByText("New chat")).toBeNull();
+
+            const promptInput = await screen.findByTestId(dataTestId.promptInput);
+            fireEvent.change(promptInput, { target: { value: "Create the real conversation" } });
+            fireEvent.click(screen.getByTestId(dataTestId.sendPrompt));
+            const prompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
+            expect(prompt.sessionId).toBe(draftPreparation.sessionId);
+
+            await waitFor(() => {
+                expect(window.location.pathname).toBe(
+                    `/channels/${encodeURIComponent(paired.channelId)}/sessions/${encodeURIComponent(prompt.sessionId)}`,
+                );
+                expect(within(conversations).getAllByTestId(dataTestId.conversationLink)).toHaveLength(2);
+            });
+            expect(within(conversations).getByText("Create the real conversation")).toBeTruthy();
         } finally {
             await paired.close();
         }
     });
 
-    it("Given conversations restored from the relay without loaded turns, When the user requests New chat, Then a conversation is created instead of an existing one being reopened", async () => {
+    it("Given conversations restored from the Relay without loaded turns, When the user requests New chat, Then neither restored Session is mistaken for the unlisted draft", async () => {
         const paired = await openPairedApplication();
         const channelPath = `/channels/${encodeURIComponent(paired.channelId)}`;
 
@@ -768,7 +764,7 @@ describe.sequential("Agent interaction boundaries", () => {
             const sidebar = screen.getByRole("complementary", {
                 name: "Conversation sidebar",
             });
-            fireEvent.click(within(sidebar).getByRole("button", { name: /New chat.*⌘ N/ }));
+            fireEvent.click(within(sidebar).getByTestId(dataTestId.newChat));
             const secondPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             await sendReadySession(paired.daemon, secondPreparation);
             await completeRenderedPrompt(paired.daemon, "Beta conversation", "Beta response");
@@ -784,27 +780,31 @@ describe.sequential("Agent interaction boundaries", () => {
                 name: "Conversations",
             });
             await waitFor(() => {
-                expect(within(conversations).getAllByRole("link")).toHaveLength(2);
+                expect(within(conversations).getAllByTestId(dataTestId.conversationLink)).toHaveLength(2);
             });
 
             const before = within(conversations)
-                .getAllByRole("link")
+                .getAllByTestId(dataTestId.conversationLink)
                 .map((link) => link.getAttribute("href"));
             fireEvent.click(
                 within(
                     screen.getByRole("complementary", {
                         name: "Conversation sidebar",
                     }),
-                ).getByRole("button", { name: /New chat.*⌘ N/ }),
+                ).getByTestId(dataTestId.newChat),
             );
+            const draftPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            expect(draftPreparation.transient).toBe(true);
+            await sendReadySession(paired.daemon, draftPreparation);
 
             await waitFor(() => {
-                expect(within(conversations).getAllByRole("link")).toHaveLength(3);
+                expect(window.location.pathname).toBe(`${channelPath}/sessions/new`);
+                expect(within(conversations).getAllByTestId(dataTestId.conversationLink)).toHaveLength(2);
             });
             const after = within(conversations)
-                .getAllByRole("link")
+                .getAllByTestId(dataTestId.conversationLink)
                 .map((link) => link.getAttribute("href"));
-            expect(after.filter((href) => !before.includes(href))).toHaveLength(1);
+            expect(after).toEqual(before);
         } finally {
             await paired.close();
         }

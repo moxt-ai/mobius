@@ -209,6 +209,7 @@ interface ChatComposerProps {
 
 export function ChatComposer({ placement }: ChatComposerProps) {
     const conversation = useChatStore(selectActiveConversation);
+    const agent = useChatStore((state) => state.agents.find((candidate) => candidate.id === conversation.agentId));
     const errorMessage = useChatStore((state) => state.errorMessage);
     const runtime = useChatStore((state) => state.runtime);
     const toggleAdditionalDirectory = useChatStore((state) => state.toggleAdditionalDirectory);
@@ -241,7 +242,7 @@ export function ChatComposer({ placement }: ChatComposerProps) {
     const canSubmitWhileRunning = activeDisposition !== SessionPromptDisposition.Reject;
     const canSend =
         runtime.canSend &&
-        conversation.session.isReady &&
+        (conversation.session.isReady || (conversation.isDraft && !conversation.session.isPreparing)) &&
         hasPromptContent &&
         (!conversation.isRunning || canSubmitWhileRunning);
     const sendLabel =
@@ -250,8 +251,10 @@ export function ChatComposer({ placement }: ChatComposerProps) {
             : activeDisposition === SessionPromptDisposition.Steer
               ? "Steer agent"
               : "Send message";
-    const canAttach =
-        conversation.session.capabilities.imagePrompt || conversation.session.capabilities.embeddedContextPrompt;
+    const promptCapabilities = conversation.isDraft
+        ? (agent?.capabilities ?? conversation.session.capabilities)
+        : conversation.session.capabilities;
+    const canAttach = promptCapabilities.imagePrompt || promptCapabilities.embeddedContextPrompt;
     const hasSelectedContext = hasSelectedComposerContext({
         additionalDirectoryCount: conversation.additionalDirectories.length,
         imageCount: conversation.draftImages.length,
@@ -319,7 +322,7 @@ export function ChatComposer({ placement }: ChatComposerProps) {
             .then((attachments) => {
                 for (const attachment of attachments) {
                     if (attachment instanceof ReadPromptImage) {
-                        if (!conversation.session.capabilities.imagePrompt) {
+                        if (!promptCapabilities.imagePrompt) {
                             throw new AttachmentReadError(
                                 "image_prompt_unsupported",
                                 `${conversation.agentLabel} does not accept image prompts.`,
@@ -327,7 +330,7 @@ export function ChatComposer({ placement }: ChatComposerProps) {
                         }
                         addDraftImage(attachment.image);
                     } else if (attachment instanceof ReadPromptResource) {
-                        if (!conversation.session.capabilities.embeddedContextPrompt) {
+                        if (!promptCapabilities.embeddedContextPrompt) {
                             throw new AttachmentReadError(
                                 "resource_prompt_unsupported",
                                 `${conversation.agentLabel} does not accept embedded resources.`,
@@ -377,7 +380,7 @@ export function ChatComposer({ placement }: ChatComposerProps) {
         }
         // Keep the image out of the textarea, but still let non-image clipboard payloads paste normally.
         event.preventDefault();
-        if (!conversation.session.capabilities.imagePrompt) {
+        if (!promptCapabilities.imagePrompt) {
             setErrorMessage(`image_prompt_unsupported: ${conversation.agentLabel} does not accept image prompts.`);
             return;
         }
@@ -513,7 +516,11 @@ export function ChatComposer({ placement }: ChatComposerProps) {
                     }}
                     onKeyDown={handleKeyDown}
                     onPaste={handlePaste}
-                    placeholder={conversation.session.isReady ? "Ask the local agent…" : conversation.session.label}
+                    placeholder={
+                        conversation.session.isReady || conversation.isDraft
+                            ? "Ask the local agent…"
+                            : conversation.session.label
+                    }
                     ref={textareaRef}
                     // The composer drives the command listbox, so it is the combobox that owns the popup.
                     role="combobox"

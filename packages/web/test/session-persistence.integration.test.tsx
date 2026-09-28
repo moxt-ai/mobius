@@ -2,7 +2,6 @@ import {
     AGENT_SETTINGS_DISCOVER_KIND,
     decodeAgentSettingsDiscoverCommand,
     decodeSessionCancelCommand,
-    decodeSessionConfigureCommand,
     decodeSessionPrepareCommand,
     decodeSessionPromptCommand,
     decodeWorkspaceListCommand,
@@ -386,6 +385,7 @@ describe.sequential("Session persistence boundaries", () => {
 
         try {
             const initialPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            expect(initialPreparation.transient).toBe(true);
             await sendReadySession(paired.daemon, initialPreparation);
 
             fireEvent.click(await screen.findByRole("button", { name: /Workspace directory:/ }));
@@ -433,6 +433,7 @@ describe.sequential("Session persistence boundaries", () => {
             expect(directoryPreparation).toMatchObject({
                 agentId: "codex",
                 directoryId: "selected-project",
+                transient: true,
             });
             await sendReadySession(paired.daemon, directoryPreparation);
 
@@ -451,6 +452,7 @@ describe.sequential("Session persistence boundaries", () => {
             expect(selectedAgentPreparation).toMatchObject({
                 agentId: "claude",
                 directoryId: "selected-project",
+                transient: true,
             });
             await sendReadySession(paired.daemon, selectedAgentPreparation, modeConfigOptions("ask"));
 
@@ -461,25 +463,21 @@ describe.sequential("Session persistence boundaries", () => {
                 pointerType: "mouse",
             });
             fireEvent.click(await screen.findByRole("option", { name: "Plan" }));
-            const selectedConfiguration = decodeSessionConfigureCommand(
-                await paired.daemon.receive(SESSION_CONFIGURE_KIND),
+            await screen.findByRole("button", { name: /Run settings: Plan/ });
+            expect(paired.daemon.available(SESSION_CONFIGURE_KIND)).toBe(0);
+            const firstPrompt = await completeRenderedPrompt(
+                paired.daemon,
+                "Remember my chat setup",
+                "SETUP-REMEMBERED",
             );
-            expect(selectedConfiguration).toMatchObject({
-                agentId: "claude",
-                configId: "mode",
-                sessionId: selectedAgentPreparation.sessionId,
-                value: "plan",
-            });
-            await paired.daemon.sendSessionEvent(
-                selectedAgentPreparation.sessionId,
-                encodeSessionConfigUpdatedEvent({
-                    configOptions: modeConfigOptions("plan"),
-                    kind: "session.config.updated",
-                    requestId: selectedConfiguration.requestId,
-                    sessionId: selectedAgentPreparation.sessionId,
-                }),
-            );
-            await completeRenderedPrompt(paired.daemon, "Remember my chat setup", "SETUP-REMEMBERED");
+            expect(firstPrompt.sessionConfigurations).toEqual([
+                {
+                    booleanValue: false,
+                    configId: "mode",
+                    value: "plan",
+                    valueType: "select",
+                },
+            ]);
 
             fireEvent.click(
                 within(
@@ -493,30 +491,12 @@ describe.sequential("Session persistence boundaries", () => {
             expect(nextPreparation).toMatchObject({
                 agentId: "claude",
                 directoryId: "selected-project",
+                transient: true,
             });
             await sendReadySession(paired.daemon, nextPreparation, modeConfigOptions("ask"));
-            // This Agent applies run settings through a Session configuration rather than passing them
-            // with the prompt, so the draft still needs the Session that preparing it creates and its
-            // preparation stays a recorded one. An Agent that discovers settings takes the other path,
-            // which the run-settings tests cover.
-            const restoredConfiguration = decodeSessionConfigureCommand(
-                await paired.daemon.receive(SESSION_CONFIGURE_KIND),
-            );
-            expect(restoredConfiguration).toMatchObject({
-                agentId: "claude",
-                configId: "mode",
-                sessionId: nextPreparation.sessionId,
-                value: "plan",
-            });
-            await paired.daemon.sendSessionEvent(
-                nextPreparation.sessionId,
-                encodeSessionConfigUpdatedEvent({
-                    configOptions: modeConfigOptions("plan"),
-                    kind: "session.config.updated",
-                    requestId: restoredConfiguration.requestId,
-                    sessionId: nextPreparation.sessionId,
-                }),
-            );
+            // The draft restores the preference into its transient inspection result. It remains absent
+            // from the Relay until its first prompt carries this configuration snapshot.
+            expect(paired.daemon.available(SESSION_CONFIGURE_KIND)).toBe(0);
             expect(
                 screen.getByRole("button", {
                     name: "Agent for this conversation",

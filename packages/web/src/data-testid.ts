@@ -5,6 +5,7 @@ export const dataTestId = Object.freeze({
     conversationLink: "mobius-conversation-link",
     conversationTitle: "mobius-conversation-title",
     conversationTitleHeader: "mobius-conversation-title-header",
+    newChat: "mobius-new-chat",
     promptAttachment: "mobius-prompt-attachment",
     promptFileInput: "mobius-prompt-file-input",
     promptInput: "mobius-prompt-input",
