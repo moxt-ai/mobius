@@ -26,6 +26,7 @@ import {
     type RecordedActivityNarration,
     type RecordedContent,
     type RecordedSession,
+    type RecordedSessionExecution,
     type RecordedTurn,
     RunningRecordedTurn,
     type TurnTiming,
@@ -790,6 +791,67 @@ function mergeNativeHistory(
     ];
 }
 
+const ACTIVE_TURN_MARKER_SUFFIX = ":active-turn-marker";
+
+function isActiveTurnMarker(message: ChatMessage): boolean {
+    return message instanceof AgentChatMessage && message.id === `${message.commandId}${ACTIVE_TURN_MARKER_SUFFIX}`;
+}
+
+function reconcileRecordedSessionExecution(
+    messages: readonly ChatMessage[],
+    execution: RecordedSessionExecution,
+): readonly ChatMessage[] {
+    if (execution.kind === "unavailable") {
+        return messages;
+    }
+    const messagesWithoutMarker = messages.filter((message) => !isActiveTurnMarker(message));
+    if (execution.turn === null) {
+        return messagesWithoutMarker;
+    }
+    const hasLiveTurn = messagesWithoutMarker.some(
+        (message) =>
+            message instanceof AgentChatMessage &&
+            message.commandId === execution.turn?.commandId &&
+            message.state.isStreaming,
+    );
+    if (hasLiveTurn) {
+        return messagesWithoutMarker;
+    }
+    return [
+        ...messagesWithoutMarker,
+        new AgentChatMessage(
+            `${execution.turn.commandId}${ACTIVE_TURN_MARKER_SUFFIX}`,
+            execution.turn.commandId,
+            new Date(0),
+            "",
+            new RunningTurnState(execution.turn.epoch),
+            [],
+            [],
+            "0",
+            "",
+            { kind: "running", startedAt: new Date(0) },
+        ),
+    ];
+}
+
+function mergeRecordedSessionHistory(
+    sessionId: string,
+    history: NativeSessionHistory | null,
+    messages: readonly ChatMessage[],
+    execution: RecordedSessionExecution,
+): readonly ChatMessage[] {
+    if (execution.kind === "available") {
+        const liveMessages = messages.filter(
+            (message) => !(message instanceof NativeHistoryChatMessage) && !isActiveTurnMarker(message),
+        );
+        if (liveMessages.length > 0) {
+            const existingHistory = messages.find((message) => message instanceof NativeHistoryChatMessage);
+            return [...(existingHistory === undefined ? [] : [existingHistory]), ...liveMessages];
+        }
+    }
+    return mergeNativeHistory(sessionId, history, messages);
+}
+
 export abstract class UserChatMessage extends ChatMessage {
     readonly commandId: string;
     abstract readonly disposition: string;
@@ -1531,7 +1593,15 @@ export class Conversation {
             recorded.title.length > 0 ? recorded.title : base.title,
             recorded.nativeHistory === null ? base.preview : "Continue Agent context",
             base.draft,
-            mergeNativeHistory(recorded.sessionId, recorded.nativeHistory, base.messages),
+            reconcileRecordedSessionExecution(
+                mergeRecordedSessionHistory(
+                    recorded.sessionId,
+                    recorded.nativeHistory,
+                    base.messages,
+                    recorded.execution,
+                ),
+                recorded.execution,
+            ),
             new UnpreparedSessionState(recorded.elicitations, recorded.permissions),
             recorded.directoryId,
             directoryLabelFromId(recorded.directoryId),
@@ -1609,7 +1679,10 @@ export class Conversation {
             recorded.title.length > 0 ? recorded.title : this.title,
             recorded.nativeHistory === null ? this.preview : "Continue Agent context",
             this.draft,
-            mergeNativeHistory(this.sessionId, recorded.nativeHistory, this.messages),
+            reconcileRecordedSessionExecution(
+                mergeRecordedSessionHistory(this.sessionId, recorded.nativeHistory, this.messages, recorded.execution),
+                recorded.execution,
+            ),
             this.session.withInteractions(recorded.elicitations, recorded.permissions),
             recorded.directoryId,
             this.directoryId === recorded.directoryId

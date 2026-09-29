@@ -57,9 +57,11 @@ import {
     RecordedActivity,
     RecordedContent,
     RecordedSession,
+    type RecordedSessionExecution,
     type RecordedTurn,
     RunningRecordedTurn,
     type TurnTiming,
+    UNAVAILABLE_RECORDED_SESSION_EXECUTION,
     UNTIMED_TURN,
     WaitingBrowserPairingStatus,
 } from "@/domain/channel";
@@ -1383,18 +1385,23 @@ async function readSessionHistoryWithSignal(
             throw new PairingApiError("invalid_relay_response", "The Runtime returned an inconsistent Session lookup.");
         }
         const additionalDirectoryIds = entry.additionalDirectories.map((directory) => directory.directoryId);
-        const nativeHistory = await readRuntimeNativeSessionHistory(
+        const identity = {
+            additionalDirectoryIds,
+            agentId: entry.agentId,
+            directoryId: entry.directoryId,
+        };
+        const { execution, nativeHistory } = await readConsistentRuntimeSessionRecovery(
             client,
             connection.runtimeId,
             entry.sessionId,
-            {
-                additionalDirectoryIds,
-                agentId: entry.agentId,
-                directoryId: entry.directoryId,
-            },
+            identity,
             signal,
         );
-        return new ChannelHistory([], [recordedSessionFromRuntimeMetadata(connection, entry, nativeHistory)]);
+        signal.throwIfAborted();
+        return new ChannelHistory(
+            [],
+            [recordedSessionFromRuntimeMetadata(connection, entry, nativeHistory, { ...execution, kind: "available" })],
+        );
     } catch (error) {
         return throwPublicApiFailure(error);
     } finally {
@@ -1402,11 +1409,48 @@ async function readSessionHistoryWithSignal(
     }
 }
 
+function sessionExecutionEpoch(
+    execution: Awaited<ReturnType<MobiusClient["sessions"]["readRuntimeSessionExecution"]>>,
+): string {
+    return execution.turn === null ? "idle" : `${execution.turn.commandId}:${execution.turn.epoch}`;
+}
+
+async function readConsistentRuntimeSessionRecovery(
+    client: MobiusClient,
+    runtimeId: string,
+    sessionId: string,
+    identity: {
+        readonly additionalDirectoryIds: readonly string[];
+        readonly agentId: string;
+        readonly directoryId: string;
+    },
+    signal: AbortSignal,
+): Promise<{
+    readonly execution: Awaited<ReturnType<MobiusClient["sessions"]["readRuntimeSessionExecution"]>>;
+    readonly nativeHistory: NativeSessionHistory;
+}> {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+        const before = await client.sessions.readRuntimeSessionExecution(runtimeId, sessionId, identity, signal);
+        const nativeHistory = await readRuntimeNativeSessionHistory(client, runtimeId, sessionId, identity, signal);
+        const after = await client.sessions.readRuntimeSessionExecution(runtimeId, sessionId, identity, signal);
+        signal.throwIfAborted();
+        if (sessionExecutionEpoch(before) === sessionExecutionEpoch(after)) {
+            return { execution: after, nativeHistory };
+        }
+    }
+    throw new PairingApiError(
+        "session_state_changed",
+        "The Session changed while its running Turn and history were being recovered.",
+    );
+}
+
 function recordedSessionFromRuntimeMetadata(
     connection: ChannelConnection,
     entry: SessionMetadata,
     nativeHistory: NativeSessionHistory | null,
+    execution: RecordedSessionExecution = UNAVAILABLE_RECORDED_SESSION_EXECUTION,
 ): RecordedSession {
+    const interaction = execution.kind === "available" ? execution.turn?.interaction : null;
     return new RecordedSession(
         entry.agentId,
         RUNTIME_WORKSPACE_BINDING_ID,
@@ -1417,8 +1461,9 @@ function recordedSessionFromRuntimeMetadata(
         entry.title,
         entry.updatedAt,
         nativeHistory,
-        [],
-        [],
+        execution,
+        interaction?.kind === "session.elicitation.requested" ? [interaction] : [],
+        interaction?.kind === "session.permission.requested" ? [interaction] : [],
         entry.additionalDirectories.map((directory) => directory.directoryId),
     );
 }
@@ -1513,6 +1558,7 @@ async function _readSessionHistoryForSummary(
             summary.session.title,
             summary.session.updatedAt,
             nativeHistoryResult.value,
+            UNAVAILABLE_RECORDED_SESSION_EXECUTION,
             pending.elicitations,
             pending.permissions,
             additionalDirectoryIds,
@@ -1544,6 +1590,7 @@ function decodeRecordedSession(value: MobiusSession, credential: BrowserChannelC
             value.title,
             value.updatedAt,
             null,
+            UNAVAILABLE_RECORDED_SESSION_EXECUTION,
             [],
             [],
             [],

@@ -173,15 +173,13 @@ function historyBeforeActiveTurn(history: NativeSessionHistory, activeTurn: Acti
     const activeRoot = activeTurn.messages.find(
         (message) => message.role === "user" && message.id === activeTurn.commandId,
     );
-    const coveredActiveRoot = history.coveredCommandIds.includes(activeTurn.commandId);
-    const latestNativeMessage = history.messages.at(-1);
     const matchingActiveUserIndex =
-        coveredActiveRoot && activeRoot !== undefined
-            ? history.messages.findLastIndex((message) => message.role === "user" && message.text === activeRoot.text)
-            : activeRoot !== undefined &&
-                latestNativeMessage?.role === "user" &&
-                latestNativeMessage.text === activeRoot.text
-              ? history.messages.length - 1
+        activeRoot === undefined
+            ? -1
+            : activeTurn.state === "completed" ||
+                (history.messages.at(-1)?.role === "user" && history.messages.at(-1)?.text === activeRoot.text) ||
+                history.coveredCommandIds.includes(activeTurn.commandId)
+              ? history.messages.findLastIndex((message) => message.role === "user" && message.text === activeRoot.text)
               : -1;
     const activeUserIndex =
         matchingActiveUserIndex >= 0

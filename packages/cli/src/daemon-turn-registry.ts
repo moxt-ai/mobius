@@ -11,6 +11,13 @@ import type { DaemonOperationState } from "./relay-connection/daemon-operation-s
 
 type ActiveTurnSnapshot = Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"];
 
+interface CompletedTurnRecovery {
+    readonly command: SessionPromptCommand;
+    readonly recovery: ActiveTurnRecovery;
+}
+
+const COMPLETED_TURN_RECOVERY_LIMIT = 32;
+
 const waitForTurnCompletion = (turn: ActiveDaemonTurn, waitSignal: AbortSignal): Promise<void> => {
     waitSignal.throwIfAborted();
     return new Promise<void>((resolve, reject) => {
@@ -41,6 +48,7 @@ const waitForTurnCompletion = (turn: ActiveDaemonTurn, waitSignal: AbortSignal):
 /** Owns in-flight prompts for one Runtime, independently of Relay connections. */
 export class DaemonTurnRegistry {
     readonly #turns = new Map<string, ActiveDaemonTurn>();
+    readonly #completed = new Map<string, CompletedTurnRecovery>();
     readonly #operations: DaemonOperationState;
 
     constructor(operations: DaemonOperationState) {
@@ -56,7 +64,26 @@ export class DaemonTurnRegistry {
     readonly get = (commandId: string): ActiveDaemonTurn | undefined => this.#turns.get(commandId);
 
     readonly finish = (turn: ActiveDaemonTurn): void => {
+        const recovery = turn.recovery();
         this.#turns.delete(turn.command.commandId);
+        if (recovery !== null) {
+            // Agent-native history can briefly lag the terminal event. Keep the latest completed
+            // Turn per Session as an in-memory overlay so every Web client sees the same complete
+            // handoff. The native-history merge removes any overlapping copy, and the bounded map
+            // prevents completed Sessions from growing daemon memory without limit.
+            this.#completed.delete(turn.command.sessionId);
+            this.#completed.set(turn.command.sessionId, {
+                command: turn.command,
+                recovery: { ...recovery, state: "completed" },
+            });
+            while (this.#completed.size > COMPLETED_TURN_RECOVERY_LIMIT) {
+                const oldestSessionId = this.#completed.keys().next().value;
+                if (oldestSessionId === undefined) {
+                    break;
+                }
+                this.#completed.delete(oldestSessionId);
+            }
+        }
         turn.finish();
     };
 
@@ -125,6 +152,11 @@ export class DaemonTurnRegistry {
                 return recovery;
             }
         }
+        for (const completed of this.#completed.values()) {
+            if (matches(completed.command)) {
+                return completed.recovery;
+            }
+        }
         return null;
     };
 
@@ -134,6 +166,7 @@ export class DaemonTurnRegistry {
             turn.abortDaemon();
         }
         await Promise.all(turns.map((turn) => turn.completion));
+        this.#completed.clear();
     };
 
     readonly admitAndWait = async (

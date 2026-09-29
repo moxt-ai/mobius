@@ -24,12 +24,15 @@ import {
 
 type ActiveTurnSnapshot = Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"];
 type ActiveTurnMessage = NonNullable<ActiveTurnSnapshot>["messages"][number];
-export interface ActiveTurnRecovery {
+interface TurnRecovery {
     readonly commandId: string;
     readonly epoch: string;
     readonly messages: readonly ActiveTurnMessage[];
     readonly truncated: boolean;
 }
+export type ActiveTurnRecovery =
+    | (TurnRecovery & { readonly state: "running" })
+    | (TurnRecovery & { readonly state: "completed" });
 type ActiveTurnEventInput =
     | {
           readonly kind: typeof AGENT_MESSAGE_DELTA_KIND;
@@ -368,6 +371,7 @@ export class ActiveDaemonTurn {
             commandId: decodeIdentifier(this.command.commandId),
             epoch: this.#epoch,
             messages: this.timelineMessages(),
+            state: "running",
             truncated: false,
         };
     };

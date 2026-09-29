@@ -2,12 +2,22 @@ import type {
     AgentDisplayContent,
     AgentInstallationStage,
     NativeSessionHistory,
+    NativeSessionResult,
     PromptImage,
     PromptResource,
     SessionCapabilities,
     SessionElicitationRequestedEvent,
     SessionPermissionRequestedEvent,
 } from "@moxt-ai/mobius-sdk";
+
+export type RecordedSessionExecution =
+    | { readonly kind: "unavailable" }
+    | ({ readonly kind: "available" } & Pick<
+          Extract<NativeSessionResult, { readonly action: "active-turn" }>,
+          "queued" | "turn"
+      >);
+
+export const UNAVAILABLE_RECORDED_SESSION_EXECUTION: RecordedSessionExecution = { kind: "unavailable" };
 
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const TOKEN_PATTERN = /^[a-zA-Z0-9_-]{32,256}$/;
@@ -291,6 +301,7 @@ export class RecordedSession {
     readonly bindingId: string;
     readonly configRevision: number;
     readonly elicitations: readonly SessionElicitationRequestedEvent[];
+    readonly execution: RecordedSessionExecution;
     readonly runtimeId: string;
     readonly sessionId: string;
     readonly title: string;
@@ -309,6 +320,7 @@ export class RecordedSession {
         title: string,
         updatedAt: string,
         nativeHistory: NativeSessionHistory | null,
+        execution: RecordedSessionExecution,
         elicitations: readonly SessionElicitationRequestedEvent[] = [],
         permissions: readonly SessionPermissionRequestedEvent[] = [],
         additionalDirectoryIds: readonly string[] = [],
@@ -320,6 +332,7 @@ export class RecordedSession {
         this.configRevision = configRevision;
         this.directoryId = directoryId;
         this.elicitations = elicitations;
+        this.execution = execution;
         this.runtimeId = runtimeId;
         this.sessionId = sessionId;
         this.title = title;

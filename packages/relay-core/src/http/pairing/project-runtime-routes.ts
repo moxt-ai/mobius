@@ -288,6 +288,36 @@ export function createProjectRuntimeRoutes() {
             },
         )
         .post(
+            "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/active-turn",
+            bodyParser<RelayHttpEnvironment>(),
+            async (context) => {
+                const body = validated(sessionIdentitySchema, context.req.valid("json"));
+                const sessionId = validateIdentifier(context.req.param("sessionId"), "session_id");
+                const result = await context.env.services.runtimePairings.requestControl(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
+                    bearerToken(context.req.raw),
+                    decodeNativeSessionRequest(
+                        JSON.stringify({
+                            action: "active-turn",
+                            ...body,
+                            bindingId: RUNTIME_WORKSPACE_BINDING_ID,
+                            kind: "native.session.request",
+                            requestId: crypto.randomUUID(),
+                            sessionId,
+                            targetSessionId: sessionId,
+                        }),
+                    ),
+                    context.req.raw.signal,
+                );
+                if (result.kind !== "native.session.result" || result.action !== "active-turn") {
+                    throw new PairingDirectoryError("invalid_request", "The Runtime returned an invalid active Turn");
+                }
+                context.header("Cache-Control", "no-store");
+                return context.json(result);
+            },
+        )
+        .post(
             "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/turns",
             bodyParser<RelayHttpEnvironment>(),
             async (context) => {

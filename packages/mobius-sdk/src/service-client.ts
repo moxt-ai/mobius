@@ -1387,6 +1387,34 @@ export class MobiusSessionResources {
         }
         return { turn: result.turn, queued: result.queued };
     };
+
+    readonly readRuntimeSessionExecution = async (
+        runtimeId: string,
+        sessionId: string,
+        identity: {
+            readonly additionalDirectoryIds: readonly string[];
+            readonly agentId: string;
+            readonly directoryId: string;
+        },
+        signal: AbortSignal,
+    ): Promise<Pick<Extract<NativeSessionResult, { readonly action: "active-turn" }>, "turn" | "queued">> => {
+        const result = decodeNativeSessionResult(
+            JSON.stringify(
+                await this.#executor.post(
+                    projectPath(
+                        this.#projectId,
+                        `runtimes/${encodeURIComponent(runtimeId)}/sessions/${encodeURIComponent(sessionId)}/active-turn`,
+                    ),
+                    identity,
+                    signal,
+                ),
+            ),
+        );
+        if (result.action !== "active-turn" || result.targetSessionId !== sessionId) {
+            throw new MobiusProtocolError("The service returned an invalid active Turn");
+        }
+        return { turn: result.turn, queued: result.queued };
+    };
 }
 
 export class MobiusTurnResources {
