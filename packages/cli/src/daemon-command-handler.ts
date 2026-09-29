@@ -105,8 +105,8 @@ export function createDaemonCommandHandler({
     });
     const queueChanged = (sessionId: string): void =>
         publisher.publish(sessionId, { kind: "session.queue.changed", sessionId });
-    const activeTurnSnapshot = (sessionId: string) =>
-        activeTurns.snapshot((command) => command.sessionId === sessionId);
+    const activeTurnRecovery = (sessionId: string) =>
+        activeTurns.recovery((command) => command.sessionId === sessionId);
     const nativeRequestHandler = createNativeSessionRequestHandler({
         audit,
         diagnostics,
@@ -128,7 +128,7 @@ export function createDaemonCommandHandler({
                     directories,
                     audit,
                     sessions,
-                    activeTurnSnapshot,
+                    activeTurnRecovery,
                     signal,
                 );
                 return;
@@ -142,7 +142,7 @@ export function createDaemonCommandHandler({
                     directories,
                     audit,
                     sessions,
-                    activeTurnSnapshot,
+                    activeTurnRecovery,
                     signal,
                 );
                 return;

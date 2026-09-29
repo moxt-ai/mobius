@@ -100,9 +100,9 @@ they do not establish real Agent compatibility.
   Claude's ACP path and OpenCode's distinct native ID shape. A Pi label on the same
   ACP peer adds no coverage. Real Pi scenarios remain independent compatibility tests;
   real non-Codex history coverage is still a gap.
-- Token bursts assert complete output before successful completion, without fixing
-  the number of network snapshots. Large active-turn recovery, cancellation, steering,
-  narration and interaction snapshots remain covered.
+- Token bursts assert complete incremental output before successful completion, without
+  fixing the number of network updates. Bounded active-turn recovery, cancellation,
+  steering, narration and interaction recovery remain covered.
 - Settings/model translation, backend faults, compact commands, exclusive history
   writers, fork identity and authorization stay controlled until another production
   boundary proves those same risks.

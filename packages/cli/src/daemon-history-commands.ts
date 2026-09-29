@@ -1,14 +1,11 @@
-import type {
-    decodeSessionLiveHistoryLoad,
-    decodeSessionLiveHistoryPageLoad,
-    NativeSessionResult,
-} from "@moxt-ai/mobius-protocol";
+import type { decodeSessionLiveHistoryLoad, decodeSessionLiveHistoryPageLoad } from "@moxt-ai/mobius-protocol";
 import type { WebSocket } from "undici";
 import type { AgentRuntimeManager } from "./acp/agent-runtime-manager.ts";
 import type { AuditStore } from "./audit/audit-store.ts";
 import { resolveSessionDirectories } from "./authorization/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
 import type { DaemonConfig } from "./config.ts";
+import type { ActiveTurnRecovery } from "./daemon-active-turn.ts";
 import { operationErrorCode, operationErrorMessage, send } from "./daemon-command-results.ts";
 import { mergeLiveSessionHistory, paginateLiveSessionHistory } from "./native-sessions/live-history-page.ts";
 export async function executeSessionLiveHistoryLoad(
@@ -18,7 +15,7 @@ export async function executeSessionLiveHistoryLoad(
     directories: WorkspaceDirectoryService,
     audit: AuditStore,
     sessions: AgentRuntimeManager,
-    activeTurn: (sessionId: string) => Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"],
+    activeTurn: (sessionId: string) => ActiveTurnRecovery | null,
     signal: AbortSignal,
 ): Promise<void> {
     try {
@@ -78,7 +75,7 @@ export async function executeSessionLiveHistoryPageLoad(
     directories: WorkspaceDirectoryService,
     audit: AuditStore,
     sessions: AgentRuntimeManager,
-    activeTurn: (sessionId: string) => Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"],
+    activeTurn: (sessionId: string) => ActiveTurnRecovery | null,
     signal: AbortSignal,
 ): Promise<void> {
     try {

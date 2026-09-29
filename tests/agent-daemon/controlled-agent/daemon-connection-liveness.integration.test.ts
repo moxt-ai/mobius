@@ -14,11 +14,16 @@ import type { DaemonScheduledTask, DaemonTimer } from "../../../packages/cli/src
 import { runDaemon } from "../../../packages/cli/src/run-daemon.ts";
 
 import {
-    type ActiveTurnSnapshot,
+    AGENT_ACTIVITY_KIND,
+    AGENT_ACTIVITY_NARRATION_KIND,
+    AGENT_MESSAGE_DELTA_KIND,
+    type AgentActivityEvent,
+    decodeAgentActivityEvent,
+    decodeAgentActivityNarrationEvent,
+    decodeAgentMessageDeltaEvent,
     decodeMessageKind,
     decodeRuntimeHeartbeatEvent,
     decodeSessionEventEnvelope,
-    decodeSessionTurnUpdatedEvent,
     encodeRuntimeHeartbeatAckEvent,
     encodeSessionPromptCommand,
     encodeWorkspaceListCommand,
@@ -30,7 +35,6 @@ import {
     SESSION_EVENT_KIND,
     SESSION_PROMPT_KIND,
     SESSION_STARTED_KIND,
-    SESSION_TURN_UPDATED_KIND,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
 } from "../../../packages/protocol/src/index.ts";
@@ -489,7 +493,7 @@ describe("daemon relay connection liveness", () => {
         }
     });
 
-    it("Given an Agent emits many snapshots for one activity, When the daemon records the turn, Then it coalesces intermediate snapshots and preserves the final activity", async () => {
+    it("Given an Agent emits many updates for one activity, When the daemon records the turn, Then it coalesces bounded live events and preserves the final activity", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-activity-coalescing-"));
         const defaultWorkspace = join(stateDirectory, "workspace");
         await mkdir(defaultWorkspace);
@@ -507,7 +511,7 @@ describe("daemon relay connection liveness", () => {
             response.end();
         });
         const sockets = new Set<Duplex>();
-        let activities: ActiveTurnSnapshot["activities"] = [];
+        const activities = new Map<string, AgentActivityEvent>();
         let agentText = "";
         let removeObserver = (): void => undefined;
         let resolveCompleted = (): void => undefined;
@@ -538,10 +542,24 @@ describe("daemon relay connection liveness", () => {
                 }
                 const envelope = decodeSessionEventEnvelope(frame.text);
                 const kind = decodeMessageKind(envelope.payload);
-                if (kind === SESSION_TURN_UPDATED_KIND) {
-                    const { turn } = decodeSessionTurnUpdatedEvent(envelope.payload);
-                    activities = turn.activities;
-                    agentText = turn.text;
+                if (kind === AGENT_ACTIVITY_KIND) {
+                    const activity = decodeAgentActivityEvent(envelope.payload);
+                    activities.set(activity.activityId, activity);
+                    return;
+                }
+                if (kind === AGENT_ACTIVITY_NARRATION_KIND) {
+                    const narration = decodeAgentActivityNarrationEvent(envelope.payload);
+                    const activity = activities.get(narration.activityId);
+                    if (activity !== undefined) {
+                        activities.set(narration.activityId, {
+                            ...activity,
+                            output: `${activity.output}${narration.text}`,
+                        });
+                    }
+                    return;
+                }
+                if (kind === AGENT_MESSAGE_DELTA_KIND) {
+                    agentText += decodeAgentMessageDeltaEvent(envelope.payload).text;
                     return;
                 }
                 if (kind === SESSION_COMPLETED_KIND) {
@@ -597,7 +615,7 @@ describe("daemon relay connection liveness", () => {
 
         try {
             await completed;
-            const reasoning = activities.filter((activity) => activity.activityType === "reasoning");
+            const reasoning = [...activities.values()].filter((activity) => activity.activityType === "reasoning");
             expect(reasoning).toHaveLength(1);
             expect(reasoning.map((activity) => activity.status)).toEqual(["completed"]);
             expect(reasoning.at(-1)?.output).toContain("step-63");

@@ -38,7 +38,6 @@ test("Given the real claude and its production adapter, When two prompts execute
             );
             let text = "";
             let toolSucceeded = false;
-            let version = 0;
             for (;;) {
                 const event = decodeRecordedSessionEvent(await peer.nextEvent());
                 if (event.kind === "session.permission.requested") {
@@ -55,17 +54,14 @@ test("Given the real claude and its production adapter, When two prompts execute
                             outcome: "selected",
                         }),
                     );
-                } else if (event.kind === "session.turn.updated") {
-                    expect(event.turn.commandId).toBe(commandId);
-                    expect(event.turn.sequence).toBeGreaterThan(version);
-                    expect(event.turn.text.startsWith(text)).toBe(true);
-                    version = event.turn.sequence;
-                    text = event.turn.text;
-                    for (const activity of event.turn.activities) {
-                        if (activity.activityType === "tool" && activity.status === "completed") {
-                            expect(activity.output).toContain(peer.workspace);
-                            toolSucceeded = true;
-                        }
+                } else if (event.kind === "agent.message.delta") {
+                    expect(event.commandId).toBe(commandId);
+                    text += event.text;
+                } else if (event.kind === "agent.activity") {
+                    expect(event.commandId).toBe(commandId);
+                    if (event.activityType === "tool" && event.status === "completed") {
+                        expect(event.output).toContain(peer.workspace);
+                        toolSucceeded = true;
                     }
                 } else if (event.kind === "session.failed") {
                     throw new Error(JSON.stringify(event));
@@ -112,14 +108,13 @@ test.skipIf(process.platform !== "darwin")(
             let text = "";
             for (;;) {
                 const event = decodeRecordedSessionEvent(await peer.nextEvent());
-                if (event.kind === "session.turn.updated") {
-                    expect(event.turn.commandId).toBe(commandId);
-                    text = event.turn.text;
-                    const activity = event.turn.activities.find((item) => item.activityType === "notice");
-                    if (activity !== undefined) {
-                        expect(activity.status).toBe("completed");
-                        notice = activity.output;
-                    }
+                if (event.kind === "agent.message.delta") {
+                    expect(event.commandId).toBe(commandId);
+                    text += event.text;
+                } else if (event.kind === "agent.activity" && event.activityType === "notice") {
+                    expect(event.commandId).toBe(commandId);
+                    expect(event.status).toBe("completed");
+                    notice = event.output;
                 } else if (event.kind === "session.failed") {
                     throw new Error(JSON.stringify(event));
                 } else if (event.kind === "session.completed") {

@@ -88,8 +88,8 @@ test("Given real Codex with an active turn, When three follow-ups are accepted a
                 if (event.kind === "session.started") {
                     started.push(event.commandId);
                 }
-                if (event.kind === "session.turn.updated") {
-                    replies.set(event.turn.commandId, event.turn.text);
+                if (event.kind === "agent.message.delta") {
+                    replies.set(event.commandId, `${replies.get(event.commandId) ?? ""}${event.text}`);
                 }
                 if (event.kind === "session.completed") {
                     expect(event.stopReason).toBe("end_turn");

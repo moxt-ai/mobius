@@ -85,8 +85,8 @@ test("Given a real pi native Session, When the active prompt is cancelled with a
                     if (event.kind === "session.failed") {
                         throw new Error(JSON.stringify(event));
                     }
-                    if (event.kind === "session.turn.updated" && event.turn.commandId === commandId) {
-                        text = event.turn.text;
+                    if (event.kind === "agent.message.delta" && event.commandId === commandId) {
+                        text += event.text;
                     }
                     if (event.kind === "session.completed") {
                         expect(event.commandId).toBe(commandId);

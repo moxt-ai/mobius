@@ -56,7 +56,6 @@ import {
     type SessionFailedEvent,
     type SessionStartedEvent,
 } from "./messages.ts";
-import { activeTurnSnapshotSchema } from "./native-sessions.ts";
 export const SESSION_EVENT_KIND = "session.event";
 
 const MAX_RECORDED_EVENT_LENGTH = 8 * 1024 * 1024;
@@ -77,20 +76,7 @@ const sessionQueueChangedSchema = z
     .readonly();
 export type SessionQueueChangedEvent = z.infer<typeof sessionQueueChangedSchema>;
 
-export const SESSION_TURN_UPDATED_KIND = "session.turn.updated";
-const sessionTurnUpdatedSchema = z
-    .strictObject({
-        kind: z.literal(SESSION_TURN_UPDATED_KIND),
-        sessionId: identifierStringSchema,
-        turn: activeTurnSnapshotSchema,
-    })
-    .readonly();
-export type SessionTurnUpdatedEvent = z.infer<typeof sessionTurnUpdatedSchema>;
-export const decodeSessionTurnUpdatedEvent = (encoded: string): SessionTurnUpdatedEvent =>
-    decode(encoded, sessionTurnUpdatedSchema);
-
 export type RecordedSessionEvent =
-    | SessionTurnUpdatedEvent
     | SessionQueueChangedEvent
     | AgentActivityEvent
     | AgentActivityNarrationEvent
@@ -144,8 +130,6 @@ export const encodeSessionEventEnvelope = (message: SessionEventEnvelope): strin
 export function decodeRecordedSessionEvent(encoded: string): RecordedSessionEvent {
     const kind = decodeMessageKind(encoded);
     switch (kind) {
-        case SESSION_TURN_UPDATED_KIND:
-            return decodeSessionTurnUpdatedEvent(encoded);
         case SESSION_QUEUE_CHANGED_KIND:
             return decode(encoded, sessionQueueChangedSchema);
         case AGENT_ACTIVITY_KIND:

@@ -7,15 +7,17 @@ import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import {
+    AGENT_ACTIVITY_KIND,
+    AGENT_ACTIVITY_NARRATION_KIND,
+    decodeAgentActivityEvent,
+    decodeAgentActivityNarrationEvent,
     decodeMessageKind,
     decodeSessionEventEnvelope,
-    decodeSessionTurnUpdatedEvent,
     encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
     SESSION_COMPLETED_KIND,
     SESSION_EVENT_KIND,
     SESSION_FAILED_KIND,
-    SESSION_TURN_UPDATED_KIND,
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -108,7 +110,7 @@ class ClientFrames {
 }
 
 describe("daemon narration delivery", () => {
-    it("Given an Agent rewrites one reasoning activity for every streamed chunk, When the turn completes, Then versioned cumulative snapshots preserve the whole narration without duplicate text", async () => {
+    it("Given an Agent streams a long reasoning activity, When the turn completes, Then bounded narration increments preserve it without duplicate text", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-narration-delta-"));
         const workspace = join(stateDirectory, "workspace");
         const nativeStateDirectory = join(stateDirectory, "native");
@@ -184,7 +186,6 @@ describe("daemon narration delivery", () => {
             };
             sendText(socket, encodeSessionPromptCommand(prompt));
 
-            let version = 0;
             let narration = "";
             let completedNarration = false;
             for (;;) {
@@ -194,15 +195,13 @@ describe("daemon narration delivery", () => {
                 }
                 const { payload } = decodeSessionEventEnvelope(message);
                 const kind = decodeMessageKind(payload);
-                if (kind === SESSION_TURN_UPDATED_KIND) {
-                    const { turn } = decodeSessionTurnUpdatedEvent(payload);
-                    expect(turn.sequence).toBeGreaterThan(version);
-                    version = turn.sequence;
-                    const reasoning = turn.activities.find((activity) => activity.activityType === "reasoning");
-                    if (reasoning !== undefined) {
-                        expect(reasoning.output.startsWith(narration)).toBe(true);
-                        narration = reasoning.output;
-                        completedNarration = reasoning.status === "completed";
+                if (kind === AGENT_ACTIVITY_NARRATION_KIND) {
+                    narration += decodeAgentActivityNarrationEvent(payload).text;
+                }
+                if (kind === AGENT_ACTIVITY_KIND) {
+                    const activity = decodeAgentActivityEvent(payload);
+                    if (activity.activityType === "reasoning" && activity.status === "completed") {
+                        completedNarration = true;
                     }
                 }
                 if (kind === SESSION_FAILED_KIND) {

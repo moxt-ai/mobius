@@ -228,9 +228,13 @@ function AgentMessage({
 export function NativeSessionHistoryView({
     history,
     agentLabel,
+    connection,
+    sessionId,
 }: {
     readonly history: NativeSessionHistory;
     readonly agentLabel: string;
+    readonly connection?: ChannelConnection | undefined;
+    readonly sessionId?: string | undefined;
 }) {
     if (history.status === "unavailable") {
         return (
@@ -273,6 +277,7 @@ export function NativeSessionHistoryView({
                             </div>
                         )}
                         {parsed.text.length > 0 && <AgentMarkdown markdown={parsed.text} streaming={false} />}
+                        <AgentRichContent connection={connection} contents={entry.content} sessionId={sessionId} />
                     </article>
                 );
             })}
@@ -318,7 +323,14 @@ const Message = memo(function Message({
     readonly supportsFork: boolean;
 }) {
     if (message instanceof NativeHistoryChatMessage) {
-        return <NativeSessionHistoryView history={message.history} agentLabel={agentLabel} />;
+        return (
+            <NativeSessionHistoryView
+                history={message.history}
+                agentLabel={agentLabel}
+                connection={connection}
+                sessionId={sessionId}
+            />
+        );
     }
     if (message instanceof UserChatMessage) {
         return (

@@ -24,6 +24,15 @@ import {
 
 type ActiveTurnSnapshot = Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"];
 type ActiveTurnMessage = NonNullable<ActiveTurnSnapshot>["messages"][number];
+interface TurnRecovery {
+    readonly commandId: string;
+    readonly epoch: string;
+    readonly messages: readonly ActiveTurnMessage[];
+    readonly truncated: boolean;
+}
+export type ActiveTurnRecovery =
+    | (TurnRecovery & { readonly state: "running" })
+    | (TurnRecovery & { readonly state: "completed" });
 type ActiveTurnEventInput =
     | {
           readonly kind: typeof AGENT_MESSAGE_DELTA_KIND;
@@ -54,6 +63,39 @@ type TurnDispatchState =
     | { readonly kind: "promoted" }
     | { readonly kind: "running" };
 
+function activeMessageCharacters(message: ActiveTurnMessage): number {
+    return (
+        message.text.length +
+        (message.role === "assistant"
+            ? JSON.stringify(message.activities).length + JSON.stringify(message.content).length
+            : 0)
+    );
+}
+
+const ACTIVE_TURN_TEXT_CHUNK_LIMIT = Math.floor(SESSION_HISTORY_CHARACTER_LIMIT / 2);
+
+function boundedRecoveryMessages(messages: readonly ActiveTurnMessage[]): {
+    readonly hasOlder: boolean;
+    readonly messages: readonly ActiveTurnMessage[];
+} {
+    const selected: ActiveTurnMessage[] = [];
+    let remainingCharacters = SESSION_HISTORY_CHARACTER_LIMIT;
+    for (let index = messages.length - 1; index >= 0 && selected.length < SESSION_HISTORY_MESSAGE_LIMIT; index -= 1) {
+        const message = messages[index];
+        if (message === undefined) {
+            break;
+        }
+        const characters = activeMessageCharacters(message);
+        if (characters <= remainingCharacters) {
+            selected.unshift(message);
+            remainingCharacters -= characters;
+            continue;
+        }
+        break;
+    }
+    return { hasOlder: selected.length !== messages.length, messages: selected };
+}
+
 export class ActiveDaemonTurn {
     readonly attemptId: string;
     readonly command: SessionPromptCommand;
@@ -61,9 +103,7 @@ export class ActiveDaemonTurn {
     readonly #finished = Promise.withResolvers<void>();
     #cancellationRequested = false;
     #dispatch: TurnDispatchState;
-    #text = "";
     readonly #activities = new Map<string, NativeMessageActivity>();
-    readonly #content = new Map<string, AgentDisplayContent>();
     #timeline: readonly ActiveTimelineEntry[];
     #sequence = 0;
     #interaction: Extract<
@@ -128,9 +168,17 @@ export class ActiveDaemonTurn {
 
     readonly recordEvent = (event: ActiveTurnEventInput): RecordedSessionEvent => {
         if (event.kind === AGENT_MESSAGE_DELTA_KIND) {
-            this.#text += event.text;
+            const sequence = this.advance();
             this.appendMessageText(event.messageId, event.text);
-            return this.updated();
+            return {
+                commandId: this.command.commandId,
+                epoch: this.#epoch,
+                kind: AGENT_MESSAGE_DELTA_KIND,
+                messageId: event.messageId,
+                sequence,
+                sessionId: this.command.sessionId,
+                text: event.text,
+            };
         }
         if (
             event.sessionId !== this.command.sessionId ||
@@ -180,7 +228,6 @@ export class ActiveDaemonTurn {
                 toolKind: previous?.toolKind ?? "",
             });
         } else if (event.kind === AGENT_CONTENT_KIND) {
-            this.#content.set(event.contentId, event.content);
             const target = this.#timeline.findLastIndex(
                 (entry) => entry.kind === "message" && entry.sourceMessageId === event.messageId,
             );
@@ -218,7 +265,7 @@ export class ActiveDaemonTurn {
             event.kind === AGENT_ACTIVITY_NARRATION_KIND ||
             event.kind === AGENT_CONTENT_KIND
         ) {
-            return this.updated();
+            this.advance();
         }
         return event;
     };
@@ -228,7 +275,7 @@ export class ActiveDaemonTurn {
         while (remaining.length > 0) {
             const latest = this.#timeline.at(-1);
             if (latest?.kind === "message" && latest.sourceMessageId === messageId) {
-                const available = SESSION_HISTORY_CHARACTER_LIMIT - latest.text.length;
+                const available = ACTIVE_TURN_TEXT_CHUNK_LIMIT - latest.text.length;
                 if (available > 0) {
                     this.#timeline = [
                         ...this.#timeline.slice(0, -1),
@@ -245,26 +292,27 @@ export class ActiveDaemonTurn {
                     id: decodeIdentifier(randomUUID()),
                     kind: "message",
                     sourceMessageId: messageId,
-                    text: remaining.slice(0, SESSION_HISTORY_CHARACTER_LIMIT),
+                    text: remaining.slice(0, ACTIVE_TURN_TEXT_CHUNK_LIMIT),
                 },
             ];
-            remaining = remaining.slice(SESSION_HISTORY_CHARACTER_LIMIT);
+            remaining = remaining.slice(ACTIVE_TURN_TEXT_CHUNK_LIMIT);
         }
     }
 
-    readonly recordSteeringPrompt = (command: SessionPromptCommand): RecordedSessionEvent | null => {
+    readonly recordSteeringPrompt = (command: SessionPromptCommand): boolean => {
         if (
             this.#dispatch.kind !== "running" ||
             command.sessionId !== this.command.sessionId ||
             command.targetCommandId !== this.command.commandId
         ) {
-            return null;
+            return false;
         }
         this.#timeline = [
             ...this.#timeline,
             { id: decodeIdentifier(command.commandId), images: command.images, kind: "user", text: command.prompt },
         ];
-        return this.updated();
+        this.advance();
+        return true;
     };
 
     private timelineMessages(): readonly ActiveTurnMessage[] {
@@ -290,33 +338,41 @@ export class ActiveDaemonTurn {
         });
     }
 
-    private readonly updated = (): RecordedSessionEvent => {
-        this.#sequence += 1;
-        const turn = this.snapshot();
-        if (turn === null) {
-            throw new Error("Only a running turn can publish a snapshot");
+    private readonly advance = (): number => {
+        if (this.#dispatch.kind !== "running") {
+            throw new Error("Only a running turn can advance its snapshot");
         }
-        return { kind: "session.turn.updated", sessionId: this.command.sessionId, turn };
+        this.#sequence += 1;
+        return this.#sequence;
     };
 
     readonly snapshot = (): ActiveTurnSnapshot => {
         if (this.#dispatch.kind !== "running") {
             return null;
         }
-        const completeMessages = this.timelineMessages();
-        const messages = completeMessages.slice(-SESSION_HISTORY_MESSAGE_LIMIT);
+        const bounded = boundedRecoveryMessages(this.timelineMessages());
         return {
-            activities: [...this.#activities.values()].sort((left, right) => left.sequence - right.sequence),
             commandId: decodeIdentifier(this.command.commandId),
-            content: [...this.#content.values()],
-            prompt: this.command.prompt,
-            text: this.#text,
-            truncated: messages.length !== completeMessages.length,
             epoch: this.#epoch,
+            hasOlder: bounded.hasOlder,
             interaction: this.#interaction,
-            messages,
+            messages: bounded.messages,
             sequence: this.#sequence,
             state: "running",
+            truncated: false,
+        };
+    };
+
+    readonly recovery = (): ActiveTurnRecovery | null => {
+        if (this.#dispatch.kind !== "running") {
+            return null;
+        }
+        return {
+            commandId: decodeIdentifier(this.command.commandId),
+            epoch: this.#epoch,
+            messages: this.timelineMessages(),
+            state: "running",
+            truncated: false,
         };
     };
 
