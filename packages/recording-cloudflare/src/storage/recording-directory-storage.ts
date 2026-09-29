@@ -1,7 +1,7 @@
 import {
     conversationTitleFromText,
-    decodeRecordedSessionEvent,
     isIdentifier,
+    type RecordedSessionEvent,
     type SessionRecordingDirectory,
     type SessionRecordingWrite,
 } from "@moxt-ai/mobius-protocol";
@@ -13,6 +13,10 @@ import { recordingSessionSummary } from "../schema/recording-directory-do/index.
 import { applyDurableObjectMigrations } from "./durable-object-migrations.ts";
 
 type RecordingDirectoryDatabase = DrizzleSqliteDODatabase<typeof schema>;
+type RecordingDirectoryEvent = Extract<
+    RecordedSessionEvent,
+    { readonly kind: "session.completed" | "session.failed" | "session.ready" | "session.started" }
+>;
 
 function decodeAdditionalDirectoryIds(encoded: string): readonly string[] {
     const value: unknown = JSON.parse(encoded);
@@ -32,8 +36,7 @@ export class RecordingDirectoryStorage {
         this.#storage = storage;
     }
 
-    readonly record = (write: SessionRecordingWrite, recordedAt: number): void => {
-        const event = decodeRecordedSessionEvent(write.envelope.payload);
+    readonly record = (write: SessionRecordingWrite, event: RecordingDirectoryEvent, recordedAt: number): void => {
         this.#storage.transactionSync(() => {
             const existing = this.#database
                 .select()

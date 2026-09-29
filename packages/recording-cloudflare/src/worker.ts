@@ -5,6 +5,7 @@ import {
     encodeSessionRecordingHistory,
     isIdentifier,
     ProtocolMessageError,
+    type RecordedSessionEvent,
     type SessionRecordingWrite,
     validateSessionEventEnvelope,
 } from "@moxt-ai/mobius-protocol";
@@ -82,10 +83,47 @@ function directoryPath(pathname: string): Pick<RecordingPath, "projectId" | "run
     return isIdentifier(projectId) && isIdentifier(runtimeId) ? { projectId, runtimeId } : null;
 }
 
-function decodeValidatedWrite(encoded: string): SessionRecordingWrite {
+type RecordingDirectoryEvent = Extract<
+    RecordedSessionEvent,
+    { readonly kind: "session.completed" | "session.failed" | "session.ready" | "session.started" }
+>;
+
+interface ValidatedSessionRecordingWrite {
+    readonly event: RecordedSessionEvent;
+    readonly write: SessionRecordingWrite;
+}
+
+function decodeValidatedWrite(encoded: string): ValidatedSessionRecordingWrite {
     const write = decodeSessionRecordingWrite(encoded);
-    validateSessionEventEnvelope(write.envelope);
-    return write;
+    return { event: validateSessionEventEnvelope(write.envelope), write };
+}
+
+function isRecordingDirectoryEvent(event: RecordedSessionEvent): event is RecordingDirectoryEvent {
+    switch (event.kind) {
+        case "session.completed":
+        case "session.failed":
+        case "session.ready":
+        case "session.started":
+            return true;
+        case "agent.activity":
+        case "agent.activity.narration":
+        case "agent.content":
+        case "agent.message.delta":
+        case "session.commands.updated":
+        case "session.config.updated":
+        case "session.elicitation.requested":
+        case "session.elicitation.resolved":
+        case "session.info.updated":
+        case "session.permission.requested":
+        case "session.permission.resolved":
+        case "session.queue.changed":
+        case "session.usage.updated":
+            return false;
+        default: {
+            const unsupported: never = event;
+            return unsupported;
+        }
+    }
 }
 
 export function createRecordingWorker(): RecordingWorker {
@@ -99,15 +137,16 @@ export function createRecordingWorker(): RecordingWorker {
                 } catch {
                     return errorResponse("invalid_envelope", "The Recording envelope is invalid", 400);
                 }
-                let write: SessionRecordingWrite;
+                let validated: ValidatedSessionRecordingWrite;
                 try {
-                    write = decodeValidatedWrite(encoded);
+                    validated = decodeValidatedWrite(encoded);
                 } catch (cause) {
                     if (cause instanceof ProtocolMessageError) {
                         return errorResponse("invalid_envelope", "The Recording envelope is invalid", 400);
                     }
                     throw cause;
                 }
+                const { event, write } = validated;
                 const target = {
                     projectId: write.projectId,
                     runtimeId: write.runtimeId,
@@ -138,6 +177,9 @@ export function createRecordingWorker(): RecordingWorker {
                     recordedAt < 0
                 ) {
                     return errorResponse("storage_unavailable", "Recording storage is unavailable", 503);
+                }
+                if (!isRecordingDirectoryEvent(event)) {
+                    return Response.json({ recordingEpoch }, { status: recorded.status });
                 }
                 const indexed = await environment.RECORDING_DIRECTORY.getByName(directoryObjectName(target)).fetch(
                     new Request("https://recording-directory.internal/events", {
@@ -191,7 +233,7 @@ export class SessionRecordingDurableObject extends DurableObject<RecordingWorker
         if (request.method === "POST" && url.pathname === "/events") {
             let write: SessionRecordingWrite;
             try {
-                write = decodeValidatedWrite(await request.text());
+                ({ write } = decodeValidatedWrite(await request.text()));
             } catch {
                 return errorResponse("invalid_envelope", "The Recording envelope is invalid", 400);
             }
@@ -238,13 +280,16 @@ export class RecordingDirectoryDurableObject extends DurableObject<RecordingWork
             if (!Number.isSafeInteger(recordedAt) || recordedAt < 0) {
                 return errorResponse("invalid_envelope", "The Recording envelope is invalid", 400);
             }
-            let write: SessionRecordingWrite;
+            let validated: ValidatedSessionRecordingWrite;
             try {
-                write = decodeValidatedWrite(await request.text());
+                validated = decodeValidatedWrite(await request.text());
             } catch {
                 return errorResponse("invalid_envelope", "The Recording envelope is invalid", 400);
             }
-            this.#directory.record(write, recordedAt);
+            if (!isRecordingDirectoryEvent(validated.event)) {
+                return new Response(null, { status: 204 });
+            }
+            this.#directory.record(validated.write, validated.event, recordedAt);
             return new Response(null, { status: 204 });
         }
         if (request.method === "GET" && url.pathname === "/sessions") {
