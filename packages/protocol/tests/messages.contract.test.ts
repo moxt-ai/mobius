@@ -7,14 +7,62 @@ import {
     type AgentMessageDeltaEvent,
     decodeAgentActivityEvent,
     decodeAgentMessageDeltaEvent,
+    decodeRuntimeLivenessReadyEvent,
     decodeSessionCancelCommand,
+    decodeSessionEventAcknowledgement,
+    decodeSessionEventEnvelope,
     decodeSessionPromptCommand,
     encodeAgentActivityEvent,
+    encodeRuntimeLivenessReadyEvent,
+    encodeSessionEventAcknowledgement,
+    encodeSessionEventEnvelope,
     ProtocolMessageError,
     SESSION_CANCEL_KIND,
+    SESSION_EVENT_ACK_KIND,
+    SESSION_EVENT_KIND,
     SESSION_PROMPT_KIND,
+    type SessionEventAcknowledgement,
+    type SessionEventEnvelope,
     SessionPromptDisposition,
 } from "../src/index.ts";
+
+describe("reliable session event protocol", () => {
+    it("Given a Runtime assigns durable delivery identity, When the event crosses the Relay boundary, Then the identity round-trips with its payload", () => {
+        const envelope: SessionEventEnvelope = {
+            delivery: {
+                eventId: "event-1",
+                kind: "reliable",
+                sourceSeq: "42",
+                streamId: "stream-1",
+            },
+            kind: SESSION_EVENT_KIND,
+            payload: JSON.stringify({ kind: "session.queue.changed", sessionId: "session-1" }),
+            sessionId: "session-1",
+        };
+
+        expect(decodeSessionEventEnvelope(encodeSessionEventEnvelope(envelope))).toEqual(envelope);
+    });
+
+    it("Given Recording is disabled for a reliable event, When Relay accepts its live delivery, Then the acknowledgement records that no durable recording was required", () => {
+        const acknowledgement: SessionEventAcknowledgement = {
+            eventId: "event-1",
+            kind: SESSION_EVENT_ACK_KIND,
+            outcome: { kind: "relayed" },
+            sessionId: "session-1",
+        };
+
+        expect(decodeSessionEventAcknowledgement(encodeSessionEventAcknowledgement(acknowledgement))).toEqual(
+            acknowledgement,
+        );
+    });
+});
+
+describe("runtime delivery negotiation", () => {
+    it("Given both Runtime and Relay support reliable Session events, When liveness becomes ready, Then the selected delivery mode is explicit", () => {
+        const ready = { kind: "runtime.liveness.ready" as const, sessionEventDelivery: "reliable-v1" as const };
+        expect(decodeRuntimeLivenessReadyEvent(encodeRuntimeLivenessReadyEvent(ready))).toEqual(ready);
+    });
+});
 
 describe("session prompt protocol", () => {
     it("Given a prompt has no text, images or resources, When it crosses the daemon boundary, Then it is rejected", () => {

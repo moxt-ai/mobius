@@ -2,6 +2,9 @@ import {
     decodeServiceToDaemonMessage,
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_LIVENESS_READY_KIND,
+    SESSION_EVENT_ACK_KIND,
+    SESSION_EVENT_DEFERRED_KIND,
+    SESSION_EVENT_REJECTED_KIND,
 } from "@moxt-ai/mobius-protocol";
 import { type MessageEvent, WebSocket } from "undici";
 import type { AgentRuntimeManager } from "../acp/agent-runtime-manager.ts";
@@ -74,6 +77,7 @@ export async function runRelayConnection({
 }: RelayConnectionOptions): Promise<void> {
     const relayUrl = new URL(config.relayUrl);
     relayUrl.searchParams.set("liveness", "1");
+    relayUrl.searchParams.set("sessionEventDelivery", "reliable-v1");
     const socket = await connectRelay(relayUrl, signal);
     diagnostics.connectionOpened(connectionEpoch);
     const connectionController = new AbortController();
@@ -202,11 +206,27 @@ export async function runRelayConnection({
                     const message = decodeServiceToDaemonMessage(encoded);
                     const kind = message.kind;
                     if (kind === RUNTIME_LIVENESS_READY_KIND) {
+                        publisher.connect(
+                            socket,
+                            message.sessionEventDelivery === "reliable-v1" ? "reliable" : "ephemeral",
+                        );
                         connectionLiveness.start();
                         return;
                     }
                     if (kind === RUNTIME_HEARTBEAT_ACK_KIND) {
                         connectionLiveness.acknowledge(message);
+                        return;
+                    }
+                    if (kind === SESSION_EVENT_ACK_KIND) {
+                        publisher.acknowledge(message);
+                        return;
+                    }
+                    if (kind === SESSION_EVENT_DEFERRED_KIND) {
+                        publisher.defer(message);
+                        return;
+                    }
+                    if (kind === SESSION_EVENT_REJECTED_KIND) {
+                        publisher.quarantine(message);
                         return;
                     }
                     commands.handle(message);
@@ -223,7 +243,6 @@ export async function runRelayConnection({
             socket.addEventListener("close", handleClose);
             socket.addEventListener("error", handleError);
             socket.addEventListener("message", handleMessage);
-            publisher.connect(socket);
 
             if (signal.aborted) {
                 stop();

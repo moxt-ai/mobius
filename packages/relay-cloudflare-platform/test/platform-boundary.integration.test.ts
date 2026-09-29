@@ -3,6 +3,7 @@ import { env } from "cloudflare:workers";
 import {
     AGENT_MESSAGE_DELTA_KIND,
     decodeServiceToDaemonMessage,
+    decodeSessionEventAcknowledgement,
     decodeSessionEventEnvelope,
     decodeSessionPromptCommand,
     encodeSessionEventEnvelope,
@@ -312,6 +313,142 @@ describe.sequential("Platform Session-only boundary", () => {
         expect(unavailableProjects.accessCount).toBe(0);
     });
 
+    it("Given Recording is not installed, When a developer configures App, Project, and Session policy, Then disabled inheritance works and enablement is rejected", async () => {
+        const worker = createTestMobiusPlatformApp(
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
+            createPlatformGateways,
+        );
+        const environment = bindings();
+        const tenants = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/platform/tenants`, {
+                    headers: developerHeaders(),
+                }),
+                environment,
+            ),
+            200,
+        );
+        const tenantValues = tenants["tenants"];
+        if (!Array.isArray(tenantValues) || tenantValues.length === 0) {
+            throw new Error("Expected a Platform tenant");
+        }
+        const app = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps`, {
+                    body: JSON.stringify({
+                        displayName: "Recording policy App",
+                        tenantId: text(record(tenantValues[0]), "tenantId"),
+                    }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const appId = text(app, "appId");
+        const project = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${appId}/projects`, {
+                    body: JSON.stringify({
+                        displayName: "Recording policy Project",
+                        idempotencyKey: "recording-policy-project",
+                        locationHint: "apac",
+                    }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const projectId = text(project, "projectId");
+        const appPolicyUrl = `${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${appId}/recording-policy`;
+        expect(
+            await responseJson(
+                await worker.fetch(new Request(appPolicyUrl, { headers: developerHeaders() }), environment),
+                200,
+            ),
+        ).toEqual({
+            effectiveMode: "disabled",
+            inheritedFrom: "system",
+            mode: "inherit",
+            providerAvailable: false,
+        });
+        expect(
+            await responseJson(
+                await worker.fetch(
+                    new Request(appPolicyUrl, {
+                        body: JSON.stringify({ mode: "enabled" }),
+                        headers: developerHeaders(),
+                        method: "PUT",
+                    }),
+                    environment,
+                ),
+                409,
+            ),
+        ).toMatchObject({ error: { code: "recording_provider_unavailable" } });
+        expect(
+            await responseJson(
+                await worker.fetch(
+                    new Request(appPolicyUrl, {
+                        body: JSON.stringify({ mode: "disabled" }),
+                        headers: developerHeaders(),
+                        method: "PUT",
+                    }),
+                    environment,
+                ),
+                200,
+            ),
+        ).toMatchObject({ effectiveMode: "disabled", inheritedFrom: "app", mode: "disabled" });
+
+        const projectPolicyUrl = `${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/projects/${projectId}/recording-policy`;
+        expect(
+            await responseJson(
+                await worker.fetch(new Request(projectPolicyUrl, { headers: developerHeaders() }), environment),
+                200,
+            ),
+        ).toMatchObject({ effectiveMode: "disabled", inheritedFrom: "app", mode: "inherit" });
+        await responseJson(
+            await worker.fetch(
+                new Request(projectPolicyUrl, {
+                    body: JSON.stringify({ mode: "disabled" }),
+                    headers: developerHeaders(),
+                    method: "PUT",
+                }),
+                environment,
+            ),
+            200,
+        );
+        const sessionPolicyUrl = `${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/projects/${projectId}/sessions/session-policy/recording-policy`;
+        expect(
+            await responseJson(
+                await worker.fetch(
+                    new Request(sessionPolicyUrl, {
+                        body: JSON.stringify({ mode: "disabled" }),
+                        headers: developerHeaders(),
+                        method: "PUT",
+                    }),
+                    environment,
+                ),
+                200,
+            ),
+        ).toMatchObject({ effectiveMode: "disabled", inheritedFrom: "session", mode: "disabled" });
+        expect(
+            await responseJson(
+                await worker.fetch(
+                    new Request(sessionPolicyUrl, {
+                        body: JSON.stringify({ mode: "inherit" }),
+                        headers: developerHeaders(),
+                        method: "PUT",
+                    }),
+                    environment,
+                ),
+                200,
+            ),
+        ).toMatchObject({ effectiveMode: "disabled", inheritedFrom: "project", mode: "inherit" });
+    });
+
     it("Given a linked Codex Runtime, When Chat reads its Agents, sends a prompt, and the Runtime reconnects, Then the Runtime-scoped Agents, answer, and connection status arrive without cloud Session storage", async () => {
         vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
         const worker = createTestMobiusPlatformApp(
@@ -480,6 +617,58 @@ describe.sequential("Platform Session-only boundary", () => {
             // A retransmission remains a live event; the viewer uses the Runtime's epoch and sequence.
             daemon.send(answer);
             expect(decodeSessionEventEnvelope(await hostMessages.next()).payload).toContain("local answer");
+
+            const reliableAnswer = encodeSessionEventEnvelope({
+                delivery: {
+                    eventId: "local-codex-event-1",
+                    kind: "reliable",
+                    sourceSeq: "1",
+                    streamId: "local-codex-stream",
+                },
+                kind: "session.event",
+                payload: JSON.stringify({
+                    commandId: prompt.commandId,
+                    epoch: prompt.commandId,
+                    kind: AGENT_MESSAGE_DELTA_KIND,
+                    messageId: "local-codex-message",
+                    sequence: 2,
+                    sessionId,
+                    text: "reliable answer one",
+                }),
+                sessionId,
+            });
+            daemon.send(reliableAnswer);
+            expect(decodeSessionEventEnvelope(await hostMessages.next()).payload).toContain("reliable answer one");
+            expect(decodeSessionEventAcknowledgement(await daemonMessages.next())).toEqual({
+                eventId: "local-codex-event-1",
+                kind: "session.event.ack",
+                outcome: { kind: "relayed" },
+                sessionId,
+            });
+            daemon.send(reliableAnswer);
+            expect(decodeSessionEventAcknowledgement(await daemonMessages.next()).eventId).toBe("local-codex-event-1");
+            const secondReliableAnswer = encodeSessionEventEnvelope({
+                delivery: {
+                    eventId: "local-codex-event-2",
+                    kind: "reliable",
+                    sourceSeq: "2",
+                    streamId: "local-codex-stream",
+                },
+                kind: "session.event",
+                payload: JSON.stringify({
+                    commandId: prompt.commandId,
+                    epoch: prompt.commandId,
+                    kind: AGENT_MESSAGE_DELTA_KIND,
+                    messageId: "local-codex-message",
+                    sequence: 3,
+                    sessionId,
+                    text: "reliable answer two",
+                }),
+                sessionId,
+            });
+            daemon.send(secondReliableAnswer);
+            expect(decodeSessionEventEnvelope(await hostMessages.next()).payload).toContain("reliable answer two");
+            expect(decodeSessionEventAcknowledgement(await daemonMessages.next()).eventId).toBe("local-codex-event-2");
             const browserAccess = await responseJson(
                 await worker.fetch(
                     new Request(

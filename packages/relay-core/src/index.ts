@@ -75,6 +75,12 @@ export type {
     ProjectStoragePlacement,
 } from "./infra/project-storage-directory.ts";
 export { instrumentD1Database, RequestAccessMetrics } from "./infra/request-access-metrics.ts";
+export {
+    DisabledSessionRecording,
+    type SessionRecording,
+    type SessionRecordingDeliveryResult,
+    type SessionRecordingTarget,
+} from "./infra/session-recording.ts";
 export * from "./service/authentication/oidc-authentication.ts";
 export { RuntimeDescriptor, RuntimeStatus } from "./service/channel/channel.ts";
 export {

@@ -23,6 +23,7 @@ import { DaemonOperationState } from "./relay-connection/daemon-operation-state.
 import { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
 import { runRelayConnection } from "./relay-connection/run-relay-connection.ts";
 import { RuntimeRelayRevokedError } from "./relay-connection/runtime-revocation.ts";
+import { SessionEventOutbox } from "./relay-connection/session-event-outbox.ts";
 import { DaemonSessionEventPublisher } from "./relay-connection/session-event-publisher.ts";
 import { type DaemonTimer, systemDaemonTimer } from "./relay-connection/timer.ts";
 
@@ -123,7 +124,11 @@ export async function runDaemon(
         join(stateDirectory, "sessions", `${createHash("sha256").update(config.channelId).digest("hex")}.sqlite`),
     );
     const operations = new DaemonOperationState();
-    const publisher = new DaemonSessionEventPublisher();
+    const channelHash = createHash("sha256").update(config.channelId).digest("hex");
+    const publisher = new DaemonSessionEventPublisher(
+        new SessionEventOutbox(join(stateDirectory, "events", `${channelHash}.sqlite`)),
+        timer,
+    );
     const activeTurns = new DaemonTurnRegistry(operations);
     const recordSessionEvent = (sessionId: string, event: RecordedSessionEvent): void => {
         publisher.publish(sessionId, activeTurns.recordEvent(event));
