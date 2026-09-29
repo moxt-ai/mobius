@@ -1,0 +1,27 @@
+{
+    "name": "@moxt-ai/mobius-recording-cloudflare",
+    "version": "0.0.1",
+    "private": true,
+    "type": "module",
+    "exports": {
+        ".": "./src/worker.ts"
+    },
+    "scripts": {
+        "prebuild": "pnpm --dir ../.. db:codegen",
+        "build": "wrangler deploy --dry-run --config wrangler.jsonc --outdir dist",
+        "pretest:integration": "pnpm --dir ../.. db:codegen",
+        "pretypecheck": "pnpm --dir ../.. db:codegen",
+        "test:integration": "vitest run --config vitest.config.ts --max-workers=1 --no-isolate",
+        "typecheck": "tsc --project tsconfig.json && tsc --project test/tsconfig.json"
+    },
+    "dependencies": {
+        "@moxt-ai/mobius-protocol": "workspace:*",
+        "drizzle-orm": "^0.45.2",
+        "hono": "^4.13.8"
+    },
+    "devDependencies": {
+        "@cloudflare/vitest-plugin": "^1.1.12",
+        "@cloudflare/workers-types": "^5.20260918.1",
+        "wrangler": "^4.134.0"
+    }
+}

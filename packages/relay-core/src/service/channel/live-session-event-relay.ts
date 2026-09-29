@@ -23,12 +23,14 @@ async function sha256(value: string, signal: AbortSignal): Promise<string> {
 export class LiveSessionEventRelay {
     readonly #peers: ChannelPeers;
     readonly #projectId: string;
+    readonly #runtimeId: string;
     readonly #receipts: SessionEventReceiptStorage;
     readonly #recording: SessionRecording;
     readonly #now: () => number;
 
     constructor(
         projectId: string,
+        runtimeId: string,
         peers: ChannelPeers,
         recording: SessionRecording,
         receipts: SessionEventReceiptStorage,
@@ -36,6 +38,7 @@ export class LiveSessionEventRelay {
     ) {
         this.#now = now;
         this.#projectId = projectId;
+        this.#runtimeId = runtimeId;
         this.#peers = peers;
         this.#receipts = receipts;
         this.#recording = recording;
@@ -90,7 +93,7 @@ export class LiveSessionEventRelay {
 
         signal.throwIfAborted();
         const result = await this.#recording.deliver(
-            { projectId: this.#projectId, sessionId: envelope.sessionId },
+            { projectId: this.#projectId, runtimeId: this.#runtimeId, sessionId: envelope.sessionId },
             envelope,
             signal,
         );

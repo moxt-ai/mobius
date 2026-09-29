@@ -1,0 +1,83 @@
+{
+    "version": "6",
+    "dialect": "sqlite",
+    "id": "4aa0210e-6289-4d24-a732-1e411bae64a0",
+    "prevId": "00000000-0000-0000-0000-000000000000",
+    "tables": {
+        "recording_session_summaries": {
+            "name": "recording_session_summaries",
+            "columns": {
+                "session_id": {
+                    "name": "session_id",
+                    "type": "text",
+                    "primaryKey": true,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "runtime_id": {
+                    "name": "runtime_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "agent_id": {
+                    "name": "agent_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "directory_id": {
+                    "name": "directory_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "additional_directory_ids_json": {
+                    "name": "additional_directory_ids_json",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "title": {
+                    "name": "title",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "updated_at": {
+                    "name": "updated_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {
+                "recording_session_summaries_updated": {
+                    "name": "recording_session_summaries_updated",
+                    "columns": ["updated_at", "session_id"],
+                    "isUnique": false
+                }
+            },
+            "foreignKeys": {},
+            "compositePrimaryKeys": {},
+            "uniqueConstraints": {},
+            "checkConstraints": {}
+        }
+    },
+    "views": {},
+    "enums": {},
+    "_meta": {
+        "schemas": {},
+        "tables": {},
+        "columns": {}
+    },
+    "internal": {
+        "indexes": {}
+    }
+}

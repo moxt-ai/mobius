@@ -93,6 +93,9 @@ export async function startLocalRelay(): Promise<LocalRelay> {
                 vars: { PUBLIC_PROJECT_BOOTSTRAP_CLIENT_LIMIT: "100" },
             },
             {
+                configPath: "packages/recording-cloudflare/wrangler.jsonc",
+            },
+            {
                 config: {
                     compatibility_date: "2026-09-03",
                     d1_databases: [{ binding: DIRECTORY_DATABASE_BINDING }],

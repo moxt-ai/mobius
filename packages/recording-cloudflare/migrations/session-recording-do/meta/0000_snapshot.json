@@ -1,0 +1,138 @@
+{
+    "version": "6",
+    "dialect": "sqlite",
+    "id": "a073bf88-71bd-4aa8-9e8a-95187d1ec973",
+    "prevId": "00000000-0000-0000-0000-000000000000",
+    "tables": {
+        "recorded_session_events": {
+            "name": "recorded_session_events",
+            "columns": {
+                "ordinal": {
+                    "name": "ordinal",
+                    "type": "integer",
+                    "primaryKey": true,
+                    "notNull": true,
+                    "autoincrement": true
+                },
+                "event_id": {
+                    "name": "event_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "envelope_json": {
+                    "name": "envelope_json",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "recorded_at": {
+                    "name": "recorded_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "source_seq": {
+                    "name": "source_seq",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "stream_id": {
+                    "name": "stream_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {
+                "recorded_session_events_event_id_unique": {
+                    "name": "recorded_session_events_event_id_unique",
+                    "columns": ["event_id"],
+                    "isUnique": true
+                },
+                "recorded_session_events_stream_order": {
+                    "name": "recorded_session_events_stream_order",
+                    "columns": ["stream_id", "source_seq"],
+                    "isUnique": false
+                }
+            },
+            "foreignKeys": {},
+            "compositePrimaryKeys": {},
+            "uniqueConstraints": {},
+            "checkConstraints": {}
+        },
+        "recording_metadata": {
+            "name": "recording_metadata",
+            "columns": {
+                "singleton": {
+                    "name": "singleton",
+                    "type": "integer",
+                    "primaryKey": true,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "project_id": {
+                    "name": "project_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "runtime_id": {
+                    "name": "runtime_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "session_id": {
+                    "name": "session_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "recording_epoch": {
+                    "name": "recording_epoch",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "created_at": {
+                    "name": "created_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {},
+            "foreignKeys": {},
+            "compositePrimaryKeys": {},
+            "uniqueConstraints": {},
+            "checkConstraints": {
+                "recording_metadata_singleton_check": {
+                    "name": "recording_metadata_singleton_check",
+                    "value": "\"recording_metadata\".\"singleton\" = 1"
+                }
+            }
+        }
+    },
+    "views": {},
+    "enums": {},
+    "_meta": {
+        "schemas": {},
+        "tables": {},
+        "columns": {}
+    },
+    "internal": {
+        "indexes": {}
+    }
+}

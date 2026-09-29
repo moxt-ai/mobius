@@ -1,0 +1,1 @@
+ALTER TABLE `recording_session_summaries` ADD `prompted` integer DEFAULT false NOT NULL;

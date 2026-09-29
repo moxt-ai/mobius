@@ -13,6 +13,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router";
 
 import { Button } from "@/components/ui/button";
+import { dataTestId } from "@/data-testid";
 import {
     type ChannelConnection,
     ConnectedBrowserPairingStatus,
@@ -21,7 +22,13 @@ import {
     PairingApiError,
 } from "@/domain/channel";
 import { projectRuntimeRoutePath } from "@/services/app-routes";
-import { createBrowserPairing, pairingCommand, readBrowserPairingStatus } from "@/services/pairing-api";
+import {
+    configureStandaloneRecording,
+    createBrowserPairing,
+    pairingCommand,
+    readBrowserPairingStatus,
+    readStandaloneRecordingConfiguration,
+} from "@/services/pairing-api";
 
 const POLL_INTERVAL_MILLISECONDS = 1_200;
 const CONNECTED_PAUSE_MILLISECONDS = 650;
@@ -32,6 +39,16 @@ abstract class PairingPageState {
 
 class CreatingPairingPageState extends PairingPageState {
     readonly status = "creating";
+}
+
+class SelectingRecordingPageState extends PairingPageState {
+    readonly providerAvailable: boolean;
+    readonly status = "selecting-recording";
+
+    constructor(providerAvailable: boolean) {
+        super();
+        this.providerAvailable = providerAvailable;
+    }
 }
 
 class WaitingPairingPageState extends PairingPageState {
@@ -103,7 +120,13 @@ function MobiusWordmark() {
     );
 }
 
-function PairingLoading() {
+function PairingLoading({
+    description = "Mobius is creating a short-lived code for this browser.",
+    title = "Preparing secure pairing",
+}: {
+    readonly description?: string;
+    readonly title?: string;
+}) {
     return (
         <section
             aria-busy="true"
@@ -111,10 +134,63 @@ function PairingLoading() {
             className="pairing-card mx-auto flex min-h-[340px] w-full max-w-[680px] flex-col items-center justify-center rounded-2xl bg-white px-7 py-12 text-center"
         >
             <LoaderCircle className="size-6 animate-spin text-[#279a60]" />
-            <h1 className="mt-5 text-2xl font-semibold tracking-[-0.03em]">Preparing secure pairing</h1>
-            <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">
-                Mobius is creating a short-lived code for this browser.
-            </p>
+            <h1 className="mt-5 text-2xl font-semibold tracking-[-0.03em]">{title}</h1>
+            <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">{description}</p>
+        </section>
+    );
+}
+
+function RecordingChoice({
+    onContinue,
+    providerAvailable,
+}: {
+    readonly onContinue: (enabled: boolean) => void;
+    readonly providerAvailable: boolean;
+}) {
+    const [enabled, setEnabled] = useState(false);
+    return (
+        <section className="pairing-card mx-auto w-full max-w-[680px] rounded-2xl bg-white px-7 py-10 sm:px-10">
+            <div className="mx-auto max-w-[520px]">
+                <span className="inline-flex size-12 items-center justify-center rounded-2xl bg-[#eefaf3] text-[#218854]">
+                    <ShieldCheck className="size-5" />
+                </span>
+                <p className="mt-5 text-xs font-semibold tracking-[0.06em] text-[#218854] uppercase">First pairing</p>
+                <h1 className="mt-2 text-2xl font-semibold tracking-[-0.03em]">Keep durable conversation history?</h1>
+                <p className="mt-3 text-sm leading-6 text-muted-foreground">
+                    Recording stores Session events in the optional Recording Worker. When enabled, this Web app loads
+                    conversation history from Recording instead of asking your local daemon.
+                </p>
+
+                <label className="mt-7 flex min-h-20 cursor-pointer items-start gap-3 rounded-xl border border-black/10 bg-[#f7f8f9] px-4 py-4 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[#2fb872]">
+                    <input
+                        checked={enabled}
+                        className="mt-0.5 size-4 accent-[#279a60]"
+                        data-testid={dataTestId.recordingChoice}
+                        disabled={!providerAvailable}
+                        onChange={(event) => setEnabled(event.target.checked)}
+                        type="checkbox"
+                    />
+                    <span>
+                        <span className="block text-sm font-semibold">Enable Recording</span>
+                        <span className="mt-1 block text-xs leading-5 text-muted-foreground">
+                            {providerAvailable
+                                ? "This choice applies to this Standalone deployment and cannot be changed after pairing starts."
+                                : "No Recording Worker is installed. Conversations will continue to load from the daemon."}
+                        </span>
+                    </span>
+                </label>
+
+                <Button
+                    className="mt-6 w-full"
+                    data-testid={dataTestId.recordingContinue}
+                    onClick={() => onContinue(enabled)}
+                >
+                    Continue to pairing
+                </Button>
+                <p className="mt-3 text-center text-[11px] leading-4 text-muted-foreground">
+                    Recording is off by default. Local execution permissions are unchanged.
+                </p>
+            </div>
         </section>
     );
 }
@@ -294,6 +370,7 @@ function PairingWorkflow({
     readonly onRetry: () => void;
 }) {
     const [state, setState] = useState<PairingPageState>(new CreatingPairingPageState());
+    const [configurationSaved, setConfigurationSaved] = useState(false);
 
     useEffect(() => {
         const controller = new AbortController();
@@ -301,6 +378,11 @@ function PairingWorkflow({
         const run = async (): Promise<void> => {
             try {
                 const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]);
+                const recording = await readStandaloneRecordingConfiguration(signal);
+                if (recording.state === "unconfigured" && !configurationSaved) {
+                    setState(new SelectingRecordingPageState(recording.providerAvailable));
+                    return;
+                }
                 const pairing = await createBrowserPairing(signal);
                 if (controller.signal.aborted) {
                     return;
@@ -342,10 +424,30 @@ function PairingWorkflow({
 
         void run();
         return () => controller.abort();
-    }, [onConnected]);
+    }, [configurationSaved, onConnected]);
 
     let content = <PairingLoading />;
-    if (state instanceof WaitingPairingPageState) {
+    if (state instanceof SelectingRecordingPageState) {
+        content = (
+            <RecordingChoice
+                onContinue={(enabled) => {
+                    setState(new CreatingPairingPageState());
+                    const signal = AbortSignal.timeout(15_000);
+                    void configureStandaloneRecording(enabled, signal).then(
+                        () => setConfigurationSaved(true),
+                        (error: unknown) => {
+                            const message =
+                                error instanceof PairingApiError
+                                    ? `${error.code}: ${error.message}`
+                                    : "The Recording choice could not be saved.";
+                            setState(new FailedPairingPageState(message));
+                        },
+                    );
+                }}
+                providerAvailable={state.providerAvailable}
+            />
+        );
+    } else if (state instanceof WaitingPairingPageState) {
         content = <PairingInstructions pairing={state.pairing} />;
     } else if (state instanceof ConnectedPairingPageState) {
         content = <PairingConnected machineName={state.machineName} />;

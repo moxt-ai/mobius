@@ -89,7 +89,7 @@ const reliableDeliverySchema = z
     })
     .readonly();
 
-const reliableEventEnvelopeSchema = z
+export const reliableSessionEventEnvelopeSchema = z
     .strictObject({
         delivery: reliableDeliverySchema,
         kind: z.literal(SESSION_EVENT_KIND),
@@ -98,7 +98,7 @@ const reliableEventEnvelopeSchema = z
     })
     .readonly();
 
-const eventEnvelopeSchema = z.union([ephemeralEventEnvelopeSchema, reliableEventEnvelopeSchema]).readonly();
+const eventEnvelopeSchema = z.union([ephemeralEventEnvelopeSchema, reliableSessionEventEnvelopeSchema]).readonly();
 
 const acknowledgementOutcomeSchema = z.discriminatedUnion("kind", [
     z.strictObject({ kind: z.literal("relayed") }).readonly(),
@@ -139,7 +139,7 @@ const eventRejectedSchema = z
     .readonly();
 
 export type SessionEventEnvelope = z.infer<typeof eventEnvelopeSchema>;
-export type ReliableSessionEventEnvelope = z.infer<typeof reliableEventEnvelopeSchema>;
+export type ReliableSessionEventEnvelope = z.infer<typeof reliableSessionEventEnvelopeSchema>;
 export type SessionEventAcknowledgement = z.infer<typeof eventAcknowledgementSchema>;
 export type SessionEventDeferred = z.infer<typeof eventDeferredSchema>;
 export type SessionEventRejected = z.infer<typeof eventRejectedSchema>;

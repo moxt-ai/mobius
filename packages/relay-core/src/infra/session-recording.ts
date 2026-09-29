@@ -2,6 +2,7 @@ import type { ReliableSessionEventEnvelope, SessionEventRejectionCode } from "@m
 
 export interface SessionRecordingTarget {
     readonly projectId: string;
+    readonly runtimeId: string;
     readonly sessionId: string;
 }
 

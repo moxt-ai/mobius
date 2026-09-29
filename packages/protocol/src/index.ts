@@ -14,3 +14,4 @@ export * from "./session-access.ts";
 export * from "./session-events.ts";
 export * from "./session-history.ts";
 export * from "./session-live-history.ts";
+export * from "./session-recording.ts";

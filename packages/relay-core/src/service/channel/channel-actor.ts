@@ -183,7 +183,7 @@ export class ChannelActor {
         this.#clock = clock;
         this.#peers = peers;
         this.#runtimeId = runtimeId;
-        this.#liveEvents = new LiveSessionEventRelay(projectId, peers, recording, receipts, clock.now);
+        this.#liveEvents = new LiveSessionEventRelay(projectId, runtimeId, peers, recording, receipts, clock.now);
     }
 
     readonly attachDaemon = async (replacedExistingConnection: boolean, _signal: AbortSignal): Promise<void> => {
