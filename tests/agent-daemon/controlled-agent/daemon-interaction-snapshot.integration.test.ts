@@ -65,7 +65,7 @@ class Messages {
     };
 }
 
-test("Given an Agent resolves interactions and remains active, When a viewer asks for the active Turn, Then resolved interactions do not appear in its snapshot", async () => {
+test("Given an Agent was inspected transiently, When its first Turn materializes and resolves interactions, Then readiness is recorded and resolved interactions do not appear in its snapshot", async () => {
     const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-interaction-snapshot-"));
     const workspace = join(stateDirectory, "workspace");
     await mkdir(workspace);
@@ -105,6 +105,19 @@ test("Given an Agent resolves interactions and remains active, When a viewer ask
         socket.send(JSON.stringify({ kind: "runtime.liveness.ready" }));
         const sessionId = "interaction_snapshot";
         socket.send(
+            encodeSessionPrepareCommand({
+                additionalDirectoryIds: [],
+                agentId: "claude",
+                bindingId: config.bindingId,
+                directoryId: "default",
+                kind: "session.prepare",
+                requestId: "inspect_request",
+                sessionId,
+                transient: true,
+            }),
+        );
+        await messages.nextKind(SESSION_READY_KIND);
+        socket.send(
             encodeSessionPromptCommand({
                 additionalDirectoryIds: [],
                 agentId: "claude",
@@ -120,6 +133,7 @@ test("Given an Agent resolves interactions and remains active, When a viewer ask
                 targetCommandId: "",
             }),
         );
+        await messages.nextKind(SESSION_READY_KIND);
         const snapshot = async (requestId: string) => {
             socket.send(
                 encodeNativeSessionRequest({

@@ -5,6 +5,7 @@ import {
     type AgentActivityEvent,
     type RecordedSessionEvent,
     SESSION_COMPLETED_KIND,
+    SESSION_READY_KIND,
     SESSION_STARTED_KIND,
     type SessionPromptCommand,
     SessionPromptDisposition,
@@ -147,14 +148,15 @@ export async function executePrompt({
                 : agentForSessionConfiguration(agent, command.sessionConfigurations);
         const executionAgent = appliedSettings?.agent ?? agent;
         const sessionConfigurations = appliedSettings?.sessionConfigurations;
+        const preparation = {
+            additionalDirectories: resolved.additionalDirectories,
+            agent: executionAgent,
+            cwd: resolved.cwd,
+            sessionId: command.sessionId,
+            signal,
+        };
+        let prepared = await sessions.prepareExecutionSession(preparation);
         if (command.sessionConfigurations !== undefined) {
-            const prepared = await sessions.prepareExecutionSession({
-                additionalDirectories: resolved.additionalDirectories,
-                agent: executionAgent,
-                cwd: resolved.cwd,
-                sessionId: command.sessionId,
-                signal,
-            });
             if (availability.disposition === SessionPromptDisposition.Steer) {
                 // Steering cannot reconfigure a running Agent, so the Turn snapshot
                 // only has to agree with the settings this live Session exposes. The
@@ -174,6 +176,7 @@ export async function executePrompt({
                     command.sessionId,
                     signal,
                 );
+                prepared = await sessions.prepareExecutionSession(preparation);
             }
         }
         audit.record({
@@ -192,6 +195,24 @@ export async function executePrompt({
             }
         }
         const stream = activateAttempt();
+        if (!prepared.prompted) {
+            const listing = await directories.list(config.bindingId, command.directoryId, signal);
+            publisher.publish(command.sessionId, {
+                additionalDirectories: resolved.additionalDirectoryEntries,
+                agentId: command.agentId,
+                agentName: prepared.agentName,
+                agentVersion: prepared.agentVersion,
+                capabilities: prepared.capabilities,
+                commands: prepared.commands,
+                configOptions: prepared.configOptions,
+                directoryId: command.directoryId,
+                directoryLabel: listing.directoryLabel,
+                kind: SESSION_READY_KIND,
+                requestId: command.commandId,
+                restored: prepared.restored,
+                sessionId: command.sessionId,
+            });
+        }
         publisher.publish(command.sessionId, {
             commandId: command.commandId,
             epoch: stream.epoch,

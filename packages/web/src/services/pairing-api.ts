@@ -1541,6 +1541,8 @@ async function readRecordedSessionHistory(
     }
     const history = decodeSessionRecordingHistory(await response.text());
     const turns = new Map<string, RecordingReplayTurn>();
+    const elicitations = new Map<string, SessionElicitationRequestedEvent>();
+    const permissions = new Map<string, SessionPermissionRequestedEvent>();
     let ready: Extract<ReturnType<typeof decodeRecordedSessionEvent>, { readonly kind: "session.ready" }> | null = null;
     let updatedAt = "1970-01-01T00:00:00.000Z";
 
@@ -1553,6 +1555,22 @@ async function readRecordedSessionHistory(
         updatedAt = entry.recordedAt;
         if (event.kind === "session.ready") {
             ready = event;
+            continue;
+        }
+        if (event.kind === "session.elicitation.requested") {
+            elicitations.set(event.interactionId, event);
+            continue;
+        }
+        if (event.kind === "session.elicitation.resolved") {
+            elicitations.delete(event.interactionId);
+            continue;
+        }
+        if (event.kind === "session.permission.requested") {
+            permissions.set(event.interactionId, event);
+            continue;
+        }
+        if (event.kind === "session.permission.resolved") {
+            permissions.delete(event.interactionId);
             continue;
         }
         if (event.kind === "session.started") {
@@ -1722,8 +1740,8 @@ async function readRecordedSessionHistory(
         updatedAt,
         null,
         UNAVAILABLE_RECORDED_SESSION_EXECUTION,
-        [],
-        [],
+        [...elicitations.values()],
+        [...permissions.values()],
         ready?.additionalDirectories.map((directory) => directory.directoryId) ?? [],
         lastCommittedSeq,
     );

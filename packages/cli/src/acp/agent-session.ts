@@ -269,6 +269,7 @@ export class AgentSession implements AcpClientHandler {
             this.#capabilities,
             this.#commands,
             this.#configOptions,
+            this.#prompted,
             this.#restored,
         );
 
