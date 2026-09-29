@@ -1,6 +1,6 @@
 export type RecordingPolicyMode = "inherit" | "enabled" | "disabled";
 export type EffectiveRecordingMode = Exclude<RecordingPolicyMode, "inherit">;
-export type RecordingPolicySource = "system" | "app" | "project" | "session";
+export type RecordingPolicySource = "system" | "app" | "project";
 
 export interface ResolvedRecordingPolicy {
     readonly effectiveMode: EffectiveRecordingMode;

@@ -281,33 +281,6 @@ export function createPlatformControlApplication() {
                 ),
             );
         })
-        .get("/v1/projects/:projectId/sessions/:sessionId/recording-policy", async (context) => {
-            const identity = await authenticateDeveloper(context);
-            return context.json(
-                await context.env.recordingPolicies.readSession(
-                    identity,
-                    path(context.req.param("projectId")),
-                    path(context.req.param("sessionId")),
-                    context.var.signal,
-                ),
-            );
-        })
-        .put(
-            "/v1/projects/:projectId/sessions/:sessionId/recording-policy",
-            bodyParser(recordingPolicyBody),
-            async (context) => {
-                const identity = await authenticateDeveloper(context);
-                return context.json(
-                    await context.env.recordingPolicies.writeSession(
-                        identity,
-                        path(context.req.param("projectId")),
-                        path(context.req.param("sessionId")),
-                        context.req.valid("json").mode,
-                        context.var.signal,
-                    ),
-                );
-            },
-        )
         .put("/v1/apps/:appId", bodyParser(updateAppBody), async (context) => {
             const value = context.req.valid("json");
             const identity = await authenticateDeveloper(context);

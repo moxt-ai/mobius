@@ -52,7 +52,7 @@ export class PlatformSessionRecording implements SessionRecording {
         envelope: ReliableSessionEventEnvelope,
         signal: AbortSignal,
     ): Promise<SessionRecordingDeliveryResult> => {
-        const policy = await this.#policies.readSession(target.projectId, target.sessionId, signal);
+        const policy = await this.#policies.readProject(target.projectId, signal);
         if (policy === null) {
             return { code: SessionEventRejectionCode.InvalidEvent, kind: "rejected" };
         }

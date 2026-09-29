@@ -11,7 +11,6 @@ import {
     platformAppRecordingPolicy,
     platformProject,
     platformProjectRecordingPolicy,
-    platformSessionRecordingPolicy,
 } from "../schema/d1/index.ts";
 import { type PlatformDrizzleDatabase, platformDrizzle } from "./platform-drizzle-database.ts";
 
@@ -19,12 +18,10 @@ type StoredRecordingMode = EffectiveRecordingMode;
 
 function resolved(
     mode: RecordingPolicyMode,
-    sessionMode: StoredRecordingMode | null,
     projectMode: StoredRecordingMode | null,
     appMode: StoredRecordingMode | null,
 ): ResolvedRecordingPolicy {
     const candidates: readonly (readonly [StoredRecordingMode | null, RecordingPolicySource])[] = [
-        [sessionMode, "session"],
         [projectMode, "project"],
         [appMode, "app"],
     ];
@@ -67,7 +64,7 @@ export class RecordingPolicyStorage {
             .limit(1);
         signal.throwIfAborted();
         const row = rows[0];
-        return row === undefined ? null : resolved(row.mode ?? "inherit", null, null, row.mode);
+        return row === undefined ? null : resolved(row.mode ?? "inherit", null, row.mode);
     };
 
     readonly readProject = async (projectId: string, signal: AbortSignal): Promise<ResolvedRecordingPolicy | null> => {
@@ -84,41 +81,7 @@ export class RecordingPolicyStorage {
             .limit(1);
         signal.throwIfAborted();
         const row = rows[0];
-        return row === undefined ? null : resolved(row.projectMode ?? "inherit", null, row.projectMode, row.appMode);
-    };
-
-    readonly readSession = async (
-        projectId: string,
-        sessionId: string,
-        signal: AbortSignal,
-    ): Promise<ResolvedRecordingPolicy | null> => {
-        signal.throwIfAborted();
-        const rows = await this.#database
-            .select({
-                appMode: platformAppRecordingPolicy.mode,
-                projectMode: platformProjectRecordingPolicy.mode,
-                sessionMode: platformSessionRecordingPolicy.mode,
-            })
-            .from(platformProject)
-            .leftJoin(
-                platformProjectRecordingPolicy,
-                eq(platformProjectRecordingPolicy.projectId, platformProject.projectId),
-            )
-            .leftJoin(platformAppRecordingPolicy, eq(platformAppRecordingPolicy.appId, platformProject.appId))
-            .leftJoin(
-                platformSessionRecordingPolicy,
-                and(
-                    eq(platformSessionRecordingPolicy.projectId, platformProject.projectId),
-                    eq(platformSessionRecordingPolicy.sessionId, sessionId),
-                ),
-            )
-            .where(and(eq(platformProject.projectId, projectId), eq(platformProject.lifecycle, "active")))
-            .limit(1);
-        signal.throwIfAborted();
-        const row = rows[0];
-        return row === undefined
-            ? null
-            : resolved(row.sessionMode ?? "inherit", row.sessionMode, row.projectMode, row.appMode);
+        return row === undefined ? null : resolved(row.projectMode ?? "inherit", row.projectMode, row.appMode);
     };
 
     readonly writeApp = async (
@@ -156,35 +119,6 @@ export class RecordingPolicyStorage {
                 .values({ mode, projectId, updatedAt: now })
                 .onConflictDoUpdate({
                     target: platformProjectRecordingPolicy.projectId,
-                    set: { mode, updatedAt: now },
-                });
-        }
-        signal.throwIfAborted();
-    };
-
-    readonly writeSession = async (
-        projectId: string,
-        sessionId: string,
-        mode: RecordingPolicyMode,
-        now: number,
-        signal: AbortSignal,
-    ): Promise<void> => {
-        signal.throwIfAborted();
-        if (mode === "inherit") {
-            await this.#database
-                .delete(platformSessionRecordingPolicy)
-                .where(
-                    and(
-                        eq(platformSessionRecordingPolicy.projectId, projectId),
-                        eq(platformSessionRecordingPolicy.sessionId, sessionId),
-                    ),
-                );
-        } else {
-            await this.#database
-                .insert(platformSessionRecordingPolicy)
-                .values({ mode, projectId, sessionId, updatedAt: now })
-                .onConflictDoUpdate({
-                    target: [platformSessionRecordingPolicy.projectId, platformSessionRecordingPolicy.sessionId],
                     set: { mode, updatedAt: now },
                 });
         }

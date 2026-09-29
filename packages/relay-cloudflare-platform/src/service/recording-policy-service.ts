@@ -33,16 +33,6 @@ export class RecordingPolicyService {
         return this.resource(await this.requirePolicy(this.#storage.readProject(projectId, signal)));
     };
 
-    readonly readSession = async (
-        identity: VerifiedExternalIdentity,
-        projectId: string,
-        sessionId: string,
-        signal: AbortSignal,
-    ): Promise<object> => {
-        await this.authorizeProject(identity, projectId, signal);
-        return this.resource(await this.requirePolicy(this.#storage.readSession(projectId, sessionId, signal)));
-    };
-
     readonly writeApp = async (
         identity: VerifiedExternalIdentity,
         appId: string,
@@ -65,19 +55,6 @@ export class RecordingPolicyService {
         this.requireProvider(mode);
         await this.#storage.writeProject(projectId, mode, Date.now(), signal);
         return this.resource(await this.requirePolicy(this.#storage.readProject(projectId, signal)));
-    };
-
-    readonly writeSession = async (
-        identity: VerifiedExternalIdentity,
-        projectId: string,
-        sessionId: string,
-        mode: RecordingPolicyMode,
-        signal: AbortSignal,
-    ): Promise<object> => {
-        await this.authorizeProject(identity, projectId, signal);
-        this.requireProvider(mode);
-        await this.#storage.writeSession(projectId, sessionId, mode, Date.now(), signal);
-        return this.resource(await this.requirePolicy(this.#storage.readSession(projectId, sessionId, signal)));
     };
 
     private readonly authorizeProject = async (

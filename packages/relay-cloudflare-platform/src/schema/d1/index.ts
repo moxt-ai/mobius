@@ -7,5 +7,4 @@ export { platformDashboardAuditEvent } from "./platform-dashboard-audit-event.ts
 export { platformOrganizationInviteLink } from "./platform-organization-invite-link.ts";
 export { platformProject } from "./platform-project.ts";
 export { platformProjectRecordingPolicy } from "./platform-project-recording-policy.ts";
-export { platformSessionRecordingPolicy } from "./platform-session-recording-policy.ts";
 export { platformTenant } from "./platform-tenant.ts";

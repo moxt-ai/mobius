@@ -313,7 +313,7 @@ describe.sequential("Platform Session-only boundary", () => {
         expect(unavailableProjects.accessCount).toBe(0);
     });
 
-    it("Given Recording is not installed, When a developer configures App, Project, and Session policy, Then disabled inheritance works and enablement is rejected", async () => {
+    it("Given Recording is not installed, When a developer configures App and Project policy, Then disabled inheritance works, enablement is rejected, and Session policy is unavailable", async () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
             createPlatformGateways,
@@ -421,32 +421,15 @@ describe.sequential("Platform Session-only boundary", () => {
             200,
         );
         const sessionPolicyUrl = `${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/projects/${projectId}/sessions/session-policy/recording-policy`;
-        expect(
-            await responseJson(
-                await worker.fetch(
-                    new Request(sessionPolicyUrl, {
-                        body: JSON.stringify({ mode: "disabled" }),
-                        headers: developerHeaders(),
-                        method: "PUT",
-                    }),
-                    environment,
-                ),
-                200,
-            ),
-        ).toMatchObject({ effectiveMode: "disabled", inheritedFrom: "session", mode: "disabled" });
-        expect(
-            await responseJson(
-                await worker.fetch(
-                    new Request(sessionPolicyUrl, {
-                        body: JSON.stringify({ mode: "inherit" }),
-                        headers: developerHeaders(),
-                        method: "PUT",
-                    }),
-                    environment,
-                ),
-                200,
-            ),
-        ).toMatchObject({ effectiveMode: "disabled", inheritedFrom: "project", mode: "inherit" });
+        const sessionPolicyResponse = await worker.fetch(
+            new Request(sessionPolicyUrl, {
+                body: JSON.stringify({ mode: "disabled" }),
+                headers: developerHeaders(),
+                method: "PUT",
+            }),
+            environment,
+        );
+        expect(sessionPolicyResponse.status).toBe(404);
     });
 
     it("Given a linked Codex Runtime, When Chat reads its Agents, sends a prompt, and the Runtime reconnects, Then the Runtime-scoped Agents, answer, and connection status arrive without cloud Session storage", async () => {
