@@ -22,12 +22,13 @@ This is the failing browser scenario that owns the terminal handoff behavior. Th
 ## Final verification
 
 - Runtime: `rnt_a5R4IsdqDRAMI5xx9S8R8GAb`
-- Session: `web-33ef3dee-6d1c-4258-9984-faee8684128b`
+- Session: `web-e4b6dbcd-ee36-498a-8cdd-ce2e4c6b2dfb`
 - Tab A opened the Turn through the production Web prompt entrypoint.
 - Tab B opened the same deep link only after A displayed the first delta.
 - While running, both tabs showed the session under `RUNNING`, the prompt `release after first delta`, the recovered text `Partial reply`, `partial.bin`, `Working`, and `Stop agent`.
 - After the controlled Agent was released, both tabs left `RUNNING` and showed exactly one user prompt plus the complete `Partial reply and more` response.
 - Tab B was reloaded after completion and still showed exactly one prompt, the complete response, and `partial.bin` from the recovered rich content.
+- A native-history convergence regression was also checked separately: once Agent-native history contains the complete terminal text and rich content, the daemon stops applying the overlay and preserves the Agent-native activity timeline.
 - No direct store access, request interception, or test-only internal bypass was used. The run used the standalone Web, production Relay and daemon transports, and the repository's stateful controlled ACP executable.
 
 Result: pass.

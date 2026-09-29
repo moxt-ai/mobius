@@ -166,6 +166,38 @@ function nativeActiveMessage(message: ActiveTurnMessage): NativeHistoryMessage {
     return { ...(images.length === 0 ? {} : { images }), role: "user", text: message.text };
 }
 
+function nativeHistoryCoversCompletedRecovery(
+    history: AvailableNativeSessionHistory,
+    recovery: Extract<ActiveTurnRecovery, { readonly state: "completed" }>,
+): boolean {
+    const root = recovery.messages.find((message) => message.role === "user" && message.id === recovery.commandId);
+    if (root === undefined) {
+        return false;
+    }
+    const rootIndex = history.messages.findLastIndex(
+        (message) => message.role === "user" && message.text === root.text,
+    );
+    if (rootIndex < 0) {
+        return false;
+    }
+    const nativeAssistant = history.messages.slice(rootIndex + 1).filter((message) => message.role === "assistant");
+    if (nativeAssistant.length === 0) {
+        return false;
+    }
+    const recoveryAssistant = recovery.messages.filter((message) => message.role === "assistant");
+    const recoveryText = recoveryAssistant.map((message) => message.text).join("");
+    const nativeText = nativeAssistant.map((message) => message.text).join("");
+    if (recoveryText.length > 0 && !nativeText.includes(recoveryText)) {
+        return false;
+    }
+    const nativeContent = new Set(
+        nativeAssistant.flatMap((message) => message.content).map((content) => JSON.stringify(content)),
+    );
+    return recoveryAssistant
+        .flatMap((message) => message.content)
+        .every((content) => nativeContent.has(JSON.stringify(content)));
+}
+
 function historyBeforeActiveTurn(history: NativeSessionHistory, activeTurn: ActiveTurnRecovery): NativeSessionHistory {
     if (history.status === "unavailable") {
         return history;
@@ -317,7 +349,12 @@ export function paginateLiveSessionHistory(
     limit: number,
 ): NativeMessagePage {
     const cursor = encodedCursor === null ? null : decodeLiveHistoryCursor(encodedCursor, sessionId);
-    if (activeTurn === null) {
+    if (
+        activeTurn === null ||
+        (activeTurn.state === "completed" &&
+            history.status === "available" &&
+            nativeHistoryCoversCompletedRecovery(history, activeTurn))
+    ) {
         return paginateNativeHistory(history, sessionId, cursor, limit);
     }
     const historical = historyBeforeActiveTurn(history, activeTurn);
