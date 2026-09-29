@@ -146,6 +146,7 @@ class RecordingCatalogRelay {
                     "Upgrade: websocket\r\n" +
                     `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
             );
+            sendText(socket, JSON.stringify({ kind: "runtime.liveness.ready" }));
             this.#ready.resolve(socket);
         });
     }

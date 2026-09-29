@@ -7,6 +7,7 @@ import {
     RUNTIME_HEARTBEAT_KIND,
     RUNTIME_LIVENESS_READY_KIND,
     RUNTIME_STATUS_KIND,
+    type RuntimeLivenessReadyEvent,
     SESSION_EVENT_KIND,
 } from "@moxt-ai/mobius-protocol";
 import { ProjectScope } from "../../entity/do/session.ts";
@@ -93,7 +94,13 @@ export class RuntimeService {
         this.#cx = cx;
     }
 
-    readonly acceptDaemon = async (runtimeId: string, scope: ProjectScope, liveness: boolean, signal: AbortSignal) => {
+    readonly acceptDaemon = async (
+        runtimeId: string,
+        scope: ProjectScope,
+        liveness: boolean,
+        reliableSessionEvents: boolean,
+        signal: AbortSignal,
+    ) => {
         const accepting = { runtimeId, scope, controller: new AbortController() };
         this.#accepting.add(accepting);
         const operation = this.#acceptTail.then(async (): Promise<RuntimeAcceptance> => {
@@ -102,6 +109,7 @@ export class RuntimeService {
                     runtimeId,
                     scope,
                     liveness,
+                    reliableSessionEvents,
                     AbortSignal.any([signal, accepting.controller.signal]),
                 );
             } catch (error) {
@@ -130,6 +138,7 @@ export class RuntimeService {
         runtimeId: string,
         scope: ProjectScope,
         liveness: boolean,
+        reliableSessionEvents: boolean,
         signal: AbortSignal,
     ): Promise<RuntimeAcceptance> => {
         signal.throwIfAborted();
@@ -165,7 +174,7 @@ export class RuntimeService {
         const accepted = this.#cx.gateways.peers.accept(identity);
         this.#cx.services.connections.connected(prepared.identity, Date.now());
         if (liveness) {
-            this.deferDaemonAttachment(identity, accepted.socket, scope);
+            this.deferDaemonAttachment(identity, accepted.socket, scope, reliableSessionEvents);
             return { kind: "accepted", response: accepted.response };
         }
         try {
@@ -186,6 +195,7 @@ export class RuntimeService {
         identity: DaemonSocketIdentity,
         socket: RuntimeSocket,
         scope: ProjectScope,
+        reliableSessionEvents: boolean,
     ): void => {
         const attachment = { controller: new AbortController(), identity };
         this.#attachments.add(attachment);
@@ -204,7 +214,10 @@ export class RuntimeService {
                     socket.close(1008, "Runtime revoked");
                     return;
                 }
-                socket.send(encodeServiceToDaemonMessage({ kind: RUNTIME_LIVENESS_READY_KIND }));
+                const ready: RuntimeLivenessReadyEvent = reliableSessionEvents
+                    ? { kind: RUNTIME_LIVENESS_READY_KIND, sessionEventDelivery: "reliable-v1" }
+                    : { kind: RUNTIME_LIVENESS_READY_KIND };
+                socket.send(encodeServiceToDaemonMessage(ready));
             } catch (error) {
                 if (!attachment.controller.signal.aborted) {
                     console.error("Runtime attachment failed", error);

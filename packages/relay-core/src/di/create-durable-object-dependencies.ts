@@ -3,12 +3,14 @@ import { createRuntimeRoutes } from "../http/do/runtime-routes.ts";
 import type { DatabaseResolver } from "../infra/database-resolver.ts";
 import type { DoSqlDatabase } from "../infra/do-sql-database.ts";
 import type { ProjectStorageDirectory } from "../infra/project-storage-directory.ts";
+import { DisabledSessionRecording, type SessionRecording } from "../infra/session-recording.ts";
 import { ChannelActor } from "../service/channel/channel-actor.ts";
 import { ChannelCredentialService } from "../service/channel/channel-credential-service.ts";
 import { RuntimeConnectionService } from "../service/channel/runtime-connection-service.ts";
 import { type RuntimePeers, RuntimeService } from "../service/channel/runtime-service.ts";
 import { ChannelCredentialStorage } from "../storage/channel-credential-storage.ts";
 import { RuntimeConnectionStorage } from "../storage/runtime-connection-storage.ts";
+import { SessionEventReceiptStorage } from "../storage/session-event-receipt-storage.ts";
 
 function createRuntimeRelayDependencies(cx: {
     readonly database: DoSqlDatabase;
@@ -18,6 +20,7 @@ function createRuntimeRelayDependencies(cx: {
     };
     readonly gateways: {
         readonly peers: RuntimePeers;
+        readonly recording: SessionRecording;
     };
     readonly utilities: {
         readonly waitUntil: (operation: Promise<void>) => void;
@@ -38,13 +41,18 @@ function createRuntimeRelayDependencies(cx: {
             return (await credentialService(scope, signal)).isActive(identity, signal);
         },
     };
+    const receipts = new SessionEventReceiptStorage(cx.database);
     const services = {
         credentials,
         connections: new RuntimeConnectionService(new RuntimeConnectionStorage(cx.database)),
-        channel: (runtimeId: string, _scope: ProjectScope) =>
+        channel: (runtimeId: string, scope: ProjectScope) =>
             new ChannelActor({
-                config: { runtimeId },
-                gateways: { peers: cx.gateways.peers },
+                config: { projectId: scope.projectId, runtimeId },
+                gateways: {
+                    peers: cx.gateways.peers,
+                    receipts,
+                    recording: cx.gateways.recording,
+                },
             }),
     };
     return {
@@ -73,6 +81,7 @@ export function createDurableObjectDependencies(cx: {
     };
     readonly gateways: {
         readonly peers: RuntimePeers;
+        readonly recording?: SessionRecording;
     };
     readonly utilities: {
         readonly waitUntil: (operation: Promise<void>) => void;
@@ -80,7 +89,10 @@ export function createDurableObjectDependencies(cx: {
 }) {
     const runtime = createRuntimeRelayDependencies({
         database: cx.doDatabase,
-        gateways: cx.gateways,
+        gateways: {
+            peers: cx.gateways.peers,
+            recording: cx.gateways.recording ?? new DisabledSessionRecording(),
+        },
         storages: cx.storages,
         utilities: cx.utilities,
     });

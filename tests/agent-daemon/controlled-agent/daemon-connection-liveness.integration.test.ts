@@ -25,6 +25,7 @@ import {
     decodeRuntimeHeartbeatEvent,
     decodeSessionEventEnvelope,
     encodeRuntimeHeartbeatAckEvent,
+    encodeRuntimeLivenessReadyEvent,
     encodeSessionPromptCommand,
     encodeWorkspaceListCommand,
     MOBIUS_API_PREFIX,
@@ -191,6 +192,28 @@ function observeClientFrames(socket: Duplex, observe: (frame: ClientWebSocketFra
     };
     socket.on("data", handleData);
     return () => socket.removeListener("data", handleData);
+}
+
+class ClientFrameQueue {
+    readonly #frames: ClientWebSocketFrame[] = [];
+    readonly #waiters: Array<(frame: ClientWebSocketFrame) => void> = [];
+    readonly close: () => void;
+
+    constructor(socket: Duplex) {
+        this.close = observeClientFrames(socket, (frame) => {
+            const resolve = this.#waiters.shift();
+            if (resolve === undefined) {
+                this.#frames.push(frame);
+            } else {
+                resolve(frame);
+            }
+        });
+    }
+
+    readonly next = (): Promise<ClientWebSocketFrame> => {
+        const frame = this.#frames.shift();
+        return frame === undefined ? new Promise((resolve) => this.#waiters.push(resolve)) : Promise.resolve(frame);
+    };
 }
 
 function writeServerCloseFrame(socket: Duplex, code: number, reason: string): void {
@@ -567,6 +590,7 @@ describe("daemon relay connection liveness", () => {
                 }
             });
             respondToClientClose(socket);
+            writeServerTextFrame(socket, JSON.stringify({ kind: RUNTIME_LIVENESS_READY_KIND }));
             writeServerTextFrame(
                 socket,
                 encodeSessionPromptCommand({
@@ -773,7 +797,9 @@ describe("daemon relay connection liveness", () => {
             expect({ catalogRequestCount, connectionCount, requestedUrls }).toEqual({
                 catalogRequestCount: 2,
                 connectionCount: 1,
-                requestedUrls: [`${MOBIUS_API_PREFIX}/channels/liveness-channel/daemon?liveness=1`],
+                requestedUrls: [
+                    `${MOBIUS_API_PREFIX}/channels/liveness-channel/daemon?liveness=1&sessionEventDelivery=reliable-v1`,
+                ],
             });
         } finally {
             cancellation.abort();
@@ -805,7 +831,7 @@ describe("daemon relay connection liveness", () => {
         }
     });
 
-    it("Given the Relay has no active Turn reconciliation endpoint, When an active Agent turn reconnects, Then live events resume on that connection", async () => {
+    it("Given the Relay disconnects before acknowledging an event, When the daemon reconnects, Then the same reliable event is replayed", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-reconciliation-"));
         const defaultWorkspace = join(stateDirectory, "workspace");
         await mkdir(defaultWorkspace);
@@ -841,7 +867,7 @@ describe("daemon relay connection liveness", () => {
         const sockets = new Set<Duplex>();
         const upgradeWaiters: Array<() => void> = [];
         const daemonSockets: Duplex[] = [];
-        const clientFrames: Array<Promise<ClientWebSocketFrame>> = [];
+        const clientFrames: ClientFrameQueue[] = [];
         const waitForUpgrade = (): Promise<void> => new Promise((resolve) => upgradeWaiters.push(resolve));
         relay.on("connection", (socket) => {
             sockets.add(socket);
@@ -863,7 +889,14 @@ describe("daemon relay connection liveness", () => {
             );
             daemonSockets.push(socket);
             respondToClientClose(socket);
-            clientFrames.push(readClientFrame(socket));
+            clientFrames.push(new ClientFrameQueue(socket));
+            writeServerTextFrame(
+                socket,
+                encodeRuntimeLivenessReadyEvent({
+                    kind: RUNTIME_LIVENESS_READY_KIND,
+                    sessionEventDelivery: "reliable-v1",
+                }),
+            );
             if (daemonSockets.length === 1) {
                 writeServerTextFrame(
                     socket,
@@ -920,13 +953,28 @@ describe("daemon relay connection liveness", () => {
             if (firstFrame === undefined) {
                 throw new Error("Test relay did not observe the active Agent turn");
             }
-            const started = decodeSessionEventEnvelope((await firstFrame).text);
-            expect(decodeMessageKind(started.payload)).toBe(SESSION_STARTED_KIND);
             const firstSocket = daemonSockets[0];
             if (firstSocket === undefined) {
                 throw new Error("Test relay did not retain the first connection");
             }
-
+            let firstEventFrame = await firstFrame.next();
+            if (decodeMessageKind(firstEventFrame.text) === RUNTIME_HEARTBEAT_KIND) {
+                const heartbeat = decodeRuntimeHeartbeatEvent(firstEventFrame.text);
+                writeServerTextFrame(
+                    firstSocket,
+                    encodeRuntimeHeartbeatAckEvent({
+                        heartbeatId: heartbeat.heartbeatId,
+                        kind: RUNTIME_HEARTBEAT_ACK_KIND,
+                    }),
+                );
+                firstEventFrame = await firstFrame.next();
+            }
+            const started = decodeSessionEventEnvelope(firstEventFrame.text);
+            expect(decodeMessageKind(started.payload)).toBe(SESSION_STARTED_KIND);
+            expect("delivery" in started).toBe(true);
+            if (!("delivery" in started)) {
+                throw new Error("Test relay received an ephemeral event instead of a reliable event");
+            }
             const secondConnection = waitForUpgrade();
             const firstRetry = timer.waitForTask(500);
             firstSocket.destroy();
@@ -936,7 +984,31 @@ describe("daemon relay connection liveness", () => {
             if (resumedFrame === undefined) {
                 throw new Error("Test relay did not observe resumed live events");
             }
-            expect((await resumedFrame).opcode).toBe(1);
+            let replayedFrame = await resumedFrame.next();
+            if (decodeMessageKind(replayedFrame.text) === RUNTIME_HEARTBEAT_KIND) {
+                const heartbeat = decodeRuntimeHeartbeatEvent(replayedFrame.text);
+                const secondSocket = daemonSockets[1];
+                if (secondSocket === undefined) {
+                    throw new Error("Test relay did not retain the replacement connection");
+                }
+                writeServerTextFrame(
+                    secondSocket,
+                    encodeRuntimeHeartbeatAckEvent({
+                        heartbeatId: heartbeat.heartbeatId,
+                        kind: RUNTIME_HEARTBEAT_ACK_KIND,
+                    }),
+                );
+                replayedFrame = await resumedFrame.next();
+            }
+            expect(replayedFrame.opcode).toBe(1);
+            const replayed = decodeSessionEventEnvelope(replayedFrame.text);
+            expect("delivery" in replayed).toBe(true);
+            if (!("delivery" in replayed)) {
+                throw new Error("Test relay received an ephemeral replay instead of a reliable event");
+            }
+            expect(replayed.delivery.eventId).toBe(started.delivery.eventId);
+            expect(replayed.delivery.sourceSeq).toBe(started.delivery.sourceSeq);
+            expect(replayed.payload).toBe(started.payload);
             expect(reconciliationRequestCount).toBe(0);
             expect(daemonSockets).toHaveLength(2);
         } finally {

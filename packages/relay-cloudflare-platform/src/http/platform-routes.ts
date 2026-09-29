@@ -13,6 +13,7 @@ import {
 import { bodyParser } from "../middleware/body-parser.ts";
 import { createBrowserCors } from "../middleware/browser-cors.ts";
 import type { OrganizationInviteService } from "../service/organization-invite-service.ts";
+import type { RecordingPolicyService } from "../service/recording-policy-service.ts";
 
 const OPERATION_TIMEOUT_MILLISECONDS = 15_000;
 
@@ -38,11 +39,13 @@ const issueCredentialBody = v.strictObject({
 const rotateCredentialBody = v.strictObject({ overlapSeconds: safeInteger });
 const emptyBody = v.strictObject({});
 const inviteBody = v.strictObject({ token: v.pipe(v.string(), v.regex(/^[a-f0-9]{64}$/)) });
+const recordingPolicyBody = v.strictObject({ mode: v.picklist(["inherit", "enabled", "disabled"]) });
 
 type PlatformHttpEnvironment = PlatformAuthenticationEnvironment & {
     readonly Bindings: {
         readonly allowedOrigins: ReadonlySet<string>;
         readonly invites: OrganizationInviteService;
+        readonly recordingPolicies: RecordingPolicyService;
     };
 };
 
@@ -109,6 +112,7 @@ export function createPlatformControlApplication() {
                     apps: true,
                     appCredentials: true,
                     projects: true,
+                    recordingPolicies: true,
                     tenants: true,
                 },
             }),
@@ -231,6 +235,48 @@ export function createPlatformControlApplication() {
                 await context.env.control.readAppResource(
                     identity,
                     path(context.req.param("appId")),
+                    context.var.signal,
+                ),
+            );
+        })
+        .get("/v1/apps/:appId/recording-policy", async (context) => {
+            const identity = await authenticateDeveloper(context);
+            return context.json(
+                await context.env.recordingPolicies.readApp(
+                    identity,
+                    path(context.req.param("appId")),
+                    context.var.signal,
+                ),
+            );
+        })
+        .put("/v1/apps/:appId/recording-policy", bodyParser(recordingPolicyBody), async (context) => {
+            const identity = await authenticateDeveloper(context);
+            return context.json(
+                await context.env.recordingPolicies.writeApp(
+                    identity,
+                    path(context.req.param("appId")),
+                    context.req.valid("json").mode,
+                    context.var.signal,
+                ),
+            );
+        })
+        .get("/v1/projects/:projectId/recording-policy", async (context) => {
+            const identity = await authenticateDeveloper(context);
+            return context.json(
+                await context.env.recordingPolicies.readProject(
+                    identity,
+                    path(context.req.param("projectId")),
+                    context.var.signal,
+                ),
+            );
+        })
+        .put("/v1/projects/:projectId/recording-policy", bodyParser(recordingPolicyBody), async (context) => {
+            const identity = await authenticateDeveloper(context);
+            return context.json(
+                await context.env.recordingPolicies.writeProject(
+                    identity,
+                    path(context.req.param("projectId")),
+                    context.req.valid("json").mode,
                     context.var.signal,
                 ),
             );

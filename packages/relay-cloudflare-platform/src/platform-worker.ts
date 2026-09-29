@@ -56,6 +56,7 @@ import {
 import { AppCredentialAuthenticationService } from "./service/app-credential-authentication-service.ts";
 import { OrganizationInviteService } from "./service/organization-invite-service.ts";
 import { PlatformControlPlaneService } from "./service/platform-control-plane-service.ts";
+import { RecordingPolicyService } from "./service/recording-policy-service.ts";
 import { SessionAccessService, type SessionAccessTarget } from "./service/session-access-service.ts";
 import { AppCredentialCacheStorage } from "./storage/app-credential-cache-storage.ts";
 import { OrganizationInviteStorage } from "./storage/organization-invite-storage.ts";
@@ -66,12 +67,15 @@ import {
     PlatformStorageRegistry,
 } from "./storage/platform-database-resolver.ts";
 import { PlatformProjectAuthorizationStorage } from "./storage/platform-project-authorization-storage.ts";
+import { RecordingPolicyStorage } from "./storage/recording-policy-storage.ts";
 
 export interface PlatformRelayBindings extends PlatformStorageBindings, ProjectWorkerRoutingBindings {
     readonly CLERK_SECRET_KEY?: string;
     readonly APP_CREDENTIAL_CACHE: KVNamespace;
     readonly PLATFORM_DIRECTORY_DATABASE: D1Database;
     readonly R2_BUCKET_APAC: R2Bucket;
+    readonly RECORDING?: Fetcher;
+    readonly RECORDING_PROVIDER_ID?: string;
     readonly RUNTIME_RELAY: DurableObjectNamespace<RuntimeRelay>;
 }
 
@@ -132,6 +136,7 @@ type DispatchEnvironment = {
         readonly storageRegistry: PlatformStorageRegistry;
         readonly projectDatabases: import("@moxt-ai/mobius-relay-core/database").SqlDatabase[];
         readonly relay: RelayContext;
+        readonly recordingPolicies: RecordingPolicyService;
         readonly sessionAccess: SessionAccessService;
         readonly sessionAccessTarget: SessionAccessTarget;
         readonly signal: AbortSignal;
@@ -176,6 +181,7 @@ export function createPlatformApplication(
                 new OrganizationInviteStorage(context.env.PLATFORM_DIRECTORY_DATABASE),
                 organizations(context.env),
             ),
+            recordingPolicies: context.var.recordingPolicies,
         });
     const projectHandler: Handler<DispatchEnvironment> = (context) =>
         scopedProjectApplication.fetch(context.req.raw, {
@@ -197,7 +203,10 @@ export function createPlatformApplication(
                         .all("/storage-placement", controlHandler)
                         .all("/storage-placement/", controlHandler)
                         .all("/audit-events", controlHandler)
-                        .all("/audit-events/", controlHandler),
+                        .all("/audit-events/", controlHandler)
+                        .all("/recording-policy", controlHandler)
+                        .all("/recording-policy/", controlHandler)
+                        .all("/sessions/*", controlHandler),
                 ),
         );
     const sessionRoutes = new Hono<DispatchEnvironment>()
@@ -730,6 +739,14 @@ export function createPlatformApplication(
             context.set("control", control);
             context.set("appAuthentication", appAuthentication);
             context.set("sessionAccess", new SessionAccessService(appAuthentication, control));
+            context.set(
+                "recordingPolicies",
+                new RecordingPolicyService(
+                    control,
+                    new RecordingPolicyStorage(environment.PLATFORM_DIRECTORY_DATABASE),
+                    environment.RECORDING !== undefined && isIdentifier(environment.RECORDING_PROVIDER_ID),
+                ),
+            );
             context.set("databases", databases);
             context.set("storageRegistry", storageRegistry);
             context.set("projectDatabases", projectDatabases);

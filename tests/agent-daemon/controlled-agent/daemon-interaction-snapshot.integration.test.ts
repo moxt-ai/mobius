@@ -102,6 +102,7 @@ test("Given an Agent resolves interactions and remains active, When a viewer ask
     try {
         const socket = await connected.promise;
         const messages = new Messages(socket);
+        socket.send(JSON.stringify({ kind: "runtime.liveness.ready" }));
         const sessionId = "interaction_snapshot";
         socket.send(
             encodeSessionPromptCommand({
@@ -224,6 +225,7 @@ test("Given a real daemon prepared a Session, When Platform queries its metadata
     try {
         const socket = await connected.promise;
         const messages = new Messages(socket);
+        socket.send(JSON.stringify({ kind: "runtime.liveness.ready" }));
         const sessionId = "prepared_session";
         socket.send(
             encodeSessionPrepareCommand({

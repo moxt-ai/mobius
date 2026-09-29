@@ -172,6 +172,7 @@ async function startControlledDaemon(): Promise<{
                 "Upgrade: websocket\r\n" +
                 `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
         );
+        sendText(socket, JSON.stringify({ kind: "runtime.liveness.ready" }));
         socketReady.resolve(socket);
     });
     await listen(relay);
@@ -391,6 +392,7 @@ describe("daemon assistant text coalescing", () => {
                     "Upgrade: websocket\r\n" +
                     `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
             );
+            sendText(socket, JSON.stringify({ kind: "runtime.liveness.ready" }));
             socketReady.resolve(socket);
         });
         await listen(relay);
@@ -509,6 +511,7 @@ describe("daemon assistant text coalescing", () => {
                     "Upgrade: websocket\r\n" +
                     `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
             );
+            sendText(socket, JSON.stringify({ kind: "runtime.liveness.ready" }));
             socketReady.resolve(socket);
         });
         await listen(relay);
@@ -795,6 +798,7 @@ describe("daemon assistant text coalescing", () => {
                     "Upgrade: websocket\r\n" +
                     `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
             );
+            sendText(socket, JSON.stringify({ kind: "runtime.liveness.ready" }));
             socketReady.resolve(socket);
         });
         await listen(relay);

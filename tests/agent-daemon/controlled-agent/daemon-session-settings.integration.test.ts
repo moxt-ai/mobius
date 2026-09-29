@@ -318,6 +318,7 @@ describe("daemon session configuration boundary", () => {
                     "Upgrade: websocket\r\n" +
                     `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
             );
+            sendText(socket, JSON.stringify({ kind: "runtime.liveness.ready" }));
             socketReady.resolve(socket);
         });
         await listen(relay);
@@ -408,6 +409,7 @@ describe("daemon session configuration boundary", () => {
                     "Upgrade: websocket\r\n" +
                     `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
             );
+            sendText(socket, JSON.stringify({ kind: "runtime.liveness.ready" }));
             socketReady.resolve(socket);
         });
         await listen(relay);
@@ -521,6 +523,7 @@ if (process.argv.includes("--version")) {
                     "Upgrade: websocket\r\n" +
                     `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
             );
+            sendText(socket, JSON.stringify({ kind: "runtime.liveness.ready" }));
             socketReady.resolve(socket);
         });
         await listen(relay);
@@ -869,6 +872,7 @@ if (process.argv.includes("--version")) {
                     "Upgrade: websocket\r\n" +
                     `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
             );
+            sendText(socket, JSON.stringify({ kind: "runtime.liveness.ready" }));
             socketReady.resolve(socket);
         });
         await listen(relay);
@@ -1015,6 +1019,7 @@ if (process.argv.includes("--version")) {
                     "Upgrade: websocket\r\n" +
                     `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
             );
+            sendText(socket, JSON.stringify({ kind: "runtime.liveness.ready" }));
             socketReady.resolve(socket);
         });
         await writeFile(
@@ -1125,6 +1130,7 @@ if (process.argv.includes("--version")) {
                     "Upgrade: websocket\r\n" +
                     `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
             );
+            sendText(socket, JSON.stringify({ kind: "runtime.liveness.ready" }));
             socketReady.resolve(socket);
         });
         await listen(relay);
@@ -1225,6 +1231,7 @@ if (process.argv.includes("--version")) {
                     "Upgrade: websocket\r\n" +
                     `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
             );
+            sendText(socket, JSON.stringify({ kind: "runtime.liveness.ready" }));
             socketReady.resolve(socket);
         });
         await listen(relay);
@@ -1325,6 +1332,7 @@ if (process.argv.includes("--version")) {
                     "Upgrade: websocket\r\n" +
                     `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
             );
+            sendText(socket, JSON.stringify({ kind: "runtime.liveness.ready" }));
             socketReady.resolve(socket);
         });
         await listen(relay);

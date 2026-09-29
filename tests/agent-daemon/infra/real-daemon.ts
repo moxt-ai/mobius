@@ -3,7 +3,17 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { decodeMessageKind, decodeSessionEventEnvelope, MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
+import {
+    decodeMessageKind,
+    decodeRuntimeHeartbeatEvent,
+    decodeSessionEventEnvelope,
+    encodeRuntimeHeartbeatAckEvent,
+    encodeRuntimeLivenessReadyEvent,
+    MOBIUS_API_PREFIX,
+    RUNTIME_HEARTBEAT_ACK_KIND,
+    RUNTIME_HEARTBEAT_KIND,
+    RUNTIME_LIVENESS_READY_KIND,
+} from "@moxt-ai/mobius-protocol";
 import { type WebSocket, WebSocketServer } from "ws";
 import type { LocalAgentSpecification } from "../../../packages/cli/src/agent-catalog/agent-specification.ts";
 import { discoverLocalAgentInventory } from "../../../packages/cli/src/agent-catalog/discover-local-agents.ts";
@@ -58,6 +68,16 @@ export async function withRealDaemon(
             socket = connection;
             connection.on("message", (value) => {
                 const message = value.toString();
+                if (decodeMessageKind(message) === RUNTIME_HEARTBEAT_KIND) {
+                    const heartbeat = decodeRuntimeHeartbeatEvent(message);
+                    connection.send(
+                        encodeRuntimeHeartbeatAckEvent({
+                            heartbeatId: heartbeat.heartbeatId,
+                            kind: RUNTIME_HEARTBEAT_ACK_KIND,
+                        }),
+                    );
+                    return;
+                }
 
                 if (waiter === undefined) {
                     messages.push(message);
@@ -67,6 +87,7 @@ export async function withRealDaemon(
                     pending.resolve(message);
                 }
             });
+            connection.send(encodeRuntimeLivenessReadyEvent({ kind: RUNTIME_LIVENESS_READY_KIND }));
             connected.resolve();
         });
         const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/real-agent/daemon`);
