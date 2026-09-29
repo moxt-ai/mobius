@@ -1,16 +1,16 @@
 import {
+    type NativeHistoryImage,
     type NativeHistoryMessage,
     type NativeMessagePage,
     type NativeSessionHistory,
-    type NativeSessionResult,
     SESSION_HISTORY_CHARACTER_LIMIT,
 } from "@moxt-ai/mobius-protocol";
 import { AcpExecutionError } from "../acp/agent-runtime-manager.ts";
+import type { ActiveTurnRecovery } from "../daemon-active-turn.ts";
 
-type ActiveTurnSnapshot = Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"];
 type AvailableNativeMessagePage = Extract<NativeMessagePage, { readonly status: "available" }>;
 type AvailableNativeSessionHistory = Extract<NativeSessionHistory, { readonly status: "available" }>;
-type ActiveTurnMessage = NonNullable<ActiveTurnSnapshot>["messages"][number];
+type ActiveTurnMessage = ActiveTurnRecovery["messages"][number];
 
 interface LiveHistoryCoveredTurnRange {
     readonly assistantEndIndex: number;
@@ -19,11 +19,20 @@ interface LiveHistoryCoveredTurnRange {
     readonly userIndex: number;
 }
 
-function liveHistoryCursor(sessionId: string, endIndex: number): string {
-    return Buffer.from(JSON.stringify({ endIndex, sessionId }), "utf8").toString("base64url");
+type LiveHistoryCursor =
+    | {
+          readonly endIndex: number;
+          readonly kind: "active";
+          readonly epoch: string;
+          readonly sessionId: string;
+      }
+    | { readonly endIndex: number; readonly kind: "native"; readonly sessionId: string };
+
+function encodeLiveHistoryCursor(cursor: LiveHistoryCursor): string {
+    return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
 }
 
-function liveHistoryEndIndex(cursor: string, sessionId: string): number {
+function decodeLiveHistoryCursor(cursor: string, sessionId: string): LiveHistoryCursor {
     try {
         if (!/^[A-Za-z0-9_-]{1,512}$/u.test(cursor)) {
             throw new Error("Invalid cursor alphabet");
@@ -33,19 +42,40 @@ function liveHistoryEndIndex(cursor: string, sessionId: string): number {
             throw new Error("Invalid cursor shape");
         }
         const record = Object.fromEntries(Object.entries(value));
+        const keys = Object.keys(record).sort().join(",");
+        const legacyNative = keys === "endIndex,sessionId";
+        const kind = legacyNative ? "native" : record["kind"];
         if (
-            Object.keys(record).sort().join(",") !== "endIndex,sessionId" ||
+            (keys !== "endIndex,kind,sessionId" && keys !== "endIndex,epoch,kind,sessionId" && !legacyNative) ||
             record["sessionId"] !== sessionId ||
+            (kind !== "active" && kind !== "native") ||
             typeof record["endIndex"] !== "number" ||
             !Number.isSafeInteger(record["endIndex"]) ||
             record["endIndex"] < 0
         ) {
             throw new Error("Invalid cursor target");
         }
-        return record["endIndex"];
+        if (kind === "active") {
+            if (keys !== "endIndex,epoch,kind,sessionId" || typeof record["epoch"] !== "string") {
+                throw new Error("Invalid active cursor target");
+            }
+            return { endIndex: record["endIndex"], epoch: record["epoch"], kind, sessionId };
+        }
+        if (keys !== "endIndex,kind,sessionId" && !legacyNative) {
+            throw new Error("Invalid native cursor target");
+        }
+        return { endIndex: record["endIndex"], kind, sessionId };
     } catch (cause) {
         throw new AcpExecutionError("The native Session history cursor is invalid", { cause }, "invalid_cursor");
     }
+}
+
+function activeHistoryCursor(sessionId: string, epoch: string, endIndex: number): string {
+    return encodeLiveHistoryCursor({ endIndex, epoch, kind: "active", sessionId });
+}
+
+function nativeHistoryCursor(sessionId: string, endIndex: number): string {
+    return encodeLiveHistoryCursor({ endIndex, kind: "native", sessionId });
 }
 
 function liveHistoryCoveredTurnRanges(history: AvailableNativeSessionHistory): readonly LiveHistoryCoveredTurnRange[] {
@@ -66,7 +96,7 @@ function liveHistoryCoveredTurnRanges(history: AvailableNativeSessionHistory): r
     return ranges;
 }
 
-function historyMessageCharacters(message: AvailableNativeSessionHistory["messages"][number]): number {
+function historyMessageCharacters(message: NativeHistoryMessage): number {
     return (
         message.text.length +
         (message.role === "assistant"
@@ -75,178 +105,23 @@ function historyMessageCharacters(message: AvailableNativeSessionHistory["messag
     );
 }
 
-function boundedActiveMessages(
+function isNativeHistoryImageMimeType(mimeType: string): mimeType is NativeHistoryImage["mimeType"] {
+    return (
+        mimeType === "image/png" || mimeType === "image/jpeg" || mimeType === "image/gif" || mimeType === "image/webp"
+    );
+}
+
+function selectMessagesBefore(
     messages: readonly NativeHistoryMessage[],
+    endIndex: number,
     messageLimit: number,
     characterLimit: number,
-): { readonly characters: number; readonly messages: readonly NativeHistoryMessage[]; readonly truncated: boolean } {
+): { readonly characters: number; readonly messages: readonly NativeHistoryMessage[]; readonly startIndex: number } {
     const selected: NativeHistoryMessage[] = [];
     let remainingCharacters = characterLimit;
-    let truncated = false;
-    for (let index = messages.length - 1; index >= 0 && selected.length < messageLimit; index -= 1) {
+    let startIndex = endIndex;
+    for (let index = endIndex - 1; index >= 0 && selected.length < messageLimit; index -= 1) {
         const message = messages[index];
-        if (message === undefined) {
-            break;
-        }
-        const characters = historyMessageCharacters(message);
-        if (characters <= remainingCharacters) {
-            selected.unshift(message);
-            remainingCharacters -= characters;
-            continue;
-        }
-        const structuredCharacters = characters - message.text.length;
-        if (structuredCharacters <= remainingCharacters) {
-            const textCharacters = remainingCharacters - structuredCharacters;
-            selected.unshift({ ...message, text: textCharacters === 0 ? "" : message.text.slice(-textCharacters) });
-            remainingCharacters = 0;
-            truncated = true;
-        }
-        break;
-    }
-    return {
-        characters: characterLimit - remainingCharacters,
-        messages: selected,
-        truncated: truncated || selected.length !== messages.length,
-    };
-}
-
-function nativeActiveMessage(message: ActiveTurnMessage): NativeHistoryMessage {
-    return message.role === "user"
-        ? { role: "user", text: message.text }
-        : {
-              activities: message.activities,
-              content: message.content,
-              role: "assistant",
-              text: message.text,
-          };
-}
-
-function paginateAcpSessionHistory(
-    history: AvailableNativeSessionHistory,
-    sessionId: string,
-    cursor: string | null,
-    limit: number,
-): AvailableNativeMessagePage;
-function paginateAcpSessionHistory(
-    history: NativeSessionHistory,
-    sessionId: string,
-    cursor: string | null,
-    limit: number,
-): NativeMessagePage;
-function paginateAcpSessionHistory(
-    history: NativeSessionHistory,
-    sessionId: string,
-    cursor: string | null,
-    limit: number,
-): NativeMessagePage {
-    if (history.status === "unavailable") {
-        if (cursor !== null) {
-            throw new AcpExecutionError("Unavailable native Session history has no cursor", {}, "invalid_cursor");
-        }
-        return { cause: history.cause, nextCursor: null, status: "unavailable" };
-    }
-    const endIndex = cursor === null ? history.messages.length : liveHistoryEndIndex(cursor, sessionId);
-    if (endIndex > history.messages.length) {
-        throw new AcpExecutionError("The native Session history cursor is invalid", {}, "invalid_cursor");
-    }
-    const startIndex = Math.max(0, endIndex - limit);
-    const coveredMessageIds = new Set(history.coveredMessageIds);
-    const ranges = liveHistoryCoveredTurnRanges(history);
-    return {
-        coveredCommandIds: ranges
-            .filter((range) => range.userIndex >= startIndex && range.assistantEndIndex <= endIndex)
-            .map((range) => range.commandId),
-        coveredMessageIds: ranges.flatMap((range) => [
-            ...(range.userIndex >= startIndex &&
-            range.userIndex < endIndex &&
-            coveredMessageIds.has(`${range.commandId}:user`)
-                ? [`${range.commandId}:user`]
-                : []),
-            ...(range.assistantStartIndex >= startIndex &&
-            range.assistantEndIndex <= endIndex &&
-            coveredMessageIds.has(`${range.commandId}:agent`)
-                ? [`${range.commandId}:agent`]
-                : []),
-        ]),
-        messages: history.messages.slice(startIndex, endIndex),
-        nextCursor: startIndex > 0 ? liveHistoryCursor(sessionId, startIndex) : null,
-        status: "available",
-        truncated: history.truncated,
-    };
-}
-
-export function paginateLiveSessionHistory(
-    history: NativeSessionHistory,
-    activeTurn: ActiveTurnSnapshot,
-    sessionId: string,
-    cursor: string | null,
-    limit: number,
-): NativeMessagePage {
-    if (activeTurn === null || cursor !== null) {
-        return paginateAcpSessionHistory(history, sessionId, cursor, limit);
-    }
-
-    if (history.status === "unavailable") {
-        const bounded = boundedActiveMessages(
-            activeTurn.messages.map(nativeActiveMessage),
-            limit,
-            SESSION_HISTORY_CHARACTER_LIMIT,
-        );
-        return {
-            coveredCommandIds: [],
-            coveredMessageIds: [],
-            messages: bounded.messages,
-            nextCursor: null,
-            status: "available",
-            truncated: activeTurn.truncated || bounded.truncated,
-        };
-    }
-    // Native turn identity tells us whether the source contains this turn. The
-    // native format has no message IDs, so its root prompt locates the boundary
-    // before any steering prompts. Keep that root (including attachments), then
-    // replace the rest with the authoritative in-memory timeline.
-    const activeRoot = activeTurn.messages.find(
-        (message) => message.role === "user" && message.id === activeTurn.commandId,
-    );
-    const coveredActiveRoot = history.coveredCommandIds.includes(activeTurn.commandId);
-    const matchingActiveUserIndex =
-        coveredActiveRoot && activeRoot !== undefined
-            ? history.messages.findLastIndex((message) => message.role === "user" && message.text === activeRoot.text)
-            : -1;
-    const activeUserIndex =
-        matchingActiveUserIndex >= 0
-            ? matchingActiveUserIndex
-            : (liveHistoryCoveredTurnRanges(history).find((range) => range.commandId === activeTurn.commandId)
-                  ?.userIndex ?? -1);
-    if (activeUserIndex >= 0) {
-        history = {
-            ...history,
-            coveredCommandIds: history.coveredCommandIds.filter((id) => id !== activeTurn.commandId),
-            coveredMessageIds: history.coveredMessageIds.filter(
-                (id) => id !== `${activeTurn.commandId}:user` && id !== `${activeTurn.commandId}:agent`,
-            ),
-            messages: history.messages.slice(0, activeUserIndex + 1),
-        };
-    }
-    const latestNativeMessage = history.messages.at(-1);
-    const firstActiveMessage = activeTurn.messages[0];
-    const preserveNativeRoot =
-        activeUserIndex >= 0 ||
-        (firstActiveMessage?.role === "user" &&
-            latestNativeMessage?.role === "user" &&
-            latestNativeMessage.text === firstActiveMessage.text);
-    const activeMessages = activeTurn.messages.slice(preserveNativeRoot ? 1 : 0).map(nativeActiveMessage);
-    const bounded = boundedActiveMessages(activeMessages, limit, SESSION_HISTORY_CHARACTER_LIMIT);
-
-    let historicalMessageCount = 0;
-    let remainingCharacters = SESSION_HISTORY_CHARACTER_LIMIT - bounded.characters;
-    const historicalMessageLimit = Math.max(0, limit - bounded.messages.length);
-    for (
-        let index = history.messages.length - 1;
-        index >= 0 && historicalMessageCount < historicalMessageLimit;
-        index -= 1
-    ) {
-        const message = history.messages[index];
         if (message === undefined) {
             break;
         }
@@ -254,31 +129,212 @@ export function paginateLiveSessionHistory(
         if (characters > remainingCharacters) {
             break;
         }
-        historicalMessageCount += 1;
+        selected.unshift(message);
         remainingCharacters -= characters;
+        startIndex = index;
     }
-    const page =
-        historicalMessageCount === 0
-            ? {
-                  coveredCommandIds: [],
-                  coveredMessageIds: [],
-                  messages: [],
-                  nextCursor:
-                      history.messages.length === 0 ? null : liveHistoryCursor(sessionId, history.messages.length),
-                  status: "available" as const,
-                  truncated: history.truncated,
-              }
-            : paginateAcpSessionHistory(history, sessionId, null, historicalMessageCount);
+    if (selected.length === 0 && endIndex > 0) {
+        throw new AcpExecutionError(
+            "A native Session history item exceeds the page budget",
+            {},
+            "history_item_too_large",
+        );
+    }
+    return { characters: characterLimit - remainingCharacters, messages: selected, startIndex };
+}
+
+function nativeActiveMessage(message: ActiveTurnMessage): NativeHistoryMessage {
+    if (message.role === "assistant") {
+        return {
+            activities: message.activities,
+            content: message.content,
+            role: "assistant",
+            text: message.text,
+        };
+    }
+    const images = (message.images ?? []).flatMap((image) => {
+        if (
+            image.data.length < 4 ||
+            image.data.length % 4 !== 0 ||
+            !/^[A-Za-z0-9+/]*={0,2}$/u.test(image.data) ||
+            !isNativeHistoryImageMimeType(image.mimeType)
+        ) {
+            return [];
+        }
+        return [{ data: image.data, mimeType: image.mimeType, name: image.name }];
+    });
+    return { ...(images.length === 0 ? {} : { images }), role: "user", text: message.text };
+}
+
+function historyBeforeActiveTurn(history: NativeSessionHistory, activeTurn: ActiveTurnRecovery): NativeSessionHistory {
+    if (history.status === "unavailable") {
+        return history;
+    }
+    const activeRoot = activeTurn.messages.find(
+        (message) => message.role === "user" && message.id === activeTurn.commandId,
+    );
+    const coveredActiveRoot = history.coveredCommandIds.includes(activeTurn.commandId);
+    const latestNativeMessage = history.messages.at(-1);
+    const matchingActiveUserIndex =
+        coveredActiveRoot && activeRoot !== undefined
+            ? history.messages.findLastIndex((message) => message.role === "user" && message.text === activeRoot.text)
+            : activeRoot !== undefined &&
+                latestNativeMessage?.role === "user" &&
+                latestNativeMessage.text === activeRoot.text
+              ? history.messages.length - 1
+              : -1;
+    const activeUserIndex =
+        matchingActiveUserIndex >= 0
+            ? matchingActiveUserIndex
+            : (liveHistoryCoveredTurnRanges(history).find((range) => range.commandId === activeTurn.commandId)
+                  ?.userIndex ?? -1);
+    if (activeUserIndex < 0) {
+        return history;
+    }
     return {
-        ...page,
-        messages: [...page.messages, ...bounded.messages],
-        truncated: page.truncated || activeTurn.truncated || bounded.truncated,
+        ...history,
+        coveredCommandIds: history.coveredCommandIds.filter((id) => id !== activeTurn.commandId),
+        coveredMessageIds: history.coveredMessageIds.filter(
+            (id) => id !== `${activeTurn.commandId}:user` && id !== `${activeTurn.commandId}:agent`,
+        ),
+        messages: history.messages.slice(0, activeUserIndex),
     };
+}
+
+function paginateAvailableNativeHistory(
+    history: AvailableNativeSessionHistory,
+    sessionId: string,
+    endIndex: number,
+    limit: number,
+    characterLimit: number,
+): AvailableNativeMessagePage {
+    if (endIndex > history.messages.length) {
+        throw new AcpExecutionError("The native Session history cursor is invalid", {}, "invalid_cursor");
+    }
+    const selected = selectMessagesBefore(history.messages, endIndex, limit, characterLimit);
+    const coveredMessageIds = new Set(history.coveredMessageIds);
+    const ranges = liveHistoryCoveredTurnRanges(history);
+    return {
+        coveredCommandIds: ranges
+            .filter((range) => range.userIndex >= selected.startIndex && range.assistantEndIndex <= endIndex)
+            .map((range) => range.commandId),
+        coveredMessageIds: ranges.flatMap((range) => [
+            ...(range.userIndex >= selected.startIndex &&
+            range.userIndex < endIndex &&
+            coveredMessageIds.has(`${range.commandId}:user`)
+                ? [`${range.commandId}:user`]
+                : []),
+            ...(range.assistantStartIndex >= selected.startIndex &&
+            range.assistantEndIndex <= endIndex &&
+            coveredMessageIds.has(`${range.commandId}:agent`)
+                ? [`${range.commandId}:agent`]
+                : []),
+        ]),
+        messages: selected.messages,
+        nextCursor: selected.startIndex > 0 ? nativeHistoryCursor(sessionId, selected.startIndex) : null,
+        status: "available",
+        truncated: history.truncated,
+    };
+}
+
+function paginateNativeHistory(
+    history: NativeSessionHistory,
+    sessionId: string,
+    cursor: LiveHistoryCursor | null,
+    limit: number,
+): NativeMessagePage {
+    if (cursor?.kind === "active") {
+        throw new AcpExecutionError("The native Session history cursor is invalid", {}, "invalid_cursor");
+    }
+    if (history.status === "unavailable") {
+        if (cursor !== null) {
+            throw new AcpExecutionError("Unavailable native Session history has no cursor", {}, "invalid_cursor");
+        }
+        return { cause: history.cause, nextCursor: null, status: "unavailable" };
+    }
+    return paginateAvailableNativeHistory(
+        history,
+        sessionId,
+        cursor?.endIndex ?? history.messages.length,
+        limit,
+        SESSION_HISTORY_CHARACTER_LIMIT,
+    );
+}
+
+function paginateActiveTurn(
+    history: NativeSessionHistory,
+    activeTurn: ActiveTurnRecovery,
+    sessionId: string,
+    endIndex: number,
+    limit: number,
+): AvailableNativeMessagePage {
+    if (endIndex > activeTurn.messages.length) {
+        throw new AcpExecutionError("The native Session history cursor is invalid", {}, "invalid_cursor");
+    }
+    const activeMessages = activeTurn.messages.map(nativeActiveMessage);
+    const active = selectMessagesBefore(activeMessages, endIndex, limit, SESSION_HISTORY_CHARACTER_LIMIT);
+    const historicalLimit = limit - active.messages.length;
+    const historicalCharacterLimit = SESSION_HISTORY_CHARACTER_LIMIT - active.characters;
+    const pendingHistoricalCursor =
+        history.status === "available" && history.messages.length > 0
+            ? nativeHistoryCursor(sessionId, history.messages.length)
+            : null;
+    const latestHistoricalMessage = history.status === "available" ? history.messages.at(-1) : undefined;
+    const historicalPageFits =
+        latestHistoricalMessage === undefined ||
+        historyMessageCharacters(latestHistoricalMessage) <= historicalCharacterLimit;
+    const historical =
+        active.startIndex === 0 && history.status === "available" && historicalLimit > 0 && historicalPageFits
+            ? paginateAvailableNativeHistory(
+                  history,
+                  sessionId,
+                  history.messages.length,
+                  historicalLimit,
+                  historicalCharacterLimit,
+              )
+            : null;
+    return {
+        coveredCommandIds: historical?.coveredCommandIds ?? [],
+        coveredMessageIds: [
+            ...(historical?.coveredMessageIds ?? []),
+            ...(active.startIndex === 0 ? [`${activeTurn.commandId}:user`, `${activeTurn.commandId}:agent`] : []),
+        ],
+        messages: [...(historical?.messages ?? []), ...active.messages],
+        nextCursor:
+            active.startIndex > 0
+                ? activeHistoryCursor(sessionId, activeTurn.epoch, active.startIndex)
+                : historical === null
+                  ? pendingHistoricalCursor
+                  : historical.nextCursor,
+        status: "available",
+        truncated: activeTurn.truncated || (historical?.truncated ?? false),
+    };
+}
+
+export function paginateLiveSessionHistory(
+    history: NativeSessionHistory,
+    activeTurn: ActiveTurnRecovery | null,
+    sessionId: string,
+    encodedCursor: string | null,
+    limit: number,
+): NativeMessagePage {
+    const cursor = encodedCursor === null ? null : decodeLiveHistoryCursor(encodedCursor, sessionId);
+    if (activeTurn === null) {
+        return paginateNativeHistory(history, sessionId, cursor, limit);
+    }
+    const historical = historyBeforeActiveTurn(history, activeTurn);
+    if (cursor?.kind === "native") {
+        return paginateNativeHistory(historical, sessionId, cursor, limit);
+    }
+    if (cursor !== null && cursor.epoch !== activeTurn.epoch) {
+        throw new AcpExecutionError("The active Turn history cursor is stale", {}, "stale_cursor");
+    }
+    return paginateActiveTurn(historical, activeTurn, sessionId, cursor?.endIndex ?? activeTurn.messages.length, limit);
 }
 
 export function mergeLiveSessionHistory(
     history: NativeSessionHistory,
-    activeTurn: ActiveTurnSnapshot,
+    activeTurn: ActiveTurnRecovery | null,
     sessionId: string,
 ): NativeSessionHistory {
     const page = paginateLiveSessionHistory(history, activeTurn, sessionId, null, 1_000);
@@ -290,6 +346,6 @@ export function mergeLiveSessionHistory(
         coveredMessageIds: page.coveredMessageIds,
         messages: page.messages,
         status: "available",
-        truncated: page.truncated,
+        truncated: page.truncated || page.nextCursor !== null,
     };
 }

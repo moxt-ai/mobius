@@ -617,8 +617,9 @@ describe("daemon assistant text coalescing", () => {
             expect(active.turn).toMatchObject({
                 commandId: prompt.commandId,
                 epoch: firstDelta.epoch,
+                hasOlder: true,
                 sequence: expect.any(Number),
-                truncated: true,
+                truncated: false,
             });
             sendText(
                 socket,
@@ -642,7 +643,8 @@ describe("daemon assistant text coalescing", () => {
             if (activePage.status !== "available") {
                 throw new Error("Expected active native history");
             }
-            expect(activePage.truncated).toBe(true);
+            expect(activePage.truncated).toBe(false);
+            expect(activePage.nextCursor).not.toBeNull();
             const activeText = activePage.messages
                 .flatMap((message) => (message.role === "assistant" ? [message.text] : []))
                 .join("");
@@ -659,6 +661,41 @@ describe("daemon assistant text coalescing", () => {
                     0,
                 ),
             ).toBeLessThanOrEqual(SESSION_HISTORY_CHARACTER_LIMIT);
+            const activePages = [activePage];
+            let activeCursor = activePage.nextCursor;
+            while (activeCursor !== null) {
+                sendText(
+                    socket,
+                    encodeSessionLiveHistoryPageLoad({
+                        additionalDirectoryIds: [],
+                        agentId: agent.id,
+                        bindingId: config.bindingId,
+                        cursor: activeCursor,
+                        directoryId: "default",
+                        kind: "session.live-history.page.load",
+                        limit: 50,
+                        requestId: `older_active_history_${activePages.length.toString()}`,
+                        sessionId,
+                    }),
+                );
+                do {
+                    result = await next();
+                } while (decodeMessageKind(result) !== SESSION_LIVE_HISTORY_PAGE_LOADED_KIND);
+                const olderPage = decodeSessionLiveHistoryPageLoaded(result).page;
+                if (olderPage.status !== "available") {
+                    throw new Error("Expected an older active native history page");
+                }
+                expect(olderPage.truncated).toBe(false);
+                activePages.push(olderPage);
+                activeCursor = olderPage.nextCursor;
+            }
+            const recoveredPages = activePages.toReversed().flatMap((page) => page.messages);
+            expect(
+                recoveredPages.flatMap((message) => (message.role === "assistant" ? [message.text] : [])).join(""),
+            ).toBe(output);
+            expect(new Set(activePages.flatMap((page) => page.coveredMessageIds))).toEqual(
+                new Set([`${prompt.commandId}:user`, `${prompt.commandId}:agent`]),
+            );
             sendText(socket, encodeSessionPromptCommand({ ...prompt, commandId: "second_burst_turn" }));
             let rejected: string;
             for (;;) {

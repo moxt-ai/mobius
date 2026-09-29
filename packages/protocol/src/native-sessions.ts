@@ -63,14 +63,15 @@ const activeTurnMessageSchema = z.discriminatedUnion("role", [
 export const activeTurnSnapshotSchema = z
     .strictObject({
         commandId: identifier,
-        truncated: z.boolean(),
         epoch: identifier,
+        hasOlder: z.boolean(),
         interaction: z
             .discriminatedUnion("kind", [sessionPermissionRequestedEventSchema, sessionElicitationRequestedEventSchema])
             .nullable(),
         messages: z.array(activeTurnMessageSchema).max(SESSION_HISTORY_MESSAGE_LIMIT).readonly(),
         sequence: z.number().int().nonnegative(),
         state: z.literal("running"),
+        truncated: z.boolean(),
     })
     .readonly()
     .refine(

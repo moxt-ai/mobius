@@ -6,7 +6,7 @@ import {
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
-import { ActiveDaemonTurn } from "./daemon-active-turn.ts";
+import { ActiveDaemonTurn, type ActiveTurnRecovery } from "./daemon-active-turn.ts";
 import type { DaemonOperationState } from "./relay-connection/daemon-operation-state.ts";
 
 type ActiveTurnSnapshot = Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"];
@@ -110,6 +110,19 @@ export class DaemonTurnRegistry {
             const snapshot = turn.snapshot();
             if (snapshot !== null) {
                 return snapshot;
+            }
+        }
+        return null;
+    };
+
+    readonly recovery = (matches: (command: SessionPromptCommand) => boolean): ActiveTurnRecovery | null => {
+        for (const turn of this.#turns.values()) {
+            if (!matches(turn.command)) {
+                continue;
+            }
+            const recovery = turn.recovery();
+            if (recovery !== null) {
+                return recovery;
             }
         }
         return null;

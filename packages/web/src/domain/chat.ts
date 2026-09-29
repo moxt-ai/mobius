@@ -776,9 +776,17 @@ function mergeNativeHistory(
               ]
             : [],
     );
+    const liveMessages = messages.filter((message) => !(message instanceof NativeHistoryChatMessage));
+    if (liveMessages.some((message) => covered.has(message.id))) {
+        // An eager history refresh can overlap the Turn already assembled from live deltas. Keep the
+        // live representation because it also owns running/failed/completed state; a fresh page has no
+        // such live messages and therefore uses the complete paged native recovery below.
+        const existingHistory = messages.find((message) => message instanceof NativeHistoryChatMessage);
+        return [...(existingHistory === undefined ? [] : [existingHistory]), ...liveMessages];
+    }
     return [
         new NativeHistoryChatMessage(sessionId, history),
-        ...messages.filter((message) => !(message instanceof NativeHistoryChatMessage) && !covered.has(message.id)),
+        ...liveMessages.filter((message) => !covered.has(message.id)),
     ];
 }
 

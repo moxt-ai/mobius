@@ -24,6 +24,12 @@ import {
 
 type ActiveTurnSnapshot = Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"];
 type ActiveTurnMessage = NonNullable<ActiveTurnSnapshot>["messages"][number];
+export interface ActiveTurnRecovery {
+    readonly commandId: string;
+    readonly epoch: string;
+    readonly messages: readonly ActiveTurnMessage[];
+    readonly truncated: boolean;
+}
 type ActiveTurnEventInput =
     | {
           readonly kind: typeof AGENT_MESSAGE_DELTA_KIND;
@@ -63,13 +69,14 @@ function activeMessageCharacters(message: ActiveTurnMessage): number {
     );
 }
 
+const ACTIVE_TURN_TEXT_CHUNK_LIMIT = Math.floor(SESSION_HISTORY_CHARACTER_LIMIT / 2);
+
 function boundedRecoveryMessages(messages: readonly ActiveTurnMessage[]): {
+    readonly hasOlder: boolean;
     readonly messages: readonly ActiveTurnMessage[];
-    readonly truncated: boolean;
 } {
     const selected: ActiveTurnMessage[] = [];
     let remainingCharacters = SESSION_HISTORY_CHARACTER_LIMIT;
-    let truncated = false;
     for (let index = messages.length - 1; index >= 0 && selected.length < SESSION_HISTORY_MESSAGE_LIMIT; index -= 1) {
         const message = messages[index];
         if (message === undefined) {
@@ -81,15 +88,9 @@ function boundedRecoveryMessages(messages: readonly ActiveTurnMessage[]): {
             remainingCharacters -= characters;
             continue;
         }
-        const structuredCharacters = characters - message.text.length;
-        if (structuredCharacters <= remainingCharacters) {
-            const textCharacters = remainingCharacters - structuredCharacters;
-            selected.unshift({ ...message, text: textCharacters === 0 ? "" : message.text.slice(-textCharacters) });
-            truncated = true;
-        }
         break;
     }
-    return { messages: selected, truncated: truncated || selected.length !== messages.length };
+    return { hasOlder: selected.length !== messages.length, messages: selected };
 }
 
 export class ActiveDaemonTurn {
@@ -101,7 +102,6 @@ export class ActiveDaemonTurn {
     #dispatch: TurnDispatchState;
     readonly #activities = new Map<string, NativeMessageActivity>();
     #timeline: readonly ActiveTimelineEntry[];
-    #truncated = false;
     #sequence = 0;
     #interaction: Extract<
         RecordedSessionEvent,
@@ -167,7 +167,6 @@ export class ActiveDaemonTurn {
         if (event.kind === AGENT_MESSAGE_DELTA_KIND) {
             const sequence = this.advance();
             this.appendMessageText(event.messageId, event.text);
-            this.trimRecoveryState();
             return {
                 commandId: this.command.commandId,
                 epoch: this.#epoch,
@@ -264,7 +263,6 @@ export class ActiveDaemonTurn {
             event.kind === AGENT_CONTENT_KIND
         ) {
             this.advance();
-            this.trimRecoveryState();
         }
         return event;
     };
@@ -274,7 +272,7 @@ export class ActiveDaemonTurn {
         while (remaining.length > 0) {
             const latest = this.#timeline.at(-1);
             if (latest?.kind === "message" && latest.sourceMessageId === messageId) {
-                const available = SESSION_HISTORY_CHARACTER_LIMIT - latest.text.length;
+                const available = ACTIVE_TURN_TEXT_CHUNK_LIMIT - latest.text.length;
                 if (available > 0) {
                     this.#timeline = [
                         ...this.#timeline.slice(0, -1),
@@ -291,10 +289,10 @@ export class ActiveDaemonTurn {
                     id: decodeIdentifier(randomUUID()),
                     kind: "message",
                     sourceMessageId: messageId,
-                    text: remaining.slice(0, SESSION_HISTORY_CHARACTER_LIMIT),
+                    text: remaining.slice(0, ACTIVE_TURN_TEXT_CHUNK_LIMIT),
                 },
             ];
-            remaining = remaining.slice(SESSION_HISTORY_CHARACTER_LIMIT);
+            remaining = remaining.slice(ACTIVE_TURN_TEXT_CHUNK_LIMIT);
         }
     }
 
@@ -311,7 +309,6 @@ export class ActiveDaemonTurn {
             { id: decodeIdentifier(command.commandId), images: command.images, kind: "user", text: command.prompt },
         ];
         this.advance();
-        this.trimRecoveryState();
         return true;
     };
 
@@ -338,33 +335,6 @@ export class ActiveDaemonTurn {
         });
     }
 
-    private trimRecoveryState(): void {
-        const complete = this.timelineMessages();
-        const bounded = boundedRecoveryMessages(complete);
-        if (!bounded.truncated) {
-            return;
-        }
-        this.#truncated = true;
-        const retained = new Map(bounded.messages.map((message) => [message.id, message]));
-        const removedActivityIds: string[] = [];
-        this.#timeline = this.#timeline.flatMap((entry): readonly ActiveTimelineEntry[] => {
-            const message = retained.get(entry.id);
-            if (message === undefined) {
-                if (entry.kind === "activity") {
-                    removedActivityIds.push(entry.activityId);
-                }
-                return [];
-            }
-            if (entry.kind === "message" || entry.kind === "user") {
-                return [{ ...entry, text: message.text }];
-            }
-            return [entry];
-        });
-        for (const activityId of removedActivityIds) {
-            this.#activities.delete(activityId);
-        }
-    }
-
     private readonly advance = (): number => {
         if (this.#dispatch.kind !== "running") {
             throw new Error("Only a running turn can advance its snapshot");
@@ -377,15 +347,28 @@ export class ActiveDaemonTurn {
         if (this.#dispatch.kind !== "running") {
             return null;
         }
-        const messages = this.timelineMessages();
+        const bounded = boundedRecoveryMessages(this.timelineMessages());
         return {
             commandId: decodeIdentifier(this.command.commandId),
-            truncated: this.#truncated,
             epoch: this.#epoch,
+            hasOlder: bounded.hasOlder,
             interaction: this.#interaction,
-            messages,
+            messages: bounded.messages,
             sequence: this.#sequence,
             state: "running",
+            truncated: false,
+        };
+    };
+
+    readonly recovery = (): ActiveTurnRecovery | null => {
+        if (this.#dispatch.kind !== "running") {
+            return null;
+        }
+        return {
+            commandId: decodeIdentifier(this.command.commandId),
+            epoch: this.#epoch,
+            messages: this.timelineMessages(),
+            truncated: false,
         };
     };
 
