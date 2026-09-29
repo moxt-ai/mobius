@@ -26,6 +26,7 @@ import {
     decodeSessionEventEnvelope,
     encodeRuntimeHeartbeatAckEvent,
     encodeRuntimeLivenessReadyEvent,
+    encodeSessionEventAcknowledgement,
     encodeSessionPromptCommand,
     encodeWorkspaceListCommand,
     MOBIUS_API_PREFIX,
@@ -33,8 +34,10 @@ import {
     RUNTIME_HEARTBEAT_KIND,
     RUNTIME_LIVENESS_READY_KIND,
     SESSION_COMPLETED_KIND,
+    SESSION_EVENT_ACK_KIND,
     SESSION_EVENT_KIND,
     SESSION_PROMPT_KIND,
+    SESSION_READY_KIND,
     SESSION_STARTED_KIND,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
@@ -969,7 +972,22 @@ describe("daemon relay connection liveness", () => {
                 );
                 firstEventFrame = await firstFrame.next();
             }
-            const started = decodeSessionEventEnvelope(firstEventFrame.text);
+            const ready = decodeSessionEventEnvelope(firstEventFrame.text);
+            expect(decodeMessageKind(ready.payload)).toBe(SESSION_READY_KIND);
+            expect("delivery" in ready).toBe(true);
+            if (!("delivery" in ready)) {
+                throw new Error("Test relay received an ephemeral ready event instead of a reliable event");
+            }
+            writeServerTextFrame(
+                firstSocket,
+                encodeSessionEventAcknowledgement({
+                    eventId: ready.delivery.eventId,
+                    kind: SESSION_EVENT_ACK_KIND,
+                    outcome: { kind: "relayed" },
+                    sessionId: ready.sessionId,
+                }),
+            );
+            const started = decodeSessionEventEnvelope((await firstFrame.next()).text);
             expect(decodeMessageKind(started.payload)).toBe(SESSION_STARTED_KIND);
             expect("delivery" in started).toBe(true);
             if (!("delivery" in started)) {
