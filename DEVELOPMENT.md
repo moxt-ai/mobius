@@ -6,6 +6,8 @@ Mobius serves Mobius Chat through the Platform Worker and SDK. The Standalone Wo
 
 The project starts from new databases and has no old-data import path. Authoritative Drizzle schemas live in each package's `src/schema/<target>` directory. Generate migrations with the pinned Drizzle CLI through the `db:generate:*` scripts. Do not edit generated migration SQL. `pnpm db:codegen` prepares ignored SQL modules for targets that cannot import `.sql` directly.
 
+After `main` passes validation, CI applies committed D1 migrations to each remote database immediately before deploying the Worker that consumes that schema. Migration failure stops that environment's deployment. CI addresses databases by their stable Cloudflare database names and authenticates with environment-scoped `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` values. The token must grant the target account D1 Edit permission in addition to the permissions required to deploy the Worker.
+
 Sessions are handled in the corresponding Runtime Relay. Session content is not retained in cloud storage. Do not add a retained-content mode or a migration path for previous Mobius deployments.
 
 ## Boundaries
