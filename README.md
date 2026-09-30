@@ -44,8 +44,8 @@ pnpm dev:cloudflare:standalone
 
 The local command applies the committed D1 migration before starting Wrangler. The
 credential file is ignored by Git. The bundled Web app never receives this deployment
-credential. It uses `MobiusStandaloneCredentialProvider` to create a Project and its
-Project-scoped owner credential, then uses `MobiusClient` for Runtime pairing,
+credential. Its deployment adapter creates a Project and its Project-scoped owner
+credential, then uses the generic `MobiusClient` for Runtime pairing,
 Runtime discovery, Session history, and Session operations. The browser persists the
 Project credential after pairing so page loads and WebSocket reconnects return to the
 same Project. The old standalone
@@ -73,18 +73,19 @@ pnpm mobius pair --url http://127.0.0.1:8787 --pairing <pairingId> --code <pairi
 
 Operator clients can use the same deployment credential for Project and Session API
 requests. Keep it private: it grants full access to every Standalone Project. Browser
-apps should follow the bundled Web app and use the Standalone SDK credential provider
-instead. The SDK's WebSocket transport is available at `/mobius/api/v1/transport`.
+apps should follow the bundled Web app and keep the Project credential inside their
+deployment integration. The SDK's WebSocket transport is available at `/mobius/api/v1/transport`.
 A connected local Runtime supplies Session history when Recording is disabled. When
 Recording is installed and enabled for a Standalone Project during pairing, the Web
 app loads that Project's durable history from Recording instead. The Standalone Worker
-has no Platform identity, App, or organization routes.
+acts as one deployment-owned Platform principal, but does not expose the hosted
+Platform's identity, App, or organization control-plane routes.
 
 The repository deploys the production Standalone Worker to
 `https://mobius-standalone.moxt.ai` after `main` passes CI. The workflow deploys
 the Worker and Web assets with the `MOBIUS_STANDALONE_TOKEN` GitHub environment
 secret and verifies the deployed page. Before deploying the Worker, CI applies
-the committed `packages/relay-core/migrations/d1` migrations to the dedicated
+the committed `packages/relay-cloudflare-standalone/migrations/d1` migrations to the dedicated
 production D1 database with the D1 Edit-only `CLOUDFLARE_D1_API_TOKEN`
 environment secret and stops the deployment if migration fails.
 Self-hosted deployments need their own bearer credential and D1 binding.

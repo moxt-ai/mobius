@@ -14,6 +14,7 @@ import {
     MobiusAgentIntegrationDescriptor,
     MobiusChannelAccessClient,
     MobiusClient,
+    type MobiusCredentialProvider,
     MobiusError,
     MobiusExpiredRuntimePairingStatus,
     MobiusMissingAgentDescriptor,
@@ -26,7 +27,6 @@ import {
     MobiusRuntimePairingRequest,
     type MobiusRuntimePairingStatus,
     type MobiusSession,
-    MobiusStandaloneCredentialProvider,
     type NativeSessionHistory,
     RUNTIME_WORKSPACE_BINDING_ID,
     type SessionElicitationRequestedEvent,
@@ -96,16 +96,74 @@ export type StandaloneRecordingConfiguration =
     | { readonly providerAvailable: boolean; readonly state: "unconfigured" }
     | { readonly enabled: boolean; readonly providerAvailable: boolean; readonly state: "configured" };
 
+interface StandaloneProjectCredential {
+    readonly projectId: string;
+    readonly token: string;
+}
+
+class StandaloneProjectCredentialProvider implements MobiusCredentialProvider {
+    #current: StandaloneProjectCredential | null = null;
+
+    readonly projectCredential = async (signal: AbortSignal): Promise<StandaloneProjectCredential> => {
+        if (this.#current !== null) {
+            return this.#current;
+        }
+        const response = await fetch(new URL(`${MOBIUS_API_PREFIX}/v1/standalone/projects`, window.location.origin), {
+            body: "{}",
+            headers: { accept: "application/json", "content-type": "application/json" },
+            method: "POST",
+            signal: requestSignal(signal),
+        });
+        if (!response.ok) {
+            let errorCode = "project_creation_failed";
+            let errorMessage = "The Project creation request failed.";
+            try {
+                const body: unknown = await response.json();
+                if (isRecord(body) && isRecord(body["error"])) {
+                    if (typeof body["error"]["code"] === "string") {
+                        errorCode = body["error"]["code"];
+                    }
+                    if (typeof body["error"]["message"] === "string") {
+                        errorMessage = body["error"]["message"];
+                    }
+                }
+            } catch {}
+            throw new PairingApiError(errorCode, errorMessage);
+        }
+        let value: unknown;
+        try {
+            value = await response.json();
+        } catch {
+            throw new PairingApiError("invalid_relay_response", "The relay returned an invalid Project credential.");
+        }
+        if (
+            !isRecord(value) ||
+            Object.keys(value).length !== 2 ||
+            typeof value["projectId"] !== "string" ||
+            !isIdentifier(value["projectId"]) ||
+            typeof value["token"] !== "string" ||
+            !isToken(value["token"])
+        ) {
+            throw new PairingApiError("invalid_relay_response", "The relay returned an invalid Project credential.");
+        }
+        const credential = Object.freeze({ projectId: value["projectId"], token: value["token"] });
+        this.#current = credential;
+        return credential;
+    };
+
+    readonly credential = async (signal: AbortSignal): Promise<string> => (await this.projectCredential(signal)).token;
+}
+
 let standaloneCredentialProviderState:
-    | { readonly origin: string; readonly provider: MobiusStandaloneCredentialProvider }
+    | { readonly origin: string; readonly provider: StandaloneProjectCredentialProvider }
     | undefined;
 
-export function standaloneProjectCredentialProvider(): MobiusStandaloneCredentialProvider {
+export function standaloneProjectCredentialProvider(): StandaloneProjectCredentialProvider {
     const origin = window.location.origin;
     if (standaloneCredentialProviderState?.origin === origin) {
         return standaloneCredentialProviderState.provider;
     }
-    const provider = new MobiusStandaloneCredentialProvider({ endpoint: origin });
+    const provider = new StandaloneProjectCredentialProvider();
     standaloneCredentialProviderState = { origin, provider };
     return provider;
 }

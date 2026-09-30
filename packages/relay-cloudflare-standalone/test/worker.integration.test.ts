@@ -4,7 +4,6 @@ import {
     MobiusClient,
     type MobiusHttpTransport,
     MobiusRuntimePairingRequest,
-    MobiusStandaloneCredentialProvider,
     StaticMobiusCredentialProvider,
 } from "@moxt-ai/mobius-sdk";
 import { describe, expect, it } from "vitest";
@@ -94,11 +93,17 @@ describe("Standalone Relay", () => {
         const transport: MobiusHttpTransport = {
             fetch: async (request) => await worker.fetch(request, env),
         };
-        const provider = new MobiusStandaloneCredentialProvider({
-            endpoint: "https://standalone.test",
-            transport,
-        });
-        const credential = await provider.projectCredential(AbortSignal.timeout(5_000));
+        const projectResponse = await transport.fetch(
+            new Request("https://standalone.test/mobius/api/v1/standalone/projects", {
+                body: "{}",
+                headers: { "content-type": "application/json" },
+                method: "POST",
+                signal: AbortSignal.timeout(5_000),
+            }),
+        );
+        expect(projectResponse.status).toBe(201);
+        const credential = await projectResponse.json<{ readonly projectId: string; readonly token: string }>();
+        const provider = new StaticMobiusCredentialProvider(credential.token);
         const client = new MobiusClient({
             credentialProvider: provider,
             endpoint: "https://standalone.test",

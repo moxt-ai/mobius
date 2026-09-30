@@ -87,6 +87,5 @@ export * from "./errors.ts";
 export * from "./project-authentication.ts";
 export * from "./resources.ts";
 export * from "./service-client.ts";
-export * from "./standalone.ts";
 export * from "./transport/http-transport.ts";
 export * from "./transport/ws-transport.ts";

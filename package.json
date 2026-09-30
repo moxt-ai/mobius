@@ -9,6 +9,7 @@
         "pnpm": ">=11.25.0 <12"
     },
     "scripts": {
+        "db:generate:standalone-d1": "drizzle-kit generate --config drizzle/drizzle.standalone-d1.config.ts",
         "db:generate:platform-d1": "drizzle-kit generate --config drizzle/drizzle.platform-d1.config.ts",
         "db:generate:cli-acp-session-store": "drizzle-kit generate --config drizzle/drizzle.cli-acp-session-store.config.ts && pnpm db:codegen",
         "db:generate:project-do": "drizzle-kit generate --config drizzle/drizzle.project-do.config.ts && pnpm db:codegen",

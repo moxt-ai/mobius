@@ -7,7 +7,7 @@
         "bindings": [{ "name": "RUNTIME_RELAY", "class_name": "RuntimeRelay" }]
     },
     "migrations": [{ "tag": "standalone-initial", "new_sqlite_classes": ["RuntimeRelay"] }],
-    "d1_databases": [{ "binding": "DIRECTORY_DATABASE", "migrations_dir": "../relay-core/migrations/d1" }],
+    "d1_databases": [{ "binding": "DIRECTORY_DATABASE", "migrations_dir": "migrations/d1" }],
     "services": [{ "binding": "RECORDING", "service": "mobius-recording-local" }],
     "vars": { "RECORDING_PROVIDER_ID": "recording-local" },
     "assets": {
@@ -34,7 +34,7 @@
                     "binding": "DIRECTORY_DATABASE",
                     "database_name": "mobius-standalone-production-directory-wnam",
                     "database_id": "8b67ba69-121b-4851-82e8-55495a1bf578",
-                    "migrations_dir": "../relay-core/migrations/d1"
+                    "migrations_dir": "migrations/d1"
                 }
             ]
         }

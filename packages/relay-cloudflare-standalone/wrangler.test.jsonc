@@ -7,6 +7,6 @@
         "bindings": [{ "name": "RUNTIME_RELAY", "class_name": "RuntimeRelay" }]
     },
     "migrations": [{ "tag": "standalone-initial", "new_sqlite_classes": ["RuntimeRelay"] }],
-    "d1_databases": [{ "binding": "DIRECTORY_DATABASE", "migrations_dir": "../relay-core/migrations/d1" }],
+    "d1_databases": [{ "binding": "DIRECTORY_DATABASE", "migrations_dir": "migrations/d1" }],
     "observability": { "enabled": true }
 }
