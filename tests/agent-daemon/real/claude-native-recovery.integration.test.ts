@@ -130,3 +130,85 @@ test("Given a real claude native Session, When the active prompt is cancelled wi
         release.resolve();
     }
 });
+
+test("Given a completed real claude Session, When it is forked and immediately prompted, Then the first child Turn completes", async () => {
+    await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-6", "CLAUDE_FORK_REPLY");
+    await using agent = await ClaudeFixture.create(provider);
+    await withRealDaemon(new ClaudeCodeAgentSpecification(), agent.environment, async (peer) => {
+        const sendPrompt = (sessionId: string, commandId: string): void =>
+            peer.send(
+                encodeSessionPromptCommand({
+                    additionalDirectoryIds: [],
+                    agentId: "claude",
+                    bindingId: peer.bindingId,
+                    commandId,
+                    directoryId: "default",
+                    disposition: SessionPromptDisposition.Reject,
+                    images: [],
+                    kind: "session.prompt",
+                    prompt: "Reply with a short greeting, without using tools",
+                    resources: [],
+                    sessionId,
+                    targetCommandId: "",
+                }),
+            );
+        const finish = async (sessionId: string, commandId: string): Promise<string> => {
+            let text = "";
+            for (;;) {
+                const event = decodeRecordedSessionEvent(await peer.nextEvent());
+                if (event.kind === "session.failed" && event.commandId === commandId) {
+                    throw new Error(JSON.stringify(event));
+                }
+                if (event.kind === "agent.message.delta" && event.commandId === commandId) {
+                    text += event.text;
+                }
+                if (event.kind === "session.completed" && event.commandId === commandId) {
+                    expect(event.sessionId).toBe(sessionId);
+                    expect(event.stopReason).toBe("end_turn");
+                    return text;
+                }
+            }
+        };
+
+        const sourceCommandId = randomUUID();
+        sendPrompt(peer.sessionId, sourceCommandId);
+        expect(await finish(peer.sessionId, sourceCommandId)).toContain("CLAUDE_FORK_REPLY");
+
+        const childSessionId = randomUUID();
+        const requestId = randomUUID();
+        peer.send(
+            encodeNativeSessionCommand({
+                action: "fork-recorded",
+                additionalDirectoryIds: [],
+                agentId: "claude",
+                bindingId: peer.bindingId,
+                directoryId: "default",
+                kind: "native.session.request",
+                requestId,
+                sessionId: peer.sessionId,
+                targetSessionId: childSessionId,
+                throughCommandId: sourceCommandId,
+            }),
+        );
+        for (;;) {
+            const message = await peer.nextMessage();
+            const kind = decodeMessageKind(message);
+            if (kind === "session.operation.failed") {
+                throw new Error(message);
+            }
+            if (kind === "native.session.result") {
+                const result = decodeNativeSessionResult(message);
+                if (result.requestId !== requestId) {
+                    continue;
+                }
+                expect(result.action).toBe("fork-recorded");
+                expect(result.targetSessionId).toBe(childSessionId);
+                break;
+            }
+        }
+
+        const childCommandId = randomUUID();
+        sendPrompt(childSessionId, childCommandId);
+        expect(await finish(childSessionId, childCommandId)).toContain("CLAUDE_FORK_REPLY");
+    });
+});

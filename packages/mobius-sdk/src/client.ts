@@ -102,6 +102,7 @@ import {
     SESSION_ELICITATION_RESPOND_KIND,
     SESSION_EVENT_KIND,
     SESSION_FAILED_KIND,
+    SESSION_FORKED_KIND,
     SESSION_INFO_UPDATED_KIND,
     SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
     SESSION_OPERATION_FAILED_KIND,
@@ -150,6 +151,7 @@ const HISTORY_CHANGING_MESSAGE_KINDS: ReadonlySet<string> = new Set([
     SESSION_ELICITATION_REQUESTED_KIND,
     SESSION_ELICITATION_RESOLVED_KIND,
     SESSION_FAILED_KIND,
+    SESSION_FORKED_KIND,
     SESSION_PERMISSION_REQUESTED_KIND,
     SESSION_PERMISSION_RESOLVED_KIND,
     SESSION_STARTED_KIND,
@@ -1191,6 +1193,8 @@ export class MobiusClient {
                 this.#options.onLiveMessage?.(decodeSessionCompletedEvent(encoded));
             } else if (kind === SESSION_FAILED_KIND) {
                 this.#options.onLiveMessage?.(decodeSessionFailedEvent(encoded));
+            } else if (kind === SESSION_FORKED_KIND) {
+                decodeRecordedSessionEvent(encoded);
             } else if (kind === SESSION_OPERATION_FAILED_KIND) {
                 decodeSessionOperationFailedEvent(encoded);
             } else {
