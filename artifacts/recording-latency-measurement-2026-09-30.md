@@ -124,6 +124,18 @@ The same Session's recorded history contained 33 entries at that point, so `deli
 delivery attempts observed by that Runtime Relay Durable Object since it was instantiated, not the recorded
 total. A daemon that reconnects, or a Runtime Relay that is evicted, starts a fresh snapshot.
 
+The outbox backlog age needs an enqueue timestamp, which existing local outboxes do not have. Opening an
+outbox written before that column existed adds the column in place and keeps the pending events:
+
+```text
+legacy backlog {"deadLetters":0,"oldestEventAgeMilliseconds":0,"pendingBytes":215,"pendingEvents":1,"standardEventBytes":100663296}
+legacy pending rows 1
+columns ordinal,event_id,session_id,source_seq,byte_length,envelope_json,created_at
+```
+
+`oldestEventAgeMilliseconds` stays `0` for rows written before the timestamp existed rather than reporting a
+fabricated age, and those rows are replaced as they are acknowledged.
+
 ## What these numbers mean
 
 - Recording is not free, but it is not the dominant cost. In production, enabling Recording added roughly
