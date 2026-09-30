@@ -244,14 +244,12 @@ describe("daemon Session event backlog", () => {
                     sessionId: pending.sessionId,
                 }),
             );
-            // The daemon schedules the deferred replay only after it has recorded its backlog.
+            // The daemon schedules the deferred replay only after it has recorded its backlog. The original
+            // batch may still be buffered on the socket, so wait for the deferred event to be re-sent rather
+            // than asserting it is the very next frame.
             const replay = await timer.waitForTask(RETRY_AFTER_MILLISECONDS);
             replay.run();
-            const replayed = await firstReliableEventFrame(socket);
-            expect(decodeSessionEventEnvelope(replayed)).toMatchObject({
-                delivery: { eventId: pending.eventId },
-                sessionId: pending.sessionId,
-            });
+            expect(await replayedEventId(socket, pending.eventId)).toBe(pending.eventId);
 
             const backlog = await readBacklogDiagnostic(join(stateDirectory, "logs", "daemon.log"));
             expect(backlog).toMatchObject({
@@ -442,6 +440,20 @@ async function firstReliableEventFrame(socket: Duplex): Promise<string> {
         }
         if ("delivery" in decodeSessionEventEnvelope(frame)) {
             return frame;
+        }
+    }
+}
+
+/** Waits until the deferred event is re-sent, ignoring other buffered events from the original batch. */
+async function replayedEventId(socket: Duplex, eventId: string): Promise<string> {
+    for (;;) {
+        const frame = await readClientFrame(socket);
+        if (decodeMessageKind(frame) !== SESSION_EVENT_KIND) {
+            continue;
+        }
+        const envelope = decodeSessionEventEnvelope(frame);
+        if ("delivery" in envelope && envelope.delivery.eventId === eventId) {
+            return envelope.delivery.eventId;
         }
     }
 }
