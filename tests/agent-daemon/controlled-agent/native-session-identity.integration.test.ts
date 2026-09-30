@@ -6,6 +6,51 @@ import { codexFixture } from "./codex-native-fixture.ts";
 import { fixture } from "./native-session-fixture.ts";
 
 describe("native session identity", () => {
+    it("Given a Mobius Session has a terminal recorded Turn, When Chat forks that Turn, Then the Runtime opens an independent child from the bound native Session", async () => {
+        const f = await fixture("Codex");
+        const signal = new AbortController().signal;
+        const sourceSessionId = "recorded-fork-source";
+        const throughCommandId = "recorded-fork-command";
+        const targetSessionId = "recorded-fork-child";
+        try {
+            await f.sessions.runPrompt({
+                agent: f.agent,
+                additionalDirectories: [],
+                cwd: f.workspace,
+                signal,
+                sessionId: sourceSessionId,
+                commandId: throughCommandId,
+                prompt: "Create source context",
+                images: [],
+                resources: [],
+                onText: async () => {},
+                onActivity: async () => {},
+            });
+
+            const result = await f.service.execute(
+                {
+                    ...f.identity,
+                    action: "fork-recorded",
+                    sessionId: sourceSessionId,
+                    targetSessionId,
+                    throughCommandId,
+                },
+                signal,
+            );
+
+            expect(result).toMatchObject({
+                action: "fork-recorded",
+                ready: { sessionId: targetSessionId },
+                targetSessionId,
+            });
+            expect(await f.service.querySessions([targetSessionId], signal)).toMatchObject([
+                { sessionId: targetSessionId },
+            ]);
+        } finally {
+            await f.close();
+        }
+    });
+
     it.each(["import", "fork"] satisfies readonly ("import" | "fork")[])(
         "Given a %s assigned a UUID distinct from its native identity, When the Runtime restarts, Then that conversation remains discoverable and can continue",
         async (action) => {

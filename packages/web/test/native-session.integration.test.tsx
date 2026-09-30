@@ -1,10 +1,8 @@
 import {
     decodeNativeSessionCommand,
-    decodeNativeSessionTurnForkCommand,
     decodeSessionPrepareCommand,
     encodeNativeSessionResult,
     NATIVE_SESSION_REQUEST_KIND,
-    NATIVE_SESSION_TURN_FORK_KIND,
     SESSION_PREPARE_KIND,
 } from "@moxt-ai/mobius-protocol";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
@@ -24,7 +22,7 @@ import {
 setupWebIntegrationEnvironment();
 
 describe.sequential("Native Session boundaries", () => {
-    it("Given a conversation has multiple completed turns, When a user forks from the first answer, Then a new conversation opens with context ending at that turn", async ({
+    it("Given a conversation has multiple completed turns, When a user forks from its latest answer, Then the request binds the child to that terminal Turn", async ({
         signal,
     }) => {
         const paired = await openReadyApplication();
@@ -40,50 +38,41 @@ describe.sequential("Native Session boundaries", () => {
                 "Apply the second-stage changes",
                 "The second-stage changes are applied.",
             );
-            await completeRenderedPrompt(
+            const latest = await completeRenderedPrompt(
                 paired.daemon,
                 "Repeat the first answer verbatim",
                 "The implementation plan is established.",
             );
 
-            const firstAnswer = screen
+            const latestAnswer = screen
                 .getAllByRole("article", { name: "Message from Codex" })
                 .find((article) => article.textContent?.includes("The implementation plan is established."));
-            if (firstAnswer === undefined) {
-                throw new Error("Expected the first completed answer");
+            const matchingAnswers = screen
+                .getAllByRole("article", { name: "Message from Codex" })
+                .filter((article) => article.textContent?.includes("The implementation plan is established."));
+            const latestMatchingAnswer = matchingAnswers.at(-1) ?? latestAnswer;
+            if (latestMatchingAnswer === undefined) {
+                throw new Error("Expected the latest completed answer");
             }
             fireEvent.click(
-                within(firstAnswer).getByRole("button", {
+                within(latestMatchingAnswer).getByRole("button", {
                     name: "Fork conversation after this turn",
                 }),
             );
 
-            const fork = decodeNativeSessionTurnForkCommand(await paired.daemon.receive(NATIVE_SESSION_TURN_FORK_KIND));
+            const fork = decodeNativeSessionCommand(await paired.daemon.receive(NATIVE_SESSION_REQUEST_KIND));
             expect(fork).toMatchObject({
+                action: "fork-recorded",
                 agentId: "codex",
-                messageId: `agent-${first.commandId}`,
-                messageOccurrence: 1,
                 sessionId: first.sessionId,
-                sourceCommandId: first.commandId,
+                throughCommandId: latest.commandId,
             });
+            if (fork.action !== "fork-recorded") {
+                throw new Error("Expected a recorded Turn fork request");
+            }
             paired.daemon.send(
                 encodeNativeSessionResult({
-                    action: "fork",
-                    history: {
-                        coveredCommandIds: [],
-                        coveredMessageIds: [],
-                        messages: [
-                            { role: "user", text: "Establish the implementation plan" },
-                            {
-                                activities: [],
-                                content: [],
-                                role: "assistant",
-                                text: "The implementation plan is established.",
-                            },
-                        ],
-                        status: "available",
-                        truncated: false,
-                    },
+                    action: "fork-recorded",
                     kind: "native.session.result",
                     ready: {
                         additionalDirectories: [],
@@ -121,14 +110,12 @@ describe.sequential("Native Session boundaries", () => {
             );
 
             await waitForDocumentState(
-                () => screen.queryByRole("region", { name: "Previous conversation history" }) !== null,
+                () => window.location.pathname.includes(`/sessions/${encodeURIComponent(fork.targetSessionId)}`),
                 signal,
             );
             expect(screen.queryByRole("button", { name: "Forking conversation" })).toBeNull();
             expect(screen.queryByRole("alert")?.textContent ?? "").toBe("");
             expect(window.location.pathname).toContain(`/sessions/${encodeURIComponent(fork.targetSessionId)}`);
-            expect(screen.getByText("The implementation plan is established.")).toBeTruthy();
-            expect(screen.queryByText("The second-stage changes are applied.")).toBeNull();
         } finally {
             await paired.close();
         }

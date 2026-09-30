@@ -168,6 +168,28 @@ importers:
         specifier: ^4.6.5
         version: 4.6.5
 
+  packages/recording-cloudflare:
+    dependencies:
+      '@moxt-ai/mobius-protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      drizzle-orm:
+        specifier: ^0.45.2
+        version: 0.45.2(@cloudflare/workers-types@5.20260918.1)(@types/better-sqlite3@7.6.13)(better-sqlite3@12.4.1)
+      hono:
+        specifier: ^4.13.8
+        version: 4.13.8
+    devDependencies:
+      '@cloudflare/vitest-plugin':
+        specifier: ^1.1.12
+        version: 1.1.12(@cloudflare/workers-types@5.20260918.1)(@types/node@24.13.5)(@vitest/runner@4.1.11)(@vitest/snapshot@4.1.11)(vitest@4.1.11)
+      '@cloudflare/workers-types':
+        specifier: ^5.20260918.1
+        version: 5.20260918.1
+      wrangler:
+        specifier: ^4.134.0
+        version: 4.134.0(@cloudflare/workers-types@5.20260918.1)(@types/node@24.13.5)
+
   packages/relay-cloudflare-platform:
     dependencies:
       '@moxt-ai/mobius-protocol':

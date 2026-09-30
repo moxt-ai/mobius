@@ -9,6 +9,7 @@ import {
     decodeSessionPromptCommand,
     decodeWorkspaceListCommand,
     encodeAgentMessageDeltaEvent,
+    encodeRecordedSessionEvent,
     encodeRuntimeStatusEvent,
     encodeSessionCompletedEvent,
     encodeSessionConfigUpdatedEvent,
@@ -415,7 +416,7 @@ describe("browser relay connection", () => {
         }
     });
 
-    it("Given agent preparation control messages, When no conversation history changes, Then the history observer waits for a live session event", async () => {
+    it("Given agent preparation and fork lineage messages, When conversation history changes, Then the history observer accepts each recorded event", async () => {
         const relay = createServer();
         const sockets = new Set<Duplex>();
         const connections = new ValueFeed<Duplex>();
@@ -543,6 +544,22 @@ describe("browser relay connection", () => {
             );
             await expect(nextHistoryChange.next()).resolves.toBe("changed");
             expect(historyChanges).toEqual(["changed"]);
+
+            writeServerTextFrame(
+                socket,
+                encodeSessionEventEnvelope({
+                    kind: "session.event",
+                    payload: encodeRecordedSessionEvent({
+                        kind: "session.forked",
+                        sessionId: "session-2",
+                        sourceSessionId: "session-1",
+                        throughCommandId: "command-1",
+                    }),
+                    sessionId: "session-2",
+                }),
+            );
+            await expect(nextHistoryChange.next()).resolves.toBe("changed");
+            expect(historyChanges).toEqual(["changed", "changed"]);
         } finally {
             closeClient();
             for (const socket of sockets) {

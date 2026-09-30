@@ -15,6 +15,13 @@
             "when": 1790161015988,
             "tag": "0001_bouncy_veda",
             "breakpoints": true
+        },
+        {
+            "idx": 2,
+            "version": "6",
+            "when": 1790676795735,
+            "tag": "0002_short_captain_britain",
+            "breakpoints": true
         }
     ]
 }

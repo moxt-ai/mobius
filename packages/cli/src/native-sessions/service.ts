@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { basename } from "node:path";
 import {
     decodeIdentifier,
     type Identifier,
@@ -113,6 +114,69 @@ export class NativeSessionService {
                 nativeSessionId: decodeIdentifier(nativeSessionId),
                 requestId: command.requestId,
                 sessionId: command.sessionId,
+            };
+        }
+        if (command.action === "fork-recorded") {
+            const source = this.#sessions.findSessions([command.sessionId])[0];
+            if (source === undefined || !source.prompted) {
+                throw new AcpExecutionError(
+                    "The source conversation has no resumable native Agent session",
+                    {},
+                    "native_session_not_found",
+                );
+            }
+            if (
+                source.agentId !== command.agentId ||
+                source.cwd !== cwd ||
+                source.additionalDirectories.length !== additionalDirectories.length ||
+                source.additionalDirectories.some((path, index) => path !== additionalDirectories[index])
+            ) {
+                throw new AcpExecutionError(
+                    "The source conversation execution target does not match the fork request",
+                    {},
+                    "native_session_target_changed",
+                );
+            }
+            if (source.lastTerminalCommandId !== command.throughCommandId) {
+                throw new AcpExecutionError(
+                    "The selected Turn is no longer the source conversation head",
+                    {},
+                    "fork_point_stale",
+                );
+            }
+            const opened = await this.#sessions.openNativeSession(
+                { ...options, sessionId: command.targetSessionId },
+                { kind: "fork", nativeSessionId: source.nativeSessionId },
+            );
+            signal.throwIfAborted();
+            const directory = await this.#directories.list(this.#config.bindingId, command.directoryId, signal);
+            const ready: SessionReadyEvent = {
+                additionalDirectories: additionalDirectories.map((path, index) => ({
+                    directoryId: command.additionalDirectoryIds[index] ?? command.directoryId,
+                    name: basename(path) || path,
+                })),
+                agentId: command.agentId,
+                agentName: opened.prepared.agentName,
+                agentVersion: opened.prepared.agentVersion,
+                capabilities: opened.prepared.capabilities,
+                commands: opened.prepared.commands,
+                configOptions: opened.prepared.configOptions,
+                directoryId: command.directoryId,
+                directoryLabel: directory.directoryLabel,
+                kind: "session.ready",
+                requestId: command.requestId,
+                restored: true,
+                sessionId: opened.sessionId,
+            };
+            this.record(command, "native_recorded_session_forked");
+            return {
+                action: "fork-recorded",
+                kind: "native.session.result",
+                ready,
+                requestId: command.requestId,
+                sessionId: command.sessionId,
+                targetSessionId: command.targetSessionId,
+                title: source.title || "Untitled session",
             };
         }
         const prepared = await this.#sessions.prepareNativeSessionBrowser(options);

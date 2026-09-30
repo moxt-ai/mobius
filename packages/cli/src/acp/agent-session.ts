@@ -123,6 +123,7 @@ export class AgentSession implements AcpClientHandler {
     #commands: readonly SessionCommand[] = [];
     #configRevision = 0;
     #configOptions: readonly SessionConfigOption[] = [];
+    #lastTerminalCommandId: string | null = null;
     #prompted = false;
     #nativePrompt: { readonly commandId: string; readonly previousTurnId: string | null } | null = null;
     #sessionLoad: SessionLoadState = { kind: "not-requested" };
@@ -269,6 +270,7 @@ export class AgentSession implements AcpClientHandler {
             this.#capabilities,
             this.#commands,
             this.#configOptions,
+            this.#prompted,
             this.#restored,
         );
 
@@ -526,6 +528,7 @@ export class AgentSession implements AcpClientHandler {
         ) {
             this.selectNativeSession(stored.session.nativeSessionId);
             this.#prompted = stored.session.prompted;
+            this.#lastTerminalCommandId = stored.session.lastTerminalCommandId;
             this.#sessionTitle = stored.session.title;
             this.#restored = true;
             if (this.#capabilities.resumeSession) {
@@ -602,6 +605,8 @@ export class AgentSession implements AcpClientHandler {
                 this.#additionalDirectories,
                 this.#prompted,
                 this.#sessionTitle ?? "",
+                new Date().toISOString(),
+                this.#lastTerminalCommandId,
             ),
         );
     };
@@ -821,6 +826,8 @@ export class AgentSession implements AcpClientHandler {
                 this.#additionalDirectories,
                 true,
                 this.#sessionTitle,
+                new Date().toISOString(),
+                this.#lastTerminalCommandId,
             ),
         );
         this.#prompted = true;
@@ -872,6 +879,20 @@ export class AgentSession implements AcpClientHandler {
                     usage: result.usage ?? null,
                 });
             }
+            this.#lastTerminalCommandId = options.commandId;
+            this.#store.write(
+                new AcpStoredSession(
+                    this.#mobiusSessionId,
+                    this.#agentId,
+                    this.#updates.sessionId(),
+                    this.#cwd,
+                    this.#additionalDirectories,
+                    true,
+                    this.#sessionTitle ?? "",
+                    new Date().toISOString(),
+                    this.#lastTerminalCommandId,
+                ),
+            );
             return result;
         } catch (error) {
             await running.activities.finish();
@@ -1091,6 +1112,8 @@ export class AgentSession implements AcpClientHandler {
                         this.#additionalDirectories,
                         this.#prompted,
                         this.#sessionTitle ?? "",
+                        new Date().toISOString(),
+                        this.#lastTerminalCommandId,
                     ),
                 );
             }

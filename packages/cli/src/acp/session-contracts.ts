@@ -123,6 +123,7 @@ export class AcpPreparedSession {
     readonly capabilities: SessionCapabilities;
     readonly commands: readonly SessionCommand[];
     readonly configOptions: readonly SessionConfigOption[];
+    readonly prompted: boolean;
     readonly restored: boolean;
 
     constructor(
@@ -131,6 +132,7 @@ export class AcpPreparedSession {
         capabilities: SessionCapabilities,
         commands: readonly SessionCommand[],
         configOptions: readonly SessionConfigOption[],
+        prompted: boolean,
         restored: boolean,
     ) {
         this.agentName = agentName;
@@ -138,6 +140,7 @@ export class AcpPreparedSession {
         this.capabilities = capabilities;
         this.commands = commands;
         this.configOptions = configOptions;
+        this.prompted = prompted;
         this.restored = restored;
     }
 }

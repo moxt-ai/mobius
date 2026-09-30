@@ -1,9 +1,17 @@
-import { createDurableObjectContext, RuntimeRelay as RuntimeRelayImplementation } from "@moxt-ai/mobius-relay-core";
+import {
+    createDurableObjectContext,
+    D1DatabaseAdapter,
+    RuntimeRelay as RuntimeRelayImplementation,
+} from "@moxt-ai/mobius-relay-core";
 import { StandaloneDatabaseResolver } from "./standalone-database-resolver.ts";
 import { StandaloneProjectStorageDirectory } from "./standalone-project-storage-directory.ts";
+import { StandaloneSessionRecording, standaloneRecordingProvider } from "./standalone-session-recording.ts";
+import { StandaloneRecordingConfigurationStorage } from "./storage/standalone-recording-configuration-storage.ts";
 
 export interface StandaloneDurableObjectEnvironment {
     readonly DIRECTORY_DATABASE: D1Database;
+    readonly RECORDING?: Fetcher;
+    readonly RECORDING_PROVIDER_ID?: string;
     readonly RUNTIME_RELAY: DurableObjectNamespace;
 }
 
@@ -14,6 +22,10 @@ export function createStandaloneDurableObjectContext(
     return createDurableObjectContext(state, {
         databases: new StandaloneDatabaseResolver(environment.DIRECTORY_DATABASE),
         projects: new StandaloneProjectStorageDirectory(),
+        recording: new StandaloneSessionRecording(
+            new StandaloneRecordingConfigurationStorage(D1DatabaseAdapter.from(environment.DIRECTORY_DATABASE)),
+            standaloneRecordingProvider(environment),
+        ),
     });
 }
 

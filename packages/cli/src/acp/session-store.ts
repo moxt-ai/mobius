@@ -12,6 +12,7 @@ export class AcpStoredSession {
     readonly additionalDirectories: readonly string[];
     readonly agentId: string;
     readonly cwd: string;
+    readonly lastTerminalCommandId: string | null;
     readonly nativeSessionId: string;
     readonly prompted: boolean;
     readonly sessionId: string;
@@ -27,10 +28,12 @@ export class AcpStoredSession {
         prompted: boolean,
         title: string,
         updatedAt = new Date().toISOString(),
+        lastTerminalCommandId: string | null = null,
     ) {
         this.additionalDirectories = [...additionalDirectories];
         this.agentId = agentId;
         this.cwd = cwd;
+        this.lastTerminalCommandId = lastTerminalCommandId;
         this.nativeSessionId = nativeSessionId;
         this.prompted = prompted;
         this.sessionId = sessionId;
@@ -118,6 +121,7 @@ const storedSessionRowSchema = z.object({
     additionalDirectories: z.string(),
     agentId: z.string(),
     cwd: z.string(),
+    lastTerminalCommandId: z.string().nullable(),
     nativeSessionId: z.string(),
     prompted: z.boolean(),
     sessionId: z.string(),
@@ -140,6 +144,7 @@ function decodeStoredSession(value: unknown): AcpStoredSession {
         row.prompted,
         row.title,
         row.updatedAt,
+        row.lastTerminalCommandId,
     );
 }
 
@@ -239,6 +244,7 @@ export class SqliteAcpSessionStore implements AcpSessionStore {
             additionalDirectories: JSON.stringify(session.additionalDirectories),
             agentId: session.agentId,
             cwd: session.cwd,
+            lastTerminalCommandId: session.lastTerminalCommandId,
             nativeSessionId: session.nativeSessionId,
             prompted: session.prompted,
             sessionId: session.sessionId,

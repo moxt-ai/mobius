@@ -1,4 +1,9 @@
-import { isIdentifier, type ReliableSessionEventEnvelope, SessionEventRejectionCode } from "@moxt-ai/mobius-protocol";
+import {
+    encodeSessionRecordingWrite,
+    isIdentifier,
+    type ReliableSessionEventEnvelope,
+    SessionEventRejectionCode,
+} from "@moxt-ai/mobius-protocol";
 import type {
     SessionRecording,
     SessionRecordingDeliveryResult,
@@ -69,7 +74,11 @@ export class PlatformSessionRecording implements SessionRecording {
         try {
             response = await this.#provider.fetcher.fetch(
                 new Request("https://recording.internal/v1/session-events", {
-                    body: JSON.stringify({ envelope, projectId: target.projectId }),
+                    body: encodeSessionRecordingWrite({
+                        envelope,
+                        projectId: target.projectId,
+                        runtimeId: target.runtimeId,
+                    }),
                     headers: { "content-type": "application/json" },
                     method: "POST",
                     signal: requestSignal,

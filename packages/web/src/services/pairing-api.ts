@@ -1,11 +1,16 @@
 import {
     AGENT_ACTIVITY_DETAIL_LIMIT,
+    conversationTitleFromText,
     decodeAgentDisplayContentValue,
     decodePromptImagesValue,
     decodePromptResourcesValue,
     decodeRecordedAgentContentValue,
+    decodeRecordedSessionEvent,
+    decodeSessionRecordingDirectory,
+    decodeSessionRecordingHistory,
     type Interaction,
     MAX_LOCAL_AGENT_DIRECTORY_ENTRIES,
+    MOBIUS_API_PREFIX,
     MobiusAgentIntegrationDescriptor,
     MobiusChannelAccessClient,
     MobiusClient,
@@ -86,6 +91,10 @@ const TOOL_KINDS = new Set([
     "think",
 ]);
 
+export type StandaloneRecordingConfiguration =
+    | { readonly providerAvailable: boolean; readonly state: "unconfigured" }
+    | { readonly enabled: boolean; readonly providerAvailable: boolean; readonly state: "configured" };
+
 let standaloneCredentialProviderState:
     | { readonly origin: string; readonly provider: MobiusStandaloneCredentialProvider }
     | undefined;
@@ -98,6 +107,74 @@ export function standaloneProjectCredentialProvider(): MobiusStandaloneCredentia
     const provider = new MobiusStandaloneCredentialProvider({ endpoint: origin });
     standaloneCredentialProviderState = { origin, provider };
     return provider;
+}
+
+function decodeStandaloneRecordingConfiguration(value: unknown): StandaloneRecordingConfiguration {
+    if (!isRecord(value) || typeof value["providerAvailable"] !== "boolean") {
+        throw new PairingApiError("invalid_relay_response", "The relay returned an invalid Recording configuration.");
+    }
+    if (value["state"] === "unconfigured" && Object.keys(value).length === 2) {
+        return { providerAvailable: value["providerAvailable"], state: "unconfigured" };
+    }
+    if (value["state"] === "configured" && typeof value["enabled"] === "boolean" && Object.keys(value).length === 3) {
+        return {
+            enabled: value["enabled"],
+            providerAvailable: value["providerAvailable"],
+            state: "configured",
+        };
+    }
+    throw new PairingApiError("invalid_relay_response", "The relay returned an invalid Recording configuration.");
+}
+
+async function standaloneRecordingRequest(
+    method: "GET" | "PUT",
+    signal: AbortSignal,
+    enabled?: boolean,
+): Promise<StandaloneRecordingConfiguration> {
+    const provider = standaloneProjectCredentialProvider();
+    const token = await provider.credential(requestSignal(signal));
+    const response = await fetch(new URL(`${MOBIUS_API_PREFIX}/v1/standalone/recording`, window.location.origin), {
+        ...(enabled === undefined ? {} : { body: JSON.stringify({ enabled }) }),
+        headers: {
+            authorization: `Bearer ${token}`,
+            ...(enabled === undefined ? {} : { "content-type": "application/json" }),
+        },
+        method,
+        signal: requestSignal(signal),
+    });
+    if (!response.ok) {
+        let errorCode = "recording_configuration_failed";
+        let errorMessage = "The Recording configuration request failed.";
+        try {
+            const body: unknown = await response.json();
+            if (isRecord(body) && isRecord(body["error"])) {
+                if (typeof body["error"]["code"] === "string") {
+                    errorCode = body["error"]["code"];
+                }
+                if (typeof body["error"]["message"] === "string") {
+                    errorMessage = body["error"]["message"];
+                }
+            }
+        } catch {}
+        throw new PairingApiError(errorCode, errorMessage);
+    }
+    return decodeStandaloneRecordingConfiguration(await response.json());
+}
+
+export async function readStandaloneRecordingConfiguration(
+    signal: AbortSignal,
+): Promise<StandaloneRecordingConfiguration> {
+    return await standaloneRecordingRequest("GET", signal);
+}
+
+export async function configureStandaloneRecording(enabled: boolean, signal: AbortSignal): Promise<void> {
+    const configuration = await standaloneRecordingRequest("PUT", signal, enabled);
+    if (configuration.state !== "configured" || configuration.enabled !== enabled) {
+        throw new PairingApiError(
+            "recording_configuration_conflict",
+            "The saved Recording configuration does not match the selected choice.",
+        );
+    }
 }
 
 export type ActivityDetailResult =
@@ -1338,6 +1415,12 @@ async function readConnectionDirectoryWithSignal(
     connection: ChannelConnection,
     signal: AbortSignal,
 ): Promise<ChannelHistory> {
+    if (connection.projectId === "standalone") {
+        const configuration = await readStandaloneRecordingConfiguration(signal);
+        if (configuration.state === "configured" && configuration.enabled) {
+            return await readRecordedSessionDirectory(connection, signal);
+        }
+    }
     const client = publicServiceClient(connectionCredential(connection));
     try {
         const entries = await client.runtimes.listSessions(connection.runtimeId, 100, signal);
@@ -1353,6 +1436,337 @@ async function readConnectionDirectoryWithSignal(
     } finally {
         client.close();
     }
+}
+
+async function readRecordedSessionDirectory(
+    connection: ChannelConnection,
+    signal: AbortSignal,
+): Promise<ChannelHistory> {
+    const token = await standaloneProjectCredentialProvider().credential(signal);
+    const url = new URL(`${MOBIUS_API_PREFIX}/v1/standalone/recording/sessions`, window.location.origin);
+    url.searchParams.set("runtimeId", connection.runtimeId);
+    const response = await fetch(url, {
+        headers: { authorization: `Bearer ${token}` },
+        signal,
+    });
+    if (!response.ok) {
+        throw new PairingApiError("recording_directory_unavailable", "The recorded Session directory is unavailable.");
+    }
+    const directory = decodeSessionRecordingDirectory(await response.text());
+    if (directory.sessions.some((session) => session.runtimeId !== connection.runtimeId)) {
+        throw new PairingApiError("invalid_relay_response", "Recording returned a Session for another Runtime.");
+    }
+    return new ChannelHistory(
+        [],
+        directory.sessions.map(
+            (summary) =>
+                new RecordedSession(
+                    summary.agentId,
+                    RUNTIME_WORKSPACE_BINDING_ID,
+                    0,
+                    summary.directoryId,
+                    summary.runtimeId,
+                    summary.sessionId,
+                    summary.title.length === 0 ? "New chat" : summary.title,
+                    summary.updatedAt,
+                    null,
+                    UNAVAILABLE_RECORDED_SESSION_EXECUTION,
+                    [],
+                    [],
+                    summary.additionalDirectoryIds,
+                ),
+        ),
+    );
+}
+
+interface RecordingReplayTurn {
+    readonly attemptId: string;
+    readonly commandId: string;
+    readonly createdAt: Date;
+    readonly prompt: string;
+    readonly activities: ReadonlyMap<string, RecordedActivity>;
+    readonly contents: readonly RecordedContent[];
+    readonly lastCommittedSequence: string;
+    readonly response: string;
+    readonly outcome:
+        | { readonly kind: "running" }
+        | { readonly kind: "completed"; readonly settledAt: Date; readonly stopReason: string }
+        | { readonly code: string; readonly kind: "failed"; readonly message: string; readonly settledAt: Date };
+}
+
+function recordedActivityFromEvent(
+    event: Extract<ReturnType<typeof decodeRecordedSessionEvent>, { readonly kind: "agent.activity" }>,
+    attemptId: string,
+): RecordedActivity {
+    const detailAvailability =
+        event.detail.kind === "available"
+            ? "available"
+            : event.detail.kind === "recorded"
+              ? "inline"
+              : event.detail.kind;
+    return new RecordedActivity(
+        event.activityId,
+        attemptId,
+        event.activityType,
+        event.input,
+        event.locations,
+        event.name,
+        event.output,
+        event.sequence,
+        event.status,
+        event.title,
+        event.toolKind,
+        event.content,
+        detailAvailability,
+    );
+}
+
+async function readRecordedSessionHistory(
+    connection: ChannelConnection,
+    sessionId: string,
+    signal: AbortSignal,
+): Promise<ChannelHistory> {
+    const token = await standaloneProjectCredentialProvider().credential(signal);
+    const url = new URL(
+        `${MOBIUS_API_PREFIX}/v1/standalone/recording/sessions/${encodeURIComponent(sessionId)}/events`,
+        window.location.origin,
+    );
+    url.searchParams.set("runtimeId", connection.runtimeId);
+    const response = await fetch(url, {
+        headers: { authorization: `Bearer ${token}` },
+        signal,
+    });
+    if (!response.ok) {
+        throw new PairingApiError("recording_history_unavailable", "The recorded Session history is unavailable.");
+    }
+    const history = decodeSessionRecordingHistory(await response.text());
+    if (history.sessionId !== sessionId || history.segments.at(-1)?.sessionId !== sessionId) {
+        throw new PairingApiError("invalid_relay_response", "Recording returned another Session's history.");
+    }
+    const turns = new Map<string, RecordingReplayTurn>();
+    const elicitations = new Map<string, SessionElicitationRequestedEvent>();
+    const permissions = new Map<string, SessionPermissionRequestedEvent>();
+    let ready: Extract<ReturnType<typeof decodeRecordedSessionEvent>, { readonly kind: "session.ready" }> | null = null;
+    let updatedAt = "1970-01-01T00:00:00.000Z";
+
+    for (const segment of history.segments) {
+        const targetSegment = segment.sessionId === sessionId;
+        for (const entry of segment.entries) {
+            signal.throwIfAborted();
+            const event = decodeRecordedSessionEvent(entry.envelope.payload);
+            if (event.sessionId !== segment.sessionId) {
+                throw new PairingApiError("invalid_relay_response", "Recording returned an event outside its segment.");
+            }
+            if (targetSegment) {
+                updatedAt = entry.recordedAt;
+            }
+            if (event.kind === "session.ready") {
+                if (targetSegment) {
+                    ready = event;
+                }
+                continue;
+            }
+            if (event.kind === "session.elicitation.requested") {
+                if (targetSegment) {
+                    elicitations.set(event.interactionId, event);
+                }
+                continue;
+            }
+            if (event.kind === "session.elicitation.resolved") {
+                if (targetSegment) {
+                    elicitations.delete(event.interactionId);
+                }
+                continue;
+            }
+            if (event.kind === "session.permission.requested") {
+                if (targetSegment) {
+                    permissions.set(event.interactionId, event);
+                }
+                continue;
+            }
+            if (event.kind === "session.permission.resolved") {
+                if (targetSegment) {
+                    permissions.delete(event.interactionId);
+                }
+                continue;
+            }
+            if (event.kind === "session.started") {
+                const existing = turns.get(event.commandId);
+                if (existing === undefined) {
+                    turns.set(event.commandId, {
+                        activities: new Map(),
+                        attemptId: event.attemptId,
+                        commandId: event.commandId,
+                        contents: [],
+                        createdAt: new Date(entry.recordedAt),
+                        lastCommittedSequence: "0",
+                        outcome: { kind: "running" },
+                        prompt: event.prompt,
+                        response: "",
+                    });
+                }
+                continue;
+            }
+            if (!("commandId" in event)) {
+                continue;
+            }
+            const turn = turns.get(event.commandId);
+            if (turn === undefined) {
+                continue;
+            }
+            if (event.kind === "agent.message.delta") {
+                turns.set(event.commandId, {
+                    ...turn,
+                    lastCommittedSequence: event.sequence.toString(),
+                    response: `${turn.response}${event.text}`,
+                });
+            } else if (event.kind === "agent.activity") {
+                turns.set(event.commandId, {
+                    ...turn,
+                    activities: new Map(turn.activities).set(
+                        event.activityId,
+                        recordedActivityFromEvent(event, turn.attemptId),
+                    ),
+                });
+            } else if (event.kind === "agent.activity.narration") {
+                const activity = turn.activities.get(event.activityId);
+                if (activity !== undefined) {
+                    turns.set(event.commandId, {
+                        ...turn,
+                        activities: new Map(turn.activities).set(
+                            event.activityId,
+                            activity.appendingOutput(event.text),
+                        ),
+                    });
+                }
+            } else if (event.kind === "agent.content") {
+                turns.set(event.commandId, {
+                    ...turn,
+                    contents: [
+                        ...turn.contents.filter((content) => content.contentId !== event.contentId),
+                        new RecordedContent(event.commandId, event.contentId, event.messageId, event.content),
+                    ],
+                });
+            } else if (event.kind === "session.completed") {
+                turns.set(event.commandId, {
+                    ...turn,
+                    outcome: {
+                        kind: "completed",
+                        settledAt: new Date(entry.recordedAt),
+                        stopReason: event.stopReason,
+                    },
+                });
+            } else if (event.kind === "session.failed") {
+                turns.set(event.commandId, {
+                    ...turn,
+                    outcome: {
+                        code: event.code,
+                        kind: "failed",
+                        message: event.message,
+                        settledAt: new Date(entry.recordedAt),
+                    },
+                });
+            }
+        }
+    }
+
+    const agentId = ready?.agentId ?? connection.agents[0]?.id;
+    if (agentId === undefined) {
+        throw new PairingApiError("invalid_relay_response", "Recording does not identify the Session Agent.");
+    }
+    const recordedTurns: RecordedTurn[] = [];
+    for (const turn of turns.values()) {
+        const activities = [...turn.activities.values()].sort((left, right) => left.sequence - right.sequence);
+        const timing: TurnTiming =
+            turn.outcome.kind === "running"
+                ? { kind: "running", startedAt: turn.createdAt }
+                : {
+                      elapsedMilliseconds: Math.max(0, turn.outcome.settledAt.getTime() - turn.createdAt.getTime()),
+                      kind: "measured",
+                  };
+        if (turn.outcome.kind === "completed") {
+            recordedTurns.push(
+                new CompletedRecordedTurn(
+                    agentId,
+                    turn.commandId,
+                    turn.createdAt,
+                    turn.prompt,
+                    turn.response,
+                    sessionId,
+                    turn.attemptId,
+                    turn.outcome.stopReason,
+                    activities,
+                    [],
+                    [],
+                    turn.contents,
+                    "reject",
+                    "",
+                    "",
+                    timing,
+                ),
+            );
+        } else if (turn.outcome.kind === "failed") {
+            recordedTurns.push(
+                new FailedRecordedTurn(
+                    agentId,
+                    turn.commandId,
+                    turn.createdAt,
+                    turn.prompt,
+                    turn.response,
+                    sessionId,
+                    turn.outcome.code,
+                    turn.outcome.message,
+                    activities,
+                    [],
+                    [],
+                    turn.contents,
+                    "reject",
+                    "",
+                    "",
+                    timing,
+                ),
+            );
+        } else {
+            recordedTurns.push(
+                new RunningRecordedTurn(
+                    agentId,
+                    turn.commandId,
+                    turn.createdAt,
+                    turn.prompt,
+                    turn.response,
+                    sessionId,
+                    turn.attemptId,
+                    activities,
+                    [],
+                    [],
+                    turn.contents,
+                    "reject",
+                    "",
+                    "",
+                    timing,
+                ),
+            );
+        }
+    }
+    const firstPrompt = recordedTurns[0]?.prompt ?? "New conversation";
+    const lastCommittedSeq = [...turns.values()].at(-1)?.lastCommittedSequence ?? "0";
+    const session = new RecordedSession(
+        agentId,
+        RUNTIME_WORKSPACE_BINDING_ID,
+        0,
+        ready?.directoryId ?? "default",
+        connection.runtimeId,
+        sessionId,
+        conversationTitleFromText(firstPrompt),
+        updatedAt,
+        null,
+        UNAVAILABLE_RECORDED_SESSION_EXECUTION,
+        [...elicitations.values()],
+        [...permissions.values()],
+        ready?.additionalDirectories.map((directory) => directory.directoryId) ?? [],
+        lastCommittedSeq,
+    );
+    return new ChannelHistory(recordedTurns, [session]);
 }
 
 async function _readConnectionDirectoryWithClient(
@@ -1372,6 +1786,12 @@ async function readSessionHistoryWithSignal(
     sessionId: string,
     signal: AbortSignal,
 ): Promise<ChannelHistory> {
+    if (connection.projectId === "standalone") {
+        const configuration = await readStandaloneRecordingConfiguration(signal);
+        if (configuration.state === "configured" && configuration.enabled) {
+            return await readRecordedSessionHistory(connection, sessionId, signal);
+        }
+    }
     const credential = connectionCredential(connection);
     const client = publicServiceClient(credential);
     try {

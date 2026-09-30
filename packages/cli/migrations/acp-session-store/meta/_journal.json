@@ -8,6 +8,13 @@
             "when": 1790245978972,
             "tag": "0000_slimy_captain_midlands",
             "breakpoints": true
+        },
+        {
+            "idx": 1,
+            "version": "6",
+            "when": 1790739894008,
+            "tag": "0001_regular_ultimates",
+            "breakpoints": true
         }
     ]
 }

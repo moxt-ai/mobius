@@ -5,6 +5,8 @@ import {
     type RecordedSessionEvent,
     SESSION_COMPLETED_KIND,
     SESSION_FAILED_KIND,
+    SESSION_FORKED_KIND,
+    SESSION_READY_KIND,
     type SessionEventAcknowledgement,
     type SessionEventDeferred,
     type SessionEventRejected,
@@ -30,7 +32,12 @@ interface InFlightEvent {
 }
 
 function reservesSessionEventCapacity(event: RecordedSessionEvent): boolean {
-    if (event.kind === SESSION_COMPLETED_KIND || event.kind === SESSION_FAILED_KIND) {
+    if (
+        event.kind === SESSION_COMPLETED_KIND ||
+        event.kind === SESSION_FAILED_KIND ||
+        event.kind === SESSION_FORKED_KIND ||
+        event.kind === SESSION_READY_KIND
+    ) {
         return true;
     }
     return (
@@ -114,6 +121,12 @@ export class DaemonSessionEventPublisher {
             }
             return;
         }
+        this.#publishNextBatch();
+    };
+
+    readonly publishBatch = (sessionId: string, events: readonly RecordedSessionEvent[]): void => {
+        const critical = events.some(reservesSessionEventCapacity);
+        this.#outbox.enqueueBatch(sessionId, events.map(encodeRecordedSessionEvent), critical);
         this.#publishNextBatch();
     };
 

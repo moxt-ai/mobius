@@ -27,6 +27,54 @@ function nextMessage(socket: WebSocket): Promise<unknown> {
 }
 
 describe("Standalone Relay", () => {
+    it("Given a malformed encoded Session target, When recorded history is requested, Then the Relay rejects it without throwing", async () => {
+        const worker = createStandaloneWorker();
+        const response = await worker.fetch(
+            new Request(
+                "https://standalone.test/mobius/api/v1/standalone/recording/sessions/%E0%A4%A/events?runtimeId=runtime-1",
+            ),
+            env,
+        );
+
+        expect(response.status).toBe(400);
+        expect(await response.json()).toMatchObject({ error: { code: "invalid_request" } });
+    });
+
+    it("Given no Runtime has been paired, When the first browser chooses its Recording setting, Then the choice becomes fixed for later pairings", async () => {
+        const worker = createStandaloneWorker();
+        const credentialResponse = await worker.fetch(
+            new Request("https://standalone.test/mobius/api/v1/standalone/browser-credentials", { method: "POST" }),
+            env,
+        );
+        expect(credentialResponse.status).toBe(201);
+        const credential = await credentialResponse.json<{ token: string }>();
+        const request = (method: "GET" | "PUT", body?: object) =>
+            new Request("https://standalone.test/mobius/api/v1/standalone/recording", {
+                ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+                headers: {
+                    authorization: `Bearer ${credential.token}`,
+                    ...(body === undefined ? {} : { "content-type": "application/json" }),
+                },
+                method,
+            });
+
+        const initial = await worker.fetch(request("GET"), env);
+        expect(initial.status).toBe(200);
+        expect(await initial.json()).toEqual({ providerAvailable: false, state: "unconfigured" });
+
+        const unavailable = await worker.fetch(request("PUT", { enabled: true }), env);
+        expect(unavailable.status).toBe(409);
+        expect(await unavailable.json()).toMatchObject({ error: { code: "recording_provider_unavailable" } });
+
+        const configured = await worker.fetch(request("PUT", { enabled: false }), env);
+        expect(configured.status).toBe(200);
+        expect(await configured.json()).toEqual({ enabled: false, providerAvailable: false, state: "configured" });
+
+        const locked = await worker.fetch(request("PUT", { enabled: true }), env);
+        expect(locked.status).toBe(409);
+        expect(await locked.json()).toMatchObject({ error: { code: "recording_configuration_locked" } });
+    });
+
     it("Given the Standalone Web app, When it bootstraps browser access, Then it can create a Runtime pairing without receiving the deployment credential", async () => {
         const worker = createStandaloneWorker();
         const transport: MobiusHttpTransport = {

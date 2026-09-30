@@ -9,6 +9,8 @@ export const dataTestId = Object.freeze({
     promptAttachment: "mobius-prompt-attachment",
     promptFileInput: "mobius-prompt-file-input",
     promptInput: "mobius-prompt-input",
+    recordingChoice: "mobius-recording-choice",
+    recordingContinue: "mobius-recording-continue",
     runSettingsTrigger: "mobius-run-settings-trigger",
     sendPrompt: "mobius-send-prompt",
     turnProcess: "mobius-turn-process",

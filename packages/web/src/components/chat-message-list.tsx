@@ -373,6 +373,10 @@ export function ChatMessageList({ connection }: { readonly connection: ChannelCo
     // message changes identity on every appended delta and is stable otherwise, so it marks exactly the
     // renders that grew the content.
     const latestMessage = messages.at(-1);
+    const forkableCommandId = messages.findLast(
+        (message): message is AgentChatMessage =>
+            message instanceof AgentChatMessage && message.state.appearance === "completed",
+    )?.commandId;
     useLayoutEffect(() => {
         const viewport = viewportRef.current;
         if (viewport === null) {
@@ -428,7 +432,11 @@ export function ChatMessageList({ connection }: { readonly connection: ChannelCo
                                 key={message.id}
                                 message={message}
                                 sessionId={conversation.sessionId}
-                                supportsFork={conversation.session.capabilities.unstableForkSession}
+                                supportsFork={
+                                    conversation.session.capabilities.unstableForkSession &&
+                                    message instanceof AgentChatMessage &&
+                                    message.commandId === forkableCommandId
+                                }
                             />
                         ))}
                         <SessionInteractions />
