@@ -111,7 +111,18 @@ describe("Recording Worker", () => {
             ).toBe(201);
         };
 
-        expect((await record(ready(parentSessionId))).status).toBe(201);
+        // The Relay aggregates these segments to explain a slow delivery, so the header names are a contract.
+        expect(
+            (await record(ready(parentSessionId))).headers
+                .get("x-mobius-recording-timing")
+                ?.split(",")
+                .map((segment) => segment.split(";dur=")[0]),
+        ).toEqual([
+            "recording-decode",
+            "recording-session-write",
+            "recording-session-claim",
+            "recording-directory-write",
+        ]);
         await turn(parentSessionId, "parent-command-1", "Parent turn one");
         expect((await record(ready(childSessionId))).status).toBe(201);
         expect(

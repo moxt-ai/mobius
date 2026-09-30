@@ -4,10 +4,13 @@ import {
     type ReliableSessionEventEnvelope,
     SessionEventRejectionCode,
 } from "@moxt-ai/mobius-protocol";
-import type {
-    SessionRecording,
-    SessionRecordingDeliveryResult,
-    SessionRecordingTarget,
+import {
+    decodeRecordingTiming,
+    type OperationTiming,
+    type SessionRecording,
+    type SessionRecordingDeliveryResult,
+    type SessionRecordingTarget,
+    unmeasuredOperationTiming,
 } from "@moxt-ai/mobius-relay-core";
 import type { RecordingPolicyStorage } from "../storage/recording-policy-storage.ts";
 
@@ -56,8 +59,11 @@ export class PlatformSessionRecording implements SessionRecording {
         target: SessionRecordingTarget,
         envelope: ReliableSessionEventEnvelope,
         signal: AbortSignal,
+        timing: OperationTiming = unmeasuredOperationTiming,
     ): Promise<SessionRecordingDeliveryResult> => {
-        const policy = await this.#policies.readProject(target.projectId, signal);
+        const policy = await timing.measure("recording-policy", "Read the Project Recording policy", async () =>
+            this.#policies.readProject(target.projectId, signal),
+        );
         if (policy === null) {
             return { code: SessionEventRejectionCode.InvalidEvent, kind: "rejected" };
         }
@@ -67,22 +73,27 @@ export class PlatformSessionRecording implements SessionRecording {
         if (this.#provider.kind === "absent") {
             return { kind: "deferred", retryAfterMilliseconds: 5_000 };
         }
-
+        const provider = this.#provider;
         const timeout = AbortSignal.timeout(RECORDING_REQUEST_TIMEOUT_MILLISECONDS);
         const requestSignal = AbortSignal.any([signal, timeout]);
         let response: Response;
         try {
-            response = await this.#provider.fetcher.fetch(
-                new Request("https://recording.internal/v1/session-events", {
-                    body: encodeSessionRecordingWrite({
-                        envelope,
-                        projectId: target.projectId,
-                        runtimeId: target.runtimeId,
-                    }),
-                    headers: { "content-type": "application/json" },
-                    method: "POST",
-                    signal: requestSignal,
-                }),
+            response = await timing.measure(
+                "recording-worker",
+                "Call the Recording Worker",
+                async () =>
+                    await provider.fetcher.fetch(
+                        new Request("https://recording.internal/v1/session-events", {
+                            body: encodeSessionRecordingWrite({
+                                envelope,
+                                projectId: target.projectId,
+                                runtimeId: target.runtimeId,
+                            }),
+                            headers: { "content-type": "application/json" },
+                            method: "POST",
+                            signal: requestSignal,
+                        }),
+                    ),
             );
         } catch {
             signal.throwIfAborted();
@@ -92,6 +103,9 @@ export class PlatformSessionRecording implements SessionRecording {
             return { kind: "deferred", retryAfterMilliseconds: DEFAULT_RETRY_AFTER_MILLISECONDS };
         }
         signal.throwIfAborted();
+        for (const metric of decodeRecordingTiming(response)) {
+            timing.record(metric.name, metric.description, metric.durationMilliseconds);
+        }
         if (response.status === 200 || response.status === 201) {
             const epoch = await recordingEpoch(response);
             if (epoch === null) {

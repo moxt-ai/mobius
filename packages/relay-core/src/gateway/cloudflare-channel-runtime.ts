@@ -1,5 +1,9 @@
 import type { RuntimeAccessContext } from "../entity/authentication/project-authentication.ts";
 import type { ChannelHostCredential, VerifiedChannelAccess } from "../entity/pairing/pairing.ts";
+import {
+    decodeRecordingDeliveryMetrics,
+    type RecordingDeliveryMetricsSnapshot,
+} from "../infra/recording-delivery-metrics.ts";
 import { RuntimeStatus } from "../service/channel/channel.ts";
 import type { ChannelGateway } from "./channel-gateway.ts";
 
@@ -102,6 +106,21 @@ export class CloudflareChannelRuntime implements ChannelGateway {
             throw new Error("The Runtime returned an invalid status");
         }
         return new RuntimeStatus(Reflect.get(value, "online"));
+    };
+
+    readonly readRecordingMetrics = async (
+        access: VerifiedChannelAccess,
+        signal: AbortSignal,
+    ): Promise<RecordingDeliveryMetricsSnapshot> => {
+        const response = await this.forward(
+            access,
+            new Request("https://runtime.internal/recording-metrics", { method: "GET", signal }),
+            signal,
+        );
+        if (!response.ok) {
+            throw new Error("The Runtime Recording metrics could not be read");
+        }
+        return decodeRecordingDeliveryMetrics(await response.json());
     };
 
     private readonly forward = async (

@@ -10,6 +10,8 @@ After `main` passes validation, CI applies committed D1 migrations to each remot
 
 Sessions are handled in the corresponding Runtime Relay. Live delivery remains transient. An optional Recording Worker can retain the reliable Session event stream when an App or Project policy enables it; otherwise historical content remains Agent-owned on the connected local Runtime. There is no import path for previous Mobius deployments.
 
+Recording capacity is observable rather than inferred. The Runtime Relay aggregates how long each reliable Session event took to deliver, its outcome, and the depth of its daemon message lanes; `GET /v1/projects/:projectId/runtimes/:runtimeId/recording-metrics` reports that snapshot for a Project credential. The Recording Worker returns its own measured segments in `x-mobius-recording-timing`, which the Relay folds into the same snapshot, so a slow delivery can be attributed to decoding, the Session Durable Object, the Directory Durable Object, or the binding round trip. These counters live in Durable Object memory and reset when the object is evicted. On the local side, a deferred acknowledgement makes the daemon report its durable outbox backlog as `session_event_outbox_backlog` in its diagnostic log, which is where events accumulate when Recording is slower than the Agent.
+
 ## Boundaries
 
 Server behavior flows through HTTP or Durable Object routes, services, storage, and the database. The local daemon is the execution boundary for files, processes, and Agent operations. Validate and authorize resolved targets there. Use typed errors across subsystem boundaries, deadlines for finite external operations, and cancellation for streams.

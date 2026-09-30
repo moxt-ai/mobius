@@ -1,6 +1,7 @@
 import type { AuditStore } from "../audit/audit-store.ts";
 import type { DaemonDiagnosticLog } from "../daemon-diagnostic-log.ts";
 import { describeEnvironmentProxyRoute } from "../network/environment-proxy.ts";
+import type { SessionEventOutboxBacklog } from "./session-event-outbox.ts";
 
 const MAX_DIAGNOSTIC_TEXT_LENGTH = 256;
 
@@ -128,6 +129,26 @@ export class RelayConnectionDiagnostics {
                 relayOrigin: this.#relayOrigin,
                 timeoutMilliseconds: timeoutMilliseconds.toString(),
                 ...this.#route,
+            },
+            true,
+        );
+    };
+
+    /**
+     * Reports the durable Session event backlog, which is where a Relay that is slower than the Agent
+     * accumulates work. A deferred acknowledgement is the only daemon-visible signal of that.
+     */
+    readonly sessionEventBacklog = (backlog: SessionEventOutboxBacklog): void => {
+        this.#record(
+            "session_event_outbox_backlog",
+            "session-events",
+            {
+                deadLetters: backlog.deadLetters.toString(),
+                oldestEventAgeMilliseconds: backlog.oldestEventAgeMilliseconds.toString(),
+                pendingBytes: backlog.pendingBytes.toString(),
+                pendingEvents: backlog.pendingEvents.toString(),
+                relayOrigin: this.#relayOrigin,
+                standardEventBytes: backlog.standardEventBytes.toString(),
             },
             true,
         );

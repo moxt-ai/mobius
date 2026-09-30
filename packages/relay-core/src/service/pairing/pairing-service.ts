@@ -67,6 +67,23 @@ export class PairingService {
         );
     };
 
+    /** Reports Recording delivery cost and Runtime message queue depth for one Project Runtime. */
+    readonly readRecordingMetrics = async (
+        projectId: string,
+        runtimeId: string,
+        token: string,
+        signal: AbortSignal,
+    ) => {
+        const access = await this.#pairings.authorizeProjectRuntime(
+            projectId,
+            runtimeId,
+            token,
+            ProjectPermission.RuntimeRead,
+            signal,
+        );
+        return await this.#channels.readRecordingMetrics(access, signal);
+    };
+
     readonly getRuntimeAgents = async (projectId: string, runtimeId: string, token: string, signal: AbortSignal) => {
         const channels = await this.#pairings.listProjectRuntimes(projectId, token, signal);
         const channel = channels.find((candidate) => candidate.runtimeId === runtimeId);

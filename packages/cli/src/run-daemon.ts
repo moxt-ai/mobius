@@ -125,9 +125,16 @@ export async function runDaemon(
     );
     const operations = new DaemonOperationState();
     const channelHash = createHash("sha256").update(config.channelId).digest("hex");
+    const diagnostics = new RelayConnectionDiagnostics(
+        audit,
+        config.channelId,
+        config.relayUrl,
+        new DaemonDiagnosticLog(stateDirectory),
+    );
     const publisher = new DaemonSessionEventPublisher(
         new SessionEventOutbox(join(stateDirectory, "events", `${channelHash}.sqlite`)),
         timer,
+        (backlog) => diagnostics.sessionEventBacklog(backlog),
     );
     const activeTurns = new DaemonTurnRegistry(operations);
     const recordSessionEvent = (sessionId: string, event: RecordedSessionEvent): void => {
@@ -154,12 +161,6 @@ export async function runDaemon(
     );
     const directories = new WorkspaceDirectoryService(config.bindingId, config.defaultWorkspace);
     const installationObserver = new DaemonInstallationObserver();
-    const diagnostics = new RelayConnectionDiagnostics(
-        audit,
-        config.channelId,
-        config.relayUrl,
-        new DaemonDiagnosticLog(stateDirectory),
-    );
     const nativeSessions = new NativeSessionService(
         config,
         directories,

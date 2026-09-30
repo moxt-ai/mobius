@@ -13,7 +13,11 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { WebSocket } from "undici";
 
-import { type SessionEventOutbox, SessionEventOutboxCapacityError } from "./session-event-outbox.ts";
+import {
+    type SessionEventOutbox,
+    type SessionEventOutboxBacklog,
+    SessionEventOutboxCapacityError,
+} from "./session-event-outbox.ts";
 import type { DaemonScheduledTask, DaemonTimer } from "./timer.ts";
 
 const SESSION_EVENT_REPLAY_WINDOW = 16;
@@ -50,6 +54,7 @@ function reservesSessionEventCapacity(event: RecordedSessionEvent): boolean {
 /** Persists every Session event until the Relay confirms its configured durability outcome. */
 export class DaemonSessionEventPublisher {
     readonly #inFlight = new Map<string, InFlightEvent>();
+    readonly #observeBacklog: (backlog: SessionEventOutboxBacklog) => void;
     readonly #outbox: SessionEventOutbox;
     readonly #reportedCapacityKinds = new Set<string>();
     readonly #timer: DaemonTimer;
@@ -57,10 +62,18 @@ export class DaemonSessionEventPublisher {
     #deferredReplay: DaemonScheduledTask | null = null;
     #inFlightBytes = 0;
 
-    constructor(outbox: SessionEventOutbox, timer: DaemonTimer) {
+    constructor(
+        outbox: SessionEventOutbox,
+        timer: DaemonTimer,
+        observeBacklog: (backlog: SessionEventOutboxBacklog) => void = () => undefined,
+    ) {
         this.#outbox = outbox;
         this.#timer = timer;
+        this.#observeBacklog = observeBacklog;
     }
+
+    /** Reports how much unacknowledged Session event work the Relay has not released from the outbox. */
+    readonly backlog = (): SessionEventOutboxBacklog => this.#outbox.backlog(Date.now());
 
     readonly acknowledge = (acknowledgement: SessionEventAcknowledgement): void => {
         if (!this.#outbox.acknowledge(acknowledgement)) {
@@ -89,6 +102,7 @@ export class DaemonSessionEventPublisher {
             return;
         }
         this.#clearInFlight();
+        this.#observeBacklog(this.backlog());
         if (this.#deferredReplay !== null) {
             return;
         }

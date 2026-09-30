@@ -8,5 +8,7 @@
     },
     "migrations": [{ "tag": "standalone-initial", "new_sqlite_classes": ["RuntimeRelay"] }],
     "d1_databases": [{ "binding": "DIRECTORY_DATABASE", "migrations_dir": "migrations/d1" }],
+    "services": [{ "binding": "RECORDING", "service": "mobius-recording-test" }],
+    "vars": { "RECORDING_PROVIDER_ID": "recording-test" },
     "observability": { "enabled": true }
 }

@@ -40,6 +40,11 @@ export function createRuntimeRoutes(runtime: RuntimeService) {
         if (runtime.isRevoked(runtimeId, scope)) {
             return revoked();
         }
+        if (request.method === "GET" && url.pathname.endsWith("/recording-metrics")) {
+            return Response.json(runtime.recordingMetrics(runtimeId, scope), {
+                headers: { "cache-control": "no-store" },
+            });
+        }
         if (request.headers.get("Upgrade") !== "websocket") {
             return new Response("WebSocket upgrade required", { status: 426 });
         }

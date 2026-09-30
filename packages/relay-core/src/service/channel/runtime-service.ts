@@ -11,10 +11,24 @@ import {
     SESSION_EVENT_KIND,
 } from "@moxt-ai/mobius-protocol";
 import { ProjectScope } from "../../entity/do/session.ts";
+import type {
+    RecordingDeliveryMetricsSnapshot,
+    RecordingDeliveryOutcome,
+    RecordingDurationSummary,
+} from "../../infra/recording-delivery-metrics.ts";
 import type { ChannelActor, ChannelPeers, ChannelSocket } from "./channel-actor.ts";
 import type { ChannelCredentialService } from "./channel-credential-service.ts";
 import type { RuntimeConnectionService } from "./runtime-connection-service.ts";
-import { RuntimeMessageScheduler, RuntimeMessageSchedulerCapacityError } from "./runtime-message-scheduler.ts";
+import { type RuntimeMessageScheduler, RuntimeMessageSchedulerCapacityError } from "./runtime-message-scheduler.ts";
+
+const emptyDuration = (): RecordingDurationSummary => ({ count: 0, max: 0, p50: 0, p95: 0, p99: 0 });
+
+const emptyOutcomes = (): Readonly<Record<RecordingDeliveryOutcome, number>> => ({
+    deferred: 0,
+    recorded: 0,
+    rejected: 0,
+    relayed: 0,
+});
 
 const DAEMON_ATTACHMENT_TIMEOUT_MILLISECONDS = 30_000;
 
@@ -53,6 +67,8 @@ export interface RuntimePeers extends ChannelPeers {
 }
 
 interface RuntimeContext {
+    /** Owns this Runtime's daemon message lanes, so its depth is reportable alongside Recording cost. */
+    readonly daemonMessages: RuntimeMessageScheduler;
     readonly services: {
         readonly connections: RuntimeConnectionService;
         readonly credentials: Pick<ChannelCredentialService, "isActive">;
@@ -78,7 +94,7 @@ type DaemonSocketIdentity = Extract<RuntimeSocketIdentity, { readonly role: "dae
 export class RuntimeService {
     readonly #cx: RuntimeContext;
     readonly #channels = new Map<string, ChannelActor>();
-    readonly #daemonMessages = new RuntimeMessageScheduler();
+    readonly #daemonMessages: RuntimeMessageScheduler;
     readonly #attachments = new Set<{
         readonly controller: AbortController;
         readonly identity: DaemonSocketIdentity;
@@ -92,6 +108,7 @@ export class RuntimeService {
 
     constructor(cx: RuntimeContext) {
         this.#cx = cx;
+        this.#daemonMessages = cx.daemonMessages;
     }
 
     readonly acceptDaemon = async (
@@ -299,6 +316,22 @@ export class RuntimeService {
             this.#cx.services.connections.disconnected(current, Date.now());
             this.notifyOffline(runtimeId);
         }
+    };
+
+    /**
+     * Reports Recording delivery cost plus this Runtime's message queue depth for capacity observation.
+     * A Runtime whose channel was never opened has no deliveries, and this read must not create the actor.
+     */
+    readonly recordingMetrics = (runtimeId: string, scope: ProjectScope): RecordingDeliveryMetricsSnapshot => {
+        const key = JSON.stringify({ projectId: scope.projectId, runtimeId });
+        const measured = this.#channels.get(key)?.recordingMetrics();
+        return {
+            deliveries: measured?.deliveries ?? 0,
+            durationMilliseconds: measured?.durationMilliseconds ?? emptyDuration(),
+            outcomes: measured?.outcomes ?? emptyOutcomes(),
+            recording: measured?.recording ?? {},
+            scheduler: this.#daemonMessages.depth(),
+        };
     };
 
     readonly isOnline = (runtimeId: string): boolean => {

@@ -67,6 +67,12 @@ export {
 } from "./infra/durable-object-migrations.ts";
 export { DurableObjectDatabaseAdapter, DurableObjectSqlDatabase } from "./infra/durable-object-sql-database.ts";
 export { logger } from "./infra/logger.ts";
+export {
+    createOperationTimingCollector,
+    type OperationTiming,
+    type OperationTimingMetric,
+    unmeasuredOperationTiming,
+} from "./infra/operation-timing.ts";
 export type { ProjectApplicationResolver } from "./infra/project-application-resolver.ts";
 export type { ProjectDatabaseBindings } from "./infra/project-database-bindings.ts";
 export type {
@@ -74,9 +80,16 @@ export type {
     ProjectStorageDirectory,
     ProjectStoragePlacement,
 } from "./infra/project-storage-directory.ts";
+export {
+    decodeRecordingDeliveryMetrics,
+    type RecordingDeliveryMetricsSnapshot,
+    type RuntimeMessageSchedulerDepth,
+} from "./infra/recording-delivery-metrics.ts";
 export { instrumentD1Database, RequestAccessMetrics } from "./infra/request-access-metrics.ts";
 export {
     DisabledSessionRecording,
+    decodeRecordingTiming,
+    RECORDING_TIMING_HEADER,
     type SessionRecording,
     type SessionRecordingDeliveryResult,
     type SessionRecordingTarget,

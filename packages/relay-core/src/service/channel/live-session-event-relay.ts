@@ -9,6 +9,8 @@ import {
     SessionEventRejectionCode,
     validateSessionEventEnvelope,
 } from "@moxt-ai/mobius-protocol";
+import { createOperationTimingCollector } from "../../infra/operation-timing.ts";
+import type { RecordingDeliveryMetrics } from "../../infra/recording-delivery-metrics.ts";
 import type { SessionRecording } from "../../infra/session-recording.ts";
 import type { SessionEventReceiptStorage } from "../../storage/session-event-receipt-storage.ts";
 import type { ChannelPeers, ChannelSocket } from "./channel-actor.ts";
@@ -26,6 +28,7 @@ export class LiveSessionEventRelay {
     readonly #runtimeId: string;
     readonly #receipts: SessionEventReceiptStorage;
     readonly #recording: SessionRecording;
+    readonly #metrics: RecordingDeliveryMetrics;
     readonly #now: () => number;
 
     constructor(
@@ -34,6 +37,7 @@ export class LiveSessionEventRelay {
         peers: ChannelPeers,
         recording: SessionRecording,
         receipts: SessionEventReceiptStorage,
+        metrics: RecordingDeliveryMetrics,
         now: () => number,
     ) {
         this.#now = now;
@@ -42,7 +46,11 @@ export class LiveSessionEventRelay {
         this.#peers = peers;
         this.#receipts = receipts;
         this.#recording = recording;
+        this.#metrics = metrics;
     }
+
+    /** Reports how long Recording delivery has taken and how it resolved. */
+    readonly readMetrics = () => this.#metrics.snapshot();
 
     readonly receive = (
         daemon: ChannelSocket,
@@ -92,11 +100,17 @@ export class LiveSessionEventRelay {
         }
 
         signal.throwIfAborted();
+        // Delivery duration is the Relay-side cost of one reliable Session event, including the Recording
+        // Worker round trip, so it is the value that determines whether a Session lane can keep up.
+        const startedAt = performance.now();
+        const timings = createOperationTimingCollector();
         const result = await this.#recording.deliver(
             { projectId: this.#projectId, runtimeId: this.#runtimeId, sessionId: envelope.sessionId },
             envelope,
             signal,
+            timings.timing,
         );
+        this.#metrics.record(result.kind, Math.max(0, performance.now() - startedAt), timings.snapshot());
         signal.throwIfAborted();
         if (result.kind === "deferred") {
             daemon.send(

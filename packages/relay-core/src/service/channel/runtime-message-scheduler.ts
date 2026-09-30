@@ -1,3 +1,5 @@
+import type { RuntimeMessageSchedulerDepth } from "../../infra/recording-delivery-metrics.ts";
+
 const DEFAULT_CONCURRENCY = 8;
 const DEFAULT_PENDING_LIMIT = 512;
 
@@ -51,6 +53,8 @@ class RuntimeMessageConcurrency {
         }
         this.#limit = limit;
     }
+
+    readonly active = (): number => this.#active;
 
     readonly acquire = async (signal: AbortSignal): Promise<RuntimeMessageSlot> => {
         signal.throwIfAborted();
@@ -151,6 +155,13 @@ export class RuntimeMessageScheduler {
             }
         }
     };
+
+    /** Reports how much daemon message work this Runtime Relay is holding, which is the Relay-side backlog. */
+    readonly depth = (): RuntimeMessageSchedulerDepth => ({
+        active: this.#concurrency.active(),
+        lanes: this.#lanes.size,
+        pending: this.#pending,
+    });
 
     readonly idle = async (signal: AbortSignal): Promise<void> => {
         while (this.#operations.size > 0) {

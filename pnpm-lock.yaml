@@ -242,6 +242,9 @@ importers:
       '@moxt-ai/mobius-sdk':
         specifier: workspace:*
         version: link:../mobius-sdk
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
       wrangler:
         specifier: ^4.134.0
         version: 4.134.0(@cloudflare/workers-types@5.20260918.1)(@types/node@24.13.5)

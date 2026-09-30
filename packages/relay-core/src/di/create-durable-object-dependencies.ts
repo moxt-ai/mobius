@@ -7,6 +7,7 @@ import { DisabledSessionRecording, type SessionRecording } from "../infra/sessio
 import { ChannelActor } from "../service/channel/channel-actor.ts";
 import { ChannelCredentialService } from "../service/channel/channel-credential-service.ts";
 import { RuntimeConnectionService } from "../service/channel/runtime-connection-service.ts";
+import { RuntimeMessageScheduler } from "../service/channel/runtime-message-scheduler.ts";
 import { type RuntimePeers, RuntimeService } from "../service/channel/runtime-service.ts";
 import { ChannelCredentialStorage } from "../storage/channel-credential-storage.ts";
 import { RuntimeConnectionStorage } from "../storage/runtime-connection-storage.ts";
@@ -42,6 +43,9 @@ function createRuntimeRelayDependencies(cx: {
         },
     };
     const receipts = new SessionEventReceiptStorage(cx.database);
+    // The scheduler owns the Runtime's daemon message lanes, so it is composed here and shared with both the
+    // channel that reports its depth and the Runtime service that enqueues into it.
+    const daemonMessages = new RuntimeMessageScheduler();
     const services = {
         credentials,
         connections: new RuntimeConnectionService(new RuntimeConnectionStorage(cx.database)),
@@ -63,6 +67,7 @@ function createRuntimeRelayDependencies(cx: {
                 services,
                 gateways: cx.gateways,
                 utilities: cx.utilities,
+                daemonMessages,
             }),
         },
         gateways: cx.gateways,

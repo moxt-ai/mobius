@@ -26,6 +26,15 @@ const DEFAULT_LIMITS: SessionEventOutboxLimits = {
     standardEventBytes: DEFAULT_STANDARD_EVENT_BYTES,
 };
 
+/** How much unacknowledged reliable Session event work the daemon is holding for one Relay connection. */
+export interface SessionEventOutboxBacklog {
+    readonly deadLetters: number;
+    readonly oldestEventAgeMilliseconds: number;
+    readonly pendingEvents: number;
+    readonly pendingBytes: number;
+    readonly standardEventBytes: number;
+}
+
 export class SessionEventOutboxCapacityError extends Error {
     readonly code = "session_event_outbox_full";
 
@@ -79,6 +88,7 @@ export class SessionEventOutbox {
                 session_id TEXT NOT NULL,
                 source_seq INTEGER NOT NULL UNIQUE,
                 byte_length INTEGER NOT NULL,
+                created_at INTEGER NOT NULL DEFAULT 0,
                 envelope_json TEXT NOT NULL
             ) STRICT;
             CREATE INDEX IF NOT EXISTS relay_session_event_outbox_order
@@ -97,6 +107,15 @@ export class SessionEventOutbox {
                 envelope_json TEXT NOT NULL
             ) STRICT;
         `);
+        const columns = this.#database
+            .prepare(`SELECT name FROM pragma_table_info('relay_session_event_outbox')`)
+            .all()
+            .map((row) => rowString(row, "name"));
+        if (!columns.includes("created_at")) {
+            this.#database.exec(
+                "ALTER TABLE relay_session_event_outbox ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0;",
+            );
+        }
         this.#database
             .prepare(
                 `INSERT OR IGNORE INTO relay_session_event_outbox_state (
@@ -163,10 +182,11 @@ export class SessionEventOutbox {
             if (rowNumber(state, "total_bytes") + byteLength > maximumBytes) {
                 throw new SessionEventOutboxCapacityError();
             }
+            const enqueuedAt = Date.now();
             const insert = this.#database.prepare(
                 `INSERT INTO relay_session_event_outbox (
-                    event_id, session_id, source_seq, byte_length, envelope_json
-                ) VALUES (?, ?, ?, ?, ?)`,
+                    event_id, session_id, source_seq, byte_length, created_at, envelope_json
+                ) VALUES (?, ?, ?, ?, ?, ?)`,
             );
             for (const entry of stored) {
                 insert.run(
@@ -174,6 +194,7 @@ export class SessionEventOutbox {
                     sessionId,
                     Number(entry.envelope.delivery.sourceSeq),
                     entry.byteLength,
+                    enqueuedAt,
                     entry.encoded,
                 );
             }
@@ -220,6 +241,30 @@ export class SessionEventOutbox {
                 }
                 return envelope;
             });
+    };
+
+    /**
+     * Reports the durable backlog that forms when the Relay withholds acknowledgements because Recording is
+     * slower than the event stream. `now` is supplied so callers keep one clock.
+     */
+    readonly backlog = (now: number): SessionEventOutboxBacklog => {
+        const state = this.#database
+            .prepare(
+                `SELECT (SELECT COUNT(*) FROM relay_session_event_outbox) AS pending_events,
+                        (SELECT COALESCE(SUM(byte_length), 0) FROM relay_session_event_outbox) AS pending_bytes,
+                        (SELECT COALESCE(MIN(created_at), 0) FROM relay_session_event_outbox
+                         WHERE created_at > 0) AS oldest_created_at,
+                        (SELECT COUNT(*) FROM relay_session_event_dead_letters) AS dead_letters`,
+            )
+            .get();
+        const oldestCreatedAt = rowNumber(state, "oldest_created_at");
+        return {
+            deadLetters: rowNumber(state, "dead_letters"),
+            oldestEventAgeMilliseconds: oldestCreatedAt === 0 ? 0 : Math.max(0, now - oldestCreatedAt),
+            pendingBytes: rowNumber(state, "pending_bytes"),
+            pendingEvents: rowNumber(state, "pending_events"),
+            standardEventBytes: this.#limits.standardEventBytes,
+        };
     };
 
     readonly quarantine = (rejection: SessionEventRejected): boolean => {

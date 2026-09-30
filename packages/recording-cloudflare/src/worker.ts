@@ -35,6 +35,44 @@ function errorResponse(code: string, message: string, status: number): Response 
     return Response.json({ error: { code, message } }, { status });
 }
 
+const RECORDING_TIMING_HEADER = "x-mobius-recording-timing";
+
+/** Attaches the Recording Worker's measured segments to a response without consuming its body. */
+function timed(response: Response, timing: RecordingTiming): Response {
+    const headers = new Headers(response.headers);
+    headers.set(RECORDING_TIMING_HEADER, timing.header());
+    return new Response(response.body, { headers, status: response.status, statusText: response.statusText });
+}
+
+/**
+ * Reports the cost the Recording Worker measured on its own side, so a Relay that observes slow delivery can
+ * tell whether the time went to decoding, the Session Durable Object, or the Directory Durable Object.
+ */
+class RecordingTiming {
+    readonly #segments: string[] = [];
+
+    readonly record = (name: string, durationMilliseconds: number): void => {
+        this.#segments.push(`${name};dur=${Math.max(0, durationMilliseconds).toFixed(1)}`);
+    };
+
+    readonly append = (segment: string): void => {
+        if (/^[a-z0-9-]+;dur=[0-9.]+$/u.test(segment)) {
+            this.#segments.push(segment);
+        }
+    };
+
+    readonly measure = async <T>(name: string, operation: () => Promise<T>): Promise<T> => {
+        const startedAt = performance.now();
+        try {
+            return await operation();
+        } finally {
+            this.record(name, performance.now() - startedAt);
+        }
+    };
+
+    readonly header = (): string => this.#segments.join(",");
+}
+
 function recordingPath(pathname: string): RecordingPath | null {
     const match = pathname.match(/^\/v1\/projects\/([^/]+)\/runtimes\/([^/]+)\/sessions\/([^/]+)\/events$/u);
     if (match === null) {
@@ -183,6 +221,7 @@ export function createRecordingWorker(): RecordingWorker {
         fetch: async (request, environment) => {
             const url = new URL(request.url);
             if (request.method === "POST" && url.pathname === "/v1/session-events") {
+                const timing = new RecordingTiming();
                 let encoded: string;
                 try {
                     encoded = await request.text();
@@ -191,7 +230,7 @@ export function createRecordingWorker(): RecordingWorker {
                 }
                 let validated: ValidatedSessionRecordingWrite;
                 try {
-                    validated = decodeValidatedWrite(encoded);
+                    validated = await timing.measure("recording-decode", async () => decodeValidatedWrite(encoded));
                 } catch (cause) {
                     if (cause instanceof ProtocolMessageError) {
                         return errorResponse("invalid_envelope", "The Recording envelope is invalid", 400);
@@ -210,11 +249,15 @@ export function createRecordingWorker(): RecordingWorker {
                         return errorResponse("invalid_fork_origin", "A Session cannot fork from itself", 409);
                     }
                     const sourceTarget = { ...target, sessionId: event.sourceSessionId };
-                    const source = await environment.SESSION_RECORDING.getByName(objectName(sourceTarget)).fetch(
-                        new Request(
-                            `https://session-recording.internal/events?projectId=${encodeURIComponent(sourceTarget.projectId)}&runtimeId=${encodeURIComponent(sourceTarget.runtimeId)}&sessionId=${encodeURIComponent(sourceTarget.sessionId)}&throughCommandId=${encodeURIComponent(event.throughCommandId)}`,
-                            { signal: request.signal },
-                        ),
+                    const source = await timing.measure(
+                        "recording-fork-source-read",
+                        async () =>
+                            await environment.SESSION_RECORDING.getByName(objectName(sourceTarget)).fetch(
+                                new Request(
+                                    `https://session-recording.internal/events?projectId=${encodeURIComponent(sourceTarget.projectId)}&runtimeId=${encodeURIComponent(sourceTarget.runtimeId)}&sessionId=${encodeURIComponent(sourceTarget.sessionId)}&throughCommandId=${encodeURIComponent(event.throughCommandId)}`,
+                                    { signal: request.signal },
+                                ),
+                            ),
                     );
                     if (source.status === 404) {
                         return errorResponse("fork_source_not_ready", "The fork source is not recorded yet", 503);
@@ -236,21 +279,30 @@ export function createRecordingWorker(): RecordingWorker {
                         return errorResponse("storage_unavailable", "Recording storage is unavailable", 503);
                     }
                 }
-                const recorded = await environment.SESSION_RECORDING.getByName(objectName(target)).fetch(
-                    new Request("https://session-recording.internal/events", {
-                        body: encoded,
-                        headers: {
-                            "content-type": "application/json",
-                            ...(sourceRecordingEpoch === null
-                                ? {}
-                                : { "x-mobius-source-recording-epoch": sourceRecordingEpoch }),
-                        },
-                        method: "POST",
-                        signal: request.signal,
-                    }),
+                const recorded = await timing.measure(
+                    "recording-session-write",
+                    async () =>
+                        await environment.SESSION_RECORDING.getByName(objectName(target)).fetch(
+                            new Request("https://session-recording.internal/events", {
+                                body: encoded,
+                                headers: {
+                                    "content-type": "application/json",
+                                    ...(sourceRecordingEpoch === null
+                                        ? {}
+                                        : { "x-mobius-source-recording-epoch": sourceRecordingEpoch }),
+                                },
+                                method: "POST",
+                                signal: request.signal,
+                            }),
+                        ),
                 );
+                for (const segment of recorded.headers.get(RECORDING_TIMING_HEADER)?.split(",") ?? []) {
+                    if (segment.length > 0) {
+                        timing.append(segment);
+                    }
+                }
                 if (recorded.status !== 200 && recorded.status !== 201) {
-                    return recorded;
+                    return timed(recorded, timing);
                 }
                 const result: unknown = await recorded.json();
                 if (typeof result !== "object" || result === null || Array.isArray(result)) {
@@ -268,23 +320,27 @@ export function createRecordingWorker(): RecordingWorker {
                     return errorResponse("storage_unavailable", "Recording storage is unavailable", 503);
                 }
                 if (!isRecordingDirectoryEvent(event)) {
-                    return Response.json({ recordingEpoch }, { status: recorded.status });
+                    return timed(Response.json({ recordingEpoch }, { status: recorded.status }), timing);
                 }
-                const indexed = await environment.RECORDING_DIRECTORY.getByName(directoryObjectName(target)).fetch(
-                    new Request("https://recording-directory.internal/events", {
-                        body: encoded,
-                        headers: {
-                            "content-type": "application/json",
-                            "x-mobius-recorded-at": recordedAt.toString(),
-                        },
-                        method: "POST",
-                        signal: request.signal,
-                    }),
+                const indexed = await timing.measure(
+                    "recording-directory-write",
+                    async () =>
+                        await environment.RECORDING_DIRECTORY.getByName(directoryObjectName(target)).fetch(
+                            new Request("https://recording-directory.internal/events", {
+                                body: encoded,
+                                headers: {
+                                    "content-type": "application/json",
+                                    "x-mobius-recorded-at": recordedAt.toString(),
+                                },
+                                method: "POST",
+                                signal: request.signal,
+                            }),
+                        ),
                 );
                 if (indexed.status !== 204) {
                     return errorResponse("storage_unavailable", "Recording directory is unavailable", 503);
                 }
-                return Response.json({ recordingEpoch }, { status: recorded.status });
+                return timed(Response.json({ recordingEpoch }, { status: recorded.status }), timing);
             }
             const directory = directoryPath(url.pathname);
             if (request.method === "GET" && directory !== null) {
@@ -340,13 +396,19 @@ export class SessionRecordingDurableObject extends DurableObject<RecordingWorker
                           throughCommandId: validated.event.throughCommandId,
                       }
                     : null;
+            const startedAt = performance.now();
             const claim = this.#recordings.claim(validated.write, validated.event, Date.now(), forkOrigin);
+            const timing = new RecordingTiming();
+            timing.record("recording-session-claim", performance.now() - startedAt);
             if (claim.kind === "conflict") {
                 return errorResponse("idempotency_conflict", "The event identifier is already recorded", 409);
             }
-            return Response.json(
-                { recordedAt: claim.recordedAt, recordingEpoch: claim.recordingEpoch },
-                { status: claim.kind === "accepted" ? 201 : 200 },
+            return timed(
+                Response.json(
+                    { recordedAt: claim.recordedAt, recordingEpoch: claim.recordingEpoch },
+                    { status: claim.kind === "accepted" ? 201 : 200 },
+                ),
+                timing,
             );
         }
         if (request.method === "GET" && url.pathname === "/events") {

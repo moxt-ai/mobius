@@ -77,6 +77,7 @@ import {
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-protocol";
 import { SessionRuntimeError } from "../../entity/do/session.ts";
+import { RecordingDeliveryMetrics } from "../../infra/recording-delivery-metrics.ts";
 import type { SessionRecording } from "../../infra/session-recording.ts";
 import type { SessionEventReceiptStorage } from "../../storage/session-event-receipt-storage.ts";
 import { LiveSessionEventRelay } from "./live-session-event-relay.ts";
@@ -183,8 +184,19 @@ export class ChannelActor {
         this.#clock = clock;
         this.#peers = peers;
         this.#runtimeId = runtimeId;
-        this.#liveEvents = new LiveSessionEventRelay(projectId, runtimeId, peers, recording, receipts, clock.now);
+        this.#liveEvents = new LiveSessionEventRelay(
+            projectId,
+            runtimeId,
+            peers,
+            recording,
+            receipts,
+            new RecordingDeliveryMetrics(),
+            clock.now,
+        );
     }
+
+    /** Exposes this channel's Recording delivery cost and outcome counts for capacity observation. */
+    readonly recordingMetrics = () => this.#liveEvents.readMetrics();
 
     readonly attachDaemon = async (replacedExistingConnection: boolean, _signal: AbortSignal): Promise<void> => {
         if (replacedExistingConnection) {
