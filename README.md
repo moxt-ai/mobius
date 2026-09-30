@@ -80,7 +80,8 @@ The repository deploys the production Standalone Worker to
 the Worker and Web assets with the `MOBIUS_STANDALONE_TOKEN` GitHub environment
 secret and verifies the deployed page. Before deploying the Worker, CI applies
 the committed `packages/relay-core/migrations/d1` migrations to the dedicated
-production D1 database and stops the deployment if migration fails.
+production D1 database with the D1 Edit-only `CLOUDFLARE_D1_API_TOKEN`
+environment secret and stops the deployment if migration fails.
 Self-hosted deployments need their own bearer credential and D1 binding.
 
 ## Local Runtime connections
