@@ -32,6 +32,10 @@ const emptyOutcomes = (): Readonly<Record<RecordingDeliveryOutcome, number>> => 
 
 const DAEMON_ATTACHMENT_TIMEOUT_MILLISECONDS = 30_000;
 
+/** One channel actor owns a Runtime's Session event forwarding, so its identity keys its Recording metrics. */
+const channelKey = (runtimeId: string, scope: ProjectScope): string =>
+    JSON.stringify({ projectId: scope.projectId, runtimeId });
+
 export type RuntimeSocketIdentity =
     | {
           readonly role: "relay";
@@ -323,8 +327,7 @@ export class RuntimeService {
      * A Runtime whose channel was never opened has no deliveries, and this read must not create the actor.
      */
     readonly recordingMetrics = (runtimeId: string, scope: ProjectScope): RecordingDeliveryMetricsSnapshot => {
-        const key = JSON.stringify({ projectId: scope.projectId, runtimeId });
-        const measured = this.#channels.get(key)?.recordingMetrics();
+        const measured = this.#channels.get(channelKey(runtimeId, scope))?.recordingMetrics();
         return {
             deliveries: measured?.deliveries ?? 0,
             durationMilliseconds: measured?.durationMilliseconds ?? emptyDuration(),
@@ -435,10 +438,7 @@ export class RuntimeService {
     };
 
     private readonly channel = (runtimeId: string, scope: ProjectScope): ChannelActor => {
-        const key = JSON.stringify({
-            projectId: scope.projectId,
-            runtimeId,
-        });
+        const key = channelKey(runtimeId, scope);
         const existing = this.#channels.get(key);
         if (existing !== undefined) {
             return existing;
