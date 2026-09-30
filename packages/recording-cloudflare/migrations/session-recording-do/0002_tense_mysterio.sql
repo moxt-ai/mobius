@@ -1,0 +1,1 @@
+ALTER TABLE `recording_metadata` ADD `projection_version` integer DEFAULT 0 NOT NULL;

@@ -1540,112 +1540,133 @@ async function readRecordedSessionHistory(
         throw new PairingApiError("recording_history_unavailable", "The recorded Session history is unavailable.");
     }
     const history = decodeSessionRecordingHistory(await response.text());
+    if (history.sessionId !== sessionId || history.segments.at(-1)?.sessionId !== sessionId) {
+        throw new PairingApiError("invalid_relay_response", "Recording returned another Session's history.");
+    }
     const turns = new Map<string, RecordingReplayTurn>();
     const elicitations = new Map<string, SessionElicitationRequestedEvent>();
     const permissions = new Map<string, SessionPermissionRequestedEvent>();
     let ready: Extract<ReturnType<typeof decodeRecordedSessionEvent>, { readonly kind: "session.ready" }> | null = null;
     let updatedAt = "1970-01-01T00:00:00.000Z";
 
-    for (const entry of history.entries) {
-        signal.throwIfAborted();
-        const event = decodeRecordedSessionEvent(entry.envelope.payload);
-        if (event.sessionId !== sessionId) {
-            throw new PairingApiError("invalid_relay_response", "Recording returned an event for another Session.");
-        }
-        updatedAt = entry.recordedAt;
-        if (event.kind === "session.ready") {
-            ready = event;
-            continue;
-        }
-        if (event.kind === "session.elicitation.requested") {
-            elicitations.set(event.interactionId, event);
-            continue;
-        }
-        if (event.kind === "session.elicitation.resolved") {
-            elicitations.delete(event.interactionId);
-            continue;
-        }
-        if (event.kind === "session.permission.requested") {
-            permissions.set(event.interactionId, event);
-            continue;
-        }
-        if (event.kind === "session.permission.resolved") {
-            permissions.delete(event.interactionId);
-            continue;
-        }
-        if (event.kind === "session.started") {
-            const existing = turns.get(event.commandId);
-            if (existing === undefined) {
-                turns.set(event.commandId, {
-                    activities: new Map(),
-                    attemptId: event.attemptId,
-                    commandId: event.commandId,
-                    contents: [],
-                    createdAt: new Date(entry.recordedAt),
-                    lastCommittedSequence: "0",
-                    outcome: { kind: "running" },
-                    prompt: event.prompt,
-                    response: "",
-                });
+    for (const segment of history.segments) {
+        const targetSegment = segment.sessionId === sessionId;
+        for (const entry of segment.entries) {
+            signal.throwIfAborted();
+            const event = decodeRecordedSessionEvent(entry.envelope.payload);
+            if (event.sessionId !== segment.sessionId) {
+                throw new PairingApiError("invalid_relay_response", "Recording returned an event outside its segment.");
             }
-            continue;
-        }
-        if (!("commandId" in event)) {
-            continue;
-        }
-        const turn = turns.get(event.commandId);
-        if (turn === undefined) {
-            continue;
-        }
-        if (event.kind === "agent.message.delta") {
-            turns.set(event.commandId, {
-                ...turn,
-                lastCommittedSequence: event.sequence.toString(),
-                response: `${turn.response}${event.text}`,
-            });
-        } else if (event.kind === "agent.activity") {
-            turns.set(event.commandId, {
-                ...turn,
-                activities: new Map(turn.activities).set(
-                    event.activityId,
-                    recordedActivityFromEvent(event, turn.attemptId),
-                ),
-            });
-        } else if (event.kind === "agent.activity.narration") {
-            const activity = turn.activities.get(event.activityId);
-            if (activity !== undefined) {
+            if (targetSegment) {
+                updatedAt = entry.recordedAt;
+            }
+            if (event.kind === "session.ready") {
+                if (targetSegment) {
+                    ready = event;
+                }
+                continue;
+            }
+            if (event.kind === "session.elicitation.requested") {
+                if (targetSegment) {
+                    elicitations.set(event.interactionId, event);
+                }
+                continue;
+            }
+            if (event.kind === "session.elicitation.resolved") {
+                if (targetSegment) {
+                    elicitations.delete(event.interactionId);
+                }
+                continue;
+            }
+            if (event.kind === "session.permission.requested") {
+                if (targetSegment) {
+                    permissions.set(event.interactionId, event);
+                }
+                continue;
+            }
+            if (event.kind === "session.permission.resolved") {
+                if (targetSegment) {
+                    permissions.delete(event.interactionId);
+                }
+                continue;
+            }
+            if (event.kind === "session.started") {
+                const existing = turns.get(event.commandId);
+                if (existing === undefined) {
+                    turns.set(event.commandId, {
+                        activities: new Map(),
+                        attemptId: event.attemptId,
+                        commandId: event.commandId,
+                        contents: [],
+                        createdAt: new Date(entry.recordedAt),
+                        lastCommittedSequence: "0",
+                        outcome: { kind: "running" },
+                        prompt: event.prompt,
+                        response: "",
+                    });
+                }
+                continue;
+            }
+            if (!("commandId" in event)) {
+                continue;
+            }
+            const turn = turns.get(event.commandId);
+            if (turn === undefined) {
+                continue;
+            }
+            if (event.kind === "agent.message.delta") {
                 turns.set(event.commandId, {
                     ...turn,
-                    activities: new Map(turn.activities).set(event.activityId, activity.appendingOutput(event.text)),
+                    lastCommittedSequence: event.sequence.toString(),
+                    response: `${turn.response}${event.text}`,
+                });
+            } else if (event.kind === "agent.activity") {
+                turns.set(event.commandId, {
+                    ...turn,
+                    activities: new Map(turn.activities).set(
+                        event.activityId,
+                        recordedActivityFromEvent(event, turn.attemptId),
+                    ),
+                });
+            } else if (event.kind === "agent.activity.narration") {
+                const activity = turn.activities.get(event.activityId);
+                if (activity !== undefined) {
+                    turns.set(event.commandId, {
+                        ...turn,
+                        activities: new Map(turn.activities).set(
+                            event.activityId,
+                            activity.appendingOutput(event.text),
+                        ),
+                    });
+                }
+            } else if (event.kind === "agent.content") {
+                turns.set(event.commandId, {
+                    ...turn,
+                    contents: [
+                        ...turn.contents.filter((content) => content.contentId !== event.contentId),
+                        new RecordedContent(event.commandId, event.contentId, event.messageId, event.content),
+                    ],
+                });
+            } else if (event.kind === "session.completed") {
+                turns.set(event.commandId, {
+                    ...turn,
+                    outcome: {
+                        kind: "completed",
+                        settledAt: new Date(entry.recordedAt),
+                        stopReason: event.stopReason,
+                    },
+                });
+            } else if (event.kind === "session.failed") {
+                turns.set(event.commandId, {
+                    ...turn,
+                    outcome: {
+                        code: event.code,
+                        kind: "failed",
+                        message: event.message,
+                        settledAt: new Date(entry.recordedAt),
+                    },
                 });
             }
-        } else if (event.kind === "agent.content") {
-            turns.set(event.commandId, {
-                ...turn,
-                contents: [
-                    ...turn.contents.filter((content) => content.contentId !== event.contentId),
-                    new RecordedContent(event.commandId, event.contentId, event.messageId, event.content),
-                ],
-            });
-        } else if (event.kind === "session.completed") {
-            turns.set(event.commandId, {
-                ...turn,
-                outcome: {
-                    kind: "completed",
-                    settledAt: new Date(entry.recordedAt),
-                    stopReason: event.stopReason,
-                },
-            });
-        } else if (event.kind === "session.failed") {
-            turns.set(event.commandId, {
-                ...turn,
-                outcome: {
-                    code: event.code,
-                    kind: "failed",
-                    message: event.message,
-                    settledAt: new Date(entry.recordedAt),
-                },
-            });
         }
     }
 

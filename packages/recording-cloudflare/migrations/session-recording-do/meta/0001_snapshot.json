@@ -1,0 +1,252 @@
+{
+    "version": "6",
+    "dialect": "sqlite",
+    "id": "bf39e180-1f47-4378-be28-762037127f58",
+    "prevId": "a073bf88-71bd-4aa8-9e8a-95187d1ec973",
+    "tables": {
+        "recorded_session_events": {
+            "name": "recorded_session_events",
+            "columns": {
+                "ordinal": {
+                    "name": "ordinal",
+                    "type": "integer",
+                    "primaryKey": true,
+                    "notNull": true,
+                    "autoincrement": true
+                },
+                "event_id": {
+                    "name": "event_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "envelope_json": {
+                    "name": "envelope_json",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "recorded_at": {
+                    "name": "recorded_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "source_seq": {
+                    "name": "source_seq",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "stream_id": {
+                    "name": "stream_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {
+                "recorded_session_events_event_id_unique": {
+                    "name": "recorded_session_events_event_id_unique",
+                    "columns": ["event_id"],
+                    "isUnique": true
+                },
+                "recorded_session_events_stream_order": {
+                    "name": "recorded_session_events_stream_order",
+                    "columns": ["stream_id", "source_seq"],
+                    "isUnique": false
+                }
+            },
+            "foreignKeys": {},
+            "compositePrimaryKeys": {},
+            "uniqueConstraints": {},
+            "checkConstraints": {}
+        },
+        "recorded_turns": {
+            "name": "recorded_turns",
+            "columns": {
+                "attempt_id": {
+                    "name": "attempt_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "command_id": {
+                    "name": "command_id",
+                    "type": "text",
+                    "primaryKey": true,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "created_at": {
+                    "name": "created_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "settled_at": {
+                    "name": "settled_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "started_ordinal": {
+                    "name": "started_ordinal",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "state": {
+                    "name": "state",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "terminal_ordinal": {
+                    "name": "terminal_ordinal",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {},
+            "foreignKeys": {},
+            "compositePrimaryKeys": {},
+            "uniqueConstraints": {},
+            "checkConstraints": {
+                "recorded_turns_terminal_state_check": {
+                    "name": "recorded_turns_terminal_state_check",
+                    "value": "(\"recorded_turns\".\"state\" = 'running' AND \"recorded_turns\".\"terminal_ordinal\" IS NULL AND \"recorded_turns\".\"settled_at\" IS NULL) OR (\"recorded_turns\".\"state\" IN ('completed', 'failed') AND \"recorded_turns\".\"terminal_ordinal\" IS NOT NULL AND \"recorded_turns\".\"settled_at\" IS NOT NULL)"
+                }
+            }
+        },
+        "recording_fork_origin": {
+            "name": "recording_fork_origin",
+            "columns": {
+                "created_at": {
+                    "name": "created_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "singleton": {
+                    "name": "singleton",
+                    "type": "integer",
+                    "primaryKey": true,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "source_recording_epoch": {
+                    "name": "source_recording_epoch",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "source_session_id": {
+                    "name": "source_session_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "through_command_id": {
+                    "name": "through_command_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {},
+            "foreignKeys": {},
+            "compositePrimaryKeys": {},
+            "uniqueConstraints": {},
+            "checkConstraints": {
+                "recording_fork_origin_singleton_check": {
+                    "name": "recording_fork_origin_singleton_check",
+                    "value": "\"recording_fork_origin\".\"singleton\" = 1"
+                }
+            }
+        },
+        "recording_metadata": {
+            "name": "recording_metadata",
+            "columns": {
+                "singleton": {
+                    "name": "singleton",
+                    "type": "integer",
+                    "primaryKey": true,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "project_id": {
+                    "name": "project_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "runtime_id": {
+                    "name": "runtime_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "session_id": {
+                    "name": "session_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "recording_epoch": {
+                    "name": "recording_epoch",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "created_at": {
+                    "name": "created_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {},
+            "foreignKeys": {},
+            "compositePrimaryKeys": {},
+            "uniqueConstraints": {},
+            "checkConstraints": {
+                "recording_metadata_singleton_check": {
+                    "name": "recording_metadata_singleton_check",
+                    "value": "\"recording_metadata\".\"singleton\" = 1"
+                }
+            }
+        }
+    },
+    "views": {},
+    "enums": {},
+    "_meta": {
+        "schemas": {},
+        "tables": {},
+        "columns": {}
+    },
+    "internal": {
+        "indexes": {}
+    }
+}

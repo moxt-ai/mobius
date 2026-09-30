@@ -1168,16 +1168,16 @@ export async function forkConversationAtTurn(sourceCommandId: string): Promise<s
                 agentId: conversation.agentId,
                 bindingId: conversation.bindingId,
                 directoryId: conversation.directoryId,
-                action: "fork",
-                entryId: sourceCommandId,
+                action: "fork-recorded",
                 kind: "native.session.request",
                 requestId,
                 sessionId: conversation.sessionId,
                 targetSessionId: crypto.randomUUID(),
+                throughCommandId: sourceCommandId,
             },
             AbortSignal.timeout(90_000),
         );
-        if (result.action !== "fork") {
+        if (result.action !== "fork-recorded") {
             throw new MobiusChannelError("invalid_protocol_message", "The Agent returned an invalid fork result");
         }
         useChatStore.getState().openNativeConversation(result);

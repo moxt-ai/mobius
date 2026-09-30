@@ -123,6 +123,14 @@ const nativeSessionRequestSchema = z.discriminatedUnion("action", [
     z
         .strictObject({
             ...identity,
+            action: z.literal("fork-recorded"),
+            targetSessionId: identifier,
+            throughCommandId: identifier,
+        })
+        .readonly(),
+    z
+        .strictObject({
+            ...identity,
             action: z.literal("delete"),
             entryId: identifier,
         })
@@ -148,6 +156,14 @@ const nativeSessionCommandSchema = z.discriminatedUnion("action", [
             action: z.enum(["import", "fork"]),
             entryId: identifier,
             targetSessionId: identifier,
+        })
+        .readonly(),
+    z
+        .strictObject({
+            ...identity,
+            action: z.literal("fork-recorded"),
+            targetSessionId: identifier,
+            throughCommandId: identifier,
         })
         .readonly(),
     z
@@ -221,7 +237,7 @@ const nativeSessionResultSchema = z.discriminatedUnion("action", [
     z
         .strictObject({
             ...resultEnvelope,
-            action: z.enum(["import", "fork"]),
+            action: z.enum(["import", "fork", "fork-recorded"]),
             targetSessionId: identifier,
             ready: sessionReadyEventSchema,
             title: z.string().max(500),

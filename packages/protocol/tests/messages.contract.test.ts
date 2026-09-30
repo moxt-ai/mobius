@@ -7,6 +7,7 @@ import {
     type AgentMessageDeltaEvent,
     decodeAgentActivityEvent,
     decodeAgentMessageDeltaEvent,
+    decodeNativeSessionRequest,
     decodeRuntimeLivenessReadyEvent,
     decodeSessionCancelCommand,
     decodeSessionEventAcknowledgement,
@@ -16,6 +17,7 @@ import {
     decodeSessionRecordingHistory,
     decodeSessionRecordingWrite,
     encodeAgentActivityEvent,
+    encodeNativeSessionRequest,
     encodeRuntimeLivenessReadyEvent,
     encodeSessionEventAcknowledgement,
     encodeSessionEventEnvelope,
@@ -30,6 +32,23 @@ import {
 } from "../src/index.ts";
 
 describe("session Recording protocol", () => {
+    it("Given Web selects a terminal recorded Turn, When it requests a native fork, Then source and destination identity round-trip", () => {
+        const request = {
+            action: "fork-recorded",
+            additionalDirectoryIds: [],
+            agentId: "codex",
+            bindingId: "workspace",
+            directoryId: "default",
+            kind: "native.session.request",
+            requestId: "request-fork-1",
+            sessionId: "session-parent",
+            targetSessionId: "session-child",
+            throughCommandId: "command-1",
+        } as const;
+
+        expect(decodeNativeSessionRequest(encodeNativeSessionRequest(request))).toEqual(request);
+    });
+
     it("Given Recording has Sessions for a Runtime, When Web loads its directory, Then identity and display metadata remain bound to each Session", () => {
         const directory = {
             sessions: [
@@ -76,28 +95,60 @@ describe("session Recording protocol", () => {
         expect(decodeSessionRecordingWrite(JSON.stringify(request))).toEqual(request);
     });
 
-    it("Given Recording has persisted Session events, When Web loads that Session, Then it receives a stable epoch and ordered replay entries", () => {
+    it("Given Recording has persisted a forked Session, When Web loads that Session, Then it receives ordered lineage segments ending at the selected parent Turn", () => {
         const history = {
-            entries: [
+            segments: [
                 {
-                    envelope: {
-                        delivery: {
-                            eventId: "event-1",
-                            kind: "reliable" as const,
-                            sourceSeq: "1",
-                            streamId: "stream-1",
+                    entries: [
+                        {
+                            envelope: {
+                                delivery: {
+                                    eventId: "event-1",
+                                    kind: "reliable" as const,
+                                    sourceSeq: "1",
+                                    streamId: "stream-1",
+                                },
+                                kind: SESSION_EVENT_KIND,
+                                payload: JSON.stringify({ kind: "session.queue.changed", sessionId: "session-1" }),
+                                sessionId: "session-1",
+                            },
+                            recordedAt: "2026-09-29T00:00:00.000Z",
                         },
-                        kind: SESSION_EVENT_KIND,
-                        payload: JSON.stringify({ kind: "session.queue.changed", sessionId: "session-1" }),
-                        sessionId: "session-1",
-                    },
-                    recordedAt: "2026-09-29T00:00:00.000Z",
+                    ],
+                    recordingEpoch: "recording-epoch-1",
+                    sessionId: "session-1",
+                    throughCommandId: "command-1",
                 },
             ],
-            recordingEpoch: "recording-epoch-1",
+            sessionId: "session-2",
         };
 
         expect(decodeSessionRecordingHistory(JSON.stringify(history))).toEqual(history);
+    });
+
+    it("Given a child Session is forked from a terminal recorded Turn, When the event crosses the Recording boundary, Then its lineage identity round-trips", () => {
+        const request = {
+            envelope: {
+                delivery: {
+                    eventId: "event-fork-1",
+                    kind: "reliable" as const,
+                    sourceSeq: "2",
+                    streamId: "stream-1",
+                },
+                kind: SESSION_EVENT_KIND,
+                payload: JSON.stringify({
+                    kind: "session.forked",
+                    sessionId: "session-2",
+                    sourceSessionId: "session-1",
+                    throughCommandId: "command-1",
+                }),
+                sessionId: "session-2",
+            },
+            projectId: "standalone",
+            runtimeId: "runtime-1",
+        };
+
+        expect(decodeSessionRecordingWrite(JSON.stringify(request))).toEqual(request);
     });
 });
 

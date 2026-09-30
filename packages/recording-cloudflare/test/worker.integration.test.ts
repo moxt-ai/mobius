@@ -44,6 +44,182 @@ function writeEventRequest(
 }
 
 describe("Recording Worker", () => {
+    it("Given a recorded Session is forked after a terminal Turn, When parent and child continue independently, Then child history keeps only the parent prefix through that Turn", async () => {
+        const runtimeId = "runtime-fork";
+        const parentSessionId = "session-fork-parent";
+        const childSessionId = "session-fork-child";
+        const grandchildSessionId = "session-fork-grandchild";
+        let sourceSequence = 100;
+        const record = async (
+            event: Readonly<Record<string, unknown>> & { readonly sessionId: string },
+        ): Promise<Response> => {
+            sourceSequence += 1;
+            return await worker.fetch(
+                writeEventRequest(
+                    event,
+                    `fork-event-${sourceSequence.toString()}`,
+                    sourceSequence.toString(),
+                    runtimeId,
+                ),
+                env,
+            );
+        };
+        const ready = (sessionId: string) => ({
+            additionalDirectories: [],
+            agentId: "codex",
+            agentName: "Codex",
+            agentVersion: "1.0.0",
+            capabilities: {
+                additionalDirectories: true,
+                audioPrompt: false,
+                closeSession: true,
+                deleteSession: true,
+                embeddedContextPrompt: true,
+                imagePrompt: true,
+                listSessions: true,
+                loadSession: true,
+                promptQueueing: false,
+                resumeSession: true,
+                steering: false,
+                unstableForkSession: true,
+            },
+            commands: [],
+            configOptions: [],
+            directoryId: "workspace",
+            directoryLabel: "Workspace",
+            kind: "session.ready",
+            requestId: `ready-${sessionId}`,
+            restored: sessionId !== parentSessionId,
+            sessionId,
+        });
+        const turn = async (sessionId: string, commandId: string, prompt: string): Promise<void> => {
+            expect(
+                (
+                    await record({
+                        attemptId: `attempt-${commandId}`,
+                        commandId,
+                        epoch: `epoch-${commandId}`,
+                        kind: "session.started",
+                        prompt,
+                        sequence: 0,
+                        sessionId,
+                    })
+                ).status,
+            ).toBe(201);
+            expect(
+                (await record({ commandId, kind: "session.completed", sessionId, stopReason: "end_turn" })).status,
+            ).toBe(201);
+        };
+
+        expect((await record(ready(parentSessionId))).status).toBe(201);
+        await turn(parentSessionId, "parent-command-1", "Parent turn one");
+        expect((await record(ready(childSessionId))).status).toBe(201);
+        expect(
+            (
+                await record({
+                    kind: "session.forked",
+                    sessionId: childSessionId,
+                    sourceSessionId: parentSessionId,
+                    throughCommandId: "parent-command-1",
+                })
+            ).status,
+        ).toBe(201);
+
+        const directory = await worker.fetch(
+            new Request(`https://recording.internal/v1/projects/standalone/runtimes/${runtimeId}/sessions`),
+            env,
+        );
+        expect(directory.status).toBe(200);
+        const directoryBody = await directory.json<{ readonly sessions: readonly { readonly sessionId: string }[] }>();
+        expect(directoryBody.sessions.map((session) => session.sessionId)).toContain(childSessionId);
+
+        await turn(parentSessionId, "parent-command-2", "Parent turn two");
+        await turn(childSessionId, "child-command-1", "Child turn one");
+
+        const history = await worker.fetch(
+            new Request(
+                `https://recording.internal/v1/projects/standalone/runtimes/${runtimeId}/sessions/${childSessionId}/events`,
+            ),
+            env,
+        );
+        expect(history.status).toBe(200);
+        const body = await history.json<{
+            readonly segments: readonly {
+                readonly entries: readonly { readonly envelope: { readonly payload: string } }[];
+                readonly sessionId: string;
+                readonly throughCommandId: string | null;
+            }[];
+        }>();
+        expect(
+            body.segments.map((segment) => ({
+                commands: segment.entries
+                    .map((entry) => JSON.parse(entry.envelope.payload) as { readonly commandId?: string })
+                    .flatMap((event) => (event.commandId === undefined ? [] : [event.commandId])),
+                sessionId: segment.sessionId,
+                throughCommandId: segment.throughCommandId,
+            })),
+        ).toEqual([
+            {
+                commands: ["parent-command-1", "parent-command-1"],
+                sessionId: parentSessionId,
+                throughCommandId: "parent-command-1",
+            },
+            {
+                commands: ["child-command-1", "child-command-1"],
+                sessionId: childSessionId,
+                throughCommandId: null,
+            },
+        ]);
+
+        expect((await record(ready(grandchildSessionId))).status).toBe(201);
+        expect(
+            (
+                await record({
+                    kind: "session.forked",
+                    sessionId: grandchildSessionId,
+                    sourceSessionId: childSessionId,
+                    throughCommandId: "child-command-1",
+                })
+            ).status,
+        ).toBe(201);
+        await turn(childSessionId, "child-command-2", "Child turn two");
+        await turn(grandchildSessionId, "grandchild-command-1", "Grandchild turn one");
+
+        const grandchildHistory = await worker.fetch(
+            new Request(
+                `https://recording.internal/v1/projects/standalone/runtimes/${runtimeId}/sessions/${grandchildSessionId}/events`,
+            ),
+            env,
+        );
+        expect(grandchildHistory.status).toBe(200);
+        const grandchildBody = await grandchildHistory.json<typeof body>();
+        expect(
+            grandchildBody.segments.map((segment) => ({
+                commands: segment.entries
+                    .map((entry) => JSON.parse(entry.envelope.payload) as { readonly commandId?: string })
+                    .flatMap((event) => (event.commandId === undefined ? [] : [event.commandId])),
+                sessionId: segment.sessionId,
+                throughCommandId: segment.throughCommandId,
+            })),
+        ).toEqual([
+            {
+                commands: ["parent-command-1", "parent-command-1"],
+                sessionId: parentSessionId,
+                throughCommandId: "parent-command-1",
+            },
+            {
+                commands: ["child-command-1", "child-command-1"],
+                sessionId: childSessionId,
+                throughCommandId: "child-command-1",
+            },
+            {
+                commands: ["grandchild-command-1", "grandchild-command-1"],
+                sessionId: grandchildSessionId,
+                throughCommandId: null,
+            },
+        ]);
+    });
+
     it("Given a recorded Session is active, When content events and a terminal event arrive, Then only directory lifecycle events advance its recency", async () => {
         vi.useFakeTimers({ toFake: ["Date"] });
         try {
@@ -280,9 +456,25 @@ describe("Recording Worker", () => {
             env,
         );
         expect(history.status).toBe(200);
-        const body = await history.json<{ entries: readonly unknown[]; recordingEpoch: string }>();
-        expect(body.recordingEpoch).toBe(epoch);
-        expect(body.entries).toHaveLength(1);
+        const body = await history.json<{
+            readonly sessionId: string;
+            readonly segments: readonly {
+                readonly entries: readonly unknown[];
+                readonly recordingEpoch: string;
+                readonly sessionId: string;
+                readonly throughCommandId: string | null;
+            }[];
+        }>();
+        expect(body).toMatchObject({ sessionId: "session-1" });
+        expect(body.segments).toEqual([
+            {
+                entries: expect.any(Array),
+                recordingEpoch: epoch,
+                sessionId: "session-1",
+                throughCommandId: null,
+            },
+        ]);
+        expect(body.segments[0]?.entries).toHaveLength(1);
     });
 
     it("Given an event identifier already belongs to another frame, When it is written again, Then Recording rejects the conflict", async () => {

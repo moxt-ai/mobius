@@ -1,0 +1,1 @@
+ALTER TABLE `acp_session` ADD `last_terminal_command_id` text;

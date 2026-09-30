@@ -114,6 +114,21 @@ export class SessionEventOutbox {
     };
 
     readonly enqueue = (sessionId: string, payload: string, critical: boolean): ReliableSessionEventEnvelope => {
+        const envelope = this.enqueueBatch(sessionId, [payload], critical)[0];
+        if (envelope === undefined) {
+            throw new Error("The Session event outbox did not enqueue the event");
+        }
+        return envelope;
+    };
+
+    readonly enqueueBatch = (
+        sessionId: string,
+        payloads: readonly string[],
+        critical: boolean,
+    ): readonly ReliableSessionEventEnvelope[] => {
+        if (payloads.length < 1 || payloads.length > 32) {
+            throw new Error("A Session event batch must contain between 1 and 32 events");
+        }
         this.#database.exec("BEGIN IMMEDIATE");
         try {
             const state = this.#database
@@ -124,43 +139,54 @@ export class SessionEventOutbox {
                 )
                 .get();
             const sourceSeq = rowNumber(state, "next_source_seq");
-            if (sourceSeq < 1 || !Number.isSafeInteger(sourceSeq + 1)) {
+            if (sourceSeq < 1 || !Number.isSafeInteger(sourceSeq + payloads.length)) {
                 throw new Error("The Session event source sequence is exhausted");
             }
-            const envelope: ReliableSessionEventEnvelope = {
-                delivery: {
-                    eventId: randomUUID(),
-                    kind: "reliable",
-                    sourceSeq: sourceSeq.toString(),
-                    streamId: rowString(state, "stream_id"),
-                },
-                kind: SESSION_EVENT_KIND,
-                payload,
-                sessionId,
-            };
-            const encoded = encodeSessionEventEnvelope(envelope);
-            const byteLength = Buffer.byteLength(encoded, "utf8");
+            const streamId = rowString(state, "stream_id");
+            const stored = payloads.map((payload, index) => {
+                const envelope: ReliableSessionEventEnvelope = {
+                    delivery: {
+                        eventId: randomUUID(),
+                        kind: "reliable",
+                        sourceSeq: (sourceSeq + index).toString(),
+                        streamId,
+                    },
+                    kind: SESSION_EVENT_KIND,
+                    payload,
+                    sessionId,
+                };
+                const encoded = encodeSessionEventEnvelope(envelope);
+                return { byteLength: Buffer.byteLength(encoded, "utf8"), encoded, envelope };
+            });
+            const byteLength = stored.reduce((total, entry) => total + entry.byteLength, 0);
             const maximumBytes = critical ? this.#limits.criticalEventBytes : this.#limits.standardEventBytes;
             if (rowNumber(state, "total_bytes") + byteLength > maximumBytes) {
                 throw new SessionEventOutboxCapacityError();
             }
-            this.#database
-                .prepare(
-                    `INSERT INTO relay_session_event_outbox (
-                        event_id, session_id, source_seq, byte_length, envelope_json
-                    ) VALUES (?, ?, ?, ?, ?)`,
-                )
-                .run(envelope.delivery.eventId, sessionId, sourceSeq, byteLength, encoded);
+            const insert = this.#database.prepare(
+                `INSERT INTO relay_session_event_outbox (
+                    event_id, session_id, source_seq, byte_length, envelope_json
+                ) VALUES (?, ?, ?, ?, ?)`,
+            );
+            for (const entry of stored) {
+                insert.run(
+                    entry.envelope.delivery.eventId,
+                    sessionId,
+                    Number(entry.envelope.delivery.sourceSeq),
+                    entry.byteLength,
+                    entry.encoded,
+                );
+            }
             this.#database
                 .prepare(
                     `UPDATE relay_session_event_outbox_state
-                     SET next_source_seq = next_source_seq + 1,
+                     SET next_source_seq = next_source_seq + ?,
                          total_bytes = total_bytes + ?
                      WHERE singleton = 1`,
                 )
-                .run(byteLength);
+                .run(stored.length, byteLength);
             this.#database.exec("COMMIT");
-            return envelope;
+            return stored.map((entry) => entry.envelope);
         } catch (error) {
             this.#database.exec("ROLLBACK");
             throw error;

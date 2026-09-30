@@ -60,6 +60,7 @@ export const SESSION_EVENT_KIND = "session.event";
 export const SESSION_EVENT_ACK_KIND = "session.event.ack";
 export const SESSION_EVENT_DEFERRED_KIND = "session.event.deferred";
 export const SESSION_EVENT_REJECTED_KIND = "session.event.rejected";
+export const SESSION_FORKED_KIND = "session.forked";
 
 export const SessionEventRejectionCode = {
     IdempotencyConflict: "idempotency_conflict",
@@ -150,8 +151,19 @@ const sessionQueueChangedSchema = z
     .readonly();
 export type SessionQueueChangedEvent = z.infer<typeof sessionQueueChangedSchema>;
 
+const sessionForkedSchema = z
+    .strictObject({
+        kind: z.literal(SESSION_FORKED_KIND),
+        sessionId: identifierStringSchema,
+        sourceSessionId: identifierStringSchema,
+        throughCommandId: identifierStringSchema,
+    })
+    .readonly();
+export type SessionForkedEvent = z.infer<typeof sessionForkedSchema>;
+
 export type RecordedSessionEvent =
     | SessionQueueChangedEvent
+    | SessionForkedEvent
     | AgentActivityEvent
     | AgentActivityNarrationEvent
     | AgentContentEvent
@@ -224,6 +236,8 @@ export function decodeRecordedSessionEvent(encoded: string): RecordedSessionEven
     switch (kind) {
         case SESSION_QUEUE_CHANGED_KIND:
             return decode(encoded, sessionQueueChangedSchema);
+        case SESSION_FORKED_KIND:
+            return decode(encoded, sessionForkedSchema);
         case AGENT_ACTIVITY_KIND:
             return decodeAgentActivityEvent(encoded);
         case AGENT_ACTIVITY_NARRATION_KIND:

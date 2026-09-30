@@ -15,7 +15,9 @@ import { applyDurableObjectMigrations } from "./durable-object-migrations.ts";
 type RecordingDirectoryDatabase = DrizzleSqliteDODatabase<typeof schema>;
 type RecordingDirectoryEvent = Extract<
     RecordedSessionEvent,
-    { readonly kind: "session.completed" | "session.failed" | "session.ready" | "session.started" }
+    {
+        readonly kind: "session.completed" | "session.failed" | "session.forked" | "session.ready" | "session.started";
+    }
 >;
 
 function decodeAdditionalDirectoryIds(encoded: string): readonly string[] {
@@ -63,6 +65,29 @@ export class RecordingDirectoryStorage {
                         set: values,
                         target: recordingSessionSummary.sessionId,
                     })
+                    .run();
+                return;
+            }
+            if (event.kind === "session.forked") {
+                if (existing === undefined) {
+                    throw new Error("The forked Session is not ready");
+                }
+                const source = this.#database
+                    .select({ title: recordingSessionSummary.title })
+                    .from(recordingSessionSummary)
+                    .where(eq(recordingSessionSummary.sessionId, event.sourceSessionId))
+                    .get();
+                if (source === undefined) {
+                    throw new Error("The fork source is not in the Recording directory");
+                }
+                this.#database
+                    .update(recordingSessionSummary)
+                    .set({
+                        prompted: true,
+                        title: source.title,
+                        updatedAt: Math.max(existing.updatedAt, recordedAt),
+                    })
+                    .where(eq(recordingSessionSummary.sessionId, write.envelope.sessionId))
                     .run();
                 return;
             }

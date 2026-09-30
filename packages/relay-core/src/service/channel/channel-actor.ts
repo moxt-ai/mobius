@@ -151,7 +151,7 @@ export class ChannelActor {
     readonly #pendingNativeImports = new Map<
         string,
         | {
-              readonly action: "import" | "fork";
+              readonly action: "import" | "fork" | "fork-recorded";
               readonly sessionId: string;
               readonly agentId: string;
               readonly directoryId: string;
@@ -232,7 +232,7 @@ export class ChannelActor {
             }
             if (kind === NATIVE_SESSION_RESULT_KIND) {
                 const result = message;
-                if (result.action === "import" || result.action === "fork") {
+                if (result.action === "import" || result.action === "fork" || result.action === "fork-recorded") {
                     const pending = this.#pendingNativeImports.get(result.requestId);
                     if (
                         pending === undefined ||
@@ -369,7 +369,7 @@ export class ChannelActor {
                         });
                     }
                 }
-                if (request.action === "import" || request.action === "fork") {
+                if (request.action === "import" || request.action === "fork" || request.action === "fork-recorded") {
                     const now = this.#clock.now();
                     this.expireNativeImports(now);
                     if (

@@ -18,10 +18,19 @@ const sessionRecordingEntrySchema = z
     })
     .readonly();
 
-const sessionRecordingHistorySchema = z
+const sessionRecordingSegmentSchema = z
     .strictObject({
         entries: z.array(sessionRecordingEntrySchema).max(100_000).readonly(),
         recordingEpoch: identifierStringSchema,
+        sessionId: identifierStringSchema,
+        throughCommandId: identifierStringSchema.nullable(),
+    })
+    .readonly();
+
+const sessionRecordingHistorySchema = z
+    .strictObject({
+        segments: z.array(sessionRecordingSegmentSchema).min(1).max(32).readonly(),
+        sessionId: identifierStringSchema,
     })
     .readonly();
 
@@ -45,6 +54,7 @@ const sessionRecordingDirectorySchema = z
 
 export type SessionRecordingWrite = z.infer<typeof sessionRecordingWriteSchema>;
 export type SessionRecordingEntry = z.infer<typeof sessionRecordingEntrySchema>;
+export type SessionRecordingSegment = z.infer<typeof sessionRecordingSegmentSchema>;
 export type SessionRecordingHistory = z.infer<typeof sessionRecordingHistorySchema>;
 export type SessionRecordingSummary = z.infer<typeof sessionRecordingSummarySchema>;
 export type SessionRecordingDirectory = z.infer<typeof sessionRecordingDirectorySchema>;
