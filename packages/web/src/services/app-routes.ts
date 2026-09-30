@@ -87,13 +87,13 @@ export class ProjectRuntimeWorkspaceRoutePaths extends WorkspaceRoutePaths {
     readonly rootPath: string;
     readonly runtimesPath: string;
 
-    constructor(projectId: string, runtimeId: string, accessChannelId: string) {
+    constructor(projectId: string, runtimeId: string, accessChannelId: string, standalone: boolean) {
         super();
         // Standalone authenticates the browser at the Project boundary. Its token cannot mint or
         // administer channel access grants, so do not advertise a route that will
         // always reject that credential.
         this.access =
-            projectId !== "standalone" && isIdentifier(accessChannelId)
+            !standalone && isIdentifier(accessChannelId)
                 ? { kind: "available", path: channelAccessRoutePath(accessChannelId) }
                 : { kind: "unavailable" };
         this.rootPath = projectRuntimeRoutePath(projectId, runtimeId);

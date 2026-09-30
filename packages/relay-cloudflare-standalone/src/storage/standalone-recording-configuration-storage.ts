@@ -1,7 +1,6 @@
 import { relayDrizzle, type SqlDatabase } from "@moxt-ai/mobius-relay-core/database";
-import { pairingChannel } from "@moxt-ai/mobius-relay-core/schema";
-import { count, eq } from "drizzle-orm";
-import { standaloneRecordingConfiguration } from "../schema/d1/standalone-recording-configuration.ts";
+import { eq } from "drizzle-orm";
+import { standaloneProjectRecordingConfiguration } from "../schema/d1/standalone-project-recording-configuration.ts";
 
 export type StandaloneRecordingConfiguration =
     | { readonly state: "unconfigured" }
@@ -18,40 +17,40 @@ export class StandaloneRecordingConfigurationStorage {
         this.#database = database;
     }
 
-    readonly read = async (signal: AbortSignal): Promise<StandaloneRecordingConfiguration> => {
+    readonly read = async (projectId: string, signal: AbortSignal): Promise<StandaloneRecordingConfiguration> => {
         const database = relayDrizzle(this.#database, signal);
         const configured = await database
-            .select({ enabled: standaloneRecordingConfiguration.enabled })
-            .from(standaloneRecordingConfiguration)
-            .where(eq(standaloneRecordingConfiguration.singleton, 1))
+            .select({ enabled: standaloneProjectRecordingConfiguration.enabled })
+            .from(standaloneProjectRecordingConfiguration)
+            .where(eq(standaloneProjectRecordingConfiguration.projectId, projectId))
             .limit(1);
         const row = configured[0];
         if (row !== undefined) {
             return { enabled: row.enabled, state: "configured" };
         }
-        const pairingCount = await database.select({ value: count() }).from(pairingChannel);
         signal.throwIfAborted();
-        return (pairingCount[0]?.value ?? 0) > 0 ? { enabled: false, state: "configured" } : { state: "unconfigured" };
+        return { state: "unconfigured" };
     };
 
     readonly configure = async (
+        projectId: string,
         enabled: boolean,
         now: number,
         signal: AbortSignal,
     ): Promise<StandaloneRecordingConfigurationWrite> => {
-        const current = await this.read(signal);
+        const current = await this.read(projectId, signal);
         if (current.state === "configured") {
             return { enabled: current.enabled, kind: "locked" };
         }
         try {
             await relayDrizzle(this.#database, signal)
-                .insert(standaloneRecordingConfiguration)
-                .values({ configuredAt: now, enabled, singleton: 1 });
+                .insert(standaloneProjectRecordingConfiguration)
+                .values({ configuredAt: now, enabled, projectId });
             signal.throwIfAborted();
             return { enabled, kind: "configured" };
         } catch (cause) {
             signal.throwIfAborted();
-            const resolved = await this.read(signal);
+            const resolved = await this.read(projectId, signal);
             if (resolved.state === "configured") {
                 return { enabled: resolved.enabled, kind: "locked" };
             }

@@ -365,6 +365,8 @@ export class ProjectRuntimeCredentialAuthority extends ChannelCredentialAuthorit
     }
 }
 
+export class StandaloneProjectRuntimeCredentialAuthority extends ProjectRuntimeCredentialAuthority {}
+
 export class ChannelConnection {
     readonly accessChannelId: string;
     readonly agents: readonly AgentOption[];

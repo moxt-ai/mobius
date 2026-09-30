@@ -50,7 +50,7 @@ export class StandaloneSessionRecording implements SessionRecording {
         envelope: Parameters<SessionRecording["deliver"]>[1],
         signal: AbortSignal,
     ): Promise<SessionRecordingDeliveryResult> => {
-        const configuration = await this.#configuration.read(signal);
+        const configuration = await this.#configuration.read(target.projectId, signal);
         if (configuration.state === "unconfigured" || !configuration.enabled) {
             return { kind: "relayed" };
         }

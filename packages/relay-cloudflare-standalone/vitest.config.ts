@@ -4,7 +4,7 @@ import { defineConfig, type ViteUserConfig } from "vitest/config";
 
 const packageDirectory = fileURLToPath(new URL(".", import.meta.url));
 const wranglerConfigPath = fileURLToPath(new URL("./wrangler.test.jsonc", import.meta.url));
-const migrationsPath = fileURLToPath(new URL("../relay-core/migrations/d1", import.meta.url));
+const migrationsPath = fileURLToPath(new URL("./migrations/d1", import.meta.url));
 
 export default defineConfig(async (): Promise<ViteUserConfig> => {
     const migrations = await readD1Migrations(migrationsPath);

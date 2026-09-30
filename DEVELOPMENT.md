@@ -1,6 +1,6 @@
 # Development
 
-Mobius serves Mobius Chat through the Platform Worker and SDK. The Standalone Worker exposes the same Project, Runtime, and Session API under a single deployment-owned Project. The local CLI connects to either Worker, discovers ACP agents, and executes session commands. Protocol messages cross the client, Worker, and daemon boundaries; validate them at each receiving boundary.
+Mobius serves Mobius Chat through the Platform Worker and SDK. The Standalone Worker exposes the same Project, Runtime, and Session API without a Platform control plane. Each Standalone pairing workflow creates its own Project and Project owner credential before creating the Runtime pairing; the deployment credential remains an operator credential across those Projects. The local CLI connects to either Worker, discovers ACP agents, and executes session commands. Protocol messages cross the client, Worker, and daemon boundaries; validate them at each receiving boundary.
 
 ## Data and migrations
 
@@ -8,7 +8,7 @@ The project starts from new databases and has no old-data import path. Authorita
 
 After `main` passes validation, CI applies committed D1 migrations to each remote database immediately before deploying the Worker that consumes that schema. Migration failure stops that environment's deployment. CI addresses databases by their stable Cloudflare database names and authenticates migrations with environment-scoped `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_D1_API_TOKEN` values. The D1 token grants only D1 Edit on the target account; the separate `CLOUDFLARE_API_TOKEN` retains the permissions required to deploy the Worker.
 
-Sessions are handled in the corresponding Runtime Relay. Session content is not retained in cloud storage. Do not add a retained-content mode or a migration path for previous Mobius deployments.
+Sessions are handled in the corresponding Runtime Relay. Live delivery remains transient. An optional Recording Worker can retain the reliable Session event stream when an App or Project policy enables it; otherwise historical content remains Agent-owned on the connected local Runtime. There is no import path for previous Mobius deployments.
 
 ## Boundaries
 

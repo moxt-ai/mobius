@@ -28,6 +28,7 @@ import {
     pairingCommand,
     readBrowserPairingStatus,
     readStandaloneRecordingConfiguration,
+    resetStandaloneProjectCredentialProvider,
 } from "@/services/pairing-api";
 
 const POLL_INTERVAL_MILLISECONDS = 1_200;
@@ -174,7 +175,7 @@ function RecordingChoice({
                         <span className="block text-sm font-semibold">Enable Recording</span>
                         <span className="mt-1 block text-xs leading-5 text-muted-foreground">
                             {providerAvailable
-                                ? "This choice applies to this Standalone deployment and cannot be changed after pairing starts."
+                                ? "This choice applies to the Project created for this pairing and cannot be changed after pairing starts."
                                 : "No Recording Worker is installed. Conversations will continue to load from the daemon."}
                         </span>
                     </span>
@@ -405,6 +406,7 @@ function PairingWorkflow({
                             window.setTimeout(resolve, CONNECTED_PAUSE_MILLISECONDS);
                         });
                         if (!controller.signal.aborted) {
+                            resetStandaloneProjectCredentialProvider();
                             onConnected(status.connection);
                         }
                         return;
@@ -462,7 +464,17 @@ function PairingWorkflow({
 
 export function Pair({ onConnected }: { readonly onConnected: (connection: ChannelConnection) => void }) {
     const [generation, setGeneration] = useState(0);
-    const retry = (): void => setGeneration((value) => value + 1);
+    const retry = (): void => {
+        resetStandaloneProjectCredentialProvider();
+        setGeneration((value) => value + 1);
+    };
+
+    useEffect(
+        () => () => {
+            resetStandaloneProjectCredentialProvider();
+        },
+        [],
+    );
 
     return <PairingWorkflow key={generation} onConnected={onConnected} onRetry={retry} />;
 }

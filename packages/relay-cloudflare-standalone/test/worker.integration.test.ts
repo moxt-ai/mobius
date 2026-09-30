@@ -4,7 +4,6 @@ import {
     MobiusClient,
     type MobiusHttpTransport,
     MobiusRuntimePairingRequest,
-    MobiusStandaloneCredentialProvider,
     StaticMobiusCredentialProvider,
 } from "@moxt-ai/mobius-sdk";
 import { describe, expect, it } from "vitest";
@@ -31,7 +30,7 @@ describe("Standalone Relay", () => {
         const worker = createStandaloneWorker();
         const response = await worker.fetch(
             new Request(
-                "https://standalone.test/mobius/api/v1/standalone/recording/sessions/%E0%A4%A/events?runtimeId=runtime-1",
+                "https://standalone.test/mobius/api/v1/projects/%E0%A4%A/recording/sessions/session-1/events?runtimeId=runtime-1",
             ),
             env,
         );
@@ -40,37 +39,51 @@ describe("Standalone Relay", () => {
         expect(await response.json()).toMatchObject({ error: { code: "invalid_request" } });
     });
 
-    it("Given no Runtime has been paired, When the first browser chooses its Recording setting, Then the choice becomes fixed for later pairings", async () => {
+    it("Given two Standalone pairing workflows, When each Project chooses Recording, Then their Projects and policies are independent", async () => {
         const worker = createStandaloneWorker();
-        const credentialResponse = await worker.fetch(
-            new Request("https://standalone.test/mobius/api/v1/standalone/browser-credentials", { method: "POST" }),
-            env,
-        );
-        expect(credentialResponse.status).toBe(201);
-        const credential = await credentialResponse.json<{ token: string }>();
-        const request = (method: "GET" | "PUT", body?: object) =>
-            new Request("https://standalone.test/mobius/api/v1/standalone/recording", {
+        const createProject = async (): Promise<{ readonly projectId: string; readonly token: string }> => {
+            const response = await worker.fetch(
+                new Request("https://standalone.test/mobius/api/v1/standalone/projects", { method: "POST" }),
+                env,
+            );
+            expect(response.status).toBe(201);
+            return await response.json<{ readonly projectId: string; readonly token: string }>();
+        };
+        const first = await createProject();
+        const second = await createProject();
+        expect(first.projectId).not.toBe(second.projectId);
+
+        const recordingRequest = (
+            project: { readonly projectId: string; readonly token: string },
+            method: "GET" | "PUT",
+            body?: object,
+        ) =>
+            new Request(`https://standalone.test/mobius/api/v1/projects/${project.projectId}/recording`, {
                 ...(body === undefined ? {} : { body: JSON.stringify(body) }),
                 headers: {
-                    authorization: `Bearer ${credential.token}`,
+                    authorization: `Bearer ${project.token}`,
                     ...(body === undefined ? {} : { "content-type": "application/json" }),
                 },
                 method,
             });
 
-        const initial = await worker.fetch(request("GET"), env);
-        expect(initial.status).toBe(200);
-        expect(await initial.json()).toEqual({ providerAvailable: false, state: "unconfigured" });
+        const firstInitial = await worker.fetch(recordingRequest(first, "GET"), env);
+        expect(firstInitial.status).toBe(200);
+        expect(await firstInitial.json()).toEqual({ providerAvailable: false, state: "unconfigured" });
 
-        const unavailable = await worker.fetch(request("PUT", { enabled: true }), env);
+        const unavailable = await worker.fetch(recordingRequest(first, "PUT", { enabled: true }), env);
         expect(unavailable.status).toBe(409);
         expect(await unavailable.json()).toMatchObject({ error: { code: "recording_provider_unavailable" } });
 
-        const configured = await worker.fetch(request("PUT", { enabled: false }), env);
+        const configured = await worker.fetch(recordingRequest(first, "PUT", { enabled: false }), env);
         expect(configured.status).toBe(200);
         expect(await configured.json()).toEqual({ enabled: false, providerAvailable: false, state: "configured" });
 
-        const locked = await worker.fetch(request("PUT", { enabled: true }), env);
+        const secondInitial = await worker.fetch(recordingRequest(second, "GET"), env);
+        expect(secondInitial.status).toBe(200);
+        expect(await secondInitial.json()).toEqual({ providerAvailable: false, state: "unconfigured" });
+
+        const locked = await worker.fetch(recordingRequest(first, "PUT", { enabled: true }), env);
         expect(locked.status).toBe(409);
         expect(await locked.json()).toMatchObject({ error: { code: "recording_configuration_locked" } });
     });
@@ -80,41 +93,50 @@ describe("Standalone Relay", () => {
         const transport: MobiusHttpTransport = {
             fetch: async (request) => await worker.fetch(request, env),
         };
-        const provider = new MobiusStandaloneCredentialProvider({
-            endpoint: "https://standalone.test",
-            transport,
-        });
+        const projectResponse = await transport.fetch(
+            new Request("https://standalone.test/mobius/api/v1/standalone/projects", {
+                body: "{}",
+                headers: { "content-type": "application/json" },
+                method: "POST",
+                signal: AbortSignal.timeout(5_000),
+            }),
+        );
+        expect(projectResponse.status).toBe(201);
+        const credential = await projectResponse.json<{ readonly projectId: string; readonly token: string }>();
+        const provider = new StaticMobiusCredentialProvider(credential.token);
         const client = new MobiusClient({
             credentialProvider: provider,
             endpoint: "https://standalone.test",
-            projectId: "standalone",
+            projectId: credential.projectId,
             transport,
         });
-        const credential = await provider.browserCredential(AbortSignal.timeout(5_000));
-        expect(credential.projectId).toBe("standalone");
+        expect(credential.projectId).toMatch(/^prj_/u);
         expect(credential.token).not.toBe(env.MOBIUS_STANDALONE_TOKEN);
 
         const pairing = await client.runtimePairings.create(
             new MobiusRuntimePairingRequest("browser-machine"),
             AbortSignal.timeout(5_000),
         );
-        expect(pairing.projectId).toBe("standalone");
-        await expect(
-            client.credentials.issue(new MobiusBrowserCredentialRequest(60), AbortSignal.timeout(5_000)),
-        ).rejects.toMatchObject({ code: "project_permission_denied" });
+        expect(pairing.projectId).toBe(credential.projectId);
+        const delegated = await client.credentials.issue(
+            new MobiusBrowserCredentialRequest(60),
+            AbortSignal.timeout(5_000),
+        );
+        expect(delegated.token).not.toBe(credential.token);
+        await client.credentials.revoke(delegated.credentialId, AbortSignal.timeout(5_000));
 
         const owner = new MobiusClient({
             credentialProvider: new StaticMobiusCredentialProvider(env.MOBIUS_STANDALONE_TOKEN),
             endpoint: "https://standalone.test",
-            projectId: "standalone",
+            projectId: credential.projectId,
             transport,
         });
-        const delegated = await owner.credentials.issue(
+        const deploymentDelegated = await owner.credentials.issue(
             new MobiusBrowserCredentialRequest(60),
             AbortSignal.timeout(5_000),
         );
-        expect(delegated.token).not.toBe(env.MOBIUS_STANDALONE_TOKEN);
-        await owner.credentials.revoke(delegated.credentialId, AbortSignal.timeout(5_000));
+        expect(deploymentDelegated.token).not.toBe(env.MOBIUS_STANDALONE_TOKEN);
+        await owner.credentials.revoke(deploymentDelegated.credentialId, AbortSignal.timeout(5_000));
 
         const compatibilityRoute = await worker.fetch(
             new Request("https://standalone.test/mobius/api/pairings", { method: "POST" }),
@@ -127,7 +149,12 @@ describe("Standalone Relay", () => {
 
     it("Given a self-hosted Relay, When its owner creates a Runtime pairing, Then the pairing is usable without Platform credentials", async () => {
         const worker = createStandaloneWorker();
-        const url = "https://standalone.test/mobius/api/v1/projects/standalone/runtime-pairings";
+        const createdProject = await worker.fetch(
+            new Request("https://standalone.test/mobius/api/v1/standalone/projects", { method: "POST" }),
+            env,
+        );
+        const project = await createdProject.json<{ readonly projectId: string }>();
+        const url = `https://standalone.test/mobius/api/v1/projects/${project.projectId}/runtime-pairings`;
         const request = (credential: string) =>
             new Request(url, {
                 method: "POST",
@@ -146,7 +173,7 @@ describe("Standalone Relay", () => {
         const created = await worker.fetch(request(env.MOBIUS_STANDALONE_TOKEN), env);
         expect(created.status).toBe(201);
         const pairing: unknown = await created.json();
-        expect(pairing).toMatchObject({ projectId: "standalone" });
+        expect(pairing).toMatchObject({ projectId: project.projectId });
         if (typeof pairing !== "object" || pairing === null) {
             throw new Error("The pairing response is invalid");
         }
@@ -216,7 +243,7 @@ describe("Standalone Relay", () => {
                 headers: [["authorization", `Bearer ${env.MOBIUS_STANDALONE_TOKEN}`]],
                 kind: "http.request",
                 method: "GET",
-                path: "/mobius/api/v1/projects/standalone/runtimes",
+                path: `/mobius/api/v1/projects/${project.projectId}/runtimes`,
                 requestId: "list-runtimes",
             }),
         );
