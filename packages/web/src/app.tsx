@@ -23,7 +23,7 @@ import { RuntimeManagementPage } from "@/components/runtime-management-page";
 import { Button } from "@/components/ui/button";
 import { WorkspaceRouteProvider } from "@/components/workspace-route-provider";
 import type { ChannelConnection, ChannelHistory } from "@/domain/channel";
-import { isIdentifier, PairingApiError } from "@/domain/channel";
+import { isIdentifier, PairingApiError, StandaloneProjectRuntimeCredentialAuthority } from "@/domain/channel";
 import {
     ChannelWorkspaceRoutePaths,
     decodeProjectRuntimeRouteState,
@@ -471,7 +471,12 @@ function ProjectRuntimeRoute() {
         return <ChannelErrorPage message="The Project Runtime route is malformed." title="Invalid Runtime" />;
     }
     if (state instanceof ReadyChannelRouteState && state.connection.projectId === projectId) {
-        const routes = new ProjectRuntimeWorkspaceRoutePaths(projectId, runtimeId, state.connection.accessChannelId);
+        const routes = new ProjectRuntimeWorkspaceRoutePaths(
+            projectId,
+            runtimeId,
+            state.connection.accessChannelId,
+            state.connection.credentialAuthority instanceof StandaloneProjectRuntimeCredentialAuthority,
+        );
         return (
             <WorkspaceRouteProvider routes={routes}>
                 <ChannelWorkspace

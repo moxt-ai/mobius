@@ -6,6 +6,7 @@ import {
 import { StandaloneDatabaseResolver } from "./standalone-database-resolver.ts";
 import { StandaloneProjectStorageDirectory } from "./standalone-project-storage-directory.ts";
 import { StandaloneSessionRecording, standaloneRecordingProvider } from "./standalone-session-recording.ts";
+import { StandaloneProjectStorage } from "./storage/standalone-project-storage.ts";
 import { StandaloneRecordingConfigurationStorage } from "./storage/standalone-recording-configuration-storage.ts";
 
 export interface StandaloneDurableObjectEnvironment {
@@ -19,11 +20,13 @@ export function createStandaloneDurableObjectContext(
     state: DurableObjectState,
     environment: StandaloneDurableObjectEnvironment,
 ) {
+    const database = D1DatabaseAdapter.from(environment.DIRECTORY_DATABASE);
+    const projects = new StandaloneProjectStorage(database);
     return createDurableObjectContext(state, {
         databases: new StandaloneDatabaseResolver(environment.DIRECTORY_DATABASE),
-        projects: new StandaloneProjectStorageDirectory(),
+        projects: new StandaloneProjectStorageDirectory(projects),
         recording: new StandaloneSessionRecording(
-            new StandaloneRecordingConfigurationStorage(D1DatabaseAdapter.from(environment.DIRECTORY_DATABASE)),
+            new StandaloneRecordingConfigurationStorage(database),
             standaloneRecordingProvider(environment),
         ),
     });

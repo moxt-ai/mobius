@@ -65,6 +65,7 @@ import {
     type RecordedSessionExecution,
     type RecordedTurn,
     RunningRecordedTurn,
+    StandaloneProjectRuntimeCredentialAuthority,
     type TurnTiming,
     UNAVAILABLE_RECORDED_SESSION_EXECUTION,
     UNTIMED_TURN,
@@ -109,6 +110,10 @@ export function standaloneProjectCredentialProvider(): MobiusStandaloneCredentia
     return provider;
 }
 
+export function resetStandaloneProjectCredentialProvider(): void {
+    standaloneCredentialProviderState = undefined;
+}
+
 function decodeStandaloneRecordingConfiguration(value: unknown): StandaloneRecordingConfiguration {
     if (!isRecord(value) || typeof value["providerAvailable"] !== "boolean") {
         throw new PairingApiError("invalid_relay_response", "The relay returned an invalid Recording configuration.");
@@ -132,16 +137,29 @@ async function standaloneRecordingRequest(
     enabled?: boolean,
 ): Promise<StandaloneRecordingConfiguration> {
     const provider = standaloneProjectCredentialProvider();
-    const token = await provider.credential(requestSignal(signal));
-    const response = await fetch(new URL(`${MOBIUS_API_PREFIX}/v1/standalone/recording`, window.location.origin), {
-        ...(enabled === undefined ? {} : { body: JSON.stringify({ enabled }) }),
-        headers: {
-            authorization: `Bearer ${token}`,
-            ...(enabled === undefined ? {} : { "content-type": "application/json" }),
+    const credential = await provider.projectCredential(requestSignal(signal));
+    return await projectRecordingRequest(credential.projectId, credential.token, method, signal, enabled);
+}
+
+async function projectRecordingRequest(
+    projectId: string,
+    token: string,
+    method: "GET" | "PUT",
+    signal: AbortSignal,
+    enabled?: boolean,
+): Promise<StandaloneRecordingConfiguration> {
+    const response = await fetch(
+        new URL(`${MOBIUS_API_PREFIX}/v1/projects/${encodeURIComponent(projectId)}/recording`, window.location.origin),
+        {
+            ...(enabled === undefined ? {} : { body: JSON.stringify({ enabled }) }),
+            headers: {
+                authorization: `Bearer ${token}`,
+                ...(enabled === undefined ? {} : { "content-type": "application/json" }),
+            },
+            method,
+            signal: requestSignal(signal),
         },
-        method,
-        signal: requestSignal(signal),
-    });
+    );
     if (!response.ok) {
         let errorCode = "recording_configuration_failed";
         let errorMessage = "The Recording configuration request failed.";
@@ -435,6 +453,25 @@ class ProjectOwnerBrowserCredential extends BrowserChannelCredential {
     }
 }
 
+class StandaloneProjectOwnerBrowserCredential extends BrowserChannelCredential {
+    readonly authority = "standalone-project-owner";
+    readonly ownerChannelId: string;
+
+    constructor(hostToken: string, projectId: string, ownerChannelId: string) {
+        super(hostToken, projectId);
+        this.ownerChannelId = ownerChannelId;
+    }
+}
+
+type ProjectOwnerCredential = ProjectOwnerBrowserCredential | StandaloneProjectOwnerBrowserCredential;
+
+function isProjectOwnerCredential(credential: BrowserChannelCredential): credential is ProjectOwnerCredential {
+    return (
+        credential instanceof ProjectOwnerBrowserCredential ||
+        credential instanceof StandaloneProjectOwnerBrowserCredential
+    );
+}
+
 /**
  * A Project Runtime connection addresses one Runtime rather than the channel that opened it. It carries the
  * host socket through the Project Runtime route, so a linked browser never needs a credential alias for
@@ -444,6 +481,9 @@ function connectionCredentialAuthority(
     credential: BrowserChannelCredential,
     accessChannelId: string,
 ): ChannelCredentialAuthority {
+    if (credential instanceof StandaloneProjectOwnerBrowserCredential) {
+        return new StandaloneProjectRuntimeCredentialAuthority(accessChannelId);
+    }
     if (credential instanceof ProjectOwnerBrowserCredential || credential instanceof LinkedBrowserChannelCredential) {
         return new ProjectRuntimeCredentialAuthority(accessChannelId);
     }
@@ -481,6 +521,7 @@ function saveProjectOwnerCredential(ownerChannelId: string, credential: BrowserC
     window.localStorage.setItem(
         `${PROJECT_OWNER_CREDENTIAL_PREFIX}${credential.projectId}`,
         JSON.stringify({
+            authority: credential.authority,
             hostToken: credential.hostToken,
             ownerChannelId,
             projectId: credential.projectId,
@@ -488,7 +529,7 @@ function saveProjectOwnerCredential(ownerChannelId: string, credential: BrowserC
     );
 }
 
-function readProjectOwnerCredential(projectId: string): ProjectOwnerBrowserCredential {
+function readProjectOwnerCredential(projectId: string): ProjectOwnerCredential {
     let value: unknown;
     try {
         const encoded = window.localStorage.getItem(`${PROJECT_OWNER_CREDENTIAL_PREFIX}${projectId}`);
@@ -511,6 +552,7 @@ function readProjectOwnerCredential(projectId: string): ProjectOwnerBrowserCrede
     const hostToken = value["hostToken"];
     const ownerChannelId = value["ownerChannelId"];
     const storedProjectId = value["projectId"];
+    const authority = value["authority"];
     if (
         typeof hostToken !== "string" ||
         !isToken(hostToken) ||
@@ -518,6 +560,12 @@ function readProjectOwnerCredential(projectId: string): ProjectOwnerBrowserCrede
         !isIdentifier(ownerChannelId) ||
         storedProjectId !== projectId
     ) {
+        throw new PairingApiError("project_owner_credential_invalid", "The saved Project owner credential is invalid.");
+    }
+    if (authority === "standalone-project-owner") {
+        return new StandaloneProjectOwnerBrowserCredential(hostToken, projectId, ownerChannelId);
+    }
+    if (authority !== undefined && authority !== "project-owner" && authority !== "owner") {
         throw new PairingApiError("project_owner_credential_invalid", "The saved Project owner credential is invalid.");
     }
     return new ProjectOwnerBrowserCredential(hostToken, projectId, ownerChannelId);
@@ -639,8 +687,8 @@ function channelConnection(
     return descriptorConnection(
         channel,
         credential,
-        credential instanceof ProjectOwnerBrowserCredential
-            ? new ProjectRuntimeCredentialAuthority(credential.ownerChannelId)
+        isProjectOwnerCredential(credential)
+            ? connectionCredentialAuthority(credential, credential.ownerChannelId)
             : channelCredentialAuthority(credential),
         channel.channelId,
     );
@@ -651,10 +699,7 @@ function runtimeConnection(
     credential: BrowserChannelCredential,
     accessChannelId: string,
 ): ChannelConnection {
-    if (
-        !(credential instanceof ProjectOwnerBrowserCredential) &&
-        !(credential instanceof LinkedBrowserChannelCredential)
-    ) {
+    if (!isProjectOwnerCredential(credential) && !(credential instanceof LinkedBrowserChannelCredential)) {
         throw new PairingApiError(
             "runtime_access_denied",
             "This browser cannot address another Runtime in the Project.",
@@ -870,7 +915,7 @@ function decodeRecordedTurn(value: unknown): RecordedTurn {
 
 export async function createBrowserPairing(signal: AbortSignal): Promise<CreatedPairing> {
     const provider = standaloneProjectCredentialProvider();
-    const credential = await provider.browserCredential(requestSignal(signal));
+    const credential = await provider.projectCredential(requestSignal(signal));
     const client = new MobiusClient({
         credentialProvider: provider,
         endpoint: window.location.origin,
@@ -881,7 +926,7 @@ export async function createBrowserPairing(signal: AbortSignal): Promise<Created
             new MobiusRuntimePairingRequest(`web-${crypto.randomUUID()}`),
             requestSignal(signal),
         );
-        const browserCredential = new ProjectOwnerBrowserCredential(
+        const browserCredential = new StandaloneProjectOwnerBrowserCredential(
             credential.token,
             credential.projectId,
             pairing.channelId,
@@ -907,7 +952,11 @@ export async function readBrowserPairingStatus(
     pairing: CreatedPairing,
     cancellationSignal: AbortSignal,
 ): Promise<BrowserPairingStatus> {
-    const credential = new ProjectOwnerBrowserCredential(pairing.browserToken, pairing.projectId, pairing.channelId);
+    const credential = new StandaloneProjectOwnerBrowserCredential(
+        pairing.browserToken,
+        pairing.projectId,
+        pairing.channelId,
+    );
     const client = publicServiceClient(credential);
     try {
         const status = await client.runtimePairings.read(pairing.pairingId, requestSignal(cancellationSignal));
@@ -1072,7 +1121,7 @@ export async function readProjectRuntimeConnection(
  * created it, so it survives a reload even when the navigation state that carried it does not.
  */
 function resolveAccessChannelId(credential: BrowserChannelCredential, requestedAccessChannelId: string): string {
-    if (credential instanceof ProjectOwnerBrowserCredential) {
+    if (isProjectOwnerCredential(credential)) {
         return credential.ownerChannelId;
     }
     return requestedAccessChannelId;
@@ -1235,10 +1284,7 @@ export async function readSessionArtifactBytes(
 
 function publicServiceClient(credential: BrowserChannelCredential): MobiusClient {
     return new MobiusClient({
-        credentialProvider:
-            credential instanceof ProjectOwnerBrowserCredential && credential.projectId === "standalone"
-                ? standaloneProjectCredentialProvider()
-                : new StaticMobiusCredentialProvider(credential.hostToken),
+        credentialProvider: new StaticMobiusCredentialProvider(credential.hostToken),
         endpoint: window.location.origin,
         projectId: credential.projectId,
     });
@@ -1267,26 +1313,8 @@ async function resolveProjectCredential(
     projectId: string,
     signal: AbortSignal,
 ): Promise<BrowserChannelCredential> {
-    if (projectId !== "standalone") {
-        return projectCredential(channelId, projectId);
-    }
-    const credential = await standaloneProjectCredentialProvider().browserCredential(requestSignal(signal));
-    let ownerChannelId = isIdentifier(channelId) ? channelId : "standalone";
-    try {
-        ownerChannelId = readProjectOwnerCredential(projectId).ownerChannelId;
-    } catch (error) {
-        if (
-            !(error instanceof PairingApiError) ||
-            (error.code !== "project_owner_credential_missing" && error.code !== "project_owner_credential_invalid")
-        ) {
-            throw error;
-        }
-    }
-    const resolved = new ProjectOwnerBrowserCredential(credential.token, credential.projectId, ownerChannelId);
-    if (ownerChannelId !== "standalone") {
-        saveProjectOwnerCredential(ownerChannelId, resolved);
-    }
-    return resolved;
+    signal.throwIfAborted();
+    return projectCredential(channelId, projectId);
 }
 
 function throwPublicApiFailure(error: unknown): never {
@@ -1302,7 +1330,7 @@ export async function readRuntimeManagementAccess(
     cancellationSignal: AbortSignal,
 ): Promise<RuntimeManagementAccess> {
     const credential = await resolveProjectCredential(channelId, projectId, cancellationSignal);
-    if (credential instanceof ProjectOwnerBrowserCredential) {
+    if (isProjectOwnerCredential(credential)) {
         return new OwnerRuntimeManagementAccess();
     }
     if (credential instanceof OwnerBrowserChannelCredential) {
@@ -1382,6 +1410,13 @@ export async function revokeProjectRuntime(
 }
 
 function connectionCredential(connection: ChannelConnection): BrowserChannelCredential {
+    if (connection.credentialAuthority instanceof StandaloneProjectRuntimeCredentialAuthority) {
+        return new StandaloneProjectOwnerBrowserCredential(
+            connection.hostToken,
+            connection.projectId,
+            connection.credentialAuthority.accessChannelId,
+        );
+    }
     if (connection.credentialAuthority instanceof ProjectRuntimeCredentialAuthority) {
         // The Project Runtime host socket was opened with the credential the route resolved, so history
         // reads reuse that same credential rather than the selected machine's own channel file.
@@ -1400,6 +1435,14 @@ function connectionCredential(connection: ChannelConnection): BrowserChannelCred
     throw new PairingApiError("channel_credential_invalid", "The saved channel credential is invalid.");
 }
 
+async function readConnectionRecordingConfiguration(
+    connection: ChannelConnection,
+    signal: AbortSignal,
+): Promise<StandaloneRecordingConfiguration> {
+    const credential = connectionCredential(connection);
+    return await projectRecordingRequest(connection.projectId, credential.hostToken, "GET", signal);
+}
+
 async function readConnectionHistoryWithSignal(
     connection: ChannelConnection,
     signal: AbortSignal,
@@ -1415,8 +1458,8 @@ async function readConnectionDirectoryWithSignal(
     connection: ChannelConnection,
     signal: AbortSignal,
 ): Promise<ChannelHistory> {
-    if (connection.projectId === "standalone") {
-        const configuration = await readStandaloneRecordingConfiguration(signal);
+    if (connection.credentialAuthority instanceof StandaloneProjectRuntimeCredentialAuthority) {
+        const configuration = await readConnectionRecordingConfiguration(connection, signal);
         if (configuration.state === "configured" && configuration.enabled) {
             return await readRecordedSessionDirectory(connection, signal);
         }
@@ -1442,11 +1485,14 @@ async function readRecordedSessionDirectory(
     connection: ChannelConnection,
     signal: AbortSignal,
 ): Promise<ChannelHistory> {
-    const token = await standaloneProjectCredentialProvider().credential(signal);
-    const url = new URL(`${MOBIUS_API_PREFIX}/v1/standalone/recording/sessions`, window.location.origin);
+    const credential = connectionCredential(connection);
+    const url = new URL(
+        `${MOBIUS_API_PREFIX}/v1/projects/${encodeURIComponent(connection.projectId)}/recording/sessions`,
+        window.location.origin,
+    );
     url.searchParams.set("runtimeId", connection.runtimeId);
     const response = await fetch(url, {
-        headers: { authorization: `Bearer ${token}` },
+        headers: { authorization: `Bearer ${credential.hostToken}` },
         signal,
     });
     if (!response.ok) {
@@ -1526,14 +1572,14 @@ async function readRecordedSessionHistory(
     sessionId: string,
     signal: AbortSignal,
 ): Promise<ChannelHistory> {
-    const token = await standaloneProjectCredentialProvider().credential(signal);
+    const credential = connectionCredential(connection);
     const url = new URL(
-        `${MOBIUS_API_PREFIX}/v1/standalone/recording/sessions/${encodeURIComponent(sessionId)}/events`,
+        `${MOBIUS_API_PREFIX}/v1/projects/${encodeURIComponent(connection.projectId)}/recording/sessions/${encodeURIComponent(sessionId)}/events`,
         window.location.origin,
     );
     url.searchParams.set("runtimeId", connection.runtimeId);
     const response = await fetch(url, {
-        headers: { authorization: `Bearer ${token}` },
+        headers: { authorization: `Bearer ${credential.hostToken}` },
         signal,
     });
     if (!response.ok) {
@@ -1786,8 +1832,8 @@ async function readSessionHistoryWithSignal(
     sessionId: string,
     signal: AbortSignal,
 ): Promise<ChannelHistory> {
-    if (connection.projectId === "standalone") {
-        const configuration = await readStandaloneRecordingConfiguration(signal);
+    if (connection.credentialAuthority instanceof StandaloneProjectRuntimeCredentialAuthority) {
+        const configuration = await readConnectionRecordingConfiguration(connection, signal);
         if (configuration.state === "configured" && configuration.enabled) {
             return await readRecordedSessionHistory(connection, sessionId, signal);
         }

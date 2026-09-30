@@ -15,9 +15,9 @@ Agent catalogs belong to a Runtime. Read one with `client.runtimes.getAgents(run
 ## Standalone browser apps
 
 Use `MobiusStandaloneCredentialProvider` in a browser served by the Standalone
-Worker. It exchanges the public bootstrap endpoint for a short-lived credential and
-keeps the deployment owner credential inside the Worker. All Mobius HTTP operations
-then go through the ordinary SDK client:
+Worker. It creates one Project for the current pairing workflow and retains that
+Project's owner credential in memory. The deployment owner credential remains inside
+the Worker. All Mobius HTTP operations then go through the ordinary SDK client:
 
 ```ts
 import {
@@ -28,10 +28,11 @@ import {
 
 const endpoint = window.location.origin;
 const credentials = new MobiusStandaloneCredentialProvider({ endpoint });
+const project = await credentials.projectCredential(AbortSignal.timeout(15_000));
 const mobius = new MobiusClient({
     credentialProvider: credentials,
     endpoint,
-    projectId: "standalone",
+    projectId: project.projectId,
 });
 
 const pairing = await mobius.runtimePairings.create(
@@ -42,10 +43,11 @@ const pairing = await mobius.runtimePairings.create(
 const runtimes = await mobius.runtimes.list(AbortSignal.timeout(15_000));
 ```
 
-The provider refreshes its cached credential before expiry. Keep one provider for the
-browser app and pass cancellation signals to every operation. Do not call the
-Standalone bootstrap endpoint directly or copy the deployment owner credential into
-browser configuration. Apps that hold a channel-owner credential can manage channel
+Keep one provider for one pairing workflow and persist the returned Project owner
+credential if the browser must reopen that Project after a reload. Use a new provider
+for the next pairing workflow, and pass cancellation signals to every operation. Do
+not call the Standalone Project creation endpoint directly or copy the deployment
+owner credential into browser configuration. Apps that hold a Project owner credential can manage Project browser
 access grants through `client.channels`; one-time grant redemption uses
 `MobiusChannelAccessClient`.
 

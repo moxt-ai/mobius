@@ -9,12 +9,14 @@ import {
     ProjectPermission,
     RequestAccessMetrics,
 } from "@moxt-ai/mobius-relay-core";
+import { StandaloneProjectService } from "./service/standalone-project-service.ts";
 import { StandaloneDatabaseResolver } from "./standalone-database-resolver.ts";
 import { RuntimeRelay } from "./standalone-durable-objects.ts";
 import { StandaloneProjectAuthentication } from "./standalone-project-authentication.ts";
 import { StandaloneProjectAuthenticationStorage } from "./standalone-project-authentication-storage.ts";
 import { StandaloneProjectStorageDirectory } from "./standalone-project-storage-directory.ts";
 import { standaloneRecordingProvider } from "./standalone-session-recording.ts";
+import { StandaloneProjectStorage } from "./storage/standalone-project-storage.ts";
 import { StandaloneRecordingConfigurationStorage } from "./storage/standalone-recording-configuration-storage.ts";
 
 export interface StandaloneRelayBindings {
@@ -39,6 +41,15 @@ function errorResponse(code: string, message: string, status: number): Response 
     return Response.json({ error: { code, message } }, { status });
 }
 
+function decodedPathIdentifier(value: string | undefined): string | null {
+    try {
+        const decoded = decodeURIComponent(value ?? "");
+        return isIdentifier(decoded) ? decoded : null;
+    } catch {
+        return null;
+    }
+}
+
 export function createStandaloneWorker(): StandaloneWorker {
     const standaloneWorker: StandaloneWorker = {
         fetch: async (request, environment) => {
@@ -50,43 +61,47 @@ export function createStandaloneWorker(): StandaloneWorker {
             }
             const metrics = new RequestAccessMetrics();
             const database = instrumentD1Database(environment.DIRECTORY_DATABASE, metrics);
+            const databaseAdapter = D1DatabaseAdapter.from(database);
+            const projectStorage = new StandaloneProjectStorage(databaseAdapter);
             const authentication = new StandaloneProjectAuthentication(
                 environment.MOBIUS_STANDALONE_TOKEN,
-                new StandaloneProjectAuthenticationStorage(D1DatabaseAdapter.from(database)),
+                projectStorage,
+                new StandaloneProjectAuthenticationStorage(databaseAdapter),
             );
-            const recordingConfiguration = new StandaloneRecordingConfigurationStorage(
-                D1DatabaseAdapter.from(database),
-            );
+            const recordingConfiguration = new StandaloneRecordingConfigurationStorage(databaseAdapter);
             const recordingProvider = standaloneRecordingProvider(environment);
             const context = createWorkerContext({
                 applications: authentication,
                 authorization: authentication,
                 databases: new StandaloneDatabaseResolver(database),
-                identityDatabases: [D1DatabaseAdapter.from(database)],
-                projects: new StandaloneProjectStorageDirectory(),
+                identityDatabases: [databaseAdapter],
+                projects: new StandaloneProjectStorageDirectory(projectStorage),
                 apiPrefix: MOBIUS_API_PREFIX,
                 gateways: {
                     channel: new CloudflareChannelRuntime({ gateways: { runtimeRelay: environment.RUNTIME_RELAY } }),
                 },
             });
-            if (
-                request.method === "POST" &&
-                requestUrl.pathname === `${MOBIUS_API_PREFIX}/v1/standalone/browser-credentials`
-            ) {
+            if (request.method === "POST" && requestUrl.pathname === `${MOBIUS_API_PREFIX}/v1/standalone/projects`) {
                 const response = Response.json(
-                    await context.services.runtimePairings.createBrowserCredential(
-                        "standalone",
-                        environment.MOBIUS_STANDALONE_TOKEN,
-                        60 * 60 * 1_000,
-                        request.signal,
-                    ),
-                    { status: 201 },
+                    await new StandaloneProjectService(projectStorage).create(request.signal),
+                    {
+                        status: 201,
+                    },
                 );
                 response.headers.set("Cache-Control", "no-store");
                 return metrics.appendServerTiming(response);
             }
-            if (requestUrl.pathname === `${MOBIUS_API_PREFIX}/v1/standalone/recording`) {
+            const recordingConfigurationMatch = requestUrl.pathname.match(
+                new RegExp(`^${MOBIUS_API_PREFIX}/v1/projects/([^/]+)/recording$`, "u"),
+            );
+            if (recordingConfigurationMatch !== null) {
+                const projectId = decodedPathIdentifier(recordingConfigurationMatch[1]);
                 const credential = bearerToken(request);
+                if (projectId === null) {
+                    return metrics.appendServerTiming(
+                        errorResponse("invalid_request", "The Recording target is invalid", 400),
+                    );
+                }
                 if (credential === null) {
                     return metrics.appendServerTiming(
                         errorResponse("project_credential_required", "A Project credential is required", 401),
@@ -94,7 +109,7 @@ export function createStandaloneWorker(): StandaloneWorker {
                 }
                 try {
                     await authentication.authorizeProject(
-                        "standalone",
+                        projectId,
                         credential,
                         ProjectPermission.RuntimePair,
                         request.headers.get("user-agent") ?? "standalone-web",
@@ -106,7 +121,7 @@ export function createStandaloneWorker(): StandaloneWorker {
                     );
                 }
                 if (request.method === "GET") {
-                    const configuration = await recordingConfiguration.read(request.signal);
+                    const configuration = await recordingConfiguration.read(projectId, request.signal);
                     return metrics.appendServerTiming(
                         Response.json({
                             ...configuration,
@@ -135,7 +150,7 @@ export function createStandaloneWorker(): StandaloneWorker {
                         );
                     }
                     const enabled = Reflect.get(body, "enabled") === true;
-                    const current = await recordingConfiguration.read(request.signal);
+                    const current = await recordingConfiguration.read(projectId, request.signal);
                     if (current.state === "configured") {
                         return metrics.appendServerTiming(
                             errorResponse(
@@ -154,7 +169,12 @@ export function createStandaloneWorker(): StandaloneWorker {
                             ),
                         );
                     }
-                    const result = await recordingConfiguration.configure(enabled, Date.now(), request.signal);
+                    const result = await recordingConfiguration.configure(
+                        projectId,
+                        enabled,
+                        Date.now(),
+                        request.signal,
+                    );
                     if (result.kind === "locked") {
                         return metrics.appendServerTiming(
                             errorResponse(
@@ -174,23 +194,24 @@ export function createStandaloneWorker(): StandaloneWorker {
                 }
                 return metrics.appendServerTiming(errorResponse("method_not_allowed", "Method not allowed", 405));
             }
-            const recordingMatch = requestUrl.pathname.match(
-                new RegExp(`^${MOBIUS_API_PREFIX}/v1/standalone/recording/sessions/([^/]+)/events$`, "u"),
+            const recordingDirectoryMatch = requestUrl.pathname.match(
+                new RegExp(`^${MOBIUS_API_PREFIX}/v1/projects/([^/]+)/recording/sessions$`, "u"),
             );
-            if (
-                request.method === "GET" &&
-                requestUrl.pathname === `${MOBIUS_API_PREFIX}/v1/standalone/recording/sessions`
-            ) {
+            const recordingMatch = requestUrl.pathname.match(
+                new RegExp(`^${MOBIUS_API_PREFIX}/v1/projects/([^/]+)/recording/sessions/([^/]+)/events$`, "u"),
+            );
+            if (request.method === "GET" && recordingDirectoryMatch !== null) {
                 const credential = bearerToken(request);
+                const projectId = decodedPathIdentifier(recordingDirectoryMatch[1]);
                 const runtimeId = requestUrl.searchParams.get("runtimeId") ?? "";
-                if (credential === null || !isIdentifier(runtimeId)) {
+                if (credential === null || projectId === null || !isIdentifier(runtimeId)) {
                     return metrics.appendServerTiming(
                         errorResponse("invalid_request", "The Recording target is invalid", 400),
                     );
                 }
                 try {
                     await authentication.authorizeProject(
-                        "standalone",
+                        projectId,
                         credential,
                         ProjectPermission.SessionRead,
                         request.headers.get("user-agent") ?? "standalone-web",
@@ -201,7 +222,7 @@ export function createStandaloneWorker(): StandaloneWorker {
                         errorResponse("project_access_denied", "The Project credential is invalid", 401),
                     );
                 }
-                const configuration = await recordingConfiguration.read(request.signal);
+                const configuration = await recordingConfiguration.read(projectId, request.signal);
                 if (configuration.state !== "configured" || !configuration.enabled) {
                     return metrics.appendServerTiming(
                         errorResponse("recording_disabled", "Recording is disabled", 404),
@@ -214,7 +235,7 @@ export function createStandaloneWorker(): StandaloneWorker {
                 }
                 const response = await recordingProvider.fetcher.fetch(
                     new Request(
-                        `https://recording.internal/v1/projects/standalone/runtimes/${encodeURIComponent(runtimeId)}/sessions`,
+                        `https://recording.internal/v1/projects/${encodeURIComponent(projectId)}/runtimes/${encodeURIComponent(runtimeId)}/sessions`,
                         { signal: request.signal },
                     ),
                 );
@@ -222,23 +243,17 @@ export function createStandaloneWorker(): StandaloneWorker {
             }
             if (request.method === "GET" && recordingMatch !== null) {
                 const credential = bearerToken(request);
-                let sessionId = "";
-                try {
-                    sessionId = decodeURIComponent(recordingMatch[1] ?? "");
-                } catch {
-                    return metrics.appendServerTiming(
-                        errorResponse("invalid_request", "The Recording target is invalid", 400),
-                    );
-                }
+                const projectId = decodedPathIdentifier(recordingMatch[1]);
+                const sessionId = decodedPathIdentifier(recordingMatch[2]);
                 const runtimeId = requestUrl.searchParams.get("runtimeId") ?? "";
-                if (credential === null || !isIdentifier(sessionId) || !isIdentifier(runtimeId)) {
+                if (credential === null || projectId === null || sessionId === null || !isIdentifier(runtimeId)) {
                     return metrics.appendServerTiming(
                         errorResponse("invalid_request", "The Recording target is invalid", 400),
                     );
                 }
                 try {
                     await authentication.authorizeProject(
-                        "standalone",
+                        projectId,
                         credential,
                         ProjectPermission.SessionRead,
                         request.headers.get("user-agent") ?? "standalone-web",
@@ -249,7 +264,7 @@ export function createStandaloneWorker(): StandaloneWorker {
                         errorResponse("project_access_denied", "The Project credential is invalid", 401),
                     );
                 }
-                const configuration = await recordingConfiguration.read(request.signal);
+                const configuration = await recordingConfiguration.read(projectId, request.signal);
                 if (configuration.state !== "configured" || !configuration.enabled) {
                     return metrics.appendServerTiming(
                         errorResponse("recording_disabled", "Recording is disabled", 404),
@@ -262,7 +277,7 @@ export function createStandaloneWorker(): StandaloneWorker {
                 }
                 const response = await recordingProvider.fetcher.fetch(
                     new Request(
-                        `https://recording.internal/v1/projects/standalone/runtimes/${encodeURIComponent(runtimeId)}/sessions/${encodeURIComponent(sessionId)}/events`,
+                        `https://recording.internal/v1/projects/${encodeURIComponent(projectId)}/runtimes/${encodeURIComponent(runtimeId)}/sessions/${encodeURIComponent(sessionId)}/events`,
                         { signal: request.signal },
                     ),
                 );

@@ -60,6 +60,7 @@ import {
     ProjectRuntimeCredentialAuthority,
     RecordedActivity,
     RecordedActivityNarration,
+    StandaloneProjectRuntimeCredentialAuthority,
 } from "@/domain/channel";
 import {
     type Conversation,
@@ -70,11 +71,7 @@ import {
     UnavailableRuntimeState,
 } from "@/domain/chat";
 import { AgentSettingsCache, type CachedAgentSettings } from "@/services/agent-settings-cache";
-import {
-    readChannelConnection,
-    readProjectRuntimeConnection,
-    standaloneProjectCredentialProvider,
-} from "@/services/pairing-api";
+import { readChannelConnection, readProjectRuntimeConnection } from "@/services/pairing-api";
 import {
     applySessionConfigPreferences,
     readSessionConfigPreferences,
@@ -88,11 +85,7 @@ async function createRelayUrl(connection: ChannelConnection, signal: AbortSignal
         connection.credentialAuthority instanceof ProjectRuntimeCredentialAuthority
             ? `/projects/${encodeURIComponent(connection.projectId)}/runtimes/${encodeURIComponent(connection.runtimeId)}/host`
             : `/channels/${encodeURIComponent(connection.accessChannelId)}/host`;
-    const token =
-        connection.projectId === "standalone" &&
-        connection.credentialAuthority instanceof ProjectRuntimeCredentialAuthority
-            ? await standaloneProjectCredentialProvider().credential(signal)
-            : connection.hostToken;
+    const token = connection.hostToken;
     signal.throwIfAborted();
     const relayUrl = mobiusApiUrl(window.location.origin, path);
     relayUrl.searchParams.set("token", token);
@@ -201,11 +194,7 @@ class IssuedBrowserServiceClients extends BrowserServiceClients {
 
 async function connectBrowserServiceClients(connection: ChannelConnection): Promise<BrowserServiceClients> {
     const issuer = new MobiusClient({
-        credentialProvider:
-            connection.projectId === "standalone" &&
-            connection.credentialAuthority instanceof ProjectRuntimeCredentialAuthority
-                ? standaloneProjectCredentialProvider()
-                : new StaticMobiusCredentialProvider(connection.hostToken),
+        credentialProvider: new StaticMobiusCredentialProvider(connection.hostToken),
         endpoint: window.location.origin,
         projectId: connection.projectId,
     });
@@ -214,7 +203,7 @@ async function connectBrowserServiceClients(connection: ChannelConnection): Prom
         connection.credentialAuthority instanceof ProjectRuntimeCredentialAuthority
     ) {
         // A linked device cannot exchange its credential for a Project browser credential. A Standalone
-        // Project Runtime instead keeps using its refreshable scoped provider for Runtime services.
+        // Project Runtime keeps using its Project owner credential for Runtime services.
         return new DirectBrowserServiceClients(issuer);
     }
     if (!(connection.credentialAuthority instanceof OwnerChannelCredentialAuthority)) {
@@ -344,7 +333,7 @@ class ConnectedTransport extends TransportConnection {
         super();
         this.#channelId = connection.accessChannelId;
         this.#connection = connection;
-        this.#standalone = connection.projectId === "standalone";
+        this.#standalone = connection.credentialAuthority instanceof StandaloneProjectRuntimeCredentialAuthority;
         this.#serviceClients = connectBrowserServiceClients(connection);
         this.#agentSettings = new AgentSettingsCache(
             connection.accessChannelId,

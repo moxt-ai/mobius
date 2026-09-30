@@ -16,7 +16,7 @@ import {
     validateIdentifier,
 } from "@moxt-ai/mobius-relay-core";
 import type { StandaloneProjectAuthenticationStorage } from "./standalone-project-authentication-storage.ts";
-import { STANDALONE_PROJECT_ID } from "./standalone-project-storage-directory.ts";
+import type { StandaloneProjectStorage } from "./storage/standalone-project-storage.ts";
 
 const STANDALONE_BROWSER_PERMISSIONS = Object.freeze([
     ...INTERACTIVE_PROJECT_PERMISSIONS,
@@ -48,16 +48,22 @@ function matchingDigest(expected: string, received: string): boolean {
 
 export class StandaloneProjectAuthentication implements ProjectAccessAuthorizer, ProjectApplicationResolver {
     readonly #credentialHash: Promise<string>;
+    readonly #projects: StandaloneProjectStorage;
     readonly #storage: StandaloneProjectAuthenticationStorage;
 
-    constructor(configuredCredential: string, storage: StandaloneProjectAuthenticationStorage) {
+    constructor(
+        configuredCredential: string,
+        projects: StandaloneProjectStorage,
+        storage: StandaloneProjectAuthenticationStorage,
+    ) {
         this.#credentialHash = hashSecret(ProjectCredential.decode(configuredCredential).value);
+        this.#projects = projects;
         this.#storage = storage;
     }
 
     readonly resolveApplicationId: ProjectApplicationResolver["resolveApplicationId"] = async (projectId, signal) => {
-        signal.throwIfAborted();
-        if (validateIdentifier(projectId, "project_id") !== STANDALONE_PROJECT_ID) {
+        const normalizedProjectId = validateIdentifier(projectId, "project_id");
+        if ((await this.#projects.read(normalizedProjectId, signal)) === null) {
             throw new ProjectAuthenticationError("project_access_denied", "The Project is unavailable");
         }
         return "standalone";
@@ -70,22 +76,22 @@ export class StandaloneProjectAuthentication implements ProjectAccessAuthorizer,
         _actorReference,
         signal,
     ) => {
-        signal.throwIfAborted();
-        if (validateIdentifier(projectId, "project_id") !== STANDALONE_PROJECT_ID) {
-            throw new ProjectAuthenticationError(
-                "project_access_denied",
-                "The credential is not authorized for this Project",
-            );
+        const normalizedProjectId = validateIdentifier(projectId, "project_id");
+        const project = await this.#projects.read(normalizedProjectId, signal);
+        if (project === null) {
+            throw new ProjectAuthenticationError("project_access_denied", "The Project is unavailable");
         }
         const credential = ProjectCredential.decode(credentialValue);
         const now = Date.now();
-        const expectedHash = await this.#credentialHash;
+        const deploymentHash = await this.#credentialHash;
         const receivedHash = await hashSecret(credential.value);
         signal.throwIfAborted();
-        const owner = matchingDigest(expectedHash, receivedHash);
+        const deploymentOwner = matchingDigest(deploymentHash, receivedHash);
+        const projectOwner = matchingDigest(project.ownerTokenHash, receivedHash);
+        const owner = deploymentOwner || projectOwner;
         const browser = owner
             ? null
-            : await this.#storage.readBrowserCredential(STANDALONE_PROJECT_ID, receivedHash, signal);
+            : await this.#storage.readBrowserCredential(normalizedProjectId, receivedHash, signal);
         if (!owner && browser === null) {
             throw new ProjectAuthenticationError("project_credential_invalid", "The Project credential is invalid");
         }
@@ -96,12 +102,16 @@ export class StandaloneProjectAuthentication implements ProjectAccessAuthorizer,
             throw new ProjectAuthenticationError("credential_expired", "The Project credential expired");
         }
         const permissions = new Set(owner ? PROJECT_PERMISSIONS : STANDALONE_BROWSER_PERMISSIONS);
-        const actorId = owner ? "standalone-owner" : browser?.credentialId;
+        const actorId = deploymentOwner
+            ? "standalone-owner"
+            : projectOwner
+              ? normalizedProjectId
+              : browser?.credentialId;
         if (actorId === undefined) {
             throw new ProjectAuthenticationError("project_credential_invalid", "The Project credential is invalid");
         }
         const access = new ProjectAccessContext(
-            new ProjectScope(STANDALONE_PROJECT_ID),
+            new ProjectScope(normalizedProjectId),
             permissions,
             new AuditActor(AuditActorKind.BrowserAccess, actorId),
             actorId,
@@ -117,7 +127,7 @@ export class StandaloneProjectAuthentication implements ProjectAccessAuthorizer,
                     actorRef: sanitizedActorReference(_actorReference),
                     details: { permission: requiredPermission.value },
                     outcome: "denied",
-                    projectId: STANDALONE_PROJECT_ID,
+                    projectId: normalizedProjectId,
                     subjectId: actorId,
                 },
                 null,
@@ -135,7 +145,7 @@ export class StandaloneProjectAuthentication implements ProjectAccessAuthorizer,
                 actorRef: sanitizedActorReference(_actorReference),
                 details: { permission: requiredPermission.value },
                 outcome: "succeeded",
-                projectId: STANDALONE_PROJECT_ID,
+                projectId: normalizedProjectId,
                 subjectId: actorId,
             },
             browser?.credentialId ?? null,
