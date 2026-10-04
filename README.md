@@ -25,27 +25,18 @@ The requirements below are design constraints. They are not a claim that every A
 or failure scenario is already covered. Compatibility claims require executable
 boundary scenarios; see [Testing](TESTING.md).
 
-## Non-functional requirements
+## Non-functional requirements: speed
 
-- **Security:** authorize the resolved local target before acting. Access to a
-  conversation must not imply access to arbitrary files, commands or other tenants.
-- **Privacy:** distinguish local persistence, cloud transit, cloud retention and
-  diagnostic logs. Changes to stored content, retention scope or deletion behavior
-  require an explicit product decision and observable verification.
-- **Consistency:** session writes have a defined admission order. Concurrent submissions
-  and retries must not silently overwrite work or execute a prompt twice. Authorized
-  observers must converge on the same accepted prompts, output and terminal outcome.
-- **Recovery:** a browser disconnect must not itself cancel execution. Reconnection
-  must restore an authoritative view or report that recovery is unavailable. Unknown,
-  running, cancelled, failed and completed outcomes must remain distinguishable;
-  receipt of a command or event alone does not prove execution completed.
-- **Responsiveness:** loading old history must not block current-turn presentation.
-  Slow subscribers must not stall the Agent or other observers. Agent limitations and
-  omitted history must be disclosed rather than presented as a complete conversation.
-- **Resource ownership:** current-turn memory may retain enough content for reliable
-  recovery. Completion, history handoff and expiry need explicit release conditions;
-  caches, queues, logs and disk-backed delivery need bounded retention. Limit failures
-  must be observable. Exact thresholds and transitions belong in code and tests.
+- **Open quickly:** show recent messages and current execution without waiting for
+  the full session history. Load older messages on demand.
+- **Stream promptly:** forward and render Agent output as it arrives. History reads
+  and slow subscribers must not delay the active conversation or other observers.
+- **Recover quickly:** restore the current-turn view after reconnect without waiting
+  for a full history replay. Allow enough current-turn memory to make this simple.
+
+Measure first-content latency, Agent-to-browser update delay and reconnect recovery
+latency separately from model generation time. Numeric budgets require measurements;
+this document does not claim unverified latency targets.
 
 ## Why ACP needs a remote-session layer
 
