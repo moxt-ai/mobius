@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -830,7 +830,7 @@ describe("daemon relay connection liveness", () => {
         }
     });
 
-    it("Given the Relay disconnects before acknowledging an event, When the daemon reconnects, Then the same reliable event is replayed", async () => {
+    it("Given the Relay disconnects before acknowledging an event, When the daemon reconnects, Then events replay from memory but do not survive a daemon restart", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-reconciliation-"));
         const defaultWorkspace = join(stateDirectory, "workspace");
         await mkdir(defaultWorkspace);
@@ -896,7 +896,7 @@ describe("daemon relay connection liveness", () => {
                     sessionEventDelivery: "reliable-v1",
                 }),
             );
-            if (daemonSockets.length === 1) {
+            if (daemonSockets.length === 1 || daemonSockets.length === 3) {
                 writeServerTextFrame(
                     socket,
                     encodeSessionPromptCommand({
@@ -910,7 +910,7 @@ describe("daemon relay connection liveness", () => {
                         kind: SESSION_PROMPT_KIND,
                         prompt: "exercise ACP controls",
                         resources: [],
-                        sessionId: "reconciliation-session",
+                        sessionId: daemonSockets.length === 1 ? "reconciliation-session" : "fresh-session",
                         targetCommandId: "",
                     }),
                 );
@@ -920,7 +920,7 @@ describe("daemon relay connection liveness", () => {
         await listen(relay);
 
         const audit = new AuditStore();
-        const cancellation = new AbortController();
+        let cancellation = new AbortController();
         const timer = new ControllableDaemonTimer();
         const previousFakeAcpStateDirectory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
         const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
@@ -944,7 +944,7 @@ describe("daemon relay connection liveness", () => {
         vi.useFakeTimers({ toFake: ["Date"] });
         vi.setSystemTime(new Date("2026-09-08T00:00:00.000Z"));
         const firstConnection = waitForUpgrade();
-        const daemon = runDaemon(config, audit, cancellation.signal, timer);
+        let daemon = runDaemon(config, audit, cancellation.signal, timer);
 
         try {
             await firstConnection;
@@ -1020,6 +1020,31 @@ describe("daemon relay connection liveness", () => {
             expect(replayed.payload).toBe(started.payload);
             expect(reconciliationRequestCount).toBe(0);
             expect(daemonSockets).toHaveLength(2);
+
+            // No acknowledgement was sent. A fresh daemon must not replay the old delivery queue.
+            cancellation.abort();
+            await daemon;
+            cancellation = new AbortController();
+            const restarted = waitForUpgrade();
+            daemon = runDaemon(config, audit, cancellation.signal, timer);
+            await restarted;
+            const freshFrames = clientFrames[2];
+            if (freshFrames === undefined) {
+                throw new Error("Test relay did not observe the restarted daemon");
+            }
+            let freshFrame = await freshFrames.next();
+            if (decodeMessageKind(freshFrame.text) === RUNTIME_HEARTBEAT_KIND) {
+                freshFrame = await freshFrames.next();
+            }
+            const freshReady = decodeSessionEventEnvelope(freshFrame.text);
+            expect(freshReady.sessionId).toBe("fresh-session");
+            expect(decodeMessageKind(freshReady.payload)).toBe(SESSION_READY_KIND);
+            if (!("delivery" in freshReady)) {
+                throw new Error("Test relay expected a reliable event");
+            }
+            expect(freshReady.delivery.streamId).not.toBe(ready.delivery.streamId);
+            expect(freshReady.delivery.sourceSeq).toBe("1");
+            expect(await readdir(stateDirectory)).not.toContain("events");
         } finally {
             cancellation.abort();
             await daemon;

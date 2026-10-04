@@ -226,7 +226,7 @@ export async function runRelayConnection({
                         return;
                     }
                     if (kind === SESSION_EVENT_REJECTED_KIND) {
-                        publisher.quarantine(message);
+                        publisher.reject(message);
                         return;
                     }
                     commands.handle(message);

@@ -13,7 +13,7 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { WebSocket } from "undici";
 
-import { type SessionEventOutbox, SessionEventOutboxCapacityError } from "./session-event-outbox.ts";
+import { SessionEventQueue, SessionEventQueueCapacityError } from "./session-event-queue.ts";
 import type { DaemonScheduledTask, DaemonTimer } from "./timer.ts";
 
 const SESSION_EVENT_REPLAY_WINDOW = 16;
@@ -47,23 +47,22 @@ function reservesSessionEventCapacity(event: RecordedSessionEvent): boolean {
     );
 }
 
-/** Persists every Session event until the Relay confirms its configured durability outcome. */
+/** Retries pending events while this daemon lives; shutdown discards unacknowledged delivery. */
 export class DaemonSessionEventPublisher {
     readonly #inFlight = new Map<string, InFlightEvent>();
-    readonly #outbox: SessionEventOutbox;
+    readonly #queue = new SessionEventQueue();
     readonly #reportedCapacityKinds = new Set<string>();
     readonly #timer: DaemonTimer;
     #connection: ConnectionState = { kind: "disconnected" };
     #deferredReplay: DaemonScheduledTask | null = null;
     #inFlightBytes = 0;
 
-    constructor(outbox: SessionEventOutbox, timer: DaemonTimer) {
-        this.#outbox = outbox;
+    constructor(timer: DaemonTimer) {
         this.#timer = timer;
     }
 
     readonly acknowledge = (acknowledgement: SessionEventAcknowledgement): void => {
-        if (!this.#outbox.acknowledge(acknowledgement)) {
+        if (!this.#queue.remove(acknowledgement.eventId, acknowledgement.sessionId)) {
             return;
         }
         this.#removeInFlight(acknowledgement.eventId);
@@ -75,7 +74,7 @@ export class DaemonSessionEventPublisher {
         this.#deferredReplay = null;
         this.#connection = { kind: "disconnected" };
         this.#clearInFlight();
-        this.#outbox.close();
+        this.#queue.clear();
     };
 
     readonly connect = (socket: WebSocket, delivery: "ephemeral" | "reliable"): void => {
@@ -108,16 +107,18 @@ export class DaemonSessionEventPublisher {
 
     readonly publish = (sessionId: string, event: RecordedSessionEvent): void => {
         try {
-            this.#outbox.enqueue(sessionId, encodeRecordedSessionEvent(event), reservesSessionEventCapacity(event));
+            this.#queue.enqueueBatch(
+                sessionId,
+                [encodeRecordedSessionEvent(event)],
+                reservesSessionEventCapacity(event),
+            );
         } catch (error) {
-            if (!(error instanceof SessionEventOutboxCapacityError)) {
+            if (!(error instanceof SessionEventQueueCapacityError)) {
                 throw error;
             }
             if (!this.#reportedCapacityKinds.has(event.kind)) {
                 this.#reportedCapacityKinds.add(event.kind);
-                console.warn(
-                    `Mobius daemon could not persist "${event.kind}" because the Session event outbox is full`,
-                );
+                console.warn(`Mobius daemon could not buffer "${event.kind}" because the Session event queue is full`);
             }
             return;
         }
@@ -126,12 +127,12 @@ export class DaemonSessionEventPublisher {
 
     readonly publishBatch = (sessionId: string, events: readonly RecordedSessionEvent[]): void => {
         const critical = events.some(reservesSessionEventCapacity);
-        this.#outbox.enqueueBatch(sessionId, events.map(encodeRecordedSessionEvent), critical);
+        this.#queue.enqueueBatch(sessionId, events.map(encodeRecordedSessionEvent), critical);
         this.#publishNextBatch();
     };
 
-    readonly quarantine = (rejection: SessionEventRejected): void => {
-        if (!this.#outbox.quarantine(rejection)) {
+    readonly reject = (rejection: SessionEventRejected): void => {
+        if (!this.#queue.remove(rejection.eventId, rejection.sessionId)) {
             return;
         }
         this.#removeInFlight(rejection.eventId);
@@ -149,9 +150,10 @@ export class DaemonSessionEventPublisher {
             return;
         }
         while (this.#inFlight.size < SESSION_EVENT_REPLAY_WINDOW) {
-            const batch = this.#outbox.pending(SESSION_EVENT_REPLAY_WINDOW - this.#inFlight.size, [
-                ...this.#inFlight.keys(),
-            ]);
+            const batch = this.#queue.pending(
+                SESSION_EVENT_REPLAY_WINDOW - this.#inFlight.size,
+                new Set(this.#inFlight.keys()),
+            );
             let sent = 0;
             for (const envelope of batch) {
                 const encoded = encodeDaemonToServiceMessage(
@@ -172,12 +174,7 @@ export class DaemonSessionEventPublisher {
                     return;
                 }
                 if (this.#connection.delivery === "ephemeral") {
-                    this.#outbox.acknowledge({
-                        eventId: envelope.delivery.eventId,
-                        kind: "session.event.ack",
-                        outcome: { kind: "relayed" },
-                        sessionId: envelope.sessionId,
-                    });
+                    this.#queue.remove(envelope.delivery.eventId, envelope.sessionId);
                     sent += 1;
                     continue;
                 }

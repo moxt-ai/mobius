@@ -30,7 +30,7 @@ and recovery algorithm belong in code and boundary tests.
 | Current turn accumulation | [active turn](packages/cli/src/daemon-active-turn.ts) |
 | Prompt admission, running turns and completed recovery retention | [turn registry](packages/cli/src/daemon-turn-registry.ts) |
 | Local session metadata and native-session associations | [session store](packages/cli/src/acp/session-store.ts), [schema](packages/cli/src/schema/acp-session-store/) |
-| Durable outbound event delivery | [publisher](packages/cli/src/relay-connection/session-event-publisher.ts), [outbox](packages/cli/src/relay-connection/session-event-outbox.ts) |
+| In-memory outbound event delivery | [publisher](packages/cli/src/relay-connection/session-event-publisher.ts), [queue](packages/cli/src/relay-connection/session-event-queue.ts) |
 | Optional cloud recording | [Recording Worker](packages/recording-cloudflare/src/), [Worker scenarios](packages/recording-cloudflare/test/worker.integration.test.ts) |
 | Ordered publication | [event coalescer](packages/cli/src/relay-connection/coalescing-agent-event-publisher.ts) |
 | Native history and recovery pages | [live history](packages/cli/src/native-sessions/live-history-page.ts) |
@@ -60,18 +60,20 @@ The following describes current behavior, including its limitations. It does not
 by itself justify adding storage or promise durable execution recovery:
 
 - The local daemon persists pairing credentials, connection preferences, ACP session
-  metadata and native-session associations, and a bounded event outbox. Event payloads
-  can contain conversation content; disabling cloud Recording does not disable this
-  local persistence. The outbox supports delivery recovery, not a complete history archive.
-- Current execution and queued prompts are held in memory. Restarting the daemon does
-  not durably resume a running turn or its prompt queue. Persisted session metadata and
-  pending outbox events survive a restart; event delivery recovery must not be presented
-  as execution recovery.
+  metadata and native-session associations. Agents retain their own native history.
+- Current execution, queued prompts and pending outbound events are memory-only.
+  Reconnection retries pending events within the same daemon lifetime. Shutdown or a
+  crash loses unacknowledged events and queued work by design; restarting does not
+  replay delivery or resume execution. This is the chosen
+  [performance and recovery tradeoff](README.md#non-functional-tradeoff-memory-only-live-delivery).
+- Recording retains events it has received, not events lost before delivery. Its ACK
+  allows the daemon to release pending memory; it does not make the daemon durable.
+  Rejected events are discarded with a diagnostic code, without retaining their payload.
 - Without Recording, browsing native history requires the local Runtime and the Agent's
   saved history. With the optional Recording Worker installed and recording enabled for
   an App or Project, cloud history is available according to that recording policy.
 - Bounded local diagnostics are for troubleshooting and must not log prompt text or
-  session history. This log restriction is separate from the outbox's payload storage.
+  session history. Diagnostics must not become a replacement event archive.
 
 See the implementation map above for storage and delivery owners. Exact
 schemas, acknowledgement rules and capacity limits belong in code and executable tests.

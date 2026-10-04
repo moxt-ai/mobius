@@ -43,6 +43,19 @@ A complete current-turn view may be needed when a client first joins or recovers
 an interruption. That recovery cost must not be paid again for every streaming update.
 This requirement does not prescribe a particular patch format or cursor algorithm.
 
+## Non-functional tradeoff: memory-only live delivery
+
+We prioritize responsive streaming and a simple daemon lifecycle over delivery that
+survives a daemon crash. Current execution, queued prompts and pending outbound events
+live only in memory. Network reconnection can retry pending events while the daemon
+is alive; stopping or crashing it discards them by design. Restarting does not resume
+work or replay the previous daemon's delivery queue.
+
+Recording retains what it has received. It cannot recover output that was lost before
+delivery, and enabling it does not add a local durable outbox. Users who enable
+Recording must accept that a daemon crash can leave a gap at the end of a conversation.
+Normal streaming must not wait for a local event-log disk write.
+
 ## Data ownership and recovery
 
 Users must know when their machine needs to be online and where conversation content
@@ -50,9 +63,9 @@ is retained. Without cloud recording, history depends on the connected machine a
 what its Agent has saved. Optional cloud recording provides history according to the
 configured retention policy; it does not keep an offline Agent running.
 
-The current product also stores session metadata and pending delivery content locally,
-so disabling cloud recording does not mean that nothing is written on the machine.
-Restarting the daemon does not automatically resume running work or queued prompts.
+Pairing and session metadata are still stored locally, and Agents manage their own
+native history. These are separate from the daemon's memory-only execution and
+delivery state; disabling Recording does not erase Agent history or local metadata.
 See [current persistence behavior](DEVELOPMENT.md#current-persistence-behavior) for the
 technical disclosure and implementation references.
 
