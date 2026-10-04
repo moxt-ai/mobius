@@ -13,10 +13,10 @@ type ActiveTurnSnapshot = Extract<NativeSessionResult, { readonly action: "activ
 
 interface CompletedTurnRecovery {
     readonly command: SessionPromptCommand;
-    readonly recovery: ActiveTurnRecovery;
+    readonly recovery: Extract<ActiveTurnRecovery, { readonly state: "completed" }>;
 }
 
-const COMPLETED_TURN_RECOVERY_LIMIT = 32;
+const MAX_SESSIONS_WITH_COMPLETED_RECOVERY = 32;
 
 const waitForTurnCompletion = (turn: ActiveDaemonTurn, waitSignal: AbortSignal): Promise<void> => {
     waitSignal.throwIfAborted();
@@ -45,10 +45,10 @@ const waitForTurnCompletion = (turn: ActiveDaemonTurn, waitSignal: AbortSignal):
     });
 };
 
-/** Owns in-flight prompts for one Runtime, independently of Relay connections. */
+/** Owns Runtime prompt admission and recovery; Relay connection lifetimes do not own either. */
 export class DaemonTurnRegistry {
-    readonly #turns = new Map<string, ActiveDaemonTurn>();
-    readonly #completed = new Map<string, CompletedTurnRecovery>();
+    readonly #inFlightByCommandId = new Map<string, ActiveDaemonTurn>();
+    readonly #latestCompletedBySessionId = new Map<string, CompletedTurnRecovery>();
     readonly #operations: DaemonOperationState;
 
     constructor(operations: DaemonOperationState) {
@@ -57,45 +57,47 @@ export class DaemonTurnRegistry {
 
     readonly start = (command: SessionPromptCommand, attemptId: string): ActiveDaemonTurn => {
         const turn = new ActiveDaemonTurn(command, attemptId);
-        this.#turns.set(command.commandId, turn);
+        this.#inFlightByCommandId.set(command.commandId, turn);
         return turn;
     };
 
-    readonly get = (commandId: string): ActiveDaemonTurn | undefined => this.#turns.get(commandId);
+    readonly get = (commandId: string): ActiveDaemonTurn | undefined => this.#inFlightByCommandId.get(commandId);
 
     readonly finish = (turn: ActiveDaemonTurn): void => {
         const recovery = turn.recovery();
-        this.#turns.delete(turn.command.commandId);
+        this.#inFlightByCommandId.delete(turn.command.commandId);
         if (recovery !== null) {
-            // Agent-native history can briefly lag the terminal event. Keep the latest completed
-            // Turn per Session as an in-memory overlay so every Web client sees the same complete
-            // handoff. The native-history merge removes any overlapping copy, and the bounded map
-            // prevents completed Sessions from growing daemon memory without limit.
-            this.#completed.delete(turn.command.sessionId);
-            this.#completed.set(turn.command.sessionId, {
-                command: turn.command,
-                recovery: { ...recovery, state: "completed" },
-            });
-            while (this.#completed.size > COMPLETED_TURN_RECOVERY_LIMIT) {
-                const oldestSessionId = this.#completed.keys().next().value;
-                if (oldestSessionId === undefined) {
-                    break;
-                }
-                this.#completed.delete(oldestSessionId);
-            }
+            this.retainLatestCompletedRecovery(turn.command, { ...recovery, state: "completed" });
         }
         turn.finish();
     };
 
+    private readonly retainLatestCompletedRecovery = (
+        command: SessionPromptCommand,
+        recovery: Extract<ActiveTurnRecovery, { readonly state: "completed" }>,
+    ): void => {
+        // Native history can lag completion. Retain the latest result per Session until
+        // replaced, evicted by completion order, or cleared when the Runtime closes.
+        this.#latestCompletedBySessionId.delete(command.sessionId);
+        this.#latestCompletedBySessionId.set(command.sessionId, { command, recovery });
+        while (this.#latestCompletedBySessionId.size > MAX_SESSIONS_WITH_COMPLETED_RECOVERY) {
+            const oldestSessionId = this.#latestCompletedBySessionId.keys().next().value;
+            if (oldestSessionId === undefined) {
+                break;
+            }
+            this.#latestCompletedBySessionId.delete(oldestSessionId);
+        }
+    };
+
     readonly recordEvent = (event: RecordedSessionEvent): RecordedSessionEvent => {
         if ("commandId" in event) {
-            const turn = this.#turns.get(event.commandId);
+            const turn = this.#inFlightByCommandId.get(event.commandId);
             if (turn !== undefined && turn.command.sessionId === event.sessionId) {
                 return turn.recordEvent(event);
             }
         }
         if (event.kind === SESSION_PERMISSION_RESOLVED_KIND || event.kind === SESSION_ELICITATION_RESOLVED_KIND) {
-            for (const turn of this.#turns.values()) {
+            for (const turn of this.#inFlightByCommandId.values()) {
                 if (turn.matchesInteraction(event.interactionId, event.sessionId)) {
                     return turn.recordEvent(event);
                 }
@@ -105,18 +107,18 @@ export class DaemonTurnRegistry {
     };
 
     readonly recordSteeringPrompt = (command: SessionPromptCommand): boolean => {
-        const target = this.#turns.get(command.targetCommandId);
+        const target = this.#inFlightByCommandId.get(command.targetCommandId);
         return target?.recordSteeringPrompt(command) ?? false;
     };
 
     readonly executionSnapshot = async (matches: (command: SessionPromptCommand) => Promise<boolean>) => {
         const matching: ActiveDaemonTurn[] = [];
-        for (const turn of this.#turns.values()) {
+        for (const turn of this.#inFlightByCommandId.values()) {
             if (await matches(turn.command)) {
                 matching.push(turn);
             }
         }
-        const current = matching.filter((turn) => this.#turns.get(turn.command.commandId) === turn);
+        const current = matching.filter((turn) => this.#inFlightByCommandId.get(turn.command.commandId) === turn);
         return {
             turn: current.map((turn) => turn.snapshot()).find((snapshot) => snapshot !== null) ?? null,
             queued: current
@@ -130,7 +132,7 @@ export class DaemonTurnRegistry {
     };
 
     readonly snapshot = (matches: (command: SessionPromptCommand) => boolean): ActiveTurnSnapshot => {
-        for (const turn of this.#turns.values()) {
+        for (const turn of this.#inFlightByCommandId.values()) {
             if (!matches(turn.command)) {
                 continue;
             }
@@ -143,7 +145,7 @@ export class DaemonTurnRegistry {
     };
 
     readonly recovery = (matches: (command: SessionPromptCommand) => boolean): ActiveTurnRecovery | null => {
-        for (const turn of this.#turns.values()) {
+        for (const turn of this.#inFlightByCommandId.values()) {
             if (!matches(turn.command)) {
                 continue;
             }
@@ -152,7 +154,7 @@ export class DaemonTurnRegistry {
                 return recovery;
             }
         }
-        for (const completed of this.#completed.values()) {
+        for (const completed of this.#latestCompletedBySessionId.values()) {
             if (matches(completed.command)) {
                 return completed.recovery;
             }
@@ -161,12 +163,12 @@ export class DaemonTurnRegistry {
     };
 
     readonly close = async (): Promise<void> => {
-        const turns = [...this.#turns.values()];
+        const turns = [...this.#inFlightByCommandId.values()];
         for (const turn of turns) {
             turn.abortDaemon();
         }
         await Promise.all(turns.map((turn) => turn.completion));
-        this.#completed.clear();
+        this.#latestCompletedBySessionId.clear();
     };
 
     readonly admitAndWait = async (
@@ -181,7 +183,7 @@ export class DaemonTurnRegistry {
         const command = turn.command;
         waitSignal.throwIfAborted();
         const head = (): ActiveDaemonTurn | undefined =>
-            [...this.#turns.values()].find(
+            [...this.#inFlightByCommandId.values()].find(
                 (turn) =>
                     turn.command.sessionId === command.sessionId &&
                     turn.command.disposition !== SessionPromptDisposition.Steer,
