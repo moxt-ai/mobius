@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { NativeSessionCommand } from "@moxt-ai/mobius-protocol";
@@ -10,25 +10,25 @@ import { AuditStore } from "../../../packages/cli/src/audit/audit-store.ts";
 import { WorkspaceDirectoryService } from "../../../packages/cli/src/authorization/workspace-directory.ts";
 import { createDaemonConfig } from "../../../packages/cli/src/config.ts";
 import { NativeSessionService } from "../../../packages/cli/src/native-sessions/service.ts";
+import { FakeOpenAiProvider } from "../providers/openai.ts";
+import { CodexFixture } from "./codex.ts";
 
-export async function codexFixture(sessionIdentity: "assigned" | "native" = "assigned") {
+export async function codexFixture(
+    sessionIdentity: "assigned" | "native" = "assigned",
+    answer = "REAL_CODEX_REPLY",
+    providerOptions: Parameters<typeof FakeOpenAiProvider.start>[2] = {},
+) {
     const temporary = await realpath(await mkdtemp(join(tmpdir(), "mobius-native-codex-")));
     const workspace = join(temporary, "workspace");
-    const native = join(temporary, "native");
     await mkdir(workspace);
-    await mkdir(native);
-    const previous = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
-    process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = native;
-    const appServerUrl = new URL("../fixtures/fake-acp-agent/src/app-server.ts", import.meta.url).toString();
-    const executable = join(temporary, "codex.mjs");
-    await writeFile(executable, `#!${process.execPath}\nawait import(${JSON.stringify(appServerUrl)});\n`, {
-        mode: 0o700,
-    });
+    const provider = await FakeOpenAiProvider.start("mobius-test-model", answer, providerOptions);
+    const codex = await CodexFixture.create(provider);
     const agent = new InProcessAcpAgentDefinition(
         "codex",
         "Codex",
-        executable,
+        codex.executable,
         (options) => new CodexAcpAgent(options),
+        codex.environment,
     );
     const store = new MemoryAcpSessionStore();
     const sessions = new AgentRuntimeManager(new NullAcpSessionObserver(), store, null, sessionIdentity);
@@ -55,14 +55,32 @@ export async function codexFixture(sessionIdentity: "assigned" | "native" = "ass
         requestId: "native-operation",
         sessionId: "browser",
     } satisfies Omit<NativeSessionCommand, "action">;
-    const seed = async (title: string): Promise<void> => {
-        await writeFile(
-            join(native, `${encodeURIComponent(crypto.randomUUID())}.json`),
-            JSON.stringify({ cwd: workspace, title, history: [{ role: "user", text: title }] }),
-        );
+    const prompt = async (sessionId: string, text: string): Promise<void> => {
+        await sessions.runPrompt({
+            agent,
+            cwd: workspace,
+            additionalDirectories: [],
+            sessionId,
+            commandId: crypto.randomUUID(),
+            prompt: text,
+            images: [],
+            resources: [],
+            signal: AbortSignal.timeout(30_000),
+            onText: async () => {},
+            onActivity: async () => {},
+        });
+    };
+    const seed = async (title: string): Promise<string> => {
+        const created = await service.execute({ ...identity, action: "create" }, AbortSignal.timeout(30_000));
+        if (created.action !== "create") {
+            throw new Error("Expected native Codex creation");
+        }
+        const sessionId = created.nativeSessionId;
+        await prompt(sessionId, title);
+        return sessionId;
     };
     const list = async (cursor: string | null = null) => {
-        const result = await service.execute({ ...identity, action: "list", cursor }, new AbortController().signal);
+        const result = await service.execute({ ...identity, action: "list", cursor }, AbortSignal.timeout(30_000));
         if (result.action !== "list") {
             throw new Error("Expected a native session list");
         }
@@ -71,12 +89,9 @@ export async function codexFixture(sessionIdentity: "assigned" | "native" = "ass
     const close = async (): Promise<void> => {
         await sessions.close();
         audit.close();
-        if (previous === undefined) {
-            delete process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
-        } else {
-            process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = previous;
-        }
+        await codex[Symbol.asyncDispose]();
+        await provider[Symbol.asyncDispose]();
         await rm(temporary, { recursive: true, force: true });
     };
-    return { agent, identity, list, native, seed, service, workspace, close };
+    return { agent, identity, list, seed, prompt, sessions, service, workspace, close };
 }

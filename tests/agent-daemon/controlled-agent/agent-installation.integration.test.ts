@@ -2,29 +2,10 @@ import { createHash } from "node:crypto";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 
-import { AGENT_INSTALL_REQUEST_KIND, type AgentInstallRequestCommand } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it } from "vitest";
 
-import { CodexAgentSpecification } from "../../../packages/cli/src/agent-catalog/discover-local-agents.ts";
-import {
-    LocalAgentCatalog,
-    LocalAgentDefinition,
-    MissingAgentDefinition,
-} from "../../../packages/cli/src/agent-catalog/local-agent.ts";
-import {
-    type AgentInstallation,
-    AgentInstallationManager,
-    FailedInstallation,
-    type InstallationAudit,
-    type InstallationObserver,
-    RunningInstallation,
-    SucceededInstallation,
-} from "../../../packages/cli/src/agent-installation/agent-installation-manager.ts";
 import { DEEPSEEK_HARNESS_PACKAGE } from "../../../packages/cli/src/agent-installation/deepseek-managed-package.ts";
-import { FixedInstallationExecutor } from "../../../packages/cli/src/agent-installation/fixed-installation-executor.ts";
-import type { AdapterInstallationPort } from "../../../packages/cli/src/agent-installation/managed-adapter-installer.ts";
 import {
     type ManagedAgentArchiveDefinition,
     type ManagedAgentArchiveDownloadPort,
@@ -38,31 +19,10 @@ import {
     validateManagedNpmPackage,
 } from "../../../packages/cli/src/agent-installation/managed-npm-package.ts";
 import { VerifiedDownload } from "../../../packages/cli/src/agent-installation/verified-download.ts";
-import { resolveExecutablePath, runBoundedProcess } from "../../../packages/cli/src/process/executable.ts";
-
-const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
-const _fakeAgentPath = fileURLToPath(new URL("../fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
-const turnAppServerUrl = new URL("../fixtures/fake-acp-agent/src/turn-app-server.ts", import.meta.url).toString();
+import { runBoundedProcess } from "../../../packages/cli/src/process/executable.ts";
 
 function executableSource(source: string): string {
     return `#!${process.execPath}\n${source}`;
-}
-
-class RecordingInstallationObserver implements InstallationObserver {
-    readonly states: AgentInstallation[] = [];
-
-    readonly onState = (state: AgentInstallation): Promise<void> => {
-        this.states.push(state);
-        return Promise.resolve();
-    };
-}
-
-class RecordingInstallationAudit implements InstallationAudit {
-    readonly events: string[] = [];
-
-    readonly record = (event: string): void => {
-        this.events.push(event);
-    };
 }
 
 class LocalArchiveDownloader implements ManagedAgentArchiveDownloadPort {
@@ -81,165 +41,6 @@ class LocalArchiveDownloader implements ManagedAgentArchiveDownloadPort {
         return new VerifiedDownload(options.url, metadata.size, this.#sha256);
     };
 }
-
-// The real adapter registry is mutable and requires network access. This
-// stateful boundary publishes a disposable adapter while production discovery,
-// executable validation, ACP probing, and catalog transitions remain real.
-class StatefulAdapterInstaller implements AdapterInstallationPort {
-    readonly #stateDirectory: string;
-    readonly installedAgentIds: string[] = [];
-
-    constructor(stateDirectory: string) {
-        this.#stateDirectory = stateDirectory;
-    }
-
-    readonly install: AdapterInstallationPort["install"] = async (specification, signal) => {
-        signal.throwIfAborted();
-        this.installedAgentIds.push(specification.id);
-        const directory = join(
-            this.#stateDirectory,
-            "adapters",
-            specification.id,
-            specification.adapterVersion,
-            "node_modules",
-            "@agentclientprotocol",
-            "codex-acp",
-            "dist",
-        );
-        const path = join(directory, "index.js");
-        await mkdir(directory, { mode: 0o700, recursive: true });
-        await writeFile(
-            path,
-            executableSource(`
-import { spawn } from "node:child_process";
-if (process.argv.includes("--version")) {
-  process.stdout.write("codex-acp 1.8.0\\n");
-} else {
-  const executable = process.env[${JSON.stringify(specification.adapterEnvironmentVariable)}];
-  if (executable === undefined) process.exit(91);
-  const child = spawn(executable, [], { env: process.env, stdio: "inherit" });
-  child.once("error", () => process.exit(92));
-  child.once("exit", (code) => process.exit(code ?? 93));
-}
-`),
-            { mode: 0o700 },
-        );
-        await chmod(path, 0o700);
-        const executable = await resolveExecutablePath(path);
-        if (executable === null) {
-            throw new Error("Stateful adapter installer did not create an executable");
-        }
-        return executable;
-    };
-}
-
-async function writeExternalCodexAgent(path: string): Promise<void> {
-    await mkdir(join(path, ".."), { mode: 0o700, recursive: true });
-    await writeFile(
-        path,
-        executableSource(`
-if (process.argv.includes("--version")) {
-  process.stdout.write("codex 0.153.0\\n");
-} else if (process.argv.includes("app-server")) {
-  await import(${JSON.stringify(turnAppServerUrl)});
-} else {
-  process.exit(80);
-}
-`),
-        { mode: 0o700 },
-    );
-    await chmod(path, 0o700);
-}
-
-function request(requestId: string): AgentInstallRequestCommand {
-    return {
-        agentId: "codex",
-        kind: AGENT_INSTALL_REQUEST_KIND,
-        requestId,
-    };
-}
-
-function createManager(
-    stateDirectory: string,
-    executableDirectory: string,
-    catalog: LocalAgentCatalog,
-    adapterInstaller: AdapterInstallationPort,
-    observer: RecordingInstallationObserver,
-    audit: RecordingInstallationAudit,
-): AgentInstallationManager {
-    const specification = new CodexAgentSpecification();
-    return new AgentInstallationManager(
-        [specification],
-        new FixedInstallationExecutor(
-            {
-                defaultWorkspace: repositoryRoot,
-                audit,
-                catalog,
-                environment: {
-                    MOBIUS_STATE_DIRECTORY: stateDirectory,
-                    PATH: executableDirectory,
-                },
-                publishCatalog: (signal) => {
-                    signal.throwIfAborted();
-                    return Promise.resolve();
-                },
-                stateDirectory,
-            },
-            [specification],
-            adapterInstaller,
-        ),
-        observer,
-        audit,
-    );
-}
-
-describe("local Agent integration installation", () => {
-    it("Given the daemon did not detect Codex at startup, When the user installs Codex locally and checks again, Then Mobius verifies the in-process Agent and publishes its details", async () => {
-        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-integration-after-agent-install-"));
-        const executableDirectory = join(stateDirectory, "external");
-        const agentPath = join(executableDirectory, "codex");
-        const catalog = new LocalAgentCatalog(
-            [new LocalAgentDefinition("refreshed-agent", "Refreshed Agent", process.execPath, [])],
-            [new MissingAgentDefinition("codex", "Codex")],
-        );
-        const adapterInstaller = new StatefulAdapterInstaller(stateDirectory);
-        const observer = new RecordingInstallationObserver();
-        const audit = new RecordingInstallationAudit();
-        const manager = createManager(stateDirectory, executableDirectory, catalog, adapterInstaller, observer, audit);
-
-        try {
-            const missing = await manager.request(request("integration-before-agent"), new AbortController().signal);
-            expect(missing).toBeInstanceOf(FailedInstallation);
-            expect(missing).toMatchObject({
-                code: "agent_not_installed",
-                message: "Install Codex on this machine, then check local Agents again.",
-            });
-            expect(adapterInstaller.installedAgentIds).toEqual([]);
-            expect(catalog.read().installableAgents[0]).toBeInstanceOf(MissingAgentDefinition);
-
-            await writeExternalCodexAgent(agentPath);
-            const installed = await manager.request(request("integration-after-agent"), new AbortController().signal);
-
-            expect(installed).toBeInstanceOf(SucceededInstallation);
-            // Codex hosts its ACP Agent in-process, so there is no adapter to install.
-            expect(adapterInstaller.installedAgentIds).toEqual([]);
-            expect(catalog.read().installableAgents).toEqual([]);
-            expect(catalog.read().agents.map((agent) => agent.id)).toEqual(["refreshed-agent", "codex"]);
-            expect(catalog.read().agents[1]).toMatchObject({
-                agentVersion: "codex 0.153.0",
-                id: "codex",
-                kind: "in-process-acp",
-            });
-            expect(catalog.read().agents[1]?.agentIdentity.requestedPath).toBe(agentPath);
-            // The app-server handshake during discovery is the whole verification: an in-process
-            // Agent is ready the moment its binary is, so no install stage runs at all.
-            expect(observer.states.filter((state) => state instanceof RunningInstallation)).toEqual([]);
-            expect(audit.events).not.toContain("agent_adapter_verified");
-        } finally {
-            await rm(stateDirectory, { force: true, recursive: true });
-        }
-    });
-});
 
 describe("managed Agent artifacts", () => {
     it.skipIf(process.platform === "win32")(

@@ -71,11 +71,25 @@ export class CodexFixture implements AsyncDisposable {
             MOBIUS_PI_ACP_PATH: missing,
             MOBIUS_WORKBUDDY_PATH: missing,
             NO_BROWSER: "1",
+            PATH: process.env["PATH"] ?? "",
             XDG_CACHE_HOME: join(directory, "cache"),
             XDG_CONFIG_HOME: join(directory, "config"),
             XDG_DATA_HOME: join(directory, "data"),
             XDG_STATE_HOME: join(directory, "state"),
         });
+    }
+
+    async writeLauncher(path: string): Promise<void> {
+        await writeFile(
+            path,
+            `#!${process.execPath}
+import { spawn } from "node:child_process";
+const child = spawn(${JSON.stringify(this.executable)}, process.argv.slice(2), { stdio: "inherit", env: { ...process.env, ...${JSON.stringify(this.environment)} } });
+child.once("error", () => process.exit(1));
+child.once("exit", (code) => process.exit(code ?? 1));
+`,
+            { mode: 0o700 },
+        );
     }
 
     async rolloutDiagnostics(): Promise<readonly unknown[]> {

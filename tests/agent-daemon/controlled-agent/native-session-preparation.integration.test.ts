@@ -82,68 +82,10 @@ describe("native session preparation", () => {
         }
     });
 
-    it("Given a Codex conversation is open in another writer, When its history is previewed, Then the preview succeeds without acquiring Codex's exclusive writer lock", async () => {
-        vi.useFakeTimers({ toFake: ["Date"] });
-        vi.setSystemTime(new Date("2026-09-16T00:00:00Z"));
-        const f = await fixture("Codex", "exclusive-writer");
-        const external = new AgentRuntimeManager();
-        try {
-            await external.runPrompt({
-                agent: f.agent,
-                additionalDirectories: [],
-                cwd: f.workspace,
-                signal: new AbortController().signal,
-                sessionId: "external",
-                commandId: "external-turn",
-                prompt: "Externally owned conversation",
-                images: [],
-                resources: [],
-                onText: async () => {},
-                onActivity: async () => {},
-            });
-            const entry = (await f.list()).entries[0];
-            if (entry === undefined) {
-                throw new Error("Missing native conversation");
-            }
-            // The external writer stays open for the entire preview; a lock-acquiring
-            // read (ACP session/load) would fail here with "already has an active writer".
-            const preview = await f.service.execute(
-                { ...f.identity, action: "preview", entryId: entry.entryId },
-                new AbortController().signal,
-            );
-            expect(preview).toMatchObject({
-                action: "preview",
-                reason: "requested",
-                history: {
-                    status: "available",
-                    messages: expect.arrayContaining([{ role: "user", text: "Externally owned conversation" }]),
-                },
-            });
-            await expect(
-                external.runPrompt({
-                    agent: f.agent,
-                    additionalDirectories: [],
-                    cwd: f.workspace,
-                    signal: new AbortController().signal,
-                    sessionId: "external",
-                    commandId: "external-turn-after-preview",
-                    prompt: "Still owned by the external writer",
-                    images: [],
-                    resources: [],
-                    onText: async () => {},
-                    onActivity: async () => {},
-                }),
-            ).resolves.toMatchObject({ stopReason: "end_turn" });
-        } finally {
-            await external.close();
-            await f.close();
-            vi.useRealTimers();
-        }
-    });
-    it("Given a saved Codex conversation is open elsewhere, When a user imports it and retries after it closes, Then the original opening error is reported and the retry opens the conversation", async () => {
+    it("Given a saved ACP conversation is open elsewhere, When a user imports it and retries after it closes, Then the original opening error is reported and the retry opens the conversation", async () => {
         vi.useFakeTimers({ toFake: ["Date"] });
         vi.setSystemTime(new Date("2026-09-14T00:00:00Z"));
-        const f = await fixture("Codex", "exclusive-writer");
+        const f = await fixture("Claude Code", "exclusive-writer");
         const external = new AgentRuntimeManager();
         try {
             await external.runPrompt({

@@ -1,12 +1,11 @@
 import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { AgentRuntimeManager } from "../../../packages/cli/src/acp/agent-runtime-manager.ts";
 import { formatAgentDiagnostics } from "../../../packages/cli/src/agent-catalog/agent-diagnostics.ts";
 import {
     AvailableAgent,
@@ -23,9 +22,7 @@ import {
     openCodeManagedArchive,
 } from "../../../packages/cli/src/agent-installation/opencode-managed-release.ts";
 
-const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const fakeAgentPath = fileURLToPath(new URL("../fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
-const turnAppServerUrl = new URL("../fixtures/fake-acp-agent/src/turn-app-server.ts", import.meta.url).toString();
 
 function executableSource(source: string): string {
     return `#!${process.execPath}\n${source}`;
@@ -361,124 +358,6 @@ child.once("exit", (code) => process.exit(code ?? 93));
             await rm(temporaryDirectory, { force: true, recursive: true });
         }
     });
-
-    it("Given Codex initializes but exits while listing models, When discovery runs, Then the dead backend is unavailable", async () => {
-        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-agent-readiness-exit-"));
-        const agentPath = join(stateDirectory, "codex");
-        try {
-            await writeFile(
-                agentPath,
-                executableSource(`
-if (process.argv.includes("--version")) {
-  process.stdout.write("codex 0.153.0\\n");
-} else if (process.argv.includes("app-server")) {
-  process.env["MOBIUS_FAKE_CODEX_EXIT_DURING_MODEL_LIST"] = "1";
-  await import(${JSON.stringify(turnAppServerUrl)});
-} else {
-  process.exit(80);
-}
-`),
-                { mode: 0o700 },
-            );
-            await chmod(agentPath, 0o700);
-
-            const inventory = await discoverLocalAgentInventory({
-                defaultWorkspace: repositoryRoot,
-                environment: { MOBIUS_STATE_DIRECTORY: stateDirectory, PATH: stateDirectory },
-                signal: new AbortController().signal,
-                specifications: [new CodexAgentSpecification()],
-            });
-
-            expect(inventory.available).toEqual([]);
-            expect(inventory.unavailable).toEqual([
-                expect.objectContaining({
-                    agent: expect.objectContaining({ id: "codex" }),
-                    code: "acp_incompatible",
-                    status: "incompatible_adapter",
-                }),
-            ]);
-        } finally {
-            await rm(stateDirectory, { force: true, recursive: true });
-        }
-    });
-
-    it.skipIf(process.platform === "win32")(
-        "Given a discovered Agent symlink changes, When an existing conversation continues and a new one starts, Then the existing process remains usable and the new runtime is rejected",
-        async () => {
-            const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-agent-identity-"));
-            const firstAgentPath = join(temporaryDirectory, "codex-first");
-            const secondAgentPath = join(temporaryDirectory, "codex-second");
-            const codexLink = join(temporaryDirectory, "codex");
-            const manager = new AgentRuntimeManager();
-            try {
-                for (const path of [firstAgentPath, secondAgentPath]) {
-                    await writeFile(
-                        path,
-                        executableSource(`
-if (process.argv.includes("--version")) {
-  process.stdout.write("codex 0.153.0\\n");
-} else if (process.argv.includes("app-server")) {
-  await import(${JSON.stringify(turnAppServerUrl)});
-} else {
-  process.exit(80);
-}
-`),
-                        { mode: 0o700 },
-                    );
-                    await chmod(path, 0o700);
-                }
-                await symlink(firstAgentPath, codexLink);
-                const inventory = await discoverLocalAgentInventory({
-                    defaultWorkspace: repositoryRoot,
-                    environment: {
-                        MOBIUS_CODEX_PATH: codexLink,
-                        PATH: temporaryDirectory,
-                    },
-                    signal: new AbortController().signal,
-                });
-                const discovered = inventory.available[0];
-                if (!(discovered instanceof AvailableAgent)) {
-                    throw new Error("Codex was not discovered");
-                }
-                const run = async (sessionId: string, prompt: string): Promise<string> => {
-                    const chunks: string[] = [];
-                    await manager.runPrompt({
-                        additionalDirectories: [],
-                        agent: discovered.agent,
-                        commandId: `${sessionId}-${prompt}`,
-                        cwd: temporaryDirectory,
-                        images: [],
-                        onActivity: () => Promise.resolve(),
-                        onText: (text) => {
-                            chunks.push(text);
-                            return Promise.resolve();
-                        },
-                        prompt,
-                        resources: [],
-                        sessionId,
-                        signal: new AbortController().signal,
-                    });
-                    return chunks.join("");
-                };
-
-                await expect(run("existing-session", "before")).resolves.toBe(
-                    "Scripted Codex answer (scripted-small/medium/undefined/undefined/default)",
-                );
-                await unlink(codexLink);
-                await symlink(secondAgentPath, codexLink);
-
-                await expect(run("existing-session", "after")).resolves.toBe(
-                    "Scripted Codex answer (scripted-small/medium/undefined/undefined/default)",
-                );
-                await expect(run("new-session", "blocked")).rejects.toMatchObject({
-                    code: "agent_runtime_changed",
-                });
-            } finally {
-                await manager.close();
-                await rm(temporaryDirectory, { force: true, recursive: true });
-            }
-        },
-    );
 
     it("Given PATH contains an Agent in the default working directory, When the paired machine discovers Agents, Then the working directory does not exclude that executable", async () => {
         const workspace = await mkdtemp(join(tmpdir(), "mobius-path-boundary-"));

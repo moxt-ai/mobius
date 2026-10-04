@@ -10,7 +10,6 @@ import { createDaemonConfig, LocalAgentDefinition } from "../../../packages/cli/
 import { NativeSessionService } from "../../../packages/cli/src/native-sessions/service.ts";
 
 const acpUrl = new URL("../fixtures/fake-acp-agent/src/cli.ts", import.meta.url).toString();
-const appServerUrl = new URL("../fixtures/fake-acp-agent/src/app-server.ts", import.meta.url).toString();
 
 // Real providers cannot deterministically supply destructive test sessions or stalled
 // loads. These ACP subprocesses maintain their own disposable session files.
@@ -40,17 +39,10 @@ export async function fixture(
     await mkdir(native);
     const previous = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
     process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = native;
-    // Codex's saved-history preview spawns `codex app-server` separately from
-    // the ACP Agent process; dispatch to either fixture entrypoint by argv,
-    // mirroring the real Codex CLI's two entrypoints under one executable.
+    // Controlled ACP peers are used only for protocol-specific scenarios.
     const executable = join(temporary, "agent.mjs");
-    await writeFile(
-        executable,
-        `#!${process.execPath}\nawait import(process.argv.includes("app-server") ? ${JSON.stringify(appServerUrl)} : ${JSON.stringify(acpUrl)});\n`,
-        { mode: 0o700 },
-    );
-    const agentId =
-        label === "Codex" ? "codex" : label === "Claude Code" ? "claude" : label === "Pi" ? "pi" : "opencode";
+    await writeFile(executable, `#!${process.execPath}\nawait import(${JSON.stringify(acpUrl)});\n`, { mode: 0o700 });
+    const agentId = label === "Claude Code" ? "claude" : label === "Pi" ? "pi" : "opencode";
     const agent = new LocalAgentDefinition(agentId, label, executable, [
         "--agent-name",
         label,

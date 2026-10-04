@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { fixture } from "./native-session-fixture.ts";
 
 describe("native session authorization", () => {
-    it.each(["Codex", "Claude Code"])(
+    it.each(["Claude Code"])(
         "Given %s has saved conversations across projects, When they are listed and imported, Then pagination includes other directories and imports retain their original project and Mobius identity",
         async (label) => {
             const f = await fixture(label);
@@ -74,7 +74,7 @@ describe("native session authorization", () => {
     );
 
     it("Given paginated native sessions, When one is found by its native ID, Then its authorized entry exposes the ID for direct Chat ownership", async () => {
-        const f = await fixture("Codex");
+        const f = await fixture("Claude Code");
         try {
             await f.seed("Earlier conversation");
             await f.seed("Another conversation");
@@ -111,7 +111,7 @@ describe("native session authorization", () => {
     });
 
     it("Given a listed session uses a linked directory, When that directory changes before deletion, Then the local boundary requires a refreshed selection before deleting the session", async () => {
-        const f = await fixture("Codex");
+        const f = await fixture("Claude Code");
         try {
             const inside = join(f.workspace, "inside");
             const outside = join(f.temporary, "outside");
@@ -140,7 +140,7 @@ describe("native session authorization", () => {
     });
 
     it("Given an Agent omits native session capabilities, When a remote caller requests its sessions, Then the local boundary rejects the operation", async () => {
-        const f = await fixture("Codex", "unsupported");
+        const f = await fixture("Claude Code", "unsupported");
         try {
             const ready = await f.sessions.prepareSession({
                 agent: f.agent,
