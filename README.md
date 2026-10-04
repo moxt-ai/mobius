@@ -6,82 +6,47 @@ People already do useful work with coding Agents on their own computers. Their
 projects, tools and ongoing conversations are there, but checking progress or giving
 the next instruction should not require sitting in front of that computer.
 
-Mobius makes those Agents available remotely. Users can keep working with their
-existing projects and conversations from another device. Developers building Agent
-applications can offer that experience without solving remote access and conversation
-continuity separately for every supported Agent. Users can also use Mobius on its
-own; Morty is one application built on it.
+Mobius makes those Agents available remotely. From another device, users can find and
+resume available conversations, give instructions, queue follow-up work, stop execution,
+answer permission requests and view results, including files and images. Developers
+can offer this experience without implementing remote access separately for each
+Agent. Mobius can be used on its own; [Morty](https://github.com/moxt-ai/morty) provides
+a ready-to-use Bot and browser chat experience.
 
-## Functional value
+Ongoing work should feel like a live broadcast. Multiple devices can watch the same
+conversation and see instructions sent from elsewhere. Publishing continues when
+nobody is watching. New output should arrive promptly as the answer grows: ordinary
+updates carry new or changed content, so processing and transfer grow with the content
+produced rather than with repeated copies of the entire turn. Joining or reconnecting
+may require a full current-turn view, but that catch-up cost must not recur on every
+update.
 
-| User need | What Mobius should make possible |
-| --- | --- |
-| Work away from my computer | Connect my machine and use its Agents remotely, with access to the projects and tools already there. |
-| Continue work already started | Find and resume an available conversation instead of explaining the task again in a new chat. |
-| Stay in control of ongoing work | See progress, give the next instruction, queue follow-up work, stop work or answer a request for permission. |
-| Move between devices | Open the same conversation elsewhere and catch up on both my instructions and the Agent's output. |
-| Use the results | Read available history and view authorized files and images produced by the Agent. |
-| Choose cloud history retention | Use local history, or explicitly enable cloud recording when history needs to remain accessible without the local machine. |
+We choose responsive live output and a simple lifecycle over guaranteed delivery.
+Disconnected or overloaded viewers can miss events, and daemon or Relay restarts can
+lose in-flight messages. Reconnecting resumes the broadcast; users catch up through
+the available current-turn view, native Agent history or cloud recordings. Restarting
+the daemon does not resume running work or queued prompts.
 
-These are product requirements. Availability depends on the selected Agent and
-configuration; unsupported operations must be clear to the user. Implementation and
-[verification evidence](TESTING.md) determine which scenarios are supported today.
+Users can choose optional cloud Recording when history needs to remain accessible
+without their machine. Recording is best effort: it retains what it successfully
+receives, and slow writes, failures or restarts can leave gaps. It must never block
+live output, and failed writes are not retried. It is not a lossless audit archive and
+does not keep an offline Agent running.
 
-## Non-functional requirement: efficient current-turn streaming
-
-Users should see new output promptly throughout a turn, even as the answer grows.
-Streaming must not become progressively slower because earlier output is repeatedly
-copied and processed.
-
-During a continuous subscription, each update must carry the new or changed content
-rather than a complete copy of the accumulated turn. Copying, serialization, transport
-and client processing must avoid repeatedly traversing the whole turn for each update.
-For a fixed number of observers, total streaming work should grow with the content
-produced, not with the sum of every successively larger full-turn snapshot.
-
-A complete current-turn view may be needed when a client first joins or recovers after
-an interruption. That recovery cost must not be paid again for every streaming update.
-This requirement does not prescribe a particular patch format or cursor algorithm.
-
-## Non-functional tradeoff: live broadcast over reliable delivery
-
-Users should continue seeing live output regardless of how many devices are watching
-or whether cloud recording is slow or unavailable. The daemon broadcasts to the Relay;
-the Relay fans out to current viewers and offers events to Recording independently.
-No viewers is a normal condition, not a reason to stop publishing.
-
-We choose low latency and a simple lifecycle over guaranteed delivery. There are no
-event acknowledgements, redelivery queues or durable delivery receipts. Disconnected
-or overloaded consumers can miss events; daemon and Relay restarts can lose in-flight
-messages. Reconnecting resumes live output rather than replaying a transport backlog.
-Clients catch up through the current-turn view, native Agent history or available
-recordings.
-
-Recording is best effort. It retains events it successfully receives, but slow writes,
-failures, capacity limits or restarts can leave gaps. Recording never blocks live output
-and failed writes are not retried. Users must not treat it as a lossless audit archive.
+Mobius reuses each Agent's model, tools and native environment. Available operations
+depend on that Agent and the configuration; unsupported capabilities must be clear.
+Applications decide who may access conversations, and local actions must still be
+authorized on the user's machine.
 
 ## Data ownership and recovery
 
-Users must know when their machine needs to be online and where conversation content
-is retained. Without cloud recording, history depends on the connected machine and
-what its Agent has saved. Optional cloud recording provides history according to the
-configured retention policy; it does not keep an offline Agent running.
+Without cloud Recording, history depends on the connected machine and what its Agent
+has saved. Recording retains cloud history according to the configured policy.
 
-Pairing and session metadata are still stored locally, and Agents manage their own
-native history. These are separate from the daemon's memory-only execution state; disabling Recording does not erase Agent history or local metadata.
-See [current persistence behavior](DEVELOPMENT.md#current-persistence-behavior) for the
-technical disclosure and implementation references.
-
-## Product boundary
-
-Mobius provides remote access to existing Agents. It does not replace their model,
-tools or native work environment, and it cannot make an unsupported Agent operation
-available merely by exposing it in a client.
-
-[Morty (Mobius Chat)](https://github.com/moxt-ai/morty) provides the ready-to-use Bot
-and browser chat experience. Applications remain responsible for deciding who may
-access their conversations; local actions must still be authorized on the machine.
+Pairing and session metadata are stored locally, and Agents manage their own native
+history. The daemon's execution state is memory-only. Disabling Recording does not
+erase Agent history or local metadata. See [current persistence behavior](DEVELOPMENT.md#current-persistence-behavior)
+for implementation references.
 
 ## Local development
 

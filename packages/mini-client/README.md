@@ -1,6 +1,6 @@
 # Mobius mini-client
 
-This private developer tool drives the Mobius Platform and a local Mobius CLI without Mobius Chat. It creates one isolated Platform Project, pairs the checkout's CLI as a Runtime, and persists only the identifiers needed by later commands.
+This private developer tool drives the Mobius Platform and a local Mobius CLI without Morty. It creates one isolated Platform Project, pairs the checkout's CLI as a Runtime, and persists only the identifiers needed by later commands.
 
 The state directory contains an AppCredential and Runtime credentials. `create` generates a fresh temporary directory by default so concurrent checkouts use independent Mobius CLI managers. Do not commit it, and remove it after verification.
 
