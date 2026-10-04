@@ -5,7 +5,7 @@ and hosting, and [TESTING.md](TESTING.md) for verification.
 
 ## Design rationale
 
-The [product goals](README.md#functional-value) explain why the system exists.
+The [product goals](README.md#why-mobius-exists) explain why the system exists.
 Implementation choices must serve those goals without turning the README into a
 second protocol specification.
 
@@ -68,7 +68,7 @@ by itself justify adding storage or promise durable execution recovery:
 - Relay live delivery does not persist event receipts or wait for consumers to
   acknowledge delivery. Recording runs independently with bounded buffering and a
   deadline. Failed or overloaded recording attempts are dropped, never retried.
-  This implements the chosen [latency and reliability tradeoff](README.md#non-functional-tradeoff-live-broadcast-over-reliable-delivery).
+  This implements the chosen [latency and reliability tradeoff](README.md#why-mobius-exists).
 - Without Recording, browsing native history requires the local Runtime and the Agent's
   saved history. With the optional Recording Worker installed and recording enabled for
   an App or Project, cloud history is available according to that recording policy.
@@ -83,7 +83,7 @@ schemas and capacity limits belong in code and executable tests.
 
 - `packages/cli`: local daemon, pairing, agent discovery, and ACP session execution.
 - `packages/protocol`: messages shared across the daemon, Worker, and SDK.
-- `packages/mobius-sdk`: client and server API used by Mobius Chat.
+- `packages/mobius-sdk`: client and server API used by Morty.
 - `packages/mini-client`: private stateful CLI for exercising a local Platform Worker and local Runtime.
 - `packages/relay-core`: runtime and session behavior, storage, and protocol boundaries.
 - `packages/relay-cloudflare-platform`: Cloudflare Worker and local Worker integration tests.
