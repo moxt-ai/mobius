@@ -7,6 +7,5 @@
         "skipLibCheck": true,
         "types": ["node"]
     },
-    "include": ["agents/**/*.ts", "sessions/**/*.ts", "runtime/**/*.ts", "support/**/*.ts"],
-    "exclude": ["support/acp/**"]
+    "include": ["agents/**/*.ts", "sessions/**/*.ts", "runtime/**/*.ts", "support/**/*.ts"]
 }

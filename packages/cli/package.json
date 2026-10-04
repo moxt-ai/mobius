@@ -36,7 +36,7 @@
         "prepack": "pnpm build",
         "start": "node dist/cli.js",
         "typecheck": "tsc --project tsconfig.json && tsc --project tests/tsconfig.json",
-        "test:controlled": "pnpm --filter @moxt-ai/mobius-fake-acp-agent build && vitest run tests/sessions tests/runtime --maxWorkers=4",
+        "test:controlled": "vitest run tests/sessions tests/runtime --maxWorkers=4",
         "test:agents": "vitest run tests/agents --maxWorkers=2"
     },
     "dependencies": {

@@ -41,7 +41,7 @@ import type { DaemonScheduledTask, DaemonTimer } from "../../src/relay-connectio
 import { runDaemon } from "../../src/run-daemon.ts";
 
 const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-const fakeAgentPath = fileURLToPath(new URL("../support/acp/fake-acp-agent/src/cli.ts", import.meta.url));
+const fakeAgentPath = fileURLToPath(new URL("../sessions/fixtures/acp-peer.ts", import.meta.url));
 
 function restoreEnvironmentVariable(name: string, previous: string | undefined): void {
     if (previous === undefined) {

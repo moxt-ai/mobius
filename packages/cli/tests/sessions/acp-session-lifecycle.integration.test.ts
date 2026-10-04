@@ -12,7 +12,7 @@ import { FoundAcpStoredSession, MemoryAcpSessionStore, SqliteAcpSessionStore } f
 import { LocalAgentDefinition } from "../../src/config.ts";
 import { AccumulatingOperationMetrics } from "../../src/infra/operation-metrics.ts";
 
-const fakeAgentPath = fileURLToPath(new URL("../support/acp/fake-acp-agent/src/cli.ts", import.meta.url));
+const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
 
 function processExists(pid: number): boolean {
     if (process.platform === "linux") {

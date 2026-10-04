@@ -14,7 +14,7 @@ import type {
 import type { AcpSessionObserver } from "../../src/acp/agent-runtime-manager.ts";
 import { LocalAgentDefinition } from "../../src/config.ts";
 
-export const fakeAgentPath = fileURLToPath(new URL("../support/acp/fake-acp-agent/src/cli.ts", import.meta.url));
+export const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
 
 export class RecordingObserver implements AcpSessionObserver {
     readonly commands: SessionCommandsUpdatedEvent[] = [];

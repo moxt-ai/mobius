@@ -9,7 +9,7 @@ import { WorkspaceDirectoryService } from "../../src/authorization/workspace-dir
 import { createDaemonConfig, LocalAgentDefinition } from "../../src/config.ts";
 import { NativeSessionService } from "../../src/native-sessions/service.ts";
 
-const acpUrl = new URL("../support/acp/fake-acp-agent/src/cli.ts", import.meta.url).toString();
+const acpUrl = new URL("./fixtures/acp-peer.ts", import.meta.url).toString();
 
 // Real providers cannot deterministically supply destructive test sessions or stalled
 // loads. These ACP subprocesses maintain their own disposable session files.

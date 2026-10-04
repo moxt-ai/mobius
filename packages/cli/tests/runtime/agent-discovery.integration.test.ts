@@ -22,7 +22,7 @@ import {
     openCodeManagedArchive,
 } from "../../src/agent-installation/opencode-managed-release.ts";
 
-const fakeAgentPath = fileURLToPath(new URL("../support/acp/fake-acp-agent/src/cli.ts", import.meta.url));
+const fakeAgentPath = fileURLToPath(new URL("../sessions/fixtures/acp-peer.ts", import.meta.url));
 
 function executableSource(source: string): string {
     return `#!${process.execPath}\n${source}`;

@@ -1,0 +1,177 @@
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import * as acp from "@agentclientprotocol/sdk";
+import { waitForAbort, waitForFile } from "../../support/acp-process.ts";
+import { type ControlledSessionState, type nativeHistory, persistState } from "./acp-session-state.ts";
+
+export async function runStreamingScenario(
+    context: acp.AgentRequestContext<acp.PromptRequest>,
+    prompt: string,
+    turnNumber: number,
+    cancellation: AbortController,
+    state: ControlledSessionState,
+    transcript: NonNullable<ReturnType<typeof nativeHistory.get>>,
+): Promise<acp.PromptResponse | undefined> {
+    if (prompt === "release before first delta") {
+        const directory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+        if (directory === undefined) {
+            throw new Error("The controlled Agent state directory is unavailable");
+        }
+        writeFileSync(join(directory, "prompt-paused"), context.params.sessionId);
+        await waitForFile(directory, "resume-turn", cancellation.signal);
+        if (cancellation.signal.aborted) {
+            return { stopReason: "cancelled" };
+        }
+    }
+    await context.client.notify(acp.methods.client.session.update, {
+        sessionId: context.params.sessionId,
+        update: {
+            _meta: { codex: { phase: "commentary" } },
+            content: {
+                text: "Gathering context",
+                type: "text",
+            },
+            messageId: `progress-${turnNumber.toString()}`,
+            sessionUpdate: "agent_message_chunk",
+        },
+    });
+    await context.client.notify(acp.methods.client.session.update, {
+        sessionId: context.params.sessionId,
+        update: {
+            content: {
+                text: "Inspecting ",
+                type: "text",
+            },
+            messageId: `reasoning-${turnNumber.toString()}`,
+            sessionUpdate: "agent_thought_chunk",
+        },
+    });
+    await context.client.notify(acp.methods.client.session.update, {
+        sessionId: context.params.sessionId,
+        update: {
+            content: {
+                text: "the workspace",
+                type: "text",
+            },
+            messageId: `reasoning-${turnNumber.toString()}`,
+            sessionUpdate: "agent_thought_chunk",
+        },
+    });
+    if (prompt === "stream verbose activity") {
+        for (let index = 0; index < 64; index += 1) {
+            await context.client.notify(acp.methods.client.session.update, {
+                sessionId: context.params.sessionId,
+                update: {
+                    content: {
+                        text: ` step-${index.toString()}`,
+                        type: "text",
+                    },
+                    messageId: `reasoning-${turnNumber.toString()}`,
+                    sessionUpdate: "agent_thought_chunk",
+                },
+            });
+        }
+    }
+    if (prompt === "stream oversized reasoning") {
+        for (let index = 0; index < 8; index += 1) {
+            await context.client.notify(acp.methods.client.session.update, {
+                sessionId: context.params.sessionId,
+                update: {
+                    content: { text: "r".repeat(100_000), type: "text" },
+                    messageId: `reasoning-${turnNumber.toString()}`,
+                    sessionUpdate: "agent_thought_chunk",
+                },
+            });
+        }
+    }
+    if (prompt === "wait until cancelled") {
+        await waitForAbort(cancellation.signal);
+        return { stopReason: "cancelled" };
+    }
+    if (
+        prompt === "hold after first delta" ||
+        prompt === "release after first delta" ||
+        prompt === "hold after large output"
+    ) {
+        if (prompt === "hold after large output") {
+            for (let index = 0; index < 30; index += 1) {
+                await context.client.notify(acp.methods.client.session.update, {
+                    sessionId: context.params.sessionId,
+                    update: {
+                        content: { text: "x".repeat(10_000), type: "text" },
+                        messageId: `assistant-${turnNumber.toString()}`,
+                        sessionUpdate: "agent_message_chunk",
+                    },
+                });
+            }
+            await context.client.notify(acp.methods.client.session.update, {
+                sessionId: context.params.sessionId,
+                update: {
+                    content: {
+                        resource: {
+                            blob: "AQ==",
+                            mimeType: "application/octet-stream",
+                            uri: "file:///long-output.bin",
+                        },
+                        type: "resource",
+                    },
+                    messageId: `assistant-${turnNumber.toString()}`,
+                    sessionUpdate: "agent_message_chunk",
+                },
+            });
+            await waitForAbort(cancellation.signal);
+            return { stopReason: "cancelled" };
+        }
+        await context.client.notify(acp.methods.client.session.update, {
+            sessionId: context.params.sessionId,
+            update: {
+                content: { text: "Partial reply", type: "text" },
+                messageId: `assistant-${turnNumber.toString()}`,
+                sessionUpdate: "agent_message_chunk",
+            },
+        });
+        await context.client.notify(acp.methods.client.session.update, {
+            sessionId: context.params.sessionId,
+            update: {
+                content: {
+                    resource: {
+                        blob: "AQ==",
+                        mimeType: "application/octet-stream",
+                        uri: "file:///partial.bin",
+                    },
+                    type: "resource",
+                },
+                messageId: `assistant-${turnNumber.toString()}`,
+                sessionUpdate: "agent_message_chunk",
+            },
+        });
+        if (prompt === "hold after first delta") {
+            await waitForAbort(cancellation.signal);
+            return { stopReason: "cancelled" };
+        }
+        const directory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+        if (directory === undefined) {
+            throw new Error("The controlled Agent state directory is unavailable");
+        }
+        await waitForFile(directory, "resume-turn", cancellation.signal);
+        if (cancellation.signal.aborted) {
+            return { stopReason: "cancelled" };
+        }
+        await context.client.notify(acp.methods.client.session.update, {
+            sessionId: context.params.sessionId,
+            update: {
+                content: { text: " and more", type: "text" },
+                messageId: `assistant-${turnNumber.toString()}`,
+                sessionUpdate: "agent_message_chunk",
+            },
+        });
+        transcript.push({
+            messageId: `assistant-${turnNumber.toString()}`,
+            role: "assistant",
+            text: "Partial reply and more",
+        });
+        persistState(context.params.sessionId, state);
+        return { stopReason: "end_turn" };
+    }
+    return undefined;
+}
