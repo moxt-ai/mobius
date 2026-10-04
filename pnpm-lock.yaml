@@ -87,16 +87,6 @@ importers:
         specifier: ^8.21.3
         version: 8.21.3
 
-  packages/cli/tests/support/acp/fake-acp-agent:
-    dependencies:
-      '@agentclientprotocol/sdk':
-        specifier: ^1.4.0
-        version: 1.4.0(zod@4.6.5)
-    devDependencies:
-      '@types/node':
-        specifier: ^24.13.5
-        version: 24.13.5
-
   packages/mini-client:
     dependencies:
       '@moxt-ai/mobius-protocol':

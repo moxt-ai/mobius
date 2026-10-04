@@ -15,7 +15,10 @@
 - [CLI tests](packages/cli/tests/): `agents/` proves real executable compatibility;
   `sessions/` covers session behavior and protocol faults; `runtime/` covers
   process, discovery, installation, connection and local security boundaries.
-  `support/` contains executable launchers, controlled LLM providers and ACP peers.
+  Controlled ACP scenarios live beside their owners in `sessions/fixtures/` and
+  `runtime/fixtures/`; they run directly as CLI test subprocesses without a separate
+  package or build. `support/` contains launchers, controlled LLM providers and
+  shared process I/O helpers.
   [Prerequisites](packages/cli/tests/README.md) describe executable setup.
 - [Shared test support](packages/test-support/src/): real local Platform/Cloudflare
   infrastructure and the stateful fake daemon exposed through package exports.

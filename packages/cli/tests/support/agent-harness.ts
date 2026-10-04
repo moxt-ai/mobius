@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { LocalAgentDefinition } from "../../src/config.ts";
 
-const harnessPath = fileURLToPath(new URL("./acp/fake-acp-agent/src/cli.ts", import.meta.url));
+const harnessPath = fileURLToPath(new URL("../sessions/fixtures/acp-peer.ts", import.meta.url));
 
 export interface FakeAgentHarnessDefinition {
     readonly id: string;

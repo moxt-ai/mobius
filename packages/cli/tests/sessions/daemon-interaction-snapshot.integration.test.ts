@@ -78,7 +78,7 @@ test("Given an Agent was inspected transiently, When its first Turn materializes
         `ws://127.0.0.1:${port(relay).toString()}${MOBIUS_API_PREFIX}/channels/interaction/daemon`,
     );
     relayUrl.searchParams.set("token", "r".repeat(43));
-    const fakeAgentPath = fileURLToPath(new URL("../support/acp/fake-acp-agent/src/cli.ts", import.meta.url));
+    const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
     const agent = new LocalAgentDefinition(
         "claude",
         "Claude Code",
@@ -221,7 +221,7 @@ test("Given a real daemon prepared a Session, When Platform queries its metadata
         `ws://127.0.0.1:${port(relay).toString()}${MOBIUS_API_PREFIX}/channels/session-query/daemon`,
     );
     relayUrl.searchParams.set("token", "r".repeat(43));
-    const fakeAgentPath = fileURLToPath(new URL("../support/acp/fake-acp-agent/src/cli.ts", import.meta.url));
+    const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
     const agent = new LocalAgentDefinition("codex", "Codex", process.execPath, [
         fakeAgentPath,
         "--agent-name",

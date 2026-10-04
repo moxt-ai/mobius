@@ -29,7 +29,7 @@ import { createDaemonConfig, DaemonLocalContext } from "../../src/config.ts";
 import { runDaemon } from "../../src/run-daemon.ts";
 
 const websocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-const fakeAgentPath = fileURLToPath(new URL("../support/acp/fake-acp-agent/src/cli.ts", import.meta.url));
+const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
 
 class ClientFrames {
     #buffered = Buffer.alloc(0);

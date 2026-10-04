@@ -13,7 +13,7 @@ import { LocalAgentDefinition } from "../../src/config.ts";
 
 import { createControlledSession } from "./acp-controls-fixture.ts";
 
-const fakeAgentPath = fileURLToPath(new URL("../support/acp/fake-acp-agent/src/cli.ts", import.meta.url));
+const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
 
 describe("Agent setting capabilities", () => {
     it("Given an Agent reports its reasoning effort as the provider default, When a session is prepared, Then Mobius keeps the effort setting with that current value", async () => {
