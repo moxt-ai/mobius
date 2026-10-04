@@ -1,4 +1,4 @@
-import type { ReliableSessionEventEnvelope, SessionEventRejectionCode } from "@moxt-ai/mobius-protocol";
+import type { SessionEventEnvelope } from "@moxt-ai/mobius-protocol";
 
 export interface SessionRecordingTarget {
     readonly projectId: string;
@@ -7,18 +7,14 @@ export interface SessionRecordingTarget {
 }
 
 export type SessionRecordingDeliveryResult =
-    | { readonly kind: "relayed" }
-    | { readonly kind: "recorded"; readonly providerId: string; readonly recordingEpoch: string }
-    | { readonly kind: "deferred"; readonly retryAfterMilliseconds: number }
-    | {
-          readonly kind: "rejected";
-          readonly code: (typeof SessionEventRejectionCode)[keyof typeof SessionEventRejectionCode];
-      };
+    | { readonly kind: "recorded" }
+    | { readonly kind: "skipped" }
+    | { readonly kind: "failed"; readonly code: "policy_unavailable" | "provider_unavailable" | "write_failed" };
 
 export interface SessionRecording {
     readonly deliver: (
         target: SessionRecordingTarget,
-        envelope: ReliableSessionEventEnvelope,
+        envelope: SessionEventEnvelope,
         signal: AbortSignal,
     ) => Promise<SessionRecordingDeliveryResult>;
 }
@@ -26,6 +22,6 @@ export interface SessionRecording {
 export class DisabledSessionRecording implements SessionRecording {
     readonly deliver: SessionRecording["deliver"] = async (_target, _envelope, signal) => {
         signal.throwIfAborted();
-        return { kind: "relayed" };
+        return { kind: "skipped" };
     };
 }

@@ -57,20 +57,11 @@ import {
     type SessionStartedEvent,
 } from "./messages.ts";
 export const SESSION_EVENT_KIND = "session.event";
-export const SESSION_EVENT_ACK_KIND = "session.event.ack";
-export const SESSION_EVENT_DEFERRED_KIND = "session.event.deferred";
-export const SESSION_EVENT_REJECTED_KIND = "session.event.rejected";
 export const SESSION_FORKED_KIND = "session.forked";
-
-export const SessionEventRejectionCode = {
-    IdempotencyConflict: "idempotency_conflict",
-    InvalidEvent: "invalid_event",
-    RecordingRejected: "recording_rejected",
-} as const;
 
 const MAX_RECORDED_EVENT_LENGTH = 8 * 1024 * 1024;
 
-const ephemeralEventEnvelopeSchema = z
+export const sessionEventEnvelopeSchema = z
     .strictObject({
         kind: z.literal(SESSION_EVENT_KIND),
         payload: z.string().min(2).max(MAX_RECORDED_EVENT_LENGTH),
@@ -78,72 +69,7 @@ const ephemeralEventEnvelopeSchema = z
     })
     .readonly();
 
-const reliableDeliverySchema = z
-    .strictObject({
-        eventId: identifierStringSchema,
-        kind: z.literal("reliable"),
-        sourceSeq: z
-            .string()
-            .regex(/^(?:0|[1-9][0-9]*)$/u)
-            .max(40),
-        streamId: identifierStringSchema,
-    })
-    .readonly();
-
-export const reliableSessionEventEnvelopeSchema = z
-    .strictObject({
-        delivery: reliableDeliverySchema,
-        kind: z.literal(SESSION_EVENT_KIND),
-        payload: z.string().min(2).max(MAX_RECORDED_EVENT_LENGTH),
-        sessionId: identifierStringSchema,
-    })
-    .readonly();
-
-const eventEnvelopeSchema = z.union([ephemeralEventEnvelopeSchema, reliableSessionEventEnvelopeSchema]).readonly();
-
-const acknowledgementOutcomeSchema = z.discriminatedUnion("kind", [
-    z.strictObject({ kind: z.literal("relayed") }).readonly(),
-    z
-        .strictObject({
-            kind: z.literal("recorded"),
-            providerId: identifierStringSchema,
-            recordingEpoch: identifierStringSchema,
-        })
-        .readonly(),
-]);
-
-const eventAcknowledgementSchema = z
-    .strictObject({
-        eventId: identifierStringSchema,
-        kind: z.literal(SESSION_EVENT_ACK_KIND),
-        outcome: acknowledgementOutcomeSchema,
-        sessionId: identifierStringSchema,
-    })
-    .readonly();
-
-const eventDeferredSchema = z
-    .strictObject({
-        eventId: identifierStringSchema,
-        kind: z.literal(SESSION_EVENT_DEFERRED_KIND),
-        retryAfterMilliseconds: z.number().int().min(100).max(60_000),
-        sessionId: identifierStringSchema,
-    })
-    .readonly();
-
-const eventRejectedSchema = z
-    .strictObject({
-        code: z.enum(SessionEventRejectionCode),
-        eventId: identifierStringSchema,
-        kind: z.literal(SESSION_EVENT_REJECTED_KIND),
-        sessionId: identifierStringSchema,
-    })
-    .readonly();
-
-export type SessionEventEnvelope = z.infer<typeof eventEnvelopeSchema>;
-export type ReliableSessionEventEnvelope = z.infer<typeof reliableSessionEventEnvelopeSchema>;
-export type SessionEventAcknowledgement = z.infer<typeof eventAcknowledgementSchema>;
-export type SessionEventDeferred = z.infer<typeof eventDeferredSchema>;
-export type SessionEventRejected = z.infer<typeof eventRejectedSchema>;
+export type SessionEventEnvelope = z.infer<typeof sessionEventEnvelopeSchema>;
 
 export const SESSION_QUEUE_CHANGED_KIND = "session.queue.changed";
 const sessionQueueChangedSchema = z
@@ -208,28 +134,10 @@ const encode = <T>(message: T, schema: z.ZodType<T>): string => {
 };
 
 export const decodeSessionEventEnvelope = (encoded: string): SessionEventEnvelope =>
-    decode(encoded, eventEnvelopeSchema);
+    decode(encoded, sessionEventEnvelopeSchema);
 
 export const encodeSessionEventEnvelope = (message: SessionEventEnvelope): string =>
-    encode(message, eventEnvelopeSchema);
-
-export const decodeSessionEventAcknowledgement = (encoded: string): SessionEventAcknowledgement =>
-    decode(encoded, eventAcknowledgementSchema);
-
-export const encodeSessionEventAcknowledgement = (message: SessionEventAcknowledgement): string =>
-    encode(message, eventAcknowledgementSchema);
-
-export const decodeSessionEventDeferred = (encoded: string): SessionEventDeferred =>
-    decode(encoded, eventDeferredSchema);
-
-export const encodeSessionEventDeferred = (message: SessionEventDeferred): string =>
-    encode(message, eventDeferredSchema);
-
-export const decodeSessionEventRejected = (encoded: string): SessionEventRejected =>
-    decode(encoded, eventRejectedSchema);
-
-export const encodeSessionEventRejected = (message: SessionEventRejected): string =>
-    encode(message, eventRejectedSchema);
+    encode(message, sessionEventEnvelopeSchema);
 
 export function decodeRecordedSessionEvent(encoded: string): RecordedSessionEvent {
     const kind = decodeMessageKind(encoded);

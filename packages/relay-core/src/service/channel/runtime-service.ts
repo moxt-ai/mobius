@@ -94,13 +94,7 @@ export class RuntimeService {
         this.#cx = cx;
     }
 
-    readonly acceptDaemon = async (
-        runtimeId: string,
-        scope: ProjectScope,
-        liveness: boolean,
-        reliableSessionEvents: boolean,
-        signal: AbortSignal,
-    ) => {
+    readonly acceptDaemon = async (runtimeId: string, scope: ProjectScope, liveness: boolean, signal: AbortSignal) => {
         const accepting = { runtimeId, scope, controller: new AbortController() };
         this.#accepting.add(accepting);
         const operation = this.#acceptTail.then(async (): Promise<RuntimeAcceptance> => {
@@ -109,7 +103,6 @@ export class RuntimeService {
                     runtimeId,
                     scope,
                     liveness,
-                    reliableSessionEvents,
                     AbortSignal.any([signal, accepting.controller.signal]),
                 );
             } catch (error) {
@@ -138,7 +131,6 @@ export class RuntimeService {
         runtimeId: string,
         scope: ProjectScope,
         liveness: boolean,
-        reliableSessionEvents: boolean,
         signal: AbortSignal,
     ): Promise<RuntimeAcceptance> => {
         signal.throwIfAborted();
@@ -174,7 +166,7 @@ export class RuntimeService {
         const accepted = this.#cx.gateways.peers.accept(identity);
         this.#cx.services.connections.connected(prepared.identity, Date.now());
         if (liveness) {
-            this.deferDaemonAttachment(identity, accepted.socket, scope, reliableSessionEvents);
+            this.deferDaemonAttachment(identity, accepted.socket, scope);
             return { kind: "accepted", response: accepted.response };
         }
         try {
@@ -195,7 +187,6 @@ export class RuntimeService {
         identity: DaemonSocketIdentity,
         socket: RuntimeSocket,
         scope: ProjectScope,
-        reliableSessionEvents: boolean,
     ): void => {
         const attachment = { controller: new AbortController(), identity };
         this.#attachments.add(attachment);
@@ -214,9 +205,7 @@ export class RuntimeService {
                     socket.close(1008, "Runtime revoked");
                     return;
                 }
-                const ready: RuntimeLivenessReadyEvent = reliableSessionEvents
-                    ? { kind: RUNTIME_LIVENESS_READY_KIND, sessionEventDelivery: "reliable-v1" }
-                    : { kind: RUNTIME_LIVENESS_READY_KIND };
+                const ready: RuntimeLivenessReadyEvent = { kind: RUNTIME_LIVENESS_READY_KIND };
                 socket.send(encodeServiceToDaemonMessage(ready));
             } catch (error) {
                 if (!attachment.controller.signal.aborted) {
@@ -356,7 +345,7 @@ export class RuntimeService {
             socket.close(1008, "Invalid protocol message");
             return;
         }
-        // Heartbeats must bypass the durable-write queue.
+        // Heartbeats must bypass application message scheduling.
         if (identity.role === "daemon" && daemonMessage.kind === RUNTIME_HEARTBEAT_KIND) {
             if (!this.#cx.services.connections.isCurrent(identity)) {
                 socket.replaceDaemon();

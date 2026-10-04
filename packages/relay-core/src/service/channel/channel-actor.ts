@@ -77,8 +77,7 @@ import {
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-protocol";
 import { SessionRuntimeError } from "../../entity/do/session.ts";
-import type { SessionRecording } from "../../infra/session-recording.ts";
-import type { SessionEventReceiptStorage } from "../../storage/session-event-receipt-storage.ts";
+import type { BestEffortRecording } from "./best-effort-recording.ts";
 import { LiveSessionEventRelay } from "./live-session-event-relay.ts";
 
 const NATIVE_IMPORT_DEADLINE_MILLISECONDS = 5 * 60 * 1_000;
@@ -173,17 +172,16 @@ export class ChannelActor {
         readonly config: { readonly projectId: string; readonly runtimeId: string };
         readonly gateways: {
             readonly peers: ChannelPeers;
-            readonly receipts: SessionEventReceiptStorage;
-            readonly recording: SessionRecording;
+            readonly recording: BestEffortRecording;
             readonly clock?: RelayClock;
         };
     }) {
         const { projectId, runtimeId } = cx.config;
-        const { peers, receipts, recording, clock = new SystemRelayClock() } = cx.gateways;
+        const { peers, recording, clock = new SystemRelayClock() } = cx.gateways;
         this.#clock = clock;
         this.#peers = peers;
         this.#runtimeId = runtimeId;
-        this.#liveEvents = new LiveSessionEventRelay(projectId, runtimeId, peers, recording, receipts, clock.now);
+        this.#liveEvents = new LiveSessionEventRelay(projectId, runtimeId, peers, recording);
     }
 
     readonly attachDaemon = async (replacedExistingConnection: boolean, _signal: AbortSignal): Promise<void> => {
@@ -227,7 +225,7 @@ export class ChannelActor {
         try {
             const kind = message.kind;
             if (kind === SESSION_EVENT_KIND) {
-                await this.#liveEvents.receive(socket, message, signal);
+                this.#liveEvents.receive(message);
                 return;
             }
             if (kind === NATIVE_SESSION_RESULT_KIND) {

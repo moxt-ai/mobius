@@ -43,18 +43,23 @@ A complete current-turn view may be needed when a client first joins or recovers
 an interruption. That recovery cost must not be paid again for every streaming update.
 This requirement does not prescribe a particular patch format or cursor algorithm.
 
-## Non-functional tradeoff: memory-only live delivery
+## Non-functional tradeoff: live broadcast over reliable delivery
 
-We prioritize responsive streaming and a simple daemon lifecycle over delivery that
-survives a daemon crash. Current execution, queued prompts and pending outbound events
-live only in memory. Network reconnection can retry pending events while the daemon
-is alive; stopping or crashing it discards them by design. Restarting does not resume
-work or replay the previous daemon's delivery queue.
+Users should continue seeing live output regardless of how many devices are watching
+or whether cloud recording is slow or unavailable. The daemon broadcasts to the Relay;
+the Relay fans out to current viewers and offers events to Recording independently.
+No viewers is a normal condition, not a reason to stop publishing.
 
-Recording retains what it has received. It cannot recover output that was lost before
-delivery, and enabling it does not add a local durable outbox. Users who enable
-Recording must accept that a daemon crash can leave a gap at the end of a conversation.
-Normal streaming must not wait for a local event-log disk write.
+We choose low latency and a simple lifecycle over guaranteed delivery. There are no
+event acknowledgements, redelivery queues or durable delivery receipts. Disconnected
+or overloaded consumers can miss events; daemon and Relay restarts can lose in-flight
+messages. Reconnecting resumes live output rather than replaying a transport backlog.
+Clients catch up through the current-turn view, native Agent history or available
+recordings.
+
+Recording is best effort. It retains events it successfully receives, but slow writes,
+failures, capacity limits or restarts can leave gaps. Recording never blocks live output
+and failed writes are not retried. Users must not treat it as a lossless audit archive.
 
 ## Data ownership and recovery
 
@@ -64,8 +69,7 @@ what its Agent has saved. Optional cloud recording provides history according to
 configured retention policy; it does not keep an offline Agent running.
 
 Pairing and session metadata are still stored locally, and Agents manage their own
-native history. These are separate from the daemon's memory-only execution and
-delivery state; disabling Recording does not erase Agent history or local metadata.
+native history. These are separate from the daemon's memory-only execution state; disabling Recording does not erase Agent history or local metadata.
 See [current persistence behavior](DEVELOPMENT.md#current-persistence-behavior) for the
 technical disclosure and implementation references.
 

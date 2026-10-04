@@ -796,9 +796,7 @@ describe("daemon relay connection liveness", () => {
             expect({ catalogRequestCount, connectionCount, requestedUrls }).toEqual({
                 catalogRequestCount: 2,
                 connectionCount: 1,
-                requestedUrls: [
-                    `${MOBIUS_API_PREFIX}/channels/liveness-channel/daemon?liveness=1&sessionEventDelivery=reliable-v1`,
-                ],
+                requestedUrls: [`${MOBIUS_API_PREFIX}/channels/liveness-channel/daemon?liveness=1`],
             });
         } finally {
             cancellation.abort();
@@ -830,7 +828,7 @@ describe("daemon relay connection liveness", () => {
         }
     });
 
-    it("Given the Relay disconnects before acknowledging an event, When the daemon reconnects, Then events replay from memory but do not survive a daemon restart", async () => {
+    it("Given a live daemon sends without acknowledgements, When it reconnects, Then it resumes live delivery without replaying prior events", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-reconciliation-"));
         const defaultWorkspace = join(stateDirectory, "workspace");
         await mkdir(defaultWorkspace);
@@ -893,9 +891,19 @@ describe("daemon relay connection liveness", () => {
                 socket,
                 encodeRuntimeLivenessReadyEvent({
                     kind: RUNTIME_LIVENESS_READY_KIND,
-                    sessionEventDelivery: "reliable-v1",
                 }),
             );
+            if (daemonSockets.length === 2) {
+                writeServerTextFrame(
+                    socket,
+                    encodeWorkspaceListCommand({
+                        bindingId: "workspace",
+                        directoryId: "default",
+                        kind: WORKSPACE_LIST_KIND,
+                        requestId: "after-reconnect",
+                    }),
+                );
+            }
             if (daemonSockets.length === 1 || daemonSockets.length === 3) {
                 writeServerTextFrame(
                     socket,
@@ -908,7 +916,7 @@ describe("daemon relay connection liveness", () => {
                         disposition: "reject",
                         images: [],
                         kind: SESSION_PROMPT_KIND,
-                        prompt: "exercise ACP controls",
+                        prompt: "broadcast without viewers",
                         resources: [],
                         sessionId: daemonSockets.length === 1 ? "reconciliation-session" : "fresh-session",
                         targetCommandId: "",
@@ -970,17 +978,46 @@ describe("daemon relay connection liveness", () => {
             }
             const ready = decodeSessionEventEnvelope(firstEventFrame.text);
             expect(decodeMessageKind(ready.payload)).toBe(SESSION_READY_KIND);
-            expect("delivery" in ready).toBe(true);
-            if (!("delivery" in ready)) {
-                throw new Error("Test relay received an ephemeral ready event instead of a reliable event");
-            }
-            // Keep both reliable events unacknowledged. Sending an acknowledgement immediately
-            // before destroying the socket does not prove the daemon received it.
+            expect(ready).not.toHaveProperty("delivery");
+            // No delivery acknowledgements exist. Reconnection starts receiving live events.
             const started = decodeSessionEventEnvelope((await firstFrame.next()).text);
             expect(decodeMessageKind(started.payload)).toBe(SESSION_STARTED_KIND);
-            expect("delivery" in started).toBe(true);
-            if (!("delivery" in started)) {
-                throw new Error("Test relay received an ephemeral event instead of a reliable event");
+            expect(started).not.toHaveProperty("delivery");
+            let completed = false;
+            while (!completed) {
+                const event = decodeSessionEventEnvelope((await firstFrame.next()).text);
+                completed = decodeMessageKind(event.payload) === SESSION_COMPLETED_KIND;
+            }
+            // More than the former 16-event window must stream without any delivery ACK.
+            for (let turn = 0; turn < 6; turn += 1) {
+                writeServerTextFrame(
+                    firstSocket,
+                    encodeSessionPromptCommand({
+                        additionalDirectoryIds: [],
+                        agentId: "codex",
+                        bindingId: "workspace",
+                        commandId: `live-command-${turn}`,
+                        directoryId: "default",
+                        disposition: "reject",
+                        images: [],
+                        kind: SESSION_PROMPT_KIND,
+                        prompt: "keep broadcasting",
+                        resources: [],
+                        sessionId: "reconciliation-session",
+                        targetCommandId: "",
+                    }),
+                );
+                let terminal = false;
+                let answer = "";
+                while (!terminal) {
+                    const event = decodeSessionEventEnvelope((await firstFrame.next()).text);
+                    const kind = decodeMessageKind(event.payload);
+                    if (kind === AGENT_MESSAGE_DELTA_KIND) {
+                        answer += decodeAgentMessageDeltaEvent(event.payload).text;
+                    }
+                    terminal = kind === SESSION_COMPLETED_KIND;
+                }
+                expect(answer).toContain("keep broadcasting");
             }
             const secondConnection = waitForUpgrade();
             const firstRetry = timer.waitForTask(500);
@@ -1007,21 +1044,11 @@ describe("daemon relay connection liveness", () => {
                 );
                 replayedFrame = await resumedFrame.next();
             }
-            expect(replayedFrame.opcode).toBe(1);
-            const replayedReady = decodeSessionEventEnvelope(replayedFrame.text);
-            expect(replayedReady).toEqual(ready);
-            const replayed = decodeSessionEventEnvelope((await resumedFrame.next()).text);
-            expect("delivery" in replayed).toBe(true);
-            if (!("delivery" in replayed)) {
-                throw new Error("Test relay received an ephemeral replay instead of a reliable event");
-            }
-            expect(replayed.delivery.eventId).toBe(started.delivery.eventId);
-            expect(replayed.delivery.sourceSeq).toBe(started.delivery.sourceSeq);
-            expect(replayed.payload).toBe(started.payload);
+            expect(decodeMessageKind(replayedFrame.text)).toBe(WORKSPACE_ENTRIES_KIND);
             expect(reconciliationRequestCount).toBe(0);
             expect(daemonSockets).toHaveLength(2);
 
-            // No acknowledgement was sent. A fresh daemon must not replay the old delivery queue.
+            // A fresh daemon also starts with live events, never an old delivery queue.
             cancellation.abort();
             await daemon;
             cancellation = new AbortController();
@@ -1039,11 +1066,7 @@ describe("daemon relay connection liveness", () => {
             const freshReady = decodeSessionEventEnvelope(freshFrame.text);
             expect(freshReady.sessionId).toBe("fresh-session");
             expect(decodeMessageKind(freshReady.payload)).toBe(SESSION_READY_KIND);
-            if (!("delivery" in freshReady)) {
-                throw new Error("Test relay expected a reliable event");
-            }
-            expect(freshReady.delivery.streamId).not.toBe(ready.delivery.streamId);
-            expect(freshReady.delivery.sourceSeq).toBe("1");
+            expect(freshReady).not.toHaveProperty("delivery");
             expect(await readdir(stateDirectory)).not.toContain("events");
         } finally {
             cancellation.abort();

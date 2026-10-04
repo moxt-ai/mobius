@@ -1,11 +1,11 @@
 import { z } from "zod";
 import { ProtocolMessageError } from "./codecs/messages.ts";
 import { identifierStringSchema } from "./identifier.ts";
-import { reliableSessionEventEnvelopeSchema } from "./session-events.ts";
+import { sessionEventEnvelopeSchema } from "./session-events.ts";
 
 const sessionRecordingWriteSchema = z
     .strictObject({
-        envelope: reliableSessionEventEnvelopeSchema,
+        envelope: sessionEventEnvelopeSchema,
         projectId: identifierStringSchema,
         runtimeId: identifierStringSchema,
     })
@@ -13,7 +13,7 @@ const sessionRecordingWriteSchema = z
 
 const sessionRecordingEntrySchema = z
     .strictObject({
-        envelope: reliableSessionEventEnvelopeSchema,
+        envelope: sessionEventEnvelopeSchema,
         recordedAt: z.iso.datetime({ offset: true }),
     })
     .readonly();

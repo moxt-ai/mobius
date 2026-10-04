@@ -128,20 +128,7 @@ import {
     NATIVE_SESSION_REQUEST_KIND,
     NATIVE_SESSION_RESULT_KIND,
 } from "./native-sessions.ts";
-import {
-    decodeSessionEventAcknowledgement,
-    decodeSessionEventDeferred,
-    decodeSessionEventEnvelope,
-    decodeSessionEventRejected,
-    encodeSessionEventAcknowledgement,
-    encodeSessionEventDeferred,
-    encodeSessionEventEnvelope,
-    encodeSessionEventRejected,
-    SESSION_EVENT_ACK_KIND,
-    SESSION_EVENT_DEFERRED_KIND,
-    SESSION_EVENT_KIND,
-    SESSION_EVENT_REJECTED_KIND,
-} from "./session-events.ts";
+import { decodeSessionEventEnvelope, encodeSessionEventEnvelope, SESSION_EVENT_KIND } from "./session-events.ts";
 import {
     decodeSessionLiveHistoryLoad,
     decodeSessionLiveHistoryLoaded,
@@ -240,21 +227,6 @@ const serviceToDaemonSignatures = {
         SESSION_ELICITATION_RESPOND_KIND,
         encodeSessionElicitationRespondCommand,
         decodeSessionElicitationRespondCommand,
-    ),
-    [SESSION_EVENT_ACK_KIND]: defineMessageSignature(
-        SESSION_EVENT_ACK_KIND,
-        encodeSessionEventAcknowledgement,
-        decodeSessionEventAcknowledgement,
-    ),
-    [SESSION_EVENT_DEFERRED_KIND]: defineMessageSignature(
-        SESSION_EVENT_DEFERRED_KIND,
-        encodeSessionEventDeferred,
-        decodeSessionEventDeferred,
-    ),
-    [SESSION_EVENT_REJECTED_KIND]: defineMessageSignature(
-        SESSION_EVENT_REJECTED_KIND,
-        encodeSessionEventRejected,
-        decodeSessionEventRejected,
     ),
     [SESSION_LIVE_HISTORY_LOAD_KIND]: defineMessageSignature(
         SESSION_LIVE_HISTORY_LOAD_KIND,

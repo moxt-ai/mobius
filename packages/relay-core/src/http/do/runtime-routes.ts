@@ -48,7 +48,6 @@ export function createRuntimeRoutes(runtime: RuntimeService) {
                 runtimeId,
                 scope,
                 url.searchParams.get("liveness") === "1",
-                url.searchParams.get("sessionEventDelivery") === "reliable-v1",
                 request.signal,
             );
             switch (result.kind) {

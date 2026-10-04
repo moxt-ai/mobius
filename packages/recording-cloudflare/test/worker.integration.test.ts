@@ -6,31 +6,24 @@ import { createRecordingWorker } from "../src/worker.ts";
 const worker = createRecordingWorker();
 
 function writeRequest(prompt: string, sessionId = "session-1"): Request {
-    return writeEventRequest(
-        {
-            attemptId: "attempt-1",
-            commandId: "command-1",
-            epoch: "epoch-1",
-            kind: "session.started",
-            prompt,
-            sequence: 0,
-            sessionId,
-        },
-        "event-1",
-        "1",
-    );
+    return writeEventRequest({
+        attemptId: "attempt-1",
+        commandId: "command-1",
+        epoch: "epoch-1",
+        kind: "session.started",
+        prompt,
+        sequence: 0,
+        sessionId,
+    });
 }
 
 function writeEventRequest(
     event: Readonly<Record<string, unknown>> & { readonly sessionId: string },
-    eventId: string,
-    sourceSeq: string,
     runtimeId = "runtime-1",
 ): Request {
     return new Request("https://recording.internal/v1/session-events", {
         body: encodeSessionRecordingWrite({
             envelope: {
-                delivery: { eventId, kind: "reliable", sourceSeq, streamId: "stream-1" },
                 kind: SESSION_EVENT_KIND,
                 payload: JSON.stringify(event),
                 sessionId: event.sessionId,
@@ -49,20 +42,10 @@ describe("Recording Worker", () => {
         const parentSessionId = "session-fork-parent";
         const childSessionId = "session-fork-child";
         const grandchildSessionId = "session-fork-grandchild";
-        let sourceSequence = 100;
         const record = async (
             event: Readonly<Record<string, unknown>> & { readonly sessionId: string },
         ): Promise<Response> => {
-            sourceSequence += 1;
-            return await worker.fetch(
-                writeEventRequest(
-                    event,
-                    `fork-event-${sourceSequence.toString()}`,
-                    sourceSequence.toString(),
-                    runtimeId,
-                ),
-                env,
-            );
+            return await worker.fetch(writeEventRequest(event, runtimeId), env);
         };
         const ready = (sessionId: string) => ({
             additionalDirectories: [],
@@ -257,8 +240,6 @@ describe("Recording Worker", () => {
                                 restored: false,
                                 sessionId,
                             },
-                            "recency-event-1",
-                            "20",
                             "runtime-recency",
                         ),
                         env,
@@ -280,8 +261,6 @@ describe("Recording Worker", () => {
                                 sequence: 0,
                                 sessionId,
                             },
-                            "recency-event-2",
-                            "21",
                             "runtime-recency",
                         ),
                         env,
@@ -303,8 +282,6 @@ describe("Recording Worker", () => {
                                 sessionId,
                                 text: "Streaming output",
                             },
-                            "recency-event-3",
-                            "22",
                             "runtime-recency",
                         ),
                         env,
@@ -332,8 +309,6 @@ describe("Recording Worker", () => {
                                 sessionId,
                                 stopReason: "end_turn",
                             },
-                            "recency-event-4",
-                            "23",
                             "runtime-recency",
                         ),
                         env,
@@ -354,57 +329,49 @@ describe("Recording Worker", () => {
     it("Given a Session is ready and receives its first prompt, When Web reads the Runtime directory, Then Recording provides the Session without consulting the daemon", async () => {
         const sessionId = "session-directory";
         const ready = await worker.fetch(
-            writeEventRequest(
-                {
-                    additionalDirectories: [{ directoryId: "docs", name: "Docs" }],
-                    agentId: "codex",
-                    agentName: "Codex",
-                    agentVersion: "1.0.0",
-                    capabilities: {
-                        additionalDirectories: true,
-                        audioPrompt: false,
-                        closeSession: true,
-                        deleteSession: true,
-                        embeddedContextPrompt: true,
-                        imagePrompt: true,
-                        listSessions: true,
-                        loadSession: true,
-                        promptQueueing: false,
-                        resumeSession: true,
-                        steering: false,
-                        unstableForkSession: false,
-                    },
-                    commands: [],
-                    configOptions: [],
-                    directoryId: "workspace",
-                    directoryLabel: "Workspace",
-                    kind: "session.ready",
-                    requestId: "request-1",
-                    restored: false,
-                    sessionId,
+            writeEventRequest({
+                additionalDirectories: [{ directoryId: "docs", name: "Docs" }],
+                agentId: "codex",
+                agentName: "Codex",
+                agentVersion: "1.0.0",
+                capabilities: {
+                    additionalDirectories: true,
+                    audioPrompt: false,
+                    closeSession: true,
+                    deleteSession: true,
+                    embeddedContextPrompt: true,
+                    imagePrompt: true,
+                    listSessions: true,
+                    loadSession: true,
+                    promptQueueing: false,
+                    resumeSession: true,
+                    steering: false,
+                    unstableForkSession: false,
                 },
-                "directory-event-1",
-                "10",
-            ),
+                commands: [],
+                configOptions: [],
+                directoryId: "workspace",
+                directoryLabel: "Workspace",
+                kind: "session.ready",
+                requestId: "request-1",
+                restored: false,
+                sessionId,
+            }),
             env,
         );
         expect(ready.status).toBe(201);
         expect(
             (
                 await worker.fetch(
-                    writeEventRequest(
-                        {
-                            attemptId: "attempt-directory",
-                            commandId: "command-directory",
-                            epoch: "epoch-directory",
-                            kind: "session.started",
-                            prompt: "Recorded directory title",
-                            sequence: 0,
-                            sessionId,
-                        },
-                        "directory-event-2",
-                        "11",
-                    ),
+                    writeEventRequest({
+                        attemptId: "attempt-directory",
+                        commandId: "command-directory",
+                        epoch: "epoch-directory",
+                        kind: "session.started",
+                        prompt: "Recorded directory title",
+                        sequence: 0,
+                        sessionId,
+                    }),
                     env,
                 )
             ).status,
@@ -439,15 +406,11 @@ describe("Recording Worker", () => {
         expect(await response.json()).toMatchObject({ error: { code: "not_found" } });
     });
 
-    it("Given a reliable Session event, When it is recorded and read twice, Then the write is idempotent and the durable history keeps one ordered event", async () => {
+    it("Given a live Session event, When it is recorded, Then it is available in cloud history", async () => {
         const created = await worker.fetch(writeRequest("Remember this"), env);
         expect(created.status).toBe(201);
         const epoch = Reflect.get(await created.json<object>(), "recordingEpoch");
         expect(typeof epoch).toBe("string");
-
-        const duplicate = await worker.fetch(writeRequest("Remember this"), env);
-        expect(duplicate.status).toBe(200);
-        expect(await duplicate.json()).toEqual({ recordingEpoch: epoch });
 
         const history = await worker.fetch(
             new Request(
@@ -477,7 +440,7 @@ describe("Recording Worker", () => {
         expect(body.segments[0]?.entries).toHaveLength(1);
     });
 
-    it("Given an event identifier already belongs to another frame, When it is written again, Then Recording rejects the conflict", async () => {
+    it("Given a Turn has already started, When a second start arrives for that Turn, Then Recording rejects the invalid transition", async () => {
         expect((await worker.fetch(writeRequest("First", "session-2"), env)).status).toBe(201);
         expect((await worker.fetch(writeRequest("Different", "session-2"), env)).status).toBe(409);
     });
