@@ -2,7 +2,30 @@
 
 Mobius is the agent runtime and relay used by Mobius Chat. It contains the local CLI daemon and ACP agent adapter, the shared protocol, the TypeScript SDK, and Cloudflare Platform and Standalone Workers. Mobius Chat owns its user interface and application logic.
 
-This repository starts with new database schemas. Existing Mobius data is not imported or migrated. Live events and active execution metadata are available while a Session runs. Historical content normally comes from the connected local Runtime; deployments can install the optional Recording Worker and enable durable history per App or Project.
+## Data ownership and recovery
+
+Morty owns Bot membership and access to conversations. The local Agent owns its
+native conversation and execution. Mobius connects those boundaries and can provide
+optional cloud recording; it must not imply that every deployment retains history.
+
+The current implementation has these storage boundaries:
+
+- The local daemon persists pairing credentials, connection preferences, ACP session
+  metadata and native-session associations, and a bounded event outbox. Event payloads
+  can contain conversation content; disabling cloud Recording does not disable this
+  local persistence. The outbox supports delivery recovery, not a complete history archive.
+- Current execution and queued prompts are held in memory. Restarting the daemon does
+  not durably resume a running turn or its prompt queue. Persisted session metadata and
+  pending outbox events survive a restart; event delivery recovery must not be presented
+  as execution recovery.
+- Without Recording, browsing native history requires the local Runtime and the Agent's
+  saved history. With the optional Recording Worker installed and recording enabled for
+  an App or Project, cloud history is available according to that recording policy.
+- Bounded local diagnostics are for troubleshooting and must not log prompt text or
+  session history. This log restriction is separate from the outbox's payload storage.
+
+See the [implementation map](DEVELOPMENT.md) for storage and delivery owners. Exact
+schemas, acknowledgement rules and capacity limits belong in code and executable tests.
 
 ## Workspace
 
@@ -13,7 +36,8 @@ This repository starts with new database schemas. Existing Mobius data is not im
 - `packages/relay-core`: runtime and session behavior, storage, and protocol boundaries.
 - `packages/relay-cloudflare-platform`: Cloudflare Worker and local Worker integration tests.
 - `packages/relay-cloudflare-standalone`: accountless Cloudflare Worker with one Project per pairing workflow and integration tests.
-- `packages/cli/tests`: controlled agent integration tests.
+- `packages/recording-cloudflare`: optional cloud history service.
+- `packages/cli/tests`: daemon boundary scenarios and real Agent compatibility tests.
 
 ## Local development
 
@@ -33,9 +57,7 @@ pnpm build
 
 Standalone runs the Relay without the Platform control plane. Each browser pairing
 workflow automatically creates a Project and a Project owner credential. A separate
-deployment-owned bearer credential can administer every Project. The deployment has
-one D1 database, and each Runtime Durable Object also handles its Sessions. Generate
-the deployment credential and start it locally:
+deployment-owned bearer credential can administer every Project. Generate the deployment credential and start it locally:
 
 ```sh
 printf 'MOBIUS_STANDALONE_TOKEN=%s\n' "$(openssl rand -hex 32)" > packages/relay-cloudflare-standalone/.dev.vars
@@ -48,8 +70,7 @@ credential. Its deployment adapter creates a Project and its Project-scoped owne
 credential, then uses the generic `MobiusClient` for Runtime pairing,
 Runtime discovery, Session history, and Session operations. The browser persists the
 Project credential after pairing so page loads and WebSocket reconnects return to the
-same Project. The old standalone
-`POST /mobius/api/pairings` browser compatibility route is not available.
+same Project.
 
 For an operator-driven pairing, first send `POST /mobius/api/v1/standalone/projects`
 to create a Project, then send `POST /mobius/api/v1/projects/{projectId}/runtime-pairings`
@@ -98,13 +119,6 @@ stops the old manager and launches the matching version.
 
 Run `mobius start` without options to ensure the detached daemon is running.
 
-The daemon saves pairing credentials and connection preferences. Current turns,
-delivery receipts, and pending events stay in process memory and disappear on a
-restart. Codex owns its native conversation files; Mobius Chat saves which native
-session IDs belong to each Bot. Bounded connection diagnostics remain in
-`logs/daemon.log` under the Mobius state directory. Prompt text and session
-history are not written to that log.
-
 Manage saved Runtime pairings by their local Connection ID:
 
 ```bash
@@ -123,8 +137,7 @@ credential. `mobius pair list` shows the Connection ID, Platform App ID, Runtime
 ID, workspace, and current status. Channel IDs remain internal Relay routing
 identities and are not accepted as local lifecycle selectors.
 
-The JSON form writes the same list as an array with `connection_id`, `app_id`,
-`runtime_id`, `workspace`, and `status` fields. Its target must already exist; the
-CLI refuses to create it.
+For machine-readable output, use `--output-json` with an existing file. The CLI
+refuses to create the target; command help and executable scenarios define its output contract.
 
 See [DEVELOPMENT.md](./DEVELOPMENT.md) and [TESTING.md](./TESTING.md).

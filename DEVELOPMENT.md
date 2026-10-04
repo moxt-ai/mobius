@@ -11,6 +11,9 @@ and hosting, and [TESTING.md](TESTING.md) for verification.
 | Recovery response shapes | [native sessions](packages/protocol/src/native-sessions.ts) |
 | Current turn accumulation | [active turn](packages/cli/src/daemon-active-turn.ts) |
 | Prompt admission, running turns and completed recovery retention | [turn registry](packages/cli/src/daemon-turn-registry.ts) |
+| Local session metadata and native-session associations | [session store](packages/cli/src/acp/session-store.ts), [schema](packages/cli/src/schema/acp-session-store/) |
+| Durable outbound event delivery | [publisher](packages/cli/src/relay-connection/session-event-publisher.ts), [outbox](packages/cli/src/relay-connection/session-event-outbox.ts) |
+| Optional cloud recording | [Recording Worker](packages/recording-cloudflare/src/), [Worker scenarios](packages/recording-cloudflare/test/worker.integration.test.ts) |
 | Ordered publication | [event coalescer](packages/cli/src/relay-connection/coalescing-agent-event-publisher.ts) |
 | Native history and recovery pages | [live history](packages/cli/src/native-sessions/live-history-page.ts) |
 | Agent processes and native-operation exclusion | [runtime manager](packages/cli/src/acp/agent-runtime-manager.ts), [query processes](packages/cli/src/acp/agent-query-processes.ts) |

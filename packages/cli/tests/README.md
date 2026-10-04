@@ -30,9 +30,10 @@ Use isolated Agent homes/workspaces, production protocol input, observable outpu
 event-driven waits, cancellation and finite timeouts. Release all resources on
 success, failure, and cancellation. Do not use real sleeps or polling delays.
 
-## Coverage still needed
+## Interpreting coverage
 
-Non-Codex native history/file recovery, permission rejection and reconnection need
-explicit real-Agent scenarios. Controlled protocol coverage does not close those
-gaps. Claude's transient-provider recovery scenario is macOS-only and therefore
-is not exercised by the Linux CI job.
+A compatibility claim must name an executed scenario, Agent and platform. Live-turn
+success does not establish history, file recovery, permission rejection or reconnect
+behavior. Check the scenario bodies and their platform conditions before making those
+claims; track missing scenarios in issues rather than duplicating a coverage inventory
+here. Controlled protocol scenarios do not establish real-Agent compatibility.
