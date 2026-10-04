@@ -2,15 +2,10 @@ import { configDefaults, coverageConfigDefaults, defineConfig } from "vitest/con
 
 export default defineConfig({
     test: {
-        exclude: [...configDefaults.exclude, "tests/agent-daemon/**"],
+        exclude: [...configDefaults.exclude, "packages/cli/tests/**"],
         fileParallelism: true,
         maxWorkers: 4,
-        include: [
-            "tests/**/*.contract.test.ts",
-            "tests/**/*.integration.test.ts",
-            "packages/*/tests/**/*.contract.test.ts",
-            "packages/*/tests/**/*.integration.test.ts",
-        ],
+        include: ["packages/*/tests/**/*.contract.test.ts", "packages/*/tests/**/*.integration.test.ts"],
         testTimeout: 15_000,
         coverage: {
             provider: "istanbul",

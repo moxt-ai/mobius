@@ -4,33 +4,30 @@
 
 | Command | Scope |
 | --- | --- |
-| `pnpm lint` / `pnpm typecheck` | Static validation |
-| `pnpm test` | Controlled daemon, Protocol, SDK and hosting suites |
-| `pnpm test:agent-daemon:controlled` | Deterministic protocol and daemon scenarios |
-| `pnpm test:agent-daemon:real` | Real Agent executables and production adapters |
+| `pnpm lint` / `pnpm typecheck` | Static validation, including real Agent scenarios |
+| `pnpm test` | Controlled CLI, Protocol, SDK and hosting suites |
+| `pnpm test:agent-daemon:controlled` | CLI session and runtime boundaries |
+| `pnpm test:agent-daemon:real` | Real daemon, Agent executables and production adapters |
 | `pnpm build` | Bundles without deployment |
 
-Run affected suites during development. [package.json](package.json) and
-[CI](.github/workflows/ci.yml) own the actual command composition.
+## Ownership
 
-## Executable boundaries
-
-- [Real daemon assembly](tests/agent-daemon/infra/real-daemon.ts) composes production
-  discovery and daemon execution. [Agent fixtures](tests/agent-daemon/infra/) select
-  real executables; [providers](tests/agent-daemon/providers/) control model output.
-- [Real scenarios](tests/agent-daemon/real/) establish per-Agent compatibility.
-  [Prerequisites](tests/agent-daemon/README.md) describe local executable setup.
-- [Controlled scenarios](tests/agent-daemon/controlled-agent/) exercise specific
-  protocol shapes and faults. Passing them does not establish real Agent compatibility.
-- [Consumer harness](tests/infra/platform-agent-harness.ts) and
-  [daemon launcher](tests/infra/run-agent-harness-daemon.ts) define the current shared
-  test composition. Consumers own their Web-level scenarios and replacement policy.
+- [CLI tests](packages/cli/tests/): `agents/` proves real executable compatibility;
+  `sessions/` covers session behavior and protocol faults; `runtime/` covers
+  process, discovery, installation, connection and local security boundaries.
+  `support/` contains executable launchers, controlled LLM providers and ACP peers.
+  [Prerequisites](packages/cli/tests/README.md) describe executable setup.
+- [Shared test support](packages/test-support/src/): real local Platform/Cloudflare
+  infrastructure and the stateful fake daemon exposed through package exports.
+  It does not start the production CLI or import controlled ACP peers.
+- Web / Chat consumer suites use the shared fake daemon over real transports and
+  real product services. Consumers inject their own reply scenarios.
 - [Protocol](packages/protocol/tests/) and [SDK](packages/mobius-sdk/tests/) own
-  their observable wire boundaries. Hosting packages own local Cloudflare tests.
+  their wire contracts. Hosting and Web packages own their integration scenarios.
 
-Follow [AGENTS.md](AGENTS.md) for acceptance scenarios, resource cleanup and time
-control. Controlled model providers allow real Agent execution without production
-accounts. Missing required executables fail rather than falling back to fake Agents.
-Do not replace a real compatibility scenario with the same peer under another name.
+Controlled ACP peers test explicit protocol faults; they do not establish Agent
+compatibility. Real Agent tests use controlled LLM providers without production
+accounts. Missing required executables fail instead of falling back to fake Agents.
 
-Dated `artifacts/` reports document individual manual runs; they are not contracts.
+[Package scripts](package.json) and [CI](.github/workflows/ci.yml) define execution.
+Follow [AGENTS.md](AGENTS.md) for acceptance boundaries and resource cleanup.

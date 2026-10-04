@@ -18,7 +18,7 @@ and hosting, and [TESTING.md](TESTING.md) for verification.
 | Deployment and migrations | [workflows](.github/workflows/), [Drizzle configurations](drizzle/) |
 
 State transitions and retention limits belong in these implementations. Observable
-contracts belong in [daemon scenarios](tests/agent-daemon/),
+contracts belong in [daemon scenarios](packages/cli/tests/),
 [SDK scenarios](packages/mobius-sdk/tests/) and hosting-package tests. Do not copy
 field lists or lifecycle algorithms into this guide.
 

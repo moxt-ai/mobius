@@ -1,7 +1,6 @@
 packages:
   - packages/*
-  - tests/agent-daemon/fixtures/*
-  - tests
+  - packages/cli/tests/support/acp/*
 
 engineStrict: true
 minimumReleaseAge: 1440

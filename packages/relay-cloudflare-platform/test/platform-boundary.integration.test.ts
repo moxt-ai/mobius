@@ -11,8 +11,8 @@ import {
     MOBIUS_API_PREFIX,
 } from "@moxt-ai/mobius-protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTestMobiusPlatformApp } from "../../../tests/infra/app.ts";
-import { FakeClerk } from "../../../tests/infra/clerk.ts";
+import { createTestMobiusPlatformApp } from "../../test-support/src/app.ts";
+import { FakeClerk } from "../../test-support/src/clerk.ts";
 import {
     createPlatformGateways,
     PlatformAuthenticationConfiguration,

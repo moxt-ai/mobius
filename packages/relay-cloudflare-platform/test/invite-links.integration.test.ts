@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { FakeClerk } from "../../../tests/infra/clerk.ts";
+import { FakeClerk } from "../../test-support/src/clerk.ts";
 import {
     createPlatformApplication,
     createPlatformGateways,
