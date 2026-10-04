@@ -1,14 +1,93 @@
 # Mobius
 
-Mobius is the agent runtime and relay used by Mobius Chat. It contains the local CLI daemon and ACP agent adapter, the shared protocol, the TypeScript SDK, and Cloudflare Platform and Standalone Workers. Mobius Chat owns its user interface and application logic.
+Mobius lets remote clients securely use Agents running on a user's machine and
+follow their conversations across browser and network connections. Morty (Mobius
+Chat) is one application built on it; Standalone provides access without the
+Platform control plane.
+
+## Product responsibilities
+
+| Capability | Required user-visible outcome |
+| --- | --- |
+| Pair and discover Runtimes | Users can identify their machines, installed Agents and availability. |
+| Discover Agent capabilities | Clients offer supported operations and settings; unsupported operations fail explicitly. |
+| Operate native sessions | Users can create or resume a conversation, submit or queue prompts, cancel execution and answer Agent interactions where supported. |
+| Follow current execution | Authorized clients can observe the same conversation, including prompts submitted from another browser and in-progress output. |
+| Read history and files | Users can recover available history and view authorized files, including images, without obtaining arbitrary access to the machine. |
+| Optional Recording | Operators can explicitly enable cloud history retention with a defined scope and policy. |
+
+Morty owns Bots, user access and application presentation. Mobius owns remote
+connectivity, operation routing, Agent adaptation and synchronization. Agents own
+model execution, tool execution and native conversation history. The local execution
+boundary authorizes local side effects; application authorization cannot bypass it.
+
+The requirements below are design constraints. They are not a claim that every Agent
+or failure scenario is already covered. Compatibility claims require executable
+boundary scenarios; see [Testing](TESTING.md).
+
+## Non-functional requirements
+
+- **Security:** authorize the resolved local target before acting. Access to a
+  conversation must not imply access to arbitrary files, commands or other tenants.
+- **Privacy:** distinguish local persistence, cloud transit, cloud retention and
+  diagnostic logs. Changes to stored content, retention scope or deletion behavior
+  require an explicit product decision and observable verification.
+- **Consistency:** session writes have a defined admission order. Concurrent submissions
+  and retries must not silently overwrite work or execute a prompt twice. Authorized
+  observers must converge on the same accepted prompts, output and terminal outcome.
+- **Recovery:** a browser disconnect must not itself cancel execution. Reconnection
+  must restore an authoritative view or report that recovery is unavailable. Unknown,
+  running, cancelled, failed and completed outcomes must remain distinguishable;
+  receipt of a command or event alone does not prove execution completed.
+- **Responsiveness:** loading old history must not block current-turn presentation.
+  Slow subscribers must not stall the Agent or other observers. Agent limitations and
+  omitted history must be disclosed rather than presented as a complete conversation.
+- **Resource ownership:** current-turn memory may retain enough content for reliable
+  recovery. Completion, history handoff and expiry need explicit release conditions;
+  caches, queues, logs and disk-backed delivery need bounded retention. Limit failures
+  must be observable. Exact thresholds and transitions belong in code and tests.
+
+## Why ACP needs a remote-session layer
+
+ACP provides the client-to-Agent interaction boundary used by the adapters. Mobius
+should reuse Agent operations and capabilities expressed there. A working ACP
+connection alone does not establish Mobius's remote identity, pairing, tenant and
+file authorization, multiple-subscriber delivery, reconnect recovery, retry safety
+or optional cloud retention guarantees.
+
+Mobius must supply those guarantees at its own boundaries and accommodate differences
+between Agent implementations. Agent-specific protocol and history behavior belongs
+in adapters. Do not introduce a parallel Agent operation model where the existing
+Agent protocol already provides the required semantics.
+
+## Why the current turn needs an explicit owner
+
+During a turn, accepted prompts, streamed text, tool progress and pending interactions
+change before the Agent's native history necessarily contains a complete result.
+Execution completion, event delivery and history visibility are separate facts.
+
+The daemon owns the authoritative view of current execution; browsers display that
+view. A new or reconnecting observer must recover the content produced before it
+joined and continue receiving updates without a gap or duplicate presentation. It
+must see prompts accepted from other clients, and stale responses from a previously
+selected session must not overwrite the newly selected conversation.
+
+For example, if one browser submits a prompt, another joins midway and the first
+reconnects after completion, both must recover the same accepted prompt and result.
+A delayed history read must not erase already displayed output. Cancellation racing
+with completion must resolve to a coherent terminal outcome.
+
+Recovery content must remain available until the authoritative history source can
+take over, or recovery expiry must be explicitly reported. Keeping current-turn
+content in memory is acceptable; reconstructing it independently in every browser
+must not become a competing source of truth. The representation, sequence numbers,
+acknowledgements and handoff algorithm belong in executable code, not a second
+state machine written in this README.
 
 ## Data ownership and recovery
 
-Morty owns Bot membership and access to conversations. The local Agent owns its
-native conversation and execution. Mobius connects those boundaries and can provide
-optional cloud recording; it must not imply that every deployment retains history.
-
-The current implementation has these storage boundaries:
+The following describes current behavior, including its limitations. It does not
+by itself justify adding storage or promise durable execution recovery:
 
 - The local daemon persists pairing credentials, connection preferences, ACP session
   metadata and native-session associations, and a bounded event outbox. Event payloads
