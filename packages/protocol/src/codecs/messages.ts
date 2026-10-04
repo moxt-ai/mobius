@@ -409,16 +409,8 @@ export function decodeRuntimeStatusEvent(encoded: string): RuntimeStatusEvent {
 export function decodeRuntimeLivenessReadyEvent(encoded: string): RuntimeLivenessReadyEvent {
     const value = parseJson(encoded);
     assertKind(value, RUNTIME_LIVENESS_READY_KIND);
-    if (value["sessionEventDelivery"] === undefined) {
-        assertExactKeys(value, ["kind"]);
-        return { kind: RUNTIME_LIVENESS_READY_KIND };
-    }
-    assertExactKeys(value, ["kind", "sessionEventDelivery"]);
-    const sessionEventDelivery = readString(value, "sessionEventDelivery", 32);
-    if (sessionEventDelivery !== "reliable-v1") {
-        throw new ProtocolMessageError("Unsupported Session event delivery mode");
-    }
-    return { kind: RUNTIME_LIVENESS_READY_KIND, sessionEventDelivery };
+    assertExactKeys(value, ["kind"]);
+    return { kind: RUNTIME_LIVENESS_READY_KIND };
 }
 
 export function decodeRuntimeHeartbeatEvent(encoded: string): RuntimeHeartbeatEvent {

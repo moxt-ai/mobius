@@ -30,7 +30,8 @@ and recovery algorithm belong in code and boundary tests.
 | Current turn accumulation | [active turn](packages/cli/src/daemon-active-turn.ts) |
 | Prompt admission, running turns and completed recovery retention | [turn registry](packages/cli/src/daemon-turn-registry.ts) |
 | Local session metadata and native-session associations | [session store](packages/cli/src/acp/session-store.ts), [schema](packages/cli/src/schema/acp-session-store/) |
-| In-memory outbound event delivery | [publisher](packages/cli/src/relay-connection/session-event-publisher.ts), [queue](packages/cli/src/relay-connection/session-event-queue.ts) |
+| Live broadcast | [daemon publisher](packages/cli/src/relay-connection/session-event-publisher.ts), [Relay fan-out](packages/relay-core/src/service/channel/live-session-event-relay.ts) |
+| Best-effort recording | [independent recording consumer](packages/relay-core/src/service/channel/best-effort-recording.ts) |
 | Optional cloud recording | [Recording Worker](packages/recording-cloudflare/src/), [Worker scenarios](packages/recording-cloudflare/test/worker.integration.test.ts) |
 | Ordered publication | [event coalescer](packages/cli/src/relay-connection/coalescing-agent-event-publisher.ts) |
 | Native history and recovery pages | [live history](packages/cli/src/native-sessions/live-history-page.ts) |
@@ -61,14 +62,13 @@ by itself justify adding storage or promise durable execution recovery:
 
 - The local daemon persists pairing credentials, connection preferences, ACP session
   metadata and native-session associations. Agents retain their own native history.
-- Current execution, queued prompts and pending outbound events are memory-only.
-  Reconnection retries pending events within the same daemon lifetime. Shutdown or a
-  crash loses unacknowledged events and queued work by design; restarting does not
-  replay delivery or resume execution. This is the chosen
-  [performance and recovery tradeoff](README.md#non-functional-tradeoff-memory-only-live-delivery).
-- Recording retains events it has received, not events lost before delivery. Its ACK
-  allows the daemon to release pending memory; it does not make the daemon durable.
-  Rejected events are discarded with a diagnostic code, without retaining their payload.
+- Current execution and queued prompts are memory-only. The daemon publishes live
+  events without an application delivery queue. Reconnection resumes live output;
+  shutdown or a crash loses in-flight messages and queued work by design.
+- Relay live delivery does not persist event receipts or wait for consumers to
+  acknowledge delivery. Recording runs independently with bounded buffering and a
+  deadline. Failed or overloaded recording attempts are dropped, never retried.
+  This implements the chosen [latency and reliability tradeoff](README.md#non-functional-tradeoff-live-broadcast-over-reliable-delivery).
 - Without Recording, browsing native history requires the local Runtime and the Agent's
   saved history. With the optional Recording Worker installed and recording enabled for
   an App or Project, cloud history is available according to that recording policy.
@@ -76,7 +76,7 @@ by itself justify adding storage or promise durable execution recovery:
   session history. Diagnostics must not become a replacement event archive.
 
 See the implementation map above for storage and delivery owners. Exact
-schemas, acknowledgement rules and capacity limits belong in code and executable tests.
+schemas and capacity limits belong in code and executable tests.
 
 
 ## Workspace

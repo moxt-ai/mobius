@@ -22,7 +22,6 @@ type RecordingDatabase = DrizzleSqliteDODatabase<typeof schema>;
 
 export type SessionRecordingClaim =
     | { readonly kind: "accepted"; readonly recordedAt: number; readonly recordingEpoch: string }
-    | { readonly kind: "duplicate"; readonly recordedAt: number; readonly recordingEpoch: string }
     | { readonly kind: "conflict" };
 
 export interface StoredSessionRecordingHistory {
@@ -73,9 +72,6 @@ export class SessionRecordingStorage {
                 .all();
             for (const stored of events) {
                 const envelope = decodeSessionEventEnvelope(stored.envelopeJson);
-                if (!("delivery" in envelope)) {
-                    continue;
-                }
                 const event = decodeRecordedSessionEvent(envelope.payload);
                 if (event.kind === "session.started") {
                     this.#database
@@ -148,19 +144,6 @@ export class SessionRecordingStorage {
             }
 
             const envelopeJson = encodeSessionEventEnvelope(write.envelope);
-            const existing = this.#database
-                .select({
-                    envelopeJson: recordedSessionEvent.envelopeJson,
-                    recordedAt: recordedSessionEvent.recordedAt,
-                })
-                .from(recordedSessionEvent)
-                .where(eq(recordedSessionEvent.eventId, write.envelope.delivery.eventId))
-                .get();
-            if (existing !== undefined) {
-                return existing.envelopeJson === envelopeJson
-                    ? { kind: "duplicate", recordedAt: existing.recordedAt, recordingEpoch }
-                    : { kind: "conflict" };
-            }
             const commandId = "commandId" in event ? event.commandId : null;
             const existingTurn =
                 commandId === null
@@ -198,20 +181,10 @@ export class SessionRecordingStorage {
                     return { kind: "conflict" };
                 }
             }
-            this.#database
-                .insert(recordedSessionEvent)
-                .values({
-                    envelopeJson,
-                    eventId: write.envelope.delivery.eventId,
-                    recordedAt: now,
-                    sourceSeq: write.envelope.delivery.sourceSeq,
-                    streamId: write.envelope.delivery.streamId,
-                })
-                .run();
             const storedEvent = this.#database
-                .select({ ordinal: recordedSessionEvent.ordinal })
-                .from(recordedSessionEvent)
-                .where(eq(recordedSessionEvent.eventId, write.envelope.delivery.eventId))
+                .insert(recordedSessionEvent)
+                .values({ envelopeJson, recordedAt: now })
+                .returning({ ordinal: recordedSessionEvent.ordinal })
                 .get();
             if (storedEvent === undefined) {
                 throw new Error("Recording did not persist the accepted event");
@@ -275,8 +248,7 @@ export class SessionRecordingStorage {
             .map((row) => ({
                 envelope: decodeSessionEventEnvelope(row.envelopeJson),
                 recordedAt: new Date(row.recordedAt).toISOString(),
-            }))
-            .filter((entry): entry is SessionRecordingEntry => "delivery" in entry.envelope);
+            }));
         const origin = this.#database
             .select()
             .from(recordingForkOrigin)

@@ -3,21 +3,50 @@ import { env } from "cloudflare:workers";
 import {
     AGENT_MESSAGE_DELTA_KIND,
     decodeServiceToDaemonMessage,
-    decodeSessionEventAcknowledgement,
     decodeSessionEventEnvelope,
     decodeSessionPromptCommand,
     encodeSessionEventEnvelope,
     encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
 } from "@moxt-ai/mobius-protocol";
+import { DurableObjectSqlDatabase, RuntimeRelay, type SessionRecording } from "@moxt-ai/mobius-relay-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDurableObjectDependencies } from "../../relay-core/src/di/create-durable-object-dependencies.ts";
 import { createTestMobiusPlatformApp } from "../../test-support/src/app.ts";
 import { FakeClerk } from "../../test-support/src/clerk.ts";
+import { createPlatformDurableObjectContext } from "../src/durable-objects/platform-durable-object-context.ts";
 import {
     createPlatformGateways,
     PlatformAuthenticationConfiguration,
     type PlatformRelayBindings,
 } from "../src/worker.ts";
+
+class ControlledRecording implements SessionRecording {
+    readonly started = Promise.withResolvers<void>();
+    readonly release = Promise.withResolvers<void>();
+    readonly contents: string[] = [];
+    #first = true;
+
+    readonly deliver: SessionRecording["deliver"] = async (_target, envelope, signal) => {
+        signal.throwIfAborted();
+        if (this.#first) {
+            this.#first = false;
+            this.started.resolve();
+            const cancelled = Promise.withResolvers<never>();
+            const cancel = () => cancelled.reject(signal.reason);
+            signal.addEventListener("abort", cancel, { once: true });
+            try {
+                await Promise.race([this.release.promise, cancelled.promise]);
+            } finally {
+                signal.removeEventListener("abort", cancel);
+            }
+            signal.throwIfAborted();
+            return { kind: "failed", code: "write_failed" };
+        }
+        this.contents.push(envelope.payload);
+        return { kind: "recorded" };
+    };
+}
 
 const relayOrigin = "https://platform.test";
 const clerk = new FakeClerk();
@@ -155,6 +184,69 @@ afterEach(() => {
 });
 
 describe.sequential("Platform Session-only boundary", () => {
+    it("Given no viewers are connected, When the daemon broadcasts and Recording first fails, Then later events are still recorded without redelivery", async () => {
+        await runInDurableObject(env.RUNTIME_RELAY.getByName("unwatched-runtime"), async (_instance, state) => {
+            const recording = new ControlledRecording();
+            const pending: Promise<void>[] = [];
+            const database = new DurableObjectSqlDatabase(state.storage);
+            const context = createPlatformDurableObjectContext(state, bindings(), { database });
+            const relay = new RuntimeRelay(
+                createDurableObjectDependencies({
+                    doDatabase: database,
+                    storages: context.storages,
+                    gateways: { ...context.gateways, recording },
+                    utilities: {
+                        waitUntil: (operation) => {
+                            pending.push(operation);
+                        },
+                    },
+                }),
+            );
+            const response = await relay.fetch(
+                new Request("https://runtime.internal/projects/unwatched-project/daemon", {
+                    headers: {
+                        Upgrade: "websocket",
+                        "x-mobius-runtime-id": "unwatched-runtime",
+                        "x-mobius-channel-id": "unwatched-channel",
+                    },
+                }),
+            );
+            expect(response.status).toBe(101);
+            const client = response.webSocket;
+            const daemon = state.getWebSockets("daemon")[0];
+            if (client === null || daemon === undefined) {
+                throw new Error("Expected a connected daemon");
+            }
+            client.accept();
+            const event = (text: string) =>
+                encodeSessionEventEnvelope({
+                    kind: "session.event",
+                    sessionId: "unwatched-session",
+                    payload: JSON.stringify({
+                        kind: AGENT_MESSAGE_DELTA_KIND,
+                        commandId: "unwatched-command",
+                        epoch: "unwatched-command",
+                        sequence: 1,
+                        messageId: "message",
+                        sessionId: "unwatched-session",
+                        text,
+                    }),
+                });
+            try {
+                await relay.webSocketMessage(daemon, event("first"));
+                await recording.started.promise;
+                await relay.webSocketMessage(daemon, event("second"));
+                recording.release.resolve();
+                await Promise.all(pending);
+                expect(recording.contents.map((payload) => JSON.parse(payload).text)).toEqual(["second"]);
+            } finally {
+                recording.release.resolve();
+                await Promise.all(pending);
+                client.close(1000, "Test complete");
+            }
+        });
+    });
+
     it("Given an allowed Chat origin, When the browser preflights a Session file read, Then Platform permits the request", async () => {
         const browserOrigin = "https://chat.test";
         const worker = createTestMobiusPlatformApp(
@@ -601,57 +693,58 @@ describe.sequential("Platform Session-only boundary", () => {
             daemon.send(answer);
             expect(decodeSessionEventEnvelope(await hostMessages.next()).payload).toContain("local answer");
 
-            const reliableAnswer = encodeSessionEventEnvelope({
-                delivery: {
-                    eventId: "local-codex-event-1",
-                    kind: "reliable",
-                    sourceSeq: "1",
-                    streamId: "local-codex-stream",
-                },
-                kind: "session.event",
-                payload: JSON.stringify({
-                    commandId: prompt.commandId,
-                    epoch: prompt.commandId,
-                    kind: AGENT_MESSAGE_DELTA_KIND,
-                    messageId: "local-codex-message",
-                    sequence: 2,
-                    sessionId,
-                    text: "reliable answer one",
-                }),
-                sessionId,
+            // Given Recording stalls then fails, subsequent live events still reach the viewer.
+            await runInDurableObject(environment.RUNTIME_RELAY.getByName(runtimeId), async (_instance, state) => {
+                const recording = new ControlledRecording();
+                const pending: Promise<void>[] = [];
+                const database = new DurableObjectSqlDatabase(state.storage);
+                const context = createPlatformDurableObjectContext(state, environment, { database });
+                const relay = new RuntimeRelay(
+                    createDurableObjectDependencies({
+                        doDatabase: database,
+                        storages: context.storages,
+                        gateways: { ...context.gateways, recording },
+                        utilities: {
+                            waitUntil: (operation) => {
+                                pending.push(operation);
+                            },
+                        },
+                    }),
+                );
+                const daemonSocket = state.getWebSockets("daemon")[0];
+                if (daemonSocket === undefined) {
+                    throw new Error("Expected a connected daemon");
+                }
+                const frame = (text: string) =>
+                    encodeSessionEventEnvelope({
+                        kind: "session.event",
+                        sessionId,
+                        payload: JSON.stringify({
+                            kind: AGENT_MESSAGE_DELTA_KIND,
+                            commandId: prompt.commandId,
+                            epoch: prompt.commandId,
+                            sequence: 1,
+                            messageId: "recording-isolation",
+                            sessionId,
+                            text,
+                        }),
+                    });
+                try {
+                    await relay.webSocketMessage(daemonSocket, frame("recording is stalled"));
+                    await recording.started.promise;
+                    await relay.webSocketMessage(daemonSocket, frame("live output continues"));
+                    recording.release.resolve();
+                    await Promise.all(pending);
+                    expect(recording.contents.map((payload) => JSON.parse(payload).text)).toEqual([
+                        "live output continues",
+                    ]);
+                } finally {
+                    recording.release.resolve();
+                    await Promise.all(pending);
+                }
             });
-            daemon.send(reliableAnswer);
-            expect(decodeSessionEventEnvelope(await hostMessages.next()).payload).toContain("reliable answer one");
-            expect(decodeSessionEventAcknowledgement(await daemonMessages.next())).toEqual({
-                eventId: "local-codex-event-1",
-                kind: "session.event.ack",
-                outcome: { kind: "relayed" },
-                sessionId,
-            });
-            daemon.send(reliableAnswer);
-            expect(decodeSessionEventAcknowledgement(await daemonMessages.next()).eventId).toBe("local-codex-event-1");
-            const secondReliableAnswer = encodeSessionEventEnvelope({
-                delivery: {
-                    eventId: "local-codex-event-2",
-                    kind: "reliable",
-                    sourceSeq: "2",
-                    streamId: "local-codex-stream",
-                },
-                kind: "session.event",
-                payload: JSON.stringify({
-                    commandId: prompt.commandId,
-                    epoch: prompt.commandId,
-                    kind: AGENT_MESSAGE_DELTA_KIND,
-                    messageId: "local-codex-message",
-                    sequence: 3,
-                    sessionId,
-                    text: "reliable answer two",
-                }),
-                sessionId,
-            });
-            daemon.send(secondReliableAnswer);
-            expect(decodeSessionEventEnvelope(await hostMessages.next()).payload).toContain("reliable answer two");
-            expect(decodeSessionEventAcknowledgement(await daemonMessages.next()).eventId).toBe("local-codex-event-2");
+            expect(decodeSessionEventEnvelope(await hostMessages.next()).payload).toContain("recording is stalled");
+            expect(decodeSessionEventEnvelope(await hostMessages.next()).payload).toContain("live output continues");
             const browserAccess = await responseJson(
                 await worker.fetch(
                     new Request(
@@ -720,7 +813,7 @@ describe.sequential("Platform Session-only boundary", () => {
             await runInDurableObject(environment.RUNTIME_RELAY.getByName(runtimeId), async (_instance, state) => {
                 const sessionTables = [
                     ...state.storage.sql.exec<{ name: string }>(
-                        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('sessions', 'session_bindings', 'session_configuration_snapshots', 'turns', 'attempts', 'interactions', 'pending_work', 'command_receipts', 'session_event_receipts', 'runtime_active_sessions', 'runtime_disconnect')",
+                        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('sessions', 'session_bindings', 'session_configuration_snapshots', 'turns', 'attempts', 'interactions', 'pending_work', 'command_receipts', 'session_event_receipts', 'reliable_event_receipts', 'runtime_active_sessions', 'runtime_disconnect')",
                     ),
                 ];
                 expect(sessionTables).toEqual([]);

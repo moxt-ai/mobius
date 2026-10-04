@@ -123,7 +123,7 @@ export async function runDaemon(
         join(stateDirectory, "sessions", `${createHash("sha256").update(config.channelId).digest("hex")}.sqlite`),
     );
     const operations = new DaemonOperationState();
-    const publisher = new DaemonSessionEventPublisher(timer);
+    const publisher = new DaemonSessionEventPublisher();
     const activeTurns = new DaemonTurnRegistry(operations);
     const recordSessionEvent = (sessionId: string, event: RecordedSessionEvent): void => {
         publisher.publish(sessionId, activeTurns.recordEvent(event));

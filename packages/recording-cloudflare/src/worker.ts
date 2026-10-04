@@ -346,7 +346,7 @@ export class SessionRecordingDurableObject extends DurableObject<RecordingWorker
             }
             return Response.json(
                 { recordedAt: claim.recordedAt, recordingEpoch: claim.recordingEpoch },
-                { status: claim.kind === "accepted" ? 201 : 200 },
+                { status: 201 },
             );
         }
         if (request.method === "GET" && url.pathname === "/events") {

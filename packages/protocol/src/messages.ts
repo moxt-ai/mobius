@@ -70,7 +70,6 @@ export interface RuntimeStatusEvent {
 
 export interface RuntimeLivenessReadyEvent {
     readonly kind: typeof RUNTIME_LIVENESS_READY_KIND;
-    readonly sessionEventDelivery?: "reliable-v1";
 }
 
 export interface RuntimeHeartbeatEvent {

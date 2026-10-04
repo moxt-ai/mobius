@@ -1,4 +1,4 @@
-import { encodeSessionRecordingWrite, isIdentifier, SessionEventRejectionCode } from "@moxt-ai/mobius-protocol";
+import { encodeSessionRecordingWrite } from "@moxt-ai/mobius-protocol";
 import type {
     SessionRecording,
     SessionRecordingDeliveryResult,
@@ -7,25 +7,10 @@ import type {
 import type { StandaloneRecordingConfigurationStorage } from "./storage/standalone-recording-configuration-storage.ts";
 
 const REQUEST_TIMEOUT_MILLISECONDS = 10_000;
-const DEFAULT_RETRY_AFTER_MILLISECONDS = 1_000;
 
 export type StandaloneRecordingProvider =
     | { readonly kind: "absent" }
     | { readonly fetcher: Fetcher; readonly kind: "available"; readonly providerId: string };
-
-async function recordingEpoch(response: Response): Promise<string | null> {
-    let body: unknown;
-    try {
-        body = await response.json();
-    } catch {
-        return null;
-    }
-    if (typeof body !== "object" || body === null || Array.isArray(body)) {
-        return null;
-    }
-    const value = Reflect.get(body, "recordingEpoch");
-    return typeof value === "string" && isIdentifier(value) ? value : null;
-}
 
 export function standaloneRecordingProvider(environment: {
     readonly RECORDING?: Fetcher;
@@ -52,15 +37,13 @@ export class StandaloneSessionRecording implements SessionRecording {
     ): Promise<SessionRecordingDeliveryResult> => {
         const configuration = await this.#configuration.read(target.projectId, signal);
         if (configuration.state === "unconfigured" || !configuration.enabled) {
-            return { kind: "relayed" };
+            return { kind: "skipped" };
         }
         if (this.#provider.kind === "absent") {
-            return { kind: "deferred", retryAfterMilliseconds: 5_000 };
+            return { kind: "failed", code: "provider_unavailable" };
         }
-        const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MILLISECONDS);
-        let response: Response;
         try {
-            response = await this.#provider.fetcher.fetch(
+            const response = await this.#provider.fetcher.fetch(
                 new Request("https://recording.internal/v1/session-events", {
                     body: encodeSessionRecordingWrite({
                         envelope,
@@ -69,29 +52,15 @@ export class StandaloneSessionRecording implements SessionRecording {
                     }),
                     headers: { "content-type": "application/json" },
                     method: "POST",
-                    signal: AbortSignal.any([signal, timeout]),
+                    signal: AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MILLISECONDS)]),
                 }),
             );
+            signal.throwIfAborted();
+            await response.body?.cancel();
+            return response.ok ? { kind: "recorded" } : { kind: "failed", code: "write_failed" };
         } catch {
             signal.throwIfAborted();
-            return { kind: "deferred", retryAfterMilliseconds: DEFAULT_RETRY_AFTER_MILLISECONDS };
+            return { kind: "failed", code: "write_failed" };
         }
-        signal.throwIfAborted();
-        if (response.status === 200 || response.status === 201) {
-            const epoch = await recordingEpoch(response);
-            return epoch === null
-                ? { code: SessionEventRejectionCode.RecordingRejected, kind: "rejected" }
-                : { kind: "recorded", providerId: this.#provider.providerId, recordingEpoch: epoch };
-        }
-        if (response.status === 429 || response.status >= 500) {
-            return { kind: "deferred", retryAfterMilliseconds: DEFAULT_RETRY_AFTER_MILLISECONDS };
-        }
-        return {
-            code:
-                response.status === 409
-                    ? SessionEventRejectionCode.IdempotencyConflict
-                    : SessionEventRejectionCode.RecordingRejected,
-            kind: "rejected",
-        };
     };
 }
