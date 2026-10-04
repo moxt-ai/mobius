@@ -27,17 +27,21 @@ These are product requirements. Availability depends on the selected Agent and
 configuration; unsupported operations must be clear to the user. Implementation and
 [verification evidence](TESTING.md) determine which scenarios are supported today.
 
-## Non-functional value: speed
+## Non-functional requirement: efficient current-turn streaming
 
-- **Get back to work quickly:** opening a conversation should show useful recent
-  content promptly, even after days of work.
-- **Follow work as it happens:** progress and replies should appear promptly as the
-  Agent produces them, without noticeable extra waiting introduced by remote access.
-- **Resume quickly after interruption:** switching devices or reconnecting should
-  bring the user up to date without a long reload.
+Users should see new output promptly throughout a turn, even as the answer grows.
+Streaming must not become progressively slower because earlier output is repeatedly
+copied and processed.
 
-Judge speed by time to useful content, output delay and time to resume interacting.
-Model generation time is separate from delay introduced by Mobius.
+During a continuous subscription, each update must carry the new or changed content
+rather than a complete copy of the accumulated turn. Copying, serialization, transport
+and client processing must avoid repeatedly traversing the whole turn for each update.
+For a fixed number of observers, total streaming work should grow with the content
+produced, not with the sum of every successively larger full-turn snapshot.
+
+A complete current-turn view may be needed when a client first joins or recovers after
+an interruption. That recovery cost must not be paid again for every streaming update.
+This requirement does not prescribe a particular patch format or cursor algorithm.
 
 ## Data ownership and recovery
 

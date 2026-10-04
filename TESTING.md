@@ -48,3 +48,9 @@ adapter behavior. Neither alone establishes the entire remote user journey. A pa
 happy path does not establish restart recovery or history completeness. Report the
 boundary, Agent and failure conditions actually exercised, and track unmet requirements
 as gaps rather than documenting them as implemented guarantees.
+
+For streaming performance, exercise a growing current turn over the public transport.
+Verify that a continuously subscribed client receives changes without repeated full-turn
+payloads and can reconstruct the complete result. Observe transmitted volume across
+increasing output sizes, separating normal updates from initial or reconnect recovery;
+do not prescribe internal callback counts, packet boundaries or timing tolerances.
