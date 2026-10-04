@@ -11,6 +11,8 @@ import {
 } from "../../src/agent-catalog/agent-settings-adapter.ts";
 import { LocalAgentDefinition } from "../../src/config.ts";
 
+import { createControlledSession } from "./acp-controls-fixture.ts";
+
 const fakeAgentPath = fileURLToPath(new URL("../support/acp/fake-acp-agent/src/cli.ts", import.meta.url));
 
 describe("Agent setting capabilities", () => {
@@ -207,4 +209,75 @@ describe("Agent setting capabilities", () => {
         const pi = new LocalAgentDefinition("pi", "Pi", process.execPath, [fakeAgentPath]);
         expect(agentSettingsAdapterForAgent(pi.id).settings(pi)).toEqual([]);
     });
+});
+
+it("Given ACP exposes select and boolean settings, When a user configures the conversation, Then the next prompt executes with those values", async () => {
+    await using session = await createControlledSession();
+    const prepared = await session.manager.prepareSession(session.request);
+    expect(prepared).toMatchObject({
+        agentName: "Mobius test agent",
+        capabilities: {
+            additionalDirectories: true,
+            embeddedContextPrompt: true,
+            imagePrompt: true,
+            loadSession: true,
+            promptQueueing: true,
+            resumeSession: true,
+            steering: true,
+        },
+        restored: false,
+    });
+    expect(prepared.configOptions).toEqual(
+        expect.arrayContaining([
+            expect.objectContaining({ category: "mode", id: "mode" }),
+            expect.objectContaining({ category: "model", id: "model" }),
+            expect.objectContaining({
+                category: "thought_level",
+                id: "reasoning_effort",
+            }),
+            expect.objectContaining({ id: "fast_mode", type: "boolean" }),
+        ]),
+    );
+
+    for (const [configId, value] of [
+        ["model", "test-large"],
+        ["mode", "plan"],
+        ["reasoning_effort", "high"],
+    ] as const) {
+        const configured = await session.manager.configureSession({
+            ...session.request,
+            configId,
+            value,
+            booleanValue: false,
+            valueType: "select",
+            requestId: `configure-${configId}`,
+        });
+        expect(configured).toEqual(
+            expect.arrayContaining([expect.objectContaining({ id: configId, currentValue: value })]),
+        );
+    }
+    await session.manager.configureSession({
+        ...session.request,
+        configId: "fast_mode",
+        value: "",
+        booleanValue: true,
+        valueType: "boolean",
+        requestId: "configure-fast-mode",
+    });
+
+    const text: string[] = [];
+    await expect(
+        session.manager.runPrompt({
+            ...session.request,
+            commandId: "configured-command",
+            prompt: "Report execution settings",
+            images: [],
+            resources: [],
+            onActivity: async () => {},
+            onText: async (chunk) => {
+                text.push(chunk);
+            },
+        }),
+    ).resolves.toMatchObject({ stopReason: "end_turn" });
+    expect(text.join("")).toBe("plan test-large high fast");
 });
