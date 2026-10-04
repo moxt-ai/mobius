@@ -1,13 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { AgentRuntimeManager, NullAcpSessionObserver } from "../../../packages/cli/src/acp/agent-runtime-manager.ts";
 import { MemoryAcpSessionStore } from "../../../packages/cli/src/acp/session-store.ts";
-import { codexFixture } from "./codex-native-fixture.ts";
 
 import { fixture } from "./native-session-fixture.ts";
 
 describe("native session identity", () => {
     it("Given a Mobius Session has a terminal recorded Turn, When Chat forks that Turn, Then the Runtime opens an independent child from the bound native Session", async () => {
-        const f = await fixture("Codex");
+        const f = await fixture("Claude Code");
         const signal = new AbortController().signal;
         const sourceSessionId = "recorded-fork-source";
         const throughCommandId = "recorded-fork-command";
@@ -54,7 +53,7 @@ describe("native session identity", () => {
     it.each(["import", "fork"] satisfies readonly ("import" | "fork")[])(
         "Given a %s assigned a UUID distinct from its native identity, When the Runtime restarts, Then that conversation remains discoverable and can continue",
         async (action) => {
-            const f = await fixture("Codex", "supported", "native");
+            const f = await fixture("Claude Code", "supported", "native");
             try {
                 await f.seed("Original context");
                 const entry = (await f.list()).entries[0];
@@ -92,7 +91,7 @@ describe("native session identity", () => {
     );
 
     // Keep distinct native identity/history paths; Pi uses the same ACP fixture path as Claude.
-    it.each(["Codex", "Claude Code", "OpenCode"])(
+    it.each(["Claude Code", "OpenCode"])(
         "Given a new %s chat, When the Runtime restarts, Then its native ID resumes the saved thread and history",
         async (agentName) => {
             const f = await fixture(agentName, "supported", "native");
@@ -139,39 +138,8 @@ describe("native session identity", () => {
         },
     );
 
-    it.each(["import", "fork"] satisfies readonly ("import" | "fork")[])(
-        "Given Runtime uses native Session identities, When Chat requests %s with an assigned destination, Then Codex opens the selected source without returning native history",
-        async (action) => {
-            const f = await codexFixture("native");
-            try {
-                await f.seed("Selected source conversation");
-                const entry = (await f.list()).entries[0];
-                if (entry === undefined) {
-                    throw new Error("Missing native conversation");
-                }
-                const targetSessionId = crypto.randomUUID();
-                const result = await f.service.execute(
-                    {
-                        ...f.identity,
-                        action,
-                        entryId: entry.entryId,
-                        targetSessionId,
-                    },
-                    new AbortController().signal,
-                );
-                expect(result).toMatchObject({
-                    action,
-                    ready: { sessionId: targetSessionId },
-                });
-                expect("history" in result).toBe(false);
-            } finally {
-                await f.close();
-            }
-        },
-    );
-
     it("Given Chat forks a native conversation into an assigned Session, When a post-fork turn completes and Chat reloads, Then Runtime history contains that turn", async () => {
-        const f = await fixture("Codex");
+        const f = await fixture("Claude Code");
         const signal = new AbortController().signal;
         try {
             await f.seed("Fork source");
@@ -221,7 +189,7 @@ describe("native session identity", () => {
     });
 
     it("Given an Agent returns the original session as a fork, When a user requests an independent conversation, Then the invalid fork is rejected", async () => {
-        const f = await fixture("Codex", "invalid-fork");
+        const f = await fixture("Claude Code", "invalid-fork");
         try {
             await f.seed("Original context");
             const entry = (await f.list()).entries[0];

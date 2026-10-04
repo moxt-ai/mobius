@@ -7,7 +7,6 @@ import { join } from "node:path";
 import * as acp from "@agentclientprotocol/sdk";
 
 import { FAKE_ACP_AGENT_NAME } from "./index.ts";
-import { promptUsageResponse } from "./usage.ts";
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -1127,14 +1126,26 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                     ? "reused-image-tool"
                     : `tool-${turnNumber.toString()}`;
 
-            if (prompt === "report Codex usage" || prompt === "report Claude usage") {
+            const configuredUsage = process.env["MOBIUS_FAKE_ACP_CONTEXT_USAGE"];
+            if (configuredUsage !== undefined) {
+                const usage: unknown = JSON.parse(configuredUsage);
+                if (
+                    !isRecord(usage) ||
+                    typeof usage["used"] !== "number" ||
+                    typeof usage["size"] !== "number" ||
+                    !isRecord(usage["cost"]) ||
+                    typeof usage["cost"]["amount"] !== "number" ||
+                    typeof usage["cost"]["currency"] !== "string"
+                ) {
+                    throw new Error("Invalid controlled ACP context usage configuration");
+                }
                 await context.client.notify(acp.methods.client.session.update, {
                     sessionId: context.params.sessionId,
                     update: {
-                        cost: { amount: 0.125 * turnNumber, currency: "USD" },
                         sessionUpdate: "usage_update",
-                        size: 200_000,
-                        used: 50_000,
+                        used: usage["used"],
+                        size: usage["size"],
+                        cost: { amount: usage["cost"]["amount"], currency: usage["cost"]["currency"] },
                     },
                 });
             }
@@ -1604,7 +1615,20 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
             });
             persistState(context.params.sessionId, state);
 
-            return promptUsageResponse(prompt, turnNumber) ?? { stopReason: "end_turn" };
+            const configuredResponse = process.env["MOBIUS_FAKE_ACP_PROMPT_RESPONSE"];
+            if (configuredResponse !== undefined) {
+                const response: unknown = JSON.parse(configuredResponse);
+                if (
+                    !isRecord(response) ||
+                    (response["stopReason"] !== "end_turn" && response["stopReason"] !== "cancelled")
+                ) {
+                    throw new Error("Invalid controlled ACP prompt response configuration");
+                }
+                // Validate the envelope; deliberately malformed payload fields must reach
+                // the production consumer so boundary rejection can be exercised.
+                return { ...response, stopReason: response["stopReason"] };
+            }
+            return { stopReason: "end_turn" };
         } finally {
             turnCancellations.delete(context.params.sessionId);
             steeringWaiters.delete(context.params.sessionId);

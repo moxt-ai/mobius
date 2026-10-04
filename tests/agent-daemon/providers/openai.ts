@@ -23,6 +23,9 @@ interface SelectedTool extends AvailableTool {
 }
 
 interface ProviderRequestDiagnostic {
+    readonly model: unknown;
+    readonly reasoning: unknown;
+    readonly serviceTier: unknown;
     readonly scenario: FakeProviderScenario;
     readonly selectedTool: Readonly<Pick<SelectedTool, "kind" | "name">> | undefined;
     readonly toolResultCount: number;
@@ -93,8 +96,15 @@ function selectTool(
     tools: readonly AvailableTool[],
     scenario: FakeProviderScenario,
     completedToolCalls: number,
+    patch?: string,
 ): SelectedTool | undefined {
     const callId = `call_mobius_${(completedToolCalls + 1).toString()}`;
+    if (patch !== undefined) {
+        const applyPatch = tools.find((tool) => /(?:^|\.)apply_patch$/u.test(tool.name) && tool.kind === "custom");
+        if (applyPatch !== undefined) {
+            return { ...applyPatch, callId, input: patch };
+        }
+    }
     const shell = tools.find((tool) =>
         /(?:^|\.)(?:terminal|exec|bash|shell|command|run_terminal_command)$/iu.test(tool.name),
     );
@@ -105,7 +115,10 @@ function selectTool(
                 name: shell.name.slice(shell.name.lastIndexOf(".") + 1),
                 parameters: undefined,
                 callId,
-                input: `const result = await tools.exec_command({ cmd: ${JSON.stringify(scenario.command)}, max_output_tokens: 1000 });\ntext(result.output);`,
+                input:
+                    patch !== undefined
+                        ? `const result = await tools.apply_patch(${JSON.stringify(patch)}); text(result);`
+                        : `const result = await tools.exec_command({ cmd: ${JSON.stringify(scenario.command)}, max_output_tokens: 1000 });\ntext(result.output);`,
             };
         }
         const command = stringProperty(shell.parameters, ["command", "cmd"]);
@@ -415,6 +428,7 @@ export class FakeOpenAiProvider implements AsyncDisposable {
             readonly beforeFirstText?: () => Promise<void>;
             readonly fallbackPrompt?: string;
             readonly commentary?: string;
+            readonly patch?: string;
         } = {},
     ): Promise<FakeOpenAiProvider> {
         const requests: ProviderRequestDiagnostic[] = [];
@@ -460,10 +474,15 @@ export class FakeOpenAiProvider implements AsyncDisposable {
             }
             const scenario = activeScenario ?? selectedScenario;
             const tool =
-                completedToolCalls < scenario.toolCalls ? selectTool(tools, scenario, completedToolCalls) : undefined;
+                completedToolCalls < scenario.toolCalls
+                    ? selectTool(tools, scenario, completedToolCalls, options.patch)
+                    : undefined;
             const selectedAnswer = fakeProviderResponse(answer, scenario);
             const selectedChunks = responseChunks(selectedAnswer, scenario);
             requests.push({
+                model: payload["model"],
+                reasoning: payload["reasoning"],
+                serviceTier: payload["service_tier"],
                 scenario,
                 selectedTool: tool === undefined ? undefined : { kind: tool.kind, name: tool.name },
                 toolResultCount: completedToolCalls,
