@@ -1,0 +1,254 @@
+import { createHash } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { createServer, request as httpRequest, type Server } from "node:http";
+import { connect, type Socket } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
+import { listen, port } from "@moxt-ai/mobius-test/websocket";
+import { describe, expect, it } from "vitest";
+
+const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+
+function trackConnections(server: Server, sockets: Set<Socket>): void {
+    server.on("connection", (socket) => {
+        sockets.add(socket);
+        socket.once("close", () => sockets.delete(socket));
+    });
+}
+
+async function closeServer(server: Server, sockets: Set<Socket>): Promise<void> {
+    for (const socket of sockets) {
+        socket.destroy();
+    }
+    await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+            if (error === undefined) {
+                resolve();
+                return;
+            }
+            reject(error);
+        });
+    });
+}
+
+describe("daemon environment proxy", () => {
+    it("Given proxy environment variables, When pairing and opening the relay, Then both connections use the proxy", async () => {
+        const pairingSockets = new Set<Socket>();
+        const relaySockets = new Set<Socket>();
+        const proxySockets = new Set<Socket>();
+        const tunnelTargets: string[] = [];
+        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-proxy-test-"));
+
+        const pairingPaths: string[] = [];
+        const pairingServer = createServer((request, response) => {
+            pairingPaths.push(new URL(request.url ?? "/", "http://127.0.0.1").pathname);
+            response.writeHead(200, { "content-type": "application/json" });
+            response.end(
+                JSON.stringify({
+                    appId: "app_proxy",
+                    channelId: "proxy-channel",
+                    runtimeCredential: "a".repeat(32),
+                    runtimeId: "proxy-runtime",
+                }),
+            );
+        });
+        trackConnections(pairingServer, pairingSockets);
+
+        const relayServer = createServer((_request, response) => {
+            response.writeHead(426);
+            response.end();
+        });
+        relayServer.on("upgrade", (request, socket) => {
+            const key = request.headers["sec-websocket-key"];
+            if (typeof key !== "string") {
+                socket.destroy();
+                return;
+            }
+            const accept = createHash("sha1").update(`${key}${WEBSOCKET_GUID}`).digest("base64");
+            socket.write(
+                "HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+            );
+        });
+        trackConnections(relayServer, relaySockets);
+
+        const proxyServer = createServer((request, response) => {
+            const destination = new URL(request.url ?? "/", "http://127.0.0.1");
+            tunnelTargets.push(destination.host);
+            const headers = { ...request.headers };
+            delete headers["proxy-authorization"];
+            const upstream = httpRequest(
+                destination,
+                {
+                    method: request.method,
+                    headers,
+                    signal: AbortSignal.timeout(2_000),
+                },
+                (incoming) => {
+                    response.writeHead(incoming.statusCode ?? 502, incoming.headers);
+                    incoming.pipe(response);
+                },
+            );
+            upstream.once("error", () => response.destroy());
+            response.once("close", () => upstream.destroy());
+            request.pipe(upstream);
+        });
+        proxyServer.on("connect", (request, downstream, head) => {
+            const encodedTarget = request.url;
+            if (encodedTarget === undefined) {
+                downstream.destroy();
+                return;
+            }
+            const destination = new URL(`http://${encodedTarget}`);
+            const destinationPort = Number(destination.port);
+            tunnelTargets.push(encodedTarget);
+            const upstream = connect(destinationPort, destination.hostname, () => {
+                downstream.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+                if (head.byteLength > 0) {
+                    upstream.write(head);
+                }
+                downstream.pipe(upstream);
+                upstream.pipe(downstream);
+            });
+            upstream.once("error", () => downstream.destroy());
+        });
+        proxyServer.on("upgrade", (request, downstream, head) => {
+            const destination = new URL(request.url ?? "/", "http://127.0.0.1");
+            tunnelTargets.push(destination.host);
+            const upstream = connect(Number(destination.port), destination.hostname, () => {
+                const headers = Object.entries(request.headers)
+                    .filter(([name]) => name !== "proxy-authorization")
+                    .map(([name, value]) => `${name}: ${value}`)
+                    .join("\r\n");
+                upstream.write(`GET ${destination.pathname}${destination.search} HTTP/1.1\r\n${headers}\r\n\r\n`);
+                upstream.write(head);
+                downstream.pipe(upstream);
+                upstream.pipe(downstream);
+            });
+            upstream.once("error", () => downstream.destroy());
+            downstream.once("close", () => upstream.destroy());
+        });
+        trackConnections(proxyServer, proxySockets);
+
+        await Promise.all([listen(pairingServer), listen(relayServer), listen(proxyServer)]);
+
+        const previousHttpProxy = process.env["HTTP_PROXY"];
+        const previousHttpsProxy = process.env["HTTPS_PROXY"];
+        const previousNoProxy = process.env["NO_PROXY"];
+        const previousLowerHttpProxy = process.env["http_proxy"];
+        const previousLowerHttpsProxy = process.env["https_proxy"];
+        const previousLowerNoProxy = process.env["no_proxy"];
+        const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
+        const previousPath = process.env["PATH"];
+        const proxyOrigin = `http://127.0.0.1:${port(proxyServer)}`;
+        const proxyUrl = proxyOrigin.replace("http://", "http://mobius:proxy-secret@");
+
+        process.env["HTTP_PROXY"] = proxyUrl;
+        process.env["HTTPS_PROXY"] = proxyUrl;
+        process.env["NO_PROXY"] = "";
+        delete process.env["http_proxy"];
+        delete process.env["https_proxy"];
+        delete process.env["no_proxy"];
+        process.env["MOBIUS_STATE_DIRECTORY"] = stateDirectory;
+        process.env["PATH"] = "";
+
+        try {
+            const { openRuntimeInstallationStore, pairMobiusRuntime } = await import("../../src/runtime.ts");
+            const { connectRelay } = await import("../../src/relay-connection/connect.ts");
+            const { describeEnvironmentProxyRoute, environmentProxyDispatcher } = await import(
+                "../../src/network/environment-proxy.ts"
+            );
+
+            const pairingPort = port(pairingServer);
+            const installation = await openRuntimeInstallationStore(
+                {
+                    applicationId: "dev.mobius.proxy-test",
+                    stateDirectory,
+                },
+                AbortSignal.timeout(2_000),
+            );
+            const paired = await pairMobiusRuntime(
+                installation,
+                {
+                    defaultWorkspace: process.cwd(),
+                    pairingCode: "ABCD-EFGH-JKLM-NPQR-STUV",
+                    pairingId: "proxy-pairing",
+                    relayOrigin: `http://127.0.0.1:${pairingPort}`,
+                },
+                AbortSignal.timeout(2_000),
+            );
+            expect(paired.connectionPath).toBe(installation.connectionPath(paired.connectionId));
+            expect(paired.config.localContext.stateDirectory).toBe(installation.stateDirectory);
+            expect((await installation.readConnection(paired.connectionId, AbortSignal.timeout(2_000))).appId).toBe(
+                "app_proxy",
+            );
+
+            const relayPort = port(relayServer);
+            expect(describeEnvironmentProxyRoute(new URL(`ws://127.0.0.1:${relayPort}/daemon`))).toEqual({
+                proxyOrigin,
+                proxyRoute: "proxy",
+            });
+            const socket = await connectRelay(
+                new URL(`ws://127.0.0.1:${relayPort}/daemon`),
+                AbortSignal.timeout(2_000),
+            );
+            socket.close();
+
+            expect(tunnelTargets).toContain(`127.0.0.1:${pairingPort}`);
+            expect(tunnelTargets).toContain(`127.0.0.1:${relayPort}`);
+            expect(pairingPaths).toEqual([`${MOBIUS_API_PREFIX}/v1/runtime-pairings/proxy-pairing/redeem`]);
+            await environmentProxyDispatcher.close();
+        } finally {
+            if (previousHttpProxy === undefined) {
+                delete process.env["HTTP_PROXY"];
+            } else {
+                process.env["HTTP_PROXY"] = previousHttpProxy;
+            }
+            if (previousHttpsProxy === undefined) {
+                delete process.env["HTTPS_PROXY"];
+            } else {
+                process.env["HTTPS_PROXY"] = previousHttpsProxy;
+            }
+            if (previousNoProxy === undefined) {
+                delete process.env["NO_PROXY"];
+            } else {
+                process.env["NO_PROXY"] = previousNoProxy;
+            }
+            if (previousLowerHttpProxy === undefined) {
+                delete process.env["http_proxy"];
+            } else {
+                process.env["http_proxy"] = previousLowerHttpProxy;
+            }
+            if (previousLowerHttpsProxy === undefined) {
+                delete process.env["https_proxy"];
+            } else {
+                process.env["https_proxy"] = previousLowerHttpsProxy;
+            }
+            if (previousLowerNoProxy === undefined) {
+                delete process.env["no_proxy"];
+            } else {
+                process.env["no_proxy"] = previousLowerNoProxy;
+            }
+            if (previousStateDirectory === undefined) {
+                delete process.env["MOBIUS_STATE_DIRECTORY"];
+            } else {
+                process.env["MOBIUS_STATE_DIRECTORY"] = previousStateDirectory;
+            }
+            if (previousPath === undefined) {
+                delete process.env["PATH"];
+            } else {
+                process.env["PATH"] = previousPath;
+            }
+            await Promise.all([
+                closeServer(pairingServer, pairingSockets),
+                closeServer(relayServer, relaySockets),
+                closeServer(proxyServer, proxySockets),
+            ]);
+            await rm(stateDirectory, { force: true, recursive: true });
+        }
+    });
+});

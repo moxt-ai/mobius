@@ -1,0 +1,662 @@
+import { readFileSync } from "node:fs";
+import { chmod, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Writable } from "node:stream";
+import { fileURLToPath } from "node:url";
+
+import { describe, expect, it, vi } from "vitest";
+
+import { AgentRuntimeManager, createWritableAcpStream } from "../../src/acp/agent-runtime-manager.ts";
+import { FoundAcpStoredSession, MemoryAcpSessionStore, SqliteAcpSessionStore } from "../../src/acp/session-store.ts";
+import { LocalAgentDefinition } from "../../src/config.ts";
+import { AccumulatingOperationMetrics } from "../../src/infra/operation-metrics.ts";
+
+const fakeAgentPath = fileURLToPath(new URL("../support/acp/fake-acp-agent/src/cli.ts", import.meta.url));
+
+function processExists(pid: number): boolean {
+    if (process.platform === "linux") {
+        try {
+            const encoded = readFileSync(join("/proc", pid.toString(), "stat"), "utf8");
+            const closingParenthesis = encoded.lastIndexOf(")");
+            const state = encoded
+                .slice(closingParenthesis + 1)
+                .trimStart()
+                .charAt(0);
+            if (state === "Z" || state === "X") {
+                return false;
+            }
+        } catch {
+            // Fall through when procfs is unavailable or the process has already exited.
+        }
+    }
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (error) {
+        if (error instanceof Error && "code" in error && error.code === "ESRCH") {
+            return false;
+        }
+        throw error;
+    }
+}
+
+describe("ACP conversation sessions", () => {
+    it("Given a managed Claude Code conversation, When the Runtime restarts, Then its Session remains discoverable", async () => {
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-session-store-"));
+        const databasePath = join(temporaryDirectory, "sessions.sqlite");
+        const sessionId = `chat_${"a".repeat(64)}`;
+        const agent = new LocalAgentDefinition("claude", "Claude Code", process.execPath, [
+            fakeAgentPath,
+            "--agent-name",
+            "Claude Code",
+        ]);
+        const signal = new AbortController().signal;
+        const firstStore = new SqliteAcpSessionStore(databasePath);
+        const firstRuntime = new AgentRuntimeManager(undefined, firstStore, null, "native");
+
+        try {
+            await firstRuntime.runPrompt({
+                additionalDirectories: [],
+                agent,
+                commandId: "claude-first-turn",
+                cwd: process.cwd(),
+                images: [],
+                onActivity: () => Promise.resolve(),
+                onText: () => Promise.resolve(),
+                prompt: "Remember this conversation",
+                resources: [],
+                sessionId,
+                signal,
+            });
+        } finally {
+            await firstRuntime.close();
+            firstStore.close();
+        }
+
+        const restartedStore = new SqliteAcpSessionStore(databasePath);
+        const restartedRuntime = new AgentRuntimeManager(undefined, restartedStore, null, "native");
+        try {
+            expect(restartedRuntime.findSessions([sessionId])).toEqual([
+                expect.objectContaining({ agentId: "claude", prompted: true, sessionId }),
+            ]);
+        } finally {
+            await restartedRuntime.close();
+            restartedStore.close();
+            await rm(temporaryDirectory, { force: true, recursive: true });
+        }
+    });
+
+    it("Given a conversation has been prepared without a turn, When Runtime metadata is queried, Then that conversation is immediately available", async () => {
+        const store = new MemoryAcpSessionStore();
+        const manager = new AgentRuntimeManager(undefined, store);
+        const agent = new LocalAgentDefinition("codex", "Codex", process.execPath, [
+            fakeAgentPath,
+            "--agent-name",
+            "Codex",
+        ]);
+        const sessionId = "freshly-prepared-conversation";
+
+        try {
+            await manager.prepareSession({
+                additionalDirectories: [],
+                agent,
+                cwd: process.cwd(),
+                sessionId,
+                signal: new AbortController().signal,
+            });
+
+            expect(manager.findSessions([sessionId])).toEqual([
+                expect.objectContaining({ agentId: "codex", prompted: false, sessionId, title: "" }),
+            ]);
+        } finally {
+            await manager.close();
+        }
+    });
+
+    it.skipIf(process.platform === "win32")(
+        "Given an ACP Turn keeps running, When days elapse, Then Mobius keeps it active until cancellation and releases the process tree",
+        async () => {
+            const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-long-turn-"));
+            const adapterPath = join(temporaryDirectory, "pi-acp");
+            const piPidPath = join(temporaryDirectory, "pi.pid");
+            await writeFile(
+                adapterPath,
+                `#!${process.execPath}
+import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+const pidPath = process.env.MOBIUS_TEST_PI_PID_FILE;
+if (pidPath === undefined) process.exit(81);
+const child = spawn(process.execPath, [${JSON.stringify(fakeAgentPath)}, "--agent-name", "Pi"], {
+  env: process.env,
+  stdio: "inherit",
+});
+if (child.pid === undefined) process.exit(82);
+writeFileSync(pidPath, child.pid.toString());
+process.on("SIGTERM", () => child.kill("SIGTERM"));
+child.once("error", () => process.exit(83));
+child.once("exit", (code) => process.exit(code ?? 84));
+`,
+                { mode: 0o700 },
+            );
+            await chmod(adapterPath, 0o700);
+            vi.useFakeTimers({ toFake: ["clearTimeout", "setTimeout"] });
+            const manager = new AgentRuntimeManager();
+            const adapterBaseline = new LocalAgentDefinition("pi", "Pi", adapterPath, []);
+            const agentBaseline = new LocalAgentDefinition("pi", "Pi", process.execPath, []);
+            const agent = new LocalAgentDefinition(
+                "pi",
+                "Pi",
+                adapterPath,
+                [],
+                { MOBIUS_TEST_PI_PID_FILE: piPidPath },
+                "0.0.33",
+                "0.85.0",
+                adapterBaseline.adapterIdentity,
+                agentBaseline.agentIdentity,
+            );
+            const activityStarted = Promise.withResolvers<void>();
+
+            try {
+                const hangingTurn = manager.runPrompt({
+                    additionalDirectories: [],
+                    agent,
+                    commandId: "pi-hanging-command",
+                    cwd: process.cwd(),
+                    images: [],
+                    onActivity: () => {
+                        activityStarted.resolve();
+                        return Promise.resolve();
+                    },
+                    onText: () => Promise.resolve(),
+                    prompt: "wait until cancelled",
+                    resources: [],
+                    sessionId: "pi-hanging-conversation",
+                    signal: new AbortController().signal,
+                });
+                let settled = false;
+                void hangingTurn.then(
+                    () => {
+                        settled = true;
+                    },
+                    () => {
+                        settled = true;
+                    },
+                );
+                await activityStarted.promise;
+
+                await vi.advanceTimersByTimeAsync(7 * 24 * 60 * 60 * 1_000);
+
+                const piPid = Number.parseInt(await readFile(piPidPath, "utf8"), 10);
+                expect(Number.isSafeInteger(piPid)).toBe(true);
+                expect(settled).toBe(false);
+                expect(processExists(piPid)).toBe(true);
+
+                await manager.cancelPrompt("pi-hanging-conversation");
+
+                await expect(hangingTurn).resolves.toEqual({ stopReason: "cancelled" });
+                expect(processExists(piPid)).toBe(false);
+            } finally {
+                vi.useRealTimers();
+                await manager.cancelPrompt("pi-hanging-conversation");
+                await manager.close();
+                await rm(temporaryDirectory, { force: true, recursive: true });
+            }
+        },
+    );
+
+    it("Given a prepared conversation has no turns, When its agent selection changes, Then the same Mobius session is rebound before the first prompt", async () => {
+        const manager = new AgentRuntimeManager();
+        const codex = new LocalAgentDefinition("codex", "Codex", process.execPath, [
+            fakeAgentPath,
+            "--agent-name",
+            "Codex",
+        ]);
+        const claude = new LocalAgentDefinition("claude", "Claude Code", process.execPath, [
+            fakeAgentPath,
+            "--agent-name",
+            "Claude Code",
+        ]);
+
+        try {
+            await manager.prepareSession({
+                additionalDirectories: [],
+                agent: codex,
+                cwd: process.cwd(),
+                sessionId: "rebound-conversation",
+                signal: new AbortController().signal,
+            });
+            const metrics = new AccumulatingOperationMetrics();
+            await expect(
+                manager.prepareSession(
+                    {
+                        additionalDirectories: [],
+                        agent: claude,
+                        cwd: process.cwd(),
+                        sessionId: "rebound-conversation",
+                        signal: new AbortController().signal,
+                    },
+                    metrics,
+                ),
+            ).resolves.toMatchObject({ restored: false });
+            expect(metrics.snapshot()).toEqual(
+                expect.arrayContaining([
+                    expect.objectContaining({ name: "runtime-replacement-close" }),
+                    expect.objectContaining({ name: "session-new" }),
+                ]),
+            );
+
+            const chunks: string[] = [];
+            await manager.runPrompt({
+                additionalDirectories: [],
+                agent: claude,
+                commandId: "command-after-rebind",
+                cwd: process.cwd(),
+                images: [],
+                onActivity: () => Promise.resolve(),
+                onText: (text) => {
+                    chunks.push(text);
+                    return Promise.resolve();
+                },
+                prompt: "selected agent",
+                resources: [],
+                sessionId: "rebound-conversation",
+                signal: new AbortController().signal,
+            });
+            expect(chunks.join("")).toBe("Claude Code turn 1: selected agent");
+        } finally {
+            await manager.close();
+        }
+    });
+
+    it("Given OpenCode emits untagged messages before a tool call, When they arrive, Then Mobius streams them without waiting for the tool boundary", async () => {
+        const manager = new AgentRuntimeManager();
+        const agent = new LocalAgentDefinition("opencode", "OpenCode", process.execPath, [
+            fakeAgentPath,
+            "--agent-name",
+            "OpenCode",
+        ]);
+        const activityUpdates: Array<{
+            readonly activityId: string;
+            readonly activityType: string;
+            readonly output: string;
+            readonly sequence: number;
+        }> = [];
+        const responseChunks: string[] = [];
+
+        try {
+            await manager.runPrompt({
+                additionalDirectories: [],
+                agent,
+                commandId: "opencode-interleaved-command",
+                cwd: process.cwd(),
+                images: [],
+                onActivity: (activity) => {
+                    activityUpdates.push(activity);
+                    return Promise.resolve();
+                },
+                onText: (text) => {
+                    responseChunks.push(text);
+                    return Promise.resolve();
+                },
+                prompt: "interleave untagged progress",
+                resources: [],
+                sessionId: "opencode-interleaved-conversation",
+                signal: new AbortController().signal,
+            });
+        } finally {
+            await manager.close();
+        }
+
+        const activitiesById = new Map(activityUpdates.map((activity) => [activity.activityId, activity]));
+        const timeline = [...activitiesById.values()]
+            .sort((left, right) => left.sequence - right.sequence)
+            .map((activity) => ({ activityType: activity.activityType, output: activity.output }));
+        expect(timeline).toEqual([
+            { activityType: "progress", output: "Gathering context" },
+            { activityType: "reasoning", output: "Inspecting the workspace" },
+            { activityType: "tool", output: '{\n  "name": "mobius-workspace"\n}' },
+        ]);
+        expect(responseChunks).toEqual([
+            "Checking the workspace",
+            "Preparing the next tool call",
+            "OpenCode turn 1: ",
+            "interleave untagged progress",
+        ]);
+    });
+
+    it("Given the least recently used conversation has an active turn, When an eleventh conversation starts, Then the active process is retained and the oldest idle process is released", async () => {
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-active-process-lru-"));
+        const store = new MemoryAcpSessionStore();
+        const manager = new AgentRuntimeManager(undefined, store);
+        const agent = new LocalAgentDefinition(
+            "codex",
+            "Codex",
+            process.execPath,
+            [fakeAgentPath, "--agent-name", "Codex", "--exclusive-writer"],
+            { MOBIUS_FAKE_ACP_STATE_DIRECTORY: temporaryDirectory },
+        );
+        const signal = new AbortController().signal;
+        const activityStarted = Promise.withResolvers<void>();
+        const activeTurn = manager.runPrompt({
+            additionalDirectories: [],
+            agent,
+            commandId: "conversation-1-active",
+            cwd: temporaryDirectory,
+            images: [],
+            onActivity: () => {
+                activityStarted.resolve();
+                return Promise.resolve();
+            },
+            onText: () => Promise.resolve(),
+            prompt: "wait until cancelled",
+            resources: [],
+            sessionId: "conversation-1",
+            signal,
+        });
+        const runTurn = async (sessionId: string): Promise<void> => {
+            await manager.runPrompt({
+                additionalDirectories: [],
+                agent,
+                commandId: `${sessionId}-turn`,
+                cwd: temporaryDirectory,
+                images: [],
+                onActivity: () => Promise.resolve(),
+                onText: () => Promise.resolve(),
+                prompt: "first",
+                resources: [],
+                sessionId,
+                signal,
+            });
+        };
+        const writerName = (sessionId: string): string => {
+            const stored = store.read(sessionId);
+            if (!(stored instanceof FoundAcpStoredSession)) {
+                throw new Error(`Expected ${sessionId} to have a persisted native session`);
+            }
+            return `${encodeURIComponent(stored.session.nativeSessionId)}.writer`;
+        };
+
+        try {
+            await activityStarted.promise;
+            for (let index = 2; index <= 10; index += 1) {
+                await runTurn(`conversation-${index.toString()}`);
+            }
+            const activeWriter = writerName("conversation-1");
+            const oldestIdleWriter = writerName("conversation-2");
+
+            await runTurn("conversation-11");
+
+            const activeWriters = (await readdir(temporaryDirectory)).filter((name) => name.endsWith(".writer"));
+            expect(activeWriters).toHaveLength(10);
+            expect(activeWriters).toContain(activeWriter);
+            expect(activeWriters).not.toContain(oldestIdleWriter);
+            await manager.cancelPrompt("conversation-1");
+            await expect(activeTurn).resolves.toEqual({ stopReason: "cancelled" });
+        } finally {
+            await manager.cancelPrompt("conversation-1");
+            await activeTurn.catch(() => undefined);
+            await manager.close();
+            await rm(temporaryDirectory, { force: true, recursive: true });
+        }
+    });
+
+    it("Given an ACP agent announces a different session while creating one, When Mobius receives the created session, Then the local boundary rejects the queued update", async () => {
+        const manager = new AgentRuntimeManager();
+        const agent = new LocalAgentDefinition("deepseek", "DeepSeek Harness", process.execPath, [
+            fakeAgentPath,
+            "--agent-name",
+            "DeepSeek Harness",
+            "--announce-config-while-creating",
+            "--announce-wrong-session-while-creating",
+        ]);
+
+        try {
+            await expect(
+                manager.prepareSession({
+                    additionalDirectories: [],
+                    agent,
+                    cwd: process.cwd(),
+                    sessionId: "deepseek-wrong-session-notification",
+                    signal: new AbortController().signal,
+                }),
+            ).rejects.toMatchObject({ code: "invalid_agent_session" });
+        } finally {
+            await manager.close();
+        }
+    });
+
+    it("Given an ACP agent returns the standard authentication error, When Mobius starts its session, Then the local boundary preserves an authentication-required code", async () => {
+        const manager = new AgentRuntimeManager();
+        const agent = new LocalAgentDefinition("opencode", "OpenCode", process.execPath, [
+            fakeAgentPath,
+            "--authentication-required",
+        ]);
+
+        try {
+            await expect(
+                manager.prepareSession({
+                    additionalDirectories: [],
+                    agent,
+                    cwd: process.cwd(),
+                    sessionId: "authentication-required-session",
+                    signal: new AbortController().signal,
+                }),
+            ).rejects.toMatchObject({ code: "authentication_required" });
+        } finally {
+            await manager.close();
+        }
+    });
+
+    it("Given an ACP agent rejects a prompt with a non-authentication error, When Mobius runs that turn, Then the local boundary preserves the agent's real failure reason", async () => {
+        const manager = new AgentRuntimeManager();
+        const agent = new LocalAgentDefinition("opencode", "OpenCode", process.execPath, [
+            fakeAgentPath,
+            "--agent-name",
+            "OpenCode",
+        ]);
+
+        try {
+            await expect(
+                manager.runPrompt({
+                    additionalDirectories: [],
+                    agent,
+                    commandId: "command-model-unavailable",
+                    cwd: process.cwd(),
+                    images: [],
+                    onActivity: () => Promise.resolve(),
+                    onText: () => Promise.resolve(),
+                    prompt: "fail with model unavailable",
+                    resources: [],
+                    sessionId: "model-unavailable-session",
+                    signal: new AbortController().signal,
+                }),
+            ).rejects.toMatchObject({
+                code: "acp_agent_error",
+                message: "Internal error: Model unavailable: opencode/jev-1.13-free",
+            });
+        } finally {
+            await manager.close();
+        }
+    });
+
+    it.skipIf(process.platform === "win32")(
+        "Given an ACP Agent leaves a tool subprocess alive after cancelling, When the turn is cancelled, Then Mobius releases the process tree and resumes the saved session",
+        async () => {
+            const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-cancel-tree-"));
+            const manager = new AgentRuntimeManager();
+            const adapterPath = join(temporaryDirectory, "codex-acp");
+            const childPidPath = join(temporaryDirectory, "tool-child.pid");
+            await writeFile(
+                adapterPath,
+                `#!${process.execPath}
+import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+const childPidPath = process.env.MOBIUS_TEST_CHILD_PID_FILE;
+if (childPidPath === undefined) process.exit(81);
+const tool = spawn(process.execPath, ["-e", "setInterval(() => undefined, 60000)"], {
+  detached: true,
+  env: process.env,
+  stdio: "ignore",
+});
+if (tool.pid === undefined) process.exit(82);
+writeFileSync(childPidPath, tool.pid.toString());
+const agent = spawn(process.execPath, [${JSON.stringify(fakeAgentPath)}, "--agent-name", "Codex"], {
+  env: process.env,
+  stdio: "inherit",
+});
+agent.once("error", () => process.exit(83));
+agent.once("exit", (code) => process.exit(code ?? 84));
+`,
+                { mode: 0o700 },
+            );
+            await chmod(adapterPath, 0o700);
+            const agent = new LocalAgentDefinition("codex", "Codex", adapterPath, [], {
+                MOBIUS_FAKE_ACP_STATE_DIRECTORY: temporaryDirectory,
+                MOBIUS_TEST_CHILD_PID_FILE: childPidPath,
+            });
+            const activityStarted = Promise.withResolvers<void>();
+            let childPid = 0;
+
+            try {
+                const cancelledTurn = manager.runPrompt({
+                    additionalDirectories: [],
+                    agent,
+                    commandId: "command-cancelled-tree",
+                    cwd: temporaryDirectory,
+                    images: [],
+                    onActivity: () => {
+                        activityStarted.resolve();
+                        return Promise.resolve();
+                    },
+                    onText: () => Promise.resolve(),
+                    prompt: "wait until cancelled",
+                    resources: [],
+                    sessionId: "cancelled-tree-conversation",
+                    signal: new AbortController().signal,
+                });
+                await activityStarted.promise;
+                childPid = Number.parseInt(await readFile(childPidPath, "utf8"), 10);
+                expect(Number.isSafeInteger(childPid)).toBe(true);
+
+                await manager.cancelPrompt("cancelled-tree-conversation");
+
+                await expect(cancelledTurn).resolves.toEqual({
+                    stopReason: "cancelled",
+                });
+                expect(processExists(childPid)).toBe(false);
+                const nextChunks: string[] = [];
+                await manager.runPrompt({
+                    additionalDirectories: [],
+                    agent,
+                    commandId: "command-after-tree-cancel",
+                    cwd: temporaryDirectory,
+                    images: [],
+                    onActivity: () => Promise.resolve(),
+                    onText: (text) => {
+                        nextChunks.push(text);
+                        return Promise.resolve();
+                    },
+                    prompt: "continue",
+                    resources: [],
+                    sessionId: "cancelled-tree-conversation",
+                    signal: new AbortController().signal,
+                });
+                expect(nextChunks.join("")).toBe("Codex turn 2: continue");
+            } finally {
+                await manager.close();
+                if (childPid > 0 && processExists(childPid)) {
+                    try {
+                        process.kill(-childPid, "SIGKILL");
+                    } catch {
+                        // A concurrently exited test process no longer needs cleanup.
+                    }
+                }
+                await rm(temporaryDirectory, { force: true, recursive: true });
+            }
+        },
+    );
+
+    it("Given an existing Agent conversation, When a caller changes its Agent identity, Then the local boundary rejects the request", async () => {
+        const manager = new AgentRuntimeManager();
+        const codex = new LocalAgentDefinition("codex", "Codex", process.execPath, [fakeAgentPath]);
+        const claude = new LocalAgentDefinition("claude", "Claude Code", process.execPath, [fakeAgentPath]);
+
+        try {
+            await manager.runPrompt({
+                additionalDirectories: [],
+                agent: codex,
+                commandId: "command-locked-first",
+                cwd: process.cwd(),
+                images: [],
+                onActivity: () => Promise.resolve(),
+                onText: () => Promise.resolve(),
+                prompt: "first",
+                resources: [],
+                sessionId: "locked-conversation",
+                signal: new AbortController().signal,
+            });
+            await expect(
+                manager.runPrompt({
+                    additionalDirectories: [],
+                    agent: claude,
+                    commandId: "command-locked-second",
+                    cwd: process.cwd(),
+                    images: [],
+                    onActivity: () => Promise.resolve(),
+                    onText: () => Promise.resolve(),
+                    prompt: "second",
+                    resources: [],
+                    sessionId: "locked-conversation",
+                    signal: new AbortController().signal,
+                }),
+            ).rejects.toThrow("agent or workspace cannot change");
+        } finally {
+            await manager.close();
+        }
+    });
+
+    it("Given an ACP subprocess exits during shutdown, When its session manager closes, Then the stream failure is contained", async () => {
+        const manager = new AgentRuntimeManager();
+        const agent = new LocalAgentDefinition("codex", "Codex", process.execPath, [
+            fakeAgentPath,
+            "--exit-after-session-creation",
+        ]);
+        const signal = new AbortController().signal;
+
+        await manager.prepareSession({
+            additionalDirectories: [],
+            agent,
+            cwd: process.cwd(),
+            sessionId: "exited-conversation",
+            signal,
+        });
+        await expect(
+            manager.configureSession({
+                additionalDirectories: [],
+                agent,
+                booleanValue: false,
+                configId: "model",
+                cwd: process.cwd(),
+                requestId: "configure-exited-session",
+                sessionId: "exited-conversation",
+                signal,
+                value: "test-large",
+                valueType: "select",
+            }),
+        ).rejects.toThrow();
+
+        await expect(manager.close()).resolves.toBeUndefined();
+    });
+
+    it("Given an ACP process pipe fails, When the protocol writes to it, Then the stream reports the failure without an uncaught process error", async () => {
+        const output = new Writable({
+            write(_chunk, _encoding, callback) {
+                callback(Object.assign(new Error("broken pipe"), { code: "EPIPE" }));
+            },
+        });
+        const writer = createWritableAcpStream(output).getWriter();
+
+        await expect(writer.write(new Uint8Array([1]))).rejects.toThrow("broken pipe");
+    });
+});

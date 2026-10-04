@@ -24,8 +24,7 @@ import {
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
-
-import { listen, port as readPort, sendText as writeServerTextFrame } from "../../../tests/infra/websocket.ts";
+import { listen, port as readPort, sendText as writeServerTextFrame } from "../../test-support/src/websocket.ts";
 import { connectMobiusClient, type MobiusClient } from "../src/client.ts";
 
 const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";

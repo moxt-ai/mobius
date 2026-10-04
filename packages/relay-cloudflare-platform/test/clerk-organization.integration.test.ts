@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FakeClerk } from "../../../tests/infra/clerk.ts";
+import { FakeClerk } from "../../test-support/src/clerk.ts";
 import { ClerkOrganizationGateway } from "../src/infra/clerk-organization-gateway.ts";
 
 describe("Clerk organization HTTP boundary in Workers", () => {

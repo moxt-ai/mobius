@@ -35,7 +35,9 @@
         "dev": "node --watch src/cli.ts",
         "prepack": "pnpm build",
         "start": "node dist/cli.js",
-        "typecheck": "tsc --project tsconfig.json"
+        "typecheck": "tsc --project tsconfig.json && tsc --project tests/tsconfig.json",
+        "test:controlled": "pnpm --filter @moxt-ai/mobius-fake-acp-agent build && vitest run tests/sessions tests/runtime --maxWorkers=4",
+        "test:agents": "vitest run tests/agents --maxWorkers=2"
     },
     "dependencies": {
         "@agentclientprotocol/sdk": "^1.4.0",
@@ -49,7 +51,12 @@
         "@types/better-sqlite3": "7.6.13",
         "@types/node": "^24.13.5",
         "drizzle-orm": "^0.45.2",
-        "esbuild": "0.28.2"
+        "esbuild": "0.28.2",
+        "@moxt-ai/mobius-sdk": "workspace:*",
+        "@moxt-ai/mobius-test": "workspace:*",
+        "valibot": "1.5.0",
+        "ws": "^8.21.3",
+        "@types/ws": "^8.18.1"
     },
     "main": "dist/index.js",
     "keywords": [],

@@ -13,7 +13,7 @@ This repository starts with new database schemas. Existing Mobius data is not im
 - `packages/relay-core`: runtime and session behavior, storage, and protocol boundaries.
 - `packages/relay-cloudflare-platform`: Cloudflare Worker and local Worker integration tests.
 - `packages/relay-cloudflare-standalone`: accountless Cloudflare Worker with one Project per pairing workflow and integration tests.
-- `tests/agent-daemon`: controlled agent integration tests.
+- `packages/cli/tests`: controlled agent integration tests.
 
 ## Local development
 

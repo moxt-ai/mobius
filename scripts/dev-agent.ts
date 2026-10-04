@@ -1,21 +1,21 @@
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
 
-import { ClaudeFixture } from "../tests/agent-daemon/infra/claude.ts";
-import { CodexFixture } from "../tests/agent-daemon/infra/codex.ts";
-import { CopilotFixture } from "../tests/agent-daemon/infra/copilot.ts";
-import { CursorFixture } from "../tests/agent-daemon/infra/cursor.ts";
-import { DeepSeekFixture } from "../tests/agent-daemon/infra/deepseek.ts";
-import { GeminiFixture } from "../tests/agent-daemon/infra/gemini.ts";
-import { GrokFixture } from "../tests/agent-daemon/infra/grok.ts";
-import { HermesFixture } from "../tests/agent-daemon/infra/hermes.ts";
-import { OpenCodeFixture } from "../tests/agent-daemon/infra/opencode.ts";
-import { PiFixture } from "../tests/agent-daemon/infra/pi.ts";
-import { WorkBuddyFixture } from "../tests/agent-daemon/infra/workbuddy.ts";
-import { FakeAnthropicProvider } from "../tests/agent-daemon/providers/anthropic.ts";
-import { FakeCursorProvider } from "../tests/agent-daemon/providers/cursor.ts";
-import { FakeGeminiProvider } from "../tests/agent-daemon/providers/gemini.ts";
-import { FakeOpenAiProvider } from "../tests/agent-daemon/providers/openai.ts";
+import { ClaudeFixture } from "../packages/cli/tests/support/agents/claude.ts";
+import { CodexFixture } from "../packages/cli/tests/support/agents/codex.ts";
+import { CopilotFixture } from "../packages/cli/tests/support/agents/copilot.ts";
+import { CursorFixture } from "../packages/cli/tests/support/agents/cursor.ts";
+import { DeepSeekFixture } from "../packages/cli/tests/support/agents/deepseek.ts";
+import { GeminiFixture } from "../packages/cli/tests/support/agents/gemini.ts";
+import { GrokFixture } from "../packages/cli/tests/support/agents/grok.ts";
+import { HermesFixture } from "../packages/cli/tests/support/agents/hermes.ts";
+import { OpenCodeFixture } from "../packages/cli/tests/support/agents/opencode.ts";
+import { PiFixture } from "../packages/cli/tests/support/agents/pi.ts";
+import { WorkBuddyFixture } from "../packages/cli/tests/support/agents/workbuddy.ts";
+import { FakeAnthropicProvider } from "../packages/cli/tests/support/llm/anthropic.ts";
+import { FakeCursorProvider } from "../packages/cli/tests/support/llm/cursor.ts";
+import { FakeGeminiProvider } from "../packages/cli/tests/support/llm/gemini.ts";
+import { FakeOpenAiProvider } from "../packages/cli/tests/support/llm/openai.ts";
 
 interface Disposable {
     [Symbol.asyncDispose](): Promise<void>;
