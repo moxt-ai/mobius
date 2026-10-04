@@ -162,6 +162,11 @@ test("Given real Codex emits a tool, commentary, and final text, When the comple
             let completed = false;
             let sequence = 0;
             let epoch: string | undefined;
+            let recoveryPosition: {
+                readonly commandId: string;
+                readonly epoch: string;
+                readonly sequence: number;
+            } | null = null;
             let snapshotVerified = false;
             let queuedCancelled = false;
             let text = "";
@@ -204,6 +209,13 @@ test("Given real Codex emits a tool, commentary, and final text, When the comple
                     expect(result).toMatchObject({ queued: [] });
                     expect(result.action).toBe("active-turn");
                     if (result.action === "active-turn") {
+                        if (result.turn !== null) {
+                            recoveryPosition = {
+                                commandId: result.turn.commandId,
+                                epoch: result.turn.epoch,
+                                sequence: result.turn.sequence,
+                            };
+                        }
                         expect(result.turn).toMatchObject({
                             commandId,
                             epoch: expect.any(String),
@@ -241,6 +253,8 @@ test("Given real Codex emits a tool, commentary, and final text, When the comple
                     const { page } = decodeSessionLiveHistoryPageLoaded(message);
                     expect(page.status).toBe("available");
                     if (page.status === "available") {
+                        expect(recoveryPosition).not.toBeNull();
+                        expect(page.streamPosition).toEqual(recoveryPosition);
                         expect(page.messages.filter((item) => item.role === "user")).toHaveLength(turnNumber);
                         expect(
                             page.messages.some((item) => item.role === "assistant" && item.activities.length > 0),

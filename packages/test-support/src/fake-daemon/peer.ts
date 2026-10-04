@@ -1,7 +1,7 @@
 import * as p from "@moxt-ai/mobius-protocol";
 import { fakeDaemonCapabilities, fakeSessionReady, settings } from "./catalog.ts";
 import { activeTurn, historyPage } from "./history.ts";
-import type { FakeDaemonOptions } from "./model.ts";
+import type { FakeDaemonOptions, ReplyPlan } from "./model.ts";
 import { FakeSessions } from "./sessions.ts";
 
 /** JSON protocol boundary shared by Web, Worker and browser suites. */
@@ -14,6 +14,8 @@ export class FakeAgentDaemon {
         this.#options = options;
         this.#sessions = new FakeSessions(send, options);
     }
+    readonly replayLastText = (prompt: string): void => this.#sessions.replayLastText(prompt);
+    readonly continueReply = (prompt: string, plan: ReplyPlan): void => this.#sessions.continueReply(prompt, plan);
     receive(encoded: string): void {
         const kind = p.decodeMessageKind(encoded);
         switch (kind) {

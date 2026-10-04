@@ -92,6 +92,15 @@ export function historyPage(session: Session, cursor: string | null, limit: numb
     }
     return {
         status: "available",
+        ...(session.execution.kind === "running"
+            ? {
+                  streamPosition: {
+                      commandId: session.execution.turn.commandIds[0],
+                      epoch: session.execution.turn.epoch,
+                      sequence: session.execution.turn.sequence,
+                  },
+              }
+            : {}),
         messages: page.messages.map(nativeMessage),
         nextCursor: page.start === 0 ? null : String(page.start),
         truncated: page.truncated,

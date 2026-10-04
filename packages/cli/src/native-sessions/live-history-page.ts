@@ -324,6 +324,7 @@ function paginateActiveTurn(
               )
             : null;
     return {
+        streamPosition: { commandId: activeTurn.commandId, epoch: activeTurn.epoch, sequence: activeTurn.sequence },
         coveredCommandIds: historical?.coveredCommandIds ?? [],
         coveredMessageIds: [
             ...(historical?.coveredMessageIds ?? []),
@@ -378,6 +379,7 @@ export function mergeLiveSessionHistory(
     }
     return {
         coveredCommandIds: page.coveredCommandIds,
+        ...(page.streamPosition === undefined ? {} : { streamPosition: page.streamPosition }),
         coveredMessageIds: page.coveredMessageIds,
         messages: page.messages,
         status: "available",

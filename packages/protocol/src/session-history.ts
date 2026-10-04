@@ -91,6 +91,14 @@ export const assistantHistoryMessageSchema = z
 const historyMessage = z.discriminatedUnion("role", [userHistoryMessage, assistantHistoryMessageSchema]);
 
 const availableSessionHistoryObjectSchema = z.strictObject({
+    streamPosition: z
+        .strictObject({
+            commandId: identifierStringSchema,
+            epoch: identifierStringSchema,
+            sequence: z.number().int().nonnegative(),
+        })
+        .readonly()
+        .optional(),
     status: z.literal("available"),
     messages: z.array(historyMessage).max(SESSION_HISTORY_MESSAGE_LIMIT).readonly(),
     truncated: z.boolean(),

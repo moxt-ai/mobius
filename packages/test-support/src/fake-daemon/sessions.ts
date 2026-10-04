@@ -1,9 +1,10 @@
 import * as p from "@moxt-ai/mobius-protocol";
-import type { FakeDaemonOptions, Output, Session } from "./model.ts";
+import type { FakeDaemonOptions, Output, ReplyPlan, Session } from "./model.ts";
 import { appendOutput } from "./turn-output.ts";
 
 /** The sole owner of session, active-turn, queue and historical state. */
 export class FakeSessions {
+    readonly #lastText = new Map<string, Extract<p.RecordedSessionEvent, { readonly kind: "agent.message.delta" }>>();
     readonly #sessions = new Map<string, Session>();
     readonly #send: (message: string) => void;
     readonly #options: FakeDaemonOptions;
@@ -12,6 +13,36 @@ export class FakeSessions {
         this.#options = options;
     }
     readonly get = (id: string): Session | undefined => this.#sessions.get(id);
+    readonly replayLastText = (prompt: string): void => {
+        const match = [...this.#sessions.values()].find(
+            (session) =>
+                session.execution.kind === "running" &&
+                session.execution.turn.messages.some((message) => message.role === "user" && message.text === prompt),
+        );
+        const event = match === undefined ? undefined : this.#lastText.get(match.metadata.sessionId);
+        if (event === undefined) {
+            throw new Error("No text to replay for this running prompt");
+        }
+        this.event(event.sessionId, event);
+    };
+    readonly continueReply = (prompt: string, plan: ReplyPlan): void => {
+        const matches = [...this.#sessions.values()].filter(
+            (session) =>
+                session.execution.kind === "running" &&
+                session.execution.turn.messages.some((message) => message.role === "user" && message.text === prompt),
+        );
+        const session = matches[0];
+        if (matches.length !== 1 || session === undefined) {
+            throw new Error("Expected exactly one running fake reply for this prompt");
+        }
+        for (const output of plan.output) {
+            this.#output(session.metadata.sessionId, output);
+        }
+        if (plan.outcome === "complete") {
+            this.#finish(session.metadata.sessionId, "end_turn");
+        }
+    };
+
     readonly prepare = (id: string, agentId = this.#options.agentId ?? "codex", directoryId = "default"): Session => {
         const existing = this.get(id);
         if (existing !== undefined) {
@@ -140,6 +171,9 @@ export class FakeSessions {
         }
         const result = appendOutput(session.execution.turn, id, output);
         this.#sessions.set(id, { ...session, execution: { ...session.execution, turn: result.turn } });
+        if (result.event.kind === "agent.message.delta") {
+            this.#lastText.set(id, result.event);
+        }
         this.event(id, result.event);
     }
     #finish(id: string, stopReason: string): void {
