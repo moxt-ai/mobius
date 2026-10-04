@@ -20,7 +20,6 @@ import {
     decodeSessionEventEnvelope,
     encodeRuntimeHeartbeatAckEvent,
     encodeRuntimeLivenessReadyEvent,
-    encodeSessionEventAcknowledgement,
     encodeSessionPromptCommand,
     encodeWorkspaceListCommand,
     MOBIUS_API_PREFIX,
@@ -28,7 +27,6 @@ import {
     RUNTIME_HEARTBEAT_KIND,
     RUNTIME_LIVENESS_READY_KIND,
     SESSION_COMPLETED_KIND,
-    SESSION_EVENT_ACK_KIND,
     SESSION_EVENT_KIND,
     SESSION_PROMPT_KIND,
     SESSION_READY_KIND,
@@ -976,15 +974,8 @@ describe("daemon relay connection liveness", () => {
             if (!("delivery" in ready)) {
                 throw new Error("Test relay received an ephemeral ready event instead of a reliable event");
             }
-            writeServerTextFrame(
-                firstSocket,
-                encodeSessionEventAcknowledgement({
-                    eventId: ready.delivery.eventId,
-                    kind: SESSION_EVENT_ACK_KIND,
-                    outcome: { kind: "relayed" },
-                    sessionId: ready.sessionId,
-                }),
-            );
+            // Keep both reliable events unacknowledged. Sending an acknowledgement immediately
+            // before destroying the socket does not prove the daemon received it.
             const started = decodeSessionEventEnvelope((await firstFrame.next()).text);
             expect(decodeMessageKind(started.payload)).toBe(SESSION_STARTED_KIND);
             expect("delivery" in started).toBe(true);
@@ -1017,7 +1008,9 @@ describe("daemon relay connection liveness", () => {
                 replayedFrame = await resumedFrame.next();
             }
             expect(replayedFrame.opcode).toBe(1);
-            const replayed = decodeSessionEventEnvelope(replayedFrame.text);
+            const replayedReady = decodeSessionEventEnvelope(replayedFrame.text);
+            expect(replayedReady).toEqual(ready);
+            const replayed = decodeSessionEventEnvelope((await resumedFrame.next()).text);
             expect("delivery" in replayed).toBe(true);
             if (!("delivery" in replayed)) {
                 throw new Error("Test relay received an ephemeral replay instead of a reliable event");
