@@ -1,6 +1,6 @@
 # Mobius TypeScript SDK
 
-The SDK connects browser and server clients to a Mobius Relay. It supports Runtime pairing, Runtime discovery, native Agent sessions, browser credentials, and the live Runtime channel. Native session history stays on the user's machine; Mobius does not expose cloud Session, Turn, Attempt, or message history resources.
+The SDK connects browser and server clients to a Mobius Relay. It supports Runtime pairing, Runtime discovery, native Agent sessions, browser credentials, and the live Runtime channel. Native history is supplied by the local Runtime. Deployments can also install and enable optional cloud Recording; clients must respect the configured history source rather than assume that history is always local or always retained. See [data ownership and recovery](../../README.md#data-ownership-and-recovery).
 
 ```sh
 pnpm add @moxt-ai/mobius-sdk

@@ -6,6 +6,7 @@ import {
     type AgentActivityEvent,
     type AgentActivityNarrationEvent,
     type AgentDisplayContent,
+    type AgentMessageDeltaEvent,
     type Attempt,
     decodeAgentDisplayContentValue,
     decodeAttempt,
@@ -1970,10 +1971,14 @@ export class MobiusAgentMessageEvent extends MobiusRecordedEvent {
     readonly kind = AGENT_MESSAGE_DELTA_KIND;
     readonly text: string;
 
-    constructor(sessionId: string, commandId: string, text: string) {
-        super(sessionId);
-        this.commandId = commandId;
-        this.text = text;
+    readonly epoch: string;
+    readonly sequence: number;
+    constructor(event: AgentMessageDeltaEvent) {
+        super(event.sessionId);
+        this.commandId = event.commandId;
+        this.text = event.text;
+        this.epoch = event.epoch;
+        this.sequence = event.sequence;
     }
 }
 
@@ -2073,7 +2078,7 @@ function decodeRecordedEvent(encoded: string): MobiusRecordedEvent {
         case SESSION_STARTED_KIND:
             return new MobiusTurnStartedEvent(event.sessionId, event.commandId, event.attemptId, event.prompt);
         case AGENT_MESSAGE_DELTA_KIND:
-            return new MobiusAgentMessageEvent(event.sessionId, event.commandId, event.text);
+            return new MobiusAgentMessageEvent(event);
         case AGENT_ACTIVITY_KIND:
             return new MobiusAgentActivityEvent(event);
         case AGENT_ACTIVITY_NARRATION_KIND:

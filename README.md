@@ -1,19 +1,70 @@
 # Mobius
 
-Mobius is the agent runtime and relay used by Mobius Chat. It contains the local CLI daemon and ACP agent adapter, the shared protocol, the TypeScript SDK, and Cloudflare Platform and Standalone Workers. Mobius Chat owns its user interface and application logic.
+## Why Mobius exists
 
-This repository starts with new database schemas. Existing Mobius data is not imported or migrated. Live events and active execution metadata are available while a Session runs. Historical content normally comes from the connected local Runtime; deployments can install the optional Recording Worker and enable durable history per App or Project.
+People already do useful work with coding Agents on their own computers. Their
+projects, tools and ongoing conversations are there, but checking progress or giving
+the next instruction should not require sitting in front of that computer.
 
-## Workspace
+Mobius makes those Agents available remotely. Users can keep working with their
+existing projects and conversations from another device. Developers building Agent
+applications can offer that experience without solving remote access and conversation
+continuity separately for every supported Agent. Users can also use Mobius on its
+own; Morty is one application built on it.
 
-- `packages/cli`: local daemon, pairing, agent discovery, and ACP session execution.
-- `packages/protocol`: messages shared across the daemon, Worker, and SDK.
-- `packages/mobius-sdk`: client and server API used by Mobius Chat.
-- `packages/mini-client`: private stateful CLI for exercising a local Platform Worker and local Runtime.
-- `packages/relay-core`: runtime and session behavior, storage, and protocol boundaries.
-- `packages/relay-cloudflare-platform`: Cloudflare Worker and local Worker integration tests.
-- `packages/relay-cloudflare-standalone`: accountless Cloudflare Worker with one Project per pairing workflow and integration tests.
-- `packages/cli/tests`: controlled agent integration tests.
+## Functional value
+
+| User need | What Mobius should make possible |
+| --- | --- |
+| Work away from my computer | Connect my machine and use its Agents remotely, with access to the projects and tools already there. |
+| Continue work already started | Find and resume an available conversation instead of explaining the task again in a new chat. |
+| Stay in control of ongoing work | See progress, give the next instruction, queue follow-up work, stop work or answer a request for permission. |
+| Move between devices | Open the same conversation elsewhere and catch up on both my instructions and the Agent's output. |
+| Use the results | Read available history and view authorized files and images produced by the Agent. |
+| Choose cloud history retention | Use local history, or explicitly enable cloud recording when history needs to remain accessible without the local machine. |
+
+These are product requirements. Availability depends on the selected Agent and
+configuration; unsupported operations must be clear to the user. Implementation and
+[verification evidence](TESTING.md) determine which scenarios are supported today.
+
+## Non-functional requirement: efficient current-turn streaming
+
+Users should see new output promptly throughout a turn, even as the answer grows.
+Streaming must not become progressively slower because earlier output is repeatedly
+copied and processed.
+
+During a continuous subscription, each update must carry the new or changed content
+rather than a complete copy of the accumulated turn. Copying, serialization, transport
+and client processing must avoid repeatedly traversing the whole turn for each update.
+For a fixed number of observers, total streaming work should grow with the content
+produced, not with the sum of every successively larger full-turn snapshot.
+
+A complete current-turn view may be needed when a client first joins or recovers after
+an interruption. That recovery cost must not be paid again for every streaming update.
+This requirement does not prescribe a particular patch format or cursor algorithm.
+
+## Data ownership and recovery
+
+Users must know when their machine needs to be online and where conversation content
+is retained. Without cloud recording, history depends on the connected machine and
+what its Agent has saved. Optional cloud recording provides history according to the
+configured retention policy; it does not keep an offline Agent running.
+
+The current product also stores session metadata and pending delivery content locally,
+so disabling cloud recording does not mean that nothing is written on the machine.
+Restarting the daemon does not automatically resume running work or queued prompts.
+See [current persistence behavior](DEVELOPMENT.md#current-persistence-behavior) for the
+technical disclosure and implementation references.
+
+## Product boundary
+
+Mobius provides remote access to existing Agents. It does not replace their model,
+tools or native work environment, and it cannot make an unsupported Agent operation
+available merely by exposing it in a client.
+
+[Morty (Mobius Chat)](https://github.com/moxt-ai/morty) provides the ready-to-use Bot
+and browser chat experience. Applications remain responsible for deciding who may
+access their conversations; local actions must still be authorized on the machine.
 
 ## Local development
 
@@ -33,9 +84,7 @@ pnpm build
 
 Standalone runs the Relay without the Platform control plane. Each browser pairing
 workflow automatically creates a Project and a Project owner credential. A separate
-deployment-owned bearer credential can administer every Project. The deployment has
-one D1 database, and each Runtime Durable Object also handles its Sessions. Generate
-the deployment credential and start it locally:
+deployment-owned bearer credential can administer every Project. Generate the deployment credential and start it locally:
 
 ```sh
 printf 'MOBIUS_STANDALONE_TOKEN=%s\n' "$(openssl rand -hex 32)" > packages/relay-cloudflare-standalone/.dev.vars
@@ -48,8 +97,7 @@ credential. Its deployment adapter creates a Project and its Project-scoped owne
 credential, then uses the generic `MobiusClient` for Runtime pairing,
 Runtime discovery, Session history, and Session operations. The browser persists the
 Project credential after pairing so page loads and WebSocket reconnects return to the
-same Project. The old standalone
-`POST /mobius/api/pairings` browser compatibility route is not available.
+same Project.
 
 For an operator-driven pairing, first send `POST /mobius/api/v1/standalone/projects`
 to create a Project, then send `POST /mobius/api/v1/projects/{projectId}/runtime-pairings`
@@ -98,13 +146,6 @@ stops the old manager and launches the matching version.
 
 Run `mobius start` without options to ensure the detached daemon is running.
 
-The daemon saves pairing credentials and connection preferences. Current turns,
-delivery receipts, and pending events stay in process memory and disappear on a
-restart. Codex owns its native conversation files; Mobius Chat saves which native
-session IDs belong to each Bot. Bounded connection diagnostics remain in
-`logs/daemon.log` under the Mobius state directory. Prompt text and session
-history are not written to that log.
-
 Manage saved Runtime pairings by their local Connection ID:
 
 ```bash
@@ -123,8 +164,7 @@ credential. `mobius pair list` shows the Connection ID, Platform App ID, Runtime
 ID, workspace, and current status. Channel IDs remain internal Relay routing
 identities and are not accepted as local lifecycle selectors.
 
-The JSON form writes the same list as an array with `connection_id`, `app_id`,
-`runtime_id`, `workspace`, and `status` fields. Its target must already exist; the
-CLI refuses to create it.
+For machine-readable output, use `--output-json` with an existing file. The CLI
+refuses to create the target; command help and executable scenarios define its output contract.
 
 See [DEVELOPMENT.md](./DEVELOPMENT.md) and [TESTING.md](./TESTING.md).

@@ -25,6 +25,7 @@ import {
 type ActiveTurnSnapshot = Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"];
 type ActiveTurnMessage = NonNullable<ActiveTurnSnapshot>["messages"][number];
 interface TurnRecovery {
+    readonly sequence: number;
     readonly commandId: string;
     readonly epoch: string;
     readonly messages: readonly ActiveTurnMessage[];
@@ -371,6 +372,7 @@ export class ActiveDaemonTurn {
             commandId: decodeIdentifier(this.command.commandId),
             epoch: this.#epoch,
             messages: this.timelineMessages(),
+            sequence: this.#sequence,
             state: "running",
             truncated: false,
         };

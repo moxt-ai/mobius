@@ -82,6 +82,8 @@ export async function createFakeAgentDaemonRuntime(options: {
         const owned = resources.move();
         return {
             client,
+            continueReply: connected.continueReply,
+            replayLastText: connected.replayLastText,
             failure: connected.failure,
             runtimeId: pairing.runtimeId,
             [Symbol.asyncDispose]: () => owned.disposeAsync(),
@@ -172,6 +174,8 @@ export async function connectFakeAgentDaemon(options: {
         signal.removeEventListener("abort", abort);
     }
     return {
+        continueReply: daemon.continueReply,
+        replayLastText: daemon.replayLastText,
         failure: failed.promise,
         [Symbol.asyncDispose]: async () => {
             stop();
