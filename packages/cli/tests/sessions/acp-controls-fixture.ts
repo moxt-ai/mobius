@@ -1,0 +1,90 @@
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { AgentRuntimeManager } from "../../src/acp/agent-runtime-manager.ts";
+import { fakeAgent, RecordingObserver } from "./acp-feature-fixture.ts";
+
+/** Owns an isolated ACP process and its disposable native files. */
+export async function createControlledSession() {
+    const directory = await mkdtemp(join(tmpdir(), "mobius-acp-controls-"));
+    const observer = new RecordingObserver();
+    const manager = new AgentRuntimeManager(observer);
+    const cancellation = new AbortController();
+    try {
+        const shared = join(directory, "shared");
+        await mkdir(shared);
+        return {
+            manager,
+            observer,
+            request: {
+                additionalDirectories: [shared],
+                agent: fakeAgent([], { MOBIUS_FAKE_ACP_STATE_DIRECTORY: directory }),
+                cwd: directory,
+                sessionId: "controls-session",
+                signal: AbortSignal.any([cancellation.signal, AbortSignal.timeout(10_000)]),
+            },
+            [Symbol.asyncDispose]: async () => {
+                cancellation.abort();
+                try {
+                    await manager.close();
+                } finally {
+                    await rm(directory, { recursive: true, force: true });
+                }
+            },
+        };
+    } catch (cause) {
+        cancellation.abort();
+        try {
+            await manager.close();
+        } finally {
+            await rm(directory, { recursive: true, force: true });
+        }
+        throw cause;
+    }
+}
+
+/** Drive the controlled peer's permission/form dialogue through production ports. */
+export async function completeAcpControls(session: Awaited<ReturnType<typeof createControlledSession>>) {
+    const text: string[] = [];
+    const activityContent: string[] = [];
+    const running = session.manager.runPrompt({
+        ...session.request,
+        commandId: "controls-command",
+        prompt: "exercise ACP controls",
+        images: [{ data: "aW1hZ2U=", mimeType: "image/png", name: "preview.png" }],
+        resources: [
+            {
+                type: "embedded",
+                mimeType: "text/plain",
+                name: "context.txt",
+                text: "supporting context",
+                uri: "mobius://upload/context.txt",
+            },
+        ],
+        onText: async (chunk) => {
+            text.push(chunk);
+        },
+        onActivity: async (activity) => {
+            activityContent.push(...activity.content.map((item) => item.type));
+        },
+    });
+    // Observe startup failure while waiting for an interaction, rather than timing out later.
+    const finishedBeforeInteraction = running.then(() => {
+        throw new Error("The controlled ACP prompt completed before its expected interaction");
+    });
+    const permission = await Promise.race([session.observer.permissionArrived.promise, finishedBeforeInteraction]);
+    await session.manager.respondPermission({
+        interactionId: permission.interactionId,
+        optionId: "allow-once",
+        outcome: "selected",
+        sessionId: session.request.sessionId,
+    });
+    const elicitation = await Promise.race([session.observer.elicitationArrived.promise, finishedBeforeInteraction]);
+    await session.manager.respondElicitation({
+        action: "accept",
+        content: JSON.stringify({ branch: "main" }),
+        interactionId: elicitation.interactionId,
+        sessionId: session.request.sessionId,
+    });
+    return { permission, elicitation, completed: await running, text: text.join(""), activityContent };
+}
