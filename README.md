@@ -1,113 +1,66 @@
 # Mobius
 
-Mobius lets remote clients securely use Agents running on a user's machine and
-follow their conversations across browser and network connections. Morty (Mobius
-Chat) is one application built on it; Standalone provides access without the
-Platform control plane.
+## Why Mobius exists
 
-## Product responsibilities
+People already do useful work with coding Agents on their own computers. Their
+projects, tools and ongoing conversations are there, but checking progress or giving
+the next instruction should not require sitting in front of that computer.
 
-| Capability | Required user-visible outcome |
+Mobius makes those Agents available remotely. Users can keep working with their
+existing projects and conversations from another device. Developers building Agent
+applications can offer that experience without solving remote access and conversation
+continuity separately for every supported Agent. Users can also use Mobius on its
+own; Morty is one application built on it.
+
+## Functional value
+
+| User need | What Mobius should make possible |
 | --- | --- |
-| Pair and discover Runtimes | Users can identify their machines, installed Agents and availability. |
-| Discover Agent capabilities | Clients offer supported operations and settings; unsupported operations fail explicitly. |
-| Operate native sessions | Users can create or resume a conversation, submit or queue prompts, cancel execution and answer Agent interactions where supported. |
-| Follow current execution | Authorized clients can observe the same conversation, including prompts submitted from another browser and in-progress output. |
-| Read history and files | Users can recover available history and view authorized files, including images, without obtaining arbitrary access to the machine. |
-| Optional Recording | Operators can explicitly enable cloud history retention with a defined scope and policy. |
+| Work away from my computer | Connect my machine and use its Agents remotely, with access to the projects and tools already there. |
+| Continue work already started | Find and resume an available conversation instead of explaining the task again in a new chat. |
+| Stay in control of ongoing work | See progress, give the next instruction, queue follow-up work, stop work or answer a request for permission. |
+| Move between devices | Open the same conversation elsewhere and catch up on both my instructions and the Agent's output. |
+| Use the results | Read available history and view authorized files and images produced by the Agent. |
+| Choose cloud history retention | Use local history, or explicitly enable cloud recording when history needs to remain accessible without the local machine. |
 
-Morty owns Bots, user access and application presentation. Mobius owns remote
-connectivity, operation routing, Agent adaptation and synchronization. Agents own
-model execution, tool execution and native conversation history. The local execution
-boundary authorizes local side effects; application authorization cannot bypass it.
+These are product requirements. Availability depends on the selected Agent and
+configuration; unsupported operations must be clear to the user. Implementation and
+[verification evidence](TESTING.md) determine which scenarios are supported today.
 
-The requirements below are design constraints. They are not a claim that every Agent
-or failure scenario is already covered. Compatibility claims require executable
-boundary scenarios; see [Testing](TESTING.md).
+## Non-functional value: speed
 
-## Non-functional requirements: speed
+- **Get back to work quickly:** opening a conversation should show useful recent
+  content promptly, even after days of work.
+- **Follow work as it happens:** progress and replies should appear promptly as the
+  Agent produces them, without noticeable extra waiting introduced by remote access.
+- **Resume quickly after interruption:** switching devices or reconnecting should
+  bring the user up to date without a long reload.
 
-- **Open quickly:** show recent messages and current execution without waiting for
-  the full session history. Load older messages on demand.
-- **Stream promptly:** forward and render Agent output as it arrives. History reads
-  and slow subscribers must not delay the active conversation or other observers.
-- **Recover quickly:** restore the current-turn view after reconnect without waiting
-  for a full history replay. Allow enough current-turn memory to make this simple.
-
-Measure first-content latency, Agent-to-browser update delay and reconnect recovery
-latency separately from model generation time. Numeric budgets require measurements;
-this document does not claim unverified latency targets.
-
-## Why ACP needs a remote-session layer
-
-ACP provides the client-to-Agent interaction boundary used by the adapters. Mobius
-should reuse Agent operations and capabilities expressed there. A working ACP
-connection alone does not establish Mobius's remote identity, pairing, tenant and
-file authorization, multiple-subscriber delivery, reconnect recovery, retry safety
-or optional cloud retention guarantees.
-
-Mobius must supply those guarantees at its own boundaries and accommodate differences
-between Agent implementations. Agent-specific protocol and history behavior belongs
-in adapters. Do not introduce a parallel Agent operation model where the existing
-Agent protocol already provides the required semantics.
-
-## Why the current turn needs an explicit owner
-
-During a turn, accepted prompts, streamed text, tool progress and pending interactions
-change before the Agent's native history necessarily contains a complete result.
-Execution completion, event delivery and history visibility are separate facts.
-
-The daemon owns the authoritative view of current execution; browsers display that
-view. A new or reconnecting observer must recover the content produced before it
-joined and continue receiving updates without a gap or duplicate presentation. It
-must see prompts accepted from other clients, and stale responses from a previously
-selected session must not overwrite the newly selected conversation.
-
-For example, if one browser submits a prompt, another joins midway and the first
-reconnects after completion, both must recover the same accepted prompt and result.
-A delayed history read must not erase already displayed output. Cancellation racing
-with completion must resolve to a coherent terminal outcome.
-
-Recovery content must remain available until the authoritative history source can
-take over, or recovery expiry must be explicitly reported. Keeping current-turn
-content in memory is acceptable; reconstructing it independently in every browser
-must not become a competing source of truth. The representation, sequence numbers,
-acknowledgements and handoff algorithm belong in executable code, not a second
-state machine written in this README.
+Judge speed by time to useful content, output delay and time to resume interacting.
+Model generation time is separate from delay introduced by Mobius.
 
 ## Data ownership and recovery
 
-The following describes current behavior, including its limitations. It does not
-by itself justify adding storage or promise durable execution recovery:
+Users must know when their machine needs to be online and where conversation content
+is retained. Without cloud recording, history depends on the connected machine and
+what its Agent has saved. Optional cloud recording provides history according to the
+configured retention policy; it does not keep an offline Agent running.
 
-- The local daemon persists pairing credentials, connection preferences, ACP session
-  metadata and native-session associations, and a bounded event outbox. Event payloads
-  can contain conversation content; disabling cloud Recording does not disable this
-  local persistence. The outbox supports delivery recovery, not a complete history archive.
-- Current execution and queued prompts are held in memory. Restarting the daemon does
-  not durably resume a running turn or its prompt queue. Persisted session metadata and
-  pending outbox events survive a restart; event delivery recovery must not be presented
-  as execution recovery.
-- Without Recording, browsing native history requires the local Runtime and the Agent's
-  saved history. With the optional Recording Worker installed and recording enabled for
-  an App or Project, cloud history is available according to that recording policy.
-- Bounded local diagnostics are for troubleshooting and must not log prompt text or
-  session history. This log restriction is separate from the outbox's payload storage.
+The current product also stores session metadata and pending delivery content locally,
+so disabling cloud recording does not mean that nothing is written on the machine.
+Restarting the daemon does not automatically resume running work or queued prompts.
+See [current persistence behavior](DEVELOPMENT.md#current-persistence-behavior) for the
+technical disclosure and implementation references.
 
-See the [implementation map](DEVELOPMENT.md) for storage and delivery owners. Exact
-schemas, acknowledgement rules and capacity limits belong in code and executable tests.
+## Product boundary
 
-## Workspace
+Mobius provides remote access to existing Agents. It does not replace their model,
+tools or native work environment, and it cannot make an unsupported Agent operation
+available merely by exposing it in a client.
 
-- `packages/cli`: local daemon, pairing, agent discovery, and ACP session execution.
-- `packages/protocol`: messages shared across the daemon, Worker, and SDK.
-- `packages/mobius-sdk`: client and server API used by Mobius Chat.
-- `packages/mini-client`: private stateful CLI for exercising a local Platform Worker and local Runtime.
-- `packages/relay-core`: runtime and session behavior, storage, and protocol boundaries.
-- `packages/relay-cloudflare-platform`: Cloudflare Worker and local Worker integration tests.
-- `packages/relay-cloudflare-standalone`: accountless Cloudflare Worker with one Project per pairing workflow and integration tests.
-- `packages/recording-cloudflare`: optional cloud history service.
-- `packages/cli/tests`: daemon boundary scenarios and real Agent compatibility tests.
+[Morty (Mobius Chat)](https://github.com/moxt-ai/morty) provides the ready-to-use Bot
+and browser chat experience. Applications remain responsible for deciding who may
+access their conversations; local actions must still be authorized on the machine.
 
 ## Local development
 
