@@ -34,23 +34,3 @@ accounts. Missing required executables fail instead of falling back to fake Agen
 
 [Package scripts](package.json) and [CI](.github/workflows/ci.yml) define execution.
 Follow [AGENTS.md](AGENTS.md) for acceptance boundaries and resource cleanup.
-
-## Proving the product contract
-
-Use the [product requirements](README.md#functional-value) to select
-observable scenarios. For current-turn changes, relevant cases include a second
-subscriber joining mid-turn, another client's accepted prompt, reconnect across
-completion, delayed history handoff, session switching and cancellation races.
-Assert recovered content and outcomes rather than internal batching or callback counts.
-
-Controlled peers make ordering and faults reproducible; real-Agent scenarios prove
-adapter behavior. Neither alone establishes the entire remote user journey. A passing
-happy path does not establish restart recovery or history completeness. Report the
-boundary, Agent and failure conditions actually exercised, and track unmet requirements
-as gaps rather than documenting them as implemented guarantees.
-
-For streaming performance, exercise a growing current turn over the public transport.
-Verify that a continuously subscribed client receives changes without repeated full-turn
-payloads and can reconstruct the complete result. Observe transmitted volume across
-increasing output sizes, separating normal updates from initial or reconnect recovery;
-do not prescribe internal callback counts, packet boundaries or timing tolerances.
