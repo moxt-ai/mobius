@@ -1,0 +1,86 @@
+name: Markdown PR policy
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, edited, ready_for_review]
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: write
+
+jobs:
+  enforce:
+    name: Enforce Markdown PR policy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Never check out or execute the PR's code: this policy runs from the base branch.
+      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const repo = context.repo;
+            const statusContext = 'markdown-pr-policy';
+            const publish = (sha, state, description) => github.rest.repos.createCommitStatus({
+              ...repo, sha, state, description, context: statusContext,
+              target_url: `${context.serverUrl}/${repo.owner}/${repo.repo}/actions/runs/${context.runId}`,
+            });
+
+            if (context.eventName === 'merge_group') {
+              // Admission requires this status on each PR head. A queue may combine
+              // separate code and documentation PRs; do not classify their union.
+              await publish(context.payload.merge_group.head_sha, 'success',
+                'Each queued PR passed the Markdown isolation policy before admission.');
+              return;
+            }
+
+            const pulls = context.payload.pull_request
+              ? [context.payload.pull_request]
+              : await github.paginate(github.rest.pulls.list, { ...repo, state: 'open', per_page: 100 });
+            let failed = false;
+            for (const pull of pulls) {
+              const { data: current } = await github.rest.pulls.get({ ...repo, pull_number: pull.number });
+              const sha = current.head.sha;
+              await publish(sha, 'pending', 'Checking Markdown isolation.');
+              try {
+                const files = await github.paginate(github.rest.pulls.listFiles, {
+                  ...repo, pull_number: pull.number, per_page: 100,
+                });
+                if (files.length !== current.changed_files) {
+                  throw new Error('Cannot verify the complete changed-file list; split this PR.');
+                }
+                const { data: latest } = await github.rest.pulls.get({ ...repo, pull_number: pull.number });
+                if (latest.head.sha !== sha || latest.base.sha !== current.base.sha) {
+                  throw new Error('PR changed during inspection; rerun the policy.');
+                }
+                const paths = files.flatMap(file => file.previous_filename
+                  ? [file.filename, file.previous_filename] : [file.filename]);
+                const isMarkdown = path => /\.(md|markdown|mdx)$/i.test(path);
+                const markdown = paths.filter(isMarkdown);
+                const other = paths.filter(path => !isMarkdown(path));
+                const mixed = markdown.length > 0 && other.length > 0;
+                const description = mixed
+                  ? 'Split Markdown and non-Markdown changes into separate PRs.'
+                  : markdown.length > 0
+                    ? 'Markdown-only PR; taowen-paraflow review is recommended, not required.'
+                    : 'No Markdown changes.';
+                await publish(sha, mixed ? 'failure' : 'success', description);
+                core.summary.addHeading(`PR #${pull.number}`).addRaw(description).addEOL();
+                if (mixed) {
+                  core.summary.addTable([
+                    ['Markdown files', 'Other files'],
+                    [String(markdown.length), String(other.length)],
+                  ]);
+                  failed = true;
+                }
+              } catch (error) {
+                await publish(sha, 'error', 'Unable to verify Markdown isolation; inspect the workflow run.');
+                core.error(error);
+                failed = true;
+              }
+            }
+            await core.summary.write();
+            if (failed) core.setFailed('Markdown isolation failed for one or more PRs.');
