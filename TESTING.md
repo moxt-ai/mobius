@@ -36,3 +36,7 @@ compatibility. Real Agent tests use controlled LLM providers without production
 accounts. Missing required executables fail instead of falling back to fake Agents.
 
 Follow [AGENTS.md](AGENTS.md) for acceptance boundaries and resource cleanup.
+
+Record manual verification results in the relevant pull request and attach
+screenshots there. Do not commit one-off reports or screenshots to the repository.
+Keep durable behavioral guarantees in executable tests.
