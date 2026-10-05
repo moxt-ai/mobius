@@ -1,3 +1,11 @@
+---
+metadata:
+  change-policy: >-
+    Do not modify this Markdown file together with source code or other non-Markdown
+    files. Submit changes in a separate documentation-only pull request for review
+    and approval. The recommended reviewer is taowen-paraflow.
+---
+
 # Mobius TypeScript SDK
 
 The SDK connects browser and server clients to a Mobius Relay. It supports Runtime pairing, Runtime discovery, native Agent sessions, browser credentials, and the live Runtime channel. Native history is supplied by the local Runtime. Deployments can also install and enable optional cloud Recording; clients must respect the configured history source rather than assume that history is always local or always retained. See [data ownership and recovery](../../README.md#data-ownership-and-recovery).

@@ -1,3 +1,11 @@
+---
+metadata:
+  change-policy: >-
+    Do not modify this Markdown file together with source code or other non-Markdown
+    files. Submit changes in a separate documentation-only pull request for review
+    and approval. The recommended reviewer is taowen-paraflow.
+---
+
 # Mobius mini-client
 
 This private developer tool drives the Mobius Platform and a local Mobius CLI without Morty. It creates one isolated Platform Project, pairs the checkout's CLI as a Runtime, and persists only the identifiers needed by later commands.

@@ -1,3 +1,11 @@
+---
+metadata:
+  change-policy: >-
+    Do not modify this Markdown file together with source code or other non-Markdown
+    files. Submit changes in a separate documentation-only pull request for review
+    and approval. The recommended reviewer is taowen-paraflow.
+---
+
 # Engineering Rules
 
 These rules apply to the entire repository. See [DEVELOPMENT.md](./DEVELOPMENT.md) for implementation guidance and [TESTING.md](./TESTING.md) for delivery and testing guidance.
@@ -42,6 +50,8 @@ Make illegal states unrepresentable.
 
 ## Documentation changes
 
+- Every Markdown file must include `metadata.change-policy` in its YAML frontmatter,
+  stating that changes require a separate documentation-only PR for review and approval.
 - Change Markdown files in documentation-only pull requests, separate from code,
   configuration, dependencies, and submodule updates. This includes additions,
   deletions, and renames of `.md`, `.markdown`, and `.mdx` files.
