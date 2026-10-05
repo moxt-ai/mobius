@@ -40,6 +40,19 @@ Make illegal states unrepresentable.
 - Preserve the original cause when translating an error, and expose only sanitized messages across trust boundaries.
 - Keep cancellation, timeout, retryable, and terminal failures distinct.
 
+## Documentation changes
+
+- Change Markdown files in documentation-only pull requests, separate from code,
+  configuration, dependencies, and submodule updates. This includes additions,
+  deletions, and renames of `.md`, `.markdown`, and `.mdx` files.
+- Review by `taowen-paraflow` is recommended for Markdown changes, not required.
+- Documentation defines product intent, constraints, and operational guidance.
+  Do not maintain implementation maps, source-file inventories, or copies of
+  protocol fields and state machines in Markdown. Make source organization,
+  names, types, and focused inline comments explain the implementation.
+- When changing an existing documented constraint, propose that change separately
+  before implementing behavior that depends on it.
+
 ## Delivery
 
 - Deliver behavior as the smallest user-runnable vertical slice through input, logic, and observable output.
