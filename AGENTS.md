@@ -50,8 +50,9 @@ Make illegal states unrepresentable.
 
 ## Documentation changes
 
-- Every Markdown file must include `metadata.change-policy` in its YAML frontmatter,
-  stating that changes require a separate documentation-only PR for review and approval.
+- Every Markdown file except `SKILL.md` must include `metadata.change-policy` in its
+  YAML frontmatter, stating that changes require a separate documentation-only PR
+  for review and approval. Skill entrypoints retain their existing frontmatter.
 - Change Markdown files in documentation-only pull requests, separate from code,
   configuration, dependencies, and submodule updates. This includes additions,
   deletions, and renames of `.md`, `.markdown`, and `.mdx` files.
