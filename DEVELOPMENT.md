@@ -21,29 +21,6 @@ view; clients must recover prior content and continue receiving updates without 
 duplication or output disappearing during history handoff. The concrete transitions
 and recovery algorithm belong in code and boundary tests.
 
-## Implementation map
-
-| Concern | Authoritative implementation |
-| --- | --- |
-| Wire events and decoding | [session events](packages/protocol/src/session-events.ts), [messages](packages/protocol/src/messages.ts) |
-| Recovery response shapes | [native sessions](packages/protocol/src/native-sessions.ts) |
-| Current turn accumulation | [active turn](packages/cli/src/daemon-active-turn.ts) |
-| Prompt admission, running turns and completed recovery retention | [turn registry](packages/cli/src/daemon-turn-registry.ts) |
-| Local session metadata and native-session associations | [session store](packages/cli/src/acp/session-store.ts), [schema](packages/cli/src/schema/acp-session-store/) |
-| Live broadcast | [daemon publisher](packages/cli/src/relay-connection/session-event-publisher.ts), [Relay fan-out](packages/relay-core/src/service/channel/live-session-event-relay.ts) |
-| Best-effort recording | [independent recording consumer](packages/relay-core/src/service/channel/best-effort-recording.ts) |
-| Optional cloud recording | [Recording Worker](packages/recording-cloudflare/src/), [Worker scenarios](packages/recording-cloudflare/test/worker.integration.test.ts) |
-| Ordered publication | [event coalescer](packages/cli/src/relay-connection/coalescing-agent-event-publisher.ts) |
-| Native history and recovery pages | [live history](packages/cli/src/native-sessions/live-history-page.ts) |
-| Agent processes and native-operation exclusion | [runtime manager](packages/cli/src/acp/agent-runtime-manager.ts), [query processes](packages/cli/src/acp/agent-query-processes.ts) |
-| SDK event delivery | [client](packages/mobius-sdk/src/client.ts) |
-| Deployment and migrations | [workflows](.github/workflows/), [Drizzle configurations](drizzle/) |
-
-State transitions and retention limits belong in these implementations. Observable
-contracts belong in [daemon scenarios](packages/cli/tests/),
-[SDK scenarios](packages/mobius-sdk/tests/) and hosting-package tests. Do not copy
-field lists or lifecycle algorithms into this guide.
-
 ## Database operations
 
 Generate migrations using the pinned `db:generate:*` commands in
@@ -75,18 +52,5 @@ by itself justify adding storage or promise durable execution recovery:
 - Bounded local diagnostics are for troubleshooting and must not log prompt text or
   session history. Diagnostics must not become a replacement event archive.
 
-See the implementation map above for storage and delivery owners. Exact
-schemas and capacity limits belong in code and executable tests.
-
-
-## Workspace
-
-- `packages/cli`: local daemon, pairing, agent discovery, and ACP session execution.
-- `packages/protocol`: messages shared across the daemon, Worker, and SDK.
-- `packages/mobius-sdk`: client and server API used by Morty.
-- `packages/mini-client`: private stateful CLI for exercising a local Platform Worker and local Runtime.
-- `packages/relay-core`: runtime and session behavior, storage, and protocol boundaries.
-- `packages/relay-cloudflare-platform`: Cloudflare Worker and local Worker integration tests.
-- `packages/relay-cloudflare-standalone`: accountless Cloudflare Worker with one Project per pairing workflow and integration tests.
-- `packages/recording-cloudflare`: optional cloud history service.
-- `packages/cli/tests`: daemon boundary scenarios and real Agent compatibility tests.
+Exact schemas, state transitions, and capacity limits belong in code and executable
+tests; do not duplicate them in this guide.

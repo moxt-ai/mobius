@@ -10,27 +10,21 @@
 | `pnpm test:agent-daemon:real` | Real daemon, Agent executables and production adapters |
 | `pnpm build` | Bundles without deployment |
 
-## Ownership
+## Test boundaries
 
-- [CLI tests](packages/cli/tests/): `agents/` proves real executable compatibility;
-  `sessions/` covers session behavior and protocol faults; `runtime/` covers
-  process, discovery, installation, connection and local security boundaries.
-  Controlled ACP scenarios live beside their owners in `sessions/fixtures/` and
-  `runtime/fixtures/`; they run directly as CLI test subprocesses without a separate
-  package or build. `support/` contains launchers, controlled LLM providers and
-  shared process I/O helpers.
-  [Prerequisites](packages/cli/tests/README.md) describe executable setup.
-- [Shared test support](packages/test-support/src/): real local Platform/Cloudflare
-  infrastructure and the stateful fake daemon exposed through package exports.
-  It does not start the production CLI or import controlled ACP peers.
-- Web / Chat consumer suites use the shared fake daemon over real transports and
-  real product services. Consumers inject their own reply scenarios.
-- [Protocol](packages/protocol/tests/) and [SDK](packages/mobius-sdk/tests/) own
-  their wire contracts. Hosting and Web packages own their integration scenarios.
+- Real Agent compatibility scenarios use the production daemon, adapter, and Agent
+  executable. See [prerequisites](packages/cli/tests/README.md) for executable setup.
+- Controlled daemon scenarios exercise protocol faults, lifecycle races, and local
+  security boundaries through the production daemon. Keep each controlled peer
+  beside the scenario that needs it.
+- Morty and other Web consumer suites use a stateful fake daemon over real
+  transports and product services. They must not depend on controlled ACP peers
+  or start the production daemon.
+- Protocol and SDK scenarios exercise public wire and API contracts. Hosting
+  integration scenarios enter through production service boundaries.
 
 Controlled ACP peers test explicit protocol faults; they do not establish Agent
 compatibility. Real Agent tests use controlled LLM providers without production
 accounts. Missing required executables fail instead of falling back to fake Agents.
 
-[Package scripts](package.json) and [CI](.github/workflows/ci.yml) define execution.
 Follow [AGENTS.md](AGENTS.md) for acceptance boundaries and resource cleanup.
