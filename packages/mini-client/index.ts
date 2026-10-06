@@ -22,6 +22,7 @@ import {
     MobiusPageRequest,
     MobiusRecordingPolicy,
     MobiusRuntimePairingRequest,
+    MobiusSessionImportBinding,
     StaticMobiusCredentialProvider,
     WsTransport,
 } from "@moxt-ai/mobius-sdk/server";
@@ -307,6 +308,79 @@ async function runtimeCommand(directory: string): Promise<void> {
     }
 }
 
+async function allEventsV2(service: MobiusClient, sessionId: string): Promise<readonly SessionEventV2[]> {
+    let cursor = "";
+    let events: readonly SessionEventV2[] = [];
+    do {
+        const page = await service.events.listV2(sessionId, new MobiusPageRequest(100, cursor), operationSignal());
+        events = [...page.events, ...events];
+        cursor = page.nextCursor ?? "";
+    } while (cursor.length > 0);
+    return events;
+}
+
+function copiedSessionBinding(state: MiniClientState, source: MiniClientSession): MobiusSessionImportBinding {
+    return new MobiusSessionImportBinding(identifier("binding"), state.runtimeId, source.agentId, source.directoryId);
+}
+
+async function copyEventLogCommand(
+    directory: string,
+    flags: ReadonlyMap<string, string>,
+    operation: "import" | "fork",
+): Promise<void> {
+    const state = await readState(directory);
+    requireOnline(state);
+    const source = sessionFromState(state, requireFlag(flags, "session"));
+    const connection = client(state);
+    try {
+        const service = connection.service;
+        const sourceEvents = await allEventsV2(service, source.sessionId);
+        const throughEventId =
+            operation === "fork" ? requireFlag(flags, "through-event") : sourceEvents.at(-1)?.eventId;
+        if (throughEventId === undefined) {
+            throw new MiniClientError("event_log_empty", "The source V2 Session event log is empty");
+        }
+        const target =
+            operation === "import"
+                ? await service.sessions.importV2(
+                      await service.sessions.exportV2(source.sessionId, operationSignal()),
+                      copiedSessionBinding(state, source),
+                      operationSignal(),
+                  )
+                : await service.sessions.forkRecordedV2(
+                      source.sessionId,
+                      { targetBinding: copiedSessionBinding(state, source), throughEventId },
+                      operationSignal(),
+                  );
+        const boundary = sourceEvents.findIndex((event) => event.eventId === throughEventId);
+        if (boundary === -1) {
+            throw new MiniClientError("event_not_found", "The selected V2 fork boundary is unavailable");
+        }
+        const expected = operation === "import" ? sourceEvents : sourceEvents.slice(0, boundary + 1);
+        const copied = await allEventsV2(service, target.sessionId);
+        const provenanceKind = operation === "import" ? "imported" : "forked";
+        const matches =
+            copied.length === expected.length &&
+            copied.every(
+                (event, index) =>
+                    JSON.stringify(event.payload) === JSON.stringify(expected[index]?.payload) &&
+                    event.sessionId === target.sessionId &&
+                    event.eventId !== expected[index]?.eventId &&
+                    event.provenance.kind === provenanceKind &&
+                    event.provenance.sourceSessionId === source.sessionId &&
+                    event.provenance.sourceEventId === expected[index]?.eventId &&
+                    event.provenance.sourcePosition === expected[index]?.position,
+            );
+        if (!matches) {
+            throw new MiniClientError("event_log_mismatch", "The copied V2 event log does not match its source");
+        }
+        await writeState(directory, replaceSession(state, { ...source, sessionId: target.sessionId, turns: [] }));
+        output({ count: copied.length, operation, sessionId: target.sessionId, verified: true });
+    } finally {
+        connection.close();
+    }
+}
+
 async function createSessionCommand(directory: string, flags: ReadonlyMap<string, string>): Promise<void> {
     const state = await readState(directory);
     requireOnline(state);
@@ -528,11 +602,8 @@ async function compactCommand(directory: string, flags: ReadonlyMap<string, stri
         const observer: MobiusLiveSessionEventObserverV2 = {
             reconcile: () => Promise.resolve(),
             receive: (event) => {
-                if (
-                    event.payload.kind === "acp.session.update" &&
-                    event.payload.update.sessionUpdate === "available_commands_update"
-                ) {
-                    advertisedCommands = event.payload.update.availableCommands.map((command) => ({
+                if (event.type === "acp" && event.payload.sessionUpdate === "available_commands_update") {
+                    advertisedCommands = event.payload.availableCommands.map((command) => ({
                         description: command.description,
                         inputHint: command.input?.hint ?? "",
                         name: command.name,
@@ -652,10 +723,14 @@ async function nativeEventsV2(
 }
 
 function terminalV2(event: SessionEventV2): boolean {
+    if (event.type !== "lifecycle-metadata") {
+        return false;
+    }
+    const payload = event.payload;
     return (
-        event.payload.kind === "prompt.completed" ||
-        event.payload.kind === "prompt.failed" ||
-        event.payload.kind === "prompt.failed-before-start"
+        payload.kind === "prompt.completed" ||
+        payload.kind === "prompt.failed" ||
+        payload.kind === "prompt.failed-before-start"
     );
 }
 
@@ -702,102 +777,6 @@ async function getCommand(directory: string, flags: ReadonlyMap<string, string>)
     }
 }
 
-function eventCommandIdV2(event: SessionEventV2): string | null {
-    return "commandId" in event.payload ? event.payload.commandId : null;
-}
-
-async function verifyEventLogCommand(directory: string, flags: ReadonlyMap<string, string>): Promise<void> {
-    const state = await readState(directory);
-    requireOnline(state);
-    const session = sessionFromState(state, requireFlag(flags, "session"));
-    const prompt = requireFlag(flags, "prompt");
-    const authority = client(state);
-    let execution: ClientConnection | undefined;
-    let subscription: MobiusLiveEventSubscriptionV2 | undefined;
-    try {
-        const configuration = selections(
-            (await loadSession(authority.service, state.runtimeId, session)).configOptions,
-        );
-        execution = await sessionClient(state, session);
-        const liveEvents: SessionEventV2[] = [];
-        const observer: MobiusLiveSessionEventObserverV2 = {
-            reconcile: () => Promise.resolve(),
-            receive: async (event) => {
-                liveEvents.push(event);
-                return !terminalV2(event);
-            },
-        };
-        subscription = await execution.service.events.subscribeLiveV2(session.sessionId, observer, shutdown.signal);
-        const turn = await execution.service.turns.submit(
-            session.sessionId,
-            {
-                additionalDirectoryIds: session.additionalDirectoryIds,
-                content: prompt,
-                disposition: SessionPromptDisposition.Reject,
-                idempotencyKey: identifier("verify-event-log"),
-                images: [],
-                resources: [],
-                sessionConfigurations: configuration,
-                targetCommandId: "",
-            },
-            operationSignal(),
-        );
-        await subscription.completed;
-        const start = liveEvents.findIndex(
-            (event) => event.payload.kind === "prompt.requested" && event.payload.commandId === turn.turnId,
-        );
-        const end = liveEvents.findIndex(
-            (event, index) => index >= start && terminalV2(event) && eventCommandIdV2(event) === turn.turnId,
-        );
-        if (start < 0 || end < start) {
-            throw new MiniClientError(
-                "event_log_mismatch",
-                "The live V2 event log did not contain the complete submitted prompt operation",
-            );
-        }
-        const liveRange = liveEvents.slice(start, end + 1);
-        const eventIds = new Set<string>();
-        let previousPosition: bigint | null = null;
-        for (const event of liveRange) {
-            const position = BigInt(event.position);
-            if (eventIds.has(event.eventId) || (previousPosition !== null && position <= previousPosition)) {
-                throw new MiniClientError(
-                    "event_log_mismatch",
-                    "The live V2 event log contains a duplicate or reordered record",
-                );
-            }
-            eventIds.add(event.eventId);
-            previousPosition = position;
-        }
-        const recovery = await nativeEventsV2(execution.service, session, shutdown.signal);
-        const firstPosition = BigInt(liveRange[0]?.position ?? "0");
-        const lastPosition = BigInt(liveRange.at(-1)?.position ?? "0");
-        const historyRange = recovery.history.events.filter((event) => {
-            const position = BigInt(event.position);
-            return position >= firstPosition && position <= lastPosition;
-        });
-        if (JSON.stringify(historyRange) !== JSON.stringify(liveRange)) {
-            throw new MiniClientError(
-                "event_log_mismatch",
-                "The live and historical V2 event records are not identical",
-            );
-        }
-        const updated = { ...session, turns: [...session.turns, { prompt, turnId: turn.turnId }] };
-        await writeState(directory, replaceSession(state, updated));
-        output({
-            count: liveRange.length,
-            firstPosition: liveRange[0]?.position ?? "",
-            lastPosition: liveRange.at(-1)?.position ?? "",
-            sessionId: session.sessionId,
-            verified: true,
-        });
-    } finally {
-        subscription?.close();
-        execution?.close();
-        authority.close();
-    }
-}
-
 type MiniClientCommand =
     | "cancel-turn"
     | "compact"
@@ -805,15 +784,16 @@ type MiniClientCommand =
     | "create-session"
     | "get"
     | "get-agent-configuration"
+    | "import-event-log"
     | "list-runtimes"
     | "list-sessions"
+    | "fork-event-log"
     | "send-prompt"
     | "start"
     | "status"
     | "steer"
     | "stop"
-    | "update-agent-configuration"
-    | "verify-event-log";
+    | "update-agent-configuration";
 
 function commandFlags(command: Command): ReadonlyMap<string, string> {
     const flags = new Map<string, string>();
@@ -883,8 +863,11 @@ async function runCommand(program: Command, command: Command, name: MiniClientCo
         case "get":
             await getCommand(directory, flags);
             break;
-        case "verify-event-log":
-            await verifyEventLogCommand(directory, flags);
+        case "import-event-log":
+            await copyEventLogCommand(directory, flags, "import");
+            break;
+        case "fork-event-log":
+            await copyEventLogCommand(directory, flags, "fork");
             break;
     }
 }
@@ -938,9 +921,13 @@ function createProgram(): Command {
     add("get", "get raw V2 Session events and optionally follow updates")
         .option("--session <id>", "Session identifier")
         .option("--follow", "follow Session updates");
-    add("verify-event-log", "submit a prompt and verify exact V2 live/history parity")
-        .option("--session <id>", "Session identifier")
-        .option("--prompt <text>", "prompt text");
+    add("import-event-log", "import and verify a V2 Session event log").option(
+        "--session <id>",
+        "source Session identifier",
+    );
+    add("fork-event-log", "fork and verify a V2 Session event-log prefix")
+        .option("--session <id>", "source Session identifier")
+        .option("--through-event <id>", "inclusive source event identifier");
     return program;
 }
 

@@ -1,5 +1,11 @@
 import { z } from "zod";
 import { ProtocolMessageError } from "./codecs/messages.ts";
+import {
+    sessionElicitationRequestedEventSchema,
+    sessionElicitationResolvedEventSchema,
+    sessionPermissionRequestedEventSchema,
+    sessionPermissionResolvedEventSchema,
+} from "./control-messages.ts";
 import { identifierStringSchema as identifier } from "./identifier.ts";
 
 const MAX_EVENT_COUNT = 10_000;
@@ -359,8 +365,23 @@ export const acpSessionUpdateV2Schema = z.discriminatedUnion("sessionUpdate", [
 export type AcpSessionUpdateV2 = z.infer<typeof acpSessionUpdateV2Schema>;
 
 const lifecycleBase = { commandId: identifier };
-export const sessionEventPayloadV2Schema = z.discriminatedUnion("kind", [
-    z.strictObject({ kind: z.literal("acp.session.update"), update: acpSessionUpdateV2Schema }).readonly(),
+export const lifecycleMetadataV2Schema = z.discriminatedUnion("kind", [
+    z.strictObject({ kind: z.literal("session.queue.changed") }).readonly(),
+    z
+        .strictObject({ event: sessionPermissionRequestedEventSchema, kind: z.literal("session.permission.requested") })
+        .readonly(),
+    z
+        .strictObject({ event: sessionPermissionResolvedEventSchema, kind: z.literal("session.permission.resolved") })
+        .readonly(),
+    z
+        .strictObject({
+            event: sessionElicitationRequestedEventSchema,
+            kind: z.literal("session.elicitation.requested"),
+        })
+        .readonly(),
+    z
+        .strictObject({ event: sessionElicitationResolvedEventSchema, kind: z.literal("session.elicitation.resolved") })
+        .readonly(),
     z
         .strictObject({
             ...lifecycleBase,
@@ -390,6 +411,11 @@ export const sessionEventPayloadV2Schema = z.discriminatedUnion("kind", [
         })
         .readonly(),
 ]);
+export type LifecycleMetadataV2 = z.infer<typeof lifecycleMetadataV2Schema>;
+export const sessionEventPayloadV2Schema = z.discriminatedUnion("type", [
+    z.strictObject({ payload: acpSessionUpdateV2Schema, type: z.literal("acp") }).readonly(),
+    z.strictObject({ payload: lifecycleMetadataV2Schema, type: z.literal("lifecycle-metadata") }).readonly(),
+]);
 export type SessionEventPayloadV2 = z.infer<typeof sessionEventPayloadV2Schema>;
 const positionSchema = z.string().regex(/^(0|[1-9][0-9]*)$/);
 const provenanceSchema = z.discriminatedUnion("kind", [
@@ -411,17 +437,74 @@ const provenanceSchema = z.discriminatedUnion("kind", [
         })
         .readonly(),
 ]);
-export const sessionEventV2Schema = z
+const sessionEventFieldsV2 = {
+    eventId: identifier,
+    position: positionSchema,
+    provenance: provenanceSchema,
+    recordedAt: z.iso.datetime({ offset: true }),
+    sessionId: identifier,
+};
+export const sessionEventV2Schema = z.discriminatedUnion("type", [
+    z.strictObject({ ...sessionEventFieldsV2, payload: acpSessionUpdateV2Schema, type: z.literal("acp") }).readonly(),
+    z
+        .strictObject({
+            ...sessionEventFieldsV2,
+            payload: lifecycleMetadataV2Schema,
+            type: z.literal("lifecycle-metadata"),
+        })
+        .readonly(),
+]);
+export type SessionEventV2 = z.infer<typeof sessionEventV2Schema>;
+const sessionExportV2Schema = z
     .strictObject({
-        eventId: identifier,
-        payload: sessionEventPayloadV2Schema,
-        position: positionSchema,
-        provenance: provenanceSchema,
-        recordedAt: z.iso.datetime({ offset: true }),
+        binding: z
+            .strictObject({
+                bindingId: identifier,
+                runtimeId: identifier,
+            })
+            .readonly(),
+        events: z.array(sessionEventV2Schema).max(MAX_EVENT_COUNT).readonly(),
         sessionId: identifier,
+        truncated: z.boolean(),
+    })
+    .readonly()
+    .superRefine((session, context) => {
+        let previousPosition = 0n;
+        const eventIds = new Set<string>();
+        for (const [index, event] of session.events.entries()) {
+            if (event.sessionId !== session.sessionId) {
+                context.addIssue({
+                    code: "custom",
+                    message: "Exported event belongs to a different Session",
+                    path: ["events", index, "sessionId"],
+                });
+            }
+            const position = BigInt(event.position);
+            if (position <= previousPosition) {
+                context.addIssue({
+                    code: "custom",
+                    message: "Exported events are not in increasing position order",
+                    path: ["events", index, "position"],
+                });
+            }
+            if (eventIds.has(event.eventId)) {
+                context.addIssue({
+                    code: "custom",
+                    message: "Exported event identities are not unique",
+                    path: ["events", index, "eventId"],
+                });
+            }
+            previousPosition = position;
+            eventIds.add(event.eventId);
+        }
+    });
+export const mobiusSessionExportV2Schema = z
+    .strictObject({
+        formatVersion: z.literal("2"),
+        session: sessionExportV2Schema,
     })
     .readonly();
-export type SessionEventV2 = z.infer<typeof sessionEventV2Schema>;
+export type MobiusSessionExportV2 = z.infer<typeof mobiusSessionExportV2Schema>;
 export const sessionEventEnvelopeV2Schema = z
     .strictObject({ event: sessionEventV2Schema, kind: z.literal(SESSION_EVENT_V2_KIND) })
     .readonly();
@@ -483,6 +566,10 @@ function encode<T>(value: T, schema: z.ZodType<T>): string {
 }
 export const decodeSessionEventV2 = (value: unknown): SessionEventV2 => decode(value, sessionEventV2Schema);
 export const encodeSessionEventV2 = (value: SessionEventV2): string => encode(value, sessionEventV2Schema);
+export const decodeMobiusSessionExportV2 = (value: unknown): MobiusSessionExportV2 =>
+    decode(value, mobiusSessionExportV2Schema);
+export const encodeMobiusSessionExportV2 = (value: MobiusSessionExportV2): string =>
+    encode(value, mobiusSessionExportV2Schema);
 export const decodeSessionEventEnvelopeV2 = (value: unknown): SessionEventEnvelopeV2 =>
     decode(value, sessionEventEnvelopeV2Schema);
 export const encodeSessionEventEnvelopeV2 = (value: SessionEventEnvelopeV2): string =>

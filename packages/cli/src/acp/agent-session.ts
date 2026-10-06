@@ -831,6 +831,19 @@ export class AgentSession implements AcpClientHandler {
         if (this.#turn.running) {
             throw new AcpExecutionError("Another prompt is already running in this conversation", {}, "session_busy");
         }
+        switch (this.#sessionLoad.kind) {
+            case "not-requested":
+                break;
+            case "loaded":
+                this.#sessionLoad = { kind: "not-requested" };
+                break;
+            case "capturing":
+                throw new AcpExecutionError("Session history is still loading", {}, "session_busy");
+            default: {
+                const unexpected: never = this.#sessionLoad;
+                throw new Error(`Unexpected Session load state: ${JSON.stringify(unexpected)}`);
+            }
+        }
         const prompt = this.buildPrompt(options);
         if (this.#sessionTitle === null || this.#sessionTitle.length === 0) {
             this.#sessionTitle = truncate(options.prompt, 500);
@@ -1009,7 +1022,7 @@ export class AgentSession implements AcpClientHandler {
         this.assertNativeSession(notification.sessionId);
         const update = notification.update;
         const rawUpdate = decodeAcpSessionUpdateV2(JSON.stringify(update));
-        if (this.#sessionLoad.kind !== "not-requested") {
+        if (this.#sessionLoad.kind === "capturing") {
             await this.#sessionLoad.history.record(update, rawUpdate);
         } else {
             const onAcpUpdate = this.#getObserver().onAcpUpdate;

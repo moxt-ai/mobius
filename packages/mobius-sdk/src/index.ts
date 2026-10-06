@@ -13,6 +13,7 @@ export type {
     AgentSetting,
     AgentSettingsDiscoveredEvent,
     Interaction,
+    MobiusSessionExportV2,
     NativeEventPageRequestV2,
     NativeSessionCommand,
     NativeSessionEntry,

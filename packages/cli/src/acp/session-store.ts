@@ -66,24 +66,34 @@ export class DeletedAcpStoredSession extends AcpStoredSessionLookup {
 }
 
 export interface AcpSessionStore {
-    readonly appendEventV2: (event: SessionEventV2) => void;
+    readonly appendExecutingPromptEventV2: (event: SessionEventV2) => void;
+    readonly clearExecutingPromptEventsV2: (sessionId: string) => void;
     readonly close: () => void;
     readonly findNative: (agentId: string, nativeSessionId: string) => readonly AcpStoredSession[];
     readonly list: () => readonly AcpStoredSession[];
     readonly markDeleted: (agentId: string, nativeSessionId: string) => readonly string[];
     readonly read: (sessionId: string) => AcpStoredSessionLookup;
-    readonly readEventsV2: (sessionId: string) => readonly SessionEventV2[];
+    readonly readExecutingPromptEventsV2: (sessionId: string) => readonly SessionEventV2[];
     readonly remove: (sessionId: string) => void;
+    readonly startExecutingPromptEventsV2: (sessionId: string, events: readonly SessionEventV2[]) => void;
     readonly write: (session: AcpStoredSession) => void;
 }
 
 export class MemoryAcpSessionStore implements AcpSessionStore {
     readonly #sessions = new Map<string, AcpStoredSession>();
     readonly #deleted = new Set<string>();
-    readonly #eventsV2 = new Map<string, readonly SessionEventV2[]>();
+    readonly #eventsV2 = new Map<string, SessionEventV2[]>();
 
-    readonly appendEventV2 = (event: SessionEventV2): void => {
-        this.#eventsV2.set(event.sessionId, [...(this.#eventsV2.get(event.sessionId) ?? []), event]);
+    readonly appendExecutingPromptEventV2 = (event: SessionEventV2): void => {
+        const events = this.#eventsV2.get(event.sessionId);
+        if (events === undefined) {
+            throw new Error("The executing prompt event log has not started");
+        }
+        events.push(event);
+    };
+
+    readonly clearExecutingPromptEventsV2 = (sessionId: string): void => {
+        this.#eventsV2.delete(sessionId);
     };
 
     readonly close = (): void => {
@@ -123,7 +133,13 @@ export class MemoryAcpSessionStore implements AcpSessionStore {
         this.#eventsV2.delete(sessionId);
     };
 
-    readonly readEventsV2 = (sessionId: string): readonly SessionEventV2[] => this.#eventsV2.get(sessionId) ?? [];
+    readonly readExecutingPromptEventsV2 = (sessionId: string): readonly SessionEventV2[] => [
+        ...(this.#eventsV2.get(sessionId) ?? []),
+    ];
+
+    readonly startExecutingPromptEventsV2 = (sessionId: string, events: readonly SessionEventV2[]): void => {
+        this.#eventsV2.set(sessionId, [...events]);
+    };
 
     readonly write = (session: AcpStoredSession): void => {
         this.#sessions.set(session.sessionId, session);
@@ -204,7 +220,7 @@ export class SqliteAcpSessionStore implements AcpSessionStore {
         this.#sqliteDatabase.close();
     };
 
-    readonly appendEventV2 = (event: SessionEventV2): void => {
+    readonly appendExecutingPromptEventV2 = (event: SessionEventV2): void => {
         this.#database
             .insert(sessionEventV2)
             .values({
@@ -214,6 +230,27 @@ export class SqliteAcpSessionStore implements AcpSessionStore {
                 sessionId: event.sessionId,
             })
             .run();
+    };
+
+    readonly clearExecutingPromptEventsV2 = (sessionId: string): void => {
+        this.#database.delete(sessionEventV2).where(eq(sessionEventV2.sessionId, sessionId)).run();
+    };
+
+    readonly startExecutingPromptEventsV2 = (sessionId: string, events: readonly SessionEventV2[]): void => {
+        this.#database.transaction((transaction) => {
+            transaction.delete(sessionEventV2).where(eq(sessionEventV2.sessionId, sessionId)).run();
+            for (const event of events) {
+                transaction
+                    .insert(sessionEventV2)
+                    .values({
+                        eventId: event.eventId,
+                        eventJson: JSON.stringify(event),
+                        position: Number(event.position),
+                        sessionId: event.sessionId,
+                    })
+                    .run();
+            }
+        });
     };
 
     readonly findNative = (agentId: string, nativeSessionId: string): readonly AcpStoredSession[] =>
@@ -261,7 +298,7 @@ export class SqliteAcpSessionStore implements AcpSessionStore {
         return row === undefined ? new MissingAcpStoredSession() : new FoundAcpStoredSession(decodeStoredSession(row));
     };
 
-    readonly readEventsV2 = (sessionId: string): readonly SessionEventV2[] =>
+    readonly readExecutingPromptEventsV2 = (sessionId: string): readonly SessionEventV2[] =>
         this.#database
             .select({ eventJson: sessionEventV2.eventJson })
             .from(sessionEventV2)

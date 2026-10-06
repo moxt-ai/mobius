@@ -131,7 +131,7 @@ export async function runDaemon(
         publisher.publish(sessionId, activeTurns.recordEvent(event));
     };
     const agentRuntime = new AgentRuntimeManager(
-        new DaemonAcpObserver(recordSessionEvent, eventLogV2.acpUpdate),
+        new DaemonAcpObserver(recordSessionEvent, eventLogV2.record),
         sessionStore,
         {
             read: async (options, nativeSessionId, nativeTurn) =>

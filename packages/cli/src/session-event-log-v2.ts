@@ -1,13 +1,10 @@
 import type {
-    AcpSessionUpdateV2,
     ContentBlockV2,
     ExecutingPromptRequestEventLogV2,
-    NativeSessionEventsV2,
     SessionEventPayloadV2,
     SessionEventV2,
     SessionPromptCommand,
 } from "@moxt-ai/mobius-protocol";
-import { AcpExecutionError } from "./acp/acp-error.ts";
 import type { AcpSessionStore } from "./acp/session-store.ts";
 import type { DaemonSessionEventPublisher } from "./relay-connection/session-event-publisher.ts";
 
@@ -17,7 +14,7 @@ type PromptRequestStateV2 =
     | {
           readonly kind: "requested";
           readonly commandId: string;
-          readonly events: readonly SessionEventV2[];
+          readonly eventTail: EventNodeV2;
           readonly sessionId: string;
       }
     | {
@@ -25,9 +22,24 @@ type PromptRequestStateV2 =
           readonly attemptId: string;
           readonly commandId: string;
           readonly epoch: string;
-          readonly events: readonly SessionEventV2[];
+          readonly eventTail: EventNodeV2;
           readonly sessionId: string;
       };
+
+interface EventNodeV2 {
+    readonly event: SessionEventV2;
+    readonly previous: EventNodeV2 | null;
+}
+
+function eventArray(tail: EventNodeV2): readonly SessionEventV2[] {
+    const reversed: SessionEventV2[] = [];
+    let node: EventNodeV2 | null = tail;
+    while (node !== null) {
+        reversed.push(node.event);
+        node = node.previous;
+    }
+    return reversed.reverse();
+}
 
 function promptContent(command: SessionPromptCommand): readonly ContentBlockV2[] {
     const content: ContentBlockV2[] = [];
@@ -55,40 +67,8 @@ function promptContent(command: SessionPromptCommand): readonly ContentBlockV2[]
     return content;
 }
 
-interface LocalEventCursorV2 {
-    readonly endEvent: number;
-    readonly sessionId: string;
-}
-
-function encodeLocalEventCursor(cursor: LocalEventCursorV2): string {
-    return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
-}
-
-function decodeLocalEventCursor(sessionId: string, cursor: string): LocalEventCursorV2 {
-    try {
-        const value: unknown = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
-        if (
-            typeof value !== "object" ||
-            value === null ||
-            Array.isArray(value) ||
-            Object.keys(value).sort().join(",") !== "endEvent,sessionId" ||
-            Reflect.get(value, "sessionId") !== sessionId
-        ) {
-            throw new Error("Invalid V2 event cursor target");
-        }
-        const endEvent = Reflect.get(value, "endEvent");
-        if (typeof endEvent !== "number" || !Number.isSafeInteger(endEvent) || endEvent < 0) {
-            throw new Error("Invalid V2 event cursor boundary");
-        }
-        return { endEvent, sessionId };
-    } catch (cause) {
-        throw new AcpExecutionError("The native Session event cursor is invalid", { cause }, "invalid_cursor");
-    }
-}
-
 export class DaemonSessionEventLogV2 {
     readonly #positions = new Map<string, number>();
-    readonly #events = new Map<string, readonly SessionEventV2[]>();
     readonly #requests = new Map<string, PromptRequestStateV2>();
     readonly #loadedRequestSessions = new Set<string>();
     readonly #publisher: DaemonSessionEventPublisher;
@@ -99,13 +79,8 @@ export class DaemonSessionEventLogV2 {
         this.#store = store;
     }
 
-    readonly #eventsFor = (sessionId: string): readonly SessionEventV2[] => {
-        const cached = this.#events.get(sessionId);
-        if (cached !== undefined) {
-            return cached;
-        }
-        const stored = this.#store.readEventsV2(sessionId);
-        this.#events.set(sessionId, stored);
+    readonly #loadStoredEvents = (sessionId: string): readonly SessionEventV2[] => {
+        const stored = this.#store.readExecutingPromptEventsV2(sessionId);
         const lastPosition = stored.at(-1)?.position;
         if (lastPosition !== undefined) {
             this.#positions.set(sessionId, Number(lastPosition));
@@ -117,25 +92,37 @@ export class DaemonSessionEventLogV2 {
         if (this.#loadedRequestSessions.has(sessionId)) {
             return;
         }
-        for (const event of this.#eventsFor(sessionId)) {
-            const payload = event.payload;
-            if (payload.kind === "prompt.requested") {
-                this.#requests.set(payload.commandId, {
-                    commandId: payload.commandId,
-                    events: [event],
-                    kind: "requested",
-                    sessionId,
-                });
-                continue;
-            }
-            if (payload.kind === "acp.session.update") {
+        for (const event of this.#loadStoredEvents(sessionId)) {
+            if (event.type === "acp") {
                 const executing = [...this.#requests.values()].find(
                     (request) => request.sessionId === sessionId && request.kind === "executing",
                 );
                 if (executing !== undefined) {
                     this.#requests.set(executing.commandId, {
                         ...executing,
-                        events: [...executing.events, event],
+                        eventTail: { event, previous: executing.eventTail },
+                    });
+                }
+                continue;
+            }
+            const payload = event.payload;
+            if (payload.kind === "prompt.requested") {
+                this.#requests.set(payload.commandId, {
+                    commandId: payload.commandId,
+                    eventTail: { event, previous: null },
+                    kind: "requested",
+                    sessionId,
+                });
+                continue;
+            }
+            if ("event" in payload) {
+                const executing = [...this.#requests.values()].find(
+                    (request) => request.sessionId === sessionId && request.kind === "executing",
+                );
+                if (executing !== undefined) {
+                    this.#requests.set(executing.commandId, {
+                        ...executing,
+                        eventTail: { event, previous: executing.eventTail },
                     });
                 }
                 continue;
@@ -147,13 +134,12 @@ export class DaemonSessionEventLogV2 {
             if (state === undefined) {
                 continue;
             }
-            const events = [...state.events, event];
             if (payload.kind === "prompt.started") {
                 this.#requests.set(payload.commandId, {
                     attemptId: payload.attemptId,
                     commandId: payload.commandId,
                     epoch: payload.epoch,
-                    events,
+                    eventTail: { event, previous: state.eventTail },
                     kind: "executing",
                     sessionId,
                 });
@@ -169,32 +155,42 @@ export class DaemonSessionEventLogV2 {
     };
 
     readonly #append = (sessionId: string, payload: SessionEventPayloadV2): SessionEventV2 => {
-        this.#eventsFor(sessionId);
+        this.#loadRequests(sessionId);
         const position = (this.#positions.get(sessionId) ?? 0) + 1;
         const event: SessionEventV2 = {
             eventId: `event-${crypto.randomUUID()}`,
-            payload,
+            ...payload,
             position: position.toString(),
             provenance: { kind: "original" },
             recordedAt: new Date().toISOString(),
             sessionId,
         };
-        this.#store.appendEventV2(event);
         this.#positions.set(sessionId, position);
-        this.#events.set(sessionId, [...this.#eventsFor(sessionId), event]);
         this.#publisher.publishV2(event);
         return event;
     };
 
     readonly requested = (command: SessionPromptCommand): void => {
+        const content = promptContent(command);
         const event = this.#append(command.sessionId, {
-            commandId: command.commandId,
-            content: promptContent(command),
-            kind: "prompt.requested",
+            payload: { commandId: command.commandId, content, kind: "prompt.requested" },
+            type: "lifecycle-metadata",
         });
+        let eventTail: EventNodeV2 = { event, previous: null };
+        for (const block of content) {
+            const userMessageEvent = this.#append(command.sessionId, {
+                payload: {
+                    content: block,
+                    messageId: command.commandId,
+                    sessionUpdate: "user_message_chunk",
+                },
+                type: "acp",
+            });
+            eventTail = { event: userMessageEvent, previous: eventTail };
+        }
         this.#requests.set(command.commandId, {
             commandId: command.commandId,
-            events: [event],
+            eventTail,
             kind: "requested",
             sessionId: command.sessionId,
         });
@@ -206,42 +202,90 @@ export class DaemonSessionEventLogV2 {
         if (request?.sessionId !== sessionId) {
             return;
         }
-        const event = this.#append(sessionId, { attemptId, commandId, epoch, kind: "prompt.started" });
+        const event = this.#append(sessionId, {
+            payload: { attemptId, commandId, epoch, kind: "prompt.started" },
+            type: "lifecycle-metadata",
+        });
         this.#requests.set(commandId, {
             attemptId,
             commandId,
             epoch,
-            events: [...request.events, event],
+            eventTail: { event, previous: request.eventTail },
             kind: "executing",
             sessionId,
         });
+        this.#store.startExecutingPromptEventsV2(sessionId, eventArray({ event, previous: request.eventTail }));
     };
 
-    readonly acpUpdate = (sessionId: string, update: AcpSessionUpdateV2): void => {
+    readonly record = (sessionId: string, payload: SessionEventPayloadV2): void => {
         this.#loadRequests(sessionId);
-        const event = this.#append(sessionId, { kind: "acp.session.update", update });
+        const event = this.#append(sessionId, payload);
+        this.#appendToExecutingRequest(sessionId, event);
+    };
+
+    readonly #appendToExecutingRequest = (sessionId: string, event: SessionEventV2): void => {
         const executing = [...this.#requests.values()].find(
             (request) => request.sessionId === sessionId && request.kind === "executing",
         );
         if (executing !== undefined) {
-            this.#requests.set(executing.commandId, { ...executing, events: [...executing.events, event] });
+            this.#requests.set(executing.commandId, {
+                ...executing,
+                eventTail: { event, previous: executing.eventTail },
+            });
+            this.#store.appendExecutingPromptEventV2(event);
         }
     };
 
+    readonly queueChanged = (sessionId: string): void => {
+        const event = this.#append(sessionId, {
+            payload: { kind: "session.queue.changed" },
+            type: "lifecycle-metadata",
+        });
+        this.#appendToExecutingRequest(sessionId, event);
+    };
+
     readonly completed = (sessionId: string, commandId: string, stopReason: string): void => {
-        this.#append(sessionId, { commandId, kind: "prompt.completed", stopReason });
+        this.#loadRequests(sessionId);
+        const request = this.#requests.get(commandId);
+        const event = this.#append(sessionId, {
+            payload: { commandId, kind: "prompt.completed", stopReason },
+            type: "lifecycle-metadata",
+        });
         this.#requests.delete(commandId);
+        if (request?.kind === "executing" && request.sessionId === sessionId) {
+            this.#store.clearExecutingPromptEventsV2(sessionId);
+        } else {
+            this.#appendToExecutingRequest(sessionId, event);
+        }
     };
 
     readonly failed = (sessionId: string, commandId: string, code: string, message: string): void => {
         this.#loadRequests(sessionId);
         const request = this.#requests.get(commandId);
+        let event: SessionEventV2;
         if (request?.kind === "executing" && request.commandId === commandId) {
-            this.#append(sessionId, { attemptId: request.attemptId, code, commandId, kind: "prompt.failed", message });
+            event = this.#append(sessionId, {
+                payload: {
+                    attemptId: request.attemptId,
+                    code,
+                    commandId,
+                    kind: "prompt.failed",
+                    message,
+                },
+                type: "lifecycle-metadata",
+            });
         } else {
-            this.#append(sessionId, { code, commandId, kind: "prompt.failed-before-start", message });
+            event = this.#append(sessionId, {
+                payload: { code, commandId, kind: "prompt.failed-before-start", message },
+                type: "lifecycle-metadata",
+            });
         }
         this.#requests.delete(commandId);
+        if (request?.kind === "executing" && request.sessionId === sessionId) {
+            this.#store.clearExecutingPromptEventsV2(sessionId);
+        } else {
+            this.#appendToExecutingRequest(sessionId, event);
+        }
     };
 
     readonly executingPromptRequest = (sessionId: string): ExecutingPromptRequestEventLogV2 | null => {
@@ -252,50 +296,15 @@ export class DaemonSessionEventLogV2 {
         if (request?.kind !== "executing") {
             return null;
         }
-        const events = request.events.slice(-EXECUTING_PROMPT_EVENT_LIMIT);
+        const requestEvents = eventArray(request.eventTail);
+        const events = requestEvents.slice(-EXECUTING_PROMPT_EVENT_LIMIT);
         return {
             attemptId: request.attemptId,
             commandId: request.commandId,
             epoch: request.epoch,
             events,
             tailCursor: events.at(-1)?.eventId ?? "",
-            truncated: events.length < request.events.length,
-        };
-    };
-
-    readonly recovery = (
-        sessionId: string,
-        eventLimit: number,
-        cursor: string | null,
-    ): NativeSessionEventsV2 | null => {
-        const events = this.#eventsFor(sessionId);
-        if (events.length === 0) {
-            return null;
-        }
-        const executingPromptRequest = this.executingPromptRequest(sessionId);
-        const executingRequestState = [...this.#requests.values()].find(
-            (request) => request.sessionId === sessionId && request.kind === "executing",
-        );
-        const firstExecutingPosition = executingRequestState?.events[0]?.position;
-        const historyEvents =
-            firstExecutingPosition === undefined
-                ? events
-                : events.filter((event) => BigInt(event.position) < BigInt(firstExecutingPosition));
-        const endEvent = cursor === null ? historyEvents.length : decodeLocalEventCursor(sessionId, cursor).endEvent;
-        if (endEvent > historyEvents.length) {
-            throw new AcpExecutionError("The native Session event cursor is invalid", {}, "invalid_cursor");
-        }
-        const startEvent = Math.max(0, endEvent - eventLimit);
-        const pageEvents = historyEvents.slice(startEvent, endEvent);
-        return {
-            executingPromptRequest,
-            history: {
-                events: pageEvents,
-                nextCursor: startEvent === 0 ? null : encodeLocalEventCursor({ endEvent: startEvent, sessionId }),
-                tailCursor: pageEvents.at(-1)?.eventId ?? "",
-                truncated: startEvent > 0,
-                version: 2,
-            },
+            truncated: events.length < requestEvents.length,
         };
     };
 }

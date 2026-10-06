@@ -522,7 +522,7 @@ describe("daemon relay connection liveness", () => {
         }
     });
 
-    it("Given an Agent emits many updates for one activity, When the daemon records the turn, Then it coalesces bounded live events and preserves the final activity", async () => {
+    it("Given an Agent emits many updates and history is loaded between turns, When the daemon records both turns, Then replay capture does not swallow later live ACP updates", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-activity-coalescing-"));
         const defaultWorkspace = join(stateDirectory, "workspace");
         await mkdir(defaultWorkspace);
@@ -573,6 +573,57 @@ describe("daemon relay connection liveness", () => {
                     "Upgrade: websocket\r\n" +
                     `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
             );
+            const requestHistory = () =>
+                writeServerTextFrame(
+                    socket,
+                    encodeSessionLiveHistoryV2PageLoad({
+                        additionalDirectoryIds: [],
+                        agentId: "codex",
+                        bindingId: "workspace",
+                        cursor: null,
+                        directoryId: "default",
+                        kind: "session.live-history.v2.page.load",
+                        eventLimit: 25,
+                        requestId: `activity-coalescing-history-${completedPrompts.toString()}-1`,
+                        sessionId: "activity-coalescing-session",
+                    }),
+                );
+            const sendSecondPrompt = () =>
+                writeServerTextFrame(
+                    socket,
+                    encodeSessionPromptCommand({
+                        additionalDirectoryIds: [],
+                        agentId: "codex",
+                        bindingId: "workspace",
+                        commandId: "activity-coalescing-command-2",
+                        directoryId: "default",
+                        disposition: "reject",
+                        images: [],
+                        kind: SESSION_PROMPT_KIND,
+                        prompt: "stream another verbose activity",
+                        resources: [],
+                        sessionId: "activity-coalescing-session",
+                        targetCommandId: "",
+                    }),
+                );
+            const sendFirstPrompt = () =>
+                writeServerTextFrame(
+                    socket,
+                    encodeSessionPromptCommand({
+                        additionalDirectoryIds: [],
+                        agentId: "codex",
+                        bindingId: "workspace",
+                        commandId: "activity-coalescing-command",
+                        directoryId: "default",
+                        disposition: "reject",
+                        images: [],
+                        kind: SESSION_PROMPT_KIND,
+                        prompt: "stream verbose activity",
+                        resources: [],
+                        sessionId: "activity-coalescing-session",
+                        targetCommandId: "",
+                    }),
+                );
             removeObserver = observeClientFrames(socket, (frame) => {
                 if (frame.opcode !== 1) {
                     return;
@@ -581,42 +632,9 @@ describe("daemon relay connection liveness", () => {
                 if (transportKind === SESSION_EVENT_V2_KIND) {
                     const event = decodeSessionEventEnvelopeV2(frame.text).event;
                     eventLogV2.push(event);
-                    if (event.payload.kind === "prompt.completed") {
+                    if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
                         completedPrompts += 1;
-                        if (completedPrompts === 1) {
-                            writeServerTextFrame(
-                                socket,
-                                encodeSessionPromptCommand({
-                                    additionalDirectoryIds: [],
-                                    agentId: "codex",
-                                    bindingId: "workspace",
-                                    commandId: "activity-coalescing-command-2",
-                                    directoryId: "default",
-                                    disposition: "reject",
-                                    images: [],
-                                    kind: SESSION_PROMPT_KIND,
-                                    prompt: "stream another verbose activity",
-                                    resources: [],
-                                    sessionId: "activity-coalescing-session",
-                                    targetCommandId: "",
-                                }),
-                            );
-                        } else {
-                            writeServerTextFrame(
-                                socket,
-                                encodeSessionLiveHistoryV2PageLoad({
-                                    additionalDirectoryIds: [],
-                                    agentId: "codex",
-                                    bindingId: "workspace",
-                                    cursor: null,
-                                    directoryId: "default",
-                                    kind: "session.live-history.v2.page.load",
-                                    eventLimit: 25,
-                                    requestId: "activity-coalescing-history-1",
-                                    sessionId: "activity-coalescing-session",
-                                }),
-                            );
-                        }
+                        requestHistory();
                     }
                     return;
                 }
@@ -624,7 +642,15 @@ describe("daemon relay connection liveness", () => {
                     const page = decodeSessionLiveHistoryV2PageLoaded(frame.text).events.history;
                     historyPages.push(page.events);
                     if (page.nextCursor === null) {
-                        resolveHistory(historyPages.toReversed().flat());
+                        if (completedPrompts === 0) {
+                            historyPages.length = 0;
+                            sendFirstPrompt();
+                        } else if (completedPrompts === 1) {
+                            historyPages.length = 0;
+                            sendSecondPrompt();
+                        } else {
+                            resolveHistory(historyPages.toReversed().flat());
+                        }
                     } else {
                         writeServerTextFrame(
                             socket,
@@ -677,23 +703,7 @@ describe("daemon relay connection liveness", () => {
             });
             respondToClientClose(socket);
             writeServerTextFrame(socket, JSON.stringify({ kind: RUNTIME_LIVENESS_READY_KIND }));
-            writeServerTextFrame(
-                socket,
-                encodeSessionPromptCommand({
-                    additionalDirectoryIds: [],
-                    agentId: "codex",
-                    bindingId: "workspace",
-                    commandId: "activity-coalescing-command",
-                    directoryId: "default",
-                    disposition: "reject",
-                    images: [],
-                    kind: SESSION_PROMPT_KIND,
-                    prompt: "stream verbose activity",
-                    resources: [],
-                    sessionId: "activity-coalescing-session",
-                    targetCommandId: "",
-                }),
-            );
+            requestHistory();
         });
         await listen(relay);
 
@@ -733,26 +743,46 @@ describe("daemon relay connection liveness", () => {
             expect(agentText).toBe(
                 "Echo from ACP: stream verbose activityEcho from ACP: stream another verbose activity",
             );
-            expect(eventLogV2[0]?.payload.kind).toBe("prompt.requested");
-            expect(eventLogV2[1]?.payload.kind).toBe("prompt.started");
-            expect(eventLogV2.at(-1)?.payload.kind).toBe("prompt.completed");
+            expect(eventLogV2[0]).toMatchObject({ payload: { kind: "prompt.requested" }, type: "lifecycle-metadata" });
+            expect(eventLogV2[1]).toMatchObject({
+                payload: { sessionUpdate: "user_message_chunk" },
+                type: "acp",
+            });
+            expect(eventLogV2[2]).toMatchObject({
+                payload: { kind: "prompt.started" },
+                type: "lifecycle-metadata",
+            });
+            expect(eventLogV2.at(-1)).toMatchObject({
+                payload: { kind: "prompt.completed" },
+                type: "lifecycle-metadata",
+            });
             expect(
                 eventLogV2.filter(
-                    (event) =>
-                        event.payload.kind === "acp.session.update" &&
-                        event.payload.update.sessionUpdate === "agent_thought_chunk",
+                    (event) => event.type === "acp" && event.payload.sessionUpdate === "agent_thought_chunk",
                 ),
             ).toHaveLength(68);
             expect(
                 eventLogV2.filter(
-                    (event) =>
-                        event.payload.kind === "acp.session.update" &&
-                        event.payload.update.sessionUpdate === "agent_message_chunk",
+                    (event) => event.type === "acp" && event.payload.sessionUpdate === "agent_message_chunk",
                 ),
             ).toHaveLength(6);
-            expect(historyPages.length).toBeGreaterThan(1);
             expect(historyPages.every((page) => page.length <= 25)).toBe(true);
-            expect(historyEvents).toEqual(eventLogV2);
+            expect(historyEvents.every((event) => event.type === "acp")).toBe(true);
+            expect(
+                historyEvents.flatMap((event) =>
+                    event.type === "acp" &&
+                    (event.payload.sessionUpdate === "user_message_chunk" ||
+                        event.payload.sessionUpdate === "agent_message_chunk") &&
+                    event.payload.content.type === "text"
+                        ? [event.payload.content.text]
+                        : [],
+                ),
+            ).toEqual([
+                "stream verbose activity",
+                "Echo from ACP: stream verbose activity",
+                "stream another verbose activity",
+                "Echo from ACP: stream another verbose activity",
+            ]);
         } finally {
             cancellation.abort();
             await daemon;

@@ -32,5 +32,6 @@ type Execution =
 export interface Session {
     readonly metadata: p.SessionMetadata;
     readonly history: readonly Turn[];
+    readonly eventsV2: readonly p.SessionEventV2[];
     readonly execution: Execution;
 }

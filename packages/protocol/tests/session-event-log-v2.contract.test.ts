@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
     type AcpSessionUpdateV2,
+    decodeMobiusSessionExportV2,
     decodeNativeSessionEventsV2,
     decodeSessionEventLogPageV2,
+    encodeMobiusSessionExportV2,
     encodeNativeSessionEventsV2,
     encodeSessionEventLogPageV2,
     ProtocolMessageError,
@@ -15,15 +17,67 @@ const recordedAt = "2026-10-06T00:00:00.000Z";
 function event(position: number, update: AcpSessionUpdateV2): SessionEventV2 {
     return {
         eventId: `event-${position}`,
-        payload: { kind: "acp.session.update", update },
+        payload: update,
         position: position.toString(),
         provenance: { kind: "original" },
         recordedAt,
         sessionId: "session-1",
+        type: "acp",
     };
 }
 
 describe("Session Event Log V2 protocol", () => {
+    it("Given a bounded committed V2 log, When it is exported across the public boundary, Then binding metadata, raw events, and provenance round-trip", () => {
+        const imported = {
+            ...event(1, {
+                content: { text: "copied", type: "text" },
+                messageId: "message-1",
+                sessionUpdate: "agent_message_chunk",
+            }),
+            provenance: {
+                kind: "imported",
+                sourceEventId: "source-event-1",
+                sourcePosition: "7",
+                sourceSessionId: "source-session",
+            },
+        } as const;
+        const exported = {
+            formatVersion: "2",
+            session: {
+                binding: { bindingId: "binding-1", runtimeId: "runtime-1" },
+                events: [imported],
+                sessionId: "session-1",
+                truncated: false,
+            },
+        } as const;
+
+        expect(decodeMobiusSessionExportV2(encodeMobiusSessionExportV2(exported))).toEqual(exported);
+    });
+
+    it("Given a V2 export repeats an event identity or changes Session scope, When it crosses the import boundary, Then the malformed log is rejected", () => {
+        const source = event(1, {
+            content: { text: "source", type: "text" },
+            messageId: "message-1",
+            sessionUpdate: "agent_message_chunk",
+        });
+        for (const events of [
+            [source, { ...source, position: "2" }],
+            [source, { ...source, eventId: "event-2", position: "2", sessionId: "other-session" }],
+        ]) {
+            expect(() =>
+                decodeMobiusSessionExportV2({
+                    formatVersion: "2",
+                    session: {
+                        binding: { bindingId: "binding-1", runtimeId: "runtime-1" },
+                        events,
+                        sessionId: "session-1",
+                        truncated: false,
+                    },
+                }),
+            ).toThrow(ProtocolMessageError);
+        }
+    });
+
     it("Given ACP emits every supported update variant, When the V2 page crosses the boundary, Then each raw update and source identity round-trips in order", () => {
         const updates = [
             {
@@ -121,24 +175,24 @@ describe("Session Event Log V2 protocol", () => {
         } as const;
 
         const decoded = decodeSessionEventLogPageV2(encodeSessionEventLogPageV2(page));
-        const first = decoded.events[0]?.payload;
-        const second = decoded.events[1]?.payload;
-        const third = decoded.events[2]?.payload;
+        const first = decoded.events[0];
+        const second = decoded.events[1];
+        const third = decoded.events[2];
         if (
-            first?.kind !== "acp.session.update" ||
-            second?.kind !== "acp.session.update" ||
-            third?.kind !== "acp.session.update" ||
-            first.update.sessionUpdate !== "tool_call_update" ||
-            second.update.sessionUpdate !== "tool_call_update" ||
-            third.update.sessionUpdate !== "tool_call_update"
+            first?.type !== "acp" ||
+            second?.type !== "acp" ||
+            third?.type !== "acp" ||
+            first.payload.sessionUpdate !== "tool_call_update" ||
+            second.payload.sessionUpdate !== "tool_call_update" ||
+            third.payload.sessionUpdate !== "tool_call_update"
         ) {
             throw new Error("Expected ACP updates");
         }
-        expect(Object.hasOwn(first.update, "rawOutput")).toBe(false);
-        expect(Object.hasOwn(second.update, "rawOutput")).toBe(true);
-        expect(Object.hasOwn(third.update, "rawOutput")).toBe(true);
-        expect(second.update.rawOutput).toBeNull();
-        expect(third.update.rawOutput).toEqual({ result: "ok" });
+        expect(Object.hasOwn(first.payload, "rawOutput")).toBe(false);
+        expect(Object.hasOwn(second.payload, "rawOutput")).toBe(true);
+        expect(Object.hasOwn(third.payload, "rawOutput")).toBe(true);
+        expect(second.payload.rawOutput).toBeNull();
+        expect(third.payload.rawOutput).toEqual({ result: "ok" });
     });
 
     it("Given committed history and an outstanding ACP prompt request, When native recovery crosses the boundary, Then both raw logs remain separate", () => {
@@ -186,6 +240,7 @@ describe("Session Event Log V2 protocol", () => {
                         content: [{ text: "hello", type: "text" }],
                         kind: "prompt.requested",
                     },
+                    type: "lifecycle-metadata",
                 },
                 {
                     ...event(2, {
@@ -198,6 +253,7 @@ describe("Session Event Log V2 protocol", () => {
                         kind: "prompt.failed-before-start",
                         message: "The selected directory is unavailable",
                     },
+                    type: "lifecycle-metadata",
                 },
                 {
                     ...event(3, {
@@ -211,10 +267,52 @@ describe("Session Event Log V2 protocol", () => {
                         kind: "prompt.failed",
                         message: "The local agent could not complete the request",
                     },
+                    type: "lifecycle-metadata",
                 },
             ],
             nextCursor: null,
             tailCursor: "event-3",
+            truncated: false,
+            version: 2,
+        } as const;
+
+        expect(decodeSessionEventLogPageV2(encodeSessionEventLogPageV2(page))).toEqual(page);
+    });
+
+    it("Given queue and interaction facts occur during a prompt, When the V2 page crosses the boundary, Then the facts remain typed and ordered", () => {
+        const page = {
+            events: [
+                {
+                    ...event(1, {
+                        content: { text: "ignored", type: "text" },
+                        sessionUpdate: "agent_message_chunk",
+                    }),
+                    payload: { kind: "session.queue.changed" },
+                    type: "lifecycle-metadata",
+                },
+                {
+                    ...event(2, {
+                        content: { text: "ignored", type: "text" },
+                        sessionUpdate: "agent_message_chunk",
+                    }),
+                    payload: {
+                        event: {
+                            commandId: "command-1",
+                            interactionId: "interaction-1",
+                            kind: "session.permission.requested",
+                            options: [{ kind: "allow_once", name: "Allow once", optionId: "allow-once" }],
+                            sessionId: "session-1",
+                            title: "Read the file",
+                            toolCallId: "tool-1",
+                            toolKind: "read",
+                        },
+                        kind: "session.permission.requested",
+                    },
+                    type: "lifecycle-metadata",
+                },
+            ],
+            nextCursor: null,
+            tailCursor: "event-2",
             truncated: false,
             version: 2,
         } as const;
@@ -235,11 +333,12 @@ describe("Session Event Log V2 protocol", () => {
                     events: [
                         {
                             eventId: "event-1",
-                            payload: { kind: "acp.session.update", update },
+                            payload: update,
                             position: "1",
                             provenance: { kind: "original" },
                             recordedAt,
                             sessionId: "session-1",
+                            type: "acp",
                         },
                     ],
                     nextCursor: null,

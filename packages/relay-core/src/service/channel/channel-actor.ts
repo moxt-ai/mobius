@@ -84,6 +84,12 @@ import { SessionRuntimeError } from "../../entity/do/session.ts";
 import type { BestEffortRecording } from "./best-effort-recording.ts";
 import { LiveSessionEventRelay } from "./live-session-event-relay.ts";
 
+type NativeImportAction = "import" | "fork" | "fork-recorded";
+
+function isNativeImportAction(action: string): action is NativeImportAction {
+    return action === "import" || action === "fork" || action === "fork-recorded";
+}
+
 const NATIVE_IMPORT_DEADLINE_MILLISECONDS = 5 * 60 * 1_000;
 const MAX_PENDING_NATIVE_IMPORTS = 4;
 const AGENT_SETTINGS_DISCOVERY_DEADLINE_MILLISECONDS = 2 * 60 * 1_000;
@@ -154,7 +160,7 @@ export class ChannelActor {
     readonly #pendingNativeImports = new Map<
         string,
         | {
-              readonly action: "import" | "fork" | "fork-recorded";
+              readonly action: NativeImportAction;
               readonly sessionId: string;
               readonly agentId: string;
               readonly directoryId: string;
@@ -238,7 +244,7 @@ export class ChannelActor {
             }
             if (kind === NATIVE_SESSION_RESULT_KIND) {
                 const result = message;
-                if (result.action === "import" || result.action === "fork" || result.action === "fork-recorded") {
+                if (isNativeImportAction(result.action)) {
                     const pending = this.#pendingNativeImports.get(result.requestId);
                     if (
                         pending === undefined ||
