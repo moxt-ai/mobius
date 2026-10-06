@@ -16,6 +16,7 @@ import {
     SESSION_LISTED_KIND,
     SESSION_LIVE_HISTORY_LOAD_KIND,
     SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
+    SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND,
     SESSION_PERMISSION_RESPOND_KIND,
     SESSION_PREPARE_KIND,
     SESSION_PROMPT_DISPOSITION_KIND,
@@ -36,7 +37,11 @@ import type { AuditStore } from "./audit/audit-store.ts";
 import type { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
 import type { DaemonConfig } from "./config.ts";
 import { reportOperationFailure, send, settleAbandonedTurn } from "./daemon-command-results.ts";
-import { executeSessionLiveHistoryLoad, executeSessionLiveHistoryPageLoad } from "./daemon-history-commands.ts";
+import {
+    executeSessionLiveHistoryLoad,
+    executeSessionLiveHistoryPageLoad,
+    executeSessionLiveHistoryV2PageLoad,
+} from "./daemon-history-commands.ts";
 import { executePrompt } from "./daemon-prompt-executor.ts";
 import { executeSessionConfigure, executeSessionPrepare, executeWorkspaceList } from "./daemon-session-commands.ts";
 import type { DaemonTurnRegistry } from "./daemon-turn-registry.ts";
@@ -46,6 +51,7 @@ import type { DaemonOperationState } from "./relay-connection/daemon-operation-s
 import type { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
 import type { DaemonSessionEventPublisher } from "./relay-connection/session-event-publisher.ts";
 import type { DaemonTimer } from "./relay-connection/timer.ts";
+import type { DaemonSessionEventLogV2 } from "./session-event-log-v2.ts";
 export interface DaemonCommandOptions {
     readonly config: DaemonConfig;
     readonly directories: WorkspaceDirectoryService;
@@ -55,6 +61,7 @@ export interface DaemonCommandOptions {
     readonly nativeSessions: NativeSessionService;
     readonly operations: DaemonOperationState;
     readonly publisher: DaemonSessionEventPublisher;
+    readonly eventLogV2: DaemonSessionEventLogV2;
     readonly activeTurns: DaemonTurnRegistry;
     readonly diagnostics: RelayConnectionDiagnostics;
     readonly socket: WebSocket;
@@ -73,6 +80,7 @@ export function createDaemonCommandHandler({
     nativeSessions,
     operations,
     publisher,
+    eventLogV2,
     activeTurns,
     diagnostics,
     socket,
@@ -144,6 +152,20 @@ export function createDaemonCommandHandler({
                     audit,
                     sessions,
                     activeTurnRecovery,
+                    signal,
+                );
+                return;
+            }
+            if (kind === SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND) {
+                void executeSessionLiveHistoryV2PageLoad(
+                    socket,
+                    message,
+                    config,
+                    directories,
+                    audit,
+                    sessions,
+                    eventLogV2.recovery,
+                    eventLogV2.executingPromptRequest,
                     signal,
                 );
                 return;
@@ -346,9 +368,11 @@ export function createDaemonCommandHandler({
             }
 
             const turn = activeTurns.start(command, receipt.attemptId);
+            eventLogV2.requested(command);
             void executePrompt({
                 operations,
                 publisher,
+                eventLogV2,
                 command,
                 config,
                 directories,

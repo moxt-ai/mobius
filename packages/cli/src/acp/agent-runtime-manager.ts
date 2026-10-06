@@ -28,6 +28,7 @@ export {
     AcpAgentSettingsSnapshot,
     type AcpConfigureOptions,
     type AcpElicitationResponseOptions,
+    type AcpNativeEventReplayV2,
     type AcpNativeHistoryReader,
     type AcpPermissionResponseOptions,
     AcpPreparedSession,
@@ -44,6 +45,7 @@ import {
     AcpAgentSettingsSnapshot,
     type AcpConfigureOptions,
     type AcpElicitationResponseOptions,
+    type AcpNativeEventReplayV2,
     type AcpNativeHistoryReader,
     type AcpPermissionResponseOptions,
     type AcpPreparedSession,
@@ -672,6 +674,29 @@ export class AgentRuntimeManager {
             }
         });
 
+    readonly previewNativeSessionEventsV2 = async (
+        options: AcpPrepareOptions,
+        nativeSessionId: string,
+        eventLimit: number,
+        cursor: string | null,
+    ): Promise<AcpNativeEventReplayV2> =>
+        this.#operations.run(options, async (options) => {
+            const key = `${options.agent.id}:${nativeSessionId}`;
+            if (this.#nativeOperations.has(key)) {
+                throw new AcpExecutionError(
+                    "Wait for the native session's running operation to finish",
+                    {},
+                    "session_busy",
+                );
+            }
+            this.#nativeOperations.add(key);
+            try {
+                return await this.#queryProcesses.previewEventsV2(options, nativeSessionId, eventLimit, cursor);
+            } finally {
+                this.#nativeOperations.delete(key);
+            }
+        });
+
     readonly loadSessionHistory = async (options: AcpPrepareOptions): Promise<NativeSessionHistory> =>
         this.#operations.run(options, async (options) => {
             return await this.#executionProcesses.use(options.sessionId, async () => {
@@ -688,6 +713,18 @@ export class AgentRuntimeManager {
                     }
                 }
                 return await runtime.loadHistory(options.signal);
+            });
+        });
+
+    readonly loadSessionEventsV2 = async (
+        options: AcpPrepareOptions,
+        eventLimit: number,
+        cursor: string | null,
+    ): Promise<AcpNativeEventReplayV2> =>
+        this.#operations.run(options, async (options) => {
+            return await this.#executionProcesses.use(options.sessionId, async () => {
+                const runtime = await this.ensureSession(options);
+                return await runtime.loadHistoryEventsV2(eventLimit, cursor, options.signal);
             });
         });
 

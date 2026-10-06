@@ -6,26 +6,22 @@ import { type FileHandle, mkdir, open, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-    decodeSessionCommandsUpdatedEvent,
+    type NativeSessionEventsV2,
     RUNTIME_WORKSPACE_BINDING_ID,
     type SessionCommand,
     type SessionConfigOption,
     type SessionConfigurationSelection,
+    type SessionEventV2,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { MobiusAppCredentialProvider, MobiusPlatformAppClient } from "@moxt-ai/mobius-sdk/platform";
 import {
     MobiusClient,
-    MobiusControlEvent,
-    type MobiusLiveEventSubscription,
-    type MobiusLiveSessionEventObserver,
+    type MobiusLiveEventSubscriptionV2,
+    type MobiusLiveSessionEventObserverV2,
     MobiusPageRequest,
     MobiusRecordingPolicy,
     MobiusRuntimePairingRequest,
-    type MobiusSessionEvent,
-    MobiusTurnCompletedEvent,
-    MobiusTurnFailedEvent,
-    MobiusTurnStartedEvent,
     StaticMobiusCredentialProvider,
     WsTransport,
 } from "@moxt-ai/mobius-sdk/server";
@@ -528,12 +524,19 @@ async function compactCommand(directory: string, flags: ReadonlyMap<string, stri
         execution = await sessionClient(state, session);
         const discoverySignal = AbortSignal.any([shutdown.signal, AbortSignal.timeout(5_000)]);
         let advertisedCommands: readonly SessionCommand[] = [];
-        let subscription: MobiusLiveEventSubscription | undefined;
-        const observer: MobiusLiveSessionEventObserver = {
+        let subscription: MobiusLiveEventSubscriptionV2 | undefined;
+        const observer: MobiusLiveSessionEventObserverV2 = {
             reconcile: () => Promise.resolve(),
             receive: (event) => {
-                if (event.payload instanceof MobiusControlEvent && event.payload.kind === "session.commands.updated") {
-                    advertisedCommands = decodeSessionCommandsUpdatedEvent(event.payload.encodedPayload).commands;
+                if (
+                    event.payload.kind === "acp.session.update" &&
+                    event.payload.update.sessionUpdate === "available_commands_update"
+                ) {
+                    advertisedCommands = event.payload.update.availableCommands.map((command) => ({
+                        description: command.description,
+                        inputHint: command.input?.hint ?? "",
+                        name: command.name,
+                    }));
                     return Promise.resolve(
                         !advertisedCommands.some((candidate) => candidate.name.toLowerCase() === "compact"),
                     );
@@ -542,7 +545,7 @@ async function compactCommand(directory: string, flags: ReadonlyMap<string, stri
             },
         };
         try {
-            subscription = await execution.service.events.subscribeLive(session.sessionId, observer, discoverySignal);
+            subscription = await execution.service.events.subscribeLiveV2(session.sessionId, observer, discoverySignal);
             const ready = await loadSession(authority.service, state.runtimeId, session);
             let commands = ready.commands;
             if (!commands.some((candidate) => candidate.name.toLowerCase() === "compact")) {
@@ -610,103 +613,50 @@ async function cancelCommand(directory: string, flags: ReadonlyMap<string, strin
     }
 }
 
-async function nativeMessages(
+async function nativeEventsV2(
     service: MobiusClient,
     session: MiniClientSession,
     signal: AbortSignal,
-): Promise<unknown> {
-    const pages = [];
-    let cursor = "";
+): Promise<NativeSessionEventsV2> {
+    const pages: NativeSessionEventsV2[] = [];
+    let cursor: string | null = null;
     do {
-        const page = await service.sessions.querySessionNativeMessages(
+        const page = await service.sessions.querySessionNativeEventsV2(
             session.sessionId,
             {
                 additionalDirectoryIds: session.additionalDirectoryIds,
                 agentId: session.agentId,
                 directoryId: session.directoryId,
             },
-            new MobiusPageRequest(100, cursor),
+            { cursor, eventLimit: 50 },
             signal,
         );
         pages.push(page);
-        cursor = page.nextCursor ?? "";
-    } while (cursor.length > 0 && pages.length < 100);
-    const unavailable = pages.find((page) => page.status === "unavailable");
-    if (unavailable !== undefined) {
-        return unavailable;
+        cursor = page.history.nextCursor;
+    } while (cursor !== null && pages.length < 100);
+    const newest = pages[0];
+    if (newest === undefined) {
+        throw new MiniClientError("event_log_unavailable", "The Runtime returned no V2 event-log page");
     }
+    const events = pages.toReversed().flatMap((page) => page.history.events);
     return {
-        coveredCommandIds: pages.flatMap((page) => (page.status === "available" ? page.coveredCommandIds : [])),
-        coveredMessageIds: pages.flatMap((page) => (page.status === "available" ? page.coveredMessageIds : [])),
-        messages: pages.toReversed().flatMap((page) => (page.status === "available" ? page.messages : [])),
-        nextCursor: cursor.length === 0 ? null : cursor,
-        status: "available",
-        truncated: pages.some((page) => page.status === "available" && page.truncated),
+        executingPromptRequest: newest.executingPromptRequest,
+        history: {
+            events,
+            nextCursor: cursor,
+            tailCursor: events.at(-1)?.eventId ?? "",
+            truncated: cursor !== null,
+            version: 2,
+        },
     };
 }
 
-function terminal(event: MobiusSessionEvent): boolean {
+function terminalV2(event: SessionEventV2): boolean {
     return (
-        (event.payload instanceof MobiusTurnCompletedEvent && event.payload.stopReason !== "steered") ||
-        event.payload instanceof MobiusTurnFailedEvent
+        event.payload.kind === "prompt.completed" ||
+        event.payload.kind === "prompt.failed" ||
+        event.payload.kind === "prompt.failed-before-start"
     );
-}
-
-function eventCommandId(event: MobiusSessionEvent): string | undefined {
-    const commandId = Reflect.get(event.payload, "commandId");
-    return typeof commandId === "string" ? commandId : undefined;
-}
-
-function snapshotContainsPrompt(snapshot: unknown, prompt: string): boolean {
-    if (typeof snapshot !== "object" || snapshot === null || !("messages" in snapshot)) {
-        return false;
-    }
-    const messages = Reflect.get(snapshot, "messages");
-    return (
-        Array.isArray(messages) &&
-        messages.some(
-            (message) =>
-                typeof message === "object" &&
-                message !== null &&
-                Reflect.get(message, "role") === "user" &&
-                Reflect.get(message, "text") === prompt,
-        )
-    );
-}
-
-async function waitForTerminalSnapshot(
-    service: MobiusClient,
-    session: MiniClientSession,
-    event: MobiusSessionEvent,
-    expectedPrompt: string | undefined,
-    signal: AbortSignal,
-): Promise<unknown> {
-    const payload = event.payload;
-    if (!(payload instanceof MobiusTurnCompletedEvent) && !(payload instanceof MobiusTurnFailedEvent)) {
-        return await nativeMessages(service, session, signal);
-    }
-    let snapshot = await nativeMessages(service, session, signal);
-    if (expectedPrompt === undefined) {
-        return snapshot;
-    }
-    for (let attempt = 0; attempt < 20 && !snapshotContainsPrompt(snapshot, expectedPrompt); attempt += 1) {
-        await new Promise<void>((resolve, reject) => {
-            const complete = (): void => {
-                signal.removeEventListener("abort", abort);
-                resolve();
-            };
-            const timeout = globalThis.setTimeout(complete, 100);
-            const abort = (): void => {
-                globalThis.clearTimeout(timeout);
-                signal.removeEventListener("abort", abort);
-                reject(signal.reason);
-            };
-            signal.addEventListener("abort", abort, { once: true });
-        });
-        signal.throwIfAborted();
-        snapshot = await nativeMessages(service, session, signal);
-    }
-    return snapshot;
 }
 
 async function getCommand(directory: string, flags: ReadonlyMap<string, string>): Promise<void> {
@@ -717,44 +667,134 @@ async function getCommand(directory: string, flags: ReadonlyMap<string, string>)
     const connection = await sessionClient(state, session);
     const service = connection.service;
     const signal = shutdown.signal;
-    let snapshot: unknown;
-    let subscription: MobiusLiveEventSubscription | undefined;
-    const prompts = new Map(session.turns.map((turn) => [turn.turnId, turn.prompt]));
-    const observer: MobiusLiveSessionEventObserver = {
-        reconcile: async (connection) => {
-            snapshot = await nativeMessages(service, session, signal);
-            if (follow) {
-                output({ connection: connection.kind, sessionId: session.sessionId, snapshot });
-            }
-        },
-        receive: async (event) => {
-            if (event.payload instanceof MobiusTurnStartedEvent) {
-                prompts.set(event.payload.commandId, event.payload.prompt);
-            }
-            const isTerminal = terminal(event);
-            const commandId = eventCommandId(event);
-            const expectedPrompt = commandId === undefined ? undefined : prompts.get(commandId);
-            snapshot = isTerminal
-                ? await waitForTerminalSnapshot(service, session, event, expectedPrompt, signal)
-                : await nativeMessages(service, session, signal);
-            if (follow) {
-                output({ event, sessionId: session.sessionId, snapshot });
-            }
-            return !isTerminal;
-        },
-    };
+    let subscription: MobiusLiveEventSubscriptionV2 | undefined;
     try {
-        subscription = await service.events.subscribeLive(session.sessionId, observer, signal);
         if (!follow) {
-            subscription.close();
-            await subscription.completed;
-            output({ sessionId: session.sessionId, snapshot });
+            output({ events: await nativeEventsV2(service, session, signal), sessionId: session.sessionId });
             return;
         }
+        const seen = new Set<string>();
+        const observer: MobiusLiveSessionEventObserverV2 = {
+            reconcile: async (liveConnection) => {
+                const events = await nativeEventsV2(service, session, signal);
+                for (const event of events.history.events) {
+                    seen.add(event.eventId);
+                }
+                for (const event of events.executingPromptRequest?.events ?? []) {
+                    seen.add(event.eventId);
+                }
+                output({ connection: liveConnection.kind, events, sessionId: session.sessionId });
+            },
+            receive: async (event) => {
+                if (seen.has(event.eventId)) {
+                    return true;
+                }
+                seen.add(event.eventId);
+                output({ event, sessionId: session.sessionId });
+                return !terminalV2(event);
+            },
+        };
+        subscription = await service.events.subscribeLiveV2(session.sessionId, observer, signal);
         await subscription.completed;
     } finally {
         subscription?.close();
         connection.close();
+    }
+}
+
+function eventCommandIdV2(event: SessionEventV2): string | null {
+    return "commandId" in event.payload ? event.payload.commandId : null;
+}
+
+async function verifyEventLogCommand(directory: string, flags: ReadonlyMap<string, string>): Promise<void> {
+    const state = await readState(directory);
+    requireOnline(state);
+    const session = sessionFromState(state, requireFlag(flags, "session"));
+    const prompt = requireFlag(flags, "prompt");
+    const authority = client(state);
+    let execution: ClientConnection | undefined;
+    let subscription: MobiusLiveEventSubscriptionV2 | undefined;
+    try {
+        const configuration = selections(
+            (await loadSession(authority.service, state.runtimeId, session)).configOptions,
+        );
+        execution = await sessionClient(state, session);
+        const liveEvents: SessionEventV2[] = [];
+        const observer: MobiusLiveSessionEventObserverV2 = {
+            reconcile: () => Promise.resolve(),
+            receive: async (event) => {
+                liveEvents.push(event);
+                return !terminalV2(event);
+            },
+        };
+        subscription = await execution.service.events.subscribeLiveV2(session.sessionId, observer, shutdown.signal);
+        const turn = await execution.service.turns.submit(
+            session.sessionId,
+            {
+                additionalDirectoryIds: session.additionalDirectoryIds,
+                content: prompt,
+                disposition: SessionPromptDisposition.Reject,
+                idempotencyKey: identifier("verify-event-log"),
+                images: [],
+                resources: [],
+                sessionConfigurations: configuration,
+                targetCommandId: "",
+            },
+            operationSignal(),
+        );
+        await subscription.completed;
+        const start = liveEvents.findIndex(
+            (event) => event.payload.kind === "prompt.requested" && event.payload.commandId === turn.turnId,
+        );
+        const end = liveEvents.findIndex(
+            (event, index) => index >= start && terminalV2(event) && eventCommandIdV2(event) === turn.turnId,
+        );
+        if (start < 0 || end < start) {
+            throw new MiniClientError(
+                "event_log_mismatch",
+                "The live V2 event log did not contain the complete submitted prompt operation",
+            );
+        }
+        const liveRange = liveEvents.slice(start, end + 1);
+        const eventIds = new Set<string>();
+        let previousPosition: bigint | null = null;
+        for (const event of liveRange) {
+            const position = BigInt(event.position);
+            if (eventIds.has(event.eventId) || (previousPosition !== null && position <= previousPosition)) {
+                throw new MiniClientError(
+                    "event_log_mismatch",
+                    "The live V2 event log contains a duplicate or reordered record",
+                );
+            }
+            eventIds.add(event.eventId);
+            previousPosition = position;
+        }
+        const recovery = await nativeEventsV2(execution.service, session, shutdown.signal);
+        const firstPosition = BigInt(liveRange[0]?.position ?? "0");
+        const lastPosition = BigInt(liveRange.at(-1)?.position ?? "0");
+        const historyRange = recovery.history.events.filter((event) => {
+            const position = BigInt(event.position);
+            return position >= firstPosition && position <= lastPosition;
+        });
+        if (JSON.stringify(historyRange) !== JSON.stringify(liveRange)) {
+            throw new MiniClientError(
+                "event_log_mismatch",
+                "The live and historical V2 event records are not identical",
+            );
+        }
+        const updated = { ...session, turns: [...session.turns, { prompt, turnId: turn.turnId }] };
+        await writeState(directory, replaceSession(state, updated));
+        output({
+            count: liveRange.length,
+            firstPosition: liveRange[0]?.position ?? "",
+            lastPosition: liveRange.at(-1)?.position ?? "",
+            sessionId: session.sessionId,
+            verified: true,
+        });
+    } finally {
+        subscription?.close();
+        execution?.close();
+        authority.close();
     }
 }
 
@@ -772,7 +812,8 @@ type MiniClientCommand =
     | "status"
     | "steer"
     | "stop"
-    | "update-agent-configuration";
+    | "update-agent-configuration"
+    | "verify-event-log";
 
 function commandFlags(command: Command): ReadonlyMap<string, string> {
     const flags = new Map<string, string>();
@@ -842,6 +883,9 @@ async function runCommand(program: Command, command: Command, name: MiniClientCo
         case "get":
             await getCommand(directory, flags);
             break;
+        case "verify-event-log":
+            await verifyEventLogCommand(directory, flags);
+            break;
     }
 }
 
@@ -891,9 +935,12 @@ function createProgram(): Command {
     add("cancel-turn", "cancel a turn")
         .option("--session <id>", "Session identifier")
         .option("--turn <id>", "turn identifier");
-    add("get", "get native messages and optionally follow updates")
+    add("get", "get raw V2 Session events and optionally follow updates")
         .option("--session <id>", "Session identifier")
         .option("--follow", "follow Session updates");
+    add("verify-event-log", "submit a prompt and verify exact V2 live/history parity")
+        .option("--session <id>", "Session identifier")
+        .option("--prompt <text>", "prompt text");
     return program;
 }
 

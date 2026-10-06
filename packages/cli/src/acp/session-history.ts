@@ -1,5 +1,6 @@
 import type { SessionNotification } from "@agentclientprotocol/sdk";
 import {
+    type AcpSessionUpdateV2,
     type AgentDisplayContent,
     type NativeHistoryMessage,
     type NativeMessageActivity,
@@ -57,6 +58,7 @@ function historyContentCharacters(messages: readonly NativeHistoryMessage[]): nu
 export class AcpHistoryReplay {
     readonly #activities = new Map<string, AcpActivity>();
     readonly #messages: ReplayMessage[] = [];
+    readonly #updates: AcpSessionUpdateV2[] = [];
     readonly #turnActivityIds = new Set<string>();
     readonly #activityTracker = new AcpActivityTracker(
         async (activity) => {
@@ -79,7 +81,8 @@ export class AcpHistoryReplay {
     #characters = 0;
     #truncated = false;
 
-    readonly record = async (update: SessionNotification["update"]): Promise<void> => {
+    readonly record = async (update: SessionNotification["update"], rawUpdate: AcpSessionUpdateV2): Promise<void> => {
+        this.#updates.push(rawUpdate);
         if (update.sessionUpdate === "agent_thought_chunk") {
             if (update.content.type === "text") {
                 await this.#activityTracker.recordNarrative(
@@ -170,6 +173,24 @@ export class AcpHistoryReplay {
         this.#characters += bounded.length;
         this.#lastMessageId = id;
         this.trimMessages();
+    };
+
+    readonly eventPage = (
+        eventLimit: number,
+        cursor: string | null,
+    ): import("./session-contracts.ts").AcpNativeEventReplayV2 => {
+        const parsedCursor = cursor === null ? this.#updates.length : Number(cursor);
+        if (!Number.isSafeInteger(parsedCursor) || parsedCursor < 0 || parsedCursor > this.#updates.length) {
+            throw new Error("The native event cursor is invalid");
+        }
+        const endUpdate = parsedCursor;
+        const startUpdate = Math.max(0, endUpdate - eventLimit);
+        return {
+            nextCursor: startUpdate === 0 ? null : startUpdate.toString(),
+            startPosition: startUpdate + 1,
+            truncated: startUpdate > 0,
+            updates: this.#updates.slice(startUpdate, endUpdate),
+        };
     };
 
     readonly snapshot = async (): Promise<NativeSessionHistory> => {

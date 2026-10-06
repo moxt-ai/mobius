@@ -1,12 +1,13 @@
 import { chmodSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { decodeSessionEventV2, type SessionEventV2 } from "@moxt-ai/mobius-protocol";
 import Database from "better-sqlite3";
-import { and, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq } from "drizzle-orm";
 import { type BetterSQLite3Database, drizzle } from "drizzle-orm/better-sqlite3";
 import { z } from "zod";
 import { acpSessionStoreMigrations } from "../generated/acp-session-store-migrations.ts";
 import * as schema from "../schema/acp-session-store/index.ts";
-import { acpSession, deletedAcpSession } from "../schema/acp-session-store/index.ts";
+import { acpSession, deletedAcpSession, sessionEventV2 } from "../schema/acp-session-store/index.ts";
 
 export class AcpStoredSession {
     readonly additionalDirectories: readonly string[];
@@ -65,11 +66,13 @@ export class DeletedAcpStoredSession extends AcpStoredSessionLookup {
 }
 
 export interface AcpSessionStore {
+    readonly appendEventV2: (event: SessionEventV2) => void;
     readonly close: () => void;
     readonly findNative: (agentId: string, nativeSessionId: string) => readonly AcpStoredSession[];
     readonly list: () => readonly AcpStoredSession[];
     readonly markDeleted: (agentId: string, nativeSessionId: string) => readonly string[];
     readonly read: (sessionId: string) => AcpStoredSessionLookup;
+    readonly readEventsV2: (sessionId: string) => readonly SessionEventV2[];
     readonly remove: (sessionId: string) => void;
     readonly write: (session: AcpStoredSession) => void;
 }
@@ -77,10 +80,16 @@ export interface AcpSessionStore {
 export class MemoryAcpSessionStore implements AcpSessionStore {
     readonly #sessions = new Map<string, AcpStoredSession>();
     readonly #deleted = new Set<string>();
+    readonly #eventsV2 = new Map<string, readonly SessionEventV2[]>();
+
+    readonly appendEventV2 = (event: SessionEventV2): void => {
+        this.#eventsV2.set(event.sessionId, [...(this.#eventsV2.get(event.sessionId) ?? []), event]);
+    };
 
     readonly close = (): void => {
         this.#sessions.clear();
         this.#deleted.clear();
+        this.#eventsV2.clear();
     };
 
     readonly findNative = (agentId: string, nativeSessionId: string): readonly AcpStoredSession[] =>
@@ -96,6 +105,7 @@ export class MemoryAcpSessionStore implements AcpSessionStore {
         for (const id of ids) {
             this.#sessions.delete(id);
             this.#deleted.add(id);
+            this.#eventsV2.delete(id);
         }
         return ids;
     };
@@ -110,7 +120,10 @@ export class MemoryAcpSessionStore implements AcpSessionStore {
 
     readonly remove = (sessionId: string): void => {
         this.#sessions.delete(sessionId);
+        this.#eventsV2.delete(sessionId);
     };
+
+    readonly readEventsV2 = (sessionId: string): readonly SessionEventV2[] => this.#eventsV2.get(sessionId) ?? [];
 
     readonly write = (session: AcpStoredSession): void => {
         this.#sessions.set(session.sessionId, session);
@@ -191,6 +204,18 @@ export class SqliteAcpSessionStore implements AcpSessionStore {
         this.#sqliteDatabase.close();
     };
 
+    readonly appendEventV2 = (event: SessionEventV2): void => {
+        this.#database
+            .insert(sessionEventV2)
+            .values({
+                eventId: event.eventId,
+                eventJson: JSON.stringify(event),
+                position: Number(event.position),
+                sessionId: event.sessionId,
+            })
+            .run();
+    };
+
     readonly findNative = (agentId: string, nativeSessionId: string): readonly AcpStoredSession[] =>
         this.#database
             .select()
@@ -216,6 +241,7 @@ export class SqliteAcpSessionStore implements AcpSessionStore {
                 .run();
             for (const id of ids) {
                 transaction.insert(deletedAcpSession).values({ sessionId: id }).onConflictDoNothing().run();
+                transaction.delete(sessionEventV2).where(eq(sessionEventV2.sessionId, id)).run();
             }
         });
         return ids;
@@ -235,8 +261,20 @@ export class SqliteAcpSessionStore implements AcpSessionStore {
         return row === undefined ? new MissingAcpStoredSession() : new FoundAcpStoredSession(decodeStoredSession(row));
     };
 
+    readonly readEventsV2 = (sessionId: string): readonly SessionEventV2[] =>
+        this.#database
+            .select({ eventJson: sessionEventV2.eventJson })
+            .from(sessionEventV2)
+            .where(eq(sessionEventV2.sessionId, sessionId))
+            .orderBy(asc(sessionEventV2.position))
+            .all()
+            .map((row) => decodeSessionEventV2(row.eventJson));
+
     readonly remove = (sessionId: string): void => {
-        this.#database.delete(acpSession).where(eq(acpSession.sessionId, sessionId)).run();
+        this.#database.transaction((transaction) => {
+            transaction.delete(acpSession).where(eq(acpSession.sessionId, sessionId)).run();
+            transaction.delete(sessionEventV2).where(eq(sessionEventV2.sessionId, sessionId)).run();
+        });
     };
 
     readonly write = (session: AcpStoredSession): void => {

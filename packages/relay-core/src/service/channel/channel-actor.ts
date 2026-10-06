@@ -28,6 +28,7 @@ import {
     decodeSessionListCommand,
     decodeSessionLiveHistoryLoad,
     decodeSessionLiveHistoryPageLoad,
+    decodeSessionLiveHistoryV2PageLoad,
     decodeSessionPermissionRespondCommand,
     decodeSessionPrepareCommand,
     decodeSessionPromptCommand,
@@ -55,6 +56,7 @@ import {
     SESSION_CONFIGURE_KIND,
     SESSION_ELICITATION_RESPOND_KIND,
     SESSION_EVENT_KIND,
+    SESSION_EVENT_V2_KIND,
     SESSION_FAILED_KIND,
     SESSION_LIST_KIND,
     SESSION_LISTED_KIND,
@@ -62,6 +64,8 @@ import {
     SESSION_LIVE_HISTORY_LOADED_KIND,
     SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
     SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
+    SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND,
+    SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND,
     SESSION_OPERATION_FAILED_KIND,
     SESSION_PERMISSION_RESPOND_KIND,
     SESSION_PREPARE_KIND,
@@ -228,6 +232,10 @@ export class ChannelActor {
                 this.#liveEvents.receive(message);
                 return;
             }
+            if (kind === SESSION_EVENT_V2_KIND) {
+                this.broadcast(this.#peers.hosts(), encodeDaemonToServiceMessage(message));
+                return;
+            }
             if (kind === NATIVE_SESSION_RESULT_KIND) {
                 const result = message;
                 if (result.action === "import" || result.action === "fork" || result.action === "fork-recorded") {
@@ -285,7 +293,11 @@ export class ChannelActor {
                 this.returnAgentCatalogRefreshResult(message.requestId, encodeDaemonToServiceMessage(message));
                 return;
             }
-            if (kind === SESSION_LIVE_HISTORY_LOADED_KIND || kind === SESSION_LIVE_HISTORY_PAGE_LOADED_KIND) {
+            if (
+                kind === SESSION_LIVE_HISTORY_LOADED_KIND ||
+                kind === SESSION_LIVE_HISTORY_PAGE_LOADED_KIND ||
+                kind === SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND
+            ) {
                 const result = message;
                 const pending = this.#pendingLiveSessionHistory.get(result.requestId);
                 if (pending === undefined || pending.expiresAt <= this.#clock.now()) {
@@ -389,14 +401,20 @@ export class ChannelActor {
                 this.forwardControl(socket, command, request.requestId, request.sessionId, request);
                 return;
             }
-            if (kind === SESSION_LIVE_HISTORY_LOAD_KIND || kind === SESSION_LIVE_HISTORY_PAGE_LOAD_KIND) {
+            if (
+                kind === SESSION_LIVE_HISTORY_LOAD_KIND ||
+                kind === SESSION_LIVE_HISTORY_PAGE_LOAD_KIND ||
+                kind === SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND
+            ) {
                 if (!socket.permitsLiveSessionHistory()) {
                     throw new ProtocolMessageError("Live Session history requires an internal connection");
                 }
                 const command =
                     kind === SESSION_LIVE_HISTORY_LOAD_KIND
                         ? decodeSessionLiveHistoryLoad(message)
-                        : decodeSessionLiveHistoryPageLoad(message);
+                        : kind === SESSION_LIVE_HISTORY_PAGE_LOAD_KIND
+                          ? decodeSessionLiveHistoryPageLoad(message)
+                          : decodeSessionLiveHistoryV2PageLoad(message);
                 const now = this.#clock.now();
                 for (const [requestId, pending] of this.#pendingLiveSessionHistory) {
                     if (pending.expiresAt <= now) {

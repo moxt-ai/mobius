@@ -11,6 +11,7 @@ import {
 import {
     AGENT_CONTENT_KIND,
     type AgentDisplayContent,
+    decodeAcpSessionUpdateV2,
     decodeAgentPromptResponse,
     type NativeSessionHistory,
     SESSION_COMMANDS_UPDATED_KIND,
@@ -47,6 +48,7 @@ import { sessionConfigProtocolForAgent } from "./session-config/session-config-r
 import {
     type AcpConfigureOptions,
     type AcpElicitationResponseOptions,
+    type AcpNativeEventReplayV2,
     type AcpPermissionResponseOptions,
     AcpPreparedSession,
     type AcpPrepareOptions,
@@ -286,6 +288,22 @@ export class AgentSession implements AcpClientHandler {
         }
         const loaded = await this.#loadSession(signal, "ACP agent exited while loading history");
         return await embedLocalHistoryImages(await loaded.history.snapshot(), signal);
+    };
+
+    readonly loadHistoryEventsV2 = async (
+        eventLimit: number,
+        cursor: string | null,
+        signal: AbortSignal,
+    ): Promise<AcpNativeEventReplayV2> => {
+        if (!this.#capabilities.loadSession) {
+            throw new AcpExecutionError(
+                "This Agent restores context but does not provide message history.",
+                {},
+                "native_history_unsupported",
+            );
+        }
+        const loaded = await this.#loadSession(signal, "ACP agent exited while loading history");
+        return loaded.history.eventPage(eventLimit, cursor);
     };
 
     async #loadSession(signal: AbortSignal, exitMessage: string): Promise<LoadedSession> {
@@ -990,8 +1008,14 @@ export class AgentSession implements AcpClientHandler {
     readonly #processUpdate = async (notification: SessionNotification): Promise<void> => {
         this.assertNativeSession(notification.sessionId);
         const update = notification.update;
+        const rawUpdate = decodeAcpSessionUpdateV2(JSON.stringify(update));
         if (this.#sessionLoad.kind !== "not-requested") {
-            await this.#sessionLoad.history.record(update);
+            await this.#sessionLoad.history.record(update, rawUpdate);
+        } else {
+            const onAcpUpdate = this.#getObserver().onAcpUpdate;
+            if (onAcpUpdate !== undefined) {
+                await onAcpUpdate(this.#mobiusSessionId, rawUpdate);
+            }
         }
         if (
             this.#sessionLoad.kind === "capturing" &&

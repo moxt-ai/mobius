@@ -3,8 +3,10 @@ import {
     type Attempt,
     decodeAgentSettingsDiscoveredEvent,
     decodeNativeMessagePage,
+    decodeNativeSessionEventsV2,
     decodeNativeSessionResult,
     decodeSessionConfigUpdatedEvent,
+    decodeSessionEventV2,
     decodeSessionReadyEvent,
     decodeSessionsListedEvent,
     decodeSessionsQueriedEvent,
@@ -12,10 +14,13 @@ import {
     type Interaction,
     isIdentifier,
     MOBIUS_API_PREFIX,
+    type NativeEventPageRequestV2,
     type NativeMessagePage,
+    type NativeSessionEventsV2,
     type NativeSessionRequest,
     type NativeSessionResult,
     type SessionConfigureCommand,
+    type SessionEventV2,
     SessionPromptDisposition,
     type WorkspaceEntriesEvent,
 } from "@moxt-ai/mobius-protocol";
@@ -1361,6 +1366,54 @@ export class MobiusSessionResources {
         return decodeNativeMessagePage(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal));
     };
 
+    readonly queryRuntimeNativeEventsV2 = async (
+        runtimeId: string,
+        sessionId: string,
+        identity: {
+            readonly additionalDirectoryIds: readonly string[];
+            readonly agentId: string;
+            readonly directoryId: string;
+        },
+        page: NativeEventPageRequestV2,
+        signal: AbortSignal,
+    ): Promise<NativeSessionEventsV2> => {
+        const result = await this.#executor.post(
+            projectPath(
+                this.#projectId,
+                `runtimes/${encodeURIComponent(runtimeId)}/sessions/${encodeURIComponent(sessionId)}/native-events-v2`,
+            ),
+            { ...identity, cursor: page.cursor, eventLimit: page.eventLimit },
+            signal,
+        );
+        return decodeNativeSessionEventsV2(result);
+    };
+
+    readonly querySessionNativeEventsV2 = async (
+        sessionId: string,
+        identity: {
+            readonly additionalDirectoryIds: readonly string[];
+            readonly agentId: string;
+            readonly directoryId: string;
+        },
+        page: NativeEventPageRequestV2,
+        signal: AbortSignal,
+    ): Promise<NativeSessionEventsV2> => {
+        const path = requestUrl(
+            new URL("https://mobius.invalid/"),
+            sessionPath(this.#projectId, sessionId, "native-events-v2"),
+        );
+        path.searchParams.set("agentId", identity.agentId);
+        path.searchParams.set("directoryId", identity.directoryId);
+        path.searchParams.set("eventLimit", page.eventLimit.toString());
+        if (page.cursor !== null) {
+            path.searchParams.set("cursor", page.cursor);
+        }
+        for (const directoryId of identity.additionalDirectoryIds) {
+            path.searchParams.append("additionalDirectoryId", directoryId);
+        }
+        return decodeNativeSessionEventsV2(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal));
+    };
+
     readonly readSessionExecution = async (
         sessionId: string,
         identity: {
@@ -1873,6 +1926,11 @@ export interface MobiusLiveSessionEventObserver extends MobiusSessionEventObserv
     readonly reconcile: (connection: MobiusLiveSessionConnection) => Promise<void>;
 }
 
+export interface MobiusLiveSessionEventObserverV2 {
+    readonly receive: (event: SessionEventV2) => Promise<boolean>;
+    readonly reconcile: (connection: MobiusLiveSessionConnection) => Promise<void>;
+}
+
 export class MobiusLiveEventSubscription {
     readonly #controller = new AbortController();
     readonly #executor: MobiusRequestExecutor;
@@ -2014,12 +2072,151 @@ export class MobiusLiveEventSubscription {
     };
 }
 
+export class MobiusLiveEventSubscriptionV2 {
+    readonly #controller = new AbortController();
+    readonly #executor: MobiusRequestExecutor;
+    readonly #maximumReconnectAttempts: number;
+    readonly #observer: MobiusLiveSessionEventObserverV2;
+    readonly #path: string;
+    #closed = false;
+    readonly connected: Promise<void>;
+    readonly completed: Promise<void>;
+
+    constructor(
+        executor: MobiusRequestExecutor,
+        path: string,
+        observer: MobiusLiveSessionEventObserverV2,
+        signal: AbortSignal,
+        maximumReconnectAttempts: number,
+    ) {
+        this.#executor = executor;
+        this.#maximumReconnectAttempts = maximumReconnectAttempts;
+        this.#observer = observer;
+        this.#path = path;
+        const abort = (): void => this.#controller.abort(signal.reason);
+        if (signal.aborted) {
+            abort();
+        } else {
+            signal.addEventListener("abort", abort, { once: true });
+        }
+        let resolveConnected = (): void => undefined;
+        let rejectConnected = (_cause: unknown): void => undefined;
+        this.connected = new Promise<void>((resolve, reject) => {
+            resolveConnected = resolve;
+            rejectConnected = reject;
+        });
+        this.completed = this.run(resolveConnected, rejectConnected).finally(() =>
+            signal.removeEventListener("abort", abort),
+        );
+    }
+
+    readonly close = (): void => {
+        if (this.#closed) {
+            return;
+        }
+        this.#closed = true;
+        this.#controller.abort(new Error("The live V2 Session event subscription closed"));
+    };
+
+    private readonly run = async (
+        resolveConnected: () => void,
+        rejectConnected: (cause: unknown) => void,
+    ): Promise<void> => {
+        let attempts = 0;
+        let connectionState: MobiusLiveSessionConnection = { kind: "initial" };
+        while (!this.#closed) {
+            let connection: LiveEventConnection | null = null;
+            try {
+                connection = await this.#executor.openLiveEventStream(this.#path, this.#controller.signal);
+                await this.#observer.reconcile(connectionState);
+                if (connectionState.kind === "initial") {
+                    resolveConnected();
+                    connectionState = { kind: "reconnected" };
+                }
+                attempts = 0;
+                const reader = connection.events.getReader();
+                try {
+                    while (!this.#closed) {
+                        const result = await reader.read();
+                        if (result.done) {
+                            throw new MobiusConnectionError("The live V2 Session event stream disconnected");
+                        }
+                        let value: unknown;
+                        try {
+                            value = JSON.parse(result.value.data);
+                        } catch (cause) {
+                            throw new MobiusProtocolError("The live V2 Session event stream contains invalid JSON", {
+                                cause,
+                            });
+                        }
+                        const event = decodeSessionEventV2(value);
+                        if (!(await this.#observer.receive(event))) {
+                            this.close();
+                        }
+                    }
+                } finally {
+                    reader.releaseLock();
+                }
+            } catch (cause) {
+                if (this.#closed || this.#controller.signal.aborted) {
+                    if (connectionState.kind === "initial") {
+                        rejectConnected(new MobiusCancellationError({ cause }));
+                    }
+                    return;
+                }
+                if (
+                    cause instanceof MobiusProtocolError ||
+                    (cause instanceof MobiusApiError && cause.status < 500) ||
+                    (cause instanceof MobiusError &&
+                        !(cause instanceof MobiusConnectionError) &&
+                        !(cause instanceof MobiusTimeoutError) &&
+                        !(cause instanceof MobiusApiError))
+                ) {
+                    if (connectionState.kind === "initial") {
+                        rejectConnected(cause);
+                    }
+                    throw cause;
+                }
+                attempts += 1;
+                if (attempts > this.#maximumReconnectAttempts) {
+                    const failure = new MobiusConnectionError("The live V2 Session event stream could not recover", {
+                        cause,
+                    });
+                    if (connectionState.kind === "initial") {
+                        rejectConnected(failure);
+                    }
+                    throw failure;
+                }
+                await this.reconnectDelay(attempts);
+            } finally {
+                connection?.close();
+            }
+        }
+    };
+
+    private readonly reconnectDelay = async (attempt: number): Promise<void> => {
+        const delayMilliseconds = Math.min(250 * 2 ** (attempt - 1), 2_000);
+        await new Promise<void>((resolve, reject) => {
+            const timeoutId = globalThis.setTimeout(() => {
+                this.#controller.signal.removeEventListener("abort", abort);
+                resolve();
+            }, delayMilliseconds);
+            const abort = (): void => {
+                globalThis.clearTimeout(timeoutId);
+                reject(new MobiusCancellationError());
+            };
+            this.#controller.signal.addEventListener("abort", abort, { once: true });
+        });
+    };
+}
+
 export class MobiusEventResources {
     readonly #executor: MobiusRequestExecutor;
     readonly #maximumReconnectAttempts: number;
     readonly #projectId: string;
     readonly #subscriptions = new Set<MobiusEventSubscription>();
     readonly #liveSubscriptions = new Set<MobiusLiveEventSubscription>();
+    readonly #liveSubscriptionsV2 = new Set<MobiusLiveEventSubscriptionV2>();
 
     constructor(executor: MobiusRequestExecutor, projectId: string, maximumReconnectAttempts: number) {
         this.#executor = executor;
@@ -2087,6 +2284,26 @@ export class MobiusEventResources {
         return subscription;
     };
 
+    readonly subscribeLiveV2 = async (
+        sessionId: string,
+        observer: MobiusLiveSessionEventObserverV2,
+        signal: AbortSignal,
+    ): Promise<MobiusLiveEventSubscriptionV2> => {
+        const subscription = new MobiusLiveEventSubscriptionV2(
+            this.#executor,
+            sessionPath(this.#projectId, sessionId, "events-v2"),
+            observer,
+            signal,
+            this.#maximumReconnectAttempts,
+        );
+        this.#liveSubscriptionsV2.add(subscription);
+        void subscription.completed
+            .finally(() => this.#liveSubscriptionsV2.delete(subscription))
+            .catch(() => undefined);
+        await subscription.connected;
+        return subscription;
+    };
+
     readonly list = async (
         sessionId: string,
         page: MobiusPageRequest,
@@ -2127,6 +2344,10 @@ export class MobiusEventResources {
             subscription.close();
         }
         this.#liveSubscriptions.clear();
+        for (const subscription of this.#liveSubscriptionsV2) {
+            subscription.close();
+        }
+        this.#liveSubscriptionsV2.clear();
     };
 }
 

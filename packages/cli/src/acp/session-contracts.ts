@@ -1,4 +1,5 @@
 import type {
+    AcpSessionUpdateV2,
     AgentContentEvent,
     AgentPromptResponse,
     NativeSessionHistory,
@@ -35,6 +36,13 @@ export interface AcpNativeHistoryReader {
         nativeSessionId: string,
         nativeTurn: () => { readonly commandId: string; readonly nativeTurnId: string } | null,
     ) => Promise<NativeSessionHistory | null>;
+}
+
+export interface AcpNativeEventReplayV2 {
+    readonly nextCursor: string | null;
+    readonly startPosition: number;
+    readonly truncated: boolean;
+    readonly updates: readonly AcpSessionUpdateV2[];
 }
 
 export interface AcpAgentSettingsInspectionOptions {
@@ -94,6 +102,7 @@ export interface AcpElicitationResponseOptions {
 export type AcpPromptResult = AgentPromptResponse;
 
 export interface AcpSessionObserver {
+    readonly onAcpUpdate?: (sessionId: string, update: AcpSessionUpdateV2) => Promise<void>;
     readonly onCommands: (event: SessionCommandsUpdatedEvent) => Promise<void>;
     readonly onConfig: (event: SessionConfigUpdatedEvent) => Promise<void>;
     readonly onContent: (event: AgentContentEvent) => Promise<void>;
@@ -106,6 +115,7 @@ export interface AcpSessionObserver {
 }
 
 export class NullAcpSessionObserver implements AcpSessionObserver {
+    readonly onAcpUpdate = (_sessionId: string, _update: AcpSessionUpdateV2): Promise<void> => Promise.resolve();
     readonly onCommands = (): Promise<void> => Promise.resolve();
     readonly onConfig = (): Promise<void> => Promise.resolve();
     readonly onContent = (): Promise<void> => Promise.resolve();

@@ -34,6 +34,97 @@ describe("native session history", () => {
         },
     );
 
+    it("Given ACP replays committed native updates, When Runtime loads V2 source facts, Then every accepted notification is exposed once without V1 activity folding", async () => {
+        const f = await fixture("OpenCode");
+        try {
+            const nativeSessionId = await f.seed("Preserve this update");
+            const replay = await f.sessions.previewNativeSessionEventsV2(
+                {
+                    additionalDirectories: [],
+                    agent: f.agent,
+                    cwd: f.workspace,
+                    sessionId: "v2-history-query",
+                    signal: new AbortController().signal,
+                },
+                nativeSessionId,
+                50,
+                null,
+            );
+
+            expect(replay.updates).toMatchObject([
+                {
+                    content: { text: "Preserve this update", type: "text" },
+                    messageId: "user-1",
+                    sessionUpdate: "user_message_chunk",
+                },
+                {
+                    content: { text: "Inspecting the workspace", type: "text" },
+                    messageId: "reasoning-assistant-1",
+                    sessionUpdate: "agent_thought_chunk",
+                },
+                {
+                    sessionUpdate: "tool_call",
+                    toolCallId: "tool-assistant-1",
+                },
+                {
+                    sessionUpdate: "tool_call_update",
+                    toolCallId: "tool-assistant-1",
+                },
+                {
+                    sessionUpdate: "tool_call",
+                    toolCallId: "error-assistant-1",
+                },
+                {
+                    sessionUpdate: "tool_call_update",
+                    toolCallId: "error-assistant-1",
+                },
+                {
+                    content: { text: "OpenCode turn 1: Preserve this update", type: "text" },
+                    messageId: "assistant-1",
+                    sessionUpdate: "agent_message_chunk",
+                },
+            ]);
+
+            const newestMessage = await f.sessions.previewNativeSessionEventsV2(
+                {
+                    additionalDirectories: [],
+                    agent: f.agent,
+                    cwd: f.workspace,
+                    sessionId: "v2-history-query",
+                    signal: new AbortController().signal,
+                },
+                nativeSessionId,
+                6,
+                null,
+            );
+            expect(newestMessage.nextCursor).not.toBeNull();
+            expect(newestMessage.updates.map((update) => update.sessionUpdate)).toEqual([
+                "agent_thought_chunk",
+                "tool_call",
+                "tool_call_update",
+                "tool_call",
+                "tool_call_update",
+                "agent_message_chunk",
+            ]);
+            const olderMessage = await f.sessions.previewNativeSessionEventsV2(
+                {
+                    additionalDirectories: [],
+                    agent: f.agent,
+                    cwd: f.workspace,
+                    sessionId: "v2-history-query",
+                    signal: new AbortController().signal,
+                },
+                nativeSessionId,
+                6,
+                newestMessage.nextCursor,
+            );
+            expect(olderMessage.nextCursor).toBeNull();
+            expect([...olderMessage.updates, ...newestMessage.updates]).toEqual(replay.updates);
+        } finally {
+            await f.close();
+        }
+    });
+
     it("Given a long OpenCode Session, When Runtime previews or loads its native messages, Then both return the latest 50 messages", async () => {
         const f = await fixture("OpenCode");
         const sessionId = "long-working-session";

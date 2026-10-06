@@ -6,6 +6,7 @@ import {
     decodeSessionEventEnvelope,
     decodeSessionPromptCommand,
     encodeSessionEventEnvelope,
+    encodeSessionEventEnvelopeV2,
     encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
 } from "@moxt-ai/mobius-protocol";
@@ -759,6 +760,44 @@ describe.sequential("Platform Session-only boundary", () => {
                 ),
                 201,
             );
+            const v2Response = await worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/events-v2`,
+                    {
+                        headers: {
+                            authorization: `Bearer ${text(browserAccess, "credential")}`,
+                            Upgrade: "websocket",
+                        },
+                    },
+                ),
+                environment,
+            );
+            expect(v2Response.status).toBe(101);
+            if (v2Response.webSocket === null) {
+                throw new Error("Expected the V2 Session event socket");
+            }
+            const v2Socket = v2Response.webSocket;
+            const v2Messages = new SocketMessages(v2Socket);
+            v2Socket.accept();
+            const rawEvent = {
+                eventId: "event-v2-1",
+                payload: {
+                    kind: "acp.session.update" as const,
+                    update: {
+                        content: { text: "raw local answer", type: "text" as const },
+                        messageId: "message-v2-1",
+                        sessionUpdate: "agent_message_chunk" as const,
+                    },
+                },
+                position: "1",
+                provenance: { kind: "original" as const },
+                recordedAt: "2026-09-18T00:00:00.000Z",
+                sessionId,
+            };
+            daemon.send(encodeSessionEventEnvelopeV2({ event: rawEvent, kind: "session.event.v2" }));
+            expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "session.event.v2" });
+            expect(JSON.parse(await v2Messages.next())).toEqual(rawEvent);
+            v2Socket.close(1000, "V2 browser test complete");
             const transportResponse = await worker.fetch(
                 new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/transport`, { headers: { Upgrade: "websocket" } }),
                 environment,
