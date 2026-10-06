@@ -111,8 +111,10 @@ export function createDaemonCommandHandler({
         timer,
         resolveEnvironment: resolveAgentCatalogEnvironment,
     });
-    const queueChanged = (sessionId: string): void =>
+    const queueChanged = (sessionId: string): void => {
         publisher.publish(sessionId, { kind: "session.queue.changed", sessionId });
+        eventLogV2.queueChanged(sessionId);
+    };
     const activeTurnRecovery = (sessionId: string) =>
         activeTurns.recovery((command) => command.sessionId === sessionId);
     const nativeRequestHandler = createNativeSessionRequestHandler({
@@ -164,7 +166,6 @@ export function createDaemonCommandHandler({
                     directories,
                     audit,
                     sessions,
-                    eventLogV2.recovery,
                     eventLogV2.executingPromptRequest,
                     signal,
                 );

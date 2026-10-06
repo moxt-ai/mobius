@@ -742,7 +742,7 @@ const sessionPermissionRespondCommandSchema = z
 
 export type SessionPermissionRespondCommand = z.infer<typeof sessionPermissionRespondCommandSchema>;
 
-const sessionPermissionResolvedEventSchema = z
+export const sessionPermissionResolvedEventSchema = z
     .strictObject({
         interactionId: IDENTIFIER,
         kind: z.literal(SESSION_PERMISSION_RESOLVED_KIND),
@@ -783,7 +783,7 @@ const sessionElicitationRespondCommandSchema = z
 
 export type SessionElicitationRespondCommand = z.infer<typeof sessionElicitationRespondCommandSchema>;
 
-const sessionElicitationResolvedEventSchema = z
+export const sessionElicitationResolvedEventSchema = z
     .strictObject({
         action: z.enum(["accept", "cancel", "decline", "complete"]),
         interactionId: IDENTIFIER,

@@ -17,6 +17,7 @@ import {
     type Identifier,
     isIdentifier,
     MOBIUS_API_PREFIX,
+    RUNTIME_WORKSPACE_BINDING_ID,
 } from "@moxt-ai/mobius-protocol";
 import {
     acceptWebSocketHttpTransport,
@@ -744,12 +745,6 @@ export function createPlatformApplication(
             return new Response(null, { status: 101, webSocket: client });
         })
         .get("/:sessionId/events-v2", sessionAccessTargetMiddleware, async (context) => {
-            if (context.req.header("upgrade")?.toLowerCase() !== "websocket") {
-                return context.json(
-                    { error: { code: "websocket_upgrade_required", message: "A WebSocket upgrade is required" } },
-                    426,
-                );
-            }
             const credential = (context.req.header("authorization") ?? "").match(/^Bearer ([^\s]+)$/u)?.[1];
             if (credential === undefined) {
                 return context.json(
@@ -762,6 +757,48 @@ export function createPlatformApplication(
                 credential,
                 context.req.raw.signal,
             );
+            if (context.req.header("upgrade")?.toLowerCase() !== "websocket") {
+                const identity = await runtimeSessionIdentity(
+                    context.var.relay,
+                    {
+                        projectId: target.projectId,
+                        runtimeId: target.runtimeId,
+                        sessionId: context.req.param("sessionId"),
+                    },
+                    context.req.raw.signal,
+                );
+                const result = await context.var.relay.services.runtimePairings.requestProjectScopeControl(
+                    new ProjectScope(target.projectId),
+                    target.runtimeId,
+                    decodeSessionLiveHistoryV2PageLoad(
+                        JSON.stringify({
+                            additionalDirectoryIds: identity.additionalDirectories.map(
+                                (directory) => directory.directoryId,
+                            ),
+                            agentId: identity.agentId,
+                            bindingId: RUNTIME_WORKSPACE_BINDING_ID,
+                            cursor: context.req.query("cursor") ?? null,
+                            directoryId: identity.directoryId,
+                            eventLimit: v.parse(
+                                v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(10_000)),
+                                Number(context.req.query("limit") ?? "50"),
+                            ),
+                            kind: "session.live-history.v2.page.load",
+                            requestId: crypto.randomUUID(),
+                            sessionId: context.req.param("sessionId"),
+                        }),
+                    ),
+                    context.req.raw.signal,
+                );
+                if (result.kind !== "session.live-history.v2.page.loaded") {
+                    throw new PairingDirectoryError(
+                        "invalid_request",
+                        "The Runtime returned invalid V2 Session events",
+                    );
+                }
+                context.header("Cache-Control", "no-store");
+                return context.json(result.events.history);
+            }
             const host = await context.var.relay.services.runtimePairings.openProjectSessionEventHost(
                 new ProjectScope(target.projectId),
                 target.runtimeId,

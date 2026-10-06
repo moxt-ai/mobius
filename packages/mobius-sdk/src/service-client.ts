@@ -2,10 +2,12 @@ import {
     type AgentSettingsDiscoveredEvent,
     type Attempt,
     decodeAgentSettingsDiscoveredEvent,
+    decodeMobiusSessionExportV2,
     decodeNativeMessagePage,
     decodeNativeSessionEventsV2,
     decodeNativeSessionResult,
     decodeSessionConfigUpdatedEvent,
+    decodeSessionEventLogPageV2,
     decodeSessionEventV2,
     decodeSessionReadyEvent,
     decodeSessionsListedEvent,
@@ -14,12 +16,14 @@ import {
     type Interaction,
     isIdentifier,
     MOBIUS_API_PREFIX,
+    type MobiusSessionExportV2,
     type NativeEventPageRequestV2,
     type NativeMessagePage,
     type NativeSessionEventsV2,
     type NativeSessionRequest,
     type NativeSessionResult,
     type SessionConfigureCommand,
+    type SessionEventLogPageV2,
     type SessionEventV2,
     SessionPromptDisposition,
     type WorkspaceEntriesEvent,
@@ -1205,6 +1209,11 @@ export class MobiusSessionResources {
     readonly export = async (sessionId: string, signal: AbortSignal): Promise<MobiusSessionExport> =>
         decodeMobiusSessionExport(await this.#executor.get(sessionPath(this.#projectId, sessionId, "export"), signal));
 
+    readonly exportV2 = async (sessionId: string, signal: AbortSignal): Promise<MobiusSessionExportV2> =>
+        decodeMobiusSessionExportV2(
+            await this.#executor.get(sessionPath(this.#projectId, sessionId, "export-v2"), signal),
+        );
+
     readonly import = async (
         exported: MobiusSessionExport,
         targetBinding: MobiusSessionImportBinding,
@@ -1220,6 +1229,33 @@ export class MobiusSessionResources {
                 },
                 signal,
             ),
+        );
+
+    readonly importV2 = async (
+        exported: MobiusSessionExportV2,
+        targetBinding: MobiusSessionImportBinding,
+        signal: AbortSignal,
+    ): Promise<MobiusSession> => {
+        const validated = decodeMobiusSessionExportV2(exported);
+        return decodeMobiusSession(
+            await this.#executor.post(
+                projectPath(this.#projectId, "session-imports-v2"),
+                { ...validated, targetBinding },
+                signal,
+            ),
+        );
+    };
+
+    readonly forkRecordedV2 = async (
+        sessionId: string,
+        request: {
+            readonly throughEventId: string;
+            readonly targetBinding: MobiusSessionImportBinding;
+        },
+        signal: AbortSignal,
+    ): Promise<MobiusSession> =>
+        decodeMobiusSession(
+            await this.#executor.post(sessionPath(this.#projectId, sessionId, "forks-v2"), request, signal),
         );
 
     readonly read = async (sessionId: string, signal: AbortSignal): Promise<MobiusSession> =>
@@ -2302,6 +2338,22 @@ export class MobiusEventResources {
             .catch(() => undefined);
         await subscription.connected;
         return subscription;
+    };
+
+    readonly listV2 = async (
+        sessionId: string,
+        page: MobiusPageRequest,
+        signal: AbortSignal,
+    ): Promise<SessionEventLogPageV2> => {
+        const path = requestUrl(
+            new URL("https://mobius.invalid/"),
+            sessionPath(this.#projectId, sessionId, "events-v2"),
+        );
+        path.searchParams.set("limit", page.limit.toString());
+        if (page.cursor.length > 0) {
+            path.searchParams.set("cursor", page.cursor);
+        }
+        return decodeSessionEventLogPageV2(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal));
     };
 
     readonly list = async (

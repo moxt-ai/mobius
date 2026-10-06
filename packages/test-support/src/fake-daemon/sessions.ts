@@ -5,6 +5,7 @@ import { appendOutput } from "./turn-output.ts";
 /** The sole owner of session, active-turn, queue and historical state. */
 export class FakeSessions {
     readonly #lastText = new Map<string, Extract<p.RecordedSessionEvent, { readonly kind: "agent.message.delta" }>>();
+    readonly #lastTextV2 = new Map<string, p.SessionEventV2>();
     readonly #sessions = new Map<string, Session>();
     readonly #send: (message: string) => void;
     readonly #options: FakeDaemonOptions;
@@ -23,7 +24,18 @@ export class FakeSessions {
         if (event === undefined) {
             throw new Error("No text to replay for this running prompt");
         }
-        this.event(event.sessionId, event);
+        this.#send(
+            p.encodeSessionEventEnvelope({
+                kind: "session.event",
+                sessionId: event.sessionId,
+                payload: p.encodeRecordedSessionEvent(event),
+            }),
+        );
+        const eventV2 = this.#lastTextV2.get(event.sessionId);
+        if (eventV2 === undefined) {
+            throw new Error("No V2 text to replay for this running prompt");
+        }
+        this.#send(p.encodeSessionEventEnvelopeV2({ event: eventV2, kind: "session.event.v2" }));
     };
     readonly continueReply = (prompt: string, plan: ReplyPlan): void => {
         const matches = [...this.#sessions.values()].filter(
@@ -60,6 +72,7 @@ export class FakeSessions {
                 updatedAt: "2026-01-01T00:00:00Z",
             },
             history: [],
+            eventsV2: [],
             execution: { kind: "idle" },
         };
         this.#sessions.set(id, session);
@@ -73,7 +86,128 @@ export class FakeSessions {
                 payload: p.encodeRecordedSessionEvent(event),
             }),
         );
+        for (const payload of this.#v2Payloads(event)) {
+            const recorded = this.#eventV2(sessionId, payload);
+            if (event.kind === "agent.message.delta") {
+                this.#lastTextV2.set(sessionId, recorded);
+            }
+        }
     };
+    #eventV2(sessionId: string, payload: p.SessionEventPayloadV2): p.SessionEventV2 {
+        const session = this.prepare(sessionId);
+        const recorded: p.SessionEventV2 = {
+            eventId: crypto.randomUUID(),
+            ...payload,
+            position: (session.eventsV2.length + 1).toString(),
+            provenance: { kind: "original" },
+            recordedAt: "2026-01-01T00:00:00.000Z",
+            sessionId,
+        };
+        this.#sessions.set(sessionId, { ...session, eventsV2: [...session.eventsV2, recorded] });
+        this.#send(p.encodeSessionEventEnvelopeV2({ event: recorded, kind: "session.event.v2" }));
+        return recorded;
+    }
+    #v2Payloads(event: p.RecordedSessionEvent): readonly p.SessionEventPayloadV2[] {
+        switch (event.kind) {
+            case "session.started":
+                return [
+                    {
+                        payload: {
+                            attemptId: event.attemptId,
+                            commandId: event.commandId,
+                            epoch: event.epoch,
+                            kind: "prompt.started",
+                        },
+                        type: "lifecycle-metadata",
+                    },
+                ];
+            case "session.completed":
+                return [
+                    {
+                        payload: { commandId: event.commandId, kind: "prompt.completed", stopReason: event.stopReason },
+                        type: "lifecycle-metadata",
+                    },
+                ];
+            case "session.failed":
+                return [
+                    {
+                        payload: {
+                            code: event.code,
+                            commandId: event.commandId,
+                            kind: "prompt.failed-before-start",
+                            message: event.message,
+                        },
+                        type: "lifecycle-metadata",
+                    },
+                ];
+            case "agent.message.delta":
+                return [
+                    {
+                        payload: {
+                            content: { text: event.text, type: "text" },
+                            messageId: event.messageId,
+                            sessionUpdate: "agent_message_chunk",
+                        },
+                        type: "acp",
+                    },
+                ];
+            case "agent.content":
+                return [
+                    {
+                        payload: {
+                            content: {
+                                description: event.content.text,
+                                mimeType: event.content.mimeType,
+                                name: event.content.name || event.content.uri,
+                                type: "resource_link",
+                                uri: event.content.uri,
+                            },
+                            messageId: event.messageId,
+                            sessionUpdate: "agent_message_chunk",
+                        },
+                        type: "acp",
+                    },
+                ];
+            case "agent.activity":
+                return event.activityType === "reasoning"
+                    ? [
+                          {
+                              payload: {
+                                  content: { text: event.output, type: "text" },
+                                  messageId: event.activityId,
+                                  sessionUpdate: "agent_thought_chunk",
+                              },
+                              type: "acp",
+                          },
+                      ]
+                    : [
+                          {
+                              payload: {
+                                  kind: event.toolKind === "read" ? "read" : "other",
+                                  name: event.name,
+                                  rawInput: event.input,
+                                  rawOutput: event.output,
+                                  sessionUpdate: "tool_call",
+                                  status:
+                                      event.status === "completed"
+                                          ? "completed"
+                                          : event.status === "failed"
+                                            ? "failed"
+                                            : event.status === "pending"
+                                              ? "pending"
+                                              : "in_progress",
+                                  title: event.title,
+                                  toolCallId: event.activityId,
+                              },
+                              type: "acp",
+                          },
+                      ];
+            case "session.queue.changed":
+                return [{ payload: { kind: "session.queue.changed" }, type: "lifecycle-metadata" }];
+            default:
+                return [];
+        }
+    }
     #fail(command: p.SessionPromptCommand, code: string): void {
         this.event(command.sessionId, {
             kind: "session.failed",
@@ -85,6 +219,25 @@ export class FakeSessions {
     }
     readonly prompt = (command: p.SessionPromptCommand): void => {
         const session = this.prepare(command.sessionId, command.agentId, command.directoryId);
+        const content = [
+            ...(command.prompt.length === 0 ? [] : [{ text: command.prompt, type: "text" as const }]),
+            ...command.images.map((image) => ({
+                _meta: { mobius: { name: image.name } },
+                data: image.data,
+                mimeType: image.mimeType,
+                type: "image" as const,
+            })),
+        ];
+        this.#eventV2(command.sessionId, {
+            payload: { commandId: command.commandId, content, kind: "prompt.requested" },
+            type: "lifecycle-metadata",
+        });
+        for (const block of content) {
+            this.#eventV2(command.sessionId, {
+                payload: { content: block, messageId: command.commandId, sessionUpdate: "user_message_chunk" },
+                type: "acp",
+            });
+        }
         const current = session.execution.kind === "running" ? session.execution.turn.commandIds[0] : undefined;
         const targetCompleted = session.history.some((turn) => turn.commandIds.includes(command.targetCommandId));
         if (command.disposition === "queue" && current !== command.targetCommandId && !targetCompleted) {
@@ -241,7 +394,6 @@ export class FakeSessions {
                 queued: session.execution.queued.filter((q) => q.commandId !== command.commandId),
                 turn: {
                     ...turn,
-                    commandIds: [...turn.commandIds, command.commandId],
                     messages: [
                         ...turn.messages,
                         { id: command.commandId, role: "user", text: command.prompt, images: command.images },
@@ -251,6 +403,12 @@ export class FakeSessions {
         });
         this.#started(command, turn.epoch);
         this.event(command.sessionId, { kind: "session.queue.changed", sessionId: command.sessionId });
+        this.event(command.sessionId, {
+            commandId: command.commandId,
+            kind: "session.completed",
+            sessionId: command.sessionId,
+            stopReason: "steered",
+        });
         const plan = this.#options.reply(command.prompt, session.history.length + 1, "steer");
         for (const output of plan.output) {
             this.#output(command.sessionId, output);

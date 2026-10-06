@@ -147,11 +147,12 @@ function replayEvent(sessionId: string, position: number, update: AcpSessionUpda
     const eventId = `native-${createHash("sha256").update(sessionId).update(":").update(position.toString()).update(":").update(encoded).digest("hex")}`;
     return {
         eventId,
-        payload: { kind: "acp.session.update", update },
+        payload: update,
         position: position.toString(),
         provenance: { kind: "original" },
         recordedAt: "1970-01-01T00:00:00.000Z",
         sessionId,
+        type: "acp",
     };
 }
 
@@ -162,27 +163,12 @@ export async function executeSessionLiveHistoryV2PageLoad(
     directories: WorkspaceDirectoryService,
     audit: AuditStore,
     sessions: AgentRuntimeManager,
-    localRecovery: (
-        sessionId: string,
-        eventLimit: number,
-        cursor: string | null,
-    ) => import("@moxt-ai/mobius-protocol").NativeSessionEventsV2 | null,
     executingPromptRequest: (
         sessionId: string,
     ) => import("@moxt-ai/mobius-protocol").ExecutingPromptRequestEventLogV2 | null,
     signal: AbortSignal,
 ): Promise<void> {
     try {
-        const local = localRecovery(command.sessionId, command.eventLimit, command.cursor);
-        if (local !== null) {
-            send(socket, {
-                events: local,
-                kind: "session.live-history.v2.page.loaded",
-                requestId: command.requestId,
-                sessionId: command.sessionId,
-            });
-            return;
-        }
         const resolved = await resolveSessionDirectories(
             directories,
             config.bindingId,

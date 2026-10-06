@@ -12,6 +12,7 @@ import {
     type SessionConfigUpdatedEvent,
     type SessionElicitationRequestedEvent,
     type SessionElicitationResolvedEvent,
+    type SessionEventPayloadV2,
     type SessionInfoUpdatedEvent,
     type SessionPermissionRequestedEvent,
     type SessionPermissionResolvedEvent,
@@ -34,18 +35,18 @@ import { send } from "./daemon-command-results.ts";
 
 export class DaemonAcpObserver implements AcpSessionObserver {
     readonly #record: (sessionId: string, event: RecordedSessionEvent) => void;
-    readonly #recordV2: (sessionId: string, update: AcpSessionUpdateV2) => void;
+    readonly #recordV2: (sessionId: string, payload: SessionEventPayloadV2) => void;
 
     constructor(
         record: (sessionId: string, event: RecordedSessionEvent) => void,
-        recordV2: (sessionId: string, update: AcpSessionUpdateV2) => void = () => undefined,
+        recordV2: (sessionId: string, payload: SessionEventPayloadV2) => void = () => undefined,
     ) {
         this.#record = record;
         this.#recordV2 = recordV2;
     }
 
     readonly onAcpUpdate = (sessionId: string, update: AcpSessionUpdateV2): Promise<void> => {
-        this.#recordV2(sessionId, update);
+        this.#recordV2(sessionId, { payload: update, type: "acp" });
         return Promise.resolve();
     };
 
@@ -66,11 +67,19 @@ export class DaemonAcpObserver implements AcpSessionObserver {
 
     readonly onElicitation = (event: SessionElicitationRequestedEvent): Promise<void> => {
         this.#record(event.sessionId, event);
+        this.#recordV2(event.sessionId, {
+            payload: { event, kind: "session.elicitation.requested" },
+            type: "lifecycle-metadata",
+        });
         return Promise.resolve();
     };
 
     readonly onElicitationResolved = (event: SessionElicitationResolvedEvent): Promise<void> => {
         this.#record(event.sessionId, event);
+        this.#recordV2(event.sessionId, {
+            payload: { event, kind: "session.elicitation.resolved" },
+            type: "lifecycle-metadata",
+        });
         return Promise.resolve();
     };
 
@@ -81,11 +90,19 @@ export class DaemonAcpObserver implements AcpSessionObserver {
 
     readonly onPermission = (event: SessionPermissionRequestedEvent): Promise<void> => {
         this.#record(event.sessionId, event);
+        this.#recordV2(event.sessionId, {
+            payload: { event, kind: "session.permission.requested" },
+            type: "lifecycle-metadata",
+        });
         return Promise.resolve();
     };
 
     readonly onPermissionResolved = (event: SessionPermissionResolvedEvent): Promise<void> => {
         this.#record(event.sessionId, event);
+        this.#recordV2(event.sessionId, {
+            payload: { event, kind: "session.permission.resolved" },
+            type: "lifecycle-metadata",
+        });
         return Promise.resolve();
     };
 

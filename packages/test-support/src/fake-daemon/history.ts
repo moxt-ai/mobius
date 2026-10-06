@@ -108,3 +108,54 @@ export function historyPage(session: Session, cursor: string | null, limit: numb
         coveredMessageIds,
     };
 }
+
+export function eventHistoryPageV2(
+    session: Session,
+    cursor: string | null,
+    eventLimit: number,
+): p.NativeSessionEventsV2 {
+    const activeCommandId = session.execution.kind === "running" ? session.execution.turn.commandIds[0] : null;
+    const activeStart =
+        activeCommandId === null
+            ? session.eventsV2.length
+            : session.eventsV2.findIndex(
+                  (event) =>
+                      event.type === "lifecycle-metadata" &&
+                      event.payload.kind === "prompt.requested" &&
+                      event.payload.commandId === activeCommandId,
+              );
+    if (activeStart < 0) {
+        throw new Error("The running fake prompt has no V2 request event");
+    }
+    const history = session.eventsV2.slice(0, activeStart);
+    const end = cursor === null ? history.length : Number(cursor);
+    if (!Number.isSafeInteger(end) || end < 0 || end > history.length) {
+        throw new Error("Invalid fake V2 history cursor");
+    }
+    const start = Math.max(0, end - eventLimit);
+    const activeEvents = session.eventsV2.slice(activeStart);
+    const started = activeEvents.find(
+        (event) => event.type === "lifecycle-metadata" && event.payload.kind === "prompt.started",
+    );
+    const startedPayload = started?.type === "lifecycle-metadata" ? started.payload : null;
+    return {
+        executingPromptRequest:
+            activeCommandId === null || startedPayload?.kind !== "prompt.started"
+                ? null
+                : {
+                      attemptId: startedPayload.attemptId,
+                      commandId: activeCommandId,
+                      epoch: startedPayload.epoch,
+                      events: activeEvents,
+                      tailCursor: session.eventsV2.length.toString(),
+                      truncated: false,
+                  },
+        history: {
+            events: history.slice(start, end),
+            nextCursor: start === 0 ? null : start.toString(),
+            tailCursor: session.eventsV2.length.toString(),
+            truncated: false,
+            version: 2,
+        },
+    };
+}

@@ -2,12 +2,15 @@ import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
     AGENT_MESSAGE_DELTA_KIND,
+    decodeDaemonToServiceMessage,
     decodeServiceToDaemonMessage,
     decodeSessionEventEnvelope,
     decodeSessionPromptCommand,
     encodeSessionEventEnvelope,
     encodeSessionEventEnvelopeV2,
+    encodeSessionLiveHistoryV2PageLoaded,
     encodeSessionPromptCommand,
+    encodeSessionsQueriedEvent,
     MOBIUS_API_PREFIX,
 } from "@moxt-ai/mobius-protocol";
 import { DurableObjectSqlDatabase, RuntimeRelay, type SessionRecording } from "@moxt-ai/mobius-relay-core";
@@ -782,21 +785,78 @@ describe.sequential("Platform Session-only boundary", () => {
             const rawEvent = {
                 eventId: "event-v2-1",
                 payload: {
-                    kind: "acp.session.update" as const,
-                    update: {
-                        content: { text: "raw local answer", type: "text" as const },
-                        messageId: "message-v2-1",
-                        sessionUpdate: "agent_message_chunk" as const,
-                    },
+                    content: { text: "raw local answer", type: "text" as const },
+                    messageId: "message-v2-1",
+                    sessionUpdate: "agent_message_chunk" as const,
                 },
                 position: "1",
                 provenance: { kind: "original" as const },
                 recordedAt: "2026-09-18T00:00:00.000Z",
                 sessionId,
+                type: "acp" as const,
             };
             daemon.send(encodeSessionEventEnvelopeV2({ event: rawEvent, kind: "session.event.v2" }));
             expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "session.event.v2" });
             expect(JSON.parse(await v2Messages.next())).toEqual(rawEvent);
+            const historyResponse = worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/events-v2?limit=50`,
+                    { headers: { authorization: `Bearer ${text(browserAccess, "credential")}` } },
+                ),
+                environment,
+            );
+            const query = decodeServiceToDaemonMessage(await daemonMessages.next());
+            if (query.kind !== "session.query") {
+                throw new Error("Expected a Session query before loading V2 history");
+            }
+            expect(decodeServiceToDaemonMessage(await hostMessages.next()).kind).toBe("session.query");
+            daemon.send(
+                encodeSessionsQueriedEvent({
+                    entries: [
+                        {
+                            additionalDirectories: [],
+                            agentId: "codex",
+                            directoryId: "root",
+                            directoryLabel: "Workspace",
+                            prompted: true,
+                            sessionId,
+                            title: "Local session",
+                            updatedAt: "2026-09-18T00:00:00.000Z",
+                        },
+                    ],
+                    kind: "session.queried",
+                    requestId: query.requestId,
+                }),
+            );
+            expect(decodeDaemonToServiceMessage(await hostMessages.next()).kind).toBe("session.queried");
+            const historyLoad = decodeServiceToDaemonMessage(await daemonMessages.next());
+            if (historyLoad.kind !== "session.live-history.v2.page.load") {
+                throw new Error("Expected a V2 Session history request");
+            }
+            daemon.send(
+                encodeSessionLiveHistoryV2PageLoaded({
+                    events: {
+                        executingPromptRequest: null,
+                        history: {
+                            events: [rawEvent],
+                            nextCursor: null,
+                            tailCursor: rawEvent.eventId,
+                            truncated: false,
+                            version: 2,
+                        },
+                    },
+                    kind: "session.live-history.v2.page.loaded",
+                    requestId: historyLoad.requestId,
+                    sessionId,
+                }),
+            );
+            expect(await responseJson(await historyResponse, 200)).toEqual({
+                events: [rawEvent],
+                nextCursor: null,
+                tailCursor: rawEvent.eventId,
+                truncated: false,
+                version: 2,
+            });
             v2Socket.close(1000, "V2 browser test complete");
             const transportResponse = await worker.fetch(
                 new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/transport`, { headers: { Upgrade: "websocket" } }),

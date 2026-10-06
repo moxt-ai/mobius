@@ -1,6 +1,6 @@
 import * as p from "@moxt-ai/mobius-protocol";
 import { fakeDaemonCapabilities, fakeSessionReady, settings } from "./catalog.ts";
-import { activeTurn, historyPage } from "./history.ts";
+import { activeTurn, eventHistoryPageV2, historyPage } from "./history.ts";
 import type { FakeDaemonOptions, ReplyPlan } from "./model.ts";
 import { FakeSessions } from "./sessions.ts";
 
@@ -95,6 +95,22 @@ export class FakeAgentDaemon {
                 );
                 return;
             }
+            case "session.live-history.v2.page.load": {
+                const command = p.decodeSessionLiveHistoryV2PageLoad(encoded);
+                this.#send(
+                    p.encodeSessionLiveHistoryV2PageLoaded({
+                        events: eventHistoryPageV2(
+                            this.#sessions.prepare(command.sessionId),
+                            command.cursor,
+                            command.eventLimit,
+                        ),
+                        kind: "session.live-history.v2.page.loaded",
+                        requestId: command.requestId,
+                        sessionId: command.sessionId,
+                    }),
+                );
+                return;
+            }
             default:
                 throw new Error(`Unsupported fake daemon message: ${kind}`);
         }
@@ -177,10 +193,26 @@ export class FakeAgentDaemon {
                     this.#send(
                         p.encodeNativeSessionResult({
                             ...envelope,
-                            action: "import",
+                            action: c.action,
                             targetSessionId: c.targetSessionId,
                             title: "Saved conversation",
                             ready: fakeSessionReady(c, this.#options, c.entryId, true),
+                        }),
+                    );
+                    return;
+                }
+                break;
+            }
+            case "fork": {
+                if (this.#options.nativeSessionIds?.has(c.entryId)) {
+                    this.#sessions.prepare(c.targetSessionId, c.agentId, c.directoryId);
+                    this.#send(
+                        p.encodeNativeSessionResult({
+                            ...envelope,
+                            action: c.action,
+                            targetSessionId: c.targetSessionId,
+                            title: "Saved conversation",
+                            ready: fakeSessionReady(c, this.#options, c.targetSessionId, true),
                         }),
                     );
                     return;
