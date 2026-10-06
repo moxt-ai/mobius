@@ -128,20 +128,31 @@ import {
     NATIVE_SESSION_REQUEST_KIND,
     NATIVE_SESSION_RESULT_KIND,
 } from "./native-sessions.ts";
+import {
+    decodeSessionEventEnvelopeV2,
+    encodeSessionEventEnvelopeV2,
+    SESSION_EVENT_V2_KIND,
+} from "./session-event-log-v2.ts";
 import { decodeSessionEventEnvelope, encodeSessionEventEnvelope, SESSION_EVENT_KIND } from "./session-events.ts";
 import {
     decodeSessionLiveHistoryLoad,
     decodeSessionLiveHistoryLoaded,
     decodeSessionLiveHistoryPageLoad,
     decodeSessionLiveHistoryPageLoaded,
+    decodeSessionLiveHistoryV2PageLoad,
+    decodeSessionLiveHistoryV2PageLoaded,
     encodeSessionLiveHistoryLoad,
     encodeSessionLiveHistoryLoaded,
     encodeSessionLiveHistoryPageLoad,
     encodeSessionLiveHistoryPageLoaded,
+    encodeSessionLiveHistoryV2PageLoad,
+    encodeSessionLiveHistoryV2PageLoaded,
     SESSION_LIVE_HISTORY_LOAD_KIND,
     SESSION_LIVE_HISTORY_LOADED_KIND,
     SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
     SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
+    SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND,
+    SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND,
 } from "./session-live-history.ts";
 
 interface MessageSignature<TMessage extends { readonly kind: string }> {
@@ -237,6 +248,11 @@ const serviceToDaemonSignatures = {
         SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
         encodeSessionLiveHistoryPageLoad,
         decodeSessionLiveHistoryPageLoad,
+    ),
+    [SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND]: defineMessageSignature(
+        SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND,
+        encodeSessionLiveHistoryV2PageLoad,
+        decodeSessionLiveHistoryV2PageLoad,
     ),
     [SESSION_PERMISSION_RESPOND_KIND]: defineMessageSignature(
         SESSION_PERMISSION_RESPOND_KIND,
@@ -365,6 +381,11 @@ const daemonToServiceSignatures = {
         encodeSessionEventEnvelope,
         decodeSessionEventEnvelope,
     ),
+    [SESSION_EVENT_V2_KIND]: defineMessageSignature(
+        SESSION_EVENT_V2_KIND,
+        encodeSessionEventEnvelopeV2,
+        decodeSessionEventEnvelopeV2,
+    ),
     [SESSION_OPERATION_FAILED_KIND]: defineMessageSignature(
         SESSION_OPERATION_FAILED_KIND,
         encodeSessionOperationFailedEvent,
@@ -379,6 +400,11 @@ const daemonToServiceSignatures = {
         SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
         encodeSessionLiveHistoryPageLoaded,
         decodeSessionLiveHistoryPageLoaded,
+    ),
+    [SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND]: defineMessageSignature(
+        SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND,
+        encodeSessionLiveHistoryV2PageLoaded,
+        decodeSessionLiveHistoryV2PageLoaded,
     ),
     [SESSION_READY_KIND]: defineMessageSignature(SESSION_READY_KIND, encodeSessionReadyEvent, decodeSessionReadyEvent),
     [WORKSPACE_ENTRIES_KIND]: defineMessageSignature(

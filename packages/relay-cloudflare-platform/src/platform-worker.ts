@@ -7,7 +7,9 @@ import {
     decodeSessionConfigureCommand,
     decodeSessionElicitationRespondCommand,
     decodeSessionEventEnvelope,
+    decodeSessionEventEnvelopeV2,
     decodeSessionLiveHistoryPageLoad,
+    decodeSessionLiveHistoryV2PageLoad,
     decodeSessionPermissionRespondCommand,
     decodeSessionPromptCommand,
     decodeSessionPromptDispositionCommand,
@@ -320,6 +322,55 @@ export function createPlatformApplication(
             }
             context.header("Cache-Control", "no-store");
             return context.json(result.page);
+        })
+        .get("/:sessionId/native-events-v2", sessionAccessTargetMiddleware, async (context) => {
+            const credential = (context.req.header("authorization") ?? "").match(/^Bearer ([^\s]+)$/u)?.[1];
+            if (credential === undefined) {
+                return context.json(
+                    { error: { code: "session_access_required", message: "A Session credential is required" } },
+                    401,
+                );
+            }
+            const access = await context.var.sessionAccess.authorizeSession(
+                context.var.sessionAccessTarget,
+                credential,
+                ProjectPermission.SessionRead,
+                context.req.raw.signal,
+            );
+            const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
+            const eventLimit = v.parse(
+                v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(10_000)),
+                Number(context.req.query("eventLimit") ?? "50"),
+            );
+            const result = await context.var.relay.services.runtimePairings.requestProjectScopeControl(
+                new ProjectScope(access.projectId),
+                access.runtimeId,
+                decodeSessionLiveHistoryV2PageLoad(
+                    JSON.stringify({
+                        additionalDirectoryIds: v.parse(
+                            v.pipe(v.array(v.pipe(v.string(), v.minLength(1), v.maxLength(2048))), v.maxLength(16)),
+                            context.req.queries("additionalDirectoryId") ?? [],
+                        ),
+                        agentId: v.parse(sessionIdentifier, context.req.query("agentId")),
+                        bindingId: "workspace",
+                        cursor: context.req.query("cursor") ?? null,
+                        directoryId: v.parse(
+                            v.pipe(v.string(), v.minLength(1), v.maxLength(2048)),
+                            context.req.query("directoryId"),
+                        ),
+                        kind: "session.live-history.v2.page.load",
+                        eventLimit,
+                        requestId: crypto.randomUUID(),
+                        sessionId,
+                    }),
+                ),
+                context.req.raw.signal,
+            );
+            if (result.kind !== "session.live-history.v2.page.loaded") {
+                throw new PairingDirectoryError("invalid_request", "The Runtime returned invalid V2 Session events");
+            }
+            context.header("Cache-Control", "no-store");
+            return context.json(result.events);
         })
         .get("/:sessionId/active-turn", sessionAccessTargetMiddleware, async (context) => {
             const credential = (context.req.header("authorization") ?? "").match(/^Bearer ([^\s]+)$/u)?.[1];
@@ -678,6 +729,78 @@ export function createPlatformApplication(
                         const envelope = decodeSessionEventEnvelope(event.data);
                         if (envelope.sessionId === context.req.param("sessionId")) {
                             server.send(event.data);
+                        }
+                    }
+                } catch {
+                    server.close(1007, "Invalid Runtime event");
+                    void host.close();
+                }
+            });
+            host.socket.addEventListener("close", close, { once: true });
+            host.socket.addEventListener("error", close, { once: true });
+            server.addEventListener("close", close, { once: true });
+            server.addEventListener("error", close, { once: true });
+            host.socket.accept();
+            return new Response(null, { status: 101, webSocket: client });
+        })
+        .get("/:sessionId/events-v2", sessionAccessTargetMiddleware, async (context) => {
+            if (context.req.header("upgrade")?.toLowerCase() !== "websocket") {
+                return context.json(
+                    { error: { code: "websocket_upgrade_required", message: "A WebSocket upgrade is required" } },
+                    426,
+                );
+            }
+            const credential = (context.req.header("authorization") ?? "").match(/^Bearer ([^\s]+)$/u)?.[1];
+            if (credential === undefined) {
+                return context.json(
+                    { error: { code: "session_access_required", message: "A Session credential is required" } },
+                    401,
+                );
+            }
+            const target = await context.var.sessionAccess.authorizeLiveEvents(
+                context.var.sessionAccessTarget,
+                credential,
+                context.req.raw.signal,
+            );
+            const host = await context.var.relay.services.runtimePairings.openProjectSessionEventHost(
+                new ProjectScope(target.projectId),
+                target.runtimeId,
+                context.req.raw.signal,
+            );
+            const pair = new WebSocketPair();
+            const client = pair[0];
+            const server = pair[1];
+            let closed = false;
+            const expirationTimeout = setTimeout(
+                () => close(),
+                Math.max(0, target.expiresAtEpochMilliseconds - Date.now()),
+            );
+            const close = (): void => {
+                if (closed) {
+                    return;
+                }
+                closed = true;
+                clearTimeout(expirationTimeout);
+                server.close(1000, "V2 Session event subscription closed");
+                void host.close();
+            };
+            server.accept();
+            host.socket.addEventListener("message", (event) => {
+                if (closed || typeof event.data !== "string") {
+                    return;
+                }
+                try {
+                    const kind = decodeMessageKind(event.data);
+                    if (kind === "runtime.status") {
+                        if (!decodeRuntimeStatusEvent(event.data).online) {
+                            close();
+                        }
+                        return;
+                    }
+                    if (kind === "session.event.v2") {
+                        const envelope = decodeSessionEventEnvelopeV2(event.data);
+                        if (envelope.event.sessionId === context.req.param("sessionId")) {
+                            server.send(JSON.stringify(envelope.event));
                         }
                     }
                 } catch {

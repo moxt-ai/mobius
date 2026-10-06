@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { NativeSessionCommand } from "@moxt-ai/mobius-protocol";
+import type { AcpSessionUpdateV2, NativeSessionCommand } from "@moxt-ai/mobius-protocol";
 import { AgentRuntimeManager, NullAcpSessionObserver } from "../../src/acp/agent-runtime-manager.ts";
 import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
 import { AuditStore } from "../../src/audit/audit-store.ts";
@@ -14,7 +14,12 @@ const acpUrl = new URL("./fixtures/acp-peer.ts", import.meta.url).toString();
 // Real providers cannot deterministically supply destructive test sessions or stalled
 // loads. These ACP subprocesses maintain their own disposable session files.
 class NativeSessionObserver extends NullAcpSessionObserver {
+    readonly updates: AcpSessionUpdateV2[] = [];
     readonly loading = Promise.withResolvers<void>();
+    override readonly onAcpUpdate = (_sessionId: string, update: AcpSessionUpdateV2): Promise<void> => {
+        this.updates.push(update);
+        return Promise.resolve();
+    };
     override readonly onInfo = async (): Promise<void> => {
         this.loading.resolve();
     };

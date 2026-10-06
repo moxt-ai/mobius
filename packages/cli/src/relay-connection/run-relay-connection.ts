@@ -14,6 +14,7 @@ import { send } from "../daemon-command-results.ts";
 import type { DaemonInstallationObserver } from "../daemon-observers.ts";
 import type { DaemonTurnRegistry } from "../daemon-turn-registry.ts";
 import type { NativeSessionService } from "../native-sessions/service.ts";
+import type { DaemonSessionEventLogV2 } from "../session-event-log-v2.ts";
 import { connectRelay } from "./connect.ts";
 import type { DaemonOperationState } from "./daemon-operation-state.ts";
 import type { RelayConnectionDiagnostics } from "./diagnostics.ts";
@@ -45,6 +46,7 @@ export interface RelayConnectionOptions {
     readonly nativeSessions: NativeSessionService;
     readonly operations: DaemonOperationState;
     readonly publisher: DaemonSessionEventPublisher;
+    readonly eventLogV2: DaemonSessionEventLogV2;
     readonly activeTurns: DaemonTurnRegistry;
     readonly connectionEpoch: number;
     readonly diagnostics: RelayConnectionDiagnostics;
@@ -64,6 +66,7 @@ export async function runRelayConnection({
     nativeSessions,
     operations,
     publisher,
+    eventLogV2,
     activeTurns,
     connectionEpoch,
     diagnostics,
@@ -86,6 +89,7 @@ export async function runRelayConnection({
         nativeSessions,
         operations,
         publisher,
+        eventLogV2,
         activeTurns,
         diagnostics,
         socket,

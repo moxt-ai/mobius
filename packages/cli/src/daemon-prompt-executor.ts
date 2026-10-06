@@ -32,6 +32,7 @@ import { CoalescingAgentEventPublisher } from "./relay-connection/coalescing-age
 import type { DaemonOperationState } from "./relay-connection/daemon-operation-state.ts";
 import type { DaemonSessionEventPublisher } from "./relay-connection/session-event-publisher.ts";
 import type { DaemonTimer } from "./relay-connection/timer.ts";
+import type { DaemonSessionEventLogV2 } from "./session-event-log-v2.ts";
 
 function daemonActivity(command: DaemonTurnCommand, activity: AcpActivity): AgentActivityEvent {
     return {
@@ -56,6 +57,7 @@ function daemonActivity(command: DaemonTurnCommand, activity: AcpActivity): Agen
 export interface ExecutePromptOptions {
     readonly operations: DaemonOperationState;
     readonly publisher: DaemonSessionEventPublisher;
+    readonly eventLogV2: DaemonSessionEventLogV2;
     readonly command: SessionPromptCommand;
     readonly config: DaemonConfig;
     readonly directories: WorkspaceDirectoryService;
@@ -84,6 +86,7 @@ export interface ExecutePromptOptions {
 export async function executePrompt({
     operations,
     publisher,
+    eventLogV2,
     command,
     config,
     directories,
@@ -195,6 +198,7 @@ export async function executePrompt({
             }
         }
         const stream = activateAttempt();
+        eventLogV2.started(command.sessionId, command.commandId, attemptId, stream.epoch);
         if (!prepared.prompted) {
             const listing = await directories.list(config.bindingId, command.directoryId, signal);
             publisher.publish(command.sessionId, {
@@ -265,6 +269,7 @@ export async function executePrompt({
             sessionId: command.sessionId,
             stopReason,
         });
+        eventLogV2.completed(command.sessionId, command.commandId, stopReason);
         operations.transitionExecution(command.commandId, stopReason === "cancelled" ? "cancelled" : "succeeded");
         audit.record({
             commandId: command.commandId,
@@ -280,6 +285,7 @@ export async function executePrompt({
                 sessionId: command.sessionId,
                 stopReason: "cancelled",
             });
+            eventLogV2.completed(command.sessionId, command.commandId, "cancelled");
             operations.transitionExecution(command.commandId, "cancelled");
             audit.record({
                 commandId: command.commandId,
@@ -294,14 +300,13 @@ export async function executePrompt({
             sessionId: command.sessionId,
         });
         const code = operationErrorCode(error);
-        reportFailure(
-            publisher,
-            command,
-            code === "session_operation_failed" ? "agent_execution_failed" : code,
+        const failureCode = code === "session_operation_failed" ? "agent_execution_failed" : code;
+        const failureMessage =
             code === "session_operation_failed"
                 ? "The local agent could not complete the request"
-                : operationErrorMessage(error),
-        );
+                : operationErrorMessage(error);
+        eventLogV2.failed(command.sessionId, command.commandId, failureCode, failureMessage);
+        reportFailure(publisher, command, failureCode, failureMessage);
         operations.transitionExecution(command.commandId, "failed");
         console.error("Mobius daemon command failed", error);
     }

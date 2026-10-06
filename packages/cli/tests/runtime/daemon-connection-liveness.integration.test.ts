@@ -18,8 +18,11 @@ import {
     decodeMessageKind,
     decodeRuntimeHeartbeatEvent,
     decodeSessionEventEnvelope,
+    decodeSessionEventEnvelopeV2,
+    decodeSessionLiveHistoryV2PageLoaded,
     encodeRuntimeHeartbeatAckEvent,
     encodeRuntimeLivenessReadyEvent,
+    encodeSessionLiveHistoryV2PageLoad,
     encodeSessionPromptCommand,
     encodeWorkspaceListCommand,
     MOBIUS_API_PREFIX,
@@ -28,9 +31,12 @@ import {
     RUNTIME_LIVENESS_READY_KIND,
     SESSION_COMPLETED_KIND,
     SESSION_EVENT_KIND,
+    SESSION_EVENT_V2_KIND,
+    SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND,
     SESSION_PROMPT_KIND,
     SESSION_READY_KIND,
     SESSION_STARTED_KIND,
+    type SessionEventV2,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
 } from "../../../protocol/src/index.ts";
@@ -274,7 +280,8 @@ describe("daemon relay connection liveness", () => {
                     "Upgrade: websocket\r\n" +
                     `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
             );
-            livenessRequested = new URL(request.url ?? "/", "http://127.0.0.1").searchParams.get("liveness") === "1";
+            const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
+            livenessRequested = requestUrl.searchParams.get("liveness") === "1";
             daemonSockets.push(socket);
             clientFrames.push(readClientFrame(socket));
             respondToClientClose(socket);
@@ -534,12 +541,20 @@ describe("daemon relay connection liveness", () => {
         });
         const sockets = new Set<Duplex>();
         const activities = new Map<string, AgentActivityEvent>();
+        const eventLogV2: SessionEventV2[] = [];
         let agentText = "";
         let removeObserver = (): void => undefined;
+        let completedPrompts = 0;
+        let completedV1Prompts = 0;
         let resolveCompleted = (): void => undefined;
         const completed = new Promise<void>((resolve) => {
             resolveCompleted = resolve;
         });
+        let resolveHistory = (_events: readonly SessionEventV2[]): void => undefined;
+        const history = new Promise<readonly SessionEventV2[]>((resolve) => {
+            resolveHistory = resolve;
+        });
+        const historyPages: (readonly SessionEventV2[])[] = [];
         relay.on("connection", (socket) => {
             sockets.add(socket);
             socket.once("close", () => sockets.delete(socket));
@@ -559,7 +574,76 @@ describe("daemon relay connection liveness", () => {
                     `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
             );
             removeObserver = observeClientFrames(socket, (frame) => {
-                if (frame.opcode !== 1 || decodeMessageKind(frame.text) !== SESSION_EVENT_KIND) {
+                if (frame.opcode !== 1) {
+                    return;
+                }
+                const transportKind = decodeMessageKind(frame.text);
+                if (transportKind === SESSION_EVENT_V2_KIND) {
+                    const event = decodeSessionEventEnvelopeV2(frame.text).event;
+                    eventLogV2.push(event);
+                    if (event.payload.kind === "prompt.completed") {
+                        completedPrompts += 1;
+                        if (completedPrompts === 1) {
+                            writeServerTextFrame(
+                                socket,
+                                encodeSessionPromptCommand({
+                                    additionalDirectoryIds: [],
+                                    agentId: "codex",
+                                    bindingId: "workspace",
+                                    commandId: "activity-coalescing-command-2",
+                                    directoryId: "default",
+                                    disposition: "reject",
+                                    images: [],
+                                    kind: SESSION_PROMPT_KIND,
+                                    prompt: "stream another verbose activity",
+                                    resources: [],
+                                    sessionId: "activity-coalescing-session",
+                                    targetCommandId: "",
+                                }),
+                            );
+                        } else {
+                            writeServerTextFrame(
+                                socket,
+                                encodeSessionLiveHistoryV2PageLoad({
+                                    additionalDirectoryIds: [],
+                                    agentId: "codex",
+                                    bindingId: "workspace",
+                                    cursor: null,
+                                    directoryId: "default",
+                                    kind: "session.live-history.v2.page.load",
+                                    eventLimit: 25,
+                                    requestId: "activity-coalescing-history-1",
+                                    sessionId: "activity-coalescing-session",
+                                }),
+                            );
+                        }
+                    }
+                    return;
+                }
+                if (transportKind === SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND) {
+                    const page = decodeSessionLiveHistoryV2PageLoaded(frame.text).events.history;
+                    historyPages.push(page.events);
+                    if (page.nextCursor === null) {
+                        resolveHistory(historyPages.toReversed().flat());
+                    } else {
+                        writeServerTextFrame(
+                            socket,
+                            encodeSessionLiveHistoryV2PageLoad({
+                                additionalDirectoryIds: [],
+                                agentId: "codex",
+                                bindingId: "workspace",
+                                cursor: page.nextCursor,
+                                directoryId: "default",
+                                kind: "session.live-history.v2.page.load",
+                                eventLimit: 25,
+                                requestId: `activity-coalescing-history-${(historyPages.length + 1).toString()}`,
+                                sessionId: "activity-coalescing-session",
+                            }),
+                        );
+                    }
+                    return;
+                }
+                if (transportKind !== SESSION_EVENT_KIND) {
                     return;
                 }
                 const envelope = decodeSessionEventEnvelope(frame.text);
@@ -585,7 +669,10 @@ describe("daemon relay connection liveness", () => {
                     return;
                 }
                 if (kind === SESSION_COMPLETED_KIND) {
-                    resolveCompleted();
+                    completedV1Prompts += 1;
+                    if (completedV1Prompts === 2) {
+                        resolveCompleted();
+                    }
                 }
             });
             respondToClientClose(socket);
@@ -638,11 +725,34 @@ describe("daemon relay connection liveness", () => {
 
         try {
             await completed;
+            const historyEvents = await history;
             const reasoning = [...activities.values()].filter((activity) => activity.activityType === "reasoning");
-            expect(reasoning).toHaveLength(1);
-            expect(reasoning.map((activity) => activity.status)).toEqual(["completed"]);
-            expect(reasoning.at(-1)?.output).toContain("step-63");
-            expect(agentText).toBe("Echo from ACP: stream verbose activity");
+            expect(reasoning).toHaveLength(2);
+            expect(reasoning.map((activity) => activity.status)).toEqual(["completed", "completed"]);
+            expect(reasoning.some((activity) => activity.output.includes("step-63"))).toBe(true);
+            expect(agentText).toBe(
+                "Echo from ACP: stream verbose activityEcho from ACP: stream another verbose activity",
+            );
+            expect(eventLogV2[0]?.payload.kind).toBe("prompt.requested");
+            expect(eventLogV2[1]?.payload.kind).toBe("prompt.started");
+            expect(eventLogV2.at(-1)?.payload.kind).toBe("prompt.completed");
+            expect(
+                eventLogV2.filter(
+                    (event) =>
+                        event.payload.kind === "acp.session.update" &&
+                        event.payload.update.sessionUpdate === "agent_thought_chunk",
+                ),
+            ).toHaveLength(68);
+            expect(
+                eventLogV2.filter(
+                    (event) =>
+                        event.payload.kind === "acp.session.update" &&
+                        event.payload.update.sessionUpdate === "agent_message_chunk",
+                ),
+            ).toHaveLength(6);
+            expect(historyPages.length).toBeGreaterThan(1);
+            expect(historyPages.every((page) => page.length <= 25)).toBe(true);
+            expect(historyEvents).toEqual(eventLogV2);
         } finally {
             cancellation.abort();
             await daemon;
@@ -976,16 +1086,27 @@ describe("daemon relay connection liveness", () => {
                 );
                 firstEventFrame = await firstFrame.next();
             }
+            while (decodeMessageKind(firstEventFrame.text) !== SESSION_EVENT_KIND) {
+                firstEventFrame = await firstFrame.next();
+            }
             const ready = decodeSessionEventEnvelope(firstEventFrame.text);
             expect(decodeMessageKind(ready.payload)).toBe(SESSION_READY_KIND);
             expect(ready).not.toHaveProperty("delivery");
             // No delivery acknowledgements exist. Reconnection starts receiving live events.
-            const started = decodeSessionEventEnvelope((await firstFrame.next()).text);
+            let startedFrame = await firstFrame.next();
+            while (decodeMessageKind(startedFrame.text) !== SESSION_EVENT_KIND) {
+                startedFrame = await firstFrame.next();
+            }
+            const started = decodeSessionEventEnvelope(startedFrame.text);
             expect(decodeMessageKind(started.payload)).toBe(SESSION_STARTED_KIND);
             expect(started).not.toHaveProperty("delivery");
             let completed = false;
             while (!completed) {
-                const event = decodeSessionEventEnvelope((await firstFrame.next()).text);
+                const frame = await firstFrame.next();
+                if (decodeMessageKind(frame.text) !== SESSION_EVENT_KIND) {
+                    continue;
+                }
+                const event = decodeSessionEventEnvelope(frame.text);
                 completed = decodeMessageKind(event.payload) === SESSION_COMPLETED_KIND;
             }
             // More than the former 16-event window must stream without any delivery ACK.
@@ -1010,7 +1131,11 @@ describe("daemon relay connection liveness", () => {
                 let terminal = false;
                 let answer = "";
                 while (!terminal) {
-                    const event = decodeSessionEventEnvelope((await firstFrame.next()).text);
+                    const frame = await firstFrame.next();
+                    if (decodeMessageKind(frame.text) !== SESSION_EVENT_KIND) {
+                        continue;
+                    }
+                    const event = decodeSessionEventEnvelope(frame.text);
                     const kind = decodeMessageKind(event.payload);
                     if (kind === AGENT_MESSAGE_DELTA_KIND) {
                         answer += decodeAgentMessageDeltaEvent(event.payload).text;
@@ -1061,6 +1186,9 @@ describe("daemon relay connection liveness", () => {
             }
             let freshFrame = await freshFrames.next();
             if (decodeMessageKind(freshFrame.text) === RUNTIME_HEARTBEAT_KIND) {
+                freshFrame = await freshFrames.next();
+            }
+            while (decodeMessageKind(freshFrame.text) !== SESSION_EVENT_KIND) {
                 freshFrame = await freshFrames.next();
             }
             const freshReady = decodeSessionEventEnvelope(freshFrame.text);

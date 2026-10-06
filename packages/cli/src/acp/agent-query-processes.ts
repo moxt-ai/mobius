@@ -4,7 +4,12 @@ import type { AgentProcessPool } from "./agent-process-pool.ts";
 import { AgentSession } from "./agent-session.ts";
 import { RetainedAgentProcesses } from "./retained-agent-processes.ts";
 import { waitForSharedOperation } from "./runtime-operations.ts";
-import { type AcpPreparedSession, type AcpPrepareOptions, NullAcpSessionObserver } from "./session-contracts.ts";
+import {
+    type AcpNativeEventReplayV2,
+    type AcpPreparedSession,
+    type AcpPrepareOptions,
+    NullAcpSessionObserver,
+} from "./session-contracts.ts";
 import { MemoryAcpSessionStore } from "./session-store.ts";
 
 /** Owns query processes; execution processes remain separately retained. */
@@ -124,6 +129,28 @@ export class AgentQueryProcesses {
             async (runtime) => {
                 runtime.selectNativeSession(nativeSessionId);
                 return await runtime.loadHistory(options.signal);
+            },
+            async (runtime) => await runtime.closeProcess(),
+        );
+    };
+
+    readonly previewEventsV2 = async (
+        options: AcpPrepareOptions,
+        nativeSessionId: string,
+        eventLimit: number,
+        cursor: string | null,
+    ): Promise<AcpNativeEventReplayV2> => {
+        return await this.#processes.runTransient(
+            options.signal,
+            async () =>
+                await AgentSession.startNativeSessionBrowser(
+                    options,
+                    () => this.#observer,
+                    new MemoryAcpSessionStore(),
+                ),
+            async (runtime) => {
+                runtime.selectNativeSession(nativeSessionId);
+                return await runtime.loadHistoryEventsV2(eventLimit, cursor, options.signal);
             },
             async (runtime) => await runtime.closeProcess(),
         );

@@ -5,6 +5,7 @@ import {
     decodeSessionConfigureCommand,
     decodeSessionListCommand,
     decodeSessionLiveHistoryPageLoad,
+    decodeSessionLiveHistoryV2PageLoad,
     decodeSessionPrepareCommand,
     decodeSessionPromptCommand,
     decodeSessionQueryCommand,
@@ -58,6 +59,11 @@ const nativeMessagesSchema = v.strictObject({
     ...sessionIdentitySchema.entries,
     cursor: v.nullable(v.string()),
     limit: v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(200)),
+});
+const nativeEventsV2Schema = v.strictObject({
+    ...sessionIdentitySchema.entries,
+    cursor: v.nullable(v.string()),
+    eventLimit: v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(10_000)),
 });
 const sessionQuerySchema = v.strictObject({
     sessionIds: v.pipe(v.array(identifier), v.minLength(1), v.maxLength(500)),
@@ -285,6 +291,37 @@ export function createProjectRuntimeRoutes() {
                 );
                 context.header("Cache-Control", "no-store");
                 return context.json(result);
+            },
+        )
+        .post(
+            "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/native-events-v2",
+            bodyParser<RelayHttpEnvironment>(),
+            async (context) => {
+                const body = validated(nativeEventsV2Schema, context.req.valid("json"));
+                const command = decodeSessionLiveHistoryV2PageLoad(
+                    JSON.stringify({
+                        ...body,
+                        bindingId: "workspace",
+                        kind: "session.live-history.v2.page.load",
+                        requestId: crypto.randomUUID(),
+                        sessionId: validateIdentifier(context.req.param("sessionId"), "session_id"),
+                    }),
+                );
+                const result = await context.env.services.runtimePairings.requestControl(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
+                    bearerToken(context.req.raw),
+                    command,
+                    context.req.raw.signal,
+                );
+                if (result.kind !== "session.live-history.v2.page.loaded") {
+                    throw new PairingDirectoryError(
+                        "invalid_request",
+                        "The Runtime returned invalid V2 Session events",
+                    );
+                }
+                context.header("Cache-Control", "no-store");
+                return context.json(result.events);
             },
         )
         .post(
