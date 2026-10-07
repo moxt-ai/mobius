@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,6 +31,7 @@ export async function withRealDaemon(
         readonly sessionId: string;
         readonly workspace: string;
         readonly bindingId: string;
+        readonly readDiagnostics: () => Promise<string>;
         readonly signal: AbortSignal;
         readonly nextEvent: () => Promise<string>;
         readonly nextMessage: () => Promise<string>;
@@ -120,6 +121,7 @@ export async function withRealDaemon(
         const sessionId = `real_${specification.id}_${randomUUID()}`;
         await scenario({
             bindingId: config.bindingId,
+            readDiagnostics: async () => await readFile(join(directory, "logs", "daemon.log"), "utf8"),
             signal,
             sessionId,
             workspace,

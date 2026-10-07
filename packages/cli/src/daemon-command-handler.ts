@@ -252,7 +252,17 @@ export function createDaemonCommandHandler({
             }
             if (kind === SESSION_PREPARE_KIND) {
                 const command = message;
-                void executeSessionPrepare(publisher, socket, command, config, directories, audit, sessions, signal);
+                void executeSessionPrepare(
+                    publisher,
+                    socket,
+                    command,
+                    config,
+                    directories,
+                    audit,
+                    sessions,
+                    diagnostics,
+                    signal,
+                );
                 return;
             }
             if (kind === SESSION_CONFIGURE_KIND) {

@@ -11,6 +11,9 @@ function failFirstRuntimeInitialization(clientCapabilities: unknown, selectedAge
     ) {
         return;
     }
+    if (process.env["MOBIUS_FAKE_ACP_ALWAYS_FAIL_RUNTIME_INITIALIZATION"] === "1") {
+        throw new Error("Persistent fake ACP initialization failure");
+    }
     const stateDirectory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
     if (stateDirectory === undefined) {
         throw new Error("Fake ACP state directory is required");
