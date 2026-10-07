@@ -219,17 +219,8 @@ export class FakeSessions {
     }
     readonly prompt = (command: p.SessionPromptCommand): void => {
         const session = this.prepare(command.sessionId, command.agentId, command.directoryId);
-        const content = [
-            ...(command.prompt.length === 0 ? [] : [{ text: command.prompt, type: "text" as const }]),
-            ...command.images.map((image) => ({
-                _meta: { mobius: { name: image.name } },
-                data: image.data,
-                mimeType: image.mimeType,
-                type: "image" as const,
-            })),
-        ];
         this.#eventV2(command.sessionId, {
-            payload: { commandId: command.commandId, content, kind: "prompt.requested" },
+            payload: { commandId: command.commandId, content: this.#promptContent(command), kind: "prompt.requested" },
             type: "lifecycle-metadata",
         });
         const current = session.execution.kind === "running" ? session.execution.turn.commandIds[0] : undefined;
@@ -310,6 +301,23 @@ export class FakeSessions {
             sequence: 0,
             prompt: command.prompt,
         });
+        for (const content of this.#promptContent(command)) {
+            this.#eventV2(command.sessionId, {
+                payload: { content, messageId: command.commandId, sessionUpdate: "user_message_chunk" },
+                type: "acp",
+            });
+        }
+    }
+    #promptContent(command: p.SessionPromptCommand): p.ContentBlockV2[] {
+        return [
+            ...(command.prompt.length === 0 ? [] : [{ text: command.prompt, type: "text" as const }]),
+            ...command.images.map((image) => ({
+                _meta: { mobius: { name: image.name } },
+                data: image.data,
+                mimeType: image.mimeType,
+                type: "image" as const,
+            })),
+        ];
     }
     #output(id: string, output: Output): void {
         const session = this.prepare(id);
