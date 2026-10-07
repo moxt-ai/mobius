@@ -176,21 +176,9 @@ export class DaemonSessionEventLogV2 {
             payload: { commandId: command.commandId, content, kind: "prompt.requested" },
             type: "lifecycle-metadata",
         });
-        let eventTail: EventNodeV2 = { event, previous: null };
-        for (const block of content) {
-            const userMessageEvent = this.#append(command.sessionId, {
-                payload: {
-                    content: block,
-                    messageId: command.commandId,
-                    sessionUpdate: "user_message_chunk",
-                },
-                type: "acp",
-            });
-            eventTail = { event: userMessageEvent, previous: eventTail };
-        }
         this.#requests.set(command.commandId, {
             commandId: command.commandId,
-            eventTail,
+            eventTail: { event, previous: null },
             kind: "requested",
             sessionId: command.sessionId,
         });
