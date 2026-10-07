@@ -4,10 +4,12 @@ import {
     decodeNativeSessionResult,
     decodeRecordedSessionEvent,
     decodeSessionLiveHistoryPageLoaded,
+    decodeSessionLiveHistoryV2PageLoaded,
     decodeSessionQueuedEvent,
     encodeNativeSessionCommand,
     encodeSessionCancelCommand,
     encodeSessionLiveHistoryPageLoad,
+    encodeSessionLiveHistoryV2PageLoad,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -16,6 +18,71 @@ import { CodexAgentSpecification } from "../../src/agent-catalog/agents/codex-ag
 import { CodexFixture } from "../support/agents/codex.ts";
 import { withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
+
+test("Given a newly created real Codex Session, When Chat requests its V2 history before the first prompt, Then Runtime returns an empty replay without resuming the active Codex thread", async () => {
+    await using provider = await FakeOpenAiProvider.start("mobius-test-model", "UNUSED_REPLY");
+    await using agent = await CodexFixture.create(provider);
+    await withRealDaemon(new CodexAgentSpecification(), agent.environment, async (peer) => {
+        const createRequestId = randomUUID();
+        peer.send(
+            encodeNativeSessionCommand({
+                kind: "native.session.request",
+                action: "create",
+                requestId: createRequestId,
+                agentId: "codex",
+                bindingId: peer.bindingId,
+                directoryId: "default",
+                additionalDirectoryIds: [],
+                sessionId: peer.sessionId,
+            }),
+        );
+        let sessionId = "";
+        while (sessionId.length === 0) {
+            const message = await peer.nextMessage();
+            if (decodeMessageKind(message) === "session.operation.failed") {
+                throw new Error(message);
+            }
+            if (decodeMessageKind(message) === "native.session.result") {
+                const result = decodeNativeSessionResult(message);
+                if (result.action === "create") {
+                    sessionId = result.nativeSessionId;
+                }
+            }
+        }
+        const requestId = randomUUID();
+        peer.send(
+            encodeSessionLiveHistoryV2PageLoad({
+                kind: "session.live-history.v2.page.load",
+                requestId,
+                sessionId,
+                agentId: "codex",
+                bindingId: peer.bindingId,
+                directoryId: "default",
+                additionalDirectoryIds: [],
+                cursor: null,
+                eventLimit: 50,
+            }),
+        );
+        for (;;) {
+            const message = await peer.nextMessage();
+            if (decodeMessageKind(message) === "session.operation.failed") {
+                throw new Error(message);
+            }
+            if (decodeMessageKind(message) !== "session.live-history.v2.page.loaded") {
+                continue;
+            }
+            expect(decodeSessionLiveHistoryV2PageLoaded(message)).toMatchObject({
+                events: {
+                    executingPromptRequest: null,
+                    history: { events: [], nextCursor: null, truncated: false, version: 2 },
+                },
+                requestId,
+                sessionId,
+            });
+            break;
+        }
+    });
+});
 
 test("Given a real codex native Session, When the active prompt is cancelled with a follow-up queued, Then the queued prompt restores that Session and completes", async () => {
     const entered = Promise.withResolvers<void>();
@@ -152,6 +219,47 @@ test("Given a real codex native Session, When the active prompt is cancelled wit
                         expect.objectContaining({ role: "assistant", outcome: "cancelled" }),
                     );
                 }
+                break;
+            }
+            const v2RequestId = randomUUID();
+            peer.send(
+                encodeSessionLiveHistoryV2PageLoad({
+                    kind: "session.live-history.v2.page.load",
+                    requestId: v2RequestId,
+                    sessionId: nativeId,
+                    agentId: "codex",
+                    bindingId: peer.bindingId,
+                    directoryId: "default",
+                    additionalDirectoryIds: [],
+                    cursor: null,
+                    eventLimit: 100,
+                }),
+            );
+            for (;;) {
+                const message = await peer.nextMessage();
+                if (decodeMessageKind(message) === "session.operation.failed") {
+                    throw new Error(message);
+                }
+                if (decodeMessageKind(message) !== "session.live-history.v2.page.loaded") {
+                    continue;
+                }
+                const replay = decodeSessionLiveHistoryV2PageLoaded(message).events.history.events;
+                const userText = replay.flatMap((event) =>
+                    event.type === "acp" &&
+                    event.payload.sessionUpdate === "user_message_chunk" &&
+                    event.payload.content.type === "text"
+                        ? [event.payload.content.text]
+                        : [],
+                );
+                const assistantText = replay.flatMap((event) =>
+                    event.type === "acp" &&
+                    event.payload.sessionUpdate === "agent_message_chunk" &&
+                    event.payload.content.type === "text"
+                        ? [event.payload.content.text]
+                        : [],
+                );
+                expect(userText).toContain("Reply with a short greeting, without using tools");
+                expect(assistantText.join("")).toContain("NATIVE_RECOVERY_REPLY");
                 break;
             }
         });

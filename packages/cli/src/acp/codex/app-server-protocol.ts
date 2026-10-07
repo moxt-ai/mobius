@@ -221,19 +221,15 @@ export const threadStartResponseSchema = z.object({
     thread: z.object({ id: boundedText(256) }),
 });
 
+const threadTurnSchema = z.object({
+    items: z.array(z.unknown()).max(100_000),
+});
+const threadTurnsSchema = z.array(threadTurnSchema).max(100_000);
 const threadLifecycleResponseSchema = z.object({
     model: boundedText(256).nullish(),
     reasoningEffort: boundedText(256).nullish(),
     serviceTier: boundedText(256).nullish(),
-    thread: z.object({ id: boundedText(256) }),
-    turns: z
-        .array(
-            z.object({
-                items: z.array(z.unknown()).max(100_000),
-            }),
-        )
-        .max(100_000)
-        .nullish(),
+    thread: z.object({ id: boundedText(256), turns: threadTurnsSchema }),
 });
 
 export const threadResumeResponseSchema = threadLifecycleResponseSchema;
