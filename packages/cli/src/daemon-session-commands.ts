@@ -12,6 +12,7 @@ import type { WorkspaceDirectoryService } from "./authorization/workspace-direct
 import type { DaemonConfig } from "./config.ts";
 import { operationErrorCode, reportOperationFailure, send } from "./daemon-command-results.ts";
 import { AccumulatingOperationMetrics } from "./infra/operation-metrics.ts";
+import type { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
 import type { DaemonSessionEventPublisher } from "./relay-connection/session-event-publisher.ts";
 export async function executeWorkspaceList(
     socket: WebSocket,
@@ -49,6 +50,7 @@ export async function executeSessionPrepare(
     directories: WorkspaceDirectoryService,
     audit: AuditStore,
     sessions: AgentRuntimeManager,
+    diagnostics: RelayConnectionDiagnostics,
     signal: AbortSignal,
 ): Promise<void> {
     const metrics = new AccumulatingOperationMetrics();
@@ -144,6 +146,16 @@ export async function executeSessionPrepare(
             runtimeTimings: metrics.snapshot(),
         });
     } catch (error) {
+        diagnostics.daemonDiagnostic(
+            "session_prepare_failed",
+            command.requestId,
+            {
+                agentId: command.agentId,
+                code: operationErrorCode(error),
+                sessionId: command.sessionId,
+            },
+            error,
+        );
         audit.record({
             commandId: command.requestId,
             details: {
