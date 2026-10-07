@@ -232,12 +232,6 @@ export class FakeSessions {
             payload: { commandId: command.commandId, content, kind: "prompt.requested" },
             type: "lifecycle-metadata",
         });
-        for (const block of content) {
-            this.#eventV2(command.sessionId, {
-                payload: { content: block, messageId: command.commandId, sessionUpdate: "user_message_chunk" },
-                type: "acp",
-            });
-        }
         const current = session.execution.kind === "running" ? session.execution.turn.commandIds[0] : undefined;
         const targetCompleted = session.history.some((turn) => turn.commandIds.includes(command.targetCommandId));
         if (command.disposition === "queue" && current !== command.targetCommandId && !targetCompleted) {

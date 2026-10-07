@@ -745,10 +745,6 @@ describe("daemon relay connection liveness", () => {
             );
             expect(eventLogV2[0]).toMatchObject({ payload: { kind: "prompt.requested" }, type: "lifecycle-metadata" });
             expect(eventLogV2[1]).toMatchObject({
-                payload: { sessionUpdate: "user_message_chunk" },
-                type: "acp",
-            });
-            expect(eventLogV2[2]).toMatchObject({
                 payload: { kind: "prompt.started" },
                 type: "lifecycle-metadata",
             });
@@ -756,6 +752,11 @@ describe("daemon relay connection liveness", () => {
                 payload: { kind: "prompt.completed" },
                 type: "lifecycle-metadata",
             });
+            expect(
+                eventLogV2.some(
+                    (event) => event.type === "acp" && event.payload.sessionUpdate === "user_message_chunk",
+                ),
+            ).toBe(false);
             expect(
                 eventLogV2.filter(
                     (event) => event.type === "acp" && event.payload.sessionUpdate === "agent_thought_chunk",
