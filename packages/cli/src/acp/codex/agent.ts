@@ -280,7 +280,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 this.#nativeSessionId = resumed.thread.id;
                 this.#settings.selectRestoredThread(resumed);
                 await this.#settings.probeCollaborationMode(this.#nativeSessionId, context.signal);
-                await this.#replayHistory(resumed.turns);
+                await this.#replayHistory(resumed.thread.turns);
                 await this.#emitAvailableCommands();
                 return { configOptions: this.#settings.configOptions() };
             })
@@ -299,7 +299,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 this.#nativeSessionId = forked.thread.id;
                 this.#settings.selectRestoredThread(forked);
                 await this.#settings.probeCollaborationMode(this.#nativeSessionId, context.signal);
-                await this.#replayHistory(forked.turns);
+                await this.#replayHistory(forked.thread.turns);
                 await this.#emitAvailableCommands();
                 return { configOptions: this.#settings.configOptions(), sessionId: forked.thread.id };
             })

@@ -89,6 +89,11 @@ type SessionLoadState =
       }
     | LoadedSession;
 
+type NativeHistoryOwnership =
+    | { readonly kind: "unbound" }
+    | { readonly kind: "fresh-session" }
+    | { readonly kind: "agent-owned" };
+
 interface LoadedSession {
     readonly history: AcpHistoryReplay;
     readonly kind: "loaded";
@@ -126,6 +131,7 @@ export class AgentSession implements AcpClientHandler {
     #configRevision = 0;
     #configOptions: readonly SessionConfigOption[] = [];
     #lastTerminalCommandId: string | null = null;
+    #nativeHistoryOwnership: NativeHistoryOwnership = { kind: "unbound" };
     #prompted = false;
     #nativePrompt: { readonly commandId: string; readonly previousTurnId: string | null } | null = null;
     #sessionLoad: SessionLoadState = { kind: "not-requested" };
@@ -295,6 +301,9 @@ export class AgentSession implements AcpClientHandler {
         cursor: string | null,
         signal: AbortSignal,
     ): Promise<AcpNativeEventReplayV2> => {
+        if (!this.#prompted && this.#nativeHistoryOwnership.kind === "fresh-session") {
+            return new AcpHistoryReplay().eventPage(eventLimit, cursor);
+        }
         if (!this.#capabilities.loadSession) {
             throw new AcpExecutionError(
                 "This Agent restores context but does not provide message history.",
@@ -609,6 +618,7 @@ export class AgentSession implements AcpClientHandler {
                     ),
             );
             this.selectNativeSession(created.sessionId);
+            this.#nativeHistoryOwnership = { kind: "fresh-session" };
             lifecycleResponse = created;
         }
         this.#configOptions = this.#sessionConfigProtocol.normalizeLifecycle(lifecycleResponse);
@@ -1016,7 +1026,10 @@ export class AgentSession implements AcpClientHandler {
 
     readonly onUpdate = (notification: SessionNotification): Promise<void> => this.#updates.receive(notification);
 
-    readonly selectNativeSession = (sessionId: string): void => this.#updates.select(sessionId);
+    readonly selectNativeSession = (sessionId: string): void => {
+        this.#updates.select(sessionId);
+        this.#nativeHistoryOwnership = { kind: "agent-owned" };
+    };
 
     readonly #processUpdate = async (notification: SessionNotification): Promise<void> => {
         this.assertNativeSession(notification.sessionId);
