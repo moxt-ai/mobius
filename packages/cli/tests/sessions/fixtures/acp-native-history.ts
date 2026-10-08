@@ -8,6 +8,9 @@ import { acquireWriter, nativeHistory, readPersistedState, sessions } from "./ac
 const replayedSessionHistory = new Set<string>();
 export function registerHistory(agent: ReturnType<typeof acp.agent>) {
     return agent.onRequest(acp.methods.agent.session.load, async (context) => {
+        if (process.env["MOBIUS_FAKE_ACP_FAIL_HISTORY_LOAD"] === "1") {
+            throw acp.RequestError.internalError(undefined, "Native history unavailable");
+        }
         acquireWriter(context.params.sessionId);
         const directory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
         const pausePath = directory === undefined ? null : join(directory, "pause-load");

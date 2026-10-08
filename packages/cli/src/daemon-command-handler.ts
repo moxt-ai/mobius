@@ -165,6 +165,7 @@ export function createDaemonCommandHandler({
                     config,
                     directories,
                     audit,
+                    diagnostics,
                     sessions,
                     eventLogV2.executingPromptRequest,
                     signal,

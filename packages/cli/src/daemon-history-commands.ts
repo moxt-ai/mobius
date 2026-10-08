@@ -15,6 +15,7 @@ import type { DaemonConfig } from "./config.ts";
 import type { ActiveTurnRecovery } from "./daemon-active-turn.ts";
 import { operationErrorCode, operationErrorMessage, reportOperationFailure, send } from "./daemon-command-results.ts";
 import { mergeLiveSessionHistory, paginateLiveSessionHistory } from "./native-sessions/live-history-page.ts";
+import type { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
 export async function executeSessionLiveHistoryLoad(
     socket: WebSocket,
     command: ReturnType<typeof decodeSessionLiveHistoryLoad>,
@@ -162,6 +163,7 @@ export async function executeSessionLiveHistoryV2PageLoad(
     config: DaemonConfig,
     directories: WorkspaceDirectoryService,
     audit: AuditStore,
+    diagnostics: RelayConnectionDiagnostics,
     sessions: AgentRuntimeManager,
     executingPromptRequest: (
         sessionId: string,
@@ -214,6 +216,25 @@ export async function executeSessionLiveHistoryV2PageLoad(
         });
     } catch (error) {
         if (!signal.aborted) {
+            diagnostics.daemonDiagnostic(
+                "session_history_v2_load_failed",
+                command.requestId,
+                {
+                    agentId: command.agentId,
+                    code: operationErrorCode(error),
+                    sessionId: command.sessionId,
+                },
+                error,
+            );
+            audit.record({
+                commandId: command.requestId,
+                details: {
+                    agentId: command.agentId,
+                    code: operationErrorCode(error),
+                },
+                event: "session_history_v2_load_failed",
+                sessionId: command.sessionId,
+            });
             reportOperationFailure(socket, command.requestId, command.sessionId, error);
         }
     }
