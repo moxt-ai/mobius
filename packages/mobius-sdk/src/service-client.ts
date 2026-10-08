@@ -13,6 +13,9 @@ import {
     decodeSessionsListedEvent,
     decodeSessionsQueriedEvent,
     decodeWorkspaceEntriesEvent,
+    type ExternalAudioContentBlockV2,
+    type ExternalImageContentBlockV2,
+    type ExternalResourceContentBlockV2,
     type Interaction,
     isIdentifier,
     MOBIUS_API_PREFIX,
@@ -118,6 +121,36 @@ export interface MobiusCredentialProvider {
 
 export interface DiscoverMobiusAgentSettingsRequest {
     readonly model?: string;
+}
+
+export type MobiusExternalContentBlock =
+    | ExternalImageContentBlockV2
+    | ExternalAudioContentBlockV2
+    | ExternalResourceContentBlockV2;
+
+export function externalContentPath(content: MobiusExternalContentBlock): string {
+    let kind: "audio" | "image" | "resource";
+    let key: string;
+    switch (content.type) {
+        case "external_image":
+            kind = "image";
+            key = content.imageKey;
+            break;
+        case "external_audio":
+            kind = "audio";
+            key = content.audioKey;
+            break;
+        case "external_resource":
+            kind = "resource";
+            key = content.resourceKey;
+            break;
+        default:
+            throw new MobiusValidationError("The external content reference is invalid");
+    }
+    if (!/^[a-f0-9]{64}$/u.test(key)) {
+        throw new MobiusValidationError("The external content key is invalid");
+    }
+    return `mobius-content:${kind}:${key}`;
 }
 
 export class StaticMobiusCredentialProvider implements MobiusCredentialProvider {
@@ -1285,6 +1318,14 @@ export class MobiusSessionResources {
             signal,
         );
     };
+
+    readonly readExternalContent = async (
+        sessionId: string,
+        content: MobiusExternalContentBlock,
+        signal: AbortSignal,
+        maximumBytes = content.byteLength,
+    ): ReturnType<MobiusSessionResources["readFile"]> =>
+        await this.readFile(sessionId, externalContentPath(content), signal, maximumBytes);
 
     readonly list = async (page: MobiusPageRequest, signal: AbortSignal): Promise<MobiusSessionPage> => {
         const path = requestUrl(new URL("https://mobius.invalid/"), projectPath(this.#projectId, "sessions"));

@@ -17,6 +17,7 @@ export const SESSION_EVENT_V2_KIND = "session.event.v2";
 
 const boundedString = z.string().max(MAX_CONTENT_LENGTH);
 const shortString = z.string().max(2_048);
+const externalContentKeySchema = z.string().regex(/^[a-f0-9]{64}$/u);
 
 function boundedJsonIssue(value: unknown, depth = 0): string | null {
     if (depth > MAX_JSON_DEPTH) {
@@ -97,6 +98,36 @@ const imageContentSchema = z
 const audioContentSchema = z
     .object({ ...contentFields, data: boundedString, mimeType: shortString, type: z.literal("audio") })
     .readonly();
+const externalImageContentSchema = z
+    .strictObject({
+        ...contentFields,
+        byteLength: z.number().int().positive().safe(),
+        imageKey: externalContentKeySchema,
+        mimeType: shortString,
+        type: z.literal("external_image"),
+        uri: boundedString.nullable().optional(),
+    })
+    .readonly();
+const externalAudioContentSchema = z
+    .strictObject({
+        ...contentFields,
+        audioKey: externalContentKeySchema,
+        byteLength: z.number().int().positive().safe(),
+        mimeType: shortString,
+        type: z.literal("external_audio"),
+    })
+    .readonly();
+const externalResourceContentSchema = z
+    .strictObject({
+        ...contentFields,
+        byteLength: z.number().int().positive().safe(),
+        encoding: z.enum(["binary", "text"]),
+        mimeType: shortString.nullable().optional(),
+        resourceKey: externalContentKeySchema,
+        type: z.literal("external_resource"),
+        uri: boundedString,
+    })
+    .readonly();
 const resourceLinkSchema = z
     .object({
         ...contentFields,
@@ -139,8 +170,14 @@ export const contentBlockV2Schema = z.discriminatedUnion("type", [
     audioContentSchema,
     resourceLinkSchema,
     embeddedResourceSchema,
+    externalImageContentSchema,
+    externalAudioContentSchema,
+    externalResourceContentSchema,
 ]);
 export type ContentBlockV2 = z.infer<typeof contentBlockV2Schema>;
+export type ExternalImageContentBlockV2 = z.infer<typeof externalImageContentSchema>;
+export type ExternalAudioContentBlockV2 = z.infer<typeof externalAudioContentSchema>;
+export type ExternalResourceContentBlockV2 = z.infer<typeof externalResourceContentSchema>;
 
 const toolCallContentSchema = z.discriminatedUnion("type", [
     z.object({ _meta: optionalMetadata, content: contentBlockV2Schema, type: z.literal("content") }).readonly(),

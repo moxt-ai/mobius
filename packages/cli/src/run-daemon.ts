@@ -17,6 +17,8 @@ import type { DaemonConfig } from "./config.ts";
 import { DaemonDiagnosticLog } from "./daemon-diagnostic-log.ts";
 import { AuditInstallationEvents, DaemonAcpObserver, DaemonInstallationObserver } from "./daemon-observers.ts";
 import { DaemonTurnRegistry } from "./daemon-turn-registry.ts";
+import { AcpContentExternalizer } from "./external-content/acp-content-externalizer.ts";
+import { LocalExternalContentStore } from "./external-content/local-external-content-store.ts";
 import { readCodexFullHistory } from "./native-sessions/codex-history.ts";
 import { NativeSessionService } from "./native-sessions/service.ts";
 import { DaemonOperationState } from "./relay-connection/daemon-operation-state.ts";
@@ -123,6 +125,7 @@ export async function runDaemon(
     const sessionStore = new SqliteAcpSessionStore(
         join(stateDirectory, "sessions", `${createHash("sha256").update(config.channelId).digest("hex")}.sqlite`),
     );
+    const externalContent = new LocalExternalContentStore(stateDirectory);
     const operations = new DaemonOperationState();
     const publisher = new DaemonSessionEventPublisher(sessionStore);
     const eventLogV2 = new DaemonSessionEventLogV2(publisher, sessionStore);
@@ -149,6 +152,7 @@ export async function runDaemon(
         },
         "native",
         publisher.publishStatus,
+        new AcpContentExternalizer(externalContent),
     );
     const directories = new WorkspaceDirectoryService(config.bindingId, config.defaultWorkspace);
     const installationObserver = new DaemonInstallationObserver();
@@ -266,6 +270,7 @@ export async function runDaemon(
                     operations,
                     publisher,
                     eventLogV2,
+                    externalContent,
                     activeTurns,
                     connectionEpoch,
                     diagnostics,

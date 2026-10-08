@@ -10,6 +10,7 @@ import {
     type FileReadCommand,
 } from "@moxt-ai/mobius-protocol";
 import { readLocalRaster } from "../authorization/local-raster.ts";
+import type { ExternalContentStore } from "../external-content/local-external-content-store.ts";
 
 const CHUNK_BYTES = 192 * 1024;
 
@@ -56,8 +57,10 @@ export async function streamLocalFile(
     send: (message: DaemonToServiceMessage) => void,
     signal: AbortSignal,
     workingDirectory: string | null,
+    externalContent: ExternalContentStore,
 ): Promise<void> {
-    const target = await resolveFile(command.path, workingDirectory, signal);
+    const external = await externalContent.resolve(command.sessionId, command.path, signal);
+    const target = external?.path ?? (await resolveFile(command.path, workingDirectory, signal));
     if (target === null) {
         throw new Error("The local file is unavailable");
     }
@@ -66,13 +69,13 @@ export async function streamLocalFile(
     if (!before.isFile() || before.size < 1 || before.size > command.maxBytes) {
         throw new Error("The local file is too large to read");
     }
-    const raster = await readLocalRaster(target, signal);
+    const raster = external === null ? await readLocalRaster(target, signal) : null;
     send({
         byteLength: before.size,
         kind: FILE_BEGIN_KIND,
-        mediaType: raster?.mimeType ?? "application/octet-stream",
+        mediaType: external?.mediaType ?? raster?.mimeType ?? "application/octet-stream",
         modifiedAt: before.mtime.toISOString(),
-        name: basename(target) || "file",
+        name: external?.name ?? (basename(target) || "file"),
         requestId: command.requestId,
         sessionId: command.sessionId,
     });

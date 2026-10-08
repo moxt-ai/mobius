@@ -26,6 +26,7 @@ import type { LocalRasterImage } from "../authorization/local-raster.ts";
 import { readInlineRaster, readLocalRaster } from "../authorization/local-raster.ts";
 import { type LocalVideo, readInlineVideo } from "../authorization/local-video.ts";
 import type { AcpAgentDefinition } from "../config.ts";
+import type { AcpContentExternalizer } from "../external-content/acp-content-externalizer.ts";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
 import { embedLocalHistoryImages } from "../native-sessions/history-images.ts";
 import { type ProcessTreeIdentity, revalidateExecutable } from "../process/executable.ts";
@@ -112,6 +113,7 @@ export function recordsEqual(left: Readonly<Record<string, string>>, right: Read
 
 export class AgentSession implements AcpClientHandler {
     readonly #connection: AgentConnection;
+    readonly #contentExternalizer: AcpContentExternalizer;
     readonly #interactions: AcpSessionInteractions;
     readonly #additionalDirectories: readonly string[];
     readonly #agentId: string;
@@ -148,6 +150,7 @@ export class AgentSession implements AcpClientHandler {
         getObserver: () => AcpSessionObserver,
         store: AcpSessionStore,
         metrics: OperationMetrics,
+        contentExternalizer: AcpContentExternalizer,
     ) {
         this.#updates = new AgentUpdateStream((notification) => this.#processUpdate(notification));
         this.#additionalDirectories = [...additionalDirectories];
@@ -168,6 +171,7 @@ export class AgentSession implements AcpClientHandler {
             observer: getObserver,
         });
         this.#connection = new AgentConnection(agent, cwd, this);
+        this.#contentExternalizer = contentExternalizer;
     }
 
     static async #start(
@@ -176,6 +180,7 @@ export class AgentSession implements AcpClientHandler {
         store: AcpSessionStore,
         initialize: (runtime: AgentSession) => Promise<void>,
         metrics: OperationMetrics,
+        contentExternalizer: AcpContentExternalizer,
     ): Promise<AgentSession> {
         for (let attempt = 1; attempt <= 2; attempt += 1) {
             options.signal.throwIfAborted();
@@ -209,6 +214,7 @@ export class AgentSession implements AcpClientHandler {
                         getObserver,
                         store,
                         metrics,
+                        contentExternalizer,
                     ),
             );
             try {
@@ -236,7 +242,8 @@ export class AgentSession implements AcpClientHandler {
         options: AcpPrepareOptions,
         getObserver: () => AcpSessionObserver,
         store: AcpSessionStore,
-        metrics: OperationMetrics = unmeasuredOperationMetrics,
+        metrics: OperationMetrics,
+        contentExternalizer: AcpContentExternalizer,
     ): Promise<AgentSession> =>
         await AgentSession.#start(
             options,
@@ -244,12 +251,14 @@ export class AgentSession implements AcpClientHandler {
             store,
             async (runtime) => await runtime.initialize(options.signal, options.origin),
             metrics,
+            contentExternalizer,
         );
 
     static readonly startNativeSessionBrowser = async (
         options: AcpPrepareOptions,
         getObserver: () => AcpSessionObserver,
         store: AcpSessionStore,
+        contentExternalizer: AcpContentExternalizer,
     ): Promise<AgentSession> =>
         await AgentSession.#start(
             options,
@@ -257,6 +266,7 @@ export class AgentSession implements AcpClientHandler {
             store,
             async (runtime) => await runtime.#initializeAgent(options.signal),
             unmeasuredOperationMetrics,
+            contentExternalizer,
         );
 
     readonly belongsTo = (agentId: string, cwd: string, additionalDirectories: readonly string[]): boolean =>
@@ -1034,7 +1044,12 @@ export class AgentSession implements AcpClientHandler {
     readonly #processUpdate = async (notification: SessionNotification): Promise<void> => {
         this.assertNativeSession(notification.sessionId);
         const update = notification.update;
-        const rawUpdate = decodeAcpSessionUpdateV2(JSON.stringify(update));
+        const externalized = await this.#contentExternalizer.update(
+            this.#mobiusSessionId,
+            update,
+            AbortSignal.timeout(30_000),
+        );
+        const rawUpdate = decodeAcpSessionUpdateV2(JSON.stringify(externalized));
         if (this.#sessionLoad.kind === "capturing") {
             await this.#sessionLoad.history.record(update, rawUpdate);
         } else {

@@ -1,11 +1,17 @@
+import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+    decodeFileBeginEvent,
+    decodeFileChunkEvent,
+    decodeFileEndEvent,
     decodeMessageKind,
+    decodeSessionLiveHistoryV2PageLoaded,
     decodeSessionOperationFailedEvent,
+    encodeFileReadCommand,
     encodeSessionLiveHistoryV2PageLoad,
     encodeSessionPrepareCommand,
     encodeSessionPromptCommand,
@@ -16,6 +22,163 @@ import { OpenCodeAgentSpecification } from "../../src/agent-catalog/agents/openc
 import { withRealDaemon } from "../support/agents/real-daemon.ts";
 
 const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
+
+test("Given native history contains oversized and embedded ACP media, When Chat loads V2 history, Then it receives retrievable keys instead of embedded bodies", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "mobius-external-history-image-"));
+    const executableDirectory = join(directory, "bin");
+    const executable = join(executableDirectory, "opencode");
+    await mkdir(executableDirectory);
+    await writeFile(
+        executable,
+        `#!${process.execPath}
+if (process.argv.includes("--version")) {
+  process.stdout.write("1.18.29\\n");
+} else {
+  process.argv.push(
+    "--agent-name", "OpenCode",
+    "--agent-version", "1.18.29",
+    "--http-mcp",
+    "--no-additional-directories",
+    "--no-delete-session",
+    "--no-fork-session",
+    "--no-embedded-context",
+  );
+  await import(${JSON.stringify(new URL(`file://${fakeAgentPath}`).toString())});
+}
+`,
+        { mode: 0o700 },
+    );
+    await chmod(executable, 0o700);
+    try {
+        await withRealDaemon(
+            new OpenCodeAgentSpecification(),
+            {
+                MOBIUS_FAKE_ACP_OVERSIZED_HISTORY_IMAGE: "1",
+                MOBIUS_FAKE_ACP_STATE_DIRECTORY: join(directory, "state"),
+                PATH: executableDirectory,
+            },
+            async (peer) => {
+                peer.send(
+                    encodeSessionPrepareCommand({
+                        additionalDirectoryIds: [],
+                        agentId: "opencode",
+                        bindingId: peer.bindingId,
+                        directoryId: "default",
+                        kind: "session.prepare",
+                        requestId: "prepare-external-image-session",
+                        sessionId: peer.sessionId,
+                    }),
+                );
+                for (;;) {
+                    if (decodeMessageKind(await peer.nextMessage()) === "session.ready") {
+                        break;
+                    }
+                }
+                peer.send(
+                    encodeSessionPromptCommand({
+                        additionalDirectoryIds: [],
+                        agentId: "opencode",
+                        bindingId: peer.bindingId,
+                        commandId: "external-image-seed-turn",
+                        directoryId: "default",
+                        disposition: SessionPromptDisposition.Reject,
+                        images: [],
+                        kind: "session.prompt",
+                        prompt: "Seed native history",
+                        resources: [],
+                        sessionId: peer.sessionId,
+                        targetCommandId: "",
+                    }),
+                );
+                for (;;) {
+                    if (decodeMessageKind(await peer.nextEvent()) === "session.completed") {
+                        break;
+                    }
+                }
+                peer.send(
+                    encodeSessionLiveHistoryV2PageLoad({
+                        additionalDirectoryIds: [],
+                        agentId: "opencode",
+                        bindingId: peer.bindingId,
+                        cursor: null,
+                        directoryId: "default",
+                        eventLimit: 50,
+                        kind: "session.live-history.v2.page.load",
+                        requestId: "load-external-image-history",
+                        sessionId: peer.sessionId,
+                    }),
+                );
+                let imageKey = "";
+                let audioKey = "";
+                let resourceKey = "";
+                for (;;) {
+                    const message = await peer.nextMessage();
+                    const messageKind = decodeMessageKind(message);
+                    if (messageKind === "session.operation.failed") {
+                        throw new Error(JSON.stringify(decodeSessionOperationFailedEvent(message)));
+                    }
+                    if (messageKind !== "session.live-history.v2.page.loaded") {
+                        continue;
+                    }
+                    const events = decodeSessionLiveHistoryV2PageLoaded(message).events.history.events;
+                    for (const event of events) {
+                        if (event.type !== "acp" || event.payload.sessionUpdate !== "tool_call_update") {
+                            continue;
+                        }
+                        for (const item of event.payload.content ?? []) {
+                            if (item.type === "content" && item.content.type === "external_image") {
+                                imageKey = item.content.imageKey;
+                            } else if (item.type === "content" && item.content.type === "external_audio") {
+                                audioKey = item.content.audioKey;
+                            } else if (item.type === "content" && item.content.type === "external_resource") {
+                                resourceKey = item.content.resourceKey;
+                            }
+                        }
+                    }
+                    break;
+                }
+                expect(imageKey).toMatch(/^[a-f0-9]{64}$/u);
+                expect(audioKey).toMatch(/^[a-f0-9]{64}$/u);
+                expect(resourceKey).toMatch(/^[a-f0-9]{64}$/u);
+
+                const readContent = async (kind: "audio" | "image" | "resource", key: string, mediaType: string) => {
+                    peer.send(
+                        encodeFileReadCommand({
+                            kind: "file.read",
+                            maxBytes: 2_000_000,
+                            path: `mobius-content:${kind}:${key}`,
+                            requestId: `read-external-${kind}`,
+                            sessionId: peer.sessionId,
+                        }),
+                    );
+                    const chunks: Buffer[] = [];
+                    for (;;) {
+                        const message = await peer.nextMessage();
+                        const messageKind = decodeMessageKind(message);
+                        if (messageKind === "file.begin") {
+                            expect(decodeFileBeginEvent(message).mediaType).toBe(mediaType);
+                        } else if (messageKind === "file.chunk") {
+                            chunks.push(Buffer.from(decodeFileChunkEvent(message).data, "base64"));
+                        } else if (messageKind === "file.end") {
+                            decodeFileEndEvent(message);
+                            break;
+                        }
+                    }
+                    return Buffer.concat(chunks);
+                };
+                const image = await readContent("image", imageKey, "image/png");
+                const audio = await readContent("audio", audioKey, "audio/wav");
+                const resource = await readContent("resource", resourceKey, "text/plain");
+                expect(image.byteLength).toBeGreaterThan(750_000);
+                expect(createHash("sha256").update(image).digest("hex")).toBe(imageKey);
+                expect(audio).toEqual(Buffer.from([1, 2, 3, 4]));
+                expect(resource.toString("utf8")).toBe("Generated resource");
+            },
+        );
+    } finally {
+        await rm(directory, { force: true, recursive: true });
+    }
+});
 
 test("Given an ACP Agent fails to load native history, When Chat requests V2 history, Then the public failure has a correlated local diagnostic with the sanitized cause chain", async () => {
     const directory = await mkdtemp(join(tmpdir(), "mobius-history-diagnostics-"));

@@ -12,6 +12,8 @@ import type {
     SessionStatus,
     SessionStatusChangedEvent,
 } from "@moxt-ai/mobius-protocol";
+import { AcpContentExternalizer } from "../external-content/acp-content-externalizer.ts";
+import { UnretainedExternalContentStore } from "../external-content/local-external-content-store.ts";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
 import { isNativeChatSessionId } from "../native-sessions/chat-agent.ts";
 import { AcpExecutionError } from "./acp-error.ts";
@@ -69,7 +71,7 @@ export class AgentRuntimeManager {
         touch: this.#processes.touch,
         changed: this.#processes.notifyChanged,
     });
-    readonly #queryProcesses = new AgentQueryProcesses(this.#processes);
+    readonly #queryProcesses: AgentQueryProcesses;
     readonly #executions = new ActiveExecutions();
     readonly #agentSettingsObserver = new NullAcpSessionObserver();
     readonly #nativeOperations = new Set<string>();
@@ -77,6 +79,7 @@ export class AgentRuntimeManager {
     readonly #nativeHistoryReader: AcpNativeHistoryReader | null;
     readonly #sessionIdentity: "assigned" | "native";
     readonly #onSessionStatusChanged: (event: SessionStatusChangedEvent) => void;
+    readonly #contentExternalizer: AcpContentExternalizer;
     #observer: AcpSessionObserver;
 
     constructor(
@@ -85,12 +88,15 @@ export class AgentRuntimeManager {
         nativeHistoryReader: AcpNativeHistoryReader | null = null,
         sessionIdentity: "assigned" | "native" = "assigned",
         onSessionStatusChanged: (event: SessionStatusChangedEvent) => void = () => undefined,
+        contentExternalizer: AcpContentExternalizer = new AcpContentExternalizer(new UnretainedExternalContentStore()),
     ) {
         this.#observer = observer;
         this.#store = store;
         this.#nativeHistoryReader = nativeHistoryReader;
         this.#sessionIdentity = sessionIdentity;
         this.#onSessionStatusChanged = onSessionStatusChanged;
+        this.#contentExternalizer = contentExternalizer;
+        this.#queryProcesses = new AgentQueryProcesses(this.#processes, contentExternalizer);
     }
 
     readonly setObserver = (observer: AcpSessionObserver): void => {
@@ -160,6 +166,7 @@ export class AgentRuntimeManager {
                         () => this.#observer,
                         this.#store,
                         metrics,
+                        this.#contentExternalizer,
                     ),
             );
         });
@@ -179,7 +186,14 @@ export class AgentRuntimeManager {
             this.#store.remove(options.sessionId);
             return await this.#startRetainedSessionProcess(
                 options,
-                async () => await AgentSession.start(options, () => this.#observer, this.#store, metrics),
+                async () =>
+                    await AgentSession.start(
+                        options,
+                        () => this.#observer,
+                        this.#store,
+                        metrics,
+                        this.#contentExternalizer,
+                    ),
             );
         });
     }
@@ -190,7 +204,14 @@ export class AgentRuntimeManager {
             await this.#retireSessionProcess(options.sessionId, existing, async () => await existing.close());
             const runtime = await this.#startRetainedSessionProcess(
                 options,
-                async () => await AgentSession.start(options, () => this.#observer, this.#store),
+                async () =>
+                    await AgentSession.start(
+                        options,
+                        () => this.#observer,
+                        this.#store,
+                        unmeasuredOperationMetrics,
+                        this.#contentExternalizer,
+                    ),
             );
             try {
                 for (const desired of desiredConfigOptions) {
@@ -303,6 +324,8 @@ export class AgentRuntimeManager {
                         },
                         () => this.#agentSettingsObserver,
                         new MemoryAcpSessionStore(),
+                        unmeasuredOperationMetrics,
+                        this.#contentExternalizer,
                     ),
                 async (runtime) => {
                     const prepared = runtime.prepared();
