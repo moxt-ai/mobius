@@ -70,8 +70,9 @@ bytes into a tool's JSON display defeats this purpose.
 
 The daemon may decode embedded images into a private temporary cache, naming files
 by a hash of the decoded bytes. This is an exception for media delivery, not Session
-persistence. The cache must have size and lifetime limits, release expired files,
-and validate image data and file access locally. A hash is not authorization.
+persistence. Identical decoded content must reuse the same file. The cache has no
+capacity limit, but must release expired files and validate image data and file
+access locally. A hash is not authorization.
 Eviction or a restart may make an image unavailable; native history can recreate it
 when the Agent retained the original. Recording does not guarantee offline access
 to these temporary images.
