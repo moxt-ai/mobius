@@ -21,7 +21,7 @@ metadata:
 ## Test boundaries
 
 - Real Agent compatibility scenarios use the production daemon, adapter, and Agent
-  executable. See [prerequisites](packages/cli/tests/README.md) for executable setup.
+  executable. Use the prerequisites below to prepare a local run.
 - Controlled daemon scenarios exercise protocol faults, lifecycle races, and local
   security boundaries through the production daemon. Keep each controlled peer
   beside the scenario that needs it.
@@ -34,6 +34,28 @@ metadata:
 Controlled ACP peers test explicit protocol faults; they do not establish Agent
 compatibility. Real Agent tests use controlled LLM providers without production
 accounts. Missing required executables fail instead of falling back to fake Agents.
+
+## Real Agent prerequisites
+
+Install the repository with its pinned Node and pnpm versions. Make the real Agent
+executables and their production adapters available on `PATH`, or supply these
+local executable overrides:
+
+- Codex: `MOBIUS_TEST_CODEX_PATH`.
+- Claude Code: `MOBIUS_TEST_CLAUDE_PATH` and `MOBIUS_TEST_CLAUDE_ACP_PATH`.
+- OpenCode: `MOBIUS_TEST_OPENCODE_PATH`.
+- Pi: `MOBIUS_TEST_PI_PATH` and `MOBIUS_TEST_PI_ACP_PATH`.
+
+Use versions supported by the production Agent specifications; CI pins its own
+executable versions. Compatibility scenarios use isolated Agent homes and workspaces
+with local controlled model providers, without production accounts or existing user
+sessions. Missing required executables must fail clearly, never fall back to a fake
+Agent or silently skip a required case.
+
+A compatibility claim must identify the executed scenario, Agent and platform.
+Successful live output alone does not establish history, file recovery, permission
+rejection or reconnect behavior. Track missing coverage in issues rather than keeping
+a second coverage inventory in Markdown.
 
 Follow [AGENTS.md](AGENTS.md) for acceptance boundaries and resource cleanup.
 

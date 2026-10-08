@@ -25,9 +25,10 @@ while reusing the Agent's operations rather than inventing parallel semantics.
 Current-turn recovery is difficult because a user may return while work is still
 changing, before native history contains the result. Execution completion, delivery
 and history availability must remain separate. The daemon owns the current execution
-view; clients must recover prior content and continue receiving updates without gaps,
-duplication or output disappearing during history handoff. The concrete transitions
-and recovery algorithm belong in code and boundary tests.
+view. Rejoining should show available content and resume live updates. History
+handoff must not duplicate or remove content already displayed, but recovery cannot
+promise to reconstruct events lost during disconnects or restarts. The concrete
+transitions and recovery algorithm belong in code and boundary tests.
 
 ## Database operations
 
@@ -40,25 +41,20 @@ Configure `CLOUDFLARE_D1_API_TOKEN` with D1 Edit separately from the deployment
 `CLOUDFLARE_API_TOKEN`; both use the environment's `CLOUDFLARE_ACCOUNT_ID`.
 See the workflows for exact environment bindings and failure gates.
 
-## Current persistence behavior
+## Persistence and recovery constraints
 
-The following describes current behavior, including its limitations. It does not
-by itself justify adding storage or promise durable execution recovery:
+Pairing credentials, connection preferences and session metadata may be retained
+locally. Agents own their native history. Current-turn content, pending prompts and
+execution state must remain in daemon memory; a restart loses them by design and
+does not resume work. Local diagnostics may be retained for troubleshooting, but
+must not contain prompt text or become an event archive.
 
-- The local daemon persists pairing credentials, connection preferences, ACP session
-  metadata and native-session associations. Agents retain their own native history.
-- Current execution and queued prompts are memory-only. The daemon publishes live
-  events without an application delivery queue. Reconnection resumes live output;
-  shutdown or a crash loses in-flight messages and queued work by design.
-- Relay live delivery does not persist event receipts or wait for consumers to
-  acknowledge delivery. Recording runs independently with bounded buffering and a
-  deadline. Failed or overloaded recording attempts are dropped, never retried.
-  This implements the chosen [latency and reliability tradeoff](README.md#why-mobius-exists).
-- Without Recording, browsing native history requires the local Runtime and the Agent's
-  saved history. With the optional Recording Worker installed and recording enabled for
-  an App or Project, cloud history is available according to that recording policy.
-- Bounded local diagnostics are for troubleshooting and must not log prompt text or
-  session history. Diagnostics must not become a replacement event archive.
+Live delivery must not depend on acknowledgements, persistent delivery queues or
+retries. Optional cloud Recording is best effort and must never block live output.
+Without Recording, access to saved history depends on the connected machine and
+its Agent. Recording does not guarantee a complete archive.
 
-Exact schemas, state transitions, and capacity limits belong in code and executable
-tests; do not duplicate them in this guide.
+These are product constraints, not claims that every implementation currently
+satisfies them. Resolve a conflict by correcting the implementation or proposing a
+separate constraint change; do not rewrite the constraint to match an accidental
+implementation. Exact schemas and recovery algorithms belong in executable code.
