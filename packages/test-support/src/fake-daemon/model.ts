@@ -17,6 +17,7 @@ export interface FakeDaemonOptions {
     readonly agentId?: string;
     readonly agentName?: string;
     readonly additionalAgents?: readonly { readonly id: string; readonly name: string }[];
+    readonly files?: ReadonlyMap<string, { readonly content: string; readonly mediaType: string }>;
     readonly nativeSessionIds?: ReadonlySet<string>;
     readonly reply: (prompt: string, turnNumber: number, mode: "prompt" | "steer") => ReplyPlan;
 }
