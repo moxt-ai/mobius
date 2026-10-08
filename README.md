@@ -56,6 +56,11 @@ history. Current-turn content and pending work must remain in daemon memory;
 restarting the daemon loses them. Disabling Recording does not erase Agent history
 or local metadata. See [persistence and recovery constraints](DEVELOPMENT.md#persistence-and-recovery-constraints).
 
+Images should be fetched from the connected machine when needed, so large embedded
+images do not delay the conversation. Temporary image files are a disposable media
+cache, not saved conversations; their availability depends on the connected machine
+and retained Agent history. See [image delivery constraints](DEVELOPMENT.md#image-delivery-constraints).
+
 ## Local development
 
 Use Node and pnpm versions from `.nvmrc` and `package.json`.

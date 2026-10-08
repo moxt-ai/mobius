@@ -58,3 +58,24 @@ These are product constraints, not claims that every implementation currently
 satisfies them. Resolve a conflict by correcting the implementation or proposing a
 separate constraint change; do not rewrite the constraint to match an accidental
 implementation. Exact schemas and recovery algorithms belong in executable code.
+
+## Image delivery constraints
+
+Users should see images without large base64 payloads delaying live text or opening
+a conversation. Images embedded in structured Agent output must become local image
+references before entering live delivery or history responses. Clients fetch the
+image from the connected machine through the existing authorized file-read path.
+The same rule applies to images nested inside tool results; copying their encoded
+bytes into a tool's JSON display defeats this purpose.
+
+The daemon may decode embedded images into a private temporary cache, naming files
+by a hash of the decoded bytes. This is an exception for media delivery, not Session
+persistence. The cache must have size and lifetime limits, release expired files,
+and validate image data and file access locally. A hash is not authorization.
+Eviction or a restart may make an image unavailable; native history can recreate it
+when the Agent retained the original. Recording does not guarantee offline access
+to these temporary images.
+
+Failure to prepare an image must be visible as unavailable media and must not stop
+text delivery or execution. Ordinary text that happens to contain base64 remains
+text; it must not be guessed to be an image or silently rewritten.
