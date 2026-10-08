@@ -198,7 +198,7 @@ export async function executePrompt({
             }
         }
         const stream = activateAttempt();
-        eventLogV2.started(command.sessionId, command.commandId, attemptId, stream.epoch);
+        const lifecycleV2 = eventLogV2.started(command.sessionId, command.commandId, attemptId, stream.epoch);
         if (!prepared.prompted) {
             const listing = await directories.list(config.bindingId, command.directoryId, signal);
             publisher.publish(command.sessionId, {
@@ -235,6 +235,7 @@ export async function executePrompt({
                 commandId: command.commandId,
                 cwd: resolved.cwd,
                 images: attachments.images,
+                lifecycleV2,
                 prompt: command.prompt,
                 resources: attachments.resources,
                 sessionId: command.sessionId,
@@ -250,6 +251,7 @@ export async function executePrompt({
                 cwd: resolved.cwd,
                 disposition: availability.disposition,
                 images: attachments.images,
+                lifecycleV2,
                 onActivity: events.recordActivity,
                 onNarration: events.recordNarration,
                 onText: events.recordText,

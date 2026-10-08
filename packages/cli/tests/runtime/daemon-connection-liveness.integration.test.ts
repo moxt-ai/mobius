@@ -739,17 +739,32 @@ describe("daemon relay connection liveness", () => {
             expect(agentText).toBe(
                 "Echo from ACP: stream verbose activityEcho from ACP: stream another verbose activity",
             );
-            expect(eventLogV2.filter((event) => event.payload.sessionUpdate === "user_message_chunk")).toHaveLength(2);
-            expect(eventLogV2.filter((event) => event.payload.sessionUpdate === "agent_thought_chunk")).toHaveLength(
-                68,
-            );
+            expect(
+                eventLogV2.filter(
+                    (event) => event.type === "acp" && event.payload.sessionUpdate === "user_message_chunk",
+                ),
+            ).toHaveLength(2);
+            expect(
+                eventLogV2.filter(
+                    (event) => event.type === "acp" && event.payload.sessionUpdate === "agent_thought_chunk",
+                ),
+            ).toHaveLength(68);
             expect(
                 eventLogV2.filter(
                     (event) => event.type === "acp" && event.payload.sessionUpdate === "agent_message_chunk",
                 ),
             ).toHaveLength(6);
             expect(historyPages.every((page) => page.length <= 25)).toBe(true);
-            expect(historyEvents.every((event) => event.type === "acp")).toBe(true);
+            expect(
+                historyEvents.flatMap((event) => (event.type === "lifecycle-metadata" ? [event.payload.kind] : [])),
+            ).toEqual([
+                "prompt.requested",
+                "prompt.started",
+                "prompt.completed",
+                "prompt.requested",
+                "prompt.started",
+                "prompt.completed",
+            ]);
             expect(
                 historyEvents.flatMap((event) =>
                     event.type === "acp" &&

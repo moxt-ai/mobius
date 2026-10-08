@@ -1,7 +1,7 @@
 import type {
-    AcpSessionUpdateV2,
     AgentContentEvent,
     AgentPromptResponse,
+    ContentBlockV2,
     NativeSessionHistory,
     PromptImage,
     PromptResource,
@@ -12,6 +12,7 @@ import type {
     SessionConfigUpdatedEvent,
     SessionElicitationRequestedEvent,
     SessionElicitationResolvedEvent,
+    SessionEventPayloadV2,
     SessionInfoUpdatedEvent,
     SessionPermissionRequestedEvent,
     SessionPermissionResolvedEvent,
@@ -42,7 +43,7 @@ export interface AcpNativeEventReplayV2 {
     readonly nextCursor: string | null;
     readonly startPosition: number;
     readonly truncated: boolean;
-    readonly updates: readonly AcpSessionUpdateV2[];
+    readonly events: readonly SessionEventPayloadV2[];
 }
 
 export interface AcpAgentSettingsInspectionOptions {
@@ -63,6 +64,11 @@ export interface AcpConfigureOptions extends AcpPrepareOptions {
 
 export interface AcpPromptContentOptions {
     readonly images: readonly PromptImage[];
+    readonly lifecycleV2?: {
+        readonly attemptId: string;
+        readonly content: readonly ContentBlockV2[];
+        readonly epoch: string;
+    };
     readonly prompt: string;
     readonly resources: readonly PromptResource[];
 }
@@ -102,7 +108,7 @@ export interface AcpElicitationResponseOptions {
 export type AcpPromptResult = AgentPromptResponse;
 
 export interface AcpSessionObserver {
-    readonly onAcpUpdate?: (sessionId: string, update: AcpSessionUpdateV2, position: number) => Promise<void>;
+    readonly onSessionEventV2?: (sessionId: string, event: SessionEventPayloadV2, position: number) => Promise<void>;
     readonly onCommands: (event: SessionCommandsUpdatedEvent) => Promise<void>;
     readonly onConfig: (event: SessionConfigUpdatedEvent) => Promise<void>;
     readonly onContent: (event: AgentContentEvent) => Promise<void>;
@@ -115,7 +121,7 @@ export interface AcpSessionObserver {
 }
 
 export class NullAcpSessionObserver implements AcpSessionObserver {
-    readonly onAcpUpdate = (_sessionId: string, _update: AcpSessionUpdateV2, _position: number): Promise<void> =>
+    readonly onSessionEventV2 = (_sessionId: string, _event: SessionEventPayloadV2, _position: number): Promise<void> =>
         Promise.resolve();
     readonly onCommands = (): Promise<void> => Promise.resolve();
     readonly onConfig = (): Promise<void> => Promise.resolve();

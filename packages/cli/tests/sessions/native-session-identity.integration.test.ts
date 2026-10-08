@@ -113,7 +113,7 @@ describe("native session identity", () => {
                 );
 
                 expect(result).toMatchObject({ action, ready: { sessionId: targetSessionId }, targetSessionId });
-                expect(replayed.updates).toEqual(source.updates);
+                expect(replayed.events).toEqual(source.events);
             } finally {
                 await f.close();
             }

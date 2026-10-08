@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import type {
-    AcpSessionUpdateV2,
     ContentBlockV2,
     QueuedPromptRequestEventLogV2,
+    SessionEventPayloadV2,
     SessionEventV2,
     SessionPromptCommand,
 } from "@moxt-ai/mobius-protocol";
@@ -44,22 +44,21 @@ function promptContent(command: SessionPromptCommand): readonly ContentBlockV2[]
     return content;
 }
 
-export function sessionUpdateEventV2(
+export function sessionEventV2(
     daemonGenerationId: string,
     sessionId: string,
     position: number,
-    update: AcpSessionUpdateV2,
+    event: SessionEventPayloadV2,
     recordedAt: string,
 ): SessionEventV2 {
     const sessionPrefix = createHash("sha256").update(sessionId).digest("hex").slice(0, 16);
     return {
         eventId: `event-${daemonGenerationId}-${sessionPrefix}-${position.toString().padStart(16, "0")}`,
-        payload: update,
+        ...event,
         position: position.toString(),
         provenance: { kind: "original" },
         recordedAt,
         sessionId,
-        type: "acp",
     };
 }
 
@@ -80,23 +79,30 @@ export class DaemonSessionEventLogV2 {
         });
     };
 
-    readonly started = (sessionId: string, commandId: string, _attemptId: string, _epoch: string): void => {
+    readonly started = (
+        sessionId: string,
+        commandId: string,
+        attemptId: string,
+        epoch: string,
+    ): { readonly attemptId: string; readonly content: readonly ContentBlockV2[]; readonly epoch: string } => {
         const request = this.#queued.get(commandId);
         if (request?.sessionId === sessionId) {
             this.#queued.delete(commandId);
+            return { attemptId, content: request.content, epoch };
         }
+        throw new Error("The executing prompt was not registered in the V2 queue");
     };
 
-    readonly record = (sessionId: string, update: AcpSessionUpdateV2, position: number): void => {
-        this.#publisher.publishV2(this.event(sessionId, position, update, new Date().toISOString()));
+    readonly record = (sessionId: string, event: SessionEventPayloadV2, position: number): void => {
+        this.#publisher.publishV2(this.event(sessionId, position, event, new Date().toISOString()));
     };
 
     readonly event = (
         sessionId: string,
         position: number,
-        update: AcpSessionUpdateV2,
+        event: SessionEventPayloadV2,
         recordedAt: string,
-    ): SessionEventV2 => sessionUpdateEventV2(this.daemonGenerationId, sessionId, position, update, recordedAt);
+    ): SessionEventV2 => sessionEventV2(this.daemonGenerationId, sessionId, position, event, recordedAt);
 
     readonly queueChanged = (_sessionId: string): void => undefined;
 

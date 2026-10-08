@@ -69,6 +69,22 @@ describe("acp interactions", () => {
         });
         expect(result.completed).toEqual({ stopReason: "end_turn" });
         expect(result.text).toContain("main");
+        expect(
+            session.observer.eventsV2.flatMap(({ event }) =>
+                event.type === "lifecycle-metadata" ? [event.payload.kind] : [],
+            ),
+        ).toEqual([
+            "prompt.requested",
+            "prompt.started",
+            "session.permission.requested",
+            "session.permission.resolved",
+            "session.elicitation.requested",
+            "session.elicitation.resolved",
+            "prompt.completed",
+        ]);
+        expect(session.observer.eventsV2.map(({ position }) => position)).toEqual(
+            session.observer.eventsV2.map(({ position }) => position).toSorted((left, right) => left - right),
+        );
     });
 
     it("Given URL elicitation, When the user consents and the agent reports completion, Then the out-of-band interaction stays correlated through completion", async () => {

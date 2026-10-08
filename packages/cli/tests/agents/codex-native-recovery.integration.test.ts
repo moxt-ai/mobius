@@ -251,12 +251,16 @@ test("Given a real codex native Session, When the active prompt is cancelled wit
                 }
                 const replay = decodeSessionLiveHistoryV2PageLoaded(message).events.events.events;
                 const userText = replay.flatMap((event) =>
-                    event.payload.sessionUpdate === "user_message_chunk" && event.payload.content.type === "text"
+                    event.type === "acp" &&
+                    event.payload.sessionUpdate === "user_message_chunk" &&
+                    event.payload.content.type === "text"
                         ? [event.payload.content.text]
                         : [],
                 );
                 const assistantText = replay.flatMap((event) =>
-                    event.payload.sessionUpdate === "agent_message_chunk" && event.payload.content.type === "text"
+                    event.type === "acp" &&
+                    event.payload.sessionUpdate === "agent_message_chunk" &&
+                    event.payload.content.type === "text"
                         ? [event.payload.content.text]
                         : [],
                 );

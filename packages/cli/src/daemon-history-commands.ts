@@ -170,8 +170,8 @@ export async function executeSessionLiveHistoryV2PageLoad(
         const recovery = eventLogV2.promptRequestRecovery(command.sessionId);
         const replay = await sessions.loadSessionEventsV2(loadOptions, command.eventLimit, command.cursor);
         signal.throwIfAborted();
-        const events = replay.updates.map((update, index) =>
-            eventLogV2.event(command.sessionId, replay.startPosition + index, update, "1970-01-01T00:00:00.000Z"),
+        const events = replay.events.map((event, index) =>
+            eventLogV2.event(command.sessionId, replay.startPosition + index, event, "1970-01-01T00:00:00.000Z"),
         );
         const tailCursor = events.at(-1)?.eventId ?? "";
         audit.record({

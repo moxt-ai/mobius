@@ -223,26 +223,26 @@ describe("Session Event Log V2 protocol", () => {
         expect(decodeNativeSessionEventsV2(encodeNativeSessionEventsV2(recovery))).toEqual(recovery);
     });
 
-    it("Given synthetic lifecycle metadata, When it crosses the V2 event boundary, Then it is rejected", () => {
-        expect(() =>
-            decodeSessionEventLogPageV2({
-                daemonGenerationId: "daemon-generation-1",
-                events: [
-                    {
-                        ...event(1, {
-                            content: { text: "ignored", type: "text" },
-                            sessionUpdate: "agent_message_chunk",
-                        }),
-                        payload: { kind: "session.queue.changed" },
-                        type: "lifecycle-metadata",
-                    },
-                ],
-                nextCursor: null,
-                tailCursor: "event-1",
-                truncated: false,
-                version: 2,
-            }),
-        ).toThrow(ProtocolMessageError);
+    it("Given ACP updates and lifecycle metadata, When they cross the V2 event boundary, Then their ordered union is retained", () => {
+        const page = {
+            daemonGenerationId: "daemon-generation-1",
+            events: [
+                {
+                    ...event(1, {
+                        content: { text: "ignored", type: "text" },
+                        sessionUpdate: "agent_message_chunk",
+                    }),
+                    payload: { commandId: "command-1", kind: "prompt.completed", stopReason: "end_turn" },
+                    type: "lifecycle-metadata",
+                },
+            ],
+            nextCursor: null,
+            tailCursor: "event-1",
+            truncated: false,
+            version: 2,
+        } as const;
+
+        expect(decodeSessionEventLogPageV2(encodeSessionEventLogPageV2(page))).toEqual(page);
     });
 
     it("Given an invalid or oversized raw ACP update, When it crosses the V2 boundary, Then it is rejected with a typed protocol failure", () => {
