@@ -6,15 +6,10 @@
     "bin": {
         "mobius": "dist/cli.js"
     },
+    "types": "./src/index.ts",
     "exports": {
-        ".": {
-            "types": "./dist/index.d.ts",
-            "import": "./dist/index.js"
-        },
-        "./runtime": {
-            "types": "./dist/runtime.d.ts",
-            "import": "./dist/runtime.js"
-        }
+        ".": "./src/index.ts",
+        "./runtime": "./src/runtime.ts"
     },
     "files": [
         "dist"
@@ -23,7 +18,18 @@
         "node": ">=22.13.0"
     },
     "publishConfig": {
-        "access": "public"
+        "access": "public",
+        "types": "./dist/index.d.ts",
+        "exports": {
+            ".": {
+                "types": "./dist/index.d.ts",
+                "import": "./dist/index.js"
+            },
+            "./runtime": {
+                "types": "./dist/runtime.d.ts",
+                "import": "./dist/runtime.js"
+            }
+        }
     },
     "repository": {
         "type": "git",
