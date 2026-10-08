@@ -10,9 +10,6 @@
         "./app": "./src/app.ts",
         "./clerk": "./src/clerk.ts",
         "./cloudflare": "./src/cloudflare.ts",
-        "./fake-daemon/connection": "./src/fake-daemon/connection.ts",
-        "./fake-daemon/model": "./src/fake-daemon/model.ts",
-        "./fake-daemon/peer": "./src/fake-daemon/peer.ts",
         "./websocket": "./src/websocket.ts"
     },
     "dependencies": {

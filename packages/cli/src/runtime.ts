@@ -174,11 +174,18 @@ export interface MobiusRuntimeEngineOptions {
     readonly resolveAgentCatalogEnvironment?: (signal: AbortSignal) => Promise<Readonly<NodeJS.ProcessEnv>>;
 }
 
+export type {
+    AcpEndpointTermination,
+    InProcessAcpEndpoint,
+    InProcessAcpEndpointFactory,
+    InProcessAcpEndpointOptions,
+} from "./acp/in-process/acp-endpoint.ts";
 export type { DaemonConfig, DaemonConnectionConfig } from "./config.ts";
 export {
     createDaemonConfig,
     DaemonLocalContext,
     DaemonReconnectTarget,
+    InProcessAcpAgentDefinition,
     OpaqueDaemonReconnectTarget,
 } from "./config.ts";
 export {
