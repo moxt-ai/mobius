@@ -1,4 +1,5 @@
 import type { NativeSessionHistory } from "@moxt-ai/mobius-protocol";
+import type { AcpContentExternalizer } from "../external-content/acp-content-externalizer.ts";
 import { AcpExecutionError } from "./acp-error.ts";
 import type { AgentProcessPool } from "./agent-process-pool.ts";
 import { AgentSession } from "./agent-session.ts";
@@ -18,9 +19,11 @@ export class AgentQueryProcesses {
     readonly #processes: AgentProcessPool;
     readonly #observer = new NullAcpSessionObserver();
     readonly #store = new MemoryAcpSessionStore();
+    readonly #contentExternalizer: AcpContentExternalizer;
 
-    constructor(processes: AgentProcessPool) {
+    constructor(processes: AgentProcessPool, contentExternalizer: AcpContentExternalizer) {
         this.#processes = processes;
+        this.#contentExternalizer = contentExternalizer;
         this.#processesByQuery = new RetainedAgentProcesses({
             touch: processes.touch,
             changed: processes.notifyChanged,
@@ -37,7 +40,13 @@ export class AgentQueryProcesses {
     async #startRetained(options: AcpPrepareOptions): Promise<AgentSession> {
         const runtime = await this.#processes.startRetained(
             options.signal,
-            () => AgentSession.startNativeSessionBrowser(options, () => this.#observer, this.#store),
+            () =>
+                AgentSession.startNativeSessionBrowser(
+                    options,
+                    () => this.#observer,
+                    this.#store,
+                    this.#contentExternalizer,
+                ),
             {
                 isBusy: () => this.#processesByQuery.isBusy(options.sessionId),
                 retire: (runtime) => this.retire(options.sessionId, runtime),
@@ -125,6 +134,7 @@ export class AgentQueryProcesses {
                     options,
                     () => this.#observer,
                     new MemoryAcpSessionStore(),
+                    this.#contentExternalizer,
                 ),
             async (runtime) => {
                 runtime.selectNativeSession(nativeSessionId);
@@ -147,6 +157,7 @@ export class AgentQueryProcesses {
                     options,
                     () => this.#observer,
                     new MemoryAcpSessionStore(),
+                    this.#contentExternalizer,
                 ),
             async (runtime) => {
                 runtime.selectNativeSession(nativeSessionId);

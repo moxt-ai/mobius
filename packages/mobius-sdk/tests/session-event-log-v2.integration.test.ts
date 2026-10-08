@@ -1,6 +1,6 @@
 import { once } from "node:events";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { MobiusSessionExportV2, SessionEventV2 } from "@moxt-ai/mobius-protocol";
+import type { ExternalImageContentBlockV2, MobiusSessionExportV2, SessionEventV2 } from "@moxt-ai/mobius-protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import {
     MobiusClient,
@@ -89,15 +89,28 @@ describe("Session Event Log V2 SDK", () => {
             },
         };
         const received: Array<{ readonly method: string; readonly path: string; readonly body: unknown }> = [];
+        const externalImage: ExternalImageContentBlockV2 = {
+            byteLength: 3,
+            imageKey: "a".repeat(64),
+            mimeType: "image/png",
+            type: "external_image",
+        };
         const server = createServer((request: IncomingMessage, response: ServerResponse) => {
             void (async () => {
                 const path = request.url ?? "";
                 const body = request.method === "POST" ? await requestBody(request) : null;
                 received.push({ body, method: request.method ?? "", path });
-                response.setHeader("content-type", "application/json");
-                if (path.endsWith("/export-v2")) {
+                if (path.includes("/files/content")) {
+                    response.setHeader("content-type", "image/png");
+                    response.setHeader("last-modified", recordedAt);
+                    response.setHeader("x-mobius-byte-length", "3");
+                    response.setHeader("x-mobius-file-name", "image");
+                    response.end(Buffer.from([1, 2, 3]));
+                } else if (path.endsWith("/export-v2")) {
+                    response.setHeader("content-type", "application/json");
                     response.end(JSON.stringify(exported));
                 } else if (path.includes("/events-v2")) {
+                    response.setHeader("content-type", "application/json");
                     response.end(
                         JSON.stringify({
                             events: [sourceEvent],
@@ -108,10 +121,13 @@ describe("Session Event Log V2 SDK", () => {
                         }),
                     );
                 } else if (path.endsWith("/session-imports-v2")) {
+                    response.setHeader("content-type", "application/json");
                     response.end(JSON.stringify(session("imported-session")));
                 } else if (path.endsWith("/forks-v2")) {
+                    response.setHeader("content-type", "application/json");
                     response.end(JSON.stringify(session("forked-session")));
                 } else {
+                    response.setHeader("content-type", "application/json");
                     response.statusCode = 404;
                     response.end(JSON.stringify({ error: { code: "not_found", message: "Not found" } }));
                 }
@@ -144,6 +160,11 @@ describe("Session Event Log V2 SDK", () => {
                 version: 2,
             });
             expect(await client.sessions.exportV2("source-session", signal)).toEqual(exported);
+            expect(await client.sessions.readExternalContent("source-session", externalImage, signal)).toMatchObject({
+                bytes: Uint8Array.of(1, 2, 3),
+                mediaType: "image/png",
+                name: "image",
+            });
             expect((await client.sessions.importV2(exported, binding, signal)).sessionId).toBe("imported-session");
             expect(
                 (
@@ -170,12 +191,17 @@ describe("Session Event Log V2 SDK", () => {
                 path: "/mobius/api/v1/projects/project-1/sessions/source-session/export-v2",
             },
             {
-                body: { ...exported, targetBinding: binding },
+                body: null,
+                method: "GET",
+                path: `/mobius/api/v1/projects/project-1/sessions/source-session/files/content?maxBytes=3&path=mobius-content%3Aimage%3A${"a".repeat(64)}`,
+            },
+            {
+                body: { ...exported, targetBinding: { ...binding } },
                 method: "POST",
                 path: "/mobius/api/v1/projects/project-1/session-imports-v2",
             },
             {
-                body: { targetBinding: binding, throughEventId: sourceEvent.eventId },
+                body: { targetBinding: { ...binding }, throughEventId: sourceEvent.eventId },
                 method: "POST",
                 path: "/mobius/api/v1/projects/project-1/sessions/source-session/forks-v2",
             },

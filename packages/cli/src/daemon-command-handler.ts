@@ -45,6 +45,7 @@ import {
 import { executePrompt } from "./daemon-prompt-executor.ts";
 import { executeSessionConfigure, executeSessionPrepare, executeWorkspaceList } from "./daemon-session-commands.ts";
 import type { DaemonTurnRegistry } from "./daemon-turn-registry.ts";
+import type { ExternalContentStore } from "./external-content/local-external-content-store.ts";
 import { createNativeSessionRequestHandler } from "./native-sessions/handle-native-requests.ts";
 import type { NativeSessionService } from "./native-sessions/service.ts";
 import type { DaemonOperationState } from "./relay-connection/daemon-operation-state.ts";
@@ -62,6 +63,7 @@ export interface DaemonCommandOptions {
     readonly operations: DaemonOperationState;
     readonly publisher: DaemonSessionEventPublisher;
     readonly eventLogV2: DaemonSessionEventLogV2;
+    readonly externalContent: ExternalContentStore;
     readonly activeTurns: DaemonTurnRegistry;
     readonly diagnostics: RelayConnectionDiagnostics;
     readonly socket: WebSocket;
@@ -81,6 +83,7 @@ export function createDaemonCommandHandler({
     operations,
     publisher,
     eventLogV2,
+    externalContent,
     activeTurns,
     diagnostics,
     socket,
@@ -195,6 +198,7 @@ export function createDaemonCommandHandler({
                     (message) => send(socket, message),
                     signal,
                     sessions.findSessions([command.sessionId])[0]?.cwd ?? null,
+                    externalContent,
                 ).catch((error: unknown) => {
                     if (socket.readyState !== WebSocket.OPEN || signal.aborted) {
                         return;
