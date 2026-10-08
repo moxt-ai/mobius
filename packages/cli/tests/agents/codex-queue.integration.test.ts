@@ -3,8 +3,10 @@ import {
     decodeMessageKind,
     decodeRecordedSessionEvent,
     decodeSessionEventEnvelope,
+    decodeSessionLiveHistoryV2PageLoaded,
     decodeSessionQueuedEvent,
     encodeSessionCancelCommand,
+    encodeSessionLiveHistoryV2PageLoad,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -61,6 +63,34 @@ test("Given real Codex with an active turn, When three follow-ups are accepted a
             }
             // Authorization completes independently; acknowledgments need not arrive in execution order.
             expect(accepted).toEqual(expect.arrayContaining([first, cancelled, last]));
+            peer.send(
+                encodeSessionLiveHistoryV2PageLoad({
+                    additionalDirectoryIds: [],
+                    agentId: "codex",
+                    bindingId: peer.bindingId,
+                    cursor: null,
+                    directoryId: "default",
+                    eventLimit: 25,
+                    kind: "session.live-history.v2.page.load",
+                    requestId: randomUUID(),
+                    sessionId: peer.sessionId,
+                }),
+            );
+            for (;;) {
+                const message = await peer.nextMessage();
+                if (decodeMessageKind(message) !== "session.live-history.v2.page.loaded") {
+                    continue;
+                }
+                const executing = decodeSessionLiveHistoryV2PageLoaded(message).events.executingPromptRequest;
+                expect(
+                    executing?.events.flatMap((event) =>
+                        event.type === "lifecycle-metadata" && event.payload.kind === "prompt.requested"
+                            ? [event.payload.commandId]
+                            : [],
+                    ),
+                ).toEqual([active, first, cancelled, last]);
+                break;
+            }
             peer.send(
                 encodeSessionCancelCommand({ kind: "session.cancel", sessionId: peer.sessionId, commandId: cancelled }),
             );

@@ -14,7 +14,6 @@ type PromptRequestStateV2 =
     | {
           readonly kind: "requested";
           readonly commandId: string;
-          readonly eventTail: EventNodeV2;
           readonly sessionId: string;
       }
     | {
@@ -22,24 +21,8 @@ type PromptRequestStateV2 =
           readonly attemptId: string;
           readonly commandId: string;
           readonly epoch: string;
-          readonly eventTail: EventNodeV2;
           readonly sessionId: string;
       };
-
-interface EventNodeV2 {
-    readonly event: SessionEventV2;
-    readonly previous: EventNodeV2 | null;
-}
-
-function eventArray(tail: EventNodeV2): readonly SessionEventV2[] {
-    const reversed: SessionEventV2[] = [];
-    let node: EventNodeV2 | null = tail;
-    while (node !== null) {
-        reversed.push(node.event);
-        node = node.previous;
-    }
-    return reversed.reverse();
-}
 
 function promptContent(command: SessionPromptCommand): readonly ContentBlockV2[] {
     const content: ContentBlockV2[] = [];
@@ -94,37 +77,18 @@ export class DaemonSessionEventLogV2 {
         }
         for (const event of this.#loadStoredEvents(sessionId)) {
             if (event.type === "acp") {
-                const executing = [...this.#requests.values()].find(
-                    (request) => request.sessionId === sessionId && request.kind === "executing",
-                );
-                if (executing !== undefined) {
-                    this.#requests.set(executing.commandId, {
-                        ...executing,
-                        eventTail: { event, previous: executing.eventTail },
-                    });
-                }
                 continue;
             }
             const payload = event.payload;
             if (payload.kind === "prompt.requested") {
                 this.#requests.set(payload.commandId, {
                     commandId: payload.commandId,
-                    eventTail: { event, previous: null },
                     kind: "requested",
                     sessionId,
                 });
                 continue;
             }
             if ("event" in payload) {
-                const executing = [...this.#requests.values()].find(
-                    (request) => request.sessionId === sessionId && request.kind === "executing",
-                );
-                if (executing !== undefined) {
-                    this.#requests.set(executing.commandId, {
-                        ...executing,
-                        eventTail: { event, previous: executing.eventTail },
-                    });
-                }
                 continue;
             }
             if (!("commandId" in payload)) {
@@ -139,7 +103,6 @@ export class DaemonSessionEventLogV2 {
                     attemptId: payload.attemptId,
                     commandId: payload.commandId,
                     epoch: payload.epoch,
-                    eventTail: { event, previous: state.eventTail },
                     kind: "executing",
                     sessionId,
                 });
@@ -165,20 +128,19 @@ export class DaemonSessionEventLogV2 {
             recordedAt: new Date().toISOString(),
             sessionId,
         };
-        this.#positions.set(sessionId, position);
         this.#publisher.publishV2(event);
+        this.#positions.set(sessionId, position);
         return event;
     };
 
     readonly requested = (command: SessionPromptCommand): void => {
         const content = promptContent(command);
-        const event = this.#append(command.sessionId, {
+        this.#append(command.sessionId, {
             payload: { commandId: command.commandId, content, kind: "prompt.requested" },
             type: "lifecycle-metadata",
         });
         this.#requests.set(command.commandId, {
             commandId: command.commandId,
-            eventTail: { event, previous: null },
             kind: "requested",
             sessionId: command.sessionId,
         });
@@ -190,7 +152,7 @@ export class DaemonSessionEventLogV2 {
         if (request?.sessionId !== sessionId) {
             return;
         }
-        const event = this.#append(sessionId, {
+        this.#append(sessionId, {
             payload: { attemptId, commandId, epoch, kind: "prompt.started" },
             type: "lifecycle-metadata",
         });
@@ -198,61 +160,44 @@ export class DaemonSessionEventLogV2 {
             attemptId,
             commandId,
             epoch,
-            eventTail: { event, previous: request.eventTail },
             kind: "executing",
             sessionId,
         });
-        this.#store.startExecutingPromptEventsV2(sessionId, eventArray({ event, previous: request.eventTail }));
     };
 
     readonly record = (sessionId: string, payload: SessionEventPayloadV2): void => {
         this.#loadRequests(sessionId);
-        const event = this.#append(sessionId, payload);
-        this.#appendToExecutingRequest(sessionId, event);
+        this.#append(sessionId, payload);
     };
 
-    readonly #appendToExecutingRequest = (sessionId: string, event: SessionEventV2): void => {
-        const executing = [...this.#requests.values()].find(
-            (request) => request.sessionId === sessionId && request.kind === "executing",
-        );
-        if (executing !== undefined) {
-            this.#requests.set(executing.commandId, {
-                ...executing,
-                eventTail: { event, previous: executing.eventTail },
-            });
-            this.#store.appendExecutingPromptEventV2(event);
+    readonly #clearCompletedSession = (sessionId: string): void => {
+        if (![...this.#requests.values()].some((request) => request.sessionId === sessionId)) {
+            this.#store.clearExecutingPromptEventsV2(sessionId);
         }
     };
 
     readonly queueChanged = (sessionId: string): void => {
-        const event = this.#append(sessionId, {
+        this.#append(sessionId, {
             payload: { kind: "session.queue.changed" },
             type: "lifecycle-metadata",
         });
-        this.#appendToExecutingRequest(sessionId, event);
     };
 
     readonly completed = (sessionId: string, commandId: string, stopReason: string): void => {
         this.#loadRequests(sessionId);
-        const request = this.#requests.get(commandId);
-        const event = this.#append(sessionId, {
+        this.#append(sessionId, {
             payload: { commandId, kind: "prompt.completed", stopReason },
             type: "lifecycle-metadata",
         });
         this.#requests.delete(commandId);
-        if (request?.kind === "executing" && request.sessionId === sessionId) {
-            this.#store.clearExecutingPromptEventsV2(sessionId);
-        } else {
-            this.#appendToExecutingRequest(sessionId, event);
-        }
+        this.#clearCompletedSession(sessionId);
     };
 
     readonly failed = (sessionId: string, commandId: string, code: string, message: string): void => {
         this.#loadRequests(sessionId);
         const request = this.#requests.get(commandId);
-        let event: SessionEventV2;
         if (request?.kind === "executing" && request.commandId === commandId) {
-            event = this.#append(sessionId, {
+            this.#append(sessionId, {
                 payload: {
                     attemptId: request.attemptId,
                     code,
@@ -263,17 +208,13 @@ export class DaemonSessionEventLogV2 {
                 type: "lifecycle-metadata",
             });
         } else {
-            event = this.#append(sessionId, {
+            this.#append(sessionId, {
                 payload: { code, commandId, kind: "prompt.failed-before-start", message },
                 type: "lifecycle-metadata",
             });
         }
         this.#requests.delete(commandId);
-        if (request?.kind === "executing" && request.sessionId === sessionId) {
-            this.#store.clearExecutingPromptEventsV2(sessionId);
-        } else {
-            this.#appendToExecutingRequest(sessionId, event);
-        }
+        this.#clearCompletedSession(sessionId);
     };
 
     readonly executingPromptRequest = (sessionId: string): ExecutingPromptRequestEventLogV2 | null => {
@@ -284,7 +225,7 @@ export class DaemonSessionEventLogV2 {
         if (request?.kind !== "executing") {
             return null;
         }
-        const requestEvents = eventArray(request.eventTail);
+        const requestEvents = this.#store.readExecutingPromptEventsV2(sessionId);
         const events = requestEvents.slice(-EXECUTING_PROMPT_EVENT_LIMIT);
         return {
             attemptId: request.attemptId,
