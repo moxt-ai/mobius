@@ -1,0 +1,22 @@
+{
+    "name": "@moxt-ai/mobius-test-support",
+    "version": "0.0.1",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "typecheck": "tsc --project tsconfig.json"
+    },
+    "exports": {
+        "./fake-daemon": "./src/fake-daemon/index.ts",
+        "./fake-daemon/fake-harness": "./src/fake-daemon/fake-harness/index.ts",
+        "./fake-daemon/fake-harness/model": "./src/fake-daemon/fake-harness/model.ts"
+    },
+    "dependencies": {
+        "@agentclientprotocol/sdk": "1.4.0",
+        "@moxt-ai/mobius": "workspace:*",
+        "@moxt-ai/mobius-protocol": "workspace:*"
+    },
+    "devDependencies": {
+        "@types/node": "^24.13.5"
+    }
+}

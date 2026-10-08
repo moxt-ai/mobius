@@ -128,6 +128,22 @@ importers:
         specifier: 20.14.3
         version: 20.14.3
 
+  packages/mobius-test-support:
+    dependencies:
+      '@agentclientprotocol/sdk':
+        specifier: 1.4.0
+        version: 1.4.0(zod@4.6.5)
+      '@moxt-ai/mobius':
+        specifier: workspace:*
+        version: link:../cli
+      '@moxt-ai/mobius-protocol':
+        specifier: workspace:*
+        version: link:../protocol
+    devDependencies:
+      '@types/node':
+        specifier: ^24.13.5
+        version: 24.13.5
+
   packages/platform-app:
     dependencies:
       '@clerk/clerk-react':
