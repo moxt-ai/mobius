@@ -202,7 +202,7 @@ class ControlledAgentState {
                 sessionId: active.sessionId,
                 update: {
                     content: { text: output.text, type: "text" },
-                    messageId: `assistant-${active.turnNumber.toString()}`,
+                    messageId: id,
                     sessionUpdate: "agent_message_chunk",
                 },
             };
