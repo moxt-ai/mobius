@@ -78,6 +78,7 @@ import {
     SESSION_STATUS_CHANGED_KIND,
     type ServiceToDaemonMessage,
     type SessionPromptCommand,
+    UnsupportedProtocolMessageKindError,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-protocol";
@@ -323,6 +324,14 @@ export class ChannelActor {
             if (signal.aborted) {
                 throw error;
             }
+            if (error instanceof UnsupportedProtocolMessageKindError) {
+                console.warn("Runtime message skipped", {
+                    code: error.code,
+                    direction: error.direction,
+                    messageKind: error.messageKind,
+                });
+                return;
+            }
             if (error instanceof SessionRuntimeError) {
                 socket.close(sessionErrorCloseCode(error), error.code);
                 return;
@@ -458,6 +467,14 @@ export class ChannelActor {
             if (signal.aborted) {
                 throw error;
             }
+            if (error instanceof UnsupportedProtocolMessageKindError) {
+                console.warn("Host message skipped", {
+                    code: error.code,
+                    direction: error.direction,
+                    messageKind: error.messageKind,
+                });
+                return;
+            }
             if (error instanceof SessionRuntimeError) {
                 socket.close(sessionErrorCloseCode(error), error.code);
                 return;
@@ -511,7 +528,7 @@ export class ChannelActor {
             case AGENT_INSTALL_CANCELLED_KIND:
                 return;
             default:
-                throw new ProtocolMessageError("Unsupported daemon message");
+                throw new UnsupportedProtocolMessageKindError("daemon-to-service", message.kind);
         }
     };
 
@@ -586,7 +603,7 @@ export class ChannelActor {
                 return { message: command, requestId: command.requestId, sessionId: command.sessionId };
             }
             default:
-                throw new ProtocolMessageError("Unsupported host message");
+                throw new UnsupportedProtocolMessageKindError("service-to-daemon", kind);
         }
     };
 

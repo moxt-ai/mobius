@@ -7,7 +7,7 @@ const SESSION_ACCESS_PATTERN = /^msession_([A-Za-z0-9_-]{22})_([A-Za-z0-9_-]+)_(
 const MAXIMUM_LIFETIME_MILLISECONDS = 15 * 60 * 1_000;
 
 const claimsSchema = z
-    .strictObject({
+    .object({
         expiresAtEpochMilliseconds: z.number().int().nonnegative(),
         issuedAtEpochMilliseconds: z.number().int().nonnegative(),
         projectId: identifierStringSchema,

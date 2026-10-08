@@ -8,6 +8,7 @@ import {
     decodeSessionFailedEvent,
     decodeSessionStartedEvent,
     ProtocolMessageError,
+    UnsupportedProtocolMessageKindError,
 } from "./codecs/messages.ts";
 import {
     AGENT_CONTENT_KIND,
@@ -62,7 +63,7 @@ export const SESSION_FORKED_KIND = "session.forked";
 const MAX_RECORDED_EVENT_LENGTH = 8 * 1024 * 1024;
 
 export const sessionEventEnvelopeSchema = z
-    .strictObject({
+    .object({
         kind: z.literal(SESSION_EVENT_KIND),
         payload: z.string().min(2).max(MAX_RECORDED_EVENT_LENGTH),
         sessionId: identifierStringSchema,
@@ -73,12 +74,12 @@ export type SessionEventEnvelope = z.infer<typeof sessionEventEnvelopeSchema>;
 
 export const SESSION_QUEUE_CHANGED_KIND = "session.queue.changed";
 const sessionQueueChangedSchema = z
-    .strictObject({ kind: z.literal(SESSION_QUEUE_CHANGED_KIND), sessionId: identifierStringSchema })
+    .object({ kind: z.literal(SESSION_QUEUE_CHANGED_KIND), sessionId: identifierStringSchema })
     .readonly();
 export type SessionQueueChangedEvent = z.infer<typeof sessionQueueChangedSchema>;
 
 const sessionForkedSchema = z
-    .strictObject({
+    .object({
         kind: z.literal(SESSION_FORKED_KIND),
         sessionId: identifierStringSchema,
         sourceSessionId: identifierStringSchema,
@@ -179,7 +180,7 @@ export function decodeRecordedSessionEvent(encoded: string): RecordedSessionEven
         case SESSION_USAGE_UPDATED_KIND:
             return decodeSessionUsageUpdatedEvent(encoded);
         default:
-            throw new ProtocolMessageError("Unsupported recorded session event");
+            throw new UnsupportedProtocolMessageKindError("daemon-to-service", kind);
     }
 }
 

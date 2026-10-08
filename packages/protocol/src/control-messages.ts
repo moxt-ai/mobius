@@ -51,7 +51,7 @@ const SHORT_TEXT = z.string().max(500);
 const LONG_TEXT = z.string().max(100_000);
 
 const workspaceEntrySchema = z
-    .strictObject({
+    .object({
         directoryId: DIRECTORY_IDENTIFIER,
         name: z.string().min(1).max(255),
     })
@@ -60,9 +60,9 @@ const workspaceEntrySchema = z
 export type WorkspaceEntry = z.infer<typeof workspaceEntrySchema>;
 
 const sessionStatusSchema = z.discriminatedUnion("kind", [
-    z.strictObject({ kind: z.literal("idle") }).readonly(),
+    z.object({ kind: z.literal("idle") }).readonly(),
     z
-        .strictObject({
+        .object({
             commandId: IDENTIFIER,
             kind: z.literal("working"),
         })
@@ -72,7 +72,7 @@ const sessionStatusSchema = z.discriminatedUnion("kind", [
 export type SessionStatus = z.infer<typeof sessionStatusSchema>;
 
 const sessionStatusChangedEventSchema = z
-    .strictObject({
+    .object({
         kind: z.literal(SESSION_STATUS_CHANGED_KIND),
         sessionId: IDENTIFIER,
         status: sessionStatusSchema,
@@ -82,14 +82,14 @@ const sessionStatusChangedEventSchema = z
 export type SessionStatusChangedEvent = z.infer<typeof sessionStatusChangedEventSchema>;
 
 const sessionMetadataSchema = z
-    .strictObject({
+    .object({
         additionalDirectories: z.array(workspaceEntrySchema).max(16).readonly(),
         agentId: IDENTIFIER,
         directoryId: DIRECTORY_IDENTIFIER,
         directoryLabel: z.string().min(1).max(2_048),
         prompted: z.boolean(),
         sessionId: IDENTIFIER,
-        status: sessionStatusSchema,
+        status: sessionStatusSchema.default({ kind: "idle" }),
         title: z.string().max(500),
         updatedAt: z.iso.datetime({ offset: true }),
     })
@@ -98,7 +98,7 @@ const sessionMetadataSchema = z
 export type SessionMetadata = z.infer<typeof sessionMetadataSchema>;
 
 const sessionListCommandSchema = z
-    .strictObject({
+    .object({
         kind: z.literal(SESSION_LIST_KIND),
         limit: z.number().int().positive().max(500),
         requestId: IDENTIFIER,
@@ -108,7 +108,7 @@ const sessionListCommandSchema = z
 export type SessionListCommand = z.infer<typeof sessionListCommandSchema>;
 
 const sessionsListedEventSchema = z
-    .strictObject({
+    .object({
         entries: z.array(sessionMetadataSchema).max(500).readonly(),
         kind: z.literal(SESSION_LISTED_KIND),
         requestId: IDENTIFIER,
@@ -118,7 +118,7 @@ const sessionsListedEventSchema = z
 export type SessionsListedEvent = z.infer<typeof sessionsListedEventSchema>;
 
 const sessionQueryCommandSchema = z
-    .strictObject({
+    .object({
         kind: z.literal(SESSION_QUERY_KIND),
         requestId: IDENTIFIER,
         sessionIds: z.array(IDENTIFIER).min(1).max(500).readonly(),
@@ -128,7 +128,7 @@ const sessionQueryCommandSchema = z
 export type SessionQueryCommand = z.infer<typeof sessionQueryCommandSchema>;
 
 const sessionsQueriedEventSchema = z
-    .strictObject({
+    .object({
         entries: z.array(sessionMetadataSchema).max(500).readonly(),
         kind: z.literal(SESSION_QUERIED_KIND),
         requestId: IDENTIFIER,
@@ -138,7 +138,7 @@ const sessionsQueriedEventSchema = z
 export type SessionsQueriedEvent = z.infer<typeof sessionsQueriedEventSchema>;
 
 const fileReadCommandSchema = z
-    .strictObject({
+    .object({
         kind: z.literal(FILE_READ_KIND),
         maxBytes: z
             .number()
@@ -154,7 +154,7 @@ const fileReadCommandSchema = z
 export type FileReadCommand = z.infer<typeof fileReadCommandSchema>;
 
 const fileBeginEventSchema = z
-    .strictObject({
+    .object({
         byteLength: z
             .number()
             .int()
@@ -172,7 +172,7 @@ const fileBeginEventSchema = z
 export type FileBeginEvent = z.infer<typeof fileBeginEventSchema>;
 
 const fileChunkEventSchema = z
-    .strictObject({
+    .object({
         data: z.string().min(1).max(400_000),
         kind: z.literal(FILE_CHUNK_KIND),
         requestId: IDENTIFIER,
@@ -184,7 +184,7 @@ const fileChunkEventSchema = z
 export type FileChunkEvent = z.infer<typeof fileChunkEventSchema>;
 
 const fileEndEventSchema = z
-    .strictObject({
+    .object({
         kind: z.literal(FILE_END_KIND),
         requestId: IDENTIFIER,
         sessionId: IDENTIFIER,
@@ -194,7 +194,7 @@ const fileEndEventSchema = z
 export type FileEndEvent = z.infer<typeof fileEndEventSchema>;
 
 const fileFailedEventSchema = z
-    .strictObject({
+    .object({
         code: IDENTIFIER,
         kind: z.literal(FILE_FAILED_KIND),
         message: z.string().min(1).max(500),
@@ -206,7 +206,7 @@ const fileFailedEventSchema = z
 export type FileFailedEvent = z.infer<typeof fileFailedEventSchema>;
 
 const configValueSchema = z
-    .strictObject({
+    .object({
         description: SHORT_TEXT,
         groupId: z.string().max(128),
         groupName: z.string().max(255),
@@ -222,7 +222,7 @@ const configValueSchema = z
 export type SessionConfigValue = z.infer<typeof configValueSchema>;
 
 export const sessionConfigOptionSchema = z
-    .strictObject({
+    .object({
         booleanValue: z.boolean(),
         category: z.string().max(128),
         currentValue: z.string().max(500),
@@ -239,7 +239,7 @@ export type SessionConfigOption = z.infer<typeof sessionConfigOptionSchema>;
 const sessionConfigOptionsSchema = z.array(sessionConfigOptionSchema).max(100).readonly();
 
 export const agentSettingSchema = z
-    .strictObject({
+    .object({
         booleanValue: z.boolean(),
         category: z.string().max(128),
         defaultValue: z.string().max(500),
@@ -266,7 +266,7 @@ const agentModelEffortResolutionSchema = z.enum([
 ]);
 
 export const agentModelEffortSchema = z
-    .strictObject({
+    .object({
         effortSettingId: z.string().max(128),
         modelSettingId: z.string().max(128),
         resolution: agentModelEffortResolutionSchema,
@@ -278,7 +278,7 @@ export const agentModelEffortSchema = z
 export type AgentModelEffort = z.infer<typeof agentModelEffortSchema>;
 
 const agentSettingsDiscoverCommandSchema = z
-    .strictObject({
+    .object({
         agentId: IDENTIFIER,
         kind: z.literal(AGENT_SETTINGS_DISCOVER_KIND),
         model: z.string().min(1).max(500).optional(),
@@ -289,7 +289,7 @@ const agentSettingsDiscoverCommandSchema = z
 export type AgentSettingsDiscoverCommand = z.infer<typeof agentSettingsDiscoverCommandSchema>;
 
 const agentSettingsDiscoveredEventSchema = z
-    .strictObject({
+    .object({
         agentId: IDENTIFIER,
         agentName: z.string().max(255),
         agentVersion: z.string().max(128),
@@ -304,7 +304,7 @@ const agentSettingsDiscoveredEventSchema = z
 export type AgentSettingsDiscoveredEvent = z.infer<typeof agentSettingsDiscoveredEventSchema>;
 
 const agentSettingsDiscoveryFailedEventSchema = z
-    .strictObject({
+    .object({
         code: IDENTIFIER,
         kind: z.literal(AGENT_SETTINGS_DISCOVERY_FAILED_KIND),
         message: z.string().min(1).max(500),
@@ -315,7 +315,7 @@ const agentSettingsDiscoveryFailedEventSchema = z
 export type AgentSettingsDiscoveryFailedEvent = z.infer<typeof agentSettingsDiscoveryFailedEventSchema>;
 
 const agentCatalogRefreshCommandSchema = z
-    .strictObject({
+    .object({
         kind: z.literal(AGENT_CATALOG_REFRESH_KIND),
         requestId: IDENTIFIER,
     })
@@ -324,7 +324,7 @@ const agentCatalogRefreshCommandSchema = z
 export type AgentCatalogRefreshCommand = z.infer<typeof agentCatalogRefreshCommandSchema>;
 
 const agentCatalogRefreshedEventSchema = z
-    .strictObject({
+    .object({
         kind: z.literal(AGENT_CATALOG_REFRESHED_KIND),
         requestId: IDENTIFIER,
     })
@@ -333,7 +333,7 @@ const agentCatalogRefreshedEventSchema = z
 export type AgentCatalogRefreshedEvent = z.infer<typeof agentCatalogRefreshedEventSchema>;
 
 const agentCatalogRefreshFailedEventSchema = z
-    .strictObject({
+    .object({
         code: IDENTIFIER,
         kind: z.literal(AGENT_CATALOG_REFRESH_FAILED_KIND),
         message: z.string().min(1).max(500),
@@ -344,7 +344,7 @@ const agentCatalogRefreshFailedEventSchema = z
 export type AgentCatalogRefreshFailedEvent = z.infer<typeof agentCatalogRefreshFailedEventSchema>;
 
 export const sessionConfigurationSelectionSchema = z
-    .strictObject({
+    .object({
         booleanValue: z.boolean(),
         configId: IDENTIFIER,
         value: z.string().max(500),
@@ -364,7 +364,7 @@ export const AGENT_PERMISSION_MODES: readonly string[] = Object.freeze([
 ]);
 
 export const agentExecutionConfigurationSchema = z
-    .strictObject({
+    .object({
         model: sessionConfigurationSelectionSchema,
         permissionMode: z.string().refine((value) => AGENT_PERMISSION_MODES.includes(value)),
         reasoningEffort: sessionConfigurationSelectionSchema,
@@ -432,7 +432,7 @@ export const sessionConfigurationSelectionsSchema = z
     .readonly();
 
 export const sessionCapabilitiesSchema = z
-    .strictObject({
+    .object({
         additionalDirectories: z.boolean(),
         audioPrompt: z.boolean(),
         closeSession: z.boolean(),
@@ -451,7 +451,7 @@ export const sessionCapabilitiesSchema = z
 export type SessionCapabilities = z.infer<typeof sessionCapabilitiesSchema>;
 
 const sessionCommandSchema = z
-    .strictObject({
+    .object({
         description: SHORT_TEXT,
         inputHint: z.string().max(255),
         name: z.string().min(1).max(128),
@@ -461,7 +461,7 @@ const sessionCommandSchema = z
 export type SessionCommand = z.infer<typeof sessionCommandSchema>;
 
 export const permissionOptionSchema = z
-    .strictObject({
+    .object({
         kind: z.enum(["allow_once", "allow_always", "reject_once", "reject_always"]),
         name: z.string().min(1).max(255),
         optionId: z.string().min(1).max(255),
@@ -471,7 +471,7 @@ export const permissionOptionSchema = z
 export type SessionPermissionOption = z.infer<typeof permissionOptionSchema>;
 
 const elicitationOptionSchema = z
-    .strictObject({
+    .object({
         description: SHORT_TEXT,
         label: z.string().min(1).max(255),
         value: z.string().max(500),
@@ -481,7 +481,7 @@ const elicitationOptionSchema = z
 export type SessionElicitationOption = z.infer<typeof elicitationOptionSchema>;
 
 export const elicitationFieldSchema = z
-    .strictObject({
+    .object({
         defaultBooleanValue: z.boolean(),
         defaultNumberValue: z.number().finite(),
         defaultStringValue: z.string().max(10_000),
@@ -504,7 +504,7 @@ export const elicitationFieldSchema = z
 export type SessionElicitationField = z.infer<typeof elicitationFieldSchema>;
 
 export const displayContentSchema = z
-    .strictObject({
+    .object({
         artifactId: z.string().max(128).default(""),
         data: z.string().max(4_000_000),
         mimeType: z.string().max(255),
@@ -522,7 +522,7 @@ export const displayContentSchema = z
 export type AgentDisplayContent = z.infer<typeof displayContentSchema>;
 
 const recordedDisplayContentSchema = z
-    .strictObject({
+    .object({
         artifactId: z.string().max(128).default(""),
         data: z.string().max(4_000_000),
         mimeType: z.string().max(255),
@@ -538,7 +538,7 @@ const recordedDisplayContentSchema = z
     .readonly();
 
 export const promptImageSchema = z
-    .strictObject({
+    .object({
         data: z.string().min(1).max(4_000_000),
         mimeType: z.string().min(1).max(255),
         name: z.string().min(1).max(500),
@@ -548,7 +548,7 @@ export const promptImageSchema = z
 export type PromptImage = z.infer<typeof promptImageSchema>;
 
 const promptResourceSchema = z
-    .strictObject({
+    .object({
         mimeType: z.string().max(255),
         name: z.string().min(1).max(500),
         text: z.string().max(1_000_000),
@@ -560,7 +560,7 @@ const promptResourceSchema = z
 export type PromptResource = z.infer<typeof promptResourceSchema>;
 
 const workspaceListCommandSchema = z
-    .strictObject({
+    .object({
         bindingId: IDENTIFIER,
         directoryId: DIRECTORY_IDENTIFIER,
         kind: z.literal(WORKSPACE_LIST_KIND),
@@ -571,7 +571,7 @@ const workspaceListCommandSchema = z
 export type WorkspaceListCommand = z.infer<typeof workspaceListCommandSchema>;
 
 const workspaceEntriesEventSchema = z
-    .strictObject({
+    .object({
         bindingId: IDENTIFIER,
         directoryId: DIRECTORY_IDENTIFIER,
         directoryLabel: z.string().min(1).max(2_048),
@@ -593,10 +593,10 @@ const sessionIdentityFields = {
 };
 
 const sessionPrepareCommandSchema = z
-    .strictObject({
+    .object({
         ...sessionIdentityFields,
         configuration: z
-            .strictObject({
+            .object({
                 booleanValue: z.boolean(),
                 configId: z.string().min(1).max(128),
                 value: z.string().max(500),
@@ -626,7 +626,7 @@ export type SessionPrepareCommand = z.infer<typeof sessionPrepareCommandSchema>;
 const runtimeTimingsSchema = z
     .array(
         z
-            .strictObject({
+            .object({
                 durationMilliseconds: z.number().finite().nonnegative().max(120_000),
                 name: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/),
             })
@@ -636,7 +636,7 @@ const runtimeTimingsSchema = z
     .readonly();
 
 export const sessionReadyEventSchema = z
-    .strictObject({
+    .object({
         additionalDirectories: z.array(workspaceEntrySchema).max(16).readonly(),
         agentId: IDENTIFIER,
         agentName: z.string().max(255),
@@ -657,7 +657,7 @@ export const sessionReadyEventSchema = z
 export type SessionReadyEvent = z.infer<typeof sessionReadyEventSchema>;
 
 const sessionConfigureCommandSchema = z
-    .strictObject({
+    .object({
         ...sessionIdentityFields,
         booleanValue: z.boolean(),
         configId: z.string().min(1).max(128),
@@ -671,7 +671,7 @@ const sessionConfigureCommandSchema = z
 export type SessionConfigureCommand = z.infer<typeof sessionConfigureCommandSchema>;
 
 const sessionConfigUpdatedEventSchema = z
-    .strictObject({
+    .object({
         configOptions: sessionConfigOptionsSchema,
         kind: z.literal(SESSION_CONFIG_UPDATED_KIND),
         requestId: IDENTIFIER,
@@ -682,7 +682,7 @@ const sessionConfigUpdatedEventSchema = z
 export type SessionConfigUpdatedEvent = z.infer<typeof sessionConfigUpdatedEventSchema>;
 
 const sessionContextUsageUpdatedEventSchema = z
-    .strictObject({
+    .object({
         costAmount: z.number().finite().nonnegative(),
         costCurrency: z.string().max(16),
         hasCost: z.boolean(),
@@ -697,7 +697,7 @@ const sessionContextUsageUpdatedEventSchema = z
 export type SessionContextUsageUpdatedEvent = z.infer<typeof sessionContextUsageUpdatedEventSchema>;
 
 const sessionPromptUsageUpdatedEventSchema = z
-    .strictObject({
+    .object({
         _meta: promptMetadataSchema.nullable(),
         commandId: IDENTIFIER,
         kind: z.literal(SESSION_USAGE_UPDATED_KIND),
@@ -719,7 +719,7 @@ const sessionUsageUpdatedEventSchema = z.union([
 export type SessionUsageUpdatedEvent = z.infer<typeof sessionUsageUpdatedEventSchema>;
 
 const sessionCommandsUpdatedEventSchema = z
-    .strictObject({
+    .object({
         commands: z.array(sessionCommandSchema).max(500).readonly(),
         kind: z.literal(SESSION_COMMANDS_UPDATED_KIND),
         sessionId: IDENTIFIER,
@@ -729,7 +729,7 @@ const sessionCommandsUpdatedEventSchema = z
 export type SessionCommandsUpdatedEvent = z.infer<typeof sessionCommandsUpdatedEventSchema>;
 
 const sessionInfoUpdatedEventSchema = z
-    .strictObject({
+    .object({
         kind: z.literal(SESSION_INFO_UPDATED_KIND),
         sessionId: IDENTIFIER,
         title: z.string().max(500).nullable(),
@@ -740,7 +740,7 @@ const sessionInfoUpdatedEventSchema = z
 export type SessionInfoUpdatedEvent = z.infer<typeof sessionInfoUpdatedEventSchema>;
 
 export const sessionPermissionRequestedEventSchema = z
-    .strictObject({
+    .object({
         commandId: IDENTIFIER,
         interactionId: IDENTIFIER,
         kind: z.literal(SESSION_PERMISSION_REQUESTED_KIND),
@@ -755,7 +755,7 @@ export const sessionPermissionRequestedEventSchema = z
 export type SessionPermissionRequestedEvent = z.infer<typeof sessionPermissionRequestedEventSchema>;
 
 const sessionPermissionRespondCommandSchema = z
-    .strictObject({
+    .object({
         interactionId: IDENTIFIER,
         kind: z.literal(SESSION_PERMISSION_RESPOND_KIND),
         optionId: z.string().max(255),
@@ -767,7 +767,7 @@ const sessionPermissionRespondCommandSchema = z
 export type SessionPermissionRespondCommand = z.infer<typeof sessionPermissionRespondCommandSchema>;
 
 export const sessionPermissionResolvedEventSchema = z
-    .strictObject({
+    .object({
         interactionId: IDENTIFIER,
         kind: z.literal(SESSION_PERMISSION_RESOLVED_KIND),
         optionId: z.string().max(255),
@@ -779,7 +779,7 @@ export const sessionPermissionResolvedEventSchema = z
 export type SessionPermissionResolvedEvent = z.infer<typeof sessionPermissionResolvedEventSchema>;
 
 export const sessionElicitationRequestedEventSchema = z
-    .strictObject({
+    .object({
         accepted: z.boolean(),
         commandId: IDENTIFIER,
         elicitationId: z.string().max(255),
@@ -796,7 +796,7 @@ export const sessionElicitationRequestedEventSchema = z
 export type SessionElicitationRequestedEvent = z.infer<typeof sessionElicitationRequestedEventSchema>;
 
 const sessionElicitationRespondCommandSchema = z
-    .strictObject({
+    .object({
         action: z.enum(["accept", "cancel", "decline"]),
         content: z.string().max(100_000),
         interactionId: IDENTIFIER,
@@ -808,7 +808,7 @@ const sessionElicitationRespondCommandSchema = z
 export type SessionElicitationRespondCommand = z.infer<typeof sessionElicitationRespondCommandSchema>;
 
 export const sessionElicitationResolvedEventSchema = z
-    .strictObject({
+    .object({
         action: z.enum(["accept", "cancel", "decline", "complete"]),
         interactionId: IDENTIFIER,
         kind: z.literal(SESSION_ELICITATION_RESOLVED_KIND),
@@ -819,7 +819,7 @@ export const sessionElicitationResolvedEventSchema = z
 export type SessionElicitationResolvedEvent = z.infer<typeof sessionElicitationResolvedEventSchema>;
 
 const sessionOperationFailedEventSchema = z
-    .strictObject({
+    .object({
         code: IDENTIFIER,
         kind: z.literal(SESSION_OPERATION_FAILED_KIND),
         message: z.string().min(1).max(500),
@@ -832,7 +832,7 @@ const sessionOperationFailedEventSchema = z
 export type SessionOperationFailedEvent = z.infer<typeof sessionOperationFailedEventSchema>;
 
 const agentContentEventSchema = z
-    .strictObject({
+    .object({
         commandId: IDENTIFIER,
         content: displayContentSchema,
         contentId: IDENTIFIER,
@@ -850,7 +850,7 @@ const agentInstallIdentityFields = {
 };
 
 const agentInstallRequestCommandSchema = z
-    .strictObject({
+    .object({
         ...agentInstallIdentityFields,
         kind: z.literal(AGENT_INSTALL_REQUEST_KIND),
     })
@@ -859,7 +859,7 @@ const agentInstallRequestCommandSchema = z
 export type AgentInstallRequestCommand = z.infer<typeof agentInstallRequestCommandSchema>;
 
 const agentInstallCancelCommandSchema = z
-    .strictObject({
+    .object({
         kind: z.literal(AGENT_INSTALL_CANCEL_KIND),
         requestId: IDENTIFIER,
     })
@@ -868,7 +868,7 @@ const agentInstallCancelCommandSchema = z
 export type AgentInstallCancelCommand = z.infer<typeof agentInstallCancelCommandSchema>;
 
 const agentInstallStartedEventSchema = z
-    .strictObject({
+    .object({
         ...agentInstallIdentityFields,
         kind: z.literal(AGENT_INSTALL_STARTED_KIND),
     })
@@ -887,7 +887,7 @@ const installationStageSchema = z.enum([
 export type AgentInstallationStage = z.infer<typeof installationStageSchema>;
 
 const agentInstallProgressEventSchema = z
-    .strictObject({
+    .object({
         ...agentInstallIdentityFields,
         kind: z.literal(AGENT_INSTALL_PROGRESS_KIND),
         stage: installationStageSchema,
@@ -897,7 +897,7 @@ const agentInstallProgressEventSchema = z
 export type AgentInstallProgressEvent = z.infer<typeof agentInstallProgressEventSchema>;
 
 const agentInstallCompletedEventSchema = z
-    .strictObject({
+    .object({
         ...agentInstallIdentityFields,
         authenticationMayBeRequired: z.boolean(),
         kind: z.literal(AGENT_INSTALL_COMPLETED_KIND),
@@ -907,7 +907,7 @@ const agentInstallCompletedEventSchema = z
 export type AgentInstallCompletedEvent = z.infer<typeof agentInstallCompletedEventSchema>;
 
 const agentInstallFailedEventSchema = z
-    .strictObject({
+    .object({
         ...agentInstallIdentityFields,
         code: IDENTIFIER,
         kind: z.literal(AGENT_INSTALL_FAILED_KIND),
@@ -918,7 +918,7 @@ const agentInstallFailedEventSchema = z
 export type AgentInstallFailedEvent = z.infer<typeof agentInstallFailedEventSchema>;
 
 const agentInstallCancelledEventSchema = z
-    .strictObject({
+    .object({
         ...agentInstallIdentityFields,
         kind: z.literal(AGENT_INSTALL_CANCELLED_KIND),
     })

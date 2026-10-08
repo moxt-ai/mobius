@@ -9,6 +9,7 @@ import {
     RUNTIME_STATUS_KIND,
     type RuntimeLivenessReadyEvent,
     SESSION_EVENT_KIND,
+    UnsupportedProtocolMessageKindError,
 } from "@moxt-ai/mobius-protocol";
 import { ProjectScope } from "../../entity/do/session.ts";
 import type { ChannelActor, ChannelPeers, ChannelSocket } from "./channel-actor.ts";
@@ -341,7 +342,15 @@ export class RuntimeService {
         let daemonMessage: DaemonToServiceMessage;
         try {
             daemonMessage = decodeDaemonToServiceMessage(message);
-        } catch {
+        } catch (cause) {
+            if (cause instanceof UnsupportedProtocolMessageKindError) {
+                console.warn("Runtime message skipped", {
+                    code: cause.code,
+                    direction: cause.direction,
+                    messageKind: cause.messageKind,
+                });
+                return;
+            }
             socket.close(1008, "Invalid protocol message");
             return;
         }

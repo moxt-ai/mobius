@@ -2,6 +2,7 @@ import {
     decodeServiceToDaemonMessage,
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_LIVENESS_READY_KIND,
+    UnsupportedProtocolMessageKindError,
 } from "@moxt-ai/mobius-protocol";
 import { type MessageEvent, WebSocket } from "undici";
 import type { AgentRuntimeManager } from "../acp/agent-runtime-manager.ts";
@@ -216,6 +217,14 @@ export async function runRelayConnection({
                     }
                     commands.handle(message);
                 } catch (error) {
+                    if (error instanceof UnsupportedProtocolMessageKindError) {
+                        console.warn("Mobius daemon skipped an unsupported Relay message", {
+                            code: error.code,
+                            direction: error.direction,
+                            messageKind: error.messageKind,
+                        });
+                        return;
+                    }
                     console.error("Mobius daemon rejected a message", error);
                     failAndClose(
                         new Error("Relay sent an invalid protocol message", { cause: error }),

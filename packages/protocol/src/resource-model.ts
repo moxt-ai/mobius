@@ -18,7 +18,7 @@ const decimalSequenceSchema = z.string().min(1).max(40).regex(DECIMAL_SEQUENCE_P
 const digestSchema = z.string().length(64).regex(SHA256_PATTERN);
 
 const recordingPolicySchema = z
-    .strictObject({
+    .object({
         contentLimitBytes: z.number().int().positive().safe(),
         hotEventLimit: z.number().int().positive().safe(),
         idempotencyRetentionMilliseconds: z.number().int().positive().safe(),
@@ -30,18 +30,18 @@ const recordingPolicySchema = z
 export type RecordingPolicy = z.infer<typeof recordingPolicySchema>;
 
 const tenantLifecycleSchema = z.discriminatedUnion("kind", [
-    z.strictObject({ kind: z.literal("active") }).readonly(),
+    z.object({ kind: z.literal("active") }).readonly(),
     z
-        .strictObject({
+        .object({
             kind: z.literal("suspended"),
             suspendedAt: timestampSchema,
         })
         .readonly(),
-    z.strictObject({ deletedAt: timestampSchema, kind: z.literal("deleted") }).readonly(),
+    z.object({ deletedAt: timestampSchema, kind: z.literal("deleted") }).readonly(),
 ]);
 
 const tenantSchema = z
-    .strictObject({
+    .object({
         lifecycle: tenantLifecycleSchema,
         quotaPolicyRevision: z.number().int().nonnegative().safe(),
         recordingPolicy: recordingPolicySchema,
@@ -52,13 +52,13 @@ const tenantSchema = z
 export type Tenant = z.infer<typeof tenantSchema>;
 
 const projectLifecycleSchema = z.discriminatedUnion("kind", [
-    z.strictObject({ kind: z.literal("active") }).readonly(),
-    z.strictObject({ archivedAt: timestampSchema, kind: z.literal("archived") }).readonly(),
-    z.strictObject({ deletedAt: timestampSchema, kind: z.literal("deleted") }).readonly(),
+    z.object({ kind: z.literal("active") }).readonly(),
+    z.object({ archivedAt: timestampSchema, kind: z.literal("archived") }).readonly(),
+    z.object({ deletedAt: timestampSchema, kind: z.literal("deleted") }).readonly(),
 ]);
 
 const projectSchema = z
-    .strictObject({
+    .object({
         displayName: z.string().min(1).max(120),
         lifecycle: projectLifecycleSchema,
         projectId: identifierSchema,
@@ -69,20 +69,20 @@ const projectSchema = z
 export type Project = z.infer<typeof projectSchema>;
 
 const runtimeLifecycleSchema = z.discriminatedUnion("kind", [
-    z.strictObject({ kind: z.literal("registered") }).readonly(),
-    z.strictObject({ disabledAt: timestampSchema, kind: z.literal("disabled") }).readonly(),
-    z.strictObject({ deletedAt: timestampSchema, kind: z.literal("deleted") }).readonly(),
+    z.object({ kind: z.literal("registered") }).readonly(),
+    z.object({ disabledAt: timestampSchema, kind: z.literal("disabled") }).readonly(),
+    z.object({ deletedAt: timestampSchema, kind: z.literal("deleted") }).readonly(),
 ]);
 
 const runtimeCapabilitySchema = z
-    .strictObject({
+    .object({
         name: identifierSchema,
         revision: z.number().int().nonnegative().safe(),
     })
     .readonly();
 
 const runtimeSchema = z
-    .strictObject({
+    .object({
         capabilities: z.array(runtimeCapabilitySchema).max(100).readonly(),
         displayName: z.string().min(1).max(120),
         lifecycle: runtimeLifecycleSchema,
@@ -95,7 +95,7 @@ export type Runtime = z.infer<typeof runtimeSchema>;
 
 const channelStateSchema = z.discriminatedUnion("kind", [
     z
-        .strictObject({
+        .object({
             connectionEpoch: z.number().int().nonnegative().safe(),
             connectedAt: timestampSchema,
             connectionId: identifierSchema,
@@ -103,7 +103,7 @@ const channelStateSchema = z.discriminatedUnion("kind", [
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             connectionEpoch: z.number().int().nonnegative().safe(),
             disconnectedAt: timestampSchema,
             kind: z.literal("offline"),
@@ -112,7 +112,7 @@ const channelStateSchema = z.discriminatedUnion("kind", [
 ]);
 
 const channelSchema = z
-    .strictObject({
+    .object({
         channelId: identifierSchema,
         runtimeId: identifierSchema,
         state: channelStateSchema,
@@ -122,15 +122,15 @@ const channelSchema = z
 export type Channel = z.infer<typeof channelSchema>;
 
 const sessionLifecycleSchema = z.discriminatedUnion("kind", [
-    z.strictObject({ kind: z.literal("ready") }).readonly(),
-    z.strictObject({ kind: z.literal("deleting"), requestedAt: timestampSchema }).readonly(),
-    z.strictObject({ completedAt: timestampSchema, kind: z.literal("deleted") }).readonly(),
+    z.object({ kind: z.literal("ready") }).readonly(),
+    z.object({ kind: z.literal("deleting"), requestedAt: timestampSchema }).readonly(),
+    z.object({ completedAt: timestampSchema, kind: z.literal("deleted") }).readonly(),
 ]);
 
 export type SessionLifecycle = z.infer<typeof sessionLifecycleSchema>;
 
 const sessionSchema = z
-    .strictObject({
+    .object({
         createdAt: timestampSchema,
         createdBy: identifierSchema,
         defaultBindingId: identifierSchema,
@@ -145,7 +145,7 @@ const sessionSchema = z
 export type Session = z.infer<typeof sessionSchema>;
 
 const sessionBindingSchema = z
-    .strictObject({
+    .object({
         agentRef: identifierSchema,
         bindingId: identifierSchema,
         configRevision: z.number().int().nonnegative().safe(),
@@ -159,7 +159,7 @@ const sessionBindingSchema = z
 export type SessionBinding = z.infer<typeof sessionBindingSchema>;
 
 const domainErrorSchema = z
-    .strictObject({
+    .object({
         code: identifierSchema,
         message: z.string().min(1).max(2_000),
         retryable: z.boolean(),
@@ -169,7 +169,7 @@ const domainErrorSchema = z
 export type DomainError = z.infer<typeof domainErrorSchema>;
 
 const executionResultSchema = z
-    .strictObject({
+    .object({
         kind: z.literal("agent_result"),
         stopReason: z.string().min(1).max(128),
     })
@@ -178,7 +178,7 @@ const executionResultSchema = z
 export type ExecutionResult = z.infer<typeof executionResultSchema>;
 
 const reconciliationSchema = z
-    .strictObject({
+    .object({
         detectedAt: timestampSchema,
         reason: z.enum(["connection_lost", "dispatch_indeterminate", "runtime_restarted"]),
     })
@@ -188,21 +188,21 @@ export type Reconciliation = z.infer<typeof reconciliationSchema>;
 
 const terminalTurnStateSchema = z.discriminatedUnion("kind", [
     z
-        .strictObject({
+        .object({
             completedAt: timestampSchema,
             kind: z.literal("succeeded"),
             result: executionResultSchema,
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             error: domainErrorSchema,
             failedAt: timestampSchema,
             kind: z.literal("failed"),
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             cancelledAt: timestampSchema,
             kind: z.literal("cancelled"),
         })
@@ -210,11 +210,11 @@ const terminalTurnStateSchema = z.discriminatedUnion("kind", [
 ]);
 
 const turnStateSchema = z.discriminatedUnion("kind", [
-    z.strictObject({ kind: z.literal("queued") }).readonly(),
-    z.strictObject({ kind: z.literal("running"), startedAt: timestampSchema }).readonly(),
+    z.object({ kind: z.literal("queued") }).readonly(),
+    z.object({ kind: z.literal("running"), startedAt: timestampSchema }).readonly(),
     ...terminalTurnStateSchema.options,
     z
-        .strictObject({
+        .object({
             kind: z.literal("indeterminate"),
             reconciliation: reconciliationSchema,
         })
@@ -224,18 +224,18 @@ const turnStateSchema = z.discriminatedUnion("kind", [
 export type TurnState = z.infer<typeof turnStateSchema>;
 
 const promptTurnRequestSchema = z
-    .strictObject({
+    .object({
         content: z.string().max(100_000),
         kind: z.literal("prompt"),
         sessionConfigurations: sessionConfigurationSelectionsSchema.default([]),
     })
     .readonly();
-const notRetainedTurnRequestSchema = z.strictObject({ kind: z.literal("not_retained") }).readonly();
+const notRetainedTurnRequestSchema = z.object({ kind: z.literal("not_retained") }).readonly();
 const turnRequestSchema = z.discriminatedUnion("kind", [promptTurnRequestSchema, notRetainedTurnRequestSchema]);
 
 export type TurnRequest = z.infer<typeof turnRequestSchema>;
 
-const turnIdentitySchema = z.strictObject({
+const turnIdentitySchema = z.object({
     acceptedAt: timestampSchema,
     bindingId: identifierSchema,
     idempotencyKey: identifierSchema,
@@ -251,21 +251,21 @@ export type Turn = z.infer<typeof turnSchema>;
 
 const attemptStateSchema = z.discriminatedUnion("kind", [
     z
-        .strictObject({
+        .object({
             dispatchedAt: timestampSchema,
             kind: z.literal("dispatching"),
         })
         .readonly(),
-    z.strictObject({ kind: z.literal("running"), startedAt: timestampSchema }).readonly(),
+    z.object({ kind: z.literal("running"), startedAt: timestampSchema }).readonly(),
     z
-        .strictObject({
+        .object({
             interactionIds: z.array(identifierSchema).min(1).max(100).readonly(),
             kind: z.literal("waiting_input"),
             startedAt: timestampSchema,
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             completedAt: timestampSchema,
             kind: z.literal("succeeded"),
             result: executionResultSchema,
@@ -273,7 +273,7 @@ const attemptStateSchema = z.discriminatedUnion("kind", [
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             error: domainErrorSchema,
             failedAt: timestampSchema,
             kind: z.literal("failed"),
@@ -281,14 +281,14 @@ const attemptStateSchema = z.discriminatedUnion("kind", [
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             cancelledAt: timestampSchema,
             kind: z.literal("cancelled"),
             startedAt: timestampSchema,
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             kind: z.literal("indeterminate"),
             reconciliation: reconciliationSchema,
             startedAt: timestampSchema,
@@ -299,7 +299,7 @@ const attemptStateSchema = z.discriminatedUnion("kind", [
 export type AttemptState = z.infer<typeof attemptStateSchema>;
 
 const attemptSchema = z
-    .strictObject({
+    .object({
         attemptId: identifierSchema,
         bindingId: identifierSchema,
         sessionId: identifierSchema,
@@ -311,7 +311,7 @@ const attemptSchema = z
 export type Attempt = z.infer<typeof attemptSchema>;
 
 const permissionRequestSchema = z
-    .strictObject({
+    .object({
         kind: z.literal("permission"),
         options: z.array(permissionOptionSchema).min(1).max(20).readonly(),
         title: z.string().min(1).max(500),
@@ -321,7 +321,7 @@ const permissionRequestSchema = z
     .readonly();
 
 const elicitationRequestSchema = z
-    .strictObject({
+    .object({
         elicitationId: z.string().max(255),
         fields: z.array(elicitationFieldSchema).max(100).readonly(),
         kind: z.literal("elicitation"),
@@ -336,7 +336,7 @@ const interactionRequestSchema = z.discriminatedUnion("kind", [permissionRequest
 export type InteractionRequest = z.infer<typeof interactionRequestSchema>;
 
 const interactionResponseSchema = z
-    .strictObject({
+    .object({
         content: z.string().max(100_000),
         kind: z.enum(["permission", "elicitation"]),
     })
@@ -345,9 +345,9 @@ const interactionResponseSchema = z
 export type InteractionResponse = z.infer<typeof interactionResponseSchema>;
 
 const interactionStateSchema = z.discriminatedUnion("kind", [
-    z.strictObject({ kind: z.literal("pending") }).readonly(),
+    z.object({ kind: z.literal("pending") }).readonly(),
     z
-        .strictObject({
+        .object({
             kind: z.literal("responded"),
             respondedAt: timestampSchema,
             responderId: identifierSchema,
@@ -355,12 +355,12 @@ const interactionStateSchema = z.discriminatedUnion("kind", [
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             kind: z.literal("resolved"),
             resolution: z.discriminatedUnion("kind", [
-                z.strictObject({ kind: z.literal("without_response") }).readonly(),
+                z.object({ kind: z.literal("without_response") }).readonly(),
                 z
-                    .strictObject({
+                    .object({
                         kind: z.literal("response_applied"),
                         respondedAt: timestampSchema,
                         responderId: identifierSchema,
@@ -371,9 +371,9 @@ const interactionStateSchema = z.discriminatedUnion("kind", [
             resolvedAt: timestampSchema,
         })
         .readonly(),
-    z.strictObject({ expiredAt: timestampSchema, kind: z.literal("expired") }).readonly(),
+    z.object({ expiredAt: timestampSchema, kind: z.literal("expired") }).readonly(),
     z
-        .strictObject({
+        .object({
             cancelledAt: timestampSchema,
             kind: z.literal("cancelled"),
         })
@@ -383,7 +383,7 @@ const interactionStateSchema = z.discriminatedUnion("kind", [
 export type InteractionState = z.infer<typeof interactionStateSchema>;
 
 const interactionSchema = z
-    .strictObject({
+    .object({
         attemptId: identifierSchema,
         interactionId: identifierSchema,
         request: interactionRequestSchema,
@@ -396,29 +396,29 @@ const interactionSchema = z
 export type Interaction = z.infer<typeof interactionSchema>;
 
 const recordingCompletenessSchema = z.discriminatedUnion("kind", [
-    z.strictObject({ kind: z.literal("complete") }).readonly(),
+    z.object({ kind: z.literal("complete") }).readonly(),
     z
-        .strictObject({
+        .object({
             capturedBytes: z.number().int().nonnegative().safe(),
             kind: z.literal("truncated"),
             originalBytes: z.number().int().positive().safe(),
         })
         .readonly(),
-    z.strictObject({ kind: z.literal("redacted"), reason: identifierSchema }).readonly(),
-    z.strictObject({ kind: z.literal("uncaptured") }).readonly(),
+    z.object({ kind: z.literal("redacted"), reason: identifierSchema }).readonly(),
+    z.object({ kind: z.literal("uncaptured") }).readonly(),
 ]);
 
 export type RecordingCompleteness = z.infer<typeof recordingCompletenessSchema>;
 
 const messageViewStateSchema = z.discriminatedUnion("kind", [
-    z.strictObject({ kind: z.literal("building") }).readonly(),
+    z.object({ kind: z.literal("building") }).readonly(),
     z
-        .strictObject({
+        .object({
             completeness: recordingCompletenessSchema,
             kind: z.literal("available"),
         })
         .readonly(),
-    z.strictObject({ deletedAt: timestampSchema, kind: z.literal("deleted") }).readonly(),
+    z.object({ deletedAt: timestampSchema, kind: z.literal("deleted") }).readonly(),
 ]);
 
 const messageViewCommon = {
@@ -432,18 +432,18 @@ const messageViewCommon = {
 
 const messageViewSchema = z.discriminatedUnion("role", [
     z
-        .strictObject({
+        .object({
             ...messageViewCommon,
             role: z.literal("user"),
-            source: z.strictObject({ kind: z.literal("turn"), turnId: identifierSchema }).readonly(),
+            source: z.object({ kind: z.literal("turn"), turnId: identifierSchema }).readonly(),
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             ...messageViewCommon,
             role: z.literal("agent"),
             source: z
-                .strictObject({
+                .object({
                     attemptId: identifierSchema,
                     kind: z.literal("attempt"),
                     turnId: identifierSchema,
@@ -452,11 +452,11 @@ const messageViewSchema = z.discriminatedUnion("role", [
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             ...messageViewCommon,
             role: z.literal("tool"),
             source: z
-                .strictObject({
+                .object({
                     attemptId: identifierSchema,
                     kind: z.literal("tool_call"),
                     toolCallId: identifierSchema,
@@ -466,10 +466,10 @@ const messageViewSchema = z.discriminatedUnion("role", [
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             ...messageViewCommon,
             role: z.literal("system"),
-            source: z.strictObject({ kind: z.literal("system") }).readonly(),
+            source: z.object({ kind: z.literal("system") }).readonly(),
         })
         .readonly(),
 ]);
@@ -478,40 +478,40 @@ export type MessageView = z.infer<typeof messageViewSchema>;
 
 const toolCallDetailSchema = z.discriminatedUnion("kind", [
     z
-        .strictObject({
+        .object({
             artifactId: identifierSchema,
             kind: z.literal("available"),
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             capturedBytes: z.number().int().nonnegative().safe(),
             kind: z.literal("truncated"),
             originalBytes: z.number().int().positive().safe(),
         })
         .readonly(),
-    z.strictObject({ kind: z.literal("uncaptured") }).readonly(),
-    z.strictObject({ deletedAt: timestampSchema, kind: z.literal("deleted") }).readonly(),
+    z.object({ kind: z.literal("uncaptured") }).readonly(),
+    z.object({ deletedAt: timestampSchema, kind: z.literal("deleted") }).readonly(),
 ]);
 
 const toolCallViewStateSchema = z.discriminatedUnion("kind", [
-    z.strictObject({ kind: z.literal("pending") }).readonly(),
-    z.strictObject({ kind: z.literal("running"), startedAt: timestampSchema }).readonly(),
+    z.object({ kind: z.literal("pending") }).readonly(),
+    z.object({ kind: z.literal("running"), startedAt: timestampSchema }).readonly(),
     z
-        .strictObject({
+        .object({
             completedAt: timestampSchema,
             kind: z.literal("succeeded"),
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             error: domainErrorSchema,
             failedAt: timestampSchema,
             kind: z.literal("failed"),
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             cancelledAt: timestampSchema,
             kind: z.literal("cancelled"),
         })
@@ -519,7 +519,7 @@ const toolCallViewStateSchema = z.discriminatedUnion("kind", [
 ]);
 
 const toolCallViewSchema = z
-    .strictObject({
+    .object({
         attemptId: identifierSchema,
         detail: toolCallDetailSchema,
         inputPreview: z.string().max(4_000),
@@ -536,7 +536,7 @@ const toolCallViewSchema = z
 export type ToolCallView = z.infer<typeof toolCallViewSchema>;
 
 const sessionListEntrySchema = z
-    .strictObject({
+    .object({
         lastAppliedSeq: decimalSequenceSchema,
         preview: z.string().max(4_000),
         projectId: identifierSchema,
@@ -552,7 +552,7 @@ export type SessionListEntry = z.infer<typeof sessionListEntrySchema>;
 
 const artifactStateSchema = z.discriminatedUnion("kind", [
     z
-        .strictObject({
+        .object({
             expectedBytes: z.number().int().nonnegative().safe(),
             expiresAt: timestampSchema,
             kind: z.literal("uploading"),
@@ -560,38 +560,38 @@ const artifactStateSchema = z.discriminatedUnion("kind", [
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             availableAt: timestampSchema,
             byteLength: z.number().int().nonnegative().safe(),
             kind: z.literal("available"),
             sha256: digestSchema,
         })
         .readonly(),
-    z.strictObject({ kind: z.literal("deleting"), requestedAt: timestampSchema }).readonly(),
-    z.strictObject({ completedAt: timestampSchema, kind: z.literal("deleted") }).readonly(),
+    z.object({ kind: z.literal("deleting"), requestedAt: timestampSchema }).readonly(),
+    z.object({ completedAt: timestampSchema, kind: z.literal("deleted") }).readonly(),
     z
-        .strictObject({
+        .object({
             error: domainErrorSchema,
             failedAt: timestampSchema,
             kind: z.literal("failed"),
         })
         .readonly(),
-    z.strictObject({ expiredAt: timestampSchema, kind: z.literal("expired") }).readonly(),
+    z.object({ expiredAt: timestampSchema, kind: z.literal("expired") }).readonly(),
 ]);
 
 export type ArtifactState = z.infer<typeof artifactStateSchema>;
 
 const artifactSchema = z
-    .strictObject({
+    .object({
         artifactId: identifierSchema,
         completeness: recordingCompletenessSchema,
         contentKind: identifierSchema,
         mediaType: z.string().min(1).max(128),
         projectId: identifierSchema,
         provenance: z.discriminatedUnion("kind", [
-            z.strictObject({ kind: z.literal("user_upload") }).readonly(),
+            z.object({ kind: z.literal("user_upload") }).readonly(),
             z
-                .strictObject({
+                .object({
                     attemptId: identifierSchema,
                     kind: z.literal("tool_call"),
                     toolCallId: identifierSchema,
@@ -599,7 +599,7 @@ const artifactSchema = z
                 })
                 .readonly(),
             z
-                .strictObject({
+                .object({
                     attemptId: identifierSchema,
                     kind: z.literal("agent_generated"),
                     turnId: identifierSchema,
@@ -615,9 +615,9 @@ const artifactSchema = z
 export type Artifact = z.infer<typeof artifactSchema>;
 
 const archiveSegmentStateSchema = z.discriminatedUnion("kind", [
-    z.strictObject({ kind: z.literal("pending"), queuedAt: timestampSchema }).readonly(),
+    z.object({ kind: z.literal("pending"), queuedAt: timestampSchema }).readonly(),
     z
-        .strictObject({
+        .object({
             byteLength: z.number().int().nonnegative().safe(),
             kind: z.literal("uploaded"),
             sha256: digestSchema,
@@ -625,21 +625,21 @@ const archiveSegmentStateSchema = z.discriminatedUnion("kind", [
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             byteLength: z.number().int().nonnegative().safe(),
             kind: z.literal("published"),
             publishedAt: timestampSchema,
             sha256: digestSchema,
         })
         .readonly(),
-    z.strictObject({ kind: z.literal("deleting"), requestedAt: timestampSchema }).readonly(),
-    z.strictObject({ completedAt: timestampSchema, kind: z.literal("deleted") }).readonly(),
+    z.object({ kind: z.literal("deleting"), requestedAt: timestampSchema }).readonly(),
+    z.object({ completedAt: timestampSchema, kind: z.literal("deleted") }).readonly(),
 ]);
 
 export type ArchiveSegmentState = z.infer<typeof archiveSegmentStateSchema>;
 
 const archiveSegmentSchema = z
-    .strictObject({
+    .object({
         compression: z.literal("gzip"),
         eventCount: z.number().int().positive().safe(),
         firstSeq: decimalSequenceSchema,
@@ -653,29 +653,29 @@ const archiveSegmentSchema = z
 export type ArchiveSegment = z.infer<typeof archiveSegmentSchema>;
 
 const pendingWorkStateSchema = z.discriminatedUnion("kind", [
-    z.strictObject({ kind: z.literal("pending"), queuedAt: timestampSchema }).readonly(),
+    z.object({ kind: z.literal("pending"), queuedAt: timestampSchema }).readonly(),
     z
-        .strictObject({
+        .object({
             attempt: z.number().int().positive().safe(),
             kind: z.literal("running"),
             startedAt: timestampSchema,
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             completedAt: timestampSchema,
             kind: z.literal("completed"),
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             error: domainErrorSchema,
             kind: z.literal("retryable"),
             nextAttemptAt: timestampSchema,
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             error: domainErrorSchema,
             failedAt: timestampSchema,
             kind: z.literal("failed"),
@@ -684,7 +684,7 @@ const pendingWorkStateSchema = z.discriminatedUnion("kind", [
 ]);
 
 const pendingWorkSchema = z
-    .strictObject({
+    .object({
         kind: z.enum(["archive", "delete", "dispatch", "interaction_response", "projection"]),
         projectId: identifierSchema,
         sessionId: identifierSchema,
@@ -696,7 +696,7 @@ const pendingWorkSchema = z
 export type PendingWork = z.infer<typeof pendingWorkSchema>;
 
 const commandReceiptSchema = z
-    .strictObject({
+    .object({
         acceptedAt: timestampSchema,
         commandKind: identifierSchema,
         expiresAt: timestampSchema,

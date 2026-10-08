@@ -75,6 +75,19 @@ export class ProtocolMessageError extends Error {
     }
 }
 
+export class UnsupportedProtocolMessageKindError extends Error {
+    readonly code = "unsupported_protocol_message_kind";
+    readonly direction: "daemon-to-service" | "service-to-daemon";
+    readonly messageKind: string;
+
+    constructor(direction: "daemon-to-service" | "service-to-daemon", messageKind: string) {
+        super(`Unsupported ${direction} message kind: ${messageKind}`);
+        this.name = "UnsupportedProtocolMessageKindError";
+        this.direction = direction;
+        this.messageKind = messageKind;
+    }
+}
+
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -94,14 +107,6 @@ function parseJson(encoded: string): Readonly<Record<string, unknown>> {
     }
 
     return value;
-}
-
-function assertExactKeys(value: Readonly<Record<string, unknown>>, allowedKeys: readonly string[]): void {
-    for (const key of Object.keys(value)) {
-        if (!allowedKeys.includes(key)) {
-            throw new ProtocolMessageError(`Unexpected message field: ${key}`);
-        }
-    }
 }
 
 function readString(value: Readonly<Record<string, unknown>>, key: string, maximumLength: number): string {
@@ -216,18 +221,15 @@ function readActivityDetail(value: Readonly<Record<string, unknown>>): AgentActi
     }
     const kind = readString(field, "kind", 32);
     if (kind === "available") {
-        assertExactKeys(field, ["artifactId", "kind"]);
         return {
             artifactId: readIdentifier(field, "artifactId"),
             kind,
         };
     }
     if (kind === "unrecorded") {
-        assertExactKeys(field, ["kind"]);
         return { kind };
     }
     if (kind === "truncated") {
-        assertExactKeys(field, ["capturedBytes", "kind", "originalBytes"]);
         const capturedBytes = readSequence(field, "capturedBytes");
         const originalBytes = readSequence(field, "originalBytes");
         if (capturedBytes > originalBytes) {
@@ -236,7 +238,6 @@ function readActivityDetail(value: Readonly<Record<string, unknown>>): AgentActi
         return { capturedBytes, kind, originalBytes };
     }
     if (kind === "recorded") {
-        assertExactKeys(field, ["content", "input", "kind", "output"]);
         const contentValue = field["content"];
         if (!Array.isArray(contentValue) || contentValue.length > 100) {
             throw new ProtocolMessageError("Invalid recorded activity content");
@@ -292,21 +293,6 @@ export function decodeMessageKind(encoded: string): string {
 export function decodeSessionPromptCommand(encoded: string): SessionPromptCommand {
     const value = parseJson(encoded);
     const hasSessionConfigurations = Object.hasOwn(value, "sessionConfigurations");
-    assertExactKeys(value, [
-        "additionalDirectoryIds",
-        "agentId",
-        "bindingId",
-        "commandId",
-        "directoryId",
-        "disposition",
-        "images",
-        "kind",
-        "prompt",
-        "resources",
-        ...(hasSessionConfigurations ? ["sessionConfigurations"] : []),
-        "sessionId",
-        "targetCommandId",
-    ]);
     assertKind(value, SESSION_PROMPT_KIND);
 
     const prompt = readText(value, "prompt", MAX_PROMPT_LENGTH);
@@ -358,7 +344,6 @@ export function decodeSessionPromptCommand(encoded: string): SessionPromptComman
 
 export function decodeSessionCancelCommand(encoded: string): SessionCancelCommand {
     const value = parseJson(encoded);
-    assertExactKeys(value, ["commandId", "kind", "sessionId"]);
     assertKind(value, SESSION_CANCEL_KIND);
 
     return {
@@ -370,7 +355,6 @@ export function decodeSessionCancelCommand(encoded: string): SessionCancelComman
 
 export function decodeSessionPromptDispositionCommand(encoded: string): SessionPromptDispositionCommand {
     const value = parseJson(encoded);
-    assertExactKeys(value, ["commandId", "disposition", "kind", "sessionId"]);
     assertKind(value, SESSION_PROMPT_DISPOSITION_KIND);
     if (readPromptDisposition(value) !== SessionPromptDisposition.Steer) {
         throw new ProtocolMessageError("Only queued prompts can be steered");
@@ -385,7 +369,6 @@ export function decodeSessionPromptDispositionCommand(encoded: string): SessionP
 
 export function decodeSessionQueuedEvent(encoded: string): SessionQueuedEvent {
     const value = parseJson(encoded);
-    assertExactKeys(value, ["commandId", "kind", "sessionId"]);
     assertKind(value, SESSION_QUEUED_KIND);
     return {
         commandId: readIdentifier(value, "commandId"),
@@ -396,7 +379,6 @@ export function decodeSessionQueuedEvent(encoded: string): SessionQueuedEvent {
 
 export function decodeRuntimeStatusEvent(encoded: string): RuntimeStatusEvent {
     const value = parseJson(encoded);
-    assertExactKeys(value, ["kind", "online", "runtimeId"]);
     assertKind(value, RUNTIME_STATUS_KIND);
 
     return {
@@ -409,13 +391,11 @@ export function decodeRuntimeStatusEvent(encoded: string): RuntimeStatusEvent {
 export function decodeRuntimeLivenessReadyEvent(encoded: string): RuntimeLivenessReadyEvent {
     const value = parseJson(encoded);
     assertKind(value, RUNTIME_LIVENESS_READY_KIND);
-    assertExactKeys(value, ["kind"]);
     return { kind: RUNTIME_LIVENESS_READY_KIND };
 }
 
 export function decodeRuntimeHeartbeatEvent(encoded: string): RuntimeHeartbeatEvent {
     const value = parseJson(encoded);
-    assertExactKeys(value, ["heartbeatId", "kind"]);
     assertKind(value, RUNTIME_HEARTBEAT_KIND);
 
     return {
@@ -426,7 +406,6 @@ export function decodeRuntimeHeartbeatEvent(encoded: string): RuntimeHeartbeatEv
 
 export function decodeRuntimeHeartbeatAckEvent(encoded: string): RuntimeHeartbeatAckEvent {
     const value = parseJson(encoded);
-    assertExactKeys(value, ["heartbeatId", "kind"]);
     assertKind(value, RUNTIME_HEARTBEAT_ACK_KIND);
 
     return {
@@ -437,7 +416,6 @@ export function decodeRuntimeHeartbeatAckEvent(encoded: string): RuntimeHeartbea
 
 export function decodeSessionStartedEvent(encoded: string): SessionStartedEvent {
     const value = parseJson(encoded);
-    assertExactKeys(value, ["commandId", "epoch", "kind", "attemptId", "prompt", "sequence", "sessionId"]);
     assertKind(value, SESSION_STARTED_KIND);
 
     const sequence = readSequence(value, "sequence");
@@ -458,7 +436,6 @@ export function decodeSessionStartedEvent(encoded: string): SessionStartedEvent 
 
 export function decodeAgentMessageDeltaEvent(encoded: string): AgentMessageDeltaEvent {
     const value = parseJson(encoded);
-    assertExactKeys(value, ["commandId", "epoch", "kind", "messageId", "sequence", "sessionId", "text"]);
     assertKind(value, AGENT_MESSAGE_DELTA_KIND);
 
     const sequence = readSequence(value, "sequence");
@@ -479,23 +456,6 @@ export function decodeAgentMessageDeltaEvent(encoded: string): AgentMessageDelta
 
 export function decodeAgentActivityEvent(encoded: string): AgentActivityEvent {
     const value = parseJson(encoded);
-    assertExactKeys(value, [
-        "activityId",
-        "activityType",
-        "commandId",
-        "content",
-        "detail",
-        "input",
-        "kind",
-        "locations",
-        "name",
-        "output",
-        "sequence",
-        "sessionId",
-        "status",
-        "title",
-        "toolKind",
-    ]);
     assertKind(value, AGENT_ACTIVITY_KIND);
 
     return {
@@ -519,7 +479,6 @@ export function decodeAgentActivityEvent(encoded: string): AgentActivityEvent {
 
 export function decodeSessionCompletedEvent(encoded: string): SessionCompletedEvent {
     const value = parseJson(encoded);
-    assertExactKeys(value, ["commandId", "kind", "sessionId", "stopReason"]);
     assertKind(value, SESSION_COMPLETED_KIND);
 
     return {
@@ -532,7 +491,6 @@ export function decodeSessionCompletedEvent(encoded: string): SessionCompletedEv
 
 export function decodeSessionFailedEvent(encoded: string): SessionFailedEvent {
     const value = parseJson(encoded);
-    assertExactKeys(value, ["code", "commandId", "kind", "message", "sessionId"]);
     assertKind(value, SESSION_FAILED_KIND);
 
     return {
@@ -590,7 +548,6 @@ export function encodeAgentActivityEvent(message: AgentActivityEvent): string {
 
 export function decodeAgentActivityNarrationEvent(encoded: string): AgentActivityNarrationEvent {
     const value = parseJson(encoded);
-    assertExactKeys(value, ["activityId", "activityType", "commandId", "kind", "sequence", "sessionId", "text"]);
     assertKind(value, AGENT_ACTIVITY_NARRATION_KIND);
 
     return {

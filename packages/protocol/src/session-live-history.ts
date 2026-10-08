@@ -14,7 +14,7 @@ export const SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND = "session.live-history.v2
 const directoryIdentifier = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/);
 
 const sessionLiveHistoryLoadSchema = z
-    .strictObject({
+    .object({
         additionalDirectoryIds: z.array(directoryIdentifier).max(16).readonly(),
         agentId: identifier,
         bindingId: identifier,
@@ -26,7 +26,7 @@ const sessionLiveHistoryLoadSchema = z
     .readonly();
 
 const sessionLiveHistoryLoadedSchema = z
-    .strictObject({
+    .object({
         history: sessionHistorySchema,
         kind: z.literal(SESSION_LIVE_HISTORY_LOADED_KIND),
         requestId: identifier,
@@ -35,7 +35,7 @@ const sessionLiveHistoryLoadedSchema = z
     .readonly();
 
 const sessionLiveHistoryPageLoadSchema = z
-    .strictObject({
+    .object({
         additionalDirectoryIds: z.array(directoryIdentifier).max(16).readonly(),
         agentId: identifier,
         bindingId: identifier,
@@ -49,7 +49,7 @@ const sessionLiveHistoryPageLoadSchema = z
     .readonly();
 
 const sessionLiveHistoryPageLoadedSchema = z
-    .strictObject({
+    .object({
         kind: z.literal(SESSION_LIVE_HISTORY_PAGE_LOADED_KIND),
         page: nativeMessagePageSchema,
         requestId: identifier,
@@ -58,7 +58,7 @@ const sessionLiveHistoryPageLoadedSchema = z
     .readonly();
 
 const sessionLiveHistoryV2PageLoadSchema = z
-    .strictObject({
+    .object({
         additionalDirectoryIds: z.array(directoryIdentifier).max(16).readonly(),
         agentId: identifier,
         bindingId: identifier,
@@ -72,7 +72,7 @@ const sessionLiveHistoryV2PageLoadSchema = z
     .readonly();
 
 const sessionLiveHistoryV2PageLoadedSchema = z
-    .strictObject({
+    .object({
         events: nativeSessionEventsV2Schema,
         kind: z.literal(SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND),
         requestId: identifier,

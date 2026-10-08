@@ -654,6 +654,10 @@ describe.sequential("Platform Session-only boundary", () => {
         try {
             expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("runtime.liveness.ready");
             expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "runtime.status", online: true });
+            // A newer Runtime may publish an event this Relay does not understand yet. The event is
+            // observational, so skipping it must not disconnect the Runtime or block supported work.
+            daemon.send(JSON.stringify({ kind: "session.future.changed", sessionId, value: "future" }));
+            host.send(JSON.stringify({ kind: "session.future.request", sessionId, value: "future" }));
             host.send(
                 encodeSessionPromptCommand({
                     additionalDirectoryIds: [],
