@@ -365,14 +365,14 @@ function decodeHistory(
                     if (options.detail === "rich" && historyItem.text.length > 0) {
                         append({
                             activities: [
-                                activity(historyItem.id ?? `progress-${sequence.toString()}`, "progress", sequence, {
+                                activity(historyItem.id ?? `reasoning-${sequence.toString()}`, "reasoning", sequence, {
                                     input: "",
                                     locations: [],
                                     name: "",
                                     output: historyItem.text,
                                     status: "completed",
-                                    title: "Progress",
-                                    toolKind: "",
+                                    title: "Reasoning",
+                                    toolKind: "think",
                                 }),
                             ],
                             content: [],

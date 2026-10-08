@@ -6,7 +6,6 @@ const TOOL_OUTPUT_CHARACTER_LIMIT = 32_768;
 const TITLE_CHARACTER_LIMIT = 500;
 // Mobius reads this key in its activity tracker to split streamed commentary from the final answer.
 // It is a Mobius-internal convention, not an app-server field.
-const CODEX_META_KEY = "codex";
 
 function truncate(value: string, limit: number): string {
     return value.length <= limit ? value : value.slice(0, limit);
@@ -177,17 +176,4 @@ export function reasoningText(item: ThreadItem): string | null {
         return null;
     }
     return boundedParagraphs(item.summary.length > 0 ? item.summary : item.content, TOOL_OUTPUT_CHARACTER_LIMIT);
-}
-
-/**
- * The `_meta` Mobius attaches to streamed agent text. `phase` distinguishes commentary from the
- * final answer so the activity tracker can render progress separately.
- */
-export function agentMessageMeta(
-    phase: "commentary" | "final_answer" | null | undefined,
-): { readonly codex: { readonly phase: string } } | null {
-    if (phase == null) {
-        return null;
-    }
-    return { [CODEX_META_KEY]: { phase } };
 }

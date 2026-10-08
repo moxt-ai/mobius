@@ -343,7 +343,7 @@ test("Given real Codex emits a tool, commentary, and final text, When the comple
             expect(
                 [...activities.values()].some(
                     (activity) =>
-                        activity.activityType === "progress" &&
+                        activity.activityType === "reasoning" &&
                         activity.output === "Checking the live progress boundary.",
                 ),
             ).toBe(true);
@@ -404,7 +404,7 @@ test("Given real Codex emits a tool, commentary, and final text, When the comple
                             item.role === "assistant" &&
                             item.activities.some(
                                 (activity) =>
-                                    activity.activityType === "progress" &&
+                                    activity.activityType === "reasoning" &&
                                     activity.output === "Checking the live progress boundary.",
                             ),
                     );
