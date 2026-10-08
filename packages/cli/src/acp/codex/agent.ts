@@ -95,8 +95,13 @@ function isCompactPrompt(prompt: readonly ContentBlock[]): boolean {
     return prompt.length === 1 && prompt[0]?.type === "text" && prompt[0].text.trim() === "/compact";
 }
 
-function steeringPromptInput(prompt: readonly unknown[]): readonly unknown[] {
-    const input: unknown[] = [];
+interface SteeringPromptBlock {
+    readonly content: ContentBlock;
+    readonly input: unknown;
+}
+
+function steeringPrompt(prompt: readonly unknown[]): readonly SteeringPromptBlock[] {
+    const blocks: SteeringPromptBlock[] = [];
     for (const block of prompt) {
         if (typeof block !== "object" || block === null) {
             throw new AcpExecutionError("Codex received an invalid steering prompt", {}, "invalid_request");
@@ -107,7 +112,7 @@ function steeringPromptInput(prompt: readonly unknown[]): readonly unknown[] {
             if (typeof text !== "string") {
                 throw new AcpExecutionError("Codex received an invalid steering prompt", {}, "invalid_request");
             }
-            input.push({ text, text_elements: [], type: "text" });
+            blocks.push({ content: { text, type: "text" }, input: { text, text_elements: [], type: "text" } });
             continue;
         }
         if (type === "image") {
@@ -116,7 +121,10 @@ function steeringPromptInput(prompt: readonly unknown[]): readonly unknown[] {
             if (typeof data !== "string" || typeof mimeType !== "string") {
                 throw new AcpExecutionError("Codex received an invalid steering prompt", {}, "invalid_request");
             }
-            input.push({ type: "image", url: `data:${mimeType};base64,${data}` });
+            blocks.push({
+                content: { data, mimeType, type: "image" },
+                input: { type: "image", url: `data:${mimeType};base64,${data}` },
+            });
             continue;
         }
         if (type === "resource") {
@@ -124,24 +132,41 @@ function steeringPromptInput(prompt: readonly unknown[]): readonly unknown[] {
             if (typeof resource !== "object" || resource === null) {
                 throw new AcpExecutionError("Codex received an invalid steering prompt", {}, "invalid_request");
             }
+            const uri = Reflect.get(resource, "uri");
             const text = Reflect.get(resource, "text");
-            if (text !== undefined && typeof text !== "string") {
+            const blob = Reflect.get(resource, "blob");
+            if (
+                typeof uri !== "string" ||
+                (typeof text !== "string" && typeof blob !== "string") ||
+                (text !== undefined && typeof text !== "string") ||
+                (blob !== undefined && typeof blob !== "string")
+            ) {
                 throw new AcpExecutionError("Codex received an invalid steering prompt", {}, "invalid_request");
             }
-            input.push({ text: text ?? "", text_elements: [], type: "text" });
+            blocks.push({
+                content:
+                    typeof text === "string"
+                        ? { resource: { text, uri }, type: "resource" }
+                        : { resource: { blob, uri }, type: "resource" },
+                input: { text: text ?? "", text_elements: [], type: "text" },
+            });
             continue;
         }
         if (type === "resource_link") {
+            const name = Reflect.get(block, "name");
             const uri = Reflect.get(block, "uri");
-            if (typeof uri !== "string") {
+            if (typeof name !== "string" || typeof uri !== "string") {
                 throw new AcpExecutionError("Codex received an invalid steering prompt", {}, "invalid_request");
             }
-            input.push({ text: `Resource: ${uri}`, text_elements: [], type: "text" });
+            blocks.push({
+                content: { name, type: "resource_link", uri },
+                input: { text: `Resource: ${uri}`, text_elements: [], type: "text" },
+            });
             continue;
         }
         throw new AcpExecutionError("Codex received an unsupported steering prompt", {}, "invalid_request");
     }
-    return input;
+    return blocks;
 }
 
 interface ActiveTurn {
@@ -897,14 +922,22 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
         if (sessionId !== this.#nativeSessionId || active === null || active.turn.id.length === 0) {
             return { outcome: "promptRequired", reason: "noRunningTurn" };
         }
-        const input = steeringPromptInput(prompt);
-        if (input.length === 0) {
+        const steering = steeringPrompt(prompt);
+        if (steering.length === 0) {
             throw new AcpExecutionError("Codex received an empty steering request", {}, "invalid_request");
+        }
+        const messageId = crypto.randomUUID();
+        for (const block of steering) {
+            await this.#emit({ content: block.content, messageId, sessionUpdate: "user_message_chunk" });
         }
         const response = turnSteerResponseSchema.parse(
             await this.#appServer.request(
                 "turn/steer",
-                { expectedTurnId: active.turn.id, input, threadId: this.#nativeSessionId },
+                {
+                    expectedTurnId: active.turn.id,
+                    input: steering.map((block) => block.input),
+                    threadId: this.#nativeSessionId,
+                },
                 AbortSignal.any([signal, AbortSignal.timeout(APPROVAL_TIMEOUT_MILLISECONDS)]),
             ),
         );
