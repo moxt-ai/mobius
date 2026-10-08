@@ -54,7 +54,7 @@ export MOBIUS_MINI_STATE="$(printf '%s' "$MOBIUS_MINI_CREATE" | node -e \
   'let value=""; process.stdin.on("data", chunk => value += chunk).on("end", () => process.stdout.write(JSON.parse(value).stateDir))')"
 ```
 
-`create` creates a Platform Project and Runtime pairing, launches `pnpm mobius pair` with its own `MOBIUS_STATE_DIRECTORY`, and waits for the detached local Runtime to report online. It prints the generated `stateDir` and identifiers but never the credential. Pass `--state-dir` only when an owner-provided location is required.
+`create` pairs an isolated Runtime and waits until it is online. It prints the generated `stateDir` and identifiers, but never the credential. Pass `--state-dir` only for a directory owned by this verification workflow.
 
 Inspect the Runtime and available Agents:
 
@@ -97,7 +97,7 @@ Boolean settings accept only `true` or `false`. Select settings accept only valu
 
 ## Prompt, steer, and reconcile messages
 
-Start following the Session in one terminal. The command first reconciles from `queryNativeMessages`, then refreshes the authoritative snapshot for each live event. It reconnects and reconciles again if the stream is interrupted.
+Follow the Session in one terminal to see available history and new live events. Live delivery is best effort; disconnects or restarts can leave gaps.
 
 ```sh
 pnpm exec tsx ./index.ts \
@@ -127,7 +127,7 @@ pnpm exec tsx ./index.ts \
   --prompt='Make the final checklist exactly three items.'
 ```
 
-To exercise queueing instead, submit with `--disposition=queue`. The mini-client resolves the target from its most recent locally submitted running Turn.
+To exercise queueing instead, submit with `--disposition=queue`. Queueing and steering require an active Turn submitted through this mini-client.
 
 After completion, read a finite reconciled snapshot and confirm that the original prompt, steering prompt, and Agent result appear once:
 

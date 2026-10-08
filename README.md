@@ -51,10 +51,10 @@ authorized on the user's machine.
 Without cloud Recording, history depends on the connected machine and what its Agent
 has saved. Recording retains cloud history according to the configured policy.
 
-Pairing and session metadata are stored locally, and Agents manage their own native
-history. The daemon's execution state is memory-only. Disabling Recording does not
-erase Agent history or local metadata. See [current persistence behavior](DEVELOPMENT.md#current-persistence-behavior)
-for implementation references.
+Pairing and session metadata may be stored locally, and Agents manage their own native
+history. Current-turn content and pending work must remain in daemon memory;
+restarting the daemon loses them. Disabling Recording does not erase Agent history
+or local metadata. See [persistence and recovery constraints](DEVELOPMENT.md#persistence-and-recovery-constraints).
 
 ## Local development
 
