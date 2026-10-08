@@ -10,9 +10,18 @@ import { WebSocket } from "undici";
 
 const MAX_BUFFERED_BYTES = 32 * 1024 * 1024;
 
-/** Live broadcast only. Disconnected or overloaded transports drop events; nothing is replayed. */
+interface SessionEventV2Store {
+    readonly appendExecutingPromptEventV2: (event: SessionEventV2) => void;
+}
+
+/** V1 delivery is best-effort. V2 events are committed before live delivery and recovered separately. */
 export class DaemonSessionEventPublisher {
     #socket: WebSocket | null = null;
+    readonly #store: SessionEventV2Store;
+
+    constructor(store: SessionEventV2Store) {
+        this.#store = store;
+    }
 
     readonly connect = (socket: WebSocket): void => {
         this.#socket = socket;
@@ -56,6 +65,7 @@ export class DaemonSessionEventPublisher {
     };
 
     readonly publishV2 = (event: SessionEventV2): void => {
+        this.#store.appendExecutingPromptEventV2(event);
         const socket = this.#socket;
         if (socket === null || socket.readyState !== WebSocket.OPEN) {
             return;
