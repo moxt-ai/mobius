@@ -82,23 +82,34 @@ export function registerHistory(agent: ReturnType<typeof acp.agent>) {
                     },
                 });
                 if (process.env["MOBIUS_FAKE_ACP_OVERSIZED_HISTORY_IMAGE"] === "1") {
+                    const image = {
+                        data: Buffer.concat([
+                            Buffer.from(
+                                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+                                "base64",
+                            ),
+                            Buffer.alloc(750_000),
+                        ]).toString("base64"),
+                        mimeType: "image/png",
+                        type: "image" as const,
+                    };
                     await context.client.notify(acp.methods.client.session.update, {
                         sessionId: context.params.sessionId,
                         update: {
                             content: [
-                                { type: "content", content: { type: "text", text: "Generated image" } },
                                 {
                                     type: "content",
                                     content: {
-                                        data: Buffer.concat([
-                                            Buffer.from(
-                                                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-                                                "base64",
-                                            ),
-                                            Buffer.alloc(750_000),
-                                        ]).toString("base64"),
-                                        mimeType: "image/png",
-                                        type: "image",
+                                        type: "text",
+                                        text: JSON.stringify({
+                                            result: { content: [{ type: "text", text: "Generated image" }, image] },
+                                        }),
+                                    },
+                                },
+                                {
+                                    type: "content",
+                                    content: {
+                                        ...image,
                                     },
                                 },
                                 {
@@ -117,6 +128,7 @@ export function registerHistory(agent: ReturnType<typeof acp.agent>) {
                                     },
                                 },
                             ],
+                            rawOutput: { result: { content: [{ type: "text", text: "Generated image" }, image] } },
                             sessionUpdate: "tool_call_update",
                             toolCallId: `tool-${replayId}`,
                         },

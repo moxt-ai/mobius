@@ -1043,13 +1043,13 @@ export class AgentSession implements AcpClientHandler {
 
     readonly #processUpdate = async (notification: SessionNotification): Promise<void> => {
         this.assertNativeSession(notification.sessionId);
-        const update = notification.update;
         const externalized = await this.#contentExternalizer.update(
             this.#mobiusSessionId,
-            update,
+            notification.update,
             AbortSignal.timeout(30_000),
         );
-        const rawUpdate = decodeAcpSessionUpdateV2(JSON.stringify(externalized));
+        const update = externalized.agent;
+        const rawUpdate = decodeAcpSessionUpdateV2(JSON.stringify(externalized.event));
         if (this.#sessionLoad.kind === "capturing") {
             await this.#sessionLoad.history.record(update, rawUpdate);
         } else {

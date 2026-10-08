@@ -121,6 +121,8 @@ if (process.argv.includes("--version")) {
                         continue;
                     }
                     const events = decodeSessionLiveHistoryV2PageLoaded(message).events.history.events;
+                    expect(JSON.stringify(events).length).toBeLessThan(10_000);
+                    expect(JSON.stringify(events)).not.toContain("iVBORw0KGgoAAAANSUhEUg");
                     for (const event of events) {
                         if (event.type !== "acp" || event.payload.sessionUpdate !== "tool_call_update") {
                             continue;

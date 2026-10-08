@@ -125,7 +125,7 @@ export async function runDaemon(
     const sessionStore = new SqliteAcpSessionStore(
         join(stateDirectory, "sessions", `${createHash("sha256").update(config.channelId).digest("hex")}.sqlite`),
     );
-    const externalContent = new LocalExternalContentStore(stateDirectory);
+    await using externalContent = new LocalExternalContentStore(stateDirectory);
     const operations = new DaemonOperationState();
     const publisher = new DaemonSessionEventPublisher(sessionStore);
     const eventLogV2 = new DaemonSessionEventLogV2(publisher, sessionStore);

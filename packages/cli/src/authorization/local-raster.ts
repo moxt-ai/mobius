@@ -39,7 +39,7 @@ function startsWith(bytes: Uint8Array, signature: Uint8Array, offset = 0): boole
     return signature.every((value, index) => bytes[offset + index] === value);
 }
 
-function sniffRasterMime(bytes: Uint8Array): LocalRasterMimeType | null {
+export function sniffRasterMime(bytes: Uint8Array): LocalRasterMimeType | null {
     if (startsWith(bytes, PNG_SIGNATURE)) {
         return "image/png";
     }
