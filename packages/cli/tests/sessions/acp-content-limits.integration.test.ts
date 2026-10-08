@@ -8,7 +8,7 @@ import { AgentRuntimeManager } from "../../src/acp/agent-runtime-manager.ts";
 import { fakeAgent, RecordingObserver } from "./acp-feature-fixture.ts";
 
 describe("acp content limits", () => {
-    it("Given an ACP tool returns inline image bytes, When Mobius records the tool update, Then it keeps the validated inline raster", async () => {
+    it("Given an ACP tool returns inline image bytes, When Mobius records the tool update, Then it exposes a local image reference without inline bytes", async () => {
         const observer = new RecordingObserver();
         const manager = new AgentRuntimeManager(observer);
         const activities: AcpActivity[] = [];
@@ -33,7 +33,10 @@ describe("acp content limits", () => {
             expect(
                 activities.some((activity) =>
                     activity.content.some(
-                        (content) => content.type === "image" && content.artifactId === "" && content.data.length > 0,
+                        (content) =>
+                            content.type === "image" &&
+                            content.data.length === 0 &&
+                            content.uri.startsWith("mobius-content:image:"),
                     ),
                 ),
             ).toBe(true);

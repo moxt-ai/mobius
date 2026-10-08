@@ -97,8 +97,17 @@ function selectTool(
     scenario: FakeProviderScenario,
     completedToolCalls: number,
     patch?: string,
+    readPath?: string,
 ): SelectedTool | undefined {
     const callId = `call_mobius_${(completedToolCalls + 1).toString()}`;
+    if (readPath !== undefined) {
+        const read = tools.find((tool) => /(?:^|\.)(?:read|read_file)$/iu.test(tool.name));
+        const path = stringProperty(read?.parameters, ["filePath", "path", "file"]);
+        if (read === undefined || path === undefined) {
+            throw new Error("The Agent did not expose a file-read tool");
+        }
+        return { ...read, callId, input: JSON.stringify({ [path]: readPath }) };
+    }
     if (patch !== undefined) {
         const applyPatch = tools.find((tool) => /(?:^|\.)apply_patch$/u.test(tool.name) && tool.kind === "custom");
         if (applyPatch !== undefined) {
@@ -429,6 +438,7 @@ export class FakeOpenAiProvider implements AsyncDisposable {
             readonly fallbackPrompt?: string;
             readonly commentary?: string;
             readonly patch?: string;
+            readonly readPath?: string;
         } = {},
     ): Promise<FakeOpenAiProvider> {
         const requests: ProviderRequestDiagnostic[] = [];
@@ -475,7 +485,7 @@ export class FakeOpenAiProvider implements AsyncDisposable {
             const scenario = activeScenario ?? selectedScenario;
             const tool =
                 completedToolCalls < scenario.toolCalls
-                    ? selectTool(tools, scenario, completedToolCalls, options.patch)
+                    ? selectTool(tools, scenario, completedToolCalls, options.patch, options.readPath)
                     : undefined;
             const selectedAnswer = fakeProviderResponse(answer, scenario);
             const selectedChunks = responseChunks(selectedAnswer, scenario);
