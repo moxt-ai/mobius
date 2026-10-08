@@ -52,6 +52,52 @@ export class FakeAgentDaemon {
                 );
                 return;
             }
+            case "file.read": {
+                const c = p.decodeFileReadCommand(encoded);
+                const file = this.#options.files?.get(c.path);
+                if (file === undefined) {
+                    this.#send(
+                        p.encodeFileFailedEvent({
+                            code: "file_not_found",
+                            kind: "file.failed",
+                            message: "The requested test file was not found",
+                            requestId: c.requestId,
+                            sessionId: c.sessionId,
+                        }),
+                    );
+                    return;
+                }
+                const bytes = new TextEncoder().encode(file.content);
+                const data = btoa(String.fromCharCode(...bytes));
+                this.#send(
+                    p.encodeFileBeginEvent({
+                        byteLength: bytes.byteLength,
+                        kind: "file.begin",
+                        mediaType: file.mediaType,
+                        modifiedAt: "2026-01-01T00:00:00.000Z",
+                        name: c.path.split(/[\\/]/u).at(-1) ?? c.path,
+                        requestId: c.requestId,
+                        sessionId: c.sessionId,
+                    }),
+                );
+                this.#send(
+                    p.encodeFileChunkEvent({
+                        data,
+                        kind: "file.chunk",
+                        requestId: c.requestId,
+                        sequence: 0,
+                        sessionId: c.sessionId,
+                    }),
+                );
+                this.#send(
+                    p.encodeFileEndEvent({
+                        kind: "file.end",
+                        requestId: c.requestId,
+                        sessionId: c.sessionId,
+                    }),
+                );
+                return;
+            }
             case "agent.settings.discover":
                 this.#send(settings(p.decodeAgentSettingsDiscoverCommand(encoded), this.#options));
                 return;
