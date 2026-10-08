@@ -62,6 +62,7 @@ import {
     decodeSessionPromptCommand,
     decodeSessionReadyEvent,
     decodeSessionStartedEvent,
+    decodeSessionStatusChangedEvent,
     decodeSessionUsageUpdatedEvent,
     decodeWorkspaceEntriesEvent,
     decodeWorkspaceListCommand,
@@ -113,6 +114,7 @@ import {
     SESSION_PROMPT_KIND,
     SESSION_READY_KIND,
     SESSION_STARTED_KIND,
+    SESSION_STATUS_CHANGED_KIND,
     SESSION_USAGE_UPDATED_KIND,
     type SessionCommandsUpdatedEvent,
     type SessionCompletedEvent,
@@ -128,6 +130,7 @@ import {
     SessionPromptDisposition,
     type SessionReadyEvent,
     type SessionStartedEvent,
+    type SessionStatusChangedEvent,
     type SessionUsageUpdatedEvent,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
@@ -188,6 +191,7 @@ export interface ConnectMobiusClientOptions {
     readonly onReady?: (event: SessionReadyEvent) => void;
     readonly onReconnecting?: () => void;
     readonly onStatus?: (online: boolean) => void;
+    readonly onSessionStatusChanged?: (event: SessionStatusChangedEvent) => void;
     readonly onUnavailable?: () => void;
     readonly onUsage?: (event: SessionUsageUpdatedEvent) => void;
     readonly onWorkspace?: (event: WorkspaceEntriesEvent) => void;
@@ -1143,6 +1147,8 @@ export class MobiusClient {
                 decodeSessionPrepareCommand(encoded);
             } else if (kind === SESSION_READY_KIND) {
                 this.#options.onReady?.(decodeSessionReadyEvent(encoded));
+            } else if (kind === SESSION_STATUS_CHANGED_KIND) {
+                this.#options.onSessionStatusChanged?.(decodeSessionStatusChangedEvent(encoded));
             } else if (kind === SESSION_CONFIGURE_KIND) {
                 decodeSessionConfigureCommand(encoded);
             } else if (kind === SESSION_CONFIG_UPDATED_KIND) {

@@ -55,6 +55,7 @@ it("Given a prompted local conversation, When its Runtime Session directory is l
                 directoryId: expect.any(String),
                 prompted: true,
                 sessionId,
+                status: { kind: "idle" },
                 title: "Remember this conversation",
             }),
         ]);

@@ -68,6 +68,7 @@ export class FakeSessions {
                 directoryLabel: "Fake workspace",
                 additionalDirectories: [],
                 prompted: false,
+                status: { kind: "idle" },
                 title: "New chat",
                 updatedAt: "2026-01-01T00:00:00Z",
             },
@@ -269,6 +270,7 @@ export class FakeSessions {
             metadata: {
                 ...session.metadata,
                 prompted: true,
+                status: { commandId: command.commandId, kind: "working" },
                 title: session.metadata.prompted ? session.metadata.title : command.prompt,
             },
             execution: {
@@ -282,6 +284,13 @@ export class FakeSessions {
                 },
             },
         });
+        this.#send(
+            p.encodeDaemonToServiceMessage({
+                kind: "session.status.changed",
+                sessionId: command.sessionId,
+                status: { commandId: command.commandId, kind: "working" },
+            }),
+        );
         this.#started(command, command.commandId);
         const plan = this.#options.reply(command.prompt, session.history.length + 1, "prompt");
         for (const output of plan.output) {
@@ -337,7 +346,15 @@ export class FakeSessions {
             return;
         }
         const { turn, queued } = session.execution;
-        this.#sessions.set(id, { ...session, history: [...session.history, turn], execution: { kind: "idle" } });
+        this.#sessions.set(id, {
+            ...session,
+            metadata: { ...session.metadata, status: { kind: "idle" } },
+            history: [...session.history, turn],
+            execution: { kind: "idle" },
+        });
+        this.#send(
+            p.encodeDaemonToServiceMessage({ kind: "session.status.changed", sessionId: id, status: { kind: "idle" } }),
+        );
         for (const commandId of turn.commandIds) {
             this.event(id, { kind: "session.completed", sessionId: id, commandId, stopReason });
         }

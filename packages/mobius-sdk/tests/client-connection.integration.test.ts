@@ -17,9 +17,11 @@ import {
     encodeSessionOperationFailedEvent,
     encodeSessionPrepareCommand,
     encodeSessionReadyEvent,
+    encodeSessionStatusChangedEvent,
     encodeWorkspaceEntriesEvent,
     RUNTIME_STATUS_KIND,
     SESSION_PROMPT_KIND,
+    type SessionStatusChangedEvent,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-protocol";
@@ -453,6 +455,7 @@ describe("browser relay connection", () => {
         const nextHistoryChange = new ValueFeed<string>();
         const readyRequests = new ValueFeed<string>();
         const configuredRequests = new ValueFeed<string>();
+        const sessionStatuses = new ValueFeed<SessionStatusChangedEvent>();
         let closeClient = (): void => undefined;
         try {
             const client = await connectMobiusClient({
@@ -462,6 +465,7 @@ describe("browser relay connection", () => {
                     nextHistoryChange.push("changed");
                 },
                 onReady: (event) => readyRequests.push(event.requestId),
+                onSessionStatusChanged: sessionStatuses.push,
                 relayUrl: `ws://127.0.0.1:${readPort(relay).toString()}`,
             });
             closeClient = client.close;
@@ -511,6 +515,21 @@ describe("browser relay connection", () => {
                 }),
             );
             await expect(readyRequests.next()).resolves.toBe("prepare-1");
+            expect(historyChanges).toEqual([]);
+
+            writeServerTextFrame(
+                socket,
+                encodeSessionStatusChangedEvent({
+                    kind: "session.status.changed",
+                    sessionId: "session-1",
+                    status: { commandId: "command-1", kind: "working" },
+                }),
+            );
+            await expect(sessionStatuses.next()).resolves.toEqual({
+                kind: "session.status.changed",
+                sessionId: "session-1",
+                status: { commandId: "command-1", kind: "working" },
+            });
             expect(historyChanges).toEqual([]);
 
             writeServerTextFrame(

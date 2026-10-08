@@ -148,6 +148,7 @@ export async function runDaemon(
                     : null,
         },
         "native",
+        publisher.publishStatus,
     );
     const directories = new WorkspaceDirectoryService(config.bindingId, config.defaultWorkspace);
     const installationObserver = new DaemonInstallationObserver();

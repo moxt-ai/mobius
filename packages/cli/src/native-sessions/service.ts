@@ -455,6 +455,7 @@ export class NativeSessionService {
                 directoryLabel: directory.label,
                 prompted: session.prompted,
                 sessionId: session.sessionId,
+                status: this.#sessions.sessionStatus(session.sessionId),
                 title: session.title || "Untitled session",
                 updatedAt: session.updatedAt,
             });

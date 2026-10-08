@@ -6,7 +6,12 @@ import { RuntimeOperations, waitForSharedOperation } from "./runtime-operations.
 
 export { createWritableAcpStream } from "./agent-connection.ts";
 
-import type { NativeSessionHistory, SessionConfigOption } from "@moxt-ai/mobius-protocol";
+import type {
+    NativeSessionHistory,
+    SessionConfigOption,
+    SessionStatus,
+    SessionStatusChangedEvent,
+} from "@moxt-ai/mobius-protocol";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
 import { isNativeChatSessionId } from "../native-sessions/chat-agent.ts";
 import { AcpExecutionError } from "./acp-error.ts";
@@ -71,6 +76,7 @@ export class AgentRuntimeManager {
     readonly #store: AcpSessionStore;
     readonly #nativeHistoryReader: AcpNativeHistoryReader | null;
     readonly #sessionIdentity: "assigned" | "native";
+    readonly #onSessionStatusChanged: (event: SessionStatusChangedEvent) => void;
     #observer: AcpSessionObserver;
 
     constructor(
@@ -78,11 +84,13 @@ export class AgentRuntimeManager {
         store: AcpSessionStore = new MemoryAcpSessionStore(),
         nativeHistoryReader: AcpNativeHistoryReader | null = null,
         sessionIdentity: "assigned" | "native" = "assigned",
+        onSessionStatusChanged: (event: SessionStatusChangedEvent) => void = () => undefined,
     ) {
         this.#observer = observer;
         this.#store = store;
         this.#nativeHistoryReader = nativeHistoryReader;
         this.#sessionIdentity = sessionIdentity;
+        this.#onSessionStatusChanged = onSessionStatusChanged;
     }
 
     readonly setObserver = (observer: AcpSessionObserver): void => {
@@ -469,6 +477,11 @@ export class AgentRuntimeManager {
             }
             this.#executions.begin(options.sessionId, options.commandId);
             try {
+                this.#onSessionStatusChanged({
+                    kind: "session.status.changed",
+                    sessionId: options.sessionId,
+                    status: { commandId: options.commandId, kind: "working" },
+                });
                 if (this.#executions.cancellation(options.sessionId) !== undefined) {
                     return { stopReason: "cancelled" };
                 }
@@ -514,6 +527,11 @@ export class AgentRuntimeManager {
                     await this.#executions.cancellation(options.sessionId);
                 } finally {
                     this.#executions.finish(options.sessionId, options.commandId);
+                    this.#onSessionStatusChanged({
+                        kind: "session.status.changed",
+                        sessionId: options.sessionId,
+                        status: { kind: "idle" },
+                    });
                     this.#executionProcesses.touch(options.sessionId);
                     this.#processes.notifyChanged();
                 }
@@ -553,6 +571,11 @@ export class AgentRuntimeManager {
             const stored = this.#store.read(sessionId);
             return stored instanceof FoundAcpStoredSession ? [stored.session] : [];
         });
+
+    readonly sessionStatus = (sessionId: string): SessionStatus => {
+        const commandId = this.#executions.command(sessionId);
+        return commandId === undefined ? { kind: "idle" } : { commandId, kind: "working" };
+    };
 
     readonly listSessions = (limit: number) =>
         this.#store

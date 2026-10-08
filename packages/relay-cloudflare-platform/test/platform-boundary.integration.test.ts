@@ -10,6 +10,7 @@ import {
     encodeSessionEventEnvelopeV2,
     encodeSessionLiveHistoryV2PageLoaded,
     encodeSessionPromptCommand,
+    encodeSessionStatusChangedEvent,
     encodeSessionsQueriedEvent,
     MOBIUS_API_PREFIX,
 } from "@moxt-ai/mobius-protocol";
@@ -820,6 +821,7 @@ describe.sequential("Platform Session-only boundary", () => {
                             directoryLabel: "Workspace",
                             prompted: true,
                             sessionId,
+                            status: { kind: "idle" },
                             title: "Local session",
                             updatedAt: "2026-09-18T00:00:00.000Z",
                         },
@@ -829,6 +831,18 @@ describe.sequential("Platform Session-only boundary", () => {
                 }),
             );
             expect(decodeDaemonToServiceMessage(await hostMessages.next()).kind).toBe("session.queried");
+            daemon.send(
+                encodeSessionStatusChangedEvent({
+                    kind: "session.status.changed",
+                    sessionId,
+                    status: { commandId: "command-1", kind: "working" },
+                }),
+            );
+            expect(decodeDaemonToServiceMessage(await hostMessages.next())).toEqual({
+                kind: "session.status.changed",
+                sessionId,
+                status: { commandId: "command-1", kind: "working" },
+            });
             const historyLoad = decodeServiceToDaemonMessage(await daemonMessages.next());
             if (historyLoad.kind !== "session.live-history.v2.page.load") {
                 throw new Error("Expected a V2 Session history request");
