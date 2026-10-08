@@ -61,6 +61,7 @@ class ControlledAgentState {
     readonly #activeByPrompt = new Map<string, ActiveReply>();
     readonly #activeBySession = new Map<string, ActiveReply>();
     readonly #activeWaiters = new Map<string, Set<(active: ActiveReply) => void>>();
+    readonly #history = new Map<string, acp.SessionNotification[]>();
     readonly #models = new Map<string, string>();
     readonly #options: FakeAgentHarnessOptions;
     readonly #sessions = new Map<string, number>();
@@ -75,6 +76,9 @@ class ControlledAgentState {
     readonly turnCount = (sessionId: string): number => this.#sessions.get(sessionId) ?? 0;
     readonly rememberSession = (sessionId: string, turnCount = 0): void => {
         this.#sessions.set(sessionId, turnCount);
+        if (!this.#history.has(sessionId)) {
+            this.#history.set(sessionId, []);
+        }
         if (!this.#models.has(sessionId)) {
             this.#models.set(sessionId, "test-small");
         }
@@ -89,6 +93,17 @@ class ControlledAgentState {
     };
     readonly sessions = (): readonly { readonly sessionId: string; readonly turnCount: number }[] =>
         Array.from(this.#sessions, ([sessionId, turnCount]) => ({ sessionId, turnCount }));
+    readonly replay = async (
+        sessionId: string,
+        send: (notification: acp.SessionNotification) => Promise<void>,
+    ): Promise<void> => {
+        if (this.#activeBySession.has(sessionId)) {
+            return;
+        }
+        for (const notification of this.#history.get(sessionId) ?? []) {
+            await send(notification);
+        }
+    };
 
     readonly start = async (
         sessionId: string,
@@ -98,6 +113,14 @@ class ControlledAgentState {
     ): Promise<acp.PromptResponse> => {
         const turnNumber = this.turnCount(sessionId) + 1;
         this.rememberSession(sessionId, turnNumber);
+        this.#record({
+            sessionId,
+            update: {
+                content: { text: prompt, type: "text" },
+                messageId: `user-${turnNumber.toString()}`,
+                sessionUpdate: "user_message_chunk",
+            },
+        });
         const completion = Promise.withResolvers<acp.PromptResponse>();
         const active: ActiveReply = {
             completion,
@@ -183,11 +206,12 @@ class ControlledAgentState {
                     sessionUpdate: "agent_message_chunk",
                 },
             };
+            this.#record(notification);
             await active.send(notification);
             return;
         }
         if (output.kind === "file") {
-            await active.send({
+            const notification: acp.SessionNotification = {
                 sessionId: active.sessionId,
                 update: {
                     content: {
@@ -198,21 +222,25 @@ class ControlledAgentState {
                     messageId: `assistant-${active.turnNumber.toString()}`,
                     sessionUpdate: "agent_message_chunk",
                 },
-            });
+            };
+            this.#record(notification);
+            await active.send(notification);
             return;
         }
         if (output.activityType === "reasoning") {
-            await active.send({
+            const notification: acp.SessionNotification = {
                 sessionId: active.sessionId,
                 update: {
                     content: { text: output.output, type: "text" },
                     messageId: id,
                     sessionUpdate: "agent_thought_chunk",
                 },
-            });
+            };
+            this.#record(notification);
+            await active.send(notification);
             return;
         }
-        await active.send({
+        const notification: acp.SessionNotification = {
             sessionId: active.sessionId,
             update: {
                 kind: "other",
@@ -224,7 +252,13 @@ class ControlledAgentState {
                 title: output.title,
                 toolCallId: id,
             },
-        });
+        };
+        this.#record(notification);
+        await active.send(notification);
+    }
+
+    #record(notification: acp.SessionNotification): void {
+        this.#history.get(notification.sessionId)?.push(notification);
     }
 
     #finish(active: ActiveReply, stopReason: acp.StopReason): void {
@@ -272,9 +306,14 @@ class ControlledAgentEndpoint implements FakeHarnessEndpoint {
                 this.#state.rememberSession(sessionId);
                 return { configOptions: this.#state.configuration(sessionId), sessionId };
             })
-            .onRequest(acp.methods.agent.session.load, (context) => {
+            .onRequest(acp.methods.agent.session.load, async (context) => {
                 this.#sessionIds.add(context.params.sessionId);
                 this.#state.rememberSession(context.params.sessionId, this.#state.turnCount(context.params.sessionId));
+                await this.#state.replay(
+                    context.params.sessionId,
+                    async (notification) =>
+                        await context.client.notify(acp.methods.client.session.update, notification),
+                );
                 return { configOptions: this.#state.configuration(context.params.sessionId) };
             })
             .onRequest(acp.methods.agent.session.resume, (context) => {
