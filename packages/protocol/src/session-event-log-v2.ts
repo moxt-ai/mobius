@@ -71,7 +71,7 @@ const boundedJsonSchema = z.unknown().superRefine((value, context) => {
 const metadataSchema = z.record(z.string().max(255), boundedJsonSchema).readonly();
 const optionalMetadata = metadataSchema.nullable().optional();
 const annotationsSchema = z
-    .strictObject({
+    .object({
         _meta: optionalMetadata,
         audience: z
             .array(z.enum(["assistant", "user"]))
@@ -84,9 +84,9 @@ const annotationsSchema = z
     })
     .readonly();
 const contentFields = { _meta: optionalMetadata, annotations: annotationsSchema.nullable().optional() };
-const textContentSchema = z.strictObject({ ...contentFields, text: boundedString, type: z.literal("text") }).readonly();
+const textContentSchema = z.object({ ...contentFields, text: boundedString, type: z.literal("text") }).readonly();
 const imageContentSchema = z
-    .strictObject({
+    .object({
         ...contentFields,
         data: boundedString,
         mimeType: shortString,
@@ -95,10 +95,10 @@ const imageContentSchema = z
     })
     .readonly();
 const audioContentSchema = z
-    .strictObject({ ...contentFields, data: boundedString, mimeType: shortString, type: z.literal("audio") })
+    .object({ ...contentFields, data: boundedString, mimeType: shortString, type: z.literal("audio") })
     .readonly();
 const resourceLinkSchema = z
-    .strictObject({
+    .object({
         ...contentFields,
         description: boundedString.nullable().optional(),
         mimeType: shortString.nullable().optional(),
@@ -110,7 +110,7 @@ const resourceLinkSchema = z
     })
     .readonly();
 const textResourceSchema = z
-    .strictObject({
+    .object({
         _meta: optionalMetadata,
         mimeType: shortString.nullable().optional(),
         text: boundedString,
@@ -118,7 +118,7 @@ const textResourceSchema = z
     })
     .readonly();
 const blobResourceSchema = z
-    .strictObject({
+    .object({
         _meta: optionalMetadata,
         blob: boundedString,
         mimeType: shortString.nullable().optional(),
@@ -126,7 +126,7 @@ const blobResourceSchema = z
     })
     .readonly();
 const embeddedResourceSchema = z
-    .strictObject({
+    .object({
         ...contentFields,
         resource: z.union([textResourceSchema, blobResourceSchema]),
         type: z.literal("resource"),
@@ -143,9 +143,9 @@ export const contentBlockV2Schema = z.discriminatedUnion("type", [
 export type ContentBlockV2 = z.infer<typeof contentBlockV2Schema>;
 
 const toolCallContentSchema = z.discriminatedUnion("type", [
-    z.strictObject({ _meta: optionalMetadata, content: contentBlockV2Schema, type: z.literal("content") }).readonly(),
+    z.object({ _meta: optionalMetadata, content: contentBlockV2Schema, type: z.literal("content") }).readonly(),
     z
-        .strictObject({
+        .object({
             _meta: optionalMetadata,
             newText: boundedString,
             oldText: boundedString.nullable().optional(),
@@ -153,10 +153,10 @@ const toolCallContentSchema = z.discriminatedUnion("type", [
             type: z.literal("diff"),
         })
         .readonly(),
-    z.strictObject({ _meta: optionalMetadata, terminalId: shortString, type: z.literal("terminal") }).readonly(),
+    z.object({ _meta: optionalMetadata, terminalId: shortString, type: z.literal("terminal") }).readonly(),
 ]);
 const toolCallLocationSchema = z
-    .strictObject({
+    .object({
         _meta: optionalMetadata,
         line: z.number().int().nonnegative().safe().nullable().optional(),
         path: boundedString,
@@ -187,7 +187,7 @@ const toolPatchFields = {
     title: boundedString.nullable().optional(),
 };
 const planEntrySchema = z
-    .strictObject({
+    .object({
         _meta: optionalMetadata,
         content: boundedString,
         priority: z.enum(["high", "medium", "low"]),
@@ -196,18 +196,16 @@ const planEntrySchema = z
     .readonly();
 const planContentSchema = z.discriminatedUnion("type", [
     z
-        .strictObject({
+        .object({
             _meta: optionalMetadata,
             entries: z.array(planEntrySchema).max(MAX_COLLECTION_SIZE).readonly(),
             planId: shortString,
             type: z.literal("items"),
         })
         .readonly(),
+    z.object({ _meta: optionalMetadata, planId: shortString, type: z.literal("file"), uri: boundedString }).readonly(),
     z
-        .strictObject({ _meta: optionalMetadata, planId: shortString, type: z.literal("file"), uri: boundedString })
-        .readonly(),
-    z
-        .strictObject({
+        .object({
             _meta: optionalMetadata,
             content: boundedString,
             planId: shortString,
@@ -216,15 +214,15 @@ const planContentSchema = z.discriminatedUnion("type", [
         .readonly(),
 ]);
 const commandSchema = z
-    .strictObject({
+    .object({
         _meta: optionalMetadata,
         description: boundedString,
-        input: z.strictObject({ _meta: optionalMetadata, hint: boundedString }).readonly().nullable().optional(),
+        input: z.object({ _meta: optionalMetadata, hint: boundedString }).readonly().nullable().optional(),
         name: shortString,
     })
     .readonly();
 const configSelectOptionSchema = z
-    .strictObject({
+    .object({
         _meta: optionalMetadata,
         description: boundedString.nullable().optional(),
         name: shortString,
@@ -232,7 +230,7 @@ const configSelectOptionSchema = z
     })
     .readonly();
 const configSelectGroupSchema = z
-    .strictObject({
+    .object({
         _meta: optionalMetadata,
         group: shortString,
         name: shortString,
@@ -248,7 +246,7 @@ const configBaseFields = {
 };
 const sessionConfigOptionSchema = z.discriminatedUnion("type", [
     z
-        .strictObject({
+        .object({
             ...configBaseFields,
             currentValue: shortString,
             options: z.union([
@@ -258,7 +256,7 @@ const sessionConfigOptionSchema = z.discriminatedUnion("type", [
             type: z.literal("select"),
         })
         .readonly(),
-    z.strictObject({ ...configBaseFields, currentValue: z.boolean(), type: z.literal("boolean") }).readonly(),
+    z.object({ ...configBaseFields, currentValue: z.boolean(), type: z.literal("boolean") }).readonly(),
 ]);
 const contentChunkFields = {
     _meta: optionalMetadata,
@@ -267,11 +265,11 @@ const contentChunkFields = {
 };
 
 export const acpSessionUpdateV2Schema = z.discriminatedUnion("sessionUpdate", [
-    z.strictObject({ ...contentChunkFields, sessionUpdate: z.literal("user_message_chunk") }).readonly(),
-    z.strictObject({ ...contentChunkFields, sessionUpdate: z.literal("agent_message_chunk") }).readonly(),
-    z.strictObject({ ...contentChunkFields, sessionUpdate: z.literal("agent_thought_chunk") }).readonly(),
+    z.object({ ...contentChunkFields, sessionUpdate: z.literal("user_message_chunk") }).readonly(),
+    z.object({ ...contentChunkFields, sessionUpdate: z.literal("agent_message_chunk") }).readonly(),
+    z.object({ ...contentChunkFields, sessionUpdate: z.literal("agent_thought_chunk") }).readonly(),
     z
-        .strictObject({
+        .object({
             _meta: optionalMetadata,
             content: z.array(toolCallContentSchema).max(MAX_COLLECTION_SIZE).readonly().optional(),
             kind: toolKindSchema.optional(),
@@ -285,45 +283,39 @@ export const acpSessionUpdateV2Schema = z.discriminatedUnion("sessionUpdate", [
             toolCallId: shortString,
         })
         .readonly(),
+    z.object({ ...toolPatchFields, sessionUpdate: z.literal("tool_call_update"), toolCallId: shortString }).readonly(),
     z
-        .strictObject({ ...toolPatchFields, sessionUpdate: z.literal("tool_call_update"), toolCallId: shortString })
-        .readonly(),
-    z
-        .strictObject({
+        .object({
             _meta: optionalMetadata,
             entries: z.array(planEntrySchema).max(MAX_COLLECTION_SIZE).readonly(),
             sessionUpdate: z.literal("plan"),
         })
         .readonly(),
+    z.object({ _meta: optionalMetadata, plan: planContentSchema, sessionUpdate: z.literal("plan_update") }).readonly(),
+    z.object({ _meta: optionalMetadata, planId: shortString, sessionUpdate: z.literal("plan_removed") }).readonly(),
     z
-        .strictObject({ _meta: optionalMetadata, plan: planContentSchema, sessionUpdate: z.literal("plan_update") })
-        .readonly(),
-    z
-        .strictObject({ _meta: optionalMetadata, planId: shortString, sessionUpdate: z.literal("plan_removed") })
-        .readonly(),
-    z
-        .strictObject({
+        .object({
             _meta: optionalMetadata,
             availableCommands: z.array(commandSchema).max(MAX_COLLECTION_SIZE).readonly(),
             sessionUpdate: z.literal("available_commands_update"),
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             _meta: optionalMetadata,
             currentModeId: shortString,
             sessionUpdate: z.literal("current_mode_update"),
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             _meta: optionalMetadata,
             configOptions: z.array(sessionConfigOptionSchema).max(MAX_COLLECTION_SIZE).readonly(),
             sessionUpdate: z.literal("config_option_update"),
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             _meta: optionalMetadata,
             sessionUpdate: z.literal("session_info_update"),
             title: boundedString.nullable().optional(),
@@ -331,10 +323,10 @@ export const acpSessionUpdateV2Schema = z.discriminatedUnion("sessionUpdate", [
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             _meta: optionalMetadata,
             cost: z
-                .strictObject({ _meta: optionalMetadata, amount: z.number().finite(), currency: z.string().max(16) })
+                .object({ _meta: optionalMetadata, amount: z.number().finite(), currency: z.string().max(16) })
                 .readonly()
                 .nullable()
                 .optional(),
@@ -344,7 +336,7 @@ export const acpSessionUpdateV2Schema = z.discriminatedUnion("sessionUpdate", [
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             _meta: optionalMetadata,
             compactionId: shortString,
             error: boundedString.nullable().optional(),
@@ -354,7 +346,7 @@ export const acpSessionUpdateV2Schema = z.discriminatedUnion("sessionUpdate", [
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             _meta: optionalMetadata,
             compactionId: shortString,
             content: contentBlockV2Schema,
@@ -366,35 +358,35 @@ export type AcpSessionUpdateV2 = z.infer<typeof acpSessionUpdateV2Schema>;
 
 const lifecycleBase = { commandId: identifier };
 export const lifecycleMetadataV2Schema = z.discriminatedUnion("kind", [
-    z.strictObject({ kind: z.literal("session.queue.changed") }).readonly(),
+    z.object({ kind: z.literal("session.queue.changed") }).readonly(),
     z
-        .strictObject({ event: sessionPermissionRequestedEventSchema, kind: z.literal("session.permission.requested") })
+        .object({ event: sessionPermissionRequestedEventSchema, kind: z.literal("session.permission.requested") })
         .readonly(),
     z
-        .strictObject({ event: sessionPermissionResolvedEventSchema, kind: z.literal("session.permission.resolved") })
+        .object({ event: sessionPermissionResolvedEventSchema, kind: z.literal("session.permission.resolved") })
         .readonly(),
     z
-        .strictObject({
+        .object({
             event: sessionElicitationRequestedEventSchema,
             kind: z.literal("session.elicitation.requested"),
         })
         .readonly(),
     z
-        .strictObject({ event: sessionElicitationResolvedEventSchema, kind: z.literal("session.elicitation.resolved") })
+        .object({ event: sessionElicitationResolvedEventSchema, kind: z.literal("session.elicitation.resolved") })
         .readonly(),
     z
-        .strictObject({
+        .object({
             ...lifecycleBase,
             content: z.array(contentBlockV2Schema).min(1).max(100).readonly(),
             kind: z.literal("prompt.requested"),
         })
         .readonly(),
     z
-        .strictObject({ ...lifecycleBase, attemptId: identifier, epoch: identifier, kind: z.literal("prompt.started") })
+        .object({ ...lifecycleBase, attemptId: identifier, epoch: identifier, kind: z.literal("prompt.started") })
         .readonly(),
-    z.strictObject({ ...lifecycleBase, kind: z.literal("prompt.completed"), stopReason: shortString }).readonly(),
+    z.object({ ...lifecycleBase, kind: z.literal("prompt.completed"), stopReason: shortString }).readonly(),
     z
-        .strictObject({
+        .object({
             ...lifecycleBase,
             code: identifier,
             kind: z.literal("prompt.failed-before-start"),
@@ -402,7 +394,7 @@ export const lifecycleMetadataV2Schema = z.discriminatedUnion("kind", [
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             ...lifecycleBase,
             attemptId: identifier,
             code: identifier,
@@ -413,15 +405,15 @@ export const lifecycleMetadataV2Schema = z.discriminatedUnion("kind", [
 ]);
 export type LifecycleMetadataV2 = z.infer<typeof lifecycleMetadataV2Schema>;
 export const sessionEventPayloadV2Schema = z.discriminatedUnion("type", [
-    z.strictObject({ payload: acpSessionUpdateV2Schema, type: z.literal("acp") }).readonly(),
-    z.strictObject({ payload: lifecycleMetadataV2Schema, type: z.literal("lifecycle-metadata") }).readonly(),
+    z.object({ payload: acpSessionUpdateV2Schema, type: z.literal("acp") }).readonly(),
+    z.object({ payload: lifecycleMetadataV2Schema, type: z.literal("lifecycle-metadata") }).readonly(),
 ]);
 export type SessionEventPayloadV2 = z.infer<typeof sessionEventPayloadV2Schema>;
 const positionSchema = z.string().regex(/^(0|[1-9][0-9]*)$/);
 const provenanceSchema = z.discriminatedUnion("kind", [
-    z.strictObject({ kind: z.literal("original") }).readonly(),
+    z.object({ kind: z.literal("original") }).readonly(),
     z
-        .strictObject({
+        .object({
             kind: z.literal("imported"),
             sourceEventId: identifier,
             sourcePosition: positionSchema,
@@ -429,7 +421,7 @@ const provenanceSchema = z.discriminatedUnion("kind", [
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             kind: z.literal("forked"),
             sourceEventId: identifier,
             sourcePosition: positionSchema,
@@ -445,9 +437,9 @@ const sessionEventFieldsV2 = {
     sessionId: identifier,
 };
 export const sessionEventV2Schema = z.discriminatedUnion("type", [
-    z.strictObject({ ...sessionEventFieldsV2, payload: acpSessionUpdateV2Schema, type: z.literal("acp") }).readonly(),
+    z.object({ ...sessionEventFieldsV2, payload: acpSessionUpdateV2Schema, type: z.literal("acp") }).readonly(),
     z
-        .strictObject({
+        .object({
             ...sessionEventFieldsV2,
             payload: lifecycleMetadataV2Schema,
             type: z.literal("lifecycle-metadata"),
@@ -456,9 +448,9 @@ export const sessionEventV2Schema = z.discriminatedUnion("type", [
 ]);
 export type SessionEventV2 = z.infer<typeof sessionEventV2Schema>;
 const sessionExportV2Schema = z
-    .strictObject({
+    .object({
         binding: z
-            .strictObject({
+            .object({
                 bindingId: identifier,
                 runtimeId: identifier,
             })
@@ -499,18 +491,18 @@ const sessionExportV2Schema = z
         }
     });
 export const mobiusSessionExportV2Schema = z
-    .strictObject({
+    .object({
         formatVersion: z.literal("2"),
         session: sessionExportV2Schema,
     })
     .readonly();
 export type MobiusSessionExportV2 = z.infer<typeof mobiusSessionExportV2Schema>;
 export const sessionEventEnvelopeV2Schema = z
-    .strictObject({ event: sessionEventV2Schema, kind: z.literal(SESSION_EVENT_V2_KIND) })
+    .object({ event: sessionEventV2Schema, kind: z.literal(SESSION_EVENT_V2_KIND) })
     .readonly();
 export type SessionEventEnvelopeV2 = z.infer<typeof sessionEventEnvelopeV2Schema>;
 export const sessionEventLogPageV2Schema = z
-    .strictObject({
+    .object({
         events: z.array(sessionEventV2Schema).max(MAX_EVENT_COUNT).readonly(),
         nextCursor: z.string().min(1).max(512).nullable(),
         tailCursor: z.string().max(512),
@@ -520,11 +512,11 @@ export const sessionEventLogPageV2Schema = z
     .readonly();
 export type SessionEventLogPageV2 = z.infer<typeof sessionEventLogPageV2Schema>;
 export const nativeEventPageRequestV2Schema = z
-    .strictObject({ cursor: z.string().min(1).max(512).nullable(), eventLimit: z.number().int().min(1).max(10_000) })
+    .object({ cursor: z.string().min(1).max(512).nullable(), eventLimit: z.number().int().min(1).max(10_000) })
     .readonly();
 export type NativeEventPageRequestV2 = z.infer<typeof nativeEventPageRequestV2Schema>;
 const executingPromptRequestEventLogV2Schema = z
-    .strictObject({
+    .object({
         attemptId: identifier,
         commandId: identifier,
         epoch: identifier,
@@ -535,7 +527,7 @@ const executingPromptRequestEventLogV2Schema = z
     .readonly();
 export type ExecutingPromptRequestEventLogV2 = z.infer<typeof executingPromptRequestEventLogV2Schema>;
 export const nativeSessionEventsV2Schema = z
-    .strictObject({
+    .object({
         executingPromptRequest: executingPromptRequestEventLogV2Schema.nullable(),
         history: sessionEventLogPageV2Schema,
     })

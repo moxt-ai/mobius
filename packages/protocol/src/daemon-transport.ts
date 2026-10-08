@@ -14,7 +14,7 @@ import {
     encodeSessionPromptCommand,
     encodeSessionPromptDispositionCommand,
     encodeSessionQueuedEvent,
-    ProtocolMessageError,
+    UnsupportedProtocolMessageKindError,
 } from "./codecs/messages.ts";
 import {
     AGENT_CATALOG_REFRESH_FAILED_KIND,
@@ -295,7 +295,7 @@ export function decodeServiceToDaemonMessage(encoded: string): ServiceToDaemonMe
     const kind = decodeMessageKind(encoded);
     const signature = serviceToDaemonRegistry[kind];
     if (signature === undefined) {
-        throw new ProtocolMessageError(`Unsupported service-to-daemon message kind: ${kind}`);
+        throw new UnsupportedProtocolMessageKindError("service-to-daemon", kind);
     }
     return signature.decoder(encoded);
 }
@@ -433,7 +433,7 @@ export function decodeDaemonToServiceMessage(encoded: string): DaemonToServiceMe
     const kind = decodeMessageKind(encoded);
     const signature = daemonToServiceRegistry[kind];
     if (signature === undefined) {
-        throw new ProtocolMessageError(`Unsupported daemon-to-service message kind: ${kind}`);
+        throw new UnsupportedProtocolMessageKindError("daemon-to-service", kind);
     }
     return signature.decoder(encoded);
 }

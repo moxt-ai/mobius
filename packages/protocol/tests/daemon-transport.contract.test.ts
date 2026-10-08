@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
     decodeDaemonToServiceMessage,
     decodeServiceToDaemonMessage,
+    decodeSessionsQueriedEvent,
     encodeDaemonToServiceMessage,
     encodeServiceToDaemonMessage,
     RUNTIME_HEARTBEAT_ACK_KIND,
@@ -12,6 +13,47 @@ import {
 } from "../src/index.ts";
 
 describe("daemon transport protocol", () => {
+    it("Given an older Session response and future additive fields, When a newer boundary decodes it, Then known fields remain usable with documented fallbacks", () => {
+        expect(
+            decodeSessionsQueriedEvent(
+                JSON.stringify({
+                    entries: [
+                        {
+                            additionalDirectories: [],
+                            agentId: "codex",
+                            directoryId: "default",
+                            directoryLabel: "Default",
+                            futureMetadata: { enabled: true },
+                            prompted: true,
+                            sessionId: "session-1",
+                            title: "Existing session",
+                            updatedAt: "2026-10-08T00:00:00.000Z",
+                        },
+                    ],
+                    futureEnvelope: "ignored",
+                    kind: "session.queried",
+                    requestId: "request-1",
+                }),
+            ),
+        ).toEqual({
+            entries: [
+                {
+                    additionalDirectories: [],
+                    agentId: "codex",
+                    directoryId: "default",
+                    directoryLabel: "Default",
+                    prompted: true,
+                    sessionId: "session-1",
+                    status: { kind: "idle" },
+                    title: "Existing session",
+                    updatedAt: "2026-10-08T00:00:00.000Z",
+                },
+            ],
+            kind: "session.queried",
+            requestId: "request-1",
+        });
+    });
+
     it("Given typed service and daemon messages, When they cross the transport boundary, Then each direction validates and round-trips its supported messages", () => {
         const serviceMessage = {
             commandId: "command-1",

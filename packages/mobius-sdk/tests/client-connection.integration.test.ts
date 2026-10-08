@@ -455,6 +455,7 @@ describe("browser relay connection", () => {
         const nextHistoryChange = new ValueFeed<string>();
         const readyRequests = new ValueFeed<string>();
         const configuredRequests = new ValueFeed<string>();
+        const protocolErrors: string[] = [];
         const sessionStatuses = new ValueFeed<SessionStatusChangedEvent>();
         let closeClient = (): void => undefined;
         try {
@@ -465,6 +466,7 @@ describe("browser relay connection", () => {
                     nextHistoryChange.push("changed");
                 },
                 onReady: (event) => readyRequests.push(event.requestId),
+                onProtocolError: (error) => protocolErrors.push(error.code),
                 onSessionStatusChanged: sessionStatuses.push,
                 relayUrl: `ws://127.0.0.1:${readPort(relay).toString()}`,
             });
@@ -519,6 +521,10 @@ describe("browser relay connection", () => {
 
             writeServerTextFrame(
                 socket,
+                JSON.stringify({ kind: "session.future.changed", sessionId: "session-1", value: "future" }),
+            );
+            writeServerTextFrame(
+                socket,
                 encodeSessionStatusChangedEvent({
                     kind: "session.status.changed",
                     sessionId: "session-1",
@@ -531,6 +537,7 @@ describe("browser relay connection", () => {
                 status: { commandId: "command-1", kind: "working" },
             });
             expect(historyChanges).toEqual([]);
+            expect(protocolErrors).toEqual([]);
 
             writeServerTextFrame(
                 socket,

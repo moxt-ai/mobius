@@ -9,7 +9,7 @@ export const SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT = 10;
 export const SESSION_HISTORY_IMAGE_CHARACTER_LIMIT = 4_000_000;
 
 const historyImage = z
-    .strictObject({
+    .object({
         data: z
             .string()
             .min(4)
@@ -55,7 +55,7 @@ export function parseNativeHistoryText(text: string): {
 }
 
 const nativeMessageActivitySchema = z
-    .strictObject({
+    .object({
         activityId: z.string().min(1).max(128),
         activityType: z.string().min(1).max(128),
         content: z.array(displayContentSchema).max(100).readonly(),
@@ -71,14 +71,14 @@ const nativeMessageActivitySchema = z
     .readonly();
 
 const userHistoryMessage = z
-    .strictObject({
+    .object({
         role: z.literal("user"),
         text: z.string().max(SESSION_HISTORY_CHARACTER_LIMIT),
         images: z.array(historyImage).max(8).readonly().optional(),
     })
     .readonly();
 export const assistantHistoryMessageSchema = z
-    .strictObject({
+    .object({
         activities: z.array(nativeMessageActivitySchema).max(100).readonly().default([]),
         content: z.array(displayContentSchema).max(100).readonly().default([]),
         role: z.literal("assistant"),
@@ -90,9 +90,9 @@ export const assistantHistoryMessageSchema = z
     .readonly();
 const historyMessage = z.discriminatedUnion("role", [userHistoryMessage, assistantHistoryMessageSchema]);
 
-const availableSessionHistoryObjectSchema = z.strictObject({
+const availableSessionHistoryObjectSchema = z.object({
     streamPosition: z
-        .strictObject({
+        .object({
             commandId: identifierStringSchema,
             epoch: identifierStringSchema,
             sequence: z.number().int().nonnegative(),
@@ -115,10 +115,10 @@ const availableSessionHistoryObjectSchema = z.strictObject({
         .default([]),
 });
 const availableSessionHistorySchema = availableSessionHistoryObjectSchema.readonly();
-const unavailableSessionHistoryObjectSchema = z.strictObject({
+const unavailableSessionHistoryObjectSchema = z.object({
     status: z.literal("unavailable"),
     cause: z
-        .strictObject({
+        .object({
             code: z.string().regex(/^[a-z][a-z0-9_]{0,127}$/),
             message: z.string().min(1).max(1_000),
         })

@@ -4,7 +4,7 @@ import { identifierStringSchema } from "./identifier.ts";
 import { sessionEventEnvelopeSchema } from "./session-events.ts";
 
 const sessionRecordingWriteSchema = z
-    .strictObject({
+    .object({
         envelope: sessionEventEnvelopeSchema,
         projectId: identifierStringSchema,
         runtimeId: identifierStringSchema,
@@ -12,14 +12,14 @@ const sessionRecordingWriteSchema = z
     .readonly();
 
 const sessionRecordingEntrySchema = z
-    .strictObject({
+    .object({
         envelope: sessionEventEnvelopeSchema,
         recordedAt: z.iso.datetime({ offset: true }),
     })
     .readonly();
 
 const sessionRecordingSegmentSchema = z
-    .strictObject({
+    .object({
         entries: z.array(sessionRecordingEntrySchema).max(100_000).readonly(),
         recordingEpoch: identifierStringSchema,
         sessionId: identifierStringSchema,
@@ -28,14 +28,14 @@ const sessionRecordingSegmentSchema = z
     .readonly();
 
 const sessionRecordingHistorySchema = z
-    .strictObject({
+    .object({
         segments: z.array(sessionRecordingSegmentSchema).min(1).max(32).readonly(),
         sessionId: identifierStringSchema,
     })
     .readonly();
 
 const sessionRecordingSummarySchema = z
-    .strictObject({
+    .object({
         additionalDirectoryIds: z.array(identifierStringSchema).max(16).readonly(),
         agentId: identifierStringSchema,
         directoryId: z.string().min(1).max(2_048),
@@ -47,7 +47,7 @@ const sessionRecordingSummarySchema = z
     .readonly();
 
 const sessionRecordingDirectorySchema = z
-    .strictObject({
+    .object({
         sessions: z.array(sessionRecordingSummarySchema).max(100_000).readonly(),
     })
     .readonly();

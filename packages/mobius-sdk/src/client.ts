@@ -132,6 +132,7 @@ import {
     type SessionStartedEvent,
     type SessionStatusChangedEvent,
     type SessionUsageUpdatedEvent,
+    UnsupportedProtocolMessageKindError,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
     type WorkspaceEntriesEvent,
@@ -1207,13 +1208,19 @@ export class MobiusClient {
                 try {
                     decodeServiceToDaemonMessage(encoded);
                 } catch (serviceMessageError) {
+                    if (!(serviceMessageError instanceof UnsupportedProtocolMessageKindError)) {
+                        throw serviceMessageError;
+                    }
                     try {
                         decodeDaemonToServiceMessage(encoded);
                     } catch (daemonMessageError) {
-                        throw new AggregateError(
-                            [serviceMessageError, daemonMessageError],
-                            "Relay sent an unsupported message kind",
-                        );
+                        if (!(daemonMessageError instanceof UnsupportedProtocolMessageKindError)) {
+                            throw daemonMessageError;
+                        }
+                        console.warn("Mobius client skipped an unsupported Relay message", {
+                            code: daemonMessageError.code,
+                            messageKind: daemonMessageError.messageKind,
+                        });
                     }
                 }
                 // Runtime control requests use short-lived sibling host sockets. The Relay mirrors those

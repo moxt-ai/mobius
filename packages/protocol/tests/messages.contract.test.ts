@@ -146,7 +146,7 @@ describe("session prompt protocol", () => {
         ).toThrowError(ProtocolMessageError);
     });
 
-    it("Given a prompt contains a remote working directory, When it crosses the protocol boundary, Then the authority override is rejected", () => {
+    it("Given a prompt contains a remote working directory, When it crosses the protocol boundary, Then the authority override is stripped", () => {
         const encoded = JSON.stringify({
             agentId: "codex",
             additionalDirectoryIds: [],
@@ -161,7 +161,7 @@ describe("session prompt protocol", () => {
             sessionId: "session-1",
         });
 
-        expect(() => decodeSessionPromptCommand(encoded)).toThrowError(ProtocolMessageError);
+        expect(decodeSessionPromptCommand(encoded)).not.toHaveProperty("cwd");
     });
 });
 
@@ -182,7 +182,7 @@ describe("agent message protocol", () => {
 });
 
 describe("session cancel protocol", () => {
-    it("Given cancellation contains a remote target override, When it is decoded, Then the untrusted field is rejected", () => {
+    it("Given cancellation contains a remote target override, When it is decoded, Then the untrusted field is stripped", () => {
         const encoded = JSON.stringify({
             commandId: "command-1",
             cwd: "/tmp/untrusted",
@@ -190,7 +190,11 @@ describe("session cancel protocol", () => {
             sessionId: "session-1",
         });
 
-        expect(() => decodeSessionCancelCommand(encoded)).toThrowError(ProtocolMessageError);
+        expect(decodeSessionCancelCommand(encoded)).toEqual({
+            commandId: "command-1",
+            kind: SESSION_CANCEL_KIND,
+            sessionId: "session-1",
+        });
     });
 });
 

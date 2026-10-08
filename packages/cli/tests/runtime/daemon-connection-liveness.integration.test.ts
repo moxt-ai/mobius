@@ -809,7 +809,7 @@ describe("daemon relay connection liveness", () => {
         }
     });
 
-    it("Given a healthy idle daemon connection, When twenty minutes pass, Then the same relay connection remains available", async () => {
+    it("Given a healthy idle daemon connection, When the Relay sends a future event and twenty minutes pass, Then the same connection remains available", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-liveness-"));
         const defaultWorkspace = join(stateDirectory, "workspace");
         await mkdir(defaultWorkspace);
@@ -923,6 +923,7 @@ describe("daemon relay connection liveness", () => {
                 throw new Error("Test relay did not retain the daemon connection");
             }
             const response = readClientFrame(socket);
+            writeServerTextFrame(socket, JSON.stringify({ kind: "session.future.changed", sessionId: "session-1" }));
             writeServerTextFrame(
                 socket,
                 encodeWorkspaceListCommand({

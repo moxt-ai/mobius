@@ -52,12 +52,12 @@ describe("Mobius resource model contract", () => {
             expect(() => transitionTurn(decoded, { kind: "queued" })).toThrowError(
                 expect.objectContaining({ code: "invalid_resource_transition" }),
             );
-            expect(() =>
-                decodeTurn({ ...turn, request: { kind: "not_retained", content: "leaked prompt" }, state }),
-            ).toThrow();
-            expect(() =>
-                decodeTurn({ ...turn, request: { kind: "not_retained", sessionConfigurations: [] }, state }),
-            ).toThrow();
+            expect(
+                decodeTurn({ ...turn, request: { kind: "not_retained", content: "leaked prompt" }, state }).request,
+            ).toEqual({ kind: "not_retained" });
+            expect(
+                decodeTurn({ ...turn, request: { kind: "not_retained", sessionConfigurations: [] }, state }).request,
+            ).toEqual({ kind: "not_retained" });
         }
         for (const state of [
             { kind: "queued" },
@@ -121,8 +121,8 @@ describe("Mobius resource model contract", () => {
         ).toMatchObject({ attemptId: "attempt-a", turnId: "turn-a" });
     });
 
-    it("Given lifecycle records from an untrusted boundary, When state-specific fields conflict, Then decoding rejects the illegal states", () => {
-        expect(() =>
+    it("Given lifecycle records from an untrusted boundary, When state-specific extensions conflict, Then decoding strips them into legal states", () => {
+        expect(
             decodeAttempt({
                 attemptId: "attempt-a",
                 bindingId: "binding-a",
@@ -133,8 +133,8 @@ describe("Mobius resource model contract", () => {
                     startedAt: "2026-09-07T00:00:02.000Z",
                 },
                 turnId: "turn-a",
-            }),
-        ).toThrow();
+            }).state,
+        ).toEqual({ kind: "running", startedAt: "2026-09-07T00:00:02.000Z" });
         expect(() =>
             decodeSession({
                 createdAt: "2026-09-07T00:00:00.000Z",
@@ -149,7 +149,7 @@ describe("Mobius resource model contract", () => {
         ).toThrow();
     });
 
-    it("Given bounded message, tool, and archive records, When the current schemas decode them, Then stable resource identities are accepted and unknown fields are rejected", () => {
+    it("Given bounded message, tool, and archive records, When the current schemas decode them, Then stable resource identities are accepted and unknown fields are stripped", () => {
         expect(
             decodeMessageView({
                 contentArtifactIds: ["artifact-message"],
@@ -199,7 +199,7 @@ describe("Mobius resource model contract", () => {
             },
         } as const;
         expect(decodeArchiveSegment(archive)).toEqual(archive);
-        expect(() => decodeArchiveSegment({ ...archive, unknown: true })).toThrow();
+        expect(decodeArchiveSegment({ ...archive, unknown: true })).toEqual(archive);
     });
 
     it("Given a terminal Attempt, When a caller requests a backward lifecycle transition, Then the explicit transition contract rejects it", () => {

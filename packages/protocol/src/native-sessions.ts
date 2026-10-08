@@ -25,7 +25,7 @@ const envelope = {
     sessionId: identifier,
 };
 const activeTurnActivitySchema = z
-    .strictObject({
+    .object({
         activityId: z.string().min(1).max(128),
         activityType: z.string().min(1).max(128),
         content: z.array(displayContentSchema).max(100).readonly(),
@@ -40,7 +40,7 @@ const activeTurnActivitySchema = z
     })
     .readonly();
 const activeTurnUserMessageSchema = z
-    .strictObject({
+    .object({
         id: identifier,
         images: z.array(promptImageSchema).max(8).readonly().optional(),
         role: z.literal("user"),
@@ -48,7 +48,7 @@ const activeTurnUserMessageSchema = z
     })
     .readonly();
 const activeTurnAssistantMessageSchema = z
-    .strictObject({
+    .object({
         activities: z.array(activeTurnActivitySchema).max(100).readonly().default([]),
         content: z.array(displayContentSchema).max(100).readonly().default([]),
         id: identifier,
@@ -61,7 +61,7 @@ const activeTurnMessageSchema = z.discriminatedUnion("role", [
     activeTurnAssistantMessageSchema,
 ]);
 export const activeTurnSnapshotSchema = z
-    .strictObject({
+    .object({
         commandId: identifier,
         epoch: identifier,
         hasOlder: z.boolean(),
@@ -100,20 +100,20 @@ const identity = {
 };
 
 const nativeSessionRequestSchema = z.discriminatedUnion("action", [
-    z.strictObject({ ...identity, action: z.literal("create") }).readonly(),
-    z.strictObject({ ...identity, action: z.literal("active-turn"), targetSessionId: identifier }).readonly(),
-    z.strictObject({ ...identity, action: z.literal("preview"), entryId: identifier }).readonly(),
-    z.strictObject({ ...identity, action: z.literal("history"), entryId: identifier }).readonly(),
-    z.strictObject({ ...identity, action: z.literal("find"), nativeSessionId: identifier }).readonly(),
+    z.object({ ...identity, action: z.literal("create") }).readonly(),
+    z.object({ ...identity, action: z.literal("active-turn"), targetSessionId: identifier }).readonly(),
+    z.object({ ...identity, action: z.literal("preview"), entryId: identifier }).readonly(),
+    z.object({ ...identity, action: z.literal("history"), entryId: identifier }).readonly(),
+    z.object({ ...identity, action: z.literal("find"), nativeSessionId: identifier }).readonly(),
     z
-        .strictObject({
+        .object({
             ...identity,
             action: z.literal("list"),
             cursor: identifier.nullable(),
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             ...identity,
             action: z.enum(["import", "fork"]),
             entryId: identifier,
@@ -121,7 +121,7 @@ const nativeSessionRequestSchema = z.discriminatedUnion("action", [
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             ...identity,
             action: z.literal("fork-recorded"),
             targetSessionId: identifier,
@@ -129,7 +129,7 @@ const nativeSessionRequestSchema = z.discriminatedUnion("action", [
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             ...identity,
             action: z.literal("delete"),
             entryId: identifier,
@@ -138,20 +138,20 @@ const nativeSessionRequestSchema = z.discriminatedUnion("action", [
 ]);
 export type NativeSessionRequest = z.infer<typeof nativeSessionRequestSchema>;
 const nativeSessionCommandSchema = z.discriminatedUnion("action", [
-    z.strictObject({ ...identity, action: z.literal("create") }).readonly(),
-    z.strictObject({ ...identity, action: z.literal("active-turn"), targetSessionId: identifier }).readonly(),
-    z.strictObject({ ...identity, action: z.literal("preview"), entryId: identifier }).readonly(),
-    z.strictObject({ ...identity, action: z.literal("history"), entryId: identifier }).readonly(),
-    z.strictObject({ ...identity, action: z.literal("find"), nativeSessionId: identifier }).readonly(),
+    z.object({ ...identity, action: z.literal("create") }).readonly(),
+    z.object({ ...identity, action: z.literal("active-turn"), targetSessionId: identifier }).readonly(),
+    z.object({ ...identity, action: z.literal("preview"), entryId: identifier }).readonly(),
+    z.object({ ...identity, action: z.literal("history"), entryId: identifier }).readonly(),
+    z.object({ ...identity, action: z.literal("find"), nativeSessionId: identifier }).readonly(),
     z
-        .strictObject({
+        .object({
             ...identity,
             action: z.literal("list"),
             cursor: identifier.nullable(),
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             ...identity,
             action: z.enum(["import", "fork"]),
             entryId: identifier,
@@ -159,7 +159,7 @@ const nativeSessionCommandSchema = z.discriminatedUnion("action", [
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             ...identity,
             action: z.literal("fork-recorded"),
             targetSessionId: identifier,
@@ -167,7 +167,7 @@ const nativeSessionCommandSchema = z.discriminatedUnion("action", [
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             ...identity,
             action: z.literal("delete"),
             entryId: identifier,
@@ -177,7 +177,7 @@ const nativeSessionCommandSchema = z.discriminatedUnion("action", [
 export type NativeSessionCommand = z.infer<typeof nativeSessionCommandSchema>;
 
 const nativeSessionEntrySchema = z
-    .strictObject({
+    .object({
         entryId: identifier,
         mobiusSessionIds: z.array(identifier).max(500).readonly(),
         nativeSessionId: identifier,
@@ -186,7 +186,7 @@ const nativeSessionEntrySchema = z
         directoryLabel: z.string().min(1).max(2_048),
         updatedAt: z.iso.datetime({ offset: true }).nullable(),
         additionalDirectories: z
-            .array(z.strictObject({ directoryId, name: z.string().min(1).max(255) }).readonly())
+            .array(z.object({ directoryId, name: z.string().min(1).max(255) }).readonly())
             .max(16)
             .readonly(),
     })
@@ -198,16 +198,16 @@ const resultEnvelope = {
     kind: z.literal(NATIVE_SESSION_RESULT_KIND),
 };
 const nativeSessionResultSchema = z.discriminatedUnion("action", [
-    z.strictObject({ ...resultEnvelope, action: z.literal("create"), nativeSessionId: identifier }).readonly(),
+    z.object({ ...resultEnvelope, action: z.literal("create"), nativeSessionId: identifier }).readonly(),
     z
-        .strictObject({
+        .object({
             ...resultEnvelope,
             action: z.literal("active-turn"),
             targetSessionId: identifier,
             queued: z
                 .array(
                     z
-                        .strictObject({
+                        .object({
                             commandId: identifier,
                             prompt: z.string().max(100_000),
                             images: z.array(promptImageSchema).max(8).readonly(),
@@ -219,14 +219,14 @@ const nativeSessionResultSchema = z.discriminatedUnion("action", [
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             ...resultEnvelope,
             action: z.literal("find"),
             entry: nativeSessionEntrySchema,
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             ...resultEnvelope,
             action: z.literal("list"),
             capabilities: sessionCapabilitiesSchema,
@@ -235,7 +235,7 @@ const nativeSessionResultSchema = z.discriminatedUnion("action", [
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             ...resultEnvelope,
             action: z.enum(["import", "fork", "fork-recorded"]),
             targetSessionId: identifier,
@@ -244,7 +244,7 @@ const nativeSessionResultSchema = z.discriminatedUnion("action", [
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             ...resultEnvelope,
             action: z.literal("preview"),
             entryId: identifier,
@@ -255,7 +255,7 @@ const nativeSessionResultSchema = z.discriminatedUnion("action", [
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             ...resultEnvelope,
             action: z.literal("history"),
             entryId: identifier,
@@ -264,7 +264,7 @@ const nativeSessionResultSchema = z.discriminatedUnion("action", [
         })
         .readonly(),
     z
-        .strictObject({
+        .object({
             ...resultEnvelope,
             action: z.literal("delete"),
             entryId: identifier,
@@ -274,9 +274,7 @@ const nativeSessionResultSchema = z.discriminatedUnion("action", [
 ]);
 export type NativeSessionResult = z.infer<typeof nativeSessionResultSchema>;
 
-const nativeSessionCancelSchema = z
-    .strictObject({ ...envelope, kind: z.literal(NATIVE_SESSION_CANCEL_KIND) })
-    .readonly();
+const nativeSessionCancelSchema = z.object({ ...envelope, kind: z.literal(NATIVE_SESSION_CANCEL_KIND) }).readonly();
 export type NativeSessionCancel = z.infer<typeof nativeSessionCancelSchema>;
 function decode<T>(schema: z.ZodType<T>, encoded: string): T {
     try {

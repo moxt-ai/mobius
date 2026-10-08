@@ -145,9 +145,7 @@ describe("ACP session control protocol contract", () => {
                 },
             },
         });
-        expect(() => decodeSessionUsageUpdatedEvent(JSON.stringify({ ...event, used: 50_000 }))).toThrow(
-            ProtocolMessageError,
-        );
+        expect(decodeSessionUsageUpdatedEvent(JSON.stringify({ ...event, used: 50_000 }))).toEqual(event);
         if (event.source !== "prompt" || event._meta?.quota === undefined) {
             throw new Error("Expected prompt quota");
         }
@@ -169,22 +167,16 @@ describe("ACP session control protocol contract", () => {
         }
     });
 
-    it("Given a settings discovery request includes remote Session or directory fields, When decoded, Then the authority overrides are rejected", () => {
+    it("Given a settings discovery request includes remote Session or directory fields, When decoded, Then the authority overrides are stripped", () => {
         const command: AgentSettingsDiscoverCommand = {
             agentId: "codex",
             kind: AGENT_SETTINGS_DISCOVER_KIND,
             model: "codex-1",
             requestId: "settings-1",
         };
-        expect(() =>
-            decodeAgentSettingsDiscoverCommand(JSON.stringify({ ...command, sessionId: "session-1" })),
-        ).toThrowError(ProtocolMessageError);
-        expect(() =>
-            decodeAgentSettingsDiscoverCommand(JSON.stringify({ ...command, retiredId: "retired-1" })),
-        ).toThrowError(ProtocolMessageError);
-        expect(() =>
-            decodeAgentSettingsDiscoverCommand(JSON.stringify({ ...command, directoryId: "default" })),
-        ).toThrowError(ProtocolMessageError);
+        for (const extension of [{ sessionId: "session-1" }, { retiredId: "retired-1" }, { directoryId: "default" }]) {
+            expect(decodeAgentSettingsDiscoverCommand(JSON.stringify({ ...command, ...extension }))).toEqual(command);
+        }
     });
 
     it("Given an incomplete Agent installation command, When the integration-only boundary decodes it, Then the command is rejected before adapter resolution", () => {
@@ -199,8 +191,8 @@ describe("ACP session control protocol contract", () => {
         ).toThrowError(ProtocolMessageError);
     });
 
-    it("Given an integration installation request contains executable configuration, When the local boundary decodes it, Then the request is rejected before adapter resolution", () => {
-        expect(() =>
+    it("Given an integration installation request contains executable configuration, When the local boundary decodes it, Then the executable configuration is stripped before adapter resolution", () => {
+        expect(
             decodeAgentInstallRequestCommand(
                 JSON.stringify({
                     agentId: "codex",
@@ -209,10 +201,10 @@ describe("ACP session control protocol contract", () => {
                     requestId: "install-1",
                 }),
             ),
-        ).toThrowError(ProtocolMessageError);
+        ).toEqual({ agentId: "codex", kind: AGENT_INSTALL_REQUEST_KIND, requestId: "install-1" });
     });
 
-    it("Given a remote client, When it attempts to send an absolute directory, Then the protocol rejects the authority bypass", () => {
+    it("Given a remote client, When it attempts to send an absolute directory, Then the protocol strips the authority bypass", () => {
         const encoded = JSON.stringify({
             additionalDirectoryIds: [],
             agentId: "codex",
@@ -224,7 +216,7 @@ describe("ACP session control protocol contract", () => {
             sessionId: "session-1",
         });
 
-        expect(() => decodeSessionPrepareCommand(encoded)).toThrowError(ProtocolMessageError);
+        expect(decodeSessionPrepareCommand(encoded)).not.toHaveProperty("cwd");
     });
 
     it("Given an active ACP session, When model configuration and context usage change, Then the exact state crosses the relay boundary", () => {

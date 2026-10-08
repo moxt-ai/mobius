@@ -1,9 +1,9 @@
 import { z } from "zod";
 
 export const organizationInviteTokenSchema = z.string().regex(/^[a-f0-9]{64}$/);
-export const organizationInviteRequestSchema = z.strictObject({ token: organizationInviteTokenSchema }).readonly();
+export const organizationInviteRequestSchema = z.object({ token: organizationInviteTokenSchema }).readonly();
 export const organizationInviteSchema = z
-    .strictObject({
+    .object({
         id: z.string().uuid(),
         createdAt: z.number().int().nonnegative(),
         expiresAt: z.number().int().nonnegative(),
@@ -12,13 +12,13 @@ export const organizationInviteSchema = z
     .readonly();
 export const organizationInviteListSchema = z.array(organizationInviteSchema).readonly();
 export const createdOrganizationInviteSchema = z
-    .strictObject({
+    .object({
         ...organizationInviteSchema.unwrap().shape,
         token: organizationInviteTokenSchema,
     })
     .readonly();
 export const organizationInvitePreviewSchema = z
-    .strictObject({
+    .object({
         organizationId: z.string().regex(/^org_[a-zA-Z0-9]+$/),
         organizationName: z.string().min(1).max(256),
         member: z.boolean(),
