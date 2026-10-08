@@ -1,5 +1,5 @@
 import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -7,8 +7,8 @@ import { describe, expect, it } from "vitest";
 import { WorkspaceDirectoryService } from "../../src/authorization/workspace-directory.ts";
 
 describe("machine directory selection", () => {
-    it("Given a paired machine and a default workspace, When the browser browses Home and selects another project, Then accessible canonical directories are available without granting another workspace", async () => {
-        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-workspace-"));
+    it("Given a paired machine and a default workspace, When the browser browses or directly enters a displayed home path, Then accessible canonical directories are available without granting another workspace", async () => {
+        const temporaryDirectory = await mkdtemp(join(homedir(), ".mobius-workspace-"));
         const defaultWorkspace = join(temporaryDirectory, "default");
         const outside = join(temporaryDirectory, "outside");
         await mkdir(join(defaultWorkspace, "apps", "web"), { recursive: true });
@@ -22,6 +22,10 @@ describe("machine directory selection", () => {
             expect(await service.resolve("workspace", "home", signal)).toBe(await realpath(homedir()));
             const listing = await service.list("workspace", "default", signal);
             expect(listing.entries.map((entry) => entry.name)).toEqual(["apps", "escape"]);
+            const enteredDirectoryId = `path-${Buffer.from(listing.directoryLabel, "utf8").toString("base64url")}`;
+            expect(await service.resolve("workspace", enteredDirectoryId, signal)).toBe(
+                await realpath(defaultWorkspace),
+            );
             const linked = listing.entries.find((entry) => entry.name === "escape");
             expect(await service.resolve("workspace", linked?.directoryId ?? "missing", signal)).toBe(
                 await realpath(outside),

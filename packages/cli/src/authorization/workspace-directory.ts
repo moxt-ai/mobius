@@ -36,10 +36,14 @@ function decodePath(value: string, prefix: string): string {
         throw new LocalAuthorizationError("The directory identifier is invalid");
     }
     const decoded = Buffer.from(encoded, "base64url").toString("utf8");
+    const normalized =
+        process.platform === "win32" && decoded.startsWith("~/")
+            ? normalize(decoded).replaceAll("\\", "/")
+            : normalize(decoded);
     if (
         Buffer.from(decoded, "utf8").toString("base64url") !== encoded ||
         decoded.includes("\0") ||
-        normalize(decoded) !== decoded
+        normalized !== decoded
     ) {
         throw new LocalAuthorizationError("The directory identifier is invalid");
     }
@@ -74,6 +78,12 @@ export class WorkspaceDirectoryService {
             const path = decodePath(id, "path-");
             if (isAbsolute(path)) {
                 return path;
+            }
+            if (path === "~") {
+                return homedir();
+            }
+            if (path.startsWith("~/")) {
+                return join(homedir(), path.slice(2));
             }
         }
         throw new LocalAuthorizationError("The directory identifier is invalid");
