@@ -147,6 +147,7 @@ describe("Session Event Log V2 protocol", () => {
             },
         ] as const;
         const page = {
+            daemonGenerationId: "daemon-generation-1",
             events: updates.map((update, index) => event(index + 1, update)),
             nextCursor: null,
             tailCursor: "event-15",
@@ -159,6 +160,7 @@ describe("Session Event Log V2 protocol", () => {
 
     it("Given ACP sends omitted, null, and concrete tool patches, When V2 decodes them, Then field presence remains distinct", () => {
         const page = {
+            daemonGenerationId: "daemon-generation-1",
             events: [
                 event(1, { sessionUpdate: "tool_call_update", toolCallId: "tool-1" }),
                 event(2, { rawOutput: null, sessionUpdate: "tool_call_update", toolCallId: "tool-1" }),
@@ -195,7 +197,7 @@ describe("Session Event Log V2 protocol", () => {
         expect(third.payload.rawOutput).toEqual({ result: "ok" });
     });
 
-    it("Given committed history and an outstanding ACP prompt request, When native recovery crosses the boundary, Then both raw logs remain separate", () => {
+    it("Given loaded and live ACP updates plus a queued prompt, When native recovery crosses the boundary, Then updates share one stream and queued content remains separate", () => {
         const historyEvent = event(1, {
             content: { text: "committed", type: "text" },
             messageId: "message-1",
@@ -207,117 +209,40 @@ describe("Session Event Log V2 protocol", () => {
             sessionUpdate: "agent_message_chunk",
         });
         const recovery = {
-            executingPromptRequest: {
-                attemptId: "attempt-2",
-                commandId: "command-2",
-                epoch: "epoch-2",
-                events: [executingEvent],
-                tailCursor: "event-2",
-                truncated: false,
-            },
-            history: {
-                events: [historyEvent],
+            events: {
+                daemonGenerationId: "daemon-generation-1",
+                events: [historyEvent, executingEvent],
                 nextCursor: "older-message-cursor",
-                tailCursor: "event-1",
+                tailCursor: "event-2",
                 truncated: false,
                 version: 2,
             },
+            queuedPromptRequests: [{ commandId: "command-3", content: [{ text: "queued", type: "text" }] }],
         } as const;
 
         expect(decodeNativeSessionEventsV2(encodeNativeSessionEventsV2(recovery))).toEqual(recovery);
     });
 
-    it("Given prompt execution fails before start or in flight, When lifecycle records cross the V2 boundary, Then their typed code and message remain intact", () => {
-        const page = {
-            events: [
-                {
-                    ...event(1, {
-                        content: { text: "ignored", type: "text" },
-                        sessionUpdate: "agent_message_chunk",
-                    }),
-                    payload: {
-                        commandId: "command-1",
-                        content: [{ text: "hello", type: "text" }],
-                        kind: "prompt.requested",
+    it("Given synthetic lifecycle metadata, When it crosses the V2 event boundary, Then it is rejected", () => {
+        expect(() =>
+            decodeSessionEventLogPageV2({
+                daemonGenerationId: "daemon-generation-1",
+                events: [
+                    {
+                        ...event(1, {
+                            content: { text: "ignored", type: "text" },
+                            sessionUpdate: "agent_message_chunk",
+                        }),
+                        payload: { kind: "session.queue.changed" },
+                        type: "lifecycle-metadata",
                     },
-                    type: "lifecycle-metadata",
-                },
-                {
-                    ...event(2, {
-                        content: { text: "ignored", type: "text" },
-                        sessionUpdate: "agent_message_chunk",
-                    }),
-                    payload: {
-                        code: "directory_unavailable",
-                        commandId: "command-1",
-                        kind: "prompt.failed-before-start",
-                        message: "The selected directory is unavailable",
-                    },
-                    type: "lifecycle-metadata",
-                },
-                {
-                    ...event(3, {
-                        content: { text: "ignored", type: "text" },
-                        sessionUpdate: "agent_message_chunk",
-                    }),
-                    payload: {
-                        attemptId: "attempt-2",
-                        code: "agent_execution_failed",
-                        commandId: "command-2",
-                        kind: "prompt.failed",
-                        message: "The local agent could not complete the request",
-                    },
-                    type: "lifecycle-metadata",
-                },
-            ],
-            nextCursor: null,
-            tailCursor: "event-3",
-            truncated: false,
-            version: 2,
-        } as const;
-
-        expect(decodeSessionEventLogPageV2(encodeSessionEventLogPageV2(page))).toEqual(page);
-    });
-
-    it("Given queue and interaction facts occur during a prompt, When the V2 page crosses the boundary, Then the facts remain typed and ordered", () => {
-        const page = {
-            events: [
-                {
-                    ...event(1, {
-                        content: { text: "ignored", type: "text" },
-                        sessionUpdate: "agent_message_chunk",
-                    }),
-                    payload: { kind: "session.queue.changed" },
-                    type: "lifecycle-metadata",
-                },
-                {
-                    ...event(2, {
-                        content: { text: "ignored", type: "text" },
-                        sessionUpdate: "agent_message_chunk",
-                    }),
-                    payload: {
-                        event: {
-                            commandId: "command-1",
-                            interactionId: "interaction-1",
-                            kind: "session.permission.requested",
-                            options: [{ kind: "allow_once", name: "Allow once", optionId: "allow-once" }],
-                            sessionId: "session-1",
-                            title: "Read the file",
-                            toolCallId: "tool-1",
-                            toolKind: "read",
-                        },
-                        kind: "session.permission.requested",
-                    },
-                    type: "lifecycle-metadata",
-                },
-            ],
-            nextCursor: null,
-            tailCursor: "event-2",
-            truncated: false,
-            version: 2,
-        } as const;
-
-        expect(decodeSessionEventLogPageV2(encodeSessionEventLogPageV2(page))).toEqual(page);
+                ],
+                nextCursor: null,
+                tailCursor: "event-1",
+                truncated: false,
+                version: 2,
+            }),
+        ).toThrow(ProtocolMessageError);
     });
 
     it("Given an invalid or oversized raw ACP update, When it crosses the V2 boundary, Then it is rejected with a typed protocol failure", () => {
@@ -330,6 +255,7 @@ describe("Session Event Log V2 protocol", () => {
         ]) {
             expect(() =>
                 decodeSessionEventLogPageV2({
+                    daemonGenerationId: "daemon-generation-1",
                     events: [
                         {
                             eventId: "event-1",

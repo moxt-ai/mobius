@@ -102,7 +102,7 @@ export interface AcpElicitationResponseOptions {
 export type AcpPromptResult = AgentPromptResponse;
 
 export interface AcpSessionObserver {
-    readonly onAcpUpdate?: (sessionId: string, update: AcpSessionUpdateV2) => Promise<void>;
+    readonly onAcpUpdate?: (sessionId: string, update: AcpSessionUpdateV2, position: number) => Promise<void>;
     readonly onCommands: (event: SessionCommandsUpdatedEvent) => Promise<void>;
     readonly onConfig: (event: SessionConfigUpdatedEvent) => Promise<void>;
     readonly onContent: (event: AgentContentEvent) => Promise<void>;
@@ -115,7 +115,8 @@ export interface AcpSessionObserver {
 }
 
 export class NullAcpSessionObserver implements AcpSessionObserver {
-    readonly onAcpUpdate = (_sessionId: string, _update: AcpSessionUpdateV2): Promise<void> => Promise.resolve();
+    readonly onAcpUpdate = (_sessionId: string, _update: AcpSessionUpdateV2, _position: number): Promise<void> =>
+        Promise.resolve();
     readonly onCommands = (): Promise<void> => Promise.resolve();
     readonly onConfig = (): Promise<void> => Promise.resolve();
     readonly onContent = (): Promise<void> => Promise.resolve();

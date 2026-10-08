@@ -127,8 +127,8 @@ export async function runDaemon(
     );
     await using externalContent = new LocalExternalContentStore(stateDirectory);
     const operations = new DaemonOperationState();
-    const publisher = new DaemonSessionEventPublisher(sessionStore);
-    const eventLogV2 = new DaemonSessionEventLogV2(publisher, sessionStore);
+    const publisher = new DaemonSessionEventPublisher();
+    const eventLogV2 = new DaemonSessionEventLogV2(publisher);
     const activeTurns = new DaemonTurnRegistry(operations);
     const recordSessionEvent = (sessionId: string, event: RecordedSessionEvent): void => {
         publisher.publish(sessionId, activeTurns.recordEvent(event));

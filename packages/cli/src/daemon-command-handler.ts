@@ -170,7 +170,7 @@ export function createDaemonCommandHandler({
                     audit,
                     diagnostics,
                     sessions,
-                    eventLogV2.executingPromptRequest,
+                    eventLogV2,
                     signal,
                 );
                 return;

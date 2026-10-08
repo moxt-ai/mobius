@@ -6,6 +6,51 @@ import { sessionConfiguration } from "./acp-session-settings.ts";
 import { acquireWriter, nativeHistory, readPersistedState, sessions } from "./acp-session-state.ts";
 
 const replayedSessionHistory = new Set<string>();
+
+export function oversizedHistoryUpdate(toolCallId: string) {
+    const image = {
+        data: Buffer.concat([
+            Buffer.from(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+                "base64",
+            ),
+            Buffer.alloc(750_000),
+        ]).toString("base64"),
+        mimeType: "image/png",
+        type: "image" as const,
+    };
+    return {
+        content: [
+            {
+                type: "content" as const,
+                content: {
+                    type: "text" as const,
+                    text: JSON.stringify({ result: { content: [{ type: "text", text: "Generated image" }, image] } }),
+                },
+            },
+            { type: "content" as const, content: image },
+            {
+                type: "content" as const,
+                content: { data: "AQIDBA==", mimeType: "audio/wav", type: "audio" as const },
+            },
+            {
+                type: "content" as const,
+                content: {
+                    resource: {
+                        mimeType: "text/plain",
+                        text: "Generated resource",
+                        uri: "resource:///generated.txt",
+                    },
+                    type: "resource" as const,
+                },
+            },
+        ],
+        rawOutput: { result: { content: [{ type: "text", text: "Generated image" }, image] } },
+        sessionUpdate: "tool_call_update" as const,
+        toolCallId,
+    };
+}
+
 export function registerHistory(agent: ReturnType<typeof acp.agent>) {
     return agent.onRequest(acp.methods.agent.session.load, async (context) => {
         if (process.env["MOBIUS_FAKE_ACP_FAIL_HISTORY_LOAD"] === "1") {
@@ -82,56 +127,9 @@ export function registerHistory(agent: ReturnType<typeof acp.agent>) {
                     },
                 });
                 if (process.env["MOBIUS_FAKE_ACP_OVERSIZED_HISTORY_IMAGE"] === "1") {
-                    const image = {
-                        data: Buffer.concat([
-                            Buffer.from(
-                                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-                                "base64",
-                            ),
-                            Buffer.alloc(750_000),
-                        ]).toString("base64"),
-                        mimeType: "image/png",
-                        type: "image" as const,
-                    };
                     await context.client.notify(acp.methods.client.session.update, {
                         sessionId: context.params.sessionId,
-                        update: {
-                            content: [
-                                {
-                                    type: "content",
-                                    content: {
-                                        type: "text",
-                                        text: JSON.stringify({
-                                            result: { content: [{ type: "text", text: "Generated image" }, image] },
-                                        }),
-                                    },
-                                },
-                                {
-                                    type: "content",
-                                    content: {
-                                        ...image,
-                                    },
-                                },
-                                {
-                                    type: "content",
-                                    content: { data: "AQIDBA==", mimeType: "audio/wav", type: "audio" },
-                                },
-                                {
-                                    type: "content",
-                                    content: {
-                                        resource: {
-                                            mimeType: "text/plain",
-                                            text: "Generated resource",
-                                            uri: "resource:///generated.txt",
-                                        },
-                                        type: "resource",
-                                    },
-                                },
-                            ],
-                            rawOutput: { result: { content: [{ type: "text", text: "Generated image" }, image] } },
-                            sessionUpdate: "tool_call_update",
-                            toolCallId: `tool-${replayId}`,
-                        },
+                        update: oversizedHistoryUpdate(`tool-${replayId}`),
                     });
                 }
                 await context.client.notify(acp.methods.client.session.update, {

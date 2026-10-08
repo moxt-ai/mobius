@@ -1,11 +1,5 @@
 import { z } from "zod";
 import { ProtocolMessageError } from "./codecs/messages.ts";
-import {
-    sessionElicitationRequestedEventSchema,
-    sessionElicitationResolvedEventSchema,
-    sessionPermissionRequestedEventSchema,
-    sessionPermissionResolvedEventSchema,
-} from "./control-messages.ts";
 import { identifierStringSchema as identifier } from "./identifier.ts";
 
 const MAX_EVENT_COUNT = 10_000;
@@ -393,58 +387,9 @@ export const acpSessionUpdateV2Schema = z.discriminatedUnion("sessionUpdate", [
 ]);
 export type AcpSessionUpdateV2 = z.infer<typeof acpSessionUpdateV2Schema>;
 
-const lifecycleBase = { commandId: identifier };
-export const lifecycleMetadataV2Schema = z.discriminatedUnion("kind", [
-    z.object({ kind: z.literal("session.queue.changed") }).readonly(),
-    z
-        .object({ event: sessionPermissionRequestedEventSchema, kind: z.literal("session.permission.requested") })
-        .readonly(),
-    z
-        .object({ event: sessionPermissionResolvedEventSchema, kind: z.literal("session.permission.resolved") })
-        .readonly(),
-    z
-        .object({
-            event: sessionElicitationRequestedEventSchema,
-            kind: z.literal("session.elicitation.requested"),
-        })
-        .readonly(),
-    z
-        .object({ event: sessionElicitationResolvedEventSchema, kind: z.literal("session.elicitation.resolved") })
-        .readonly(),
-    z
-        .object({
-            ...lifecycleBase,
-            content: z.array(contentBlockV2Schema).min(1).max(100).readonly(),
-            kind: z.literal("prompt.requested"),
-        })
-        .readonly(),
-    z
-        .object({ ...lifecycleBase, attemptId: identifier, epoch: identifier, kind: z.literal("prompt.started") })
-        .readonly(),
-    z.object({ ...lifecycleBase, kind: z.literal("prompt.completed"), stopReason: shortString }).readonly(),
-    z
-        .object({
-            ...lifecycleBase,
-            code: identifier,
-            kind: z.literal("prompt.failed-before-start"),
-            message: z.string().min(1).max(500),
-        })
-        .readonly(),
-    z
-        .object({
-            ...lifecycleBase,
-            attemptId: identifier,
-            code: identifier,
-            kind: z.literal("prompt.failed"),
-            message: z.string().min(1).max(500),
-        })
-        .readonly(),
-]);
-export type LifecycleMetadataV2 = z.infer<typeof lifecycleMetadataV2Schema>;
-export const sessionEventPayloadV2Schema = z.discriminatedUnion("type", [
-    z.object({ payload: acpSessionUpdateV2Schema, type: z.literal("acp") }).readonly(),
-    z.object({ payload: lifecycleMetadataV2Schema, type: z.literal("lifecycle-metadata") }).readonly(),
-]);
+export const sessionEventPayloadV2Schema = z
+    .object({ payload: acpSessionUpdateV2Schema, type: z.literal("acp") })
+    .readonly();
 export type SessionEventPayloadV2 = z.infer<typeof sessionEventPayloadV2Schema>;
 const positionSchema = z.string().regex(/^(0|[1-9][0-9]*)$/);
 const provenanceSchema = z.discriminatedUnion("kind", [
@@ -473,16 +418,9 @@ const sessionEventFieldsV2 = {
     recordedAt: z.iso.datetime({ offset: true }),
     sessionId: identifier,
 };
-export const sessionEventV2Schema = z.discriminatedUnion("type", [
-    z.object({ ...sessionEventFieldsV2, payload: acpSessionUpdateV2Schema, type: z.literal("acp") }).readonly(),
-    z
-        .object({
-            ...sessionEventFieldsV2,
-            payload: lifecycleMetadataV2Schema,
-            type: z.literal("lifecycle-metadata"),
-        })
-        .readonly(),
-]);
+export const sessionEventV2Schema = z
+    .object({ ...sessionEventFieldsV2, payload: acpSessionUpdateV2Schema, type: z.literal("acp") })
+    .readonly();
 export type SessionEventV2 = z.infer<typeof sessionEventV2Schema>;
 const sessionExportV2Schema = z
     .object({
@@ -540,6 +478,7 @@ export const sessionEventEnvelopeV2Schema = z
 export type SessionEventEnvelopeV2 = z.infer<typeof sessionEventEnvelopeV2Schema>;
 export const sessionEventLogPageV2Schema = z
     .object({
+        daemonGenerationId: identifier,
         events: z.array(sessionEventV2Schema).max(MAX_EVENT_COUNT).readonly(),
         nextCursor: z.string().min(1).max(512).nullable(),
         tailCursor: z.string().max(512),
@@ -552,21 +491,17 @@ export const nativeEventPageRequestV2Schema = z
     .object({ cursor: z.string().min(1).max(512).nullable(), eventLimit: z.number().int().min(1).max(10_000) })
     .readonly();
 export type NativeEventPageRequestV2 = z.infer<typeof nativeEventPageRequestV2Schema>;
-const executingPromptRequestEventLogV2Schema = z
+const queuedPromptRequestEventLogV2Schema = z
     .object({
-        attemptId: identifier,
         commandId: identifier,
-        epoch: identifier,
-        events: z.array(sessionEventV2Schema).max(MAX_EVENT_COUNT).readonly(),
-        tailCursor: z.string().max(512),
-        truncated: z.boolean(),
+        content: z.array(contentBlockV2Schema).min(1).max(100).readonly(),
     })
     .readonly();
-export type ExecutingPromptRequestEventLogV2 = z.infer<typeof executingPromptRequestEventLogV2Schema>;
+export type QueuedPromptRequestEventLogV2 = z.infer<typeof queuedPromptRequestEventLogV2Schema>;
 export const nativeSessionEventsV2Schema = z
     .object({
-        executingPromptRequest: executingPromptRequestEventLogV2Schema.nullable(),
-        history: sessionEventLogPageV2Schema,
+        events: sessionEventLogPageV2Schema,
+        queuedPromptRequests: z.array(queuedPromptRequestEventLogV2Schema).max(MAX_COLLECTION_SIZE).readonly(),
     })
     .readonly();
 export type NativeSessionEventsV2 = z.infer<typeof nativeSessionEventsV2Schema>;

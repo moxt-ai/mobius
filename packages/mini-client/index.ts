@@ -17,12 +17,16 @@ import {
 import { MobiusAppCredentialProvider, MobiusPlatformAppClient } from "@moxt-ai/mobius-sdk/platform";
 import {
     MobiusClient,
+    type MobiusLiveEventSubscription,
     type MobiusLiveEventSubscriptionV2,
+    type MobiusLiveSessionEventObserver,
     type MobiusLiveSessionEventObserverV2,
     MobiusPageRequest,
     MobiusRecordingPolicy,
     MobiusRuntimePairingRequest,
     MobiusSessionImportBinding,
+    MobiusTurnCompletedEvent,
+    MobiusTurnFailedEvent,
     StaticMobiusCredentialProvider,
     WsTransport,
 } from "@moxt-ai/mobius-sdk/server";
@@ -696,35 +700,27 @@ async function nativeEventsV2(
             signal,
         );
         pages.push(page);
-        cursor = page.history.nextCursor;
+        cursor = page.events.nextCursor;
     } while (cursor !== null && pages.length < 100);
     const newest = pages[0];
     if (newest === undefined) {
         throw new MiniClientError("event_log_unavailable", "The Runtime returned no V2 event-log page");
     }
-    const events = pages.toReversed().flatMap((page) => page.history.events);
+    const events = pages.toReversed().flatMap((page) => page.events.events);
+    if (pages.some((page) => page.events.daemonGenerationId !== newest.events.daemonGenerationId)) {
+        throw new MiniClientError("event_log_generation_changed", "The Runtime restarted while history was loading");
+    }
     return {
-        executingPromptRequest: newest.executingPromptRequest,
-        history: {
+        events: {
+            daemonGenerationId: newest.events.daemonGenerationId,
             events,
             nextCursor: cursor,
             tailCursor: events.at(-1)?.eventId ?? "",
             truncated: cursor !== null,
             version: 2,
         },
+        queuedPromptRequests: newest.queuedPromptRequests,
     };
-}
-
-function terminalV2(event: SessionEventV2): boolean {
-    if (event.type !== "lifecycle-metadata") {
-        return false;
-    }
-    const payload = event.payload;
-    return (
-        payload.kind === "prompt.completed" ||
-        payload.kind === "prompt.failed" ||
-        payload.kind === "prompt.failed-before-start"
-    );
 }
 
 async function getCommand(directory: string, flags: ReadonlyMap<string, string>): Promise<void> {
@@ -736,6 +732,7 @@ async function getCommand(directory: string, flags: ReadonlyMap<string, string>)
     const service = connection.service;
     const signal = shutdown.signal;
     let subscription: MobiusLiveEventSubscriptionV2 | undefined;
+    let lifecycleSubscription: MobiusLiveEventSubscription | undefined;
     try {
         if (!follow) {
             output({ events: await nativeEventsV2(service, session, signal), sessionId: session.sessionId });
@@ -745,10 +742,7 @@ async function getCommand(directory: string, flags: ReadonlyMap<string, string>)
         const observer: MobiusLiveSessionEventObserverV2 = {
             reconcile: async (liveConnection) => {
                 const events = await nativeEventsV2(service, session, signal);
-                for (const event of events.history.events) {
-                    seen.add(event.eventId);
-                }
-                for (const event of events.executingPromptRequest?.events ?? []) {
+                for (const event of events.events.events) {
                     seen.add(event.eventId);
                 }
                 output({ connection: liveConnection.kind, events, sessionId: session.sessionId });
@@ -759,13 +753,26 @@ async function getCommand(directory: string, flags: ReadonlyMap<string, string>)
                 }
                 seen.add(event.eventId);
                 output({ event, sessionId: session.sessionId });
-                return !terminalV2(event);
+                return true;
             },
         };
         subscription = await service.events.subscribeLiveV2(session.sessionId, observer, signal);
-        await subscription.completed;
+        const terminal = Promise.withResolvers<void>();
+        const lifecycleObserver: MobiusLiveSessionEventObserver = {
+            reconcile: () => Promise.resolve(),
+            receive: async ({ payload }) => {
+                if (payload instanceof MobiusTurnCompletedEvent || payload instanceof MobiusTurnFailedEvent) {
+                    terminal.resolve();
+                    return false;
+                }
+                return true;
+            },
+        };
+        lifecycleSubscription = await service.events.subscribeLive(session.sessionId, lifecycleObserver, signal);
+        await Promise.race([subscription.completed, lifecycleSubscription.completed, terminal.promise]);
     } finally {
         subscription?.close();
+        lifecycleSubscription?.close();
         connection.close();
     }
 }

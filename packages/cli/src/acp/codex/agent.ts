@@ -333,6 +333,14 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 if (isCompactPrompt(context.params.prompt)) {
                     return await this.#compact(context.signal);
                 }
+                const messageId = crypto.randomUUID();
+                for (const content of context.params.prompt) {
+                    await this.#emit({
+                        content,
+                        messageId,
+                        sessionUpdate: "user_message_chunk",
+                    });
+                }
                 return await this.#runTurn(promptInput(context.params.prompt), context.signal);
             })
             .onRequest(

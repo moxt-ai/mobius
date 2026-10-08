@@ -16,6 +16,154 @@ import { CodexFixture } from "../support/agents/codex.ts";
 import { withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 
+test("Given real Codex advances between repeated prompts, When V2 recovery paginates the active stream, Then every ACP update remains ordered without reconciliation", async () => {
+    const activeEntered = Promise.withResolvers<void>();
+    const queuedEntered = Promise.withResolvers<void>();
+    const releaseActive = Promise.withResolvers<void>();
+    const releaseQueued = Promise.withResolvers<void>();
+    let responseNumber = 0;
+    await using provider = await FakeOpenAiProvider.start("mobius-test-model", "BOUNDARY_REPLY", {
+        beforeFirstText: async () => {
+            responseNumber += 1;
+            if (responseNumber === 1) {
+                activeEntered.resolve();
+                await releaseActive.promise;
+            } else if (responseNumber === 2) {
+                queuedEntered.resolve();
+                await releaseQueued.promise;
+            }
+        },
+    });
+    await using codex = await CodexFixture.create(provider);
+    try {
+        await withRealDaemon(new CodexAgentSpecification(), codex.environment, async (peer) => {
+            const active = randomUUID();
+            const queued = randomUUID();
+            const repeatedPrompt = "Use two shell tools successfully, then reply BOUNDARY_REPLY";
+            const prompt = (
+                commandId: string,
+                disposition: "queue" | "reject",
+                targetCommandId: string,
+                text = `Reply to ${commandId}`,
+            ): void =>
+                peer.send(
+                    encodeSessionPromptCommand({
+                        additionalDirectoryIds: [],
+                        agentId: "codex",
+                        bindingId: peer.bindingId,
+                        commandId,
+                        directoryId: "default",
+                        disposition,
+                        images: [],
+                        kind: "session.prompt",
+                        prompt: text,
+                        resources: [],
+                        sessionId: peer.sessionId,
+                        targetCommandId,
+                    }),
+                );
+
+            prompt(active, SessionPromptDisposition.Reject, "", repeatedPrompt);
+            await activeEntered.promise;
+            prompt(queued, SessionPromptDisposition.Queue, active, repeatedPrompt);
+            for (;;) {
+                const message = await peer.nextMessage();
+                if (decodeMessageKind(message) === "session.queued") {
+                    expect(decodeSessionQueuedEvent(message).commandId).toBe(queued);
+                    break;
+                }
+            }
+
+            releaseActive.resolve();
+            await queuedEntered.promise;
+            const requestId = randomUUID();
+            peer.send(
+                encodeSessionLiveHistoryV2PageLoad({
+                    additionalDirectoryIds: [],
+                    agentId: "codex",
+                    bindingId: peer.bindingId,
+                    cursor: null,
+                    directoryId: "default",
+                    eventLimit: 1,
+                    kind: "session.live-history.v2.page.load",
+                    requestId,
+                    sessionId: peer.sessionId,
+                }),
+            );
+            for (;;) {
+                const message = await peer.nextMessage();
+                if (decodeMessageKind(message) !== "session.live-history.v2.page.loaded") {
+                    continue;
+                }
+                const result = decodeSessionLiveHistoryV2PageLoaded(message);
+                if (result.requestId !== requestId) {
+                    continue;
+                }
+                expect(result.events.queuedPromptRequests).toEqual([]);
+                const daemonGenerationId = result.events.events.daemonGenerationId;
+                const historyEvents = [...result.events.events.events];
+                let cursor = result.events.events.nextCursor;
+                while (cursor !== null) {
+                    const olderRequestId = randomUUID();
+                    peer.send(
+                        encodeSessionLiveHistoryV2PageLoad({
+                            additionalDirectoryIds: [],
+                            agentId: "codex",
+                            bindingId: peer.bindingId,
+                            cursor,
+                            directoryId: "default",
+                            eventLimit: 1,
+                            kind: "session.live-history.v2.page.load",
+                            requestId: olderRequestId,
+                            sessionId: peer.sessionId,
+                        }),
+                    );
+                    for (;;) {
+                        const olderMessage = await peer.nextMessage();
+                        if (decodeMessageKind(olderMessage) !== "session.live-history.v2.page.loaded") {
+                            continue;
+                        }
+                        const older = decodeSessionLiveHistoryV2PageLoaded(olderMessage);
+                        if (older.requestId !== olderRequestId) {
+                            continue;
+                        }
+                        expect(older.events.events.daemonGenerationId).toBe(daemonGenerationId);
+                        historyEvents.unshift(...older.events.events.events);
+                        cursor = older.events.events.nextCursor;
+                        break;
+                    }
+                }
+                expect(
+                    historyEvents.filter(
+                        (event) =>
+                            event.payload.sessionUpdate === "user_message_chunk" &&
+                            event.payload.content.type === "text" &&
+                            event.payload.content.text === repeatedPrompt,
+                    ),
+                ).toHaveLength(2);
+                expect(historyEvents.map((event) => event.eventId)).toEqual(
+                    historyEvents.map((event) => event.eventId).toSorted(),
+                );
+                expect(historyEvents.every((event) => event.eventId.startsWith(`event-${daemonGenerationId}-`))).toBe(
+                    true,
+                );
+                break;
+            }
+            releaseQueued.resolve();
+            for (;;) {
+                const event = decodeRecordedSessionEvent(await peer.nextEvent());
+                if (event.kind === "session.completed" && event.commandId === queued) {
+                    expect(event.stopReason).toBe("end_turn");
+                    break;
+                }
+            }
+        });
+    } finally {
+        releaseActive.resolve();
+        releaseQueued.resolve();
+    }
+});
+
 test("Given real Codex with an active turn, When three follow-ups are accepted and the middle one is cancelled, Then the remaining prompts execute in FIFO order without depending on the original turn", async () => {
     const entered = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
@@ -81,14 +229,12 @@ test("Given real Codex with an active turn, When three follow-ups are accepted a
                 if (decodeMessageKind(message) !== "session.live-history.v2.page.loaded") {
                     continue;
                 }
-                const executing = decodeSessionLiveHistoryV2PageLoaded(message).events.executingPromptRequest;
-                expect(
-                    executing?.events.flatMap((event) =>
-                        event.type === "lifecycle-metadata" && event.payload.kind === "prompt.requested"
-                            ? [event.payload.commandId]
-                            : [],
-                    ),
-                ).toEqual([active, first, cancelled, last]);
+                const recovered = decodeSessionLiveHistoryV2PageLoaded(message).events;
+                expect(recovered.queuedPromptRequests).toEqual([
+                    expect.objectContaining({ commandId: first }),
+                    expect.objectContaining({ commandId: cancelled }),
+                    expect.objectContaining({ commandId: last }),
+                ]);
                 break;
             }
             peer.send(

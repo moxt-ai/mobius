@@ -113,6 +113,7 @@ describe("Session Event Log V2 SDK", () => {
                     response.setHeader("content-type", "application/json");
                     response.end(
                         JSON.stringify({
+                            daemonGenerationId: "daemon-generation-1",
                             events: [sourceEvent],
                             nextCursor: null,
                             tailCursor: sourceEvent.eventId,
@@ -153,6 +154,7 @@ describe("Session Event Log V2 SDK", () => {
 
         try {
             expect(await client.events.listV2("source-session", new MobiusPageRequest(50, ""), signal)).toEqual({
+                daemonGenerationId: "daemon-generation-1",
                 events: [sourceEvent],
                 nextCursor: null,
                 tailCursor: sourceEvent.eventId,
