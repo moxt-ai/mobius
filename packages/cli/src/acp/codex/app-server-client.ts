@@ -5,7 +5,7 @@ import { type AcpEndpointTermination, acpEndpointTerminationError } from "../in-
 import { decodeAppServerMessage } from "./app-server-protocol.ts";
 
 const INITIALIZE_TIMEOUT_MILLISECONDS = 30_000;
-const OUTPUT_LIMIT_BYTES = 32 * 1_024 * 1_024;
+const MESSAGE_OUTPUT_LIMIT_BYTES = 32 * 1_024 * 1_024;
 
 /** A failure in the Codex app-server boundary, reported with a stable code. */
 export class CodexAppServerError extends AcpExecutionError {
@@ -52,8 +52,8 @@ export class CodexAppServerClient {
         kind: "open",
     };
     #nextRequestId = 1;
-    #pendingBuffer = "";
-    #receivedBytes = 0;
+    #pendingBytes = 0;
+    #pendingFragments: string[] = [];
 
     constructor(options: CodexAppServerOptions) {
         this.#handlers = options.handlers;
@@ -135,24 +135,39 @@ export class CodexAppServerClient {
             return;
         }
         try {
-            this.#receivedBytes += Buffer.byteLength(chunk);
-            if (this.#receivedBytes > OUTPUT_LIMIT_BYTES) {
-                throw new CodexAppServerError(
-                    "codex_app_server_output_limit",
-                    "The Codex app-server produced too much output",
-                );
-            }
-            this.#pendingBuffer += chunk;
-            let newline = this.#pendingBuffer.indexOf("\n");
+            let cursor = 0;
+            let newline = chunk.indexOf("\n");
             while (newline >= 0) {
-                const line = this.#pendingBuffer.slice(0, newline);
-                this.#pendingBuffer = this.#pendingBuffer.slice(newline + 1);
-                newline = this.#pendingBuffer.indexOf("\n");
+                const fragment = chunk.slice(cursor, newline);
+                const lineBytes = this.#pendingBytes + Buffer.byteLength(fragment);
+                if (lineBytes > MESSAGE_OUTPUT_LIMIT_BYTES) {
+                    throw new CodexAppServerError(
+                        "codex_app_server_output_limit",
+                        "The Codex app-server produced an oversized message",
+                    );
+                }
+                const line =
+                    this.#pendingFragments.length === 0 ? fragment : [...this.#pendingFragments, fragment].join("");
+                this.#pendingBytes = 0;
+                this.#pendingFragments = [];
+                cursor = newline + 1;
+                newline = chunk.indexOf("\n", cursor);
                 if (line.trim().length === 0) {
                     continue;
                 }
                 const value: unknown = JSON.parse(line);
                 this.#dispatch(decodeAppServerMessage(value));
+            }
+            const remainder = chunk.slice(cursor);
+            if (remainder.length > 0) {
+                this.#pendingBytes += Buffer.byteLength(remainder);
+                if (this.#pendingBytes > MESSAGE_OUTPUT_LIMIT_BYTES) {
+                    throw new CodexAppServerError(
+                        "codex_app_server_output_limit",
+                        "The Codex app-server produced an oversized message",
+                    );
+                }
+                this.#pendingFragments.push(remainder);
             }
         } catch (error) {
             this.#fail(

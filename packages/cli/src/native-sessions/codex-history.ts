@@ -616,8 +616,8 @@ async function readCodexHistoryWithOptions(
           };
     let state: ReadState = { kind: "initializing", requestId: 1 };
     const seenCursors = new Set<string>();
-    let pending = "";
-    let receivedBytes = 0;
+    let pendingBytes = 0;
+    let pendingFragments: string[] = [];
     const fail = (cause: unknown): void =>
         response.reject(
             cause instanceof AcpExecutionError
@@ -633,20 +633,23 @@ async function readCodexHistoryWithOptions(
     };
     const onData = (chunk: string): void => {
         try {
-            receivedBytes += Buffer.byteLength(chunk);
-            if (receivedBytes > 32 * 1_024 * 1_024) {
-                throw new AcpExecutionError(
-                    "This saved conversation is too large to preview.",
-                    {},
-                    "native_history_too_large",
-                );
-            }
-            pending += chunk;
-            let newline = pending.indexOf("\n");
+            let cursor = 0;
+            let newline = chunk.indexOf("\n");
             while (newline >= 0) {
-                const line = pending.slice(0, newline);
-                pending = pending.slice(newline + 1);
-                newline = pending.indexOf("\n");
+                const fragment = chunk.slice(cursor, newline);
+                const lineBytes = pendingBytes + Buffer.byteLength(fragment);
+                if (lineBytes > 32 * 1_024 * 1_024) {
+                    throw new AcpExecutionError(
+                        "This saved conversation is too large to preview.",
+                        {},
+                        "native_history_too_large",
+                    );
+                }
+                const line = pendingFragments.length === 0 ? fragment : [...pendingFragments, fragment].join("");
+                pendingBytes = 0;
+                pendingFragments = [];
+                cursor = newline + 1;
+                newline = chunk.indexOf("\n", cursor);
                 if (line.trim().length === 0) {
                     continue;
                 }
@@ -744,6 +747,18 @@ async function readCodexHistoryWithOptions(
                         throw new Error(`Unknown history read state: ${String(unhandled)}`);
                     }
                 }
+            }
+            const remainder = chunk.slice(cursor);
+            if (remainder.length > 0) {
+                pendingBytes += Buffer.byteLength(remainder);
+                if (pendingBytes > 32 * 1_024 * 1_024) {
+                    throw new AcpExecutionError(
+                        "This saved conversation is too large to preview.",
+                        {},
+                        "native_history_too_large",
+                    );
+                }
+                pendingFragments.push(remainder);
             }
         } catch (cause) {
             fail(cause);
