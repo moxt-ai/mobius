@@ -15,7 +15,7 @@ overrides:
 
 allowBuilds:
   '@clerk/shared': true
-  better-sqlite3: true
+  better-sqlite3: false
   esbuild: true
   simple-git-hooks: true
   workerd: true

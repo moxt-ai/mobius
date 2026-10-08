@@ -1,12 +1,11 @@
 import { chmodSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { decodeSessionEventV2, type SessionEventV2 } from "@moxt-ai/mobius-protocol";
-import Database from "better-sqlite3";
 import { and, asc, desc, eq } from "drizzle-orm";
-import { type BetterSQLite3Database, drizzle } from "drizzle-orm/better-sqlite3";
+import { drizzle, type NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
 import { z } from "zod";
 import { acpSessionStoreMigrations } from "../generated/acp-session-store-migrations.ts";
-import * as schema from "../schema/acp-session-store/index.ts";
 import { acpSession, deletedAcpSession, sessionEventV2 } from "../schema/acp-session-store/index.ts";
 
 export class AcpStoredSession {
@@ -178,23 +177,21 @@ function decodeStoredSession(value: unknown): AcpStoredSession {
 }
 
 export class SqliteAcpSessionStore implements AcpSessionStore {
-    readonly #database: BetterSQLite3Database<typeof schema>;
-    readonly #sqliteDatabase: Database.Database;
+    readonly #database: NodeSQLiteDatabase;
+    readonly #sqliteDatabase: DatabaseSync;
 
     constructor(path: string) {
         mkdirSync(dirname(path), { mode: 0o700, recursive: true });
-        this.#sqliteDatabase = new Database(path);
+        this.#sqliteDatabase = new DatabaseSync(path);
         chmodSync(path, 0o600);
         this.#migrate();
-        this.#database = drizzle(this.#sqliteDatabase, { schema });
+        this.#database = drizzle({ client: this.#sqliteDatabase });
     }
 
     readonly #migrate = (): void => {
         const version = z
-            .number()
-            .int()
-            .nonnegative()
-            .parse(this.#sqliteDatabase.pragma("user_version", { simple: true }));
+            .object({ user_version: z.number().int().nonnegative() })
+            .parse(this.#sqliteDatabase.prepare("PRAGMA user_version").get()).user_version;
         if (version > acpSessionStoreMigrations.length) {
             this.#sqliteDatabase.close();
             throw new Error("The ACP Session database was created by a newer Mobius version");
@@ -207,12 +204,23 @@ export class SqliteAcpSessionStore implements AcpSessionStore {
             this.#sqliteDatabase.exec("BEGIN IMMEDIATE");
             try {
                 this.#sqliteDatabase.exec(migration.sql);
-                this.#sqliteDatabase.pragma(`user_version = ${index + 1}`);
+                this.#sqliteDatabase.exec(`PRAGMA user_version = ${index + 1}`);
                 this.#sqliteDatabase.exec("COMMIT");
             } catch (error) {
                 this.#sqliteDatabase.exec("ROLLBACK");
                 throw error;
             }
+        }
+    };
+
+    readonly #transaction = (operation: () => void): void => {
+        this.#sqliteDatabase.exec("BEGIN IMMEDIATE");
+        try {
+            operation();
+            this.#sqliteDatabase.exec("COMMIT");
+        } catch (error) {
+            this.#sqliteDatabase.exec("ROLLBACK");
+            throw error;
         }
     };
 
@@ -237,10 +245,10 @@ export class SqliteAcpSessionStore implements AcpSessionStore {
     };
 
     readonly startExecutingPromptEventsV2 = (sessionId: string, events: readonly SessionEventV2[]): void => {
-        this.#database.transaction((transaction) => {
-            transaction.delete(sessionEventV2).where(eq(sessionEventV2.sessionId, sessionId)).run();
+        this.#transaction(() => {
+            this.#database.delete(sessionEventV2).where(eq(sessionEventV2.sessionId, sessionId)).run();
             for (const event of events) {
-                transaction
+                this.#database
                     .insert(sessionEventV2)
                     .values({
                         eventId: event.eventId,
@@ -271,14 +279,14 @@ export class SqliteAcpSessionStore implements AcpSessionStore {
             .where(and(eq(acpSession.agentId, agentId), eq(acpSession.nativeSessionId, nativeSessionId)))
             .all()
             .map((row) => sessionIdRowSchema.parse(row).sessionId);
-        this.#database.transaction((transaction) => {
-            transaction
+        this.#transaction(() => {
+            this.#database
                 .delete(acpSession)
                 .where(and(eq(acpSession.agentId, agentId), eq(acpSession.nativeSessionId, nativeSessionId)))
                 .run();
             for (const id of ids) {
-                transaction.insert(deletedAcpSession).values({ sessionId: id }).onConflictDoNothing().run();
-                transaction.delete(sessionEventV2).where(eq(sessionEventV2.sessionId, id)).run();
+                this.#database.insert(deletedAcpSession).values({ sessionId: id }).onConflictDoNothing().run();
+                this.#database.delete(sessionEventV2).where(eq(sessionEventV2.sessionId, id)).run();
             }
         });
         return ids;
@@ -308,9 +316,9 @@ export class SqliteAcpSessionStore implements AcpSessionStore {
             .map((row) => decodeSessionEventV2(row.eventJson));
 
     readonly remove = (sessionId: string): void => {
-        this.#database.transaction((transaction) => {
-            transaction.delete(acpSession).where(eq(acpSession.sessionId, sessionId)).run();
-            transaction.delete(sessionEventV2).where(eq(sessionEventV2.sessionId, sessionId)).run();
+        this.#transaction(() => {
+            this.#database.delete(acpSession).where(eq(acpSession.sessionId, sessionId)).run();
+            this.#database.delete(sessionEventV2).where(eq(sessionEventV2.sessionId, sessionId)).run();
         });
     };
 
@@ -326,9 +334,9 @@ export class SqliteAcpSessionStore implements AcpSessionStore {
             title: session.title,
             updatedAt: session.updatedAt,
         };
-        this.#database.transaction((transaction) => {
-            transaction.delete(deletedAcpSession).where(eq(deletedAcpSession.sessionId, session.sessionId)).run();
-            transaction
+        this.#transaction(() => {
+            this.#database.delete(deletedAcpSession).where(eq(deletedAcpSession.sessionId, session.sessionId)).run();
+            this.#database
                 .insert(acpSession)
                 .values(value)
                 .onConflictDoUpdate({
