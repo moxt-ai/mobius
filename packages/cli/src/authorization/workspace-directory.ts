@@ -30,6 +30,11 @@ function encodePath(path: string): string {
     return `path-${encoded}`;
 }
 
+function expandCurrentUserHome(path: string): string {
+    // Adapted from https://github.com/sindresorhus/untildify/blob/main/index.js.
+    return path.replace(/^~(?=$|\/|\\)/, homedir());
+}
+
 function decodePath(value: string, prefix: string): string {
     const encoded = value.slice(prefix.length);
     if (encoded.length === 0 || encoded.length > 2_000 || !/^[a-zA-Z0-9_-]+$/.test(encoded)) {
@@ -75,15 +80,9 @@ export class WorkspaceDirectoryService {
             return homedir();
         }
         if (id.startsWith("path-")) {
-            const path = decodePath(id, "path-");
+            const path = expandCurrentUserHome(decodePath(id, "path-"));
             if (isAbsolute(path)) {
                 return path;
-            }
-            if (path === "~") {
-                return homedir();
-            }
-            if (path.startsWith("~/")) {
-                return join(homedir(), path.slice(2));
             }
         }
         throw new LocalAuthorizationError("The directory identifier is invalid");
