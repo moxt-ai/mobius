@@ -259,6 +259,7 @@ class ControlledAgentState {
                 name: output.title,
                 rawInput: {},
                 rawOutput: output.output,
+                content: [...output.content],
                 sessionUpdate: "tool_call",
                 status: "completed",
                 title: output.title,

@@ -1,3 +1,5 @@
+import type { ToolCallContent } from "@agentclientprotocol/sdk";
+
 export type HarnessOutput =
     | { readonly kind: "text"; readonly text: string }
     | { readonly kind: "file"; readonly name: string }
@@ -5,7 +7,14 @@ export type HarnessOutput =
           readonly kind: "activity";
           readonly title: string;
           readonly output: string;
-          readonly activityType: "reasoning" | "tool";
+          readonly activityType: "reasoning";
+      }
+    | {
+          readonly kind: "activity";
+          readonly title: string;
+          readonly output: string;
+          readonly activityType: "tool";
+          readonly content: readonly ToolCallContent[];
       };
 
 export interface HarnessReplyPlan {
