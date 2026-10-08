@@ -65,8 +65,8 @@ jobs:
           @anthropic-ai/claude-code@2.1.273
           @agentclientprotocol/claude-agent-acp@0.73.0
           opencode-ai@1.18.29
-          @earendil-works/pi-coding-agent@0.85.0
-          pi-acp@0.0.33
+          @earendil-works/pi-coding-agent@1.1.0
+          pi-acp@0.0.34
       - run: pnpm test:agent-daemon:real
 
   deploy-cloudflare-platform:
