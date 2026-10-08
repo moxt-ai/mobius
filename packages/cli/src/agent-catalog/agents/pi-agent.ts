@@ -26,7 +26,7 @@ export class PiAgentSpecification extends BridgedAcpAgentDefinition {
     readonly agentOverrideVariable = "MOBIUS_PI_PATH";
     readonly id = "pi";
     readonly label = "Pi";
-    override readonly minimumSupportedAgentVersion = PI_AGENT_PACKAGE.version;
+    override readonly minimumSupportedAgentVersion = "0.85.0";
     override readonly maximumTestedAgentVersion = PI_AGENT_PACKAGE.version;
     readonly managedAdapterExecutablePath = [
         "adapters",
