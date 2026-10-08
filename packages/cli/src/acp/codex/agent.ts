@@ -38,7 +38,7 @@ import {
     turnSteerResponseSchema,
     type UserInputQuestion,
 } from "./app-server-protocol.ts";
-import { agentMessageMeta, decodeThreadItem, reasoningText, toolCallUpdate } from "./items.ts";
+import { decodeThreadItem, reasoningText, toolCallUpdate } from "./items.ts";
 import { CodexSettings } from "./settings.ts";
 
 const APPROVAL_REASON_CHARACTER_LIMIT = 500;
@@ -147,6 +147,18 @@ function steeringPromptInput(prompt: readonly unknown[]): readonly unknown[] {
 interface ActiveTurn {
     readonly completion: PromiseWithResolvers<PromptResponse>;
     readonly turn: { id: string };
+}
+
+function agentMessageUpdate(
+    messageId: string,
+    text: string,
+    phase: "commentary" | "final_answer" | null | undefined,
+): SessionNotification["update"] {
+    return {
+        content: { text, type: "text" },
+        messageId,
+        sessionUpdate: phase === "commentary" ? "agent_thought_chunk" : "agent_message_chunk",
+    };
 }
 
 function userInputSchema(questions: readonly UserInputQuestion[]): unknown {
@@ -421,12 +433,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                     continue;
                 }
                 if (item.type === "agentMessage") {
-                    await this.#emit({
-                        _meta: agentMessageMeta(item.phase),
-                        content: { text: item.text, type: "text" },
-                        messageId: item.id,
-                        sessionUpdate: "agent_message_chunk",
-                    });
+                    await this.#emit(agentMessageUpdate(item.id, item.text, item.phase));
                     continue;
                 }
                 const update = toolCallUpdate(item, "snapshot");
@@ -589,12 +596,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 const phase = this.#agentMessages.get(decoded.data.itemId)?.phase;
                 this.#agentMessages.set(decoded.data.itemId, { phase, kind: "streaming" });
                 await this.#enqueue(async () => {
-                    await this.#emit({
-                        _meta: agentMessageMeta(phase),
-                        content: { text: decoded.data.delta, type: "text" },
-                        messageId: decoded.data.itemId,
-                        sessionUpdate: "agent_message_chunk",
-                    });
+                    await this.#emit(agentMessageUpdate(decoded.data.itemId, decoded.data.delta, phase));
                 });
             }
             return;
@@ -619,12 +621,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 return;
             }
             await this.#enqueue(async () => {
-                await this.#emit({
-                    _meta: agentMessageMeta(item.phase),
-                    content: { text: item.text, type: "text" },
-                    messageId: item.id,
-                    sessionUpdate: "agent_message_chunk",
-                });
+                await this.#emit(agentMessageUpdate(item.id, item.text, item.phase));
             });
             return;
         }
