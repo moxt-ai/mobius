@@ -1,7 +1,7 @@
 import { PairingDirectoryError } from "../entity/pairing/pairing.ts";
 import { RequestBodyError, readBoundedUtf8Body } from "./bounded-request-body.ts";
 
-const MAX_REQUEST_BODY_LENGTH = 16 * 1024;
+const MAX_REQUEST_BODY_LENGTH = 256 * 1024;
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
