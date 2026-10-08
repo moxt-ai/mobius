@@ -441,14 +441,7 @@ async function listSessionsCommand(directory: string): Promise<void> {
     const connection = client(state);
     const service = connection.service;
     try {
-        const sessions = [];
-        let cursor = "";
-        do {
-            const page = await service.sessions.list(new MobiusPageRequest(100, cursor), operationSignal());
-            sessions.push(...page.sessions);
-            cursor = page.nextCursor;
-        } while (cursor.length > 0);
-        output({ sessions });
+        output({ sessions: await service.runtimes.listSessions(state.runtimeId, 500, operationSignal()) });
     } finally {
         connection.close();
     }

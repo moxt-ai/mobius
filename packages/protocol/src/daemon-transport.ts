@@ -56,6 +56,7 @@ import {
     decodeSessionPrepareCommand,
     decodeSessionQueryCommand,
     decodeSessionReadyEvent,
+    decodeSessionStatusChangedEvent,
     decodeSessionsListedEvent,
     decodeSessionsQueriedEvent,
     decodeWorkspaceEntriesEvent,
@@ -86,6 +87,7 @@ import {
     encodeSessionPrepareCommand,
     encodeSessionQueryCommand,
     encodeSessionReadyEvent,
+    encodeSessionStatusChangedEvent,
     encodeSessionsListedEvent,
     encodeSessionsQueriedEvent,
     encodeWorkspaceEntriesEvent,
@@ -105,6 +107,7 @@ import {
     SESSION_QUERIED_KIND,
     SESSION_QUERY_KIND,
     SESSION_READY_KIND,
+    SESSION_STATUS_CHANGED_KIND,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
 } from "./control-messages.ts";
@@ -360,6 +363,11 @@ const daemonToServiceSignatures = {
         SESSION_QUERIED_KIND,
         encodeSessionsQueriedEvent,
         decodeSessionsQueriedEvent,
+    ),
+    [SESSION_STATUS_CHANGED_KIND]: defineMessageSignature(
+        SESSION_STATUS_CHANGED_KIND,
+        encodeSessionStatusChangedEvent,
+        decodeSessionStatusChangedEvent,
     ),
     [SESSION_QUEUED_KIND]: defineMessageSignature(
         SESSION_QUEUED_KIND,

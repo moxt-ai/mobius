@@ -12,6 +12,7 @@ export const SESSION_LIST_KIND = "session.list";
 export const SESSION_LISTED_KIND = "session.listed";
 export const SESSION_QUERY_KIND = "session.query";
 export const SESSION_QUERIED_KIND = "session.queried";
+export const SESSION_STATUS_CHANGED_KIND = "session.status.changed";
 export const SESSION_CONFIGURE_KIND = "session.configure";
 export const SESSION_CONFIG_UPDATED_KIND = "session.config.updated";
 export const SESSION_USAGE_UPDATED_KIND = "session.usage.updated";
@@ -58,6 +59,28 @@ const workspaceEntrySchema = z
 
 export type WorkspaceEntry = z.infer<typeof workspaceEntrySchema>;
 
+const sessionStatusSchema = z.discriminatedUnion("kind", [
+    z.strictObject({ kind: z.literal("idle") }).readonly(),
+    z
+        .strictObject({
+            commandId: IDENTIFIER,
+            kind: z.literal("working"),
+        })
+        .readonly(),
+]);
+
+export type SessionStatus = z.infer<typeof sessionStatusSchema>;
+
+const sessionStatusChangedEventSchema = z
+    .strictObject({
+        kind: z.literal(SESSION_STATUS_CHANGED_KIND),
+        sessionId: IDENTIFIER,
+        status: sessionStatusSchema,
+    })
+    .readonly();
+
+export type SessionStatusChangedEvent = z.infer<typeof sessionStatusChangedEventSchema>;
+
 const sessionMetadataSchema = z
     .strictObject({
         additionalDirectories: z.array(workspaceEntrySchema).max(16).readonly(),
@@ -66,6 +89,7 @@ const sessionMetadataSchema = z
         directoryLabel: z.string().min(1).max(2_048),
         prompted: z.boolean(),
         sessionId: IDENTIFIER,
+        status: sessionStatusSchema,
         title: z.string().max(500),
         updatedAt: z.iso.datetime({ offset: true }),
     })
@@ -1014,6 +1038,10 @@ export const decodeSessionsQueriedEvent = (encoded: string): SessionsQueriedEven
     decode(encoded, sessionsQueriedEventSchema);
 export const encodeSessionsQueriedEvent = (message: SessionsQueriedEvent): string =>
     encode(message, sessionsQueriedEventSchema);
+export const decodeSessionStatusChangedEvent = (encoded: string): SessionStatusChangedEvent =>
+    decode(encoded, sessionStatusChangedEventSchema);
+export const encodeSessionStatusChangedEvent = (message: SessionStatusChangedEvent): string =>
+    encode(message, sessionStatusChangedEventSchema);
 export const decodeSessionPrepareCommand = (encoded: string): SessionPrepareCommand =>
     decode(encoded, sessionPrepareCommandSchema);
 export const encodeSessionPrepareCommand = (message: SessionPrepareCommand): string =>

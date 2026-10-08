@@ -44,6 +44,8 @@ export type {
     SessionRecordingEntry,
     SessionRecordingHistory,
     SessionRecordingSummary,
+    SessionStatus,
+    SessionStatusChangedEvent,
     SessionUsageUpdatedEvent,
     TurnRequest,
     WorkspaceEntriesEvent,

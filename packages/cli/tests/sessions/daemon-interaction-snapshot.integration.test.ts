@@ -10,6 +10,7 @@ import {
     decodeSessionElicitationRequestedEvent,
     decodeSessionEventEnvelope,
     decodeSessionPermissionRequestedEvent,
+    decodeSessionStatusChangedEvent,
     decodeSessionsQueriedEvent,
     encodeNativeSessionRequest,
     encodeSessionElicitationRespondCommand,
@@ -27,6 +28,7 @@ import {
     SESSION_PERMISSION_RESOLVED_KIND,
     SESSION_QUERIED_KIND,
     SESSION_READY_KIND,
+    SESSION_STATUS_CHANGED_KIND,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { listen, port } from "@moxt-ai/mobius-test/websocket";
@@ -134,6 +136,11 @@ test("Given an Agent was inspected transiently, When its first Turn materializes
             }),
         );
         await messages.nextKind(SESSION_READY_KIND);
+        expect(decodeSessionStatusChangedEvent(await messages.nextKind(SESSION_STATUS_CHANGED_KIND))).toEqual({
+            kind: SESSION_STATUS_CHANGED_KIND,
+            sessionId,
+            status: { commandId: "interaction_turn", kind: "working" },
+        });
         const snapshot = async (requestId: string) => {
             socket.send(
                 encodeNativeSessionRequest({
@@ -194,6 +201,11 @@ test("Given an Agent was inspected transiently, When its first Turn materializes
             turn: { interaction: null },
         });
         await writeFile(join(stateDirectory, "agent", "resume-after-elicitation"), "");
+        expect(decodeSessionStatusChangedEvent(await messages.nextKind(SESSION_STATUS_CHANGED_KIND))).toEqual({
+            kind: SESSION_STATUS_CHANGED_KIND,
+            sessionId,
+            status: { kind: "idle" },
+        });
         await messages.nextKind(SESSION_COMPLETED_KIND);
     } finally {
         cancellation.abort();
@@ -268,6 +280,7 @@ test("Given a real daemon prepared a Session, When Platform queries its metadata
                     agentId: "codex",
                     prompted: false,
                     sessionId,
+                    status: { kind: "idle" },
                     title: "Untitled session",
                 },
             ],
