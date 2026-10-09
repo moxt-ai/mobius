@@ -36,8 +36,22 @@ const embeddedImageSchema = z.looseObject({
     mimeType: z.string(),
 });
 
+const inlineImageUrlSchema = z
+    .string()
+    .regex(/^data:image\/(?:png|jpeg|gif|webp);base64,/u)
+    .transform((url) => ({
+        type: "image" as const,
+        data: url.slice(url.indexOf(",") + 1),
+        mimeType: url.slice(5, url.indexOf(";")),
+    }));
+
 const toolImageSchema = z.union([
     embeddedImageSchema,
+    z
+        .object({ type: z.literal("file"), mime: z.string(), url: inlineImageUrlSchema })
+        .refine(({ mime, url }) => mime === url.mimeType)
+        .transform(({ url }) => url),
+    z.object({ type: z.literal("inputImage"), imageUrl: inlineImageUrlSchema }).transform(({ imageUrl }) => imageUrl),
     z
         .object({
             type: z.literal("image"),

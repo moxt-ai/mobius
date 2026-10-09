@@ -24,20 +24,22 @@ import { AuditStore } from "../../../src/audit/audit-store.ts";
 import { createDaemonConfig, DaemonLocalContext } from "../../../src/config.ts";
 import { runDaemon } from "../../../src/run-daemon.ts";
 
+export interface RealDaemonPeer {
+    readonly send: (message: string) => void;
+    readonly sessionId: string;
+    readonly workspace: string;
+    readonly bindingId: string;
+    readonly readDiagnostics: () => Promise<string>;
+    readonly signal: AbortSignal;
+    readonly nextEvent: () => Promise<string>;
+    readonly nextMessage: () => Promise<string>;
+}
+
 /** Production daemon and discovery; the peer only sends and observes the public protocol. */
 export async function withRealDaemon(
     specification: LocalAgentSpecification,
     environment: Readonly<Record<string, string>>,
-    scenario: (peer: {
-        readonly send: (message: string) => void;
-        readonly sessionId: string;
-        readonly workspace: string;
-        readonly bindingId: string;
-        readonly readDiagnostics: () => Promise<string>;
-        readonly signal: AbortSignal;
-        readonly nextEvent: () => Promise<string>;
-        readonly nextMessage: () => Promise<string>;
-    }) => Promise<void>,
+    scenario: (peer: RealDaemonPeer) => Promise<void>,
 ): Promise<void> {
     const directory = await mkdtemp(join(tmpdir(), `mobius-real-${specification.id}-`));
     const workspace = join(directory, "workspace");
