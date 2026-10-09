@@ -51,7 +51,6 @@ import {
     SESSION_CANCEL_KIND,
     SESSION_CONFIGURE_KIND,
     SESSION_ELICITATION_RESPOND_KIND,
-    SESSION_EVENT_KIND,
     SESSION_EVENT_V2_KIND,
     SESSION_FAILED_KIND,
     SESSION_LIST_KIND,
@@ -206,12 +205,8 @@ export class ChannelActor {
     ): Promise<void> => {
         try {
             const kind = message.kind;
-            if (kind === SESSION_EVENT_KIND) {
-                this.#liveEvents.receive(message);
-                return;
-            }
             if (kind === SESSION_EVENT_V2_KIND) {
-                this.broadcast(this.#peers.hosts(), encodeDaemonToServiceMessage(message));
+                this.#liveEvents.receive(message);
                 return;
             }
             if (kind === NATIVE_SESSION_RESULT_KIND) {

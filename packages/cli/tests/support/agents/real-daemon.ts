@@ -6,7 +6,7 @@ import { join } from "node:path";
 import {
     decodeMessageKind,
     decodeRuntimeHeartbeatEvent,
-    decodeSessionEventEnvelope,
+    decodeSessionEventEnvelopeV2,
     decodeSessionReadyEvent,
     encodeRuntimeHeartbeatAckEvent,
     encodeRuntimeLivenessReadyEvent,
@@ -137,8 +137,8 @@ export async function withRealDaemon(
             nextEvent: async () => {
                 for (;;) {
                     const message = await nextMessage();
-                    if (decodeMessageKind(message) === "session.event") {
-                        return decodeSessionEventEnvelope(message).payload;
+                    if (decodeMessageKind(message) === "session.event.v2") {
+                        return JSON.stringify(decodeSessionEventEnvelopeV2(message).event);
                     }
                 }
             },

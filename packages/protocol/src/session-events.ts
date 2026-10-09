@@ -1,4 +1,4 @@
-import { z } from "zod";
+import type { z } from "zod";
 import {
     decodeAgentActivityEvent,
     decodeAgentActivityNarrationEvent,
@@ -42,7 +42,6 @@ import {
     type SessionReadyEvent,
     type SessionUsageUpdatedEvent,
 } from "./control-messages.ts";
-import { identifierStringSchema } from "./identifier.ts";
 import {
     AGENT_ACTIVITY_KIND,
     AGENT_ACTIVITY_NARRATION_KIND,
@@ -57,40 +56,8 @@ import {
     type SessionFailedEvent,
     type SessionStartedEvent,
 } from "./messages.ts";
-export const SESSION_EVENT_KIND = "session.event";
-export const SESSION_FORKED_KIND = "session.forked";
-
-const MAX_RECORDED_EVENT_LENGTH = 8 * 1024 * 1024;
-
-export const sessionEventEnvelopeSchema = z
-    .object({
-        kind: z.literal(SESSION_EVENT_KIND),
-        payload: z.string().min(2).max(MAX_RECORDED_EVENT_LENGTH),
-        sessionId: identifierStringSchema,
-    })
-    .readonly();
-
-export type SessionEventEnvelope = z.infer<typeof sessionEventEnvelopeSchema>;
-
-export const SESSION_QUEUE_CHANGED_KIND = "session.queue.changed";
-const sessionQueueChangedSchema = z
-    .object({ kind: z.literal(SESSION_QUEUE_CHANGED_KIND), sessionId: identifierStringSchema })
-    .readonly();
-export type SessionQueueChangedEvent = z.infer<typeof sessionQueueChangedSchema>;
-
-const sessionForkedSchema = z
-    .object({
-        kind: z.literal(SESSION_FORKED_KIND),
-        sessionId: identifierStringSchema,
-        sourceSessionId: identifierStringSchema,
-        throughCommandId: identifierStringSchema,
-    })
-    .readonly();
-export type SessionForkedEvent = z.infer<typeof sessionForkedSchema>;
 
 export type RecordedSessionEvent =
-    | SessionQueueChangedEvent
-    | SessionForkedEvent
     | AgentActivityEvent
     | AgentActivityNarrationEvent
     | AgentContentEvent
@@ -108,7 +75,7 @@ export type RecordedSessionEvent =
     | SessionStartedEvent
     | SessionUsageUpdatedEvent;
 
-function decode<T>(encoded: string, schema: z.ZodType<T>): T {
+function _decode<T>(encoded: string, schema: z.ZodType<T>): T {
     let value: unknown;
     try {
         value = JSON.parse(encoded);
@@ -124,7 +91,7 @@ function decode<T>(encoded: string, schema: z.ZodType<T>): T {
     return decoded.data;
 }
 
-const encode = <T>(message: T, schema: z.ZodType<T>): string => {
+const _encode = <T>(message: T, schema: z.ZodType<T>): string => {
     const decoded = schema.safeParse(message);
     if (!decoded.success) {
         throw new ProtocolMessageError("Message does not match its schema", {
@@ -134,19 +101,9 @@ const encode = <T>(message: T, schema: z.ZodType<T>): string => {
     return JSON.stringify(decoded.data);
 };
 
-export const decodeSessionEventEnvelope = (encoded: string): SessionEventEnvelope =>
-    decode(encoded, sessionEventEnvelopeSchema);
-
-export const encodeSessionEventEnvelope = (message: SessionEventEnvelope): string =>
-    encode(message, sessionEventEnvelopeSchema);
-
 export function decodeRecordedSessionEvent(encoded: string): RecordedSessionEvent {
     const kind = decodeMessageKind(encoded);
     switch (kind) {
-        case SESSION_QUEUE_CHANGED_KIND:
-            return decode(encoded, sessionQueueChangedSchema);
-        case SESSION_FORKED_KIND:
-            return decode(encoded, sessionForkedSchema);
         case AGENT_ACTIVITY_KIND:
             return decodeAgentActivityEvent(encoded);
         case AGENT_ACTIVITY_NARRATION_KIND:
@@ -186,11 +143,3 @@ export function decodeRecordedSessionEvent(encoded: string): RecordedSessionEven
 
 export const encodeRecordedSessionEvent = (event: RecordedSessionEvent): string =>
     JSON.stringify(decodeRecordedSessionEvent(JSON.stringify(event)));
-
-export function validateSessionEventEnvelope(envelope: SessionEventEnvelope): RecordedSessionEvent {
-    const event = decodeRecordedSessionEvent(envelope.payload);
-    if (event.sessionId !== envelope.sessionId) {
-        throw new ProtocolMessageError("Session event payload does not match its envelope");
-    }
-    return event;
-}

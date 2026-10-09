@@ -15,6 +15,13 @@ import {
 } from "../src/index.ts";
 
 describe("daemon transport protocol", () => {
+    it("Given the retired live event envelope, When a daemon sends it, Then the transport rejects it", () => {
+        expect(() =>
+            decodeDaemonToServiceMessage(
+                JSON.stringify({ kind: "session.event", sessionId: "session", payload: "{}" }),
+            ),
+        ).toThrow();
+    });
     it.each(["delete", "fork-recorded"])(
         "Given the removed native %s operation, When a remote client sends it, Then the daemon protocol rejects it",
         (action) => {

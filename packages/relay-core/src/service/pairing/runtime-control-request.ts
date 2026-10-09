@@ -14,7 +14,7 @@ import {
     decodeSessionCompletedEvent,
     decodeSessionConfigUpdatedEvent,
     decodeSessionElicitationResolvedEvent,
-    decodeSessionEventEnvelope,
+    decodeSessionEventEnvelopeV2,
     decodeSessionFailedEvent,
     decodeSessionLiveHistoryV2PageLoaded,
     decodeSessionOperationFailedEvent,
@@ -60,6 +60,57 @@ import {
     type WorkspaceListCommand,
 } from "@moxt-ai/mobius-protocol";
 import { SessionRuntimeError } from "../../entity/do/session.ts";
+
+function commandReply(encoded: string, prompt = ""): string | null {
+    if (decodeMessageKind(encoded) !== "session.event.v2") {
+        return encoded;
+    }
+    const event = decodeSessionEventEnvelopeV2(encoded).event;
+    if (event.type !== "lifecycle-metadata") {
+        return null;
+    }
+    const payload = event.payload;
+    switch (payload.kind) {
+        case "prompt.started":
+            return JSON.stringify({
+                kind: "session.started",
+                sessionId: event.sessionId,
+                commandId: payload.commandId,
+                attemptId: payload.attemptId,
+                epoch: payload.epoch,
+                sequence: 0,
+                prompt,
+            });
+        case "prompt.completed":
+            return JSON.stringify({
+                kind: "session.completed",
+                sessionId: event.sessionId,
+                commandId: payload.commandId,
+                stopReason: payload.stopReason,
+            });
+        case "prompt.failed":
+        case "prompt.failed-before-start":
+            return JSON.stringify({
+                kind: "session.failed",
+                sessionId: event.sessionId,
+                commandId: payload.commandId,
+                code: payload.code,
+                message: payload.message,
+            });
+        case "session.permission.requested":
+        case "session.permission.resolved":
+        case "session.elicitation.requested":
+        case "session.elicitation.resolved":
+            return JSON.stringify(payload.event);
+        case "prompt.requested":
+        case "session.queue.changed":
+            return null;
+        default: {
+            const unsupported: never = payload;
+            return unsupported;
+        }
+    }
+}
 
 export type RuntimeControlCommand =
     | RuntimePingCommand
@@ -261,10 +312,10 @@ export async function requestRuntimeAgentSettings(
                     if (typeof event.data !== "string") {
                         return;
                     }
-                    const raw =
-                        decodeMessageKind(event.data) === "session.event"
-                            ? decodeSessionEventEnvelope(event.data).payload
-                            : event.data;
+                    const raw = commandReply(event.data);
+                    if (raw === null) {
+                        return;
+                    }
                     const kind = decodeMessageKind(raw);
                     if (kind === "runtime.status") {
                         if (!decodeRuntimeStatusEvent(raw).online) {
@@ -349,10 +400,10 @@ export async function requestRuntimeControl(
                     if (typeof event.data !== "string") {
                         return;
                     }
-                    const raw =
-                        decodeMessageKind(event.data) === "session.event"
-                            ? decodeSessionEventEnvelope(event.data).payload
-                            : event.data;
+                    const raw = commandReply(event.data, command.kind === "session.prompt" ? command.prompt : "");
+                    if (raw === null) {
+                        return;
+                    }
                     const kind = decodeMessageKind(raw);
                     if (kind === "runtime.status") {
                         if (!decodeRuntimeStatusEvent(raw).online) {
@@ -468,10 +519,10 @@ export async function requestRuntimeWorkspace(
                     if (typeof event.data !== "string") {
                         return;
                     }
-                    const raw =
-                        decodeMessageKind(event.data) === "session.event"
-                            ? decodeSessionEventEnvelope(event.data).payload
-                            : event.data;
+                    const raw = commandReply(event.data);
+                    if (raw === null) {
+                        return;
+                    }
                     const kind = decodeMessageKind(raw);
                     if (kind === "session.failed") {
                         const failed = decodeSessionFailedEvent(raw);

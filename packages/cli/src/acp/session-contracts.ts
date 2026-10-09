@@ -3,6 +3,7 @@ import type {
     AgentPromptResponse,
     ContentBlockV2,
     NativeSessionHistory,
+    PromptExecutionContextV2,
     PromptImage,
     PromptResource,
     SessionCapabilities,
@@ -65,6 +66,7 @@ export interface AcpConfigureOptions extends AcpPrepareOptions {
 export interface AcpPromptContentOptions {
     readonly images: readonly PromptImage[];
     readonly lifecycleV2?: {
+        readonly context?: PromptExecutionContextV2;
         readonly attemptId: string;
         readonly content: readonly ContentBlockV2[];
         readonly epoch: string;
@@ -74,6 +76,7 @@ export interface AcpPromptContentOptions {
 }
 
 export interface AcpTurnOptions extends AcpPrepareOptions, AcpPromptContentOptions {
+    readonly cancellationRequested?: () => boolean;
     readonly commandId: string;
     readonly disposition?: string;
     readonly onActivity: (activity: AcpActivity) => Promise<void>;

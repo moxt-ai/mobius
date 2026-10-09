@@ -1,8 +1,6 @@
 import {
+    type DaemonToServiceMessage,
     encodeDaemonToServiceMessage,
-    encodeRecordedSessionEvent,
-    type RecordedSessionEvent,
-    SESSION_EVENT_KIND,
     SESSION_EVENT_V2_KIND,
     type SessionEventV2,
     type SessionStatusChangedEvent,
@@ -29,16 +27,18 @@ export class DaemonSessionEventPublisher {
         this.#socket = null;
     };
 
-    readonly publish = (sessionId: string, event: RecordedSessionEvent): void => {
+    readonly publishOperationFailure = (sessionId: string, requestId: string, code: string, message: string): void => {
+        this.#send({ kind: "session.operation.failed", sessionId, requestId, code, message });
+    };
+    readonly publishStatus = (event: SessionStatusChangedEvent): void => this.#send(event);
+    readonly publishV2 = (event: SessionEventV2): void => this.#send({ event, kind: SESSION_EVENT_V2_KIND });
+
+    readonly #send = (message: DaemonToServiceMessage): void => {
         const socket = this.#socket;
         if (socket === null || socket.readyState !== WebSocket.OPEN) {
             return;
         }
-        const encoded = encodeDaemonToServiceMessage({
-            kind: SESSION_EVENT_KIND,
-            payload: encodeRecordedSessionEvent(event),
-            sessionId,
-        });
+        const encoded = encodeDaemonToServiceMessage(message);
         if (socket.bufferedAmount + Buffer.byteLength(encoded, "utf8") > MAX_BUFFERED_BYTES) {
             socket.close(1013, "Live event transport overloaded");
             return;
@@ -46,47 +46,7 @@ export class DaemonSessionEventPublisher {
         try {
             socket.send(encoded);
         } catch {
-            // Socket liveness owns reconnection. Missed events are not delivery work.
-        }
-    };
-
-    readonly publishBatch = (sessionId: string, events: readonly RecordedSessionEvent[]): void => {
-        for (const event of events) {
-            this.publish(sessionId, event);
-        }
-    };
-
-    readonly publishStatus = (event: SessionStatusChangedEvent): void => {
-        const socket = this.#socket;
-        if (socket === null || socket.readyState !== WebSocket.OPEN) {
-            return;
-        }
-        const encoded = encodeDaemonToServiceMessage(event);
-        if (socket.bufferedAmount + Buffer.byteLength(encoded, "utf8") > MAX_BUFFERED_BYTES) {
-            socket.close(1013, "Live event transport overloaded");
-            return;
-        }
-        try {
-            socket.send(encoded);
-        } catch {
-            // Socket liveness owns reconnection. The Session directory provides recovery snapshots.
-        }
-    };
-
-    readonly publishV2 = (event: SessionEventV2): void => {
-        const socket = this.#socket;
-        if (socket === null || socket.readyState !== WebSocket.OPEN) {
-            return;
-        }
-        const encoded = encodeDaemonToServiceMessage({ event, kind: SESSION_EVENT_V2_KIND });
-        if (socket.bufferedAmount + Buffer.byteLength(encoded, "utf8") > MAX_BUFFERED_BYTES) {
-            socket.close(1013, "Live event transport overloaded");
-            return;
-        }
-        try {
-            socket.send(encoded);
-        } catch {
-            // Socket liveness owns reconnection. Missed events are recovered from the local cache.
+            /* Connection liveness owns reconnection; live messages are not retried. */
         }
     };
 }

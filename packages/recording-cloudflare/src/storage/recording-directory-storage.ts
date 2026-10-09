@@ -1,114 +1,42 @@
-import {
-    conversationTitleFromText,
-    isIdentifier,
-    type RecordedSessionEvent,
-    type SessionRecordingDirectory,
-    type SessionRecordingWrite,
-} from "@moxt-ai/mobius-protocol";
+import { isIdentifier, type SessionRecordingDirectory, type SessionRecordingSummary } from "@moxt-ai/mobius-protocol";
 import { and, desc, eq } from "drizzle-orm";
-import { type DrizzleSqliteDODatabase, drizzle } from "drizzle-orm/durable-sqlite";
+import { drizzle } from "drizzle-orm/durable-sqlite";
 import { recordingDirectoryDurableObjectMigrations } from "../generated/recording-directory-do-migrations.ts";
 import * as schema from "../schema/recording-directory-do/index.ts";
 import { recordingSessionSummary } from "../schema/recording-directory-do/index.ts";
 import { applyDurableObjectMigrations } from "./durable-object-migrations.ts";
 
-type RecordingDirectoryDatabase = DrizzleSqliteDODatabase<typeof schema>;
-type RecordingDirectoryEvent = Extract<
-    RecordedSessionEvent,
-    {
-        readonly kind: "session.completed" | "session.failed" | "session.forked" | "session.ready" | "session.started";
-    }
->;
-
-function decodeAdditionalDirectoryIds(encoded: string): readonly string[] {
-    const value: unknown = JSON.parse(encoded);
-    if (!Array.isArray(value) || !value.every((entry): entry is string => isIdentifier(entry))) {
-        throw new Error("Recording stored invalid additional directory identifiers");
-    }
-    return value;
-}
-
 export class RecordingDirectoryStorage {
-    readonly #database: RecordingDirectoryDatabase;
-    readonly #storage: DurableObjectStorage;
-
+    readonly #database;
     constructor(storage: DurableObjectStorage) {
         applyDurableObjectMigrations(storage, recordingDirectoryDurableObjectMigrations);
         this.#database = drizzle(storage, { schema });
-        this.#storage = storage;
     }
-
-    readonly record = (write: SessionRecordingWrite, event: RecordingDirectoryEvent, recordedAt: number): void => {
-        this.#storage.transactionSync(() => {
-            const existing = this.#database
-                .select()
-                .from(recordingSessionSummary)
-                .where(eq(recordingSessionSummary.sessionId, write.envelope.sessionId))
-                .get();
-            if (event.kind === "session.ready") {
-                const values = {
-                    additionalDirectoryIdsJson: JSON.stringify(
-                        event.additionalDirectories.map((directory) => directory.directoryId),
-                    ),
-                    agentId: event.agentId,
-                    directoryId: event.directoryId,
-                    runtimeId: write.runtimeId,
-                    sessionId: write.envelope.sessionId,
-                    prompted: existing?.prompted ?? false,
-                    title: existing?.title ?? "",
-                    updatedAt: Math.max(existing?.updatedAt ?? 0, recordedAt),
-                };
-                this.#database
-                    .insert(recordingSessionSummary)
-                    .values(values)
-                    .onConflictDoUpdate({
-                        set: values,
-                        target: recordingSessionSummary.sessionId,
-                    })
-                    .run();
-                return;
-            }
-            if (event.kind === "session.forked") {
-                if (existing === undefined) {
-                    throw new Error("The forked Session is not ready");
-                }
-                const source = this.#database
-                    .select({ title: recordingSessionSummary.title })
-                    .from(recordingSessionSummary)
-                    .where(eq(recordingSessionSummary.sessionId, event.sourceSessionId))
-                    .get();
-                if (source === undefined) {
-                    throw new Error("The fork source is not in the Recording directory");
-                }
-                this.#database
-                    .update(recordingSessionSummary)
-                    .set({
-                        prompted: true,
-                        title: source.title,
-                        updatedAt: Math.max(existing.updatedAt, recordedAt),
-                    })
-                    .where(eq(recordingSessionSummary.sessionId, write.envelope.sessionId))
-                    .run();
-                return;
-            }
-            if (existing === undefined) {
-                return;
-            }
-            this.#database
-                .update(recordingSessionSummary)
-                .set({
-                    prompted: event.kind === "session.started" || existing.prompted,
-                    title:
-                        event.kind === "session.started" && existing.title.length === 0
-                            ? conversationTitleFromText(event.prompt)
-                            : existing.title,
-                    updatedAt: Math.max(existing.updatedAt, recordedAt),
-                })
-                .where(eq(recordingSessionSummary.sessionId, write.envelope.sessionId))
-                .run();
-        });
+    readonly find = (sessionId: string): SessionRecordingSummary | null => {
+        const row = this.#database
+            .select()
+            .from(recordingSessionSummary)
+            .where(eq(recordingSessionSummary.sessionId, sessionId))
+            .get();
+        return row === undefined ? null : decodeSummary(row);
     };
-
+    readonly save = (summary: SessionRecordingSummary): void => {
+        const values = {
+            sessionId: summary.sessionId,
+            runtimeId: summary.runtimeId,
+            agentId: summary.agentId,
+            directoryId: summary.directoryId,
+            additionalDirectoryIdsJson: JSON.stringify(summary.additionalDirectoryIds),
+            title: summary.title,
+            prompted: true,
+            updatedAt: Date.parse(summary.updatedAt),
+        };
+        this.#database
+            .insert(recordingSessionSummary)
+            .values(values)
+            .onConflictDoUpdate({ target: recordingSessionSummary.sessionId, set: values })
+            .run();
+    };
     readonly read = (runtimeId: string): SessionRecordingDirectory => ({
         sessions: this.#database
             .select()
@@ -116,14 +44,21 @@ export class RecordingDirectoryStorage {
             .where(and(eq(recordingSessionSummary.runtimeId, runtimeId), eq(recordingSessionSummary.prompted, true)))
             .orderBy(desc(recordingSessionSummary.updatedAt), desc(recordingSessionSummary.sessionId))
             .all()
-            .map((row) => ({
-                additionalDirectoryIds: decodeAdditionalDirectoryIds(row.additionalDirectoryIdsJson),
-                agentId: row.agentId,
-                directoryId: row.directoryId,
-                runtimeId: row.runtimeId,
-                sessionId: row.sessionId,
-                title: row.title,
-                updatedAt: new Date(row.updatedAt).toISOString(),
-            })),
+            .map(decodeSummary),
     });
+}
+function decodeSummary(row: typeof recordingSessionSummary.$inferSelect): SessionRecordingSummary {
+    const directories: unknown = JSON.parse(row.additionalDirectoryIdsJson);
+    if (!Array.isArray(directories) || !directories.every(isIdentifier)) {
+        throw new Error("Invalid recorded directory identifiers");
+    }
+    return {
+        additionalDirectoryIds: directories,
+        agentId: row.agentId,
+        directoryId: row.directoryId,
+        runtimeId: row.runtimeId,
+        sessionId: row.sessionId,
+        title: row.title,
+        updatedAt: new Date(row.updatedAt).toISOString(),
+    };
 }

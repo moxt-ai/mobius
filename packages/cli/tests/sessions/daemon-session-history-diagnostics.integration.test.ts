@@ -9,6 +9,7 @@ import {
     decodeFileChunkEvent,
     decodeFileEndEvent,
     decodeMessageKind,
+    decodeSessionEventV2,
     decodeSessionLiveHistoryV2PageLoaded,
     decodeSessionOperationFailedEvent,
     encodeFileReadCommand,
@@ -91,7 +92,8 @@ if (process.argv.includes("--version")) {
                     }),
                 );
                 for (;;) {
-                    if (decodeMessageKind(await peer.nextEvent()) === "session.completed") {
+                    const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+                    if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
                         break;
                     }
                 }

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
-    decodeRecordedSessionEvent,
+    decodeSessionEventV2,
     encodeSessionPermissionRespondCommand,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
@@ -39,9 +39,9 @@ test("Given the real opencode and its production adapter, When two prompts execu
             let text = "";
             let toolSucceeded = false;
             for (;;) {
-                const event = decodeRecordedSessionEvent(await peer.nextEvent());
-                if (event.kind === "session.permission.requested") {
-                    const option = event.options.find((entry) => entry.kind === "allow_once");
+                const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+                if (event.type === "lifecycle-metadata" && event.payload.kind === "session.permission.requested") {
+                    const option = event.payload.event.options.find((entry) => entry.kind === "allow_once");
                     if (option === undefined) {
                         throw new Error("No one-time tool permission option");
                     }
@@ -49,25 +49,29 @@ test("Given the real opencode and its production adapter, When two prompts execu
                         encodeSessionPermissionRespondCommand({
                             kind: "session.permission.respond",
                             sessionId: peer.sessionId,
-                            interactionId: event.interactionId,
+                            interactionId: event.payload.event.interactionId,
                             optionId: option.optionId,
                             outcome: "selected",
                         }),
                     );
-                } else if (event.kind === "agent.message.delta") {
-                    expect(event.commandId).toBe(commandId);
-                    text += event.text;
-                } else if (event.kind === "agent.activity") {
-                    expect(event.commandId).toBe(commandId);
-                    if (event.activityType === "tool" && event.status === "completed") {
-                        expect(event.output).toContain(peer.workspace);
-                        toolSucceeded = true;
-                    }
-                } else if (event.kind === "session.failed") {
+                } else if (
+                    event.type === "acp" &&
+                    event.payload.sessionUpdate === "agent_message_chunk" &&
+                    event.payload.content.type === "text"
+                ) {
+                    text += event.payload.content.text;
+                } else if (
+                    event.type === "acp" &&
+                    event.payload.sessionUpdate === "tool_call_update" &&
+                    event.payload.status === "completed"
+                ) {
+                    expect(JSON.stringify(event.payload.content)).toContain(peer.workspace);
+                    toolSucceeded = true;
+                } else if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.failed") {
                     throw new Error(JSON.stringify(event));
-                } else if (event.kind === "session.completed") {
-                    expect(event.commandId).toBe(commandId);
-                    expect(event.stopReason).toBe("end_turn");
+                } else if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
+                    expect(event.payload.commandId).toBe(commandId);
+                    expect(event.payload.stopReason).toBe("end_turn");
                     break;
                 }
             }

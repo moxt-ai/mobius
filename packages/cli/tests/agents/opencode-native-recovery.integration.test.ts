@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
     decodeMessageKind,
-    decodeRecordedSessionEvent,
+    decodeSessionEventV2,
     decodeSessionQueuedEvent,
     encodeSessionCancelCommand,
     encodeSessionPromptCommand,
@@ -52,17 +52,29 @@ test("Given a real opencode native Session, When the active prompt is cancelled 
             const finish = async (commandId: string, reason: string): Promise<string> => {
                 let text = "";
                 for (;;) {
-                    const event = decodeRecordedSessionEvent(await peer.nextEvent());
-                    if (event.kind === "session.failed") {
+                    const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+                    if (
+                        event.type === "lifecycle-metadata" &&
+                        event.payload.kind === "prompt.failed" &&
+                        event.payload.commandId === commandId
+                    ) {
                         throw new Error(JSON.stringify(event));
                     }
-                    if (event.kind === "agent.message.delta" && event.commandId === commandId) {
-                        text += event.text;
+                    if (
+                        event.type === "acp" &&
+                        event.payload.sessionUpdate === "agent_message_chunk" &&
+                        event.payload.content.type === "text"
+                    ) {
+                        text += event.payload.content.text;
                     }
-                    if (event.kind === "session.completed") {
-                        expect(event.commandId).toBe(commandId);
+                    if (
+                        event.type === "lifecycle-metadata" &&
+                        event.payload.kind === "prompt.completed" &&
+                        event.payload.commandId === commandId
+                    ) {
+                        expect(event.payload.commandId).toBe(commandId);
                         expect(event.sessionId).toBe(nativeId);
-                        expect(event.stopReason).toBe(reason);
+                        expect(event.payload.stopReason).toBe(reason);
                         return text;
                     }
                 }

@@ -44,7 +44,6 @@ import { createNativeSessionRequestHandler } from "./native-sessions/handle-nati
 import type { NativeSessionService } from "./native-sessions/service.ts";
 import type { DaemonOperationState } from "./relay-connection/daemon-operation-state.ts";
 import type { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
-import type { DaemonSessionEventPublisher } from "./relay-connection/session-event-publisher.ts";
 import type { DaemonTimer } from "./relay-connection/timer.ts";
 import type { DaemonSessionEventLogV2 } from "./session-event-log-v2.ts";
 export interface DaemonCommandOptions {
@@ -55,7 +54,6 @@ export interface DaemonCommandOptions {
     readonly installations: AgentInstallationManager;
     readonly nativeSessions: NativeSessionService;
     readonly operations: DaemonOperationState;
-    readonly publisher: DaemonSessionEventPublisher;
     readonly eventLogV2: DaemonSessionEventLogV2;
     readonly externalContent: ExternalContentStore;
     readonly activeTurns: DaemonTurnRegistry;
@@ -74,7 +72,6 @@ export function createDaemonCommandHandler({
     installations,
     nativeSessions,
     operations,
-    publisher,
     eventLogV2,
     externalContent,
     activeTurns,
@@ -98,8 +95,9 @@ export function createDaemonCommandHandler({
         timer,
     });
     const queueChanged = (sessionId: string): void => {
-        publisher.publish(sessionId, { kind: "session.queue.changed", sessionId });
-        eventLogV2.queueChanged(sessionId);
+        void eventLogV2.queueChanged(sessionId).catch((error: unknown) => {
+            console.error("Could not record queue change", error);
+        });
     };
     const nativeRequestHandler = createNativeSessionRequestHandler({
         audit,
@@ -169,7 +167,9 @@ export function createDaemonCommandHandler({
                 const cancellation = message;
                 const turn = activeTurns.get(cancellation.commandId);
                 if (turn === undefined || !turn.matches(cancellation)) {
-                    settleAbandonedTurn(publisher, operations, audit, cancellation);
+                    void settleAbandonedTurn(eventLogV2, operations, audit, cancellation).catch((error: unknown) => {
+                        console.error("Could not settle abandoned turn", error);
+                    });
                     return;
                 }
                 const cancellationState = turn.requestCancellation();
@@ -209,22 +209,12 @@ export function createDaemonCommandHandler({
             }
             if (kind === SESSION_PREPARE_KIND) {
                 const command = message;
-                void executeSessionPrepare(
-                    publisher,
-                    socket,
-                    command,
-                    config,
-                    directories,
-                    audit,
-                    sessions,
-                    diagnostics,
-                    signal,
-                );
+                void executeSessionPrepare(socket, command, config, directories, audit, sessions, diagnostics, signal);
                 return;
             }
             if (kind === SESSION_CONFIGURE_KIND) {
                 const command = message;
-                void executeSessionConfigure(publisher, socket, command, config, directories, audit, sessions, signal);
+                void executeSessionConfigure(socket, command, config, directories, audit, sessions, signal);
                 return;
             }
             if (kind === SESSION_LIST_KIND) {
@@ -339,7 +329,6 @@ export function createDaemonCommandHandler({
             eventLogV2.requested(command);
             void executePrompt({
                 operations,
-                publisher,
                 eventLogV2,
                 command,
                 config,
@@ -357,9 +346,8 @@ export function createDaemonCommandHandler({
                             sessionId: command.sessionId,
                         });
                     }),
-                timer,
                 signal: turn.signal,
-                recordLiveEvent: turn.recordEvent,
+                recordTurnEvent: turn.recordEvent,
                 recordSteeringPrompt: () => activeTurns.recordSteeringPrompt(command),
                 cancellationRequested: turn.cancellationRequested,
             })
@@ -368,6 +356,7 @@ export function createDaemonCommandHandler({
                 })
                 .finally(() => {
                     activeTurns.finish(turn);
+                    eventLogV2.publishTerminal(command.sessionId, command.commandId);
                     if (command.disposition === SessionPromptDisposition.Queue) {
                         queueChanged(command.sessionId);
                     }

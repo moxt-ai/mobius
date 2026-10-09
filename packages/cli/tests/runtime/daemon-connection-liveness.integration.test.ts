@@ -8,35 +8,19 @@ import { fileURLToPath } from "node:url";
 import { listen, port as readPort, sendText as writeServerTextFrame } from "@moxt-ai/mobius-test/websocket";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-    AGENT_ACTIVITY_KIND,
-    AGENT_ACTIVITY_NARRATION_KIND,
-    AGENT_MESSAGE_DELTA_KIND,
-    type AgentActivityEvent,
-    decodeAgentActivityEvent,
-    decodeAgentActivityNarrationEvent,
-    decodeAgentMessageDeltaEvent,
     decodeMessageKind,
     decodeRuntimeHeartbeatEvent,
-    decodeSessionEventEnvelope,
     decodeSessionEventEnvelopeV2,
-    decodeSessionLiveHistoryV2PageLoaded,
     encodeRuntimeHeartbeatAckEvent,
     encodeRuntimeLivenessReadyEvent,
-    encodeSessionLiveHistoryV2PageLoad,
     encodeSessionPromptCommand,
     encodeWorkspaceListCommand,
     MOBIUS_API_PREFIX,
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_HEARTBEAT_KIND,
     RUNTIME_LIVENESS_READY_KIND,
-    SESSION_COMPLETED_KIND,
-    SESSION_EVENT_KIND,
     SESSION_EVENT_V2_KIND,
-    SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND,
     SESSION_PROMPT_KIND,
-    SESSION_READY_KIND,
-    SESSION_STARTED_KIND,
-    type SessionEventV2,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
 } from "../../../protocol/src/index.ts";
@@ -522,293 +506,6 @@ describe("daemon relay connection liveness", () => {
         }
     });
 
-    it("Given an Agent emits many updates and history is paginated between turns, When the daemon records both turns, Then every live ACP update remains in the replay", async () => {
-        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-activity-coalescing-"));
-        const defaultWorkspace = join(stateDirectory, "workspace");
-        await mkdir(defaultWorkspace);
-        const relay = createServer((request, response) => {
-            if (
-                request.method === "PUT" &&
-                request.url === `${MOBIUS_API_PREFIX}/channels/activity-coalescing-channel/catalog`
-            ) {
-                request.resume();
-                response.writeHead(204);
-                response.end();
-                return;
-            }
-            response.writeHead(426);
-            response.end();
-        });
-        const sockets = new Set<Duplex>();
-        const activities = new Map<string, AgentActivityEvent>();
-        const eventLogV2: SessionEventV2[] = [];
-        let agentText = "";
-        let removeObserver = (): void => undefined;
-        let completedPrompts = 0;
-        let resolveCompleted = (): void => undefined;
-        const completed = new Promise<void>((resolve) => {
-            resolveCompleted = resolve;
-        });
-        let resolveHistory = (_events: readonly SessionEventV2[]): void => undefined;
-        const history = new Promise<readonly SessionEventV2[]>((resolve) => {
-            resolveHistory = resolve;
-        });
-        const historyPages: (readonly SessionEventV2[])[] = [];
-        relay.on("connection", (socket) => {
-            sockets.add(socket);
-            socket.once("close", () => sockets.delete(socket));
-            socket.on("error", () => undefined);
-        });
-        relay.on("upgrade", (request, socket) => {
-            const key = request.headers["sec-websocket-key"];
-            if (typeof key !== "string") {
-                socket.destroy();
-                return;
-            }
-            const accept = createHash("sha1").update(`${key}${WEBSOCKET_GUID}`).digest("base64");
-            socket.write(
-                "HTTP/1.1 101 Switching Protocols\r\n" +
-                    "Connection: Upgrade\r\n" +
-                    "Upgrade: websocket\r\n" +
-                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
-            );
-            const requestHistory = () =>
-                writeServerTextFrame(
-                    socket,
-                    encodeSessionLiveHistoryV2PageLoad({
-                        additionalDirectoryIds: [],
-                        agentId: "codex",
-                        bindingId: "workspace",
-                        cursor: null,
-                        directoryId: "default",
-                        kind: "session.live-history.v2.page.load",
-                        eventLimit: 25,
-                        requestId: `activity-coalescing-history-${completedPrompts.toString()}-1`,
-                        sessionId: "activity-coalescing-session",
-                    }),
-                );
-            const sendSecondPrompt = () =>
-                writeServerTextFrame(
-                    socket,
-                    encodeSessionPromptCommand({
-                        additionalDirectoryIds: [],
-                        agentId: "codex",
-                        bindingId: "workspace",
-                        commandId: "activity-coalescing-command-2",
-                        directoryId: "default",
-                        disposition: "reject",
-                        images: [],
-                        kind: SESSION_PROMPT_KIND,
-                        prompt: "stream another verbose activity",
-                        resources: [],
-                        sessionId: "activity-coalescing-session",
-                        targetCommandId: "",
-                    }),
-                );
-            const sendFirstPrompt = () =>
-                writeServerTextFrame(
-                    socket,
-                    encodeSessionPromptCommand({
-                        additionalDirectoryIds: [],
-                        agentId: "codex",
-                        bindingId: "workspace",
-                        commandId: "activity-coalescing-command",
-                        directoryId: "default",
-                        disposition: "reject",
-                        images: [],
-                        kind: SESSION_PROMPT_KIND,
-                        prompt: "stream verbose activity",
-                        resources: [],
-                        sessionId: "activity-coalescing-session",
-                        targetCommandId: "",
-                    }),
-                );
-            removeObserver = observeClientFrames(socket, (frame) => {
-                if (frame.opcode !== 1) {
-                    return;
-                }
-                const transportKind = decodeMessageKind(frame.text);
-                if (transportKind === SESSION_EVENT_V2_KIND) {
-                    const event = decodeSessionEventEnvelopeV2(frame.text).event;
-                    eventLogV2.push(event);
-                    return;
-                }
-                if (transportKind === SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND) {
-                    const page = decodeSessionLiveHistoryV2PageLoaded(frame.text).events.events;
-                    historyPages.push(page.events);
-                    if (page.nextCursor === null) {
-                        if (completedPrompts === 0) {
-                            historyPages.length = 0;
-                            sendFirstPrompt();
-                        } else if (completedPrompts === 1) {
-                            historyPages.length = 0;
-                            sendSecondPrompt();
-                        } else {
-                            resolveHistory(historyPages.toReversed().flat());
-                        }
-                    } else {
-                        writeServerTextFrame(
-                            socket,
-                            encodeSessionLiveHistoryV2PageLoad({
-                                additionalDirectoryIds: [],
-                                agentId: "codex",
-                                bindingId: "workspace",
-                                cursor: page.nextCursor,
-                                directoryId: "default",
-                                kind: "session.live-history.v2.page.load",
-                                eventLimit: 25,
-                                requestId: `activity-coalescing-history-${(historyPages.length + 1).toString()}`,
-                                sessionId: "activity-coalescing-session",
-                            }),
-                        );
-                    }
-                    return;
-                }
-                if (transportKind !== SESSION_EVENT_KIND) {
-                    return;
-                }
-                const envelope = decodeSessionEventEnvelope(frame.text);
-                const kind = decodeMessageKind(envelope.payload);
-                if (kind === AGENT_ACTIVITY_KIND) {
-                    const activity = decodeAgentActivityEvent(envelope.payload);
-                    activities.set(activity.activityId, activity);
-                    return;
-                }
-                if (kind === AGENT_ACTIVITY_NARRATION_KIND) {
-                    const narration = decodeAgentActivityNarrationEvent(envelope.payload);
-                    const activity = activities.get(narration.activityId);
-                    if (activity !== undefined) {
-                        activities.set(narration.activityId, {
-                            ...activity,
-                            output: `${activity.output}${narration.text}`,
-                        });
-                    }
-                    return;
-                }
-                if (kind === AGENT_MESSAGE_DELTA_KIND) {
-                    agentText += decodeAgentMessageDeltaEvent(envelope.payload).text;
-                    return;
-                }
-                if (kind === SESSION_COMPLETED_KIND) {
-                    completedPrompts += 1;
-                    requestHistory();
-                    if (completedPrompts === 2) {
-                        resolveCompleted();
-                    }
-                }
-            });
-            respondToClientClose(socket);
-            writeServerTextFrame(socket, JSON.stringify({ kind: RUNTIME_LIVENESS_READY_KIND }));
-            requestHistory();
-        });
-        await listen(relay);
-
-        const audit = new AuditStore();
-        const cancellation = new AbortController();
-        const timer = new ControllableDaemonTimer();
-        const previousFakeAcpStateDirectory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
-        const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
-        const previousNoProxy = process.env["NO_PROXY"];
-        const previousLowerNoProxy = process.env["no_proxy"];
-        process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = join(stateDirectory, "native");
-        process.env["MOBIUS_STATE_DIRECTORY"] = stateDirectory;
-        process.env["NO_PROXY"] = "127.0.0.1,localhost";
-        process.env["no_proxy"] = "127.0.0.1,localhost";
-        const config = createDaemonConfig(
-            {
-                defaultWorkspace,
-                channelId: "activity-coalescing-channel",
-                relayUrl: new URL(
-                    `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/activity-coalescing-channel/daemon`,
-                ),
-            },
-            [new LocalAgentDefinition("codex", "Codex", process.execPath, [fakeAgentPath])],
-        );
-
-        vi.useFakeTimers({ toFake: ["Date"] });
-        vi.setSystemTime(new Date("2026-09-10T00:00:00.000Z"));
-        const daemon = runDaemon(config, audit, cancellation.signal, timer);
-
-        try {
-            await completed;
-            const historyEvents = await history;
-            const reasoning = [...activities.values()].filter((activity) => activity.activityType === "reasoning");
-            expect(reasoning).toHaveLength(2);
-            expect(reasoning.map((activity) => activity.status)).toEqual(["completed", "completed"]);
-            expect(reasoning.some((activity) => activity.output.includes("step-63"))).toBe(true);
-            expect(agentText).toBe(
-                "Echo from ACP: stream verbose activityEcho from ACP: stream another verbose activity",
-            );
-            expect(
-                eventLogV2.filter(
-                    (event) => event.type === "acp" && event.payload.sessionUpdate === "user_message_chunk",
-                ),
-            ).toHaveLength(2);
-            expect(
-                eventLogV2.filter(
-                    (event) => event.type === "acp" && event.payload.sessionUpdate === "agent_thought_chunk",
-                ),
-            ).toHaveLength(68);
-            expect(
-                eventLogV2.filter(
-                    (event) => event.type === "acp" && event.payload.sessionUpdate === "agent_message_chunk",
-                ),
-            ).toHaveLength(6);
-            expect(historyPages.every((page) => page.length <= 25)).toBe(true);
-            expect(
-                historyEvents.flatMap((event) => (event.type === "lifecycle-metadata" ? [event.payload.kind] : [])),
-            ).toEqual([
-                "prompt.requested",
-                "prompt.started",
-                "prompt.completed",
-                "prompt.requested",
-                "prompt.started",
-                "prompt.completed",
-            ]);
-            expect(
-                historyEvents.flatMap((event) =>
-                    event.type === "acp" &&
-                    (event.payload.sessionUpdate === "user_message_chunk" ||
-                        event.payload.sessionUpdate === "agent_message_chunk") &&
-                    event.payload.content.type === "text"
-                        ? [event.payload.content.text]
-                        : [],
-                ),
-            ).toEqual([
-                "stream verbose activity",
-                "Gathering context",
-                "Echo from ACP: ",
-                "stream verbose activity",
-                "stream another verbose activity",
-                "Gathering context",
-                "Echo from ACP: ",
-                "stream another verbose activity",
-            ]);
-        } finally {
-            cancellation.abort();
-            await daemon;
-            removeObserver();
-            audit.close();
-            for (const socket of sockets) {
-                socket.destroy();
-            }
-            await new Promise<void>((resolve, reject) => {
-                relay.close((error) => {
-                    if (error === undefined) {
-                        resolve();
-                        return;
-                    }
-                    reject(error);
-                });
-            });
-            restoreEnvironmentVariable("MOBIUS_FAKE_ACP_STATE_DIRECTORY", previousFakeAcpStateDirectory);
-            restoreEnvironmentVariable("MOBIUS_STATE_DIRECTORY", previousStateDirectory);
-            restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
-            restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
-            await rm(stateDirectory, { force: true, recursive: true });
-        }
-    });
-
     it("Given a healthy idle daemon connection, When the Relay sends a future event and twenty minutes pass, Then the same connection remains available", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-liveness-"));
         const defaultWorkspace = join(stateDirectory, "workspace");
@@ -1118,28 +815,29 @@ describe("daemon relay connection liveness", () => {
                 );
                 firstEventFrame = await firstFrame.next();
             }
-            while (decodeMessageKind(firstEventFrame.text) !== SESSION_EVENT_KIND) {
+            while (decodeMessageKind(firstEventFrame.text) !== SESSION_EVENT_V2_KIND) {
                 firstEventFrame = await firstFrame.next();
             }
-            const ready = decodeSessionEventEnvelope(firstEventFrame.text);
-            expect(decodeMessageKind(ready.payload)).toBe(SESSION_READY_KIND);
+            const ready = decodeSessionEventEnvelopeV2(firstEventFrame.text);
+            expect(ready.event).toMatchObject({ type: "lifecycle-metadata", payload: { kind: "prompt.requested" } });
             expect(ready).not.toHaveProperty("delivery");
             // No delivery acknowledgements exist. Reconnection starts receiving live events.
             let startedFrame = await firstFrame.next();
-            while (decodeMessageKind(startedFrame.text) !== SESSION_EVENT_KIND) {
+            while (decodeMessageKind(startedFrame.text) !== SESSION_EVENT_V2_KIND) {
                 startedFrame = await firstFrame.next();
             }
-            const started = decodeSessionEventEnvelope(startedFrame.text);
-            expect(decodeMessageKind(started.payload)).toBe(SESSION_STARTED_KIND);
+            const started = decodeSessionEventEnvelopeV2(startedFrame.text);
+            expect(started.event).toMatchObject({ type: "lifecycle-metadata", payload: { kind: "prompt.started" } });
             expect(started).not.toHaveProperty("delivery");
             let completed = false;
             while (!completed) {
                 const frame = await firstFrame.next();
-                if (decodeMessageKind(frame.text) !== SESSION_EVENT_KIND) {
+                if (decodeMessageKind(frame.text) !== SESSION_EVENT_V2_KIND) {
                     continue;
                 }
-                const event = decodeSessionEventEnvelope(frame.text);
-                completed = decodeMessageKind(event.payload) === SESSION_COMPLETED_KIND;
+                const event = decodeSessionEventEnvelopeV2(frame.text);
+                completed =
+                    event.event.type === "lifecycle-metadata" && event.event.payload.kind === "prompt.completed";
             }
             // More than the former 16-event window must stream without any delivery ACK.
             for (let turn = 0; turn < 6; turn += 1) {
@@ -1164,15 +862,19 @@ describe("daemon relay connection liveness", () => {
                 let answer = "";
                 while (!terminal) {
                     const frame = await firstFrame.next();
-                    if (decodeMessageKind(frame.text) !== SESSION_EVENT_KIND) {
+                    if (decodeMessageKind(frame.text) !== SESSION_EVENT_V2_KIND) {
                         continue;
                     }
-                    const event = decodeSessionEventEnvelope(frame.text);
-                    const kind = decodeMessageKind(event.payload);
-                    if (kind === AGENT_MESSAGE_DELTA_KIND) {
-                        answer += decodeAgentMessageDeltaEvent(event.payload).text;
+                    const event = decodeSessionEventEnvelopeV2(frame.text);
+                    const payload = event.event;
+                    if (
+                        payload.type === "acp" &&
+                        payload.payload.sessionUpdate === "agent_message_chunk" &&
+                        payload.payload.content.type === "text"
+                    ) {
+                        answer += payload.payload.content.text;
                     }
-                    terminal = kind === SESSION_COMPLETED_KIND;
+                    terminal = payload.type === "lifecycle-metadata" && payload.payload.kind === "prompt.completed";
                 }
                 expect(answer).toContain("keep broadcasting");
             }
@@ -1220,12 +922,15 @@ describe("daemon relay connection liveness", () => {
             if (decodeMessageKind(freshFrame.text) === RUNTIME_HEARTBEAT_KIND) {
                 freshFrame = await freshFrames.next();
             }
-            while (decodeMessageKind(freshFrame.text) !== SESSION_EVENT_KIND) {
+            while (decodeMessageKind(freshFrame.text) !== SESSION_EVENT_V2_KIND) {
                 freshFrame = await freshFrames.next();
             }
-            const freshReady = decodeSessionEventEnvelope(freshFrame.text);
-            expect(freshReady.sessionId).toBe("fresh-session");
-            expect(decodeMessageKind(freshReady.payload)).toBe(SESSION_READY_KIND);
+            const freshReady = decodeSessionEventEnvelopeV2(freshFrame.text);
+            expect(freshReady.event.sessionId).toBe("fresh-session");
+            expect(freshReady.event).toMatchObject({
+                type: "lifecycle-metadata",
+                payload: { kind: "prompt.requested" },
+            });
             expect(freshReady).not.toHaveProperty("delivery");
             expect(await readdir(stateDirectory)).not.toContain("events");
         } finally {

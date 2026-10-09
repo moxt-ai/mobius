@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { styleText } from "node:util";
 
-import { AGENT_INSTALL_REQUEST_KIND, type RecordedSessionEvent } from "@moxt-ai/mobius-protocol";
+import { AGENT_INSTALL_REQUEST_KIND } from "@moxt-ai/mobius-protocol";
 
 import { AgentRuntimeManager } from "./acp/agent-runtime-manager.ts";
 import { CachedAcpSessionEventStoreV2 } from "./acp/session-event-store-v2.ts";
@@ -140,13 +140,16 @@ export async function runDaemon(
     await using externalContent = new LocalExternalContentStore(stateDirectory);
     const operations = new DaemonOperationState();
     const publisher = new DaemonSessionEventPublisher();
-    const eventLogV2 = new DaemonSessionEventLogV2(publisher, daemonGenerationId);
+    const eventLogV2 = new DaemonSessionEventLogV2(
+        publisher,
+        (sessionId, event) => agentRuntime.recordLifecycleEventV2(sessionId, event),
+        daemonGenerationId,
+    );
     const activeTurns = new DaemonTurnRegistry(operations);
-    const recordSessionEvent = (sessionId: string, event: RecordedSessionEvent): void => {
-        publisher.publish(sessionId, activeTurns.recordEvent(event));
-    };
     const agentRuntime = new AgentRuntimeManager(
-        new DaemonAcpObserver(recordSessionEvent, eventLogV2.record),
+        new DaemonAcpObserver((_sessionId, event) => {
+            activeTurns.recordEvent(event);
+        }, eventLogV2.record),
         sessionStore,
         {
             read: async (options, nativeSessionId, nativeTurn) =>

@@ -48,7 +48,6 @@ import {
     decodeMobiusBrowserCredential,
     decodeMobiusChannelAccessGrant,
     decodeMobiusChannelDescriptor,
-    decodeMobiusEventPage,
     decodeMobiusInteraction,
     decodeMobiusInteractionList,
     decodeMobiusLinkedChannelDeviceList,
@@ -59,7 +58,6 @@ import {
     decodeMobiusRuntimePairingStatus,
     decodeMobiusServiceCapabilities,
     decodeMobiusSession,
-    decodeMobiusSessionEvent,
     decodeMobiusSessionExport,
     decodeMobiusSessionPage,
     decodeMobiusSessionState,
@@ -70,7 +68,6 @@ import {
     type MobiusBrowserCredentialRequest,
     type MobiusChannelAccessGrant,
     type MobiusChannelDescriptor,
-    type MobiusEventPage,
     type MobiusInteractionResponseRequest,
     type MobiusLinkedChannelDevice,
     type MobiusMessagePage,
@@ -86,7 +83,6 @@ import {
     type MobiusServiceCapabilities,
     type MobiusSession,
     MobiusSessionAccess,
-    type MobiusSessionEvent,
     type MobiusSessionExport,
     type MobiusSessionImportBinding,
     type MobiusSessionPage,
@@ -103,15 +99,10 @@ import {
     type MobiusTransportSessionEvent,
 } from "./transport/http-transport.ts";
 
-const MOBIUS_EVENT_FORMAT_VERSION = "1";
-const MOBIUS_SESSION_EVENT_STREAM_EVENT = "mobius.session-event.v1";
-const MOBIUS_SESSION_EVENT_STREAM_MEDIA_TYPE = "text/event-stream";
-
 const DEFAULT_OPERATION_TIMEOUT_MILLISECONDS = 20_000;
 const DEFAULT_STREAM_CONNECTION_TIMEOUT_MILLISECONDS = 15_000;
 const DEFAULT_STREAM_LIVENESS_TIMEOUT_MILLISECONDS = 45_000;
 const DEFAULT_STREAM_RECONNECT_ATTEMPTS = 4;
-const MAX_EVENT_BLOCK_LENGTH = 9 * 1024 * 1024;
 
 export interface MobiusCredentialProvider {
     readonly credential: (signal: AbortSignal) => Promise<string>;
@@ -333,73 +324,6 @@ class RequestDeadline {
     };
 }
 
-class StreamConnection {
-    #closed = false;
-    readonly #controller: AbortController;
-    #hasActivity = false;
-    #livenessTimedOut = false;
-    #livenessTimeoutId: ReturnType<typeof globalThis.setTimeout>;
-    readonly #livenessTimeoutMilliseconds: number;
-    readonly #release: () => void;
-    readonly response: Response;
-
-    constructor(
-        response: Response,
-        controller: AbortController,
-        release: () => void,
-        livenessTimeoutMilliseconds: number,
-    ) {
-        this.#controller = controller;
-        this.#livenessTimeoutMilliseconds = livenessTimeoutMilliseconds;
-        this.#release = release;
-        this.response = response;
-        this.#livenessTimeoutId = globalThis.setTimeout(
-            this.abortFromLivenessTimeout,
-            this.#livenessTimeoutMilliseconds,
-        );
-    }
-
-    get hasActivity(): boolean {
-        return this.#hasActivity;
-    }
-
-    readonly close = (): void => {
-        if (this.#closed) {
-            return;
-        }
-        this.#closed = true;
-        globalThis.clearTimeout(this.#livenessTimeoutId);
-        this.#controller.abort(new Error("The Mobius event connection closed"));
-        this.#release();
-    };
-
-    readonly touch = (): void => {
-        if (this.#closed) {
-            return;
-        }
-        this.#hasActivity = true;
-        globalThis.clearTimeout(this.#livenessTimeoutId);
-        this.#livenessTimeoutId = globalThis.setTimeout(
-            this.abortFromLivenessTimeout,
-            this.#livenessTimeoutMilliseconds,
-        );
-    };
-
-    readonly translateFailure = (cause: unknown): never => {
-        if (this.#livenessTimedOut) {
-            throw new MobiusTimeoutError({ cause });
-        }
-        throw new MobiusConnectionError("The Mobius event stream was interrupted", {
-            cause,
-        });
-    };
-
-    private readonly abortFromLivenessTimeout = (): void => {
-        this.#livenessTimedOut = true;
-        this.#controller.abort(new Error("The Mobius event stream became inactive"));
-    };
-}
-
 class LiveEventConnection {
     readonly events: ReadableStream<MobiusTransportSessionEvent>;
     readonly #controller: AbortController;
@@ -545,73 +469,6 @@ export class MobiusRequestExecutor {
 
     readonly deleteEmpty = async (path: string, signal: AbortSignal): Promise<void> => {
         await this.requestEmpty(path, "DELETE", signal);
-    };
-
-    readonly openEventStream = async (path: string, signal: AbortSignal): Promise<StreamConnection> => {
-        const controller = new AbortController();
-        let timedOut = false;
-        const abortFromRequest = (): void => controller.abort(signal.reason);
-        if (signal.aborted) {
-            abortFromRequest();
-        } else {
-            signal.addEventListener("abort", abortFromRequest, { once: true });
-        }
-        const timeoutId = globalThis.setTimeout(() => {
-            timedOut = true;
-            controller.abort(new Error("The Mobius event stream timed out"));
-        }, this.#streamConnectionTimeoutMilliseconds);
-        const release = (): void => {
-            globalThis.clearTimeout(timeoutId);
-            signal.removeEventListener("abort", abortFromRequest);
-        };
-        let response: Response;
-        try {
-            const credential = validateCredential(await this.#credentialProvider.credential(controller.signal));
-            response = await this.#transport.fetch(
-                new Request(requestUrl(this.#endpoint, path), {
-                    headers: this.authenticationHeaders(credential, MOBIUS_SESSION_EVENT_STREAM_MEDIA_TYPE),
-                    signal: controller.signal,
-                }),
-            );
-        } catch (cause) {
-            release();
-            if (signal.aborted) {
-                throw new MobiusCancellationError({ cause });
-            }
-            if (timedOut) {
-                throw new MobiusTimeoutError({ cause });
-            }
-            if (cause instanceof MobiusError) {
-                throw cause;
-            }
-            throw new MobiusConnectionError("The Mobius event stream could not connect", { cause });
-        }
-        if (!response.ok) {
-            try {
-                await throwApiError(response);
-            } catch (cause) {
-                release();
-                if (signal.aborted) {
-                    throw new MobiusCancellationError({ cause });
-                }
-                if (timedOut) {
-                    throw new MobiusTimeoutError({ cause });
-                }
-                throw cause;
-            }
-        }
-        globalThis.clearTimeout(timeoutId);
-        const contentType = response.headers.get("content-type") ?? "";
-        if (
-            !contentType.startsWith(MOBIUS_SESSION_EVENT_STREAM_MEDIA_TYPE) ||
-            response.headers.get("x-mobius-event-format") !== MOBIUS_EVENT_FORMAT_VERSION ||
-            response.body === null
-        ) {
-            controller.abort(new Error("The Mobius event stream is invalid"));
-            release();
-            throw new MobiusProtocolError("The service returned an invalid Session event stream");
-        }
-        return new StreamConnection(response, controller, release, this.#streamLivenessTimeoutMilliseconds);
     };
 
     readonly openLiveEventStream = async (path: string, signal: AbortSignal): Promise<LiveEventConnection> => {
@@ -1623,433 +1480,11 @@ export class MobiusInteractionResources {
     };
 }
 
-export interface MobiusSessionEventObserver {
-    readonly receive: (event: MobiusSessionEvent) => Promise<boolean>;
-}
-
-export class MobiusEventSubscription {
-    readonly #controller: AbortController;
-    readonly #executor: MobiusRequestExecutor;
-    readonly #externalSignal: AbortSignal;
-    readonly #maximumReconnectAttempts: number;
-    readonly #observer: MobiusSessionEventObserver;
-    readonly #path: string;
-    #closed = false;
-    #cursor: string;
-    #hasSequence = false;
-    #lastSequence = 0n;
-    readonly completed: Promise<void>;
-
-    constructor(
-        executor: MobiusRequestExecutor,
-        path: string,
-        cursor: string,
-        observer: MobiusSessionEventObserver,
-        signal: AbortSignal,
-        controller: AbortController,
-        firstConnection: StreamConnection,
-        maximumReconnectAttempts: number,
-    ) {
-        this.#cursor = cursor;
-        this.#controller = controller;
-        this.#executor = executor;
-        this.#externalSignal = signal;
-        this.#maximumReconnectAttempts = maximumReconnectAttempts;
-        this.#observer = observer;
-        this.#path = path;
-        if (this.#externalSignal.aborted) {
-            this.abortFromExternal();
-        } else {
-            this.#externalSignal.addEventListener("abort", this.abortFromExternal, {
-                once: true,
-            });
-        }
-        this.completed = this.run(firstConnection).finally(() => {
-            this.#externalSignal.removeEventListener("abort", this.abortFromExternal);
-        });
-    }
-
-    get cursor(): string {
-        return this.#cursor;
-    }
-
-    readonly close = (): void => {
-        if (this.#closed) {
-            return;
-        }
-        this.#closed = true;
-        this.#controller.abort(new Error("The Mobius event subscription closed"));
-    };
-
-    private readonly abortFromExternal = (): void => {
-        this.#controller.abort(this.#externalSignal.reason);
-    };
-
-    private readonly run = async (firstConnection: StreamConnection): Promise<void> => {
-        let connection = firstConnection;
-        let reconnectAttempts = 0;
-        while (!this.#closed) {
-            try {
-                const stopped = await this.consume(connection);
-                connection.close();
-                if (stopped || this.#closed) {
-                    this.#closed = true;
-                    return;
-                }
-                throw new MobiusConnectionError("The Mobius event stream closed before the observer stopped it");
-            } catch (cause) {
-                connection.close();
-                if (this.#closed) {
-                    return;
-                }
-                if (connection.hasActivity) {
-                    reconnectAttempts = 0;
-                }
-                try {
-                    const recovery = await this.recover(cause, reconnectAttempts);
-                    reconnectAttempts = recovery.attempts;
-                    connection = recovery.connection;
-                } catch (recoveryCause) {
-                    if (this.#closed) {
-                        return;
-                    }
-                    throw recoveryCause;
-                }
-            }
-        }
-    };
-
-    private readonly consume = async (connection: StreamConnection): Promise<boolean> => {
-        const body = connection.response.body;
-        if (body === null) {
-            throw new MobiusProtocolError("The Mobius event stream has no body");
-        }
-        const reader = body.getReader();
-        const decoder = new TextDecoder();
-        let buffered = "";
-        try {
-            while (!this.#closed) {
-                const result = await reader.read();
-                if (result.done) {
-                    buffered += decoder.decode();
-                    if (buffered.trim().length > 0) {
-                        throw new MobiusProtocolError("The Mobius event stream ended with an incomplete event");
-                    }
-                    return false;
-                }
-                connection.touch();
-                buffered += decoder.decode(result.value, { stream: true });
-                if (buffered.length > MAX_EVENT_BLOCK_LENGTH) {
-                    throw new MobiusProtocolError("The Mobius event stream exceeded its event limit");
-                }
-                let boundary = buffered.indexOf("\n\n");
-                let boundaryLength = 2;
-                const carriageReturnBoundary = buffered.indexOf("\r\n\r\n");
-                if (carriageReturnBoundary >= 0 && (boundary < 0 || carriageReturnBoundary < boundary)) {
-                    boundary = carriageReturnBoundary;
-                    boundaryLength = 4;
-                }
-                while (boundary >= 0) {
-                    const block = buffered.slice(0, boundary);
-                    buffered = buffered.slice(boundary + boundaryLength);
-                    if (await this.consumeBlock(block.replaceAll("\r\n", "\n"))) {
-                        return true;
-                    }
-                    boundary = buffered.indexOf("\n\n");
-                    boundaryLength = 2;
-                    const nextCarriageReturnBoundary = buffered.indexOf("\r\n\r\n");
-                    if (nextCarriageReturnBoundary >= 0 && (boundary < 0 || nextCarriageReturnBoundary < boundary)) {
-                        boundary = nextCarriageReturnBoundary;
-                        boundaryLength = 4;
-                    }
-                }
-            }
-            return true;
-        } catch (cause) {
-            if (this.#closed || this.#controller.signal.aborted) {
-                throw cause;
-            }
-            if (cause instanceof MobiusError) {
-                throw cause;
-            }
-            return connection.translateFailure(cause);
-        } finally {
-            reader.releaseLock();
-        }
-    };
-
-    private readonly consumeBlock = async (block: string): Promise<boolean> => {
-        if (block.length === 0 || block.startsWith(":")) {
-            return false;
-        }
-        let eventName = "";
-        let eventId = "";
-        let data = "";
-        for (const line of block.split("\n")) {
-            if (line.startsWith("event:")) {
-                eventName = line.slice("event:".length).trimStart();
-            } else if (line.startsWith("id:")) {
-                eventId = line.slice("id:".length).trimStart();
-            } else if (line.startsWith("data:")) {
-                data += `${line.slice("data:".length).trimStart()}\n`;
-            } else if (!line.startsWith(":")) {
-                throw new MobiusProtocolError("The Mobius event stream contains an invalid field");
-            }
-        }
-        if (eventName !== MOBIUS_SESSION_EVENT_STREAM_EVENT || data.length === 0) {
-            throw new MobiusProtocolError("The Mobius event stream contains an unsupported event");
-        }
-        let value: unknown;
-        try {
-            value = JSON.parse(data.slice(0, -1));
-        } catch (cause) {
-            throw new MobiusProtocolError("The Mobius event stream contains invalid JSON", { cause });
-        }
-        const event = decodeMobiusSessionEvent(value);
-        if (event.cursor !== eventId) {
-            throw new MobiusProtocolError("The Mobius event identifier does not match its cursor");
-        }
-        const sequence = BigInt(event.sequence);
-        if (this.#hasSequence && sequence <= this.#lastSequence) {
-            return false;
-        }
-        if (this.#hasSequence && sequence !== this.#lastSequence + 1n) {
-            throw new MobiusProtocolError("The Mobius event stream contains a gap");
-        }
-        let shouldContinue: boolean;
-        try {
-            shouldContinue = await this.#observer.receive(event);
-        } catch (cause) {
-            throw new MobiusError("event_observer_failed", "The Mobius event observer failed", { cause });
-        }
-        this.#cursor = event.cursor;
-        this.#hasSequence = true;
-        this.#lastSequence = sequence;
-        return !shouldContinue;
-    };
-
-    private readonly pathWithCursor = (): string => {
-        if (this.#cursor.length === 0) {
-            return this.#path;
-        }
-        return `${this.#path}${this.#path.includes("?") ? "&" : "?"}cursor=${encodeURIComponent(this.#cursor)}`;
-    };
-
-    private readonly recover = async (
-        initialCause: unknown,
-        completedAttempts: number,
-    ): Promise<MobiusEventStreamRecovery> => {
-        this.throwIfTerminal(initialCause);
-        let attempts = completedAttempts;
-        let latestCause = initialCause;
-        while (attempts < this.#maximumReconnectAttempts) {
-            attempts += 1;
-            await this.reconnectDelay(attempts);
-            try {
-                return new MobiusEventStreamRecovery(
-                    await this.#executor.openEventStream(this.pathWithCursor(), this.#controller.signal),
-                    attempts,
-                );
-            } catch (cause) {
-                latestCause = cause;
-                this.throwIfTerminal(cause);
-            }
-        }
-        throw new MobiusConnectionError("The Mobius event stream could not recover", { cause: latestCause });
-    };
-
-    private readonly throwIfTerminal = (cause: unknown): void => {
-        if (this.#externalSignal.aborted) {
-            throw new MobiusCancellationError({ cause });
-        }
-        if (
-            cause instanceof MobiusProtocolError ||
-            (cause instanceof MobiusApiError && cause.status < 500) ||
-            (cause instanceof MobiusError &&
-                !(cause instanceof MobiusConnectionError) &&
-                !(cause instanceof MobiusTimeoutError) &&
-                !(cause instanceof MobiusApiError))
-        ) {
-            throw cause;
-        }
-    };
-
-    private readonly reconnectDelay = async (attempt: number): Promise<void> => {
-        const delayMilliseconds = Math.min(250 * 2 ** (attempt - 1), 2_000);
-        await new Promise<void>((resolve, reject) => {
-            const timeoutId = globalThis.setTimeout(() => {
-                this.#controller.signal.removeEventListener("abort", abort);
-                resolve();
-            }, delayMilliseconds);
-            const abort = (): void => {
-                globalThis.clearTimeout(timeoutId);
-                reject(new MobiusCancellationError());
-            };
-            this.#controller.signal.addEventListener("abort", abort, { once: true });
-        });
-    };
-}
-
-class MobiusEventStreamRecovery {
-    readonly attempts: number;
-    readonly connection: StreamConnection;
-
-    constructor(connection: StreamConnection, attempts: number) {
-        this.attempts = attempts;
-        this.connection = connection;
-    }
-}
-
 export type MobiusLiveSessionConnection = { readonly kind: "initial" } | { readonly kind: "reconnected" };
-
-export interface MobiusLiveSessionEventObserver extends MobiusSessionEventObserver {
-    readonly reconcile: (connection: MobiusLiveSessionConnection) => Promise<void>;
-}
 
 export interface MobiusLiveSessionEventObserverV2 {
     readonly receive: (event: SessionEventV2) => Promise<boolean>;
     readonly reconcile: (connection: MobiusLiveSessionConnection) => Promise<void>;
-}
-
-export class MobiusLiveEventSubscription {
-    readonly #controller = new AbortController();
-    readonly #executor: MobiusRequestExecutor;
-    readonly #maximumReconnectAttempts: number;
-    readonly #observer: MobiusLiveSessionEventObserver;
-    readonly #path: string;
-    #closed = false;
-    readonly connected: Promise<void>;
-    readonly completed: Promise<void>;
-
-    constructor(
-        executor: MobiusRequestExecutor,
-        path: string,
-        observer: MobiusLiveSessionEventObserver,
-        signal: AbortSignal,
-        maximumReconnectAttempts: number,
-    ) {
-        this.#executor = executor;
-        this.#maximumReconnectAttempts = maximumReconnectAttempts;
-        this.#observer = observer;
-        this.#path = path;
-        const abort = (): void => this.#controller.abort(signal.reason);
-        if (signal.aborted) {
-            abort();
-        } else {
-            signal.addEventListener("abort", abort, { once: true });
-        }
-        let resolveConnected = (): void => undefined;
-        let rejectConnected = (_cause: unknown): void => undefined;
-        this.connected = new Promise<void>((resolve, reject) => {
-            resolveConnected = resolve;
-            rejectConnected = reject;
-        });
-        this.completed = this.run(resolveConnected, rejectConnected).finally(() =>
-            signal.removeEventListener("abort", abort),
-        );
-    }
-
-    readonly close = (): void => {
-        if (this.#closed) {
-            return;
-        }
-        this.#closed = true;
-        this.#controller.abort(new Error("The live Session event subscription closed"));
-    };
-
-    private readonly run = async (
-        resolveConnected: () => void,
-        rejectConnected: (cause: unknown) => void,
-    ): Promise<void> => {
-        let attempts = 0;
-        let connectionState: MobiusLiveSessionConnection = { kind: "initial" };
-        while (!this.#closed) {
-            let connection: LiveEventConnection | null = null;
-            try {
-                connection = await this.#executor.openLiveEventStream(this.#path, this.#controller.signal);
-                await this.#observer.reconcile(connectionState);
-                if (connectionState.kind === "initial") {
-                    resolveConnected();
-                    connectionState = { kind: "reconnected" };
-                }
-                attempts = 0;
-                const reader = connection.events.getReader();
-                try {
-                    while (!this.#closed) {
-                        const result = await reader.read();
-                        if (result.done) {
-                            throw new MobiusConnectionError("The live Session event stream disconnected");
-                        }
-                        let value: unknown;
-                        try {
-                            value = JSON.parse(result.value.data);
-                        } catch (cause) {
-                            throw new MobiusProtocolError("The live Session event stream contains invalid JSON", {
-                                cause,
-                            });
-                        }
-                        const event = decodeMobiusSessionEvent(value);
-                        if (event.cursor !== result.value.eventId) {
-                            throw new MobiusProtocolError("The live Session event identifier is invalid");
-                        }
-                        if (!(await this.#observer.receive(event))) {
-                            this.close();
-                        }
-                    }
-                } finally {
-                    reader.releaseLock();
-                }
-            } catch (cause) {
-                if (this.#closed || this.#controller.signal.aborted) {
-                    if (connectionState.kind === "initial") {
-                        rejectConnected(new MobiusCancellationError({ cause }));
-                    }
-                    return;
-                }
-                if (
-                    cause instanceof MobiusProtocolError ||
-                    (cause instanceof MobiusApiError && cause.status < 500) ||
-                    (cause instanceof MobiusError &&
-                        !(cause instanceof MobiusConnectionError) &&
-                        !(cause instanceof MobiusTimeoutError) &&
-                        !(cause instanceof MobiusApiError))
-                ) {
-                    if (connectionState.kind === "initial") {
-                        rejectConnected(cause);
-                    }
-                    throw cause;
-                }
-                attempts += 1;
-                if (attempts > this.#maximumReconnectAttempts) {
-                    const failure = new MobiusConnectionError("The live Session event stream could not recover", {
-                        cause,
-                    });
-                    if (connectionState.kind === "initial") {
-                        rejectConnected(failure);
-                    }
-                    throw failure;
-                }
-                await this.reconnectDelay(attempts);
-            } finally {
-                connection?.close();
-            }
-        }
-    };
-
-    private readonly reconnectDelay = async (attempt: number): Promise<void> => {
-        const delayMilliseconds = Math.min(250 * 2 ** (attempt - 1), 2_000);
-        await new Promise<void>((resolve, reject) => {
-            const timeoutId = globalThis.setTimeout(() => {
-                this.#controller.signal.removeEventListener("abort", abort);
-                resolve();
-            }, delayMilliseconds);
-            const abort = (): void => {
-                globalThis.clearTimeout(timeoutId);
-                reject(new MobiusCancellationError());
-            };
-            this.#controller.signal.addEventListener("abort", abort, { once: true });
-        });
-    };
 }
 
 export class MobiusLiveEventSubscriptionV2 {
@@ -2194,8 +1629,6 @@ export class MobiusEventResources {
     readonly #executor: MobiusRequestExecutor;
     readonly #maximumReconnectAttempts: number;
     readonly #projectId: string;
-    readonly #subscriptions = new Set<MobiusEventSubscription>();
-    readonly #liveSubscriptions = new Set<MobiusLiveEventSubscription>();
     readonly #liveSubscriptionsV2 = new Set<MobiusLiveEventSubscriptionV2>();
 
     constructor(executor: MobiusRequestExecutor, projectId: string, maximumReconnectAttempts: number) {
@@ -2203,66 +1636,6 @@ export class MobiusEventResources {
         this.#maximumReconnectAttempts = maximumReconnectAttempts;
         this.#projectId = projectId;
     }
-
-    readonly subscribe = async (
-        sessionId: string,
-        cursor: string,
-        observer: MobiusSessionEventObserver,
-        signal: AbortSignal,
-    ): Promise<MobiusEventSubscription> => {
-        if (cursor.length > 512) {
-            throw new MobiusValidationError("The Session event cursor is invalid");
-        }
-        const path = sessionPath(this.#projectId, sessionId, "events");
-        const streamPath = cursor.length === 0 ? path : `${path}?cursor=${encodeURIComponent(cursor)}`;
-        const controller = new AbortController();
-        const abortFromExternal = (): void => controller.abort(signal.reason);
-        if (signal.aborted) {
-            abortFromExternal();
-        } else {
-            signal.addEventListener("abort", abortFromExternal, { once: true });
-        }
-        let firstConnection: StreamConnection;
-        try {
-            firstConnection = await this.#executor.openEventStream(streamPath, controller.signal);
-        } finally {
-            signal.removeEventListener("abort", abortFromExternal);
-        }
-        const subscription = new MobiusEventSubscription(
-            this.#executor,
-            path,
-            cursor,
-            observer,
-            signal,
-            controller,
-            firstConnection,
-            this.#maximumReconnectAttempts,
-        );
-        this.#subscriptions.add(subscription);
-        const remove = subscription.completed.finally(() => {
-            this.#subscriptions.delete(subscription);
-        });
-        void remove.catch(() => {});
-        return subscription;
-    };
-
-    readonly subscribeLive = async (
-        sessionId: string,
-        observer: MobiusLiveSessionEventObserver,
-        signal: AbortSignal,
-    ): Promise<MobiusLiveEventSubscription> => {
-        const subscription = new MobiusLiveEventSubscription(
-            this.#executor,
-            sessionPath(this.#projectId, sessionId, "events"),
-            observer,
-            signal,
-            this.#maximumReconnectAttempts,
-        );
-        this.#liveSubscriptions.add(subscription);
-        void subscription.completed.finally(() => this.#liveSubscriptions.delete(subscription)).catch(() => undefined);
-        await subscription.connected;
-        return subscription;
-    };
 
     readonly subscribeLiveV2 = async (
         sessionId: string,
@@ -2300,46 +1673,7 @@ export class MobiusEventResources {
         return decodeSessionEventLogPageV2(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal));
     };
 
-    readonly list = async (
-        sessionId: string,
-        page: MobiusPageRequest,
-        signal: AbortSignal,
-    ): Promise<MobiusEventPage> => {
-        const path = requestUrl(new URL("https://mobius.invalid/"), sessionPath(this.#projectId, sessionId, "events"));
-        path.searchParams.set("limit", page.limit.toString());
-        if (page.cursor.length > 0) {
-            path.searchParams.set("cursor", page.cursor);
-        }
-        return decodeMobiusEventPage(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal));
-    };
-
-    readonly wait = async (
-        sessionId: string,
-        page: MobiusPageRequest,
-        waitMilliseconds: number,
-        signal: AbortSignal,
-    ): Promise<MobiusEventPage> => {
-        if (!Number.isSafeInteger(waitMilliseconds) || waitMilliseconds < 1 || waitMilliseconds > 10_000) {
-            throw new MobiusValidationError("The Session event wait is invalid");
-        }
-        const path = requestUrl(new URL("https://mobius.invalid/"), sessionPath(this.#projectId, sessionId, "events"));
-        path.searchParams.set("limit", page.limit.toString());
-        path.searchParams.set("wait", waitMilliseconds.toString());
-        if (page.cursor.length > 0) {
-            path.searchParams.set("cursor", page.cursor);
-        }
-        return decodeMobiusEventPage(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal));
-    };
-
     readonly close = (): void => {
-        for (const subscription of this.#subscriptions) {
-            subscription.close();
-        }
-        this.#subscriptions.clear();
-        for (const subscription of this.#liveSubscriptions) {
-            subscription.close();
-        }
-        this.#liveSubscriptions.clear();
         for (const subscription of this.#liveSubscriptionsV2) {
             subscription.close();
         }

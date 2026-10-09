@@ -41,7 +41,6 @@ export type {
     SessionPromptUsageUpdatedEvent,
     SessionReadyEvent,
     SessionRecordingDirectory,
-    SessionRecordingEntry,
     SessionRecordingHistory,
     SessionRecordingSummary,
     SessionStatus,

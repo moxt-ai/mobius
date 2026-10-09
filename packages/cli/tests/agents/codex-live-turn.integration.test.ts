@@ -5,21 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
-    AGENT_ACTIVITY_KIND,
-    AGENT_MESSAGE_DELTA_KIND,
-    type AgentActivityEvent,
-    decodeAgentActivityEvent,
-    decodeAgentMessageDeltaEvent,
     decodeFileChunkEvent,
     decodeMessageKind,
     decodeNativeSessionResult,
     decodeRuntimeHeartbeatEvent,
-    decodeSessionCompletedEvent,
-    decodeSessionEventEnvelope,
+    decodeSessionEventEnvelopeV2,
     decodeSessionLiveHistoryV2PageLoaded,
     decodeSessionOperationFailedEvent,
     decodeSessionPromptCommand,
-    decodeSessionStartedEvent,
     encodeFileReadCommand,
     encodeNativeSessionCommand,
     encodeRuntimeHeartbeatAckEvent,
@@ -36,12 +29,9 @@ import {
     RUNTIME_HEARTBEAT_KIND,
     RUNTIME_LIVENESS_READY_KIND,
     SESSION_CANCEL_KIND,
-    SESSION_COMPLETED_KIND,
-    SESSION_EVENT_KIND,
-    SESSION_FAILED_KIND,
+    SESSION_EVENT_V2_KIND,
     SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND,
     SESSION_OPERATION_FAILED_KIND,
-    SESSION_STARTED_KIND,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { listen, port } from "@moxt-ai/mobius-test/websocket";
@@ -161,7 +151,7 @@ test("Given real Codex emits a tool, commentary, and final text, When the comple
             let started = false;
             let completed = false;
             let sequence = 0;
-            let epoch: string | undefined;
+            let thought = "";
             let _recoveryPosition: {
                 readonly commandId: string;
                 readonly epoch: string;
@@ -170,7 +160,7 @@ test("Given real Codex emits a tool, commentary, and final text, When the comple
             let snapshotVerified = false;
             let queuedCancelled = false;
             let text = "";
-            const activities = new Map<string, AgentActivityEvent>();
+
             while (!completed) {
                 const message = await messages.next();
                 if (decodeMessageKind(message) === "session.queued") {
@@ -262,18 +252,15 @@ test("Given real Codex emits a tool, commentary, and final text, When the comple
                     releaseProvider.resolve();
                     continue;
                 }
-                if (decodeMessageKind(message) !== SESSION_EVENT_KIND) {
+                if (decodeMessageKind(message) !== SESSION_EVENT_V2_KIND) {
                     continue;
                 }
-                const envelope = decodeSessionEventEnvelope(message);
-                const kind = decodeMessageKind(envelope.payload);
-                if (kind === SESSION_STARTED_KIND) {
+                const event = decodeSessionEventEnvelopeV2(message).event;
+                if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.started") {
                     expect(started).toBe(false);
-                    expect(decodeSessionStartedEvent(envelope.payload)).toMatchObject({
+                    expect(event.payload).toMatchObject({
                         commandId,
                         epoch: expect.any(String),
-                        prompt: "Use a shell tool successfully, then reply using the configured model",
-                        sequence: 0,
                     });
                     started = true;
                     await providerEntered.promise;
@@ -293,22 +280,24 @@ test("Given real Codex emits a tool, commentary, and final text, When the comple
                             targetCommandId: commandId,
                         }),
                     );
-                } else if (kind === AGENT_MESSAGE_DELTA_KIND) {
+                } else if (
+                    event.type === "acp" &&
+                    event.payload.sessionUpdate === "agent_message_chunk" &&
+                    event.payload.content.type === "text"
+                ) {
                     expect(started).toBe(true);
-                    const delta = decodeAgentMessageDeltaEvent(envelope.payload);
-                    expect(delta.commandId).toBe(commandId);
-                    expect(delta.sequence).toBeGreaterThan(sequence);
-                    expect(epoch === undefined || delta.epoch === epoch).toBe(true);
-                    epoch = delta.epoch;
-                    sequence = delta.sequence;
-                    text += delta.text;
+                    expect(Number(event.position)).toBeGreaterThan(sequence);
+                    sequence = Number(event.position);
+                    text += event.payload.content.text;
                     expect(text).not.toContain("Checking the live progress boundary.");
-                } else if (kind === AGENT_ACTIVITY_KIND) {
-                    const activity = decodeAgentActivityEvent(envelope.payload);
-                    expect(activity.commandId).toBe(commandId);
-                    activities.set(activity.activityId, activity);
-                } else if (kind === SESSION_COMPLETED_KIND) {
-                    const completion = decodeSessionCompletedEvent(envelope.payload);
+                } else if (
+                    event.type === "acp" &&
+                    event.payload.sessionUpdate === "agent_thought_chunk" &&
+                    event.payload.content.type === "text"
+                ) {
+                    thought += event.payload.content.text;
+                } else if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
+                    const completion = event.payload;
                     if (completion.commandId === queuedCommandId) {
                         expect(completion.stopReason).toBe("cancelled");
                         queuedCancelled = true;
@@ -330,8 +319,11 @@ test("Given real Codex emits a tool, commentary, and final text, When the comple
                         expect(queuedCancelled).toBe(true);
                         completed = true;
                     }
-                } else if (kind === SESSION_FAILED_KIND) {
-                    throw new Error(`Real Codex Turn failed: ${envelope.payload}`);
+                } else if (
+                    event.type === "lifecycle-metadata" &&
+                    (event.payload.kind === "prompt.failed" || event.payload.kind === "prompt.failed-before-start")
+                ) {
+                    throw new Error(`Real Codex Turn failed: ${JSON.stringify(event)}`);
                 }
             }
             expect(started).toBe(true);
@@ -339,13 +331,7 @@ test("Given real Codex emits a tool, commentary, and final text, When the comple
             expect(snapshotVerified).toBe(true);
             expect(sequence).toBeGreaterThan(0);
             expect(text).toContain("Codex live reply");
-            expect(
-                [...activities.values()].some(
-                    (activity) =>
-                        activity.activityType === "reasoning" &&
-                        activity.output === "Checking the live progress boundary.",
-                ),
-            ).toBe(true);
+            expect(thought).toBe("Checking the live progress boundary.");
             const originalCommand = decodeSessionPromptCommand(originalPrompt);
             socket.send(JSON.stringify(Object.fromEntries(Object.entries(originalCommand).reverse())));
             socket.send(

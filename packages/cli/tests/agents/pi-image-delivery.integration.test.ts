@@ -5,8 +5,6 @@ import { deflateSync } from "node:zlib";
 import {
     decodeFileChunkEvent,
     decodeMessageKind,
-    decodeRecordedSessionEvent,
-    decodeSessionEventEnvelope,
     decodeSessionEventEnvelopeV2,
     decodeSessionLiveHistoryV2PageLoaded,
     encodeFileReadCommand,
@@ -113,13 +111,12 @@ for (const side of [128, 500]) {
                         throw new Error(message);
                     }
                     if (kind === "session.event.v2") {
-                        events.push(decodeSessionEventEnvelopeV2(message).event);
-                    } else if (kind === "session.event") {
-                        const event = decodeRecordedSessionEvent(decodeSessionEventEnvelope(message).payload);
-                        if (event.kind === "session.failed") {
+                        const event = decodeSessionEventEnvelopeV2(message).event;
+                        events.push(event);
+                        if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.failed") {
                             throw new Error(JSON.stringify(event));
                         }
-                        if (event.kind === "session.completed") {
+                        if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
                             return events;
                         }
                     }

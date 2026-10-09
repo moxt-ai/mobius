@@ -9,6 +9,7 @@ export { createWritableAcpStream } from "./agent-connection.ts";
 import type {
     NativeSessionHistory,
     SessionConfigOption,
+    SessionEventPayloadV2,
     SessionStatus,
     SessionStatusChangedEvent,
 } from "@moxt-ai/mobius-protocol";
@@ -97,6 +98,14 @@ export class AgentRuntimeManager {
         this.#contentExternalizer = contentExternalizer;
         this.#queryProcesses = new AgentQueryProcesses(this.#processes, contentExternalizer);
     }
+
+    readonly recordLifecycleEventV2 = async (sessionId: string, event: SessionEventPayloadV2): Promise<boolean> => {
+        const runtime = this.#executionProcesses.get(sessionId);
+        if (runtime === undefined) {
+            return false;
+        }
+        return await runtime.recordControlEventV2(event);
+    };
 
     readonly setObserver = (observer: AcpSessionObserver): void => {
         this.#observer = observer;
@@ -509,7 +518,10 @@ export class AgentRuntimeManager {
                     return { stopReason: "cancelled" };
                 }
                 try {
-                    const result = await runtime.prompt(options);
+                    const result = await runtime.prompt({
+                        ...options,
+                        cancellationRequested: () => this.#executions.cancellation(options.sessionId) !== undefined,
+                    });
                     return this.#executions.cancellation(options.sessionId) !== undefined
                         ? { stopReason: "cancelled" }
                         : result;

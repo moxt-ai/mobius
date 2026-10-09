@@ -1,12 +1,6 @@
 import {
     AGENT_ACTIVITY_DETAIL_LIMIT,
-    AGENT_ACTIVITY_KIND,
-    AGENT_ACTIVITY_NARRATION_KIND,
-    AGENT_MESSAGE_DELTA_KIND,
-    type AgentActivityEvent,
-    type AgentActivityNarrationEvent,
     type AgentDisplayContent,
-    type AgentMessageDeltaEvent,
     type Attempt,
     decodeAgentDisplayContentValue,
     decodeAttempt,
@@ -14,8 +8,6 @@ import {
     decodeInteraction,
     decodePromptImagesValue,
     decodePromptResourcesValue,
-    decodeRecordedSessionEvent,
-    decodeSessionEventEnvelope,
     decodeTurn,
     type Identifier,
     type Interaction,
@@ -23,9 +15,6 @@ import {
     MOBIUS_API_VERSION,
     type PromptImage,
     type PromptResource,
-    SESSION_COMPLETED_KIND,
-    SESSION_FAILED_KIND,
-    SESSION_STARTED_KIND,
     type SessionCapabilities,
     type SessionConfigurationSelection,
     sessionCapabilitiesSchema,
@@ -34,10 +23,10 @@ import {
 
 import { MobiusProtocolError, MobiusValidationError } from "./errors.ts";
 
-const MOBIUS_EVENT_FORMAT_VERSION = "1";
-const MOBIUS_SESSION_EVENT_STREAM_EVENT = "mobius.session-event.v1";
-const MOBIUS_SESSION_EVENT_STREAM_MEDIA_TYPE = "text/event-stream";
-const MOBIUS_SESSION_EVENT_STREAM_TRANSPORT = "sse";
+const MOBIUS_EVENT_FORMAT_VERSION = "2";
+const MOBIUS_SESSION_EVENT_STREAM_EVENT = "session.event.v2";
+const MOBIUS_SESSION_EVENT_STREAM_MEDIA_TYPE = "application/json";
+const MOBIUS_SESSION_EVENT_STREAM_TRANSPORT = "websocket";
 const MOBIUS_SESSION_EXPORT_FORMAT_VERSION = "1";
 
 const SESSION_CAPABILITY_FIELDS: readonly string[] = [
@@ -1880,27 +1869,6 @@ export function decodeMobiusToolCallDetail(value: unknown): MobiusToolCallDetail
     throw invalidResponse("The service returned an invalid ToolCall detail");
 }
 
-export class MobiusEventPage {
-    readonly cursor: string;
-    readonly events: readonly MobiusSessionEvent[];
-    readonly hasMore: boolean;
-
-    constructor(cursor: string, events: readonly MobiusSessionEvent[], hasMore: boolean) {
-        this.cursor = cursor;
-        this.events = events;
-        this.hasMore = hasMore;
-    }
-}
-
-export function decodeMobiusEventPage(value: unknown): MobiusEventPage {
-    const page = record(value, "Session event page");
-    return new MobiusEventPage(
-        stringField(page, "cursor", 512),
-        arrayField(page, "events", 100).map(decodeMobiusSessionEvent),
-        booleanField(page, "hasMore"),
-    );
-}
-
 export class MobiusSessionExport {
     readonly formatVersion: string;
     readonly session: Readonly<Record<string, unknown>>;
@@ -1918,214 +1886,4 @@ export function decodeMobiusSessionExport(value: unknown): MobiusSessionExport {
         throw invalidResponse("The service returned an unsupported Session export");
     }
     return new MobiusSessionExport(formatVersion, record(exported["session"], "Session export payload"));
-}
-
-export abstract class MobiusEventSource {
-    abstract readonly kind: string;
-    readonly sourceSequence: string;
-
-    constructor(sourceSequence: string) {
-        this.sourceSequence = sourceSequence;
-    }
-}
-
-export class MobiusRuntimeEventSource extends MobiusEventSource {
-    readonly kind = "runtime";
-}
-
-export class MobiusAttemptEventSource extends MobiusEventSource {
-    readonly attemptId: string;
-    readonly kind = "attempt";
-
-    constructor(attemptId: string, sourceSequence: string) {
-        super(sourceSequence);
-        this.attemptId = attemptId;
-    }
-}
-
-export abstract class MobiusRecordedEvent {
-    abstract readonly kind: string;
-    readonly sessionId: string;
-
-    constructor(sessionId: string) {
-        this.sessionId = sessionId;
-    }
-}
-
-export class MobiusTurnStartedEvent extends MobiusRecordedEvent {
-    readonly attemptId: string;
-    readonly commandId: string;
-    readonly kind = SESSION_STARTED_KIND;
-    readonly prompt: string;
-
-    constructor(sessionId: string, commandId: string, attemptId: string, prompt: string) {
-        super(sessionId);
-        this.attemptId = attemptId;
-        this.commandId = commandId;
-        this.prompt = prompt;
-    }
-}
-
-export class MobiusAgentMessageEvent extends MobiusRecordedEvent {
-    readonly commandId: string;
-    readonly kind = AGENT_MESSAGE_DELTA_KIND;
-    readonly text: string;
-
-    readonly epoch: string;
-    readonly sequence: number;
-    constructor(event: AgentMessageDeltaEvent) {
-        super(event.sessionId);
-        this.commandId = event.commandId;
-        this.text = event.text;
-        this.epoch = event.epoch;
-        this.sequence = event.sequence;
-    }
-}
-
-export class MobiusAgentActivityEvent extends MobiusRecordedEvent {
-    readonly activityId: string;
-    readonly activityType: string;
-    readonly commandId: string;
-    readonly content: AgentActivityEvent["content"];
-    readonly detail: AgentActivityEvent["detail"];
-    readonly input: string;
-    readonly kind = AGENT_ACTIVITY_KIND;
-    readonly locations: readonly string[];
-    readonly name: string;
-    readonly output: string;
-    readonly sequence: number;
-    readonly status: string;
-    readonly title: string;
-    readonly toolKind: string;
-
-    constructor(event: AgentActivityEvent) {
-        super(event.sessionId);
-        this.activityId = event.activityId;
-        this.activityType = event.activityType;
-        this.commandId = event.commandId;
-        this.content = event.content;
-        this.detail = event.detail;
-        this.input = event.input;
-        this.locations = event.locations;
-        this.name = event.name;
-        this.output = event.output;
-        this.sequence = event.sequence;
-        this.status = event.status;
-        this.title = event.title;
-        this.toolKind = event.toolKind;
-    }
-}
-
-/** One increment of a streamed narration activity, before it is folded into a snapshot. */
-export class MobiusAgentActivityNarrationEvent extends MobiusRecordedEvent {
-    readonly activityId: string;
-    readonly activityType: string;
-    readonly commandId: string;
-    readonly kind = AGENT_ACTIVITY_NARRATION_KIND;
-    readonly sequence: number;
-    readonly text: string;
-
-    constructor(event: AgentActivityNarrationEvent) {
-        super(event.sessionId);
-        this.activityId = event.activityId;
-        this.activityType = event.activityType;
-        this.commandId = event.commandId;
-        this.sequence = event.sequence;
-        this.text = event.text;
-    }
-}
-
-export class MobiusTurnCompletedEvent extends MobiusRecordedEvent {
-    readonly commandId: string;
-    readonly kind = SESSION_COMPLETED_KIND;
-    readonly stopReason: string;
-
-    constructor(sessionId: string, commandId: string, stopReason: string) {
-        super(sessionId);
-        this.commandId = commandId;
-        this.stopReason = stopReason;
-    }
-}
-
-export class MobiusTurnFailedEvent extends MobiusRecordedEvent {
-    readonly code: string;
-    readonly commandId: string;
-    readonly kind = SESSION_FAILED_KIND;
-    readonly message: string;
-
-    constructor(sessionId: string, commandId: string, code: string, message: string) {
-        super(sessionId);
-        this.code = code;
-        this.commandId = commandId;
-        this.message = message;
-    }
-}
-
-export class MobiusControlEvent extends MobiusRecordedEvent {
-    readonly encodedPayload: string;
-    readonly kind: string;
-
-    constructor(sessionId: string, kind: string, encodedPayload: string) {
-        super(sessionId);
-        this.encodedPayload = encodedPayload;
-        this.kind = kind;
-    }
-}
-
-function decodeRecordedEvent(encoded: string): MobiusRecordedEvent {
-    const event = decodeRecordedSessionEvent(encoded);
-    switch (event.kind) {
-        case SESSION_STARTED_KIND:
-            return new MobiusTurnStartedEvent(event.sessionId, event.commandId, event.attemptId, event.prompt);
-        case AGENT_MESSAGE_DELTA_KIND:
-            return new MobiusAgentMessageEvent(event);
-        case AGENT_ACTIVITY_KIND:
-            return new MobiusAgentActivityEvent(event);
-        case AGENT_ACTIVITY_NARRATION_KIND:
-            return new MobiusAgentActivityNarrationEvent(event);
-        case SESSION_COMPLETED_KIND:
-            return new MobiusTurnCompletedEvent(event.sessionId, event.commandId, event.stopReason);
-        case SESSION_FAILED_KIND:
-            return new MobiusTurnFailedEvent(event.sessionId, event.commandId, event.code, event.message);
-        default:
-            return new MobiusControlEvent(event.sessionId, event.kind, encoded);
-    }
-}
-
-export class MobiusSessionEvent {
-    readonly cursor: string;
-    readonly eventId: string;
-    readonly payload: MobiusRecordedEvent;
-    readonly recordedAt: string;
-    readonly sequence: string;
-    readonly sessionId: string;
-    readonly source: MobiusEventSource;
-
-    constructor(
-        cursor: string,
-        eventId: string,
-        payload: MobiusRecordedEvent,
-        recordedAt: string,
-        sequence: string,
-        sessionId: string,
-        source: MobiusEventSource,
-    ) {
-        this.cursor = cursor;
-        this.eventId = eventId;
-        this.payload = payload;
-        this.recordedAt = recordedAt;
-        this.sequence = sequence;
-        this.sessionId = sessionId;
-        this.source = source;
-    }
-}
-
-export function decodeMobiusSessionEvent(value: unknown): MobiusSessionEvent {
-    const encoded = JSON.stringify(value);
-    if (typeof encoded !== "string") {
-        throw invalidResponse("The service returned an invalid Session event");
-    }
-    const event = decodeSessionEventEnvelope(encoded);
-    const payload = decodeRecordedEvent(event.payload);
-    return new MobiusSessionEvent("", "", payload, "", "", event.sessionId, new MobiusRuntimeEventSource(""));
 }

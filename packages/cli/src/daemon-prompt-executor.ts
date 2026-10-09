@@ -4,9 +4,6 @@ import {
     AGENT_MESSAGE_DELTA_KIND,
     type AgentActivityEvent,
     type RecordedSessionEvent,
-    SESSION_COMPLETED_KIND,
-    SESSION_READY_KIND,
-    SESSION_STARTED_KIND,
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -21,17 +18,10 @@ import type { AuditStore } from "./audit/audit-store.ts";
 import { resolveSessionDirectories } from "./authorization/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
 import type { DaemonConfig } from "./config.ts";
-import {
-    type DaemonTurnCommand,
-    operationErrorCode,
-    operationErrorMessage,
-    reportFailure,
-} from "./daemon-command-results.ts";
+import type { DaemonTurnCommand } from "./daemon-command-results.ts";
+import { operationErrorCode, operationErrorMessage } from "./daemon-command-results.ts";
 import { resolvePromptArtifacts } from "./prompt-artifact-resolver.ts";
-import { CoalescingAgentEventPublisher } from "./relay-connection/coalescing-agent-event-publisher.ts";
 import type { DaemonOperationState } from "./relay-connection/daemon-operation-state.ts";
-import type { DaemonSessionEventPublisher } from "./relay-connection/session-event-publisher.ts";
-import type { DaemonTimer } from "./relay-connection/timer.ts";
 import type { DaemonSessionEventLogV2 } from "./session-event-log-v2.ts";
 
 function daemonActivity(command: DaemonTurnCommand, activity: AcpActivity): AgentActivityEvent {
@@ -56,7 +46,6 @@ function daemonActivity(command: DaemonTurnCommand, activity: AcpActivity): Agen
 
 export interface ExecutePromptOptions {
     readonly operations: DaemonOperationState;
-    readonly publisher: DaemonSessionEventPublisher;
     readonly eventLogV2: DaemonSessionEventLogV2;
     readonly command: SessionPromptCommand;
     readonly config: DaemonConfig;
@@ -72,9 +61,8 @@ export interface ExecutePromptOptions {
         | { readonly kind: "busy" }
         | { readonly kind: "queue-target-unavailable" }
     >;
-    readonly timer: DaemonTimer;
     readonly signal: AbortSignal;
-    readonly recordLiveEvent: (
+    readonly recordTurnEvent: (
         event:
             | { readonly kind: typeof AGENT_MESSAGE_DELTA_KIND; readonly messageId: string; readonly text: string }
             | Exclude<RecordedSessionEvent, { readonly kind: typeof AGENT_MESSAGE_DELTA_KIND }>,
@@ -85,7 +73,6 @@ export interface ExecutePromptOptions {
 
 export async function executePrompt({
     operations,
-    publisher,
     eventLogV2,
     command,
     config,
@@ -95,36 +82,11 @@ export async function executePrompt({
     attemptId,
     activateAttempt,
     waitForSessionAvailability,
-    timer,
     signal,
-    recordLiveEvent,
+    recordTurnEvent,
     recordSteeringPrompt,
     cancellationRequested,
 }: ExecutePromptOptions): Promise<void> {
-    const events = new CoalescingAgentEventPublisher(timer, (event) => {
-        if (event.kind === "text") {
-            publisher.publish(
-                command.sessionId,
-                recordLiveEvent({ kind: AGENT_MESSAGE_DELTA_KIND, messageId: event.messageId, text: event.text }),
-            );
-            return;
-        }
-        if (event.kind === "narration") {
-            const recorded: RecordedSessionEvent = {
-                activityId: event.increment.activityId,
-                activityType: event.increment.activityType,
-                commandId: command.commandId,
-                kind: AGENT_ACTIVITY_NARRATION_KIND,
-                sequence: event.increment.sequence,
-                sessionId: command.sessionId,
-                text: event.increment.text,
-            };
-            publisher.publish(command.sessionId, recordLiveEvent(recorded));
-            return;
-        }
-        const activity = daemonActivity(command, event.activity);
-        publisher.publish(command.sessionId, recordLiveEvent(activity));
-    });
     try {
         const resolved = await resolveSessionDirectories(
             directories,
@@ -199,33 +161,6 @@ export async function executePrompt({
         }
         const stream = activateAttempt();
         const lifecycleV2 = eventLogV2.started(command.sessionId, command.commandId, attemptId, stream.epoch);
-        if (!prepared.prompted) {
-            const listing = await directories.list(config.bindingId, command.directoryId, signal);
-            publisher.publish(command.sessionId, {
-                additionalDirectories: resolved.additionalDirectoryEntries,
-                agentId: command.agentId,
-                agentName: prepared.agentName,
-                agentVersion: prepared.agentVersion,
-                capabilities: prepared.capabilities,
-                commands: prepared.commands,
-                configOptions: prepared.configOptions,
-                directoryId: command.directoryId,
-                directoryLabel: listing.directoryLabel,
-                kind: SESSION_READY_KIND,
-                requestId: command.commandId,
-                restored: prepared.restored,
-                sessionId: command.sessionId,
-            });
-        }
-        publisher.publish(command.sessionId, {
-            commandId: command.commandId,
-            epoch: stream.epoch,
-            kind: SESSION_STARTED_KIND,
-            attemptId,
-            prompt: command.prompt,
-            sequence: stream.sequence,
-            sessionId: command.sessionId,
-        });
         const attachments = await resolvePromptArtifacts(config, command, signal);
         let stopReason: string;
         if (availability.disposition === SessionPromptDisposition.Steer) {
@@ -252,9 +187,20 @@ export async function executePrompt({
                 disposition: availability.disposition,
                 images: attachments.images,
                 lifecycleV2,
-                onActivity: events.recordActivity,
-                onNarration: events.recordNarration,
-                onText: events.recordText,
+                onActivity: async (activity) => {
+                    recordTurnEvent(daemonActivity(command, activity));
+                },
+                onNarration: async (increment) => {
+                    recordTurnEvent({
+                        ...increment,
+                        commandId: command.commandId,
+                        sessionId: command.sessionId,
+                        kind: AGENT_ACTIVITY_NARRATION_KIND,
+                    });
+                },
+                onText: async (text, messageId) => {
+                    recordTurnEvent({ kind: AGENT_MESSAGE_DELTA_KIND, text, messageId });
+                },
                 prompt: command.prompt,
                 resources: attachments.resources,
                 sessionId: command.sessionId,
@@ -264,14 +210,7 @@ export async function executePrompt({
             stopReason = result.stopReason;
         }
 
-        events.flush();
-        publisher.publish(command.sessionId, {
-            commandId: command.commandId,
-            kind: SESSION_COMPLETED_KIND,
-            sessionId: command.sessionId,
-            stopReason,
-        });
-        eventLogV2.completed(command.sessionId, command.commandId, stopReason);
+        await eventLogV2.completed(command.sessionId, command.commandId, stopReason);
         operations.transitionExecution(command.commandId, stopReason === "cancelled" ? "cancelled" : "succeeded");
         audit.record({
             commandId: command.commandId,
@@ -279,15 +218,8 @@ export async function executePrompt({
             sessionId: command.sessionId,
         });
     } catch (error) {
-        events.flush();
         if (signal.aborted && cancellationRequested()) {
-            publisher.publish(command.sessionId, {
-                commandId: command.commandId,
-                kind: SESSION_COMPLETED_KIND,
-                sessionId: command.sessionId,
-                stopReason: "cancelled",
-            });
-            eventLogV2.completed(command.sessionId, command.commandId, "cancelled");
+            await eventLogV2.completed(command.sessionId, command.commandId, "cancelled");
             operations.transitionExecution(command.commandId, "cancelled");
             audit.record({
                 commandId: command.commandId,
@@ -307,8 +239,7 @@ export async function executePrompt({
             code === "session_operation_failed"
                 ? "The local agent could not complete the request"
                 : operationErrorMessage(error);
-        eventLogV2.failed(command.sessionId, command.commandId, failureCode, failureMessage);
-        reportFailure(publisher, command, failureCode, failureMessage);
+        await eventLogV2.failed(command.sessionId, command.commandId, failureCode, failureMessage);
         operations.transitionExecution(command.commandId, "failed");
         console.error("Mobius daemon command failed", error);
     }

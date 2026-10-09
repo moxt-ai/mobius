@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
     decodeMessageKind,
-    decodeRecordedSessionEvent,
+    decodeSessionEventV2,
     decodeSessionLiveHistoryV2PageLoaded,
     encodeSessionLiveHistoryV2PageLoad,
     encodeSessionPromptCommand,
@@ -42,17 +42,21 @@ test("Given a real Codex conversation, When more Sessions are opened than the da
             );
             let output = "";
             for (;;) {
-                const event = decodeRecordedSessionEvent(await peer.nextEvent());
-                if (event.kind === "session.failed") {
+                const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+                if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.failed") {
                     throw new Error(JSON.stringify(event));
                 }
-                if (event.kind === "agent.message.delta") {
-                    output += event.text;
+                if (
+                    event.type === "acp" &&
+                    event.payload.sessionUpdate === "agent_message_chunk" &&
+                    event.payload.content.type === "text"
+                ) {
+                    output += event.payload.content.text;
                 }
-                if (event.kind === "session.completed") {
-                    expect(event.commandId).toBe(commandId);
+                if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
+                    expect(event.payload.commandId).toBe(commandId);
                     expect(event.sessionId).toBe(sessionId);
-                    expect(event.stopReason).toBe("end_turn");
+                    expect(event.payload.stopReason).toBe("end_turn");
                     expect(output).toContain("RESTORED_REPLY");
                     break;
                 }

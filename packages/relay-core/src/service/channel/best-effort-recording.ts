@@ -1,4 +1,4 @@
-import type { SessionEventEnvelope } from "@moxt-ai/mobius-protocol";
+import type { SessionEventEnvelopeV2 } from "@moxt-ai/mobius-protocol";
 import type { SessionRecording, SessionRecordingTarget } from "../../infra/session-recording.ts";
 import { RuntimeMessageScheduler } from "./runtime-message-scheduler.ts";
 
@@ -17,8 +17,8 @@ export class BestEffortRecording {
         this.#waitUntil = waitUntil;
     }
 
-    readonly publish = (target: SessionRecordingTarget, envelope: SessionEventEnvelope): void => {
-        const bytes = new TextEncoder().encode(envelope.payload).byteLength;
+    readonly publish = (target: SessionRecordingTarget, envelope: SessionEventEnvelopeV2): void => {
+        const bytes = new TextEncoder().encode(JSON.stringify(envelope.event)).byteLength;
         if (this.#pendingBytes + bytes > MAX_PENDING_BYTES) {
             console.warn("Recording event dropped", { code: "recording_capacity_exceeded" });
             return;
