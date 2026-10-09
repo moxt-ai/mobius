@@ -1,8 +1,4 @@
-import {
-    type NativeSessionHistory,
-    parseNativeHistoryText,
-    SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT,
-} from "@moxt-ai/mobius-sdk";
+import { parseNativeHistoryText, SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT } from "@moxt-ai/mobius-sdk";
 import { ArrowDown, GitFork, LoaderCircle, MoreHorizontal } from "lucide-react";
 import { memo, type UIEvent, useCallback, useLayoutEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
@@ -16,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { type PromptDelivery, UserPromptMessage } from "@/components/user-prompt-message";
 import { useWorkspaceRoutes } from "@/components/workspace-route-provider";
 import { dataTestId } from "@/data-testid";
-import type { ChannelConnection } from "@/domain/channel";
+import { type ChannelConnection, RecordedActivity } from "@/domain/channel";
 import {
     AgentChatMessage,
     type ChatMessage,
@@ -25,6 +21,7 @@ import {
     SteeringUserChatMessage,
     UserChatMessage,
 } from "@/domain/chat";
+import type { NativeSessionHistory } from "@/domain/native-history";
 import { cn } from "@/lib/utils";
 import { forkConversationAtTurn, sendPrompt } from "@/services/mobius-transport";
 import { selectActiveConversation, useChatStore } from "@/store/chat-store";
@@ -256,7 +253,14 @@ export function NativeSessionHistoryView({
                 const parsed = parseNativeHistoryText(entry.text);
                 const images = [...(entry.images ?? []), ...parsed.images];
                 return entry.role === "user" ? (
-                    <UserPromptMessage key={index.toString()} images={images} resources={[]} text={parsed.text} />
+                    <div key={index.toString()}>
+                        <UserPromptMessage images={images} resources={[]} text={parsed.text} />
+                        <AgentRichContent
+                            connection={connection}
+                            contents={entry.content ?? []}
+                            sessionId={sessionId}
+                        />
+                    </div>
                 ) : (
                     <article
                         aria-label={`Previous message from ${agentLabel}`}
@@ -275,6 +279,32 @@ export function NativeSessionHistoryView({
                                     />
                                 ))}
                             </div>
+                        )}
+                        {connection !== undefined && sessionId !== undefined && (
+                            <AgentActivityList
+                                connection={connection}
+                                sessionId={sessionId}
+                                settled={false}
+                                streaming={false}
+                                timing={{ kind: "untimed" }}
+                                activities={entry.activities.map(
+                                    (activity) =>
+                                        new RecordedActivity(
+                                            activity.activityId,
+                                            "native-history",
+                                            activity.activityType,
+                                            activity.input,
+                                            activity.locations,
+                                            activity.name,
+                                            activity.output,
+                                            activity.sequence,
+                                            activity.status,
+                                            activity.title,
+                                            activity.toolKind,
+                                            activity.content,
+                                        ),
+                                )}
+                            />
                         )}
                         {parsed.text.length > 0 && <AgentMarkdown markdown={parsed.text} streaming={false} />}
                         <AgentRichContent connection={connection} contents={entry.content} sessionId={sessionId} />

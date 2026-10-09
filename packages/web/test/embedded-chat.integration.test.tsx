@@ -1,6 +1,6 @@
 import { act, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { readChannelConnection } from "../src/index.ts";
+import { readProjectRuntimeConnection } from "@/services/pairing-api";
 import {
     createEmbeddedTestApplication,
     pairDaemon,
@@ -21,7 +21,12 @@ describe.sequential("Embedded Mobius chat", () => {
         });
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        const connection = await readChannelConnection(paired.channelId, AbortSignal.timeout(15_000));
+        const connection = await readProjectRuntimeConnection(
+            paired.credential.projectId,
+            paired.credential.runtimeId,
+            AbortSignal.timeout(15_000),
+            paired.channelId,
+        );
         vi.useFakeTimers({ now: new Date("2026-09-08T00:00:00Z") });
         try {
             // The embedded application uses the real Worker and a stateful daemon at the protocol boundary.

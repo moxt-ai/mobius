@@ -90,7 +90,10 @@ export async function startLocalRelay(): Promise<LocalRelay> {
         workers: [
             {
                 configPath: "packages/relay-cloudflare-standalone/wrangler.jsonc",
-                vars: { PUBLIC_PROJECT_BOOTSTRAP_CLIENT_LIMIT: "100" },
+                vars: {
+                    PUBLIC_PROJECT_BOOTSTRAP_CLIENT_LIMIT: "100",
+                    MOBIUS_STANDALONE_TOKEN: "web-integration-owner-credential-00000000",
+                },
             },
             {
                 configPath: "packages/recording-cloudflare/wrangler.jsonc",

@@ -5,7 +5,6 @@ import type {
     AgentInstallFailedEvent,
     AgentInstallProgressEvent,
     AgentInstallStartedEvent,
-    NativeSessionHistory,
     NativeSessionResult,
     PromptImage,
     PromptResource,
@@ -21,7 +20,6 @@ import type {
     WorkspaceEntry,
 } from "@moxt-ai/mobius-sdk";
 import { create } from "zustand";
-
 import {
     type AgentInstallationViewState,
     AgentOption,
@@ -57,6 +55,7 @@ import {
     StoppingTurnState,
     UserChatMessage,
 } from "@/domain/chat";
+import type { NativeSessionHistory } from "@/domain/native-history";
 import { readComposerDraft, readPendingComposerDraft, saveComposerDraft } from "@/services/composer-drafts";
 
 const HISTORY_SYNC_ERROR_PREFIX = "history_sync_failed:";

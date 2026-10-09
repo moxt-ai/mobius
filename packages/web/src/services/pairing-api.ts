@@ -2,13 +2,10 @@ import {
     AGENT_ACTIVITY_DETAIL_LIMIT,
     conversationTitleFromText,
     decodeAgentDisplayContentValue,
-    decodePromptImagesValue,
-    decodePromptResourcesValue,
     decodeRecordedAgentContentValue,
     decodeRecordedSessionEvent,
     decodeSessionRecordingDirectory,
     decodeSessionRecordingHistory,
-    type Interaction,
     MAX_LOCAL_AGENT_DIRECTORY_ENTRIES,
     MOBIUS_API_PREFIX,
     MobiusAgentIntegrationDescriptor,
@@ -18,7 +15,6 @@ import {
     MobiusError,
     MobiusExpiredRuntimePairingStatus,
     MobiusMissingAgentDescriptor,
-    MobiusPageRequest,
     MobiusPairedRuntimePairingStatus,
     MobiusPendingRuntimePairingStatus,
     type MobiusRedeemedChannelCredential,
@@ -26,15 +22,12 @@ import {
     type MobiusRuntimePairing,
     MobiusRuntimePairingRequest,
     type MobiusRuntimePairingStatus,
-    type MobiusSession,
-    type NativeSessionHistory,
     RUNTIME_WORKSPACE_BINDING_ID,
     type SessionElicitationRequestedEvent,
     type SessionMetadata,
     type SessionPermissionRequestedEvent,
     StaticMobiusCredentialProvider,
 } from "@moxt-ai/mobius-sdk";
-
 import {
     AgentIntegrationOption,
     AgentOption,
@@ -48,7 +41,6 @@ import {
     CreatedPairing,
     ExpiredBrowserPairingStatus,
     FailedRecordedTurn,
-    IndeterminateRecordedTurn,
     type InstallableAgentOption,
     isIdentifier,
     isToken,
@@ -57,7 +49,6 @@ import {
     MissingAgentOption,
     OwnerChannelCredentialAuthority,
     PairingApiError,
-    PendingRecordedTurn,
     ProjectRuntimeCredentialAuthority,
     RecordedActivity,
     RecordedContent,
@@ -68,14 +59,15 @@ import {
     StandaloneProjectRuntimeCredentialAuthority,
     type TurnTiming,
     UNAVAILABLE_RECORDED_SESSION_EXECUTION,
-    UNTIMED_TURN,
     WaitingBrowserPairingStatus,
 } from "@/domain/channel";
+import type { NativeSessionHistory } from "@/domain/native-history";
+
+import { nativeEventHistory } from "./acp-transcript.ts";
 
 const REQUEST_TIMEOUT_MILLISECONDS = 20_000;
 const CHANNEL_CREDENTIAL_PREFIX = "mobius:channel-credential:";
 const PROJECT_OWNER_CREDENTIAL_PREFIX = "mobius:project-owner-credential:";
-const DIRECTORY_IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/;
 const ACTIVITY_TYPES = new Set(["plan", "progress", "reasoning", "tool"]);
 const ACTIVITY_STATUSES = new Set(["pending", "running", "completed", "failed"]);
 const TOOL_KINDS = new Set([
@@ -306,59 +298,6 @@ function readIdentifier(value: unknown, field: string): string {
     return value;
 }
 
-function readAdditionalDirectoryIds(value: unknown): readonly string[] {
-    if (!Array.isArray(value) || value.length > 16) {
-        throw new PairingApiError(
-            "invalid_relay_response",
-            "The relay returned invalid additional Session workspaces.",
-        );
-    }
-    const directoryIds: string[] = [];
-    for (const directoryId of value) {
-        if (typeof directoryId !== "string" || !DIRECTORY_IDENTIFIER_PATTERN.test(directoryId)) {
-            throw new PairingApiError(
-                "invalid_relay_response",
-                "The relay returned an invalid additional Session workspace.",
-            );
-        }
-        directoryIds.push(directoryId);
-    }
-    if (new Set(directoryIds).size !== directoryIds.length) {
-        throw new PairingApiError(
-            "invalid_relay_response",
-            "The relay returned duplicate additional Session workspaces.",
-        );
-    }
-    return directoryIds;
-}
-
-function readSessionAdditionalDirectoryIds(messages: readonly unknown[]): readonly string[] {
-    const first = messages[0];
-    if (first === undefined) {
-        return [];
-    }
-    if (!isRecord(first)) {
-        throw new PairingApiError("invalid_relay_response", "The relay returned an invalid session message.");
-    }
-    const recorded = readAdditionalDirectoryIds(first["additionalDirectoryIds"]);
-    for (const message of messages.slice(1)) {
-        if (!isRecord(message)) {
-            throw new PairingApiError("invalid_relay_response", "The relay returned an invalid session message.");
-        }
-        const directoryIds = readAdditionalDirectoryIds(message["additionalDirectoryIds"]);
-        if (
-            recorded.length !== directoryIds.length ||
-            recorded.some((directoryId, index) => directoryId !== directoryIds[index])
-        ) {
-            throw new PairingApiError(
-                "invalid_relay_response",
-                "The relay returned inconsistent additional Session workspaces.",
-            );
-        }
-    }
-    return recorded;
-}
-
 function readAllowedString(value: unknown, field: string, allowedValues: ReadonlySet<string>): string {
     const text = readText(value, field, 64);
     if (!allowedValues.has(text)) {
@@ -367,7 +306,7 @@ function readAllowedString(value: unknown, field: string, allowedValues: Readonl
     return text;
 }
 
-function decodeRecordedActivity(value: unknown): RecordedActivity {
+function _decodeRecordedActivity(value: unknown): RecordedActivity {
     if (!isRecord(value)) {
         throw new PairingApiError("invalid_relay_response", "The relay returned an invalid agent activity.");
     }
@@ -422,64 +361,6 @@ function decodeRecordedActivity(value: unknown): RecordedActivity {
         content,
         detailAvailability,
     );
-}
-
-function decodeRecordedContents(value: unknown): readonly RecordedContent[] {
-    if (value === undefined) {
-        return [];
-    }
-    if (!Array.isArray(value) || value.length > 2_000) {
-        throw new PairingApiError("invalid_relay_response", "The relay returned invalid agent content.");
-    }
-    const contents: RecordedContent[] = [];
-    const identifiers = new Set<string>();
-    for (const candidate of value) {
-        if (!isRecord(candidate)) {
-            throw new PairingApiError("invalid_relay_response", "The relay returned invalid agent content.");
-        }
-        const contentId = readIdentifier(candidate["contentId"], "agent content identifier");
-        if (identifiers.has(contentId)) {
-            throw new PairingApiError("invalid_relay_response", "The relay returned duplicate agent content.");
-        }
-        identifiers.add(contentId);
-        contents.push(
-            new RecordedContent(
-                readIdentifier(candidate["commandId"], "agent content command"),
-                contentId,
-                readText(candidate["messageId"], "agent content message", 255),
-                decodeAgentDisplayContentValue(candidate["content"]),
-            ),
-        );
-    }
-    return contents;
-}
-
-function decodeRecordedActivities(value: unknown): readonly RecordedActivity[] {
-    if (value === undefined) {
-        return [];
-    }
-    if (!Array.isArray(value) || value.length > 2_000) {
-        throw new PairingApiError("invalid_relay_response", "The relay returned invalid agent activities.");
-    }
-    const activities: RecordedActivity[] = [];
-    const identifiers = new Set<string>();
-    for (const candidate of value) {
-        let activity: RecordedActivity;
-        try {
-            activity = decodeRecordedActivity(candidate);
-        } catch {
-            // A step the current protocol revision cannot read must cost only that step. Failing here
-            // would turn one unreadable record into an unavailable Session.
-            continue;
-        }
-        if (identifiers.has(activity.activityId)) {
-            throw new PairingApiError("invalid_relay_response", "The relay returned a duplicate agent activity.");
-        }
-        identifiers.add(activity.activityId);
-        activities.push(activity);
-    }
-    activities.sort((left, right) => left.sequence - right.sequence);
-    return activities;
 }
 
 abstract class BrowserChannelCredential {
@@ -822,155 +703,6 @@ function descriptorConnection(
     );
 }
 
-/**
- * Derives Turn timing from relay attempt timestamps. Both readings come from the relay clock, so a
- * settled Turn is measured against its own start and an unsettled one keeps only its start.
- */
-function decodeTurnTiming(startedAtValue: unknown, settledAtValue: unknown): TurnTiming {
-    if (startedAtValue === undefined || startedAtValue === null) {
-        return UNTIMED_TURN;
-    }
-    const startedAt = readDate(startedAtValue, "history attempt start");
-    if (settledAtValue === undefined || settledAtValue === null) {
-        return { kind: "running", startedAt };
-    }
-    const settledAt = readDate(settledAtValue, "history attempt outcome time");
-    return {
-        elapsedMilliseconds: Math.max(0, settledAt.getTime() - startedAt.getTime()),
-        kind: "measured",
-    };
-}
-
-function decodeRecordedTurn(value: unknown): RecordedTurn {
-    if (!isRecord(value)) {
-        throw new PairingApiError("invalid_relay_response", "The relay returned an invalid conversation history.");
-    }
-    const agentId = readIdentifier(value["agentId"], "history agent");
-    const commandId = readIdentifier(value["commandId"], "history command");
-    const createdAt = readDate(value["createdAt"], "history timestamp");
-    const prompt = readText(value["prompt"], "history prompt", 10_000);
-    const response = readText(value["response"], "history response", 100_000);
-    const sessionId = readIdentifier(value["sessionId"], "history session");
-    const activities = decodeRecordedActivities(value["activities"]);
-    const images = decodePromptImagesValue(value["images"] ?? []);
-    const resources = decodePromptResourcesValue(value["resources"] ?? []);
-    const contents = decodeRecordedContents(value["contents"]);
-    const disposition =
-        value["disposition"] === undefined ? "reject" : readText(value["disposition"], "prompt disposition", 16);
-    if (disposition !== "reject" && disposition !== "queue" && disposition !== "steer") {
-        throw new PairingApiError("invalid_relay_response", "The relay returned an invalid prompt disposition.");
-    }
-    const targetCommandId =
-        value["targetCommandId"] === undefined ? "" : readText(value["targetCommandId"], "target command", 128);
-    if (targetCommandId.length > 0 && !isIdentifier(targetCommandId)) {
-        throw new PairingApiError("invalid_relay_response", "The relay returned an invalid target command.");
-    }
-    const turnId = value["turnId"] === undefined ? "" : readText(value["turnId"], "turn", 128);
-    if (turnId.length > 0 && !isIdentifier(turnId)) {
-        throw new PairingApiError("invalid_relay_response", "The relay returned an invalid turn identifier.");
-    }
-    const timing = decodeTurnTiming(value["startedAt"], value["settledAt"]);
-    const status = value["status"];
-    if (status === "pending") {
-        return new PendingRecordedTurn(
-            agentId,
-            commandId,
-            createdAt,
-            prompt,
-            response,
-            sessionId,
-            activities,
-            images,
-            resources,
-            contents,
-            disposition,
-            targetCommandId,
-            turnId,
-            timing,
-        );
-    }
-    if (status === "running") {
-        return new RunningRecordedTurn(
-            agentId,
-            commandId,
-            createdAt,
-            prompt,
-            response,
-            sessionId,
-            readIdentifier(value["attemptId"], "history attempt"),
-            activities,
-            images,
-            resources,
-            contents,
-            disposition,
-            targetCommandId,
-            turnId,
-            timing,
-        );
-    }
-    if (status === "completed") {
-        return new CompletedRecordedTurn(
-            agentId,
-            commandId,
-            createdAt,
-            prompt,
-            response,
-            sessionId,
-            readIdentifier(value["attemptId"], "history attempt"),
-            readString(value["stopReason"], "history stop reason", 64),
-            activities,
-            images,
-            resources,
-            contents,
-            disposition,
-            targetCommandId,
-            turnId,
-            timing,
-        );
-    }
-    if (status === "failed") {
-        return new FailedRecordedTurn(
-            agentId,
-            commandId,
-            createdAt,
-            prompt,
-            response,
-            sessionId,
-            readIdentifier(value["code"], "history error code"),
-            readString(value["message"], "history error message", 500),
-            activities,
-            images,
-            resources,
-            contents,
-            disposition,
-            targetCommandId,
-            turnId,
-            timing,
-        );
-    }
-    if (status === "indeterminate") {
-        return new IndeterminateRecordedTurn(
-            agentId,
-            commandId,
-            createdAt,
-            prompt,
-            response,
-            sessionId,
-            readIdentifier(value["attemptId"], "history attempt"),
-            readDate(value["detectedAt"], "history reconciliation time"),
-            activities,
-            images,
-            resources,
-            contents,
-            disposition,
-            targetCommandId,
-            turnId,
-            timing,
-        );
-    }
-    throw new PairingApiError("invalid_relay_response", "The relay returned an invalid conversation history state.");
-}
-
 export async function createBrowserPairing(signal: AbortSignal): Promise<CreatedPairing> {
     const provider = standaloneProjectCredentialProvider();
     const credential = await provider.projectCredential(requestSignal(signal));
@@ -1205,108 +937,6 @@ export async function readSessionHistory(
     cancellationSignal: AbortSignal = new AbortController().signal,
 ): Promise<ChannelHistory> {
     return await readSessionHistoryWithSignal(connection, sessionId, requestSignal(cancellationSignal));
-}
-
-interface PendingSessionInteractions {
-    readonly elicitations: readonly SessionElicitationRequestedEvent[];
-    readonly permissions: readonly SessionPermissionRequestedEvent[];
-}
-
-function isAcceptedUrlResponse(interaction: Interaction): boolean {
-    if (
-        interaction.request.kind !== "elicitation" ||
-        interaction.request.mode !== "url" ||
-        interaction.state.kind !== "responded" ||
-        interaction.state.response.kind !== "elicitation"
-    ) {
-        return false;
-    }
-    try {
-        const response: unknown = JSON.parse(interaction.state.response.content);
-        return (
-            isRecord(response) &&
-            Object.keys(response).length === 2 &&
-            response["action"] === "accept" &&
-            typeof response["content"] === "string"
-        );
-    } catch {
-        return false;
-    }
-}
-
-function pendingSessionInteractions(
-    interactions: readonly Interaction[],
-    sessionId: string,
-    turns: readonly RecordedTurn[],
-): PendingSessionInteractions {
-    // An unreconciled Attempt keeps its pending Interactions, so it indexes alongside a running one.
-    const commandIdsByAttempt = new Map(
-        turns
-            .filter((turn) => turn instanceof RunningRecordedTurn || turn instanceof IndeterminateRecordedTurn)
-            .map((turn) => [turn.attemptId, turn.commandId]),
-    );
-    const elicitations: SessionElicitationRequestedEvent[] = [];
-    const permissions: SessionPermissionRequestedEvent[] = [];
-    for (const interaction of interactions) {
-        if (
-            interaction.sessionId !== sessionId ||
-            (interaction.state.kind !== "pending" && interaction.state.kind !== "responded")
-        ) {
-            throw new PairingApiError(
-                "invalid_relay_response",
-                "The relay returned an inconsistent pending Interaction.",
-            );
-        }
-        const commandId = commandIdsByAttempt.get(interaction.attemptId);
-        if (commandId === undefined) {
-            continue;
-        }
-        if (interaction.request.kind === "permission") {
-            if (interaction.state.kind === "pending") {
-                permissions.push({
-                    commandId,
-                    interactionId: interaction.interactionId,
-                    kind: "session.permission.requested",
-                    options: interaction.request.options,
-                    sessionId,
-                    title: interaction.request.title,
-                    toolCallId: interaction.request.toolCallId,
-                    toolKind: interaction.request.toolKind,
-                });
-            }
-            continue;
-        }
-        if (interaction.state.kind === "pending" || isAcceptedUrlResponse(interaction)) {
-            elicitations.push({
-                accepted: interaction.state.kind === "responded",
-                commandId,
-                elicitationId: interaction.request.elicitationId,
-                fields: interaction.request.fields,
-                interactionId: interaction.interactionId,
-                kind: "session.elicitation.requested",
-                message: interaction.request.message,
-                mode: interaction.request.mode,
-                sessionId,
-                url: interaction.request.url,
-            });
-        }
-    }
-    return { elicitations, permissions };
-}
-
-interface RestoredChannelSession {
-    readonly session: RecordedSession;
-    readonly turns: RecordedTurn[];
-}
-
-class DecodedRecordedSession {
-    readonly hasNativeHistory: boolean;
-    readonly session: RecordedSession;
-
-    constructor(hasNativeHistory: boolean, session: RecordedSession) {
-        this.hasNativeHistory = hasNativeHistory;
-        this.session = session;
-    }
 }
 
 const MOBIUS_ARTIFACT_URI_PREFIX = "mobius-artifact:";
@@ -1873,18 +1503,6 @@ async function readRecordedSessionHistory(
     return new ChannelHistory(recordedTurns, [session]);
 }
 
-async function _readConnectionDirectoryWithClient(
-    client: MobiusClient,
-    connection: ChannelConnection,
-    credential: BrowserChannelCredential,
-    signal: AbortSignal,
-): Promise<readonly DecodedRecordedSession[]> {
-    const directory = await client.sessions.list(new MobiusPageRequest(100, ""), signal);
-    return directory.sessions
-        .filter((session) => session.runtimeId === connection.runtimeId)
-        .map((session) => decodeRecordedSession(session, credential));
-}
-
 async function readSessionHistoryWithSignal(
     connection: ChannelConnection,
     sessionId: string,
@@ -2003,204 +1621,15 @@ async function readRuntimeNativeSessionHistory(
     },
     signal: AbortSignal,
 ): Promise<NativeSessionHistory> {
-    const messages: Extract<NativeSessionHistory, { readonly status: "available" }>["messages"][number][] = [];
-    const coveredCommandIds: string[] = [];
-    const coveredMessageIds: string[] = [];
-    const visitedCursors = new Set<string>();
-    let cursor = "";
-    let truncated = false;
-    for (;;) {
-        const page = await client.sessions.queryNativeMessages(
-            runtimeId,
-            sessionId,
-            identity,
-            new MobiusPageRequest(100, cursor),
-            signal,
-        );
-        signal.throwIfAborted();
-        if (page.status === "unavailable") {
-            return { cause: page.cause, status: "unavailable" };
-        }
-        messages.unshift(...page.messages);
-        coveredCommandIds.push(...page.coveredCommandIds);
-        coveredMessageIds.push(...page.coveredMessageIds);
-        truncated ||= page.truncated;
-        if (page.nextCursor === null) {
-            return {
-                coveredCommandIds,
-                coveredMessageIds,
-                messages,
-                status: "available",
-                truncated,
-            };
-        }
-        if (visitedCursors.has(page.nextCursor)) {
-            throw new PairingApiError(
-                "invalid_relay_response",
-                "The Runtime returned a repeating Session history cursor.",
-            );
-        }
-        visitedCursors.add(page.nextCursor);
-        cursor = page.nextCursor;
-    }
-}
-
-async function _readSessionHistoryForSummary(
-    client: MobiusClient,
-    summary: DecodedRecordedSession,
-    signal: AbortSignal,
-): Promise<RestoredChannelSession> {
-    const [pageResult, nativeHistoryResult, interactionsResult] = await Promise.allSettled([
-        client.sessions.readMessages(summary.session.sessionId, new MobiusPageRequest(100, ""), signal),
-        summary.hasNativeHistory
-            ? client.sessions.queryNativeMessages(summary.session.sessionId, new MobiusPageRequest(100, ""), signal)
-            : Promise.resolve(null),
-        client.interactions.listPending(summary.session.sessionId, signal),
-    ]);
-    signal.throwIfAborted();
-    if (pageResult.status !== "fulfilled") {
-        throw pageResult.reason;
-    }
-    if (nativeHistoryResult.status !== "fulfilled") {
-        throw nativeHistoryResult.reason;
-    }
-    if (interactionsResult.status !== "fulfilled") {
-        throw interactionsResult.reason;
-    }
-    const additionalDirectoryIds = readSessionAdditionalDirectoryIds(pageResult.value.messages);
-    const turns = pageResult.value.messages.toReversed().map(decodeSessionMessage);
-    const pending = pendingSessionInteractions(interactionsResult.value, summary.session.sessionId, turns);
-    return {
-        turns,
-        session: new RecordedSession(
-            summary.session.agentId,
-            summary.session.bindingId,
-            summary.session.configRevision,
-            summary.session.directoryId,
-            summary.session.runtimeId,
-            summary.session.sessionId,
-            summary.session.title,
-            summary.session.updatedAt,
-            nativeHistoryResult.value,
-            UNAVAILABLE_RECORDED_SESSION_EXECUTION,
-            pending.elicitations,
-            pending.permissions,
-            additionalDirectoryIds,
-            pageResult.value.lastCommittedSequence,
-        ),
-    };
-}
-
-function decodeRecordedSession(value: MobiusSession, credential: BrowserChannelCredential): DecodedRecordedSession {
-    const binding = value.defaultBinding;
-    if (
-        value.projectId !== credential.projectId ||
-        value.state.kind !== "ready" ||
-        binding.sessionId !== value.sessionId ||
-        binding.agentRef !== value.agentId ||
-        binding.runtimeId !== value.runtimeId
-    ) {
-        throw new PairingApiError("invalid_relay_response", "The relay returned an inconsistent session summary.");
-    }
-    return new DecodedRecordedSession(
-        value.hasNativeHistory,
-        new RecordedSession(
-            value.agentId,
-            binding.bindingId,
-            binding.configRevision,
-            binding.workspaceRef,
-            value.runtimeId,
-            value.sessionId,
-            value.title,
-            value.updatedAt,
-            null,
-            UNAVAILABLE_RECORDED_SESSION_EXECUTION,
-            [],
-            [],
-            [],
-            value.lastCommittedSequence,
-        ),
+    const events = await client.sessions.queryRuntimeNativeEventsV2(
+        runtimeId,
+        sessionId,
+        identity,
+        { cursor: null, eventLimit: 200 },
+        signal,
     );
-}
-
-function decodeSessionMessage(value: unknown): RecordedTurn {
-    if (!isRecord(value) || !Array.isArray(value["activities"])) {
-        throw new PairingApiError("invalid_relay_response", "The relay returned an invalid session message.");
-    }
-    const base = {
-        activities: value["activities"],
-        agentId: value["agentId"],
-        commandId: value["commandId"],
-        contents: [],
-        createdAt: value["createdAt"],
-        disposition: value["disposition"],
-        images: value["images"],
-        prompt: value["prompt"],
-        resources: value["resources"],
-        response: value["response"],
-        sessionId: value["sessionId"],
-        targetCommandId: value["targetCommandId"],
-        turnId: value["turnId"],
-    };
-    const attempt = value["attempt"];
-    if (attempt === null || (isRecord(attempt) && attempt["kind"] === "none")) {
-        return decodeRecordedTurn({ ...base, status: "pending" });
-    }
-    if (!isRecord(attempt) || typeof attempt["kind"] !== "string") {
-        throw new PairingApiError("invalid_relay_response", "The relay returned an invalid execution attempt.");
-    }
-    const startedAt = attempt["kind"] === "dispatching" ? attempt["dispatchedAt"] : attempt["startedAt"];
-    if (attempt["kind"] === "dispatching" || attempt["kind"] === "running" || attempt["kind"] === "waiting_input") {
-        return decodeRecordedTurn({
-            ...base,
-            attemptId: attempt["attemptId"],
-            startedAt,
-            status: "running",
-        });
-    }
-    if (attempt["kind"] === "succeeded") {
-        return decodeRecordedTurn({
-            ...base,
-            attemptId: attempt["attemptId"],
-            settledAt: attempt["completedAt"],
-            startedAt,
-            status: "completed",
-            stopReason: attempt["stopReason"],
-        });
-    }
-    if (attempt["kind"] === "cancelled") {
-        return decodeRecordedTurn({
-            ...base,
-            attemptId: attempt["attemptId"],
-            settledAt: attempt["cancelledAt"],
-            startedAt,
-            status: "completed",
-            stopReason: "cancelled",
-        });
-    }
-    if (attempt["kind"] === "failed") {
-        return decodeRecordedTurn({
-            ...base,
-            code: attempt["code"],
-            message: attempt["message"],
-            settledAt: attempt["failedAt"],
-            startedAt,
-            status: "failed",
-        });
-    }
-    if (attempt["kind"] === "indeterminate") {
-        // The Relay keeps an unreconciled Attempt as the Session's active Turn, so this is not a settled
-        // outcome. Reporting it as failed would hide the stop control the user needs to release the
-        // Session, leaving the conversation unable to accept another prompt.
-        return decodeRecordedTurn({
-            ...base,
-            attemptId: attempt["attemptId"],
-            detectedAt: attempt["detectedAt"],
-            startedAt,
-            status: "indeterminate",
-        });
-    }
-    throw new PairingApiError("invalid_relay_response", "The relay returned an unknown execution attempt state.");
+    signal.throwIfAborted();
+    return nativeEventHistory(events.events.events, events.events.truncated || events.events.nextCursor !== null);
 }
 
 function decodeActivityDetail(value: unknown): ActivityDetailResult {
