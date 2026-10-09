@@ -68,6 +68,33 @@ function mcpStatus(status: "inProgress" | "completed" | "failed"): ToolCallStatu
  * Mobius does not present (user messages, reasoning, plans, and item kinds a newer Codex added).
  */
 function presentToolItem(item: ThreadItem): ToolCallPresentation | null {
+    if (item.type === "imageGeneration") {
+        const failed = item.failure != null || item.status === "failed";
+        const content: ToolCallContent[] = [];
+        if (!failed && item.result.length > 0) {
+            // Structured media goes through the same hash-backed reverse-read path as ACP images.
+            // Never include the base64 in rawOutput or in a text tool result.
+            content.push({ type: "content", content: { type: "image", data: item.result, mimeType: "image/png" } });
+        }
+        if (failed) {
+            content.push(
+                textContent(
+                    item.failure?.type === "usageLimitExceeded"
+                        ? "Image generation usage limit reached."
+                        : "Image generation failed.",
+                ),
+            );
+        }
+        return {
+            content,
+            kind: "other",
+            locations: [],
+            rawInput: item.revisedPrompt == null ? null : { prompt: item.revisedPrompt },
+            rawOutput: null,
+            status: failed ? "failed" : item.status === "completed" ? "completed" : "in_progress",
+            title: "Generate image",
+        };
+    }
     if (item.type === "commandExecution") {
         const output = item.aggregatedOutput ?? "";
         const content: ToolCallContent[] = [];
