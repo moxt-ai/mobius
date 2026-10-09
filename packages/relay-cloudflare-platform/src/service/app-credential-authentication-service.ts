@@ -4,16 +4,23 @@ import type { CredentialRow } from "../entity/platform-records.ts";
 import { AppCredentialCacheError, type AppCredentialCacheStorage } from "../storage/app-credential-cache-storage.ts";
 import type { PlatformControlPlaneStorage } from "../storage/platform-control-plane-storage.ts";
 
+export interface AppCredentialBackgroundTasks {
+    readonly waitUntil: (operation: Promise<void>) => void;
+}
+
 export class AppCredentialAuthenticationService {
     readonly #storage: Pick<PlatformControlPlaneStorage, "readCredentialByPublicId" | "touchCredential">;
     readonly #cache: AppCredentialCacheStorage;
+    readonly #backgroundTasks: AppCredentialBackgroundTasks;
 
     constructor(
         storage: Pick<PlatformControlPlaneStorage, "readCredentialByPublicId" | "touchCredential">,
         cache: AppCredentialCacheStorage,
+        backgroundTasks: AppCredentialBackgroundTasks,
     ) {
         this.#storage = storage;
         this.#cache = cache;
+        this.#backgroundTasks = backgroundTasks;
     }
 
     readonly authenticate = async (credential: string, signal: AbortSignal): Promise<PlatformApplicationIdentity> => {
@@ -79,22 +86,26 @@ export class AppCredentialAuthenticationService {
         signal: AbortSignal,
     ): Promise<CredentialRow> => {
         signal.throwIfAborted();
+        const cached = await this.#cache.readByPublicId(publicCredentialId, signal);
+        if (cached !== null) {
+            this.requireActive(cached);
+            this.touchLater(cached.credential_id);
+            return cached;
+        }
+        const validatedAt = Date.now();
         const credential = await this.#storage.readCredentialByPublicId(publicCredentialId, signal);
         if (credential === null) {
             throw new ProjectAuthenticationError("project_credential_invalid", "The AppCredential is invalid");
         }
         this.requireActive(credential);
-        const now = Date.now();
-        if (!(await this.#storage.touchCredential(credential.credential_id, now, signal))) {
-            throw new ProjectAuthenticationError("credential_revoked", "The AppCredential is no longer active");
-        }
-        signal.throwIfAborted();
-        return { ...credential, last_used_at: now };
+        await this.#cache.write(credential, validatedAt, signal);
+        this.touchLater(credential.credential_id);
+        return credential;
     };
 
     readonly invalidate = async (row: CredentialRow, signal: AbortSignal): Promise<void> => {
         try {
-            await this.#cache.invalidate(row.secret_digest, signal);
+            await this.#cache.invalidate(row, signal);
         } catch (cause) {
             signal.throwIfAborted();
             throw new PlatformControlPlaneError(
@@ -119,6 +130,27 @@ export class AppCredentialAuthenticationService {
         if (this.isInactive(row)) {
             throw new ProjectAuthenticationError("credential_revoked", "The AppCredential is no longer active");
         }
+    };
+
+    private readonly touchLater = (credentialId: string): void => {
+        const operation = this.#storage
+            .touchCredential(credentialId, Date.now(), AbortSignal.timeout(15_000))
+            .then((updated) => {
+                if (!updated) {
+                    console.warn("App credential last-used update skipped", {
+                        code: "app_credential_inactive",
+                        credentialId,
+                    });
+                }
+            })
+            .catch((cause: unknown) => {
+                console.warn("App credential last-used update failed", {
+                    code: "app_credential_last_used_update_failed",
+                    credentialId,
+                    cause,
+                });
+            });
+        this.#backgroundTasks.waitUntil(operation);
     };
 }
 

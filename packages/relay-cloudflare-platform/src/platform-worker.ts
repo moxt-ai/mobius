@@ -32,7 +32,7 @@ import {
     requestTimeoutMiddleware,
     type WorkerRuntimeGateways,
 } from "@moxt-ai/mobius-relay-core";
-import { type Handler, Hono } from "hono";
+import { type Context, type Handler, Hono } from "hono";
 import * as v from "valibot";
 import {
     type PlatformAuthenticationEnvironment,
@@ -144,6 +144,14 @@ type DispatchEnvironment = {
         readonly signal: AbortSignal;
     };
 };
+
+function optionalExecutionContext(context: Pick<Context, "executionCtx">): Context["executionCtx"] | undefined {
+    try {
+        return context.executionCtx;
+    } catch {
+        return undefined;
+    }
+}
 
 async function runtimeSessionIdentity(
     relay: RelayContext,
@@ -833,6 +841,16 @@ export function createPlatformApplication(
             const appAuthentication = new AppCredentialAuthenticationService(
                 controlStorage,
                 new AppCredentialCacheStorage(environment.APP_CREDENTIAL_CACHE),
+                {
+                    waitUntil: (operation) => {
+                        try {
+                            context.executionCtx.waitUntil(operation);
+                        } catch {
+                            // Direct application callers do not provide a Worker execution context.
+                            // The already-started operation remains best-effort for those adapters.
+                        }
+                    },
+                },
             );
             const control = new PlatformControlPlaneService(
                 controlStorage,
@@ -883,18 +901,22 @@ export function createPlatformApplication(
         .onError((error) => {
             throw error;
         })
-        .get(
-            `${MOBIUS_API_PREFIX}/v1/transport`,
-            (context): Response =>
-                acceptWebSocketHttpTransport(
-                    context.req.raw,
-                    async (request): Promise<Response> => await platformApplication.fetch(request, context.env),
-                ),
-        )
+        .get(`${MOBIUS_API_PREFIX}/v1/transport`, (context): Response => {
+            const executionContext = optionalExecutionContext(context);
+            return acceptWebSocketHttpTransport(
+                context.req.raw,
+                async (request): Promise<Response> =>
+                    await platformApplication.fetch(request, context.env, executionContext),
+            );
+        })
         .all("*", async (context) => {
             const metrics = new RequestAccessMetrics();
             return metrics.appendServerTiming(
-                await application.fetch(context.req.raw, instrumentPlatformDatabases(context.env, metrics)),
+                await application.fetch(
+                    context.req.raw,
+                    instrumentPlatformDatabases(context.env, metrics),
+                    optionalExecutionContext(context),
+                ),
             );
         });
     return platformApplication;
@@ -917,22 +939,30 @@ export function createPlatformGateways(environment: PlatformRelayBindings): Work
 }
 
 export function createPlatformWorker(): {
-    readonly fetch: (request: Request, environment: ConfiguredPlatformRelayBindings) => Promise<Response>;
+    readonly fetch: (
+        request: Request,
+        environment: ConfiguredPlatformRelayBindings,
+        executionContext?: ExecutionContext,
+    ) => Promise<Response>;
 } {
     const configuredApplications = new Map<string, ReturnType<typeof createPlatformApplication>>();
     return {
-        fetch: async (request: Request, environment: ConfiguredPlatformRelayBindings): Promise<Response> => {
+        fetch: async (
+            request: Request,
+            environment: ConfiguredPlatformRelayBindings,
+            executionContext?: ExecutionContext,
+        ): Promise<Response> => {
             const key = `${environment.MOBIUS_PLATFORM_ALLOWED_ORIGINS}\u0000${environment.MOBIUS_PLATFORM_OIDC_PROVIDERS}\u0000${environment.MOBIUS_PLATFORM_OPERATOR_SUBJECTS}`;
             const configured = configuredApplications.get(key);
             if (configured !== undefined) {
-                return await configured.fetch(request, environment);
+                return await configured.fetch(request, environment, executionContext);
             }
             const created = createPlatformApplication(
                 platformAuthenticationFromEnvironment(environment),
                 createPlatformGateways,
             );
             configuredApplications.set(key, created);
-            return await created.fetch(request, environment);
+            return await created.fetch(request, environment, executionContext);
         },
     };
 }

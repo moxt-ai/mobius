@@ -29,9 +29,22 @@ export class AppCredentialCacheStorage {
     }
 
     readonly read = async (digest: string, signal: AbortSignal): Promise<CredentialRow | null> => {
+        const credential = await this.readRecord(this.secretKey(digest), signal);
+        return credential?.secret_digest === digest ? credential : null;
+    };
+
+    readonly readByPublicId = async (
+        publicCredentialId: string,
+        signal: AbortSignal,
+    ): Promise<CredentialRow | null> => {
+        const credential = await this.readRecord(this.publicIdKey(publicCredentialId), signal);
+        return credential?.public_credential_id === publicCredentialId ? credential : null;
+    };
+
+    private readonly readRecord = async (key: string, signal: AbortSignal): Promise<CredentialRow | null> => {
         let encoded: string | null;
         try {
-            encoded = await this.operation(() => this.#namespace.get(this.key(digest), { cacheTtl: 60 }), signal);
+            encoded = await this.operation(() => this.#namespace.get(key, { cacheTtl: 60 }), signal);
         } catch (cause) {
             signal.throwIfAborted();
             if (!(cause instanceof AppCredentialCacheError)) {
@@ -56,7 +69,6 @@ export class AppCredentialCacheStorage {
         const record = parsed.output;
         const now = Date.now();
         if (
-            record.credential.secret_digest !== digest ||
             record.validatedAt > now ||
             record.expiresAt <= now ||
             record.expiresAt !== record.validatedAt + CACHE_LIFETIME_MILLISECONDS
@@ -76,9 +88,14 @@ export class AppCredentialCacheStorage {
         try {
             await this.operation(
                 () =>
-                    this.#namespace.put(this.key(credential.secret_digest), JSON.stringify(record), {
-                        expirationTtl: Math.max(60, Math.ceil((expiresAt - Date.now()) / 1_000)),
-                    }),
+                    Promise.all([
+                        this.#namespace.put(this.secretKey(credential.secret_digest), JSON.stringify(record), {
+                            expirationTtl: Math.max(60, Math.ceil((expiresAt - Date.now()) / 1_000)),
+                        }),
+                        this.#namespace.put(this.publicIdKey(credential.public_credential_id), JSON.stringify(record), {
+                            expirationTtl: Math.max(60, Math.ceil((expiresAt - Date.now()) / 1_000)),
+                        }),
+                    ]).then(() => undefined),
                 signal,
             );
         } catch (cause) {
@@ -91,11 +108,18 @@ export class AppCredentialCacheStorage {
         }
     };
 
-    readonly invalidate = async (digest: string, signal: AbortSignal): Promise<void> => {
-        await this.operation(() => this.#namespace.delete(this.key(digest)), signal);
+    readonly invalidate = async (credential: CredentialRow, signal: AbortSignal): Promise<void> => {
+        await this.operation(
+            () =>
+                Promise.all([
+                    this.#namespace.delete(this.secretKey(credential.secret_digest)),
+                    this.#namespace.delete(this.publicIdKey(credential.public_credential_id)),
+                ]).then(() => undefined),
+            signal,
+        );
     };
 
-    private readonly key = (digest: string): string => {
+    private readonly secretKey = (digest: string): string => {
         if (!/^[a-f0-9]{64}$/u.test(digest)) {
             throw new AppCredentialCacheError(
                 "app_credential_cache_unavailable",
@@ -103,6 +127,16 @@ export class AppCredentialCacheStorage {
             );
         }
         return `app-secret:v1:${digest}`;
+    };
+
+    private readonly publicIdKey = (publicCredentialId: string): string => {
+        if (!/^[a-zA-Z0-9_-]{22}$/u.test(publicCredentialId)) {
+            throw new AppCredentialCacheError(
+                "app_credential_cache_unavailable",
+                new Error("Invalid public credential identifier"),
+            );
+        }
+        return `app-public:v1:${publicCredentialId}`;
     };
 
     private readonly operation = async <Value>(
