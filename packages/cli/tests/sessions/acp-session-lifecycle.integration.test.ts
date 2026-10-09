@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { chmod, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
@@ -10,6 +11,7 @@ import { describe, expect, it, vi } from "vitest";
 import { AgentRuntimeManager, createWritableAcpStream } from "../../src/acp/agent-runtime-manager.ts";
 import { FoundAcpStoredSession, MemoryAcpSessionStore, SqliteAcpSessionStore } from "../../src/acp/session-store.ts";
 import { LocalAgentDefinition } from "../../src/config.ts";
+import { acpSessionStoreMigrations } from "../../src/generated/acp-session-store-migrations.ts";
 import { AccumulatingOperationMetrics } from "../../src/infra/operation-metrics.ts";
 
 const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
@@ -42,6 +44,34 @@ function processExists(pid: number): boolean {
 }
 
 describe("ACP conversation sessions", () => {
+    it("Given an ACP Session database from the persisted-event release, When Mobius opens it, Then the unused event table is removed", async () => {
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-session-store-migration-"));
+        const databasePath = join(temporaryDirectory, "sessions.sqlite");
+        const legacyDatabase = new DatabaseSync(databasePath);
+        try {
+            for (const migration of acpSessionStoreMigrations.slice(0, -1)) {
+                legacyDatabase.exec(migration.sql);
+            }
+            legacyDatabase.exec(`PRAGMA user_version = ${acpSessionStoreMigrations.length - 1}`);
+        } finally {
+            legacyDatabase.close();
+        }
+
+        const store = new SqliteAcpSessionStore(databasePath);
+        store.close();
+        const migratedDatabase = new DatabaseSync(databasePath, { readOnly: true });
+        try {
+            expect(
+                migratedDatabase
+                    .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'session_event_v2'")
+                    .get(),
+            ).toBeUndefined();
+        } finally {
+            migratedDatabase.close();
+            await rm(temporaryDirectory, { force: true, recursive: true });
+        }
+    });
+
     it("Given a managed Claude Code conversation, When the Runtime restarts, Then its Session remains discoverable", async () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-session-store-"));
         const databasePath = join(temporaryDirectory, "sessions.sqlite");
