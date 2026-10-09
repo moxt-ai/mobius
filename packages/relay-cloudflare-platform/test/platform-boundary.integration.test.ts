@@ -14,7 +14,12 @@ import {
     encodeSessionsQueriedEvent,
     MOBIUS_API_PREFIX,
 } from "@moxt-ai/mobius-protocol";
-import { DurableObjectSqlDatabase, RuntimeRelay, type SessionRecording } from "@moxt-ai/mobius-relay-core";
+import {
+    DurableObjectDatabaseAdapter,
+    DurableObjectSqlDatabase,
+    RuntimeRelay,
+    type SessionRecording,
+} from "@moxt-ai/mobius-relay-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDurableObjectDependencies } from "../../relay-core/src/di/create-durable-object-dependencies.ts";
 import { createTestMobiusPlatformApp } from "../../test-support/src/app.ts";
@@ -408,6 +413,94 @@ describe.sequential("Platform Session-only boundary", () => {
             credentials: [{ allProjects: true, credentialId: defaultCredentialId, projectIds: [] }],
         });
         expect(unavailableProjects.accessCount).toBe(0);
+    });
+
+    it("Given a cached AppCredential and unavailable directory storage, When Chat authorizes a Session credential, Then authorization succeeds without waiting for last-used persistence", async () => {
+        const worker = createTestMobiusPlatformApp(
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
+            createPlatformGateways,
+        );
+        const environment = bindings();
+        const tenants = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/platform/tenants`, {
+                    headers: developerHeaders(),
+                }),
+                environment,
+            ),
+            200,
+        );
+        const tenantValues = tenants["tenants"];
+        if (!Array.isArray(tenantValues) || tenantValues.length === 0) {
+            throw new Error("Expected a Platform tenant");
+        }
+        const app = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps`, {
+                    body: JSON.stringify({
+                        displayName: "Cached Session authorization",
+                        tenantId: text(record(tenantValues[0]), "tenantId"),
+                    }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const appId = text(app, "appId");
+        const appCredential = text(record(app["defaultCredential"]), "credential");
+        const project = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${appId}/projects`, {
+                    body: JSON.stringify({
+                        displayName: "Cached Session authorization Project",
+                        idempotencyKey: "cached-session-authorization-project",
+                        locationHint: "apac",
+                    }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const projectId = text(project, "projectId");
+        const sessionId = "cached-session";
+        const runtimeId = "cached-runtime";
+        const sessionAccess = await responseJson(
+            await worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/access-credentials`,
+                    {
+                        body: JSON.stringify({ expiresInSeconds: 900, runtimeId }),
+                        headers: credentialHeaders(appCredential),
+                        method: "POST",
+                    },
+                ),
+                environment,
+            ),
+            201,
+        );
+
+        const response = await runInDurableObject(
+            environment.PROJECT_RELAY.getByName(projectId),
+            async (_instance, state) =>
+                await worker.fetch(
+                    new Request(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/live-event-subscription-target`,
+                        { headers: credentialHeaders(text(sessionAccess, "credential")) },
+                    ),
+                    {
+                        ...environment,
+                        MOBIUS_PROJECT_DATABASE: new DurableObjectDatabaseAdapter(state.storage),
+                        MOBIUS_PROJECT_ID: projectId,
+                        PLATFORM_DIRECTORY_DATABASE: env.TEST_UNINITIALIZED_SHARD,
+                    },
+                ),
+        );
+
+        expect(await responseJson(response, 200)).toMatchObject({ kind: "expiring", projectId, runtimeId });
     });
 
     it("Given Recording is not installed, When a developer configures App and Project policy, Then disabled inheritance works, enablement is rejected, and Session policy is unavailable", async () => {
