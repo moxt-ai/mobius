@@ -5,6 +5,8 @@ import {
     decodeServiceToDaemonMessage,
     decodeSessionEventEnvelopeV2,
     decodeSessionPromptCommand,
+    encodeSessionConfigUpdatedEvent,
+    encodeSessionConfigureCommand,
     encodeSessionEventEnvelopeV2,
     encodeSessionLiveHistoryV2PageLoaded,
     encodeSessionPromptCommand,
@@ -626,7 +628,7 @@ describe.sequential("Platform Session-only boundary", () => {
         expect(sessionPolicyResponse.status).toBe(404);
     });
 
-    it("Given a linked Codex Runtime, When Chat reads its Agents, sends a prompt, and the Runtime reconnects, Then the Runtime-scoped Agents, answer, and connection status arrive without cloud Session storage", async () => {
+    it("Given a linked Codex Runtime, When Chat configures and prompts a Session, Then the configuration, answer, and connection status arrive without cloud Session storage", async () => {
         vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
@@ -755,6 +757,37 @@ describe.sequential("Platform Session-only boundary", () => {
             // observational, so skipping it must not disconnect the Runtime or block supported work.
             daemon.send(JSON.stringify({ kind: "session.future.changed", sessionId, value: "future" }));
             host.send(JSON.stringify({ kind: "session.future.request", sessionId, value: "future" }));
+            host.send(
+                encodeSessionConfigureCommand({
+                    additionalDirectoryIds: [],
+                    agentId: "codex",
+                    bindingId: "workspace",
+                    booleanValue: false,
+                    configId: "model",
+                    directoryId: "root",
+                    kind: "session.configure",
+                    requestId: "local-config-request",
+                    sessionId,
+                    value: "model-deepseek-v4.1-flash",
+                    valueType: "select",
+                }),
+            );
+            expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("session.configure");
+            expect(decodeServiceToDaemonMessage(await hostMessages.next()).kind).toBe("session.configure");
+            daemon.send(
+                encodeSessionConfigUpdatedEvent({
+                    configOptions: [],
+                    kind: "session.config.updated",
+                    requestId: "local-config-request",
+                    sessionId,
+                }),
+            );
+            expect(decodeDaemonToServiceMessage(await hostMessages.next())).toEqual({
+                configOptions: [],
+                kind: "session.config.updated",
+                requestId: "local-config-request",
+                sessionId,
+            });
             host.send(
                 encodeSessionPromptCommand({
                     additionalDirectoryIds: [],

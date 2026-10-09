@@ -49,6 +49,7 @@ import {
     RUNTIME_PONG_KIND,
     RUNTIME_STATUS_KIND,
     SESSION_CANCEL_KIND,
+    SESSION_CONFIG_UPDATED_KIND,
     SESSION_CONFIGURE_KIND,
     SESSION_ELICITATION_RESPOND_KIND,
     SESSION_EVENT_V2_KIND,
@@ -405,6 +406,8 @@ export class ChannelActor {
             case SESSION_QUERIED_KIND:
                 return;
             case SESSION_LISTED_KIND:
+                return;
+            case SESSION_CONFIG_UPDATED_KIND:
                 return;
             case SESSION_STATUS_CHANGED_KIND:
                 return;
