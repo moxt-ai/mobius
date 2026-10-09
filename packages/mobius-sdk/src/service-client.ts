@@ -1417,32 +1417,6 @@ export class MobiusSessionResources {
         }
     };
 
-    readonly querySessionNativeMessages = async (
-        sessionId: string,
-        identity: {
-            readonly additionalDirectoryIds: readonly string[];
-            readonly agentId: string;
-            readonly directoryId: string;
-        },
-        page: MobiusPageRequest,
-        signal: AbortSignal,
-    ): Promise<NativeMessagePage> => {
-        const path = requestUrl(
-            new URL("https://mobius.invalid/"),
-            sessionPath(this.#projectId, sessionId, "native-messages"),
-        );
-        path.searchParams.set("agentId", identity.agentId);
-        path.searchParams.set("directoryId", identity.directoryId);
-        path.searchParams.set("limit", page.limit.toString());
-        if (page.cursor.length > 0) {
-            path.searchParams.set("cursor", page.cursor);
-        }
-        for (const directoryId of identity.additionalDirectoryIds) {
-            path.searchParams.append("additionalDirectoryId", directoryId);
-        }
-        return decodeNativeMessagePage(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal));
-    };
-
     readonly queryRuntimeNativeEventsV2 = async (
         runtimeId: string,
         sessionId: string,

@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import type {
     AcpSessionUpdateV2,
-    decodeSessionLiveHistoryLoad,
     decodeSessionLiveHistoryPageLoad,
     decodeSessionLiveHistoryV2PageLoad,
     SessionEventV2,
@@ -14,68 +13,8 @@ import type { WorkspaceDirectoryService } from "./authorization/workspace-direct
 import type { DaemonConfig } from "./config.ts";
 import type { ActiveTurnRecovery } from "./daemon-active-turn.ts";
 import { operationErrorCode, operationErrorMessage, reportOperationFailure, send } from "./daemon-command-results.ts";
-import { mergeLiveSessionHistory, paginateLiveSessionHistory } from "./native-sessions/live-history-page.ts";
+import { paginateLiveSessionHistory } from "./native-sessions/live-history-page.ts";
 import type { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
-export async function executeSessionLiveHistoryLoad(
-    socket: WebSocket,
-    command: ReturnType<typeof decodeSessionLiveHistoryLoad>,
-    config: DaemonConfig,
-    directories: WorkspaceDirectoryService,
-    audit: AuditStore,
-    sessions: AgentRuntimeManager,
-    activeTurn: (sessionId: string) => ActiveTurnRecovery | null,
-    signal: AbortSignal,
-): Promise<void> {
-    try {
-        const resolved = await resolveSessionDirectories(
-            directories,
-            config.bindingId,
-            command.directoryId,
-            command.additionalDirectoryIds,
-            signal,
-        );
-        const history = await sessions.loadSessionHistory({
-            additionalDirectories: resolved.additionalDirectories,
-            agent: config.catalog.find(command.agentId),
-            cwd: resolved.cwd,
-            sessionId: command.sessionId,
-            signal,
-        });
-        signal.throwIfAborted();
-        const mergedHistory = mergeLiveSessionHistory(history, activeTurn(command.sessionId), command.sessionId);
-        audit.record({
-            commandId: command.requestId,
-            event: "session_history_loaded",
-            sessionId: command.sessionId,
-        });
-        send(socket, {
-            history: mergedHistory,
-            kind: "session.live-history.loaded",
-            requestId: command.requestId,
-            sessionId: command.sessionId,
-        });
-    } catch (error) {
-        if (signal.aborted) {
-            return;
-        }
-        audit.record({
-            commandId: command.requestId,
-            details: { code: operationErrorCode(error) },
-            event: "session_history_unavailable",
-            sessionId: command.sessionId,
-        });
-        send(socket, {
-            history: {
-                status: "unavailable",
-                cause: { code: operationErrorCode(error), message: operationErrorMessage(error) },
-            },
-            kind: "session.live-history.loaded",
-            requestId: command.requestId,
-            sessionId: command.sessionId,
-        });
-    }
-}
-
 export async function executeSessionLiveHistoryPageLoad(
     socket: WebSocket,
     command: ReturnType<typeof decodeSessionLiveHistoryPageLoad>,

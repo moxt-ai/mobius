@@ -367,22 +367,3 @@ export function paginateLiveSessionHistory(
     }
     return paginateActiveTurn(historical, activeTurn, sessionId, cursor?.endIndex ?? activeTurn.messages.length, limit);
 }
-
-export function mergeLiveSessionHistory(
-    history: NativeSessionHistory,
-    activeTurn: ActiveTurnRecovery | null,
-    sessionId: string,
-): NativeSessionHistory {
-    const page = paginateLiveSessionHistory(history, activeTurn, sessionId, null, 1_000);
-    if (page.status === "unavailable") {
-        return { cause: page.cause, status: "unavailable" };
-    }
-    return {
-        coveredCommandIds: page.coveredCommandIds,
-        ...(page.streamPosition === undefined ? {} : { streamPosition: page.streamPosition }),
-        coveredMessageIds: page.coveredMessageIds,
-        messages: page.messages,
-        status: "available",
-        truncated: page.truncated || page.nextCursor !== null,
-    };
-}
