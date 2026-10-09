@@ -10,7 +10,7 @@ import { WebSocket } from "undici";
 import type { DaemonScheduledTask, DaemonTimer } from "./timer.ts";
 
 const MAX_BUFFERED_BYTES = 32 * 1024 * 1024;
-export const SESSION_EVENT_V2_BATCH_WINDOW_MILLISECONDS = 200;
+export const SESSION_EVENT_V2_BATCH_WINDOW_MILLISECONDS = 100;
 
 /** Live delivery is best-effort. Recovery snapshots are owned by the daemon's local Session cache. */
 export class DaemonSessionEventPublisher {
