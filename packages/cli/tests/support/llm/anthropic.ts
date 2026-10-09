@@ -56,8 +56,19 @@ function selectTool(
     tools: readonly AnthropicTool[],
     scenario: FakeProviderScenario,
     completedToolCalls: number,
+    readPath?: string,
 ): { readonly id: string; readonly input: JsonObject; readonly name: string } | undefined {
     const id = `toolu_mobius_${(completedToolCalls + 1).toString()}`;
+    if (readPath !== undefined && tools.length > 0) {
+        const read = tools.find((tool) => /(?:^|_)(?:read|read_file)$/iu.test(tool.name));
+        if (read !== undefined) {
+            const path = stringProperty(read, ["file_path", "filePath", "path", "file"]);
+            if (path !== undefined) {
+                return { id, input: { [path]: readPath }, name: read.name };
+            }
+        }
+        throw new Error("The real Agent did not advertise a file reader");
+    }
     const shell = tools.find((tool) => /(?:^|_)(?:bash|shell|command)$/iu.test(tool.name));
     if (shell !== undefined) {
         const command = stringProperty(shell, ["command", "cmd"]);
@@ -180,7 +191,11 @@ export class FakeAnthropicProvider implements AsyncDisposable {
     static async start(
         model: string,
         answer: string,
-        options: { readonly beforeFirstText?: () => Promise<void>; readonly disconnectsBeforeSuccess?: number } = {},
+        options: {
+            readonly beforeFirstText?: () => Promise<void>;
+            readonly disconnectsBeforeSuccess?: number;
+            readonly readPath?: string;
+        } = {},
     ): Promise<FakeAnthropicProvider> {
         const requests: ProviderRequestDiagnostic[] = [];
         let disconnectsRemaining = options.disconnectsBeforeSuccess ?? 0;
@@ -206,7 +221,9 @@ export class FakeAnthropicProvider implements AsyncDisposable {
             const scenario = selectFakeProviderScenario(payload);
             const completedToolCalls = toolResultCount(payload);
             const tool =
-                completedToolCalls < scenario.toolCalls ? selectTool(tools, scenario, completedToolCalls) : undefined;
+                completedToolCalls < scenario.toolCalls
+                    ? selectTool(tools, scenario, completedToolCalls, options.readPath)
+                    : undefined;
             const selectedAnswer = fakeProviderResponse(answer, scenario);
             requests.push({
                 scenario,

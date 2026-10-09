@@ -36,6 +36,22 @@ const embeddedImageSchema = z.looseObject({
     mimeType: z.string(),
 });
 
+const toolImageSchema = z.union([
+    embeddedImageSchema,
+    z
+        .object({
+            type: z.literal("image"),
+            source: z.object({ type: z.literal("base64"), data: z.string(), media_type: z.string() }),
+        })
+        .transform(({ source }) => ({ type: "image" as const, data: source.data, mimeType: source.media_type })),
+    z
+        .object({
+            type: z.literal("image"),
+            file: z.object({ base64: z.string(), type: z.string() }),
+        })
+        .transform(({ file }) => ({ type: "image" as const, data: file.base64, mimeType: file.type })),
+]);
+
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -165,7 +181,7 @@ export class AcpContentExternalizer {
         if (!isRecord(value)) {
             return value;
         }
-        const image = embeddedImageSchema.safeParse(value);
+        const image = toolImageSchema.safeParse(value);
         if (image.success && image.data.data.length > 0) {
             const prepared = await this.#content(sessionId, image.data, signal);
             if (isRecord(prepared.event) && typeof prepared.event["imageKey"] === "string") {
@@ -194,6 +210,12 @@ export class AcpContentExternalizer {
             update.rawOutput === undefined
                 ? undefined
                 : await this.#rawOutput(sessionId, update.rawOutput, images, signal);
+        const metadata =
+            update._meta === undefined || update._meta === null
+                ? update._meta
+                : z
+                      .record(z.string(), z.unknown())
+                      .parse(await this.#rawOutput(sessionId, update._meta, images, signal));
         const originalJson = images.size === 0 ? undefined : JSON.stringify(update.rawOutput);
         const rewrittenJson = images.size === 0 ? undefined : JSON.stringify(rawOutput);
         const agentContent: ToolCallContent[] = [];
@@ -220,10 +242,11 @@ export class AcpContentExternalizer {
             eventContent.push({ type: "content", content: prepared.event });
         }
         const output = update.rawOutput === undefined ? {} : { rawOutput };
+        const meta = metadata === undefined ? {} : { _meta: metadata };
         const hasContent = (update.content !== undefined && update.content !== null) || agentContent.length > 0;
         return {
-            agent: { ...update, ...output, ...(hasContent ? { content: agentContent } : {}) },
-            event: { ...update, ...output, ...(hasContent ? { content: eventContent } : {}) },
+            agent: { ...update, ...meta, ...output, ...(hasContent ? { content: agentContent } : {}) },
+            event: { ...update, ...meta, ...output, ...(hasContent ? { content: eventContent } : {}) },
         };
     }
 
