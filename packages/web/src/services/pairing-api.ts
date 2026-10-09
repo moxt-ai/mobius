@@ -1629,12 +1629,7 @@ async function readRuntimeNativeSessionHistory(
         signal,
     );
     signal.throwIfAborted();
-    return nativeEventHistory(
-        [...events.history.events, ...(events.executingPromptRequest?.events ?? [])],
-        events.history.truncated ||
-            events.history.nextCursor !== null ||
-            events.executingPromptRequest?.truncated === true,
-    );
+    return nativeEventHistory(events.events.events, events.events.truncated || events.events.nextCursor !== null);
 }
 
 function decodeActivityDetail(value: unknown): ActivityDetailResult {
