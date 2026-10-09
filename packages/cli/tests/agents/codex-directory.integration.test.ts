@@ -4,7 +4,7 @@ import { expect, it } from "vitest";
 import { readCodexFullHistory } from "../../src/native-sessions/codex-history.ts";
 import { codexFixture } from "../support/agents/codex-native.ts";
 
-it("Given saved Codex threads, When its directory is listed through the in-process Agent, Then every thread becomes an authorized entry whose conversation can be opened", async () => {
+it("Given saved Codex threads, When its directory is listed through the in-process Agent, Then every thread opens without a synthesized submitted-prompt echo", async () => {
     const f = await codexFixture();
     try {
         await f.seed("Thread from the Codex CLI");
@@ -36,10 +36,12 @@ it("Given saved Codex threads, When its directory is listed through the in-proce
             50,
             null,
         );
-        expect(replay.events.flatMap((event) => (event.type === "acp" ? [event.payload] : []))).toContainEqual(
+        const updates = replay.events.flatMap((event) => (event.type === "acp" ? [event.payload] : []));
+        expect(updates.filter((update) => update.sessionUpdate === "user_message_chunk")).toEqual([]);
+        expect(updates).toContainEqual(
             expect.objectContaining({
-                sessionUpdate: "user_message_chunk",
-                content: { type: "text", text: "Thread from the Codex CLI" },
+                sessionUpdate: "agent_message_chunk",
+                content: { type: "text", text: "REAL_CODEX_REPLY: plain response" },
             }),
         );
     } finally {
