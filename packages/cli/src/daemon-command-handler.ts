@@ -14,7 +14,6 @@ import {
     SESSION_ELICITATION_RESPOND_KIND,
     SESSION_LIST_KIND,
     SESSION_LISTED_KIND,
-    SESSION_LIVE_HISTORY_LOAD_KIND,
     SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
     SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND,
     SESSION_PERMISSION_RESPOND_KIND,
@@ -37,11 +36,7 @@ import type { AuditStore } from "./audit/audit-store.ts";
 import type { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
 import type { DaemonConfig } from "./config.ts";
 import { reportOperationFailure, send, settleAbandonedTurn } from "./daemon-command-results.ts";
-import {
-    executeSessionLiveHistoryLoad,
-    executeSessionLiveHistoryPageLoad,
-    executeSessionLiveHistoryV2PageLoad,
-} from "./daemon-history-commands.ts";
+import { executeSessionLiveHistoryPageLoad, executeSessionLiveHistoryV2PageLoad } from "./daemon-history-commands.ts";
 import { executePrompt } from "./daemon-prompt-executor.ts";
 import { executeSessionConfigure, executeSessionPrepare, executeWorkspaceList } from "./daemon-session-commands.ts";
 import type { DaemonTurnRegistry } from "./daemon-turn-registry.ts";
@@ -133,20 +128,6 @@ export function createDaemonCommandHandler({
     return {
         handle: (message: ServiceToDaemonMessage): void => {
             const kind = message.kind;
-            if (kind === SESSION_LIVE_HISTORY_LOAD_KIND) {
-                const command = message;
-                void executeSessionLiveHistoryLoad(
-                    socket,
-                    command,
-                    config,
-                    directories,
-                    audit,
-                    sessions,
-                    activeTurnRecovery,
-                    signal,
-                );
-                return;
-            }
             if (kind === SESSION_LIVE_HISTORY_PAGE_LOAD_KIND) {
                 const command = message;
                 void executeSessionLiveHistoryPageLoad(

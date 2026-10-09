@@ -20,13 +20,11 @@ import {
     decodeSessionCompletedEvent,
     decodeSessionEventEnvelope,
     decodeSessionFailedEvent,
-    decodeSessionLiveHistoryLoaded,
     decodeSessionLiveHistoryPageLoaded,
     decodeSessionQueuedEvent,
     decodeSessionStartedEvent,
     encodeNativeSessionRequest,
     encodeSessionCancelCommand,
-    encodeSessionLiveHistoryLoad,
     encodeSessionLiveHistoryPageLoad,
     encodeSessionPromptCommand,
     encodeSessionPromptDispositionCommand,
@@ -37,7 +35,6 @@ import {
     SESSION_EVENT_KIND,
     SESSION_FAILED_KIND,
     SESSION_HISTORY_CHARACTER_LIMIT,
-    SESSION_LIVE_HISTORY_LOADED_KIND,
     SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
     SESSION_PROMPT_DISPOSITION_KIND,
     SESSION_QUEUED_KIND,
@@ -939,51 +936,6 @@ describe("daemon assistant text coalescing", () => {
             expect(recoveredContent).toContainEqual(activeContent);
             sendText(
                 socket,
-                encodeSessionLiveHistoryLoad({
-                    additionalDirectoryIds: [],
-                    agentId: agent.id,
-                    bindingId: config.bindingId,
-                    directoryId: "default",
-                    kind: "session.live-history.load",
-                    requestId: "initial_history_with_active_activity",
-                    sessionId,
-                }),
-            );
-            do {
-                result = await next();
-            } while (decodeMessageKind(result) !== SESSION_LIVE_HISTORY_LOADED_KIND);
-            const activeHistory = decodeSessionLiveHistoryLoaded(result).history;
-            expect(activeHistory).toMatchObject({ status: "available" });
-            if (activeHistory.status !== "available") {
-                throw new Error("Expected active Session history");
-            }
-            expect(activeHistory.messages[0]).toMatchObject({ role: "user", text: prompt.prompt });
-            const historyActivities = activeHistory.messages.flatMap((message) =>
-                message.role === "assistant" ? message.activities : [],
-            );
-            const historyContent = activeHistory.messages.flatMap((message) =>
-                message.role === "assistant" ? message.content : [],
-            );
-            expect(historyActivities).toEqual(
-                expect.arrayContaining([
-                    expect.objectContaining({
-                        activityId: activeActivity.activityId,
-                        locations: activeActivity.locations,
-                    }),
-                    expect.objectContaining({
-                        activityType: "reasoning",
-                        output: expect.stringContaining("Inspecting the workspace"),
-                    }),
-                    expect.objectContaining({
-                        activityId: activeTool.activityId,
-                        locations: activeTool.locations,
-                        status: "completed",
-                    }),
-                ]),
-            );
-            expect(historyContent).toContainEqual(activeContent);
-            sendText(
-                socket,
                 encodeSessionLiveHistoryPageLoad({
                     additionalDirectoryIds: [],
                     agentId: agent.id,
@@ -1007,10 +959,10 @@ describe("daemon assistant text coalescing", () => {
             expect(activePage.messages[0]).toMatchObject({ role: "user", text: prompt.prompt });
             expect(
                 activePage.messages.flatMap((message) => (message.role === "assistant" ? message.activities : [])),
-            ).toEqual(historyActivities);
+            ).toEqual(recoveredActivities);
             expect(
                 activePage.messages.flatMap((message) => (message.role === "assistant" ? message.content : [])),
-            ).toEqual(historyContent);
+            ).toEqual(recoveredContent);
             const cancelledQueuedPrompt: SessionPromptCommand = {
                 ...prompt,
                 commandId: "cancelled_queued_follow_up",
