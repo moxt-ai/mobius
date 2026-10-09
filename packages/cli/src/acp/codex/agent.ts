@@ -358,14 +358,6 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 if (isCompactPrompt(context.params.prompt)) {
                     return await this.#compact(context.signal);
                 }
-                const messageId = crypto.randomUUID();
-                for (const content of context.params.prompt) {
-                    await this.#emit({
-                        content,
-                        messageId,
-                        sessionUpdate: "user_message_chunk",
-                    });
-                }
                 return await this.#runTurn(promptInput(context.params.prompt), context.signal);
             })
             .onRequest(
@@ -925,10 +917,6 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
         const steering = steeringPrompt(prompt);
         if (steering.length === 0) {
             throw new AcpExecutionError("Codex received an empty steering request", {}, "invalid_request");
-        }
-        const messageId = crypto.randomUUID();
-        for (const block of steering) {
-            await this.#emit({ content: block.content, messageId, sessionUpdate: "user_message_chunk" });
         }
         const response = turnSteerResponseSchema.parse(
             await this.#appServer.request(

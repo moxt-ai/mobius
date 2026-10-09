@@ -83,11 +83,22 @@ test("Given a real Codex conversation, When more Sessions are opened than the da
             }
             const page = decodeSessionLiveHistoryV2PageLoaded(message).events.events;
             const updates = page.events.flatMap((event) => (event.type === "acp" ? [event.payload] : []));
-            const userText = updates.flatMap((update) =>
-                update.sessionUpdate === "user_message_chunk" && update.content.type === "text"
-                    ? [update.content.text]
-                    : [],
-            );
+            const userText = [
+                ...new Set(
+                    page.events.flatMap((event) => {
+                        if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.requested") {
+                            return event.payload.content.flatMap((content) =>
+                                content.type === "text" ? [content.text] : [],
+                            );
+                        }
+                        return event.type === "acp" &&
+                            event.payload.sessionUpdate === "user_message_chunk" &&
+                            event.payload.content.type === "text"
+                            ? [event.payload.content.text]
+                            : [];
+                    }),
+                ),
+            ];
             expect(userText).toEqual([
                 "Original conversation before opening other Sessions",
                 "Continue the original conversation after opening other Sessions",

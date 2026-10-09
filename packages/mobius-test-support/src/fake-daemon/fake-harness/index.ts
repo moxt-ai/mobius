@@ -121,8 +121,10 @@ class ControlledAgentState {
                 sessionUpdate: "user_message_chunk",
             },
         } as const;
-        this.#record(userUpdate);
-        await send(userUpdate);
+        if (this.#options.echoUserMessage === true) {
+            this.#record(userUpdate);
+            await send(userUpdate);
+        }
         const completion = Promise.withResolvers<acp.PromptResponse>();
         const active: ActiveReply = {
             completion,
@@ -166,8 +168,10 @@ class ControlledAgentState {
                 sessionUpdate: "user_message_chunk",
             },
         } as const;
-        this.#record(userUpdate);
-        await active.send(userUpdate);
+        if (this.#options.echoUserMessage === true) {
+            this.#record(userUpdate);
+            await active.send(userUpdate);
+        }
         await this.#apply(active, this.#options.reply(prompt, active.turnNumber, "steer"));
         return { outcome: "injected" };
     };
