@@ -309,8 +309,7 @@ describe("daemon assistant text coalescing", () => {
             do {
                 result = await fixture.frames.next();
             } while (decodeMessageKind(result) !== SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND);
-            const recovery = decodeSessionLiveHistoryV2PageLoaded(result).events.executingPromptRequest;
-            expect(recovery?.commandId).toBe(prompt.commandId);
+            const recovery = decodeSessionLiveHistoryV2PageLoaded(result).events.events;
             const updates = recovery?.events.flatMap((event) => (event.type === "acp" ? [event.payload] : [])) ?? [];
             const toolUpdateIndex = updates.findIndex((update) => update.sessionUpdate === "tool_call");
             const finalUpdateIndex = updates.findIndex(
@@ -633,8 +632,7 @@ describe("daemon assistant text coalescing", () => {
             do {
                 result = await next();
             } while (decodeMessageKind(result) !== SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND);
-            const activeLog = decodeSessionLiveHistoryV2PageLoaded(result).events.executingPromptRequest;
-            expect(activeLog?.commandId).toBe(prompt.commandId);
+            const activeLog = decodeSessionLiveHistoryV2PageLoaded(result).events.events;
             expect(activeLog?.truncated).toBe(false);
             const recoveredText = activeLog?.events
                 .flatMap((event) =>
@@ -901,8 +899,7 @@ describe("daemon assistant text coalescing", () => {
             do {
                 result = await next();
             } while (decodeMessageKind(result) !== SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND);
-            const activeLog = decodeSessionLiveHistoryV2PageLoaded(result).events.executingPromptRequest;
-            expect(activeLog?.commandId).toBe(prompt.commandId);
+            const activeLog = decodeSessionLiveHistoryV2PageLoaded(result).events.events;
             const updates = activeLog?.events.flatMap((event) => (event.type === "acp" ? [event.payload] : [])) ?? [];
             expect(updates).toContainEqual(
                 expect.objectContaining({

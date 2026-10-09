@@ -162,7 +162,7 @@ test("Given real Codex emits a tool, commentary, and final text, When the comple
             let completed = false;
             let sequence = 0;
             let epoch: string | undefined;
-            let recoveryPosition: {
+            let _recoveryPosition: {
                 readonly commandId: string;
                 readonly epoch: string;
                 readonly sequence: number;
@@ -210,7 +210,7 @@ test("Given real Codex emits a tool, commentary, and final text, When the comple
                     expect(result.action).toBe("active-turn");
                     if (result.action === "active-turn") {
                         if (result.turn !== null) {
-                            recoveryPosition = {
+                            _recoveryPosition = {
                                 commandId: result.turn.commandId,
                                 epoch: result.turn.epoch,
                                 sequence: result.turn.sequence,
@@ -251,11 +251,8 @@ test("Given real Codex emits a tool, commentary, and final text, When the comple
                 }
                 if (decodeMessageKind(message) === SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND) {
                     const recovered = decodeSessionLiveHistoryV2PageLoaded(message).events;
-                    const recovery = recovered.executingPromptRequest;
-                    expect(recovery?.commandId).toBe(commandId);
-                    expect(recovery?.epoch).toBe(recoveryPosition?.epoch);
                     expect(
-                        [...recovered.history.events, ...(recovery?.events ?? [])].some(
+                        recovered.events.events.some(
                             (event) =>
                                 event.type === "acp" &&
                                 (event.payload.sessionUpdate === "tool_call" ||
@@ -384,7 +381,7 @@ test("Given real Codex emits a tool, commentary, and final text, When the comple
                 if (decodeMessageKind(message) !== SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND) {
                     continue;
                 }
-                const page = decodeSessionLiveHistoryV2PageLoaded(message).events.history;
+                const page = decodeSessionLiveHistoryV2PageLoaded(message).events.events;
                 const updates = page.events.flatMap((event) => (event.type === "acp" ? [event.payload] : []));
                 const toolIndex = updates.findIndex(
                     (update) => update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update",

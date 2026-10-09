@@ -81,7 +81,7 @@ test("Given a real Codex conversation, When more Sessions are opened than the da
             if (decodeMessageKind(message) !== "session.live-history.v2.page.loaded") {
                 continue;
             }
-            const page = decodeSessionLiveHistoryV2PageLoaded(message).events.history;
+            const page = decodeSessionLiveHistoryV2PageLoaded(message).events.events;
             const updates = page.events.flatMap((event) => (event.type === "acp" ? [event.payload] : []));
             const userText = updates.flatMap((update) =>
                 update.sessionUpdate === "user_message_chunk" && update.content.type === "text"

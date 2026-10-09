@@ -36,7 +36,7 @@ it("Given saved Codex threads, When its directory is listed through the in-proce
             50,
             null,
         );
-        expect(replay.updates).toContainEqual(
+        expect(replay.events.flatMap((event) => (event.type === "acp" ? [event.payload] : []))).toContainEqual(
             expect.objectContaining({
                 sessionUpdate: "user_message_chunk",
                 content: { type: "text", text: "Thread from the Codex CLI" },

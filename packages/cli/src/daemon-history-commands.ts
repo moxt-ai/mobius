@@ -5,9 +5,7 @@ import type { AuditStore } from "./audit/audit-store.ts";
 import { resolveSessionDirectories } from "./authorization/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
 import type { DaemonConfig } from "./config.ts";
-import type { ActiveTurnRecovery } from "./daemon-active-turn.ts";
-import { operationErrorCode, operationErrorMessage, reportOperationFailure, send } from "./daemon-command-results.ts";
-import { paginateLiveSessionHistory } from "./native-sessions/live-history-page.ts";
+import { operationErrorCode, reportOperationFailure, send } from "./daemon-command-results.ts";
 import type { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
 import type { DaemonSessionEventLogV2 } from "./session-event-log-v2.ts";
 export async function executeSessionLiveHistoryV2PageLoad(
