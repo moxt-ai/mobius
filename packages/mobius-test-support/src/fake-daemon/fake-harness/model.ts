@@ -26,6 +26,7 @@ export interface FakeAgentHarnessOptions {
     readonly agentId?: string;
     readonly agentName?: string;
     readonly additionalAgents?: readonly { readonly id: string; readonly name: string }[];
+    readonly echoUserMessage?: boolean;
     readonly nativeSessionIds?: ReadonlySet<string>;
     readonly reply: (prompt: string, turnNumber: number, mode: "prompt" | "steer") => HarnessReplyPlan;
 }

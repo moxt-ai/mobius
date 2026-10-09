@@ -90,10 +90,9 @@ test("Given real Codex has accepted a steering prompt, When V2 recovery reloads 
                 }
                 const event = decodeSessionEventEnvelopeV2(message).event;
                 if (
-                    event.type === "acp" &&
-                    event.payload.sessionUpdate === "user_message_chunk" &&
-                    event.payload.content.type === "text" &&
-                    event.payload.content.text === steeringPrompt
+                    event.type === "lifecycle-metadata" &&
+                    event.payload.kind === "prompt.requested" &&
+                    event.payload.content.some((content) => content.type === "text" && content.text === steeringPrompt)
                 ) {
                     break;
                 }
@@ -124,10 +123,11 @@ test("Given real Codex has accepted a steering prompt, When V2 recovery reloads 
                 expect(
                     recovered.events.events.events.some(
                         (event) =>
-                            event.type === "acp" &&
-                            event.payload.sessionUpdate === "user_message_chunk" &&
-                            event.payload.content.type === "text" &&
-                            event.payload.content.text === steeringPrompt,
+                            event.type === "lifecycle-metadata" &&
+                            event.payload.kind === "prompt.requested" &&
+                            event.payload.content.some(
+                                (content) => content.type === "text" && content.text === steeringPrompt,
+                            ),
                     ),
                 ).toBe(true);
                 break;
@@ -258,12 +258,22 @@ test("Given real Codex advances between repeated prompts, When V2 recovery pagin
                 expect(
                     historyEvents.filter(
                         (event) =>
+                            event.type === "lifecycle-metadata" &&
+                            event.payload.kind === "prompt.requested" &&
+                            event.payload.content.some(
+                                (content) => content.type === "text" && content.text === repeatedPrompt,
+                            ),
+                    ),
+                ).toHaveLength(2);
+                expect(
+                    historyEvents.filter(
+                        (event) =>
                             event.type === "acp" &&
                             event.payload.sessionUpdate === "user_message_chunk" &&
                             event.payload.content.type === "text" &&
                             event.payload.content.text === repeatedPrompt,
                     ),
-                ).toHaveLength(2);
+                ).toHaveLength(0);
                 expect(
                     historyEvents.flatMap((event) => (event.type === "lifecycle-metadata" ? [event.payload.kind] : [])),
                 ).toEqual(expect.arrayContaining(["prompt.requested", "prompt.started", "prompt.completed"]));
