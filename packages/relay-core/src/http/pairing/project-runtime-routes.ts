@@ -119,6 +119,15 @@ export function createProjectRuntimeRoutes() {
             );
             return new Response(null, { status: 204 });
         })
+        .get("/projects/:projectId/latency", async (context) => {
+            await context.env.services.runtimePairings.probeProject(
+                validateIdentifier(context.req.param("projectId"), "project_id"),
+                bearerToken(context.req.raw),
+                context.req.raw.signal,
+            );
+            context.header("Cache-Control", "no-store");
+            return context.body(null, 204);
+        })
         .get("/projects/:projectId/runtimes", async (context) => {
             const runtimes = await context.env.services.runtimePairings.listProjectRuntimes(
                 validateIdentifier(context.req.param("projectId"), "project_id"),
