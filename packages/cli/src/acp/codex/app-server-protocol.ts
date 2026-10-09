@@ -81,9 +81,26 @@ const fileUpdateChangeSchema = z.object({
     path: boundedText(4_096),
 });
 
+const imageGenerationItemSchema = z.object({
+    id: boundedText(256),
+    type: z.literal("imageGeneration"),
+    status: boundedText(80),
+    revisedPrompt: boundedText(32_768).nullish(),
+    // The app-server frame is bounded; media validation belongs to the content externalizer.
+    result: z.string(),
+    failure: z
+        .object({
+            type: z.literal("usageLimitExceeded"),
+            limitId: boundedText(256),
+            resetsAt: z.number().nullish(),
+        })
+        .nullish(),
+});
+
 // `ThreadItem` is an open union: a newer Codex can add a variant at any time. Decode the shape Mobius
 // reads and skip anything else rather than failing the whole stream.
 export const threadItemSchema = z.discriminatedUnion("type", [
+    imageGenerationItemSchema,
     z.object({
         id: boundedText(256),
         text: boundedText(1_000_000),
