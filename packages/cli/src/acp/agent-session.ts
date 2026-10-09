@@ -63,12 +63,7 @@ import {
 import { readAcpSessionFailure } from "./session-failure.ts";
 import { AcpHistoryReplay } from "./session-history.ts";
 import { AcpSessionInteractions } from "./session-interactions.ts";
-import {
-    type AcpSessionStore,
-    AcpStoredSession,
-    DeletedAcpStoredSession,
-    FoundAcpStoredSession,
-} from "./session-store.ts";
+import { type AcpSessionStore, AcpStoredSession, FoundAcpStoredSession } from "./session-store.ts";
 import { isRecord, truncate } from "./value-utils.ts";
 
 const PROCESS_STOP_TIMEOUT_MILLISECONDS = 1_000;
@@ -133,7 +128,6 @@ export class AgentSession implements AcpClientHandler {
     #commands: readonly SessionCommand[] = [];
     #configRevision = 0;
     #configOptions: readonly SessionConfigOption[] = [];
-    #lastTerminalCommandId: string | null = null;
     #nativeHistoryOwnership: NativeHistoryOwnership = { kind: "unbound" };
     #prompted = false;
     #nativePrompt: { readonly commandId: string; readonly previousTurnId: string | null } | null = null;
@@ -514,13 +508,7 @@ export class AgentSession implements AcpClientHandler {
             this.#store.remove(this.#mobiusSessionId);
             stored = this.#metrics.measureSync("session-state-read", () => this.#store.read(this.#mobiusSessionId));
         }
-        if (stored instanceof DeletedAcpStoredSession) {
-            throw new AcpExecutionError(
-                "The native Agent session was deleted. Start a new chat.",
-                {},
-                "native_session_deleted",
-            );
-        }
+
         let lifecycleResponse: unknown;
         if (origin?.kind === "fork") {
             if (!this.#capabilities.unstableForkSession) {
@@ -577,7 +565,6 @@ export class AgentSession implements AcpClientHandler {
         ) {
             this.selectNativeSession(stored.session.nativeSessionId);
             this.#prompted = stored.session.prompted;
-            this.#lastTerminalCommandId = stored.session.lastTerminalCommandId;
             this.#sessionTitle = stored.session.title;
             this.#restored = true;
             if (this.#capabilities.resumeSession) {
@@ -656,7 +643,6 @@ export class AgentSession implements AcpClientHandler {
                 this.#prompted,
                 this.#sessionTitle ?? "",
                 new Date().toISOString(),
-                this.#lastTerminalCommandId,
             ),
         );
     };
@@ -685,25 +671,6 @@ export class AgentSession implements AcpClientHandler {
             );
         }
         return decoded.data;
-    };
-
-    readonly deleteNativeSession = async (nativeSessionId: string, signal: AbortSignal): Promise<void> => {
-        if (!this.#capabilities.deleteSession || !this.#capabilities.listSessions) {
-            throw new AcpExecutionError(
-                "This Agent does not support native session deletion",
-                {},
-                "native_session_unsupported",
-            );
-        }
-        await this.race(
-            this.#connection.connection.agent.request(
-                methods.agent.session.delete,
-                { sessionId: nativeSessionIdSchema.parse(nativeSessionId) },
-                { cancellationSignal: signal },
-            ),
-            "ACP agent exited while deleting a session",
-            signal,
-        );
     };
 
     readonly nativeSessionId = (): string => this.#updates.sessionId();
@@ -880,7 +847,6 @@ export class AgentSession implements AcpClientHandler {
                 true,
                 this.#sessionTitle,
                 new Date().toISOString(),
-                this.#lastTerminalCommandId,
             ),
         );
         this.#prompted = true;
@@ -949,7 +915,6 @@ export class AgentSession implements AcpClientHandler {
                     usage: result.usage ?? null,
                 });
             }
-            this.#lastTerminalCommandId = options.commandId;
             this.#store.write(
                 new AcpStoredSession(
                     this.#mobiusSessionId,
@@ -960,7 +925,6 @@ export class AgentSession implements AcpClientHandler {
                     true,
                     this.#sessionTitle ?? "",
                     new Date().toISOString(),
-                    this.#lastTerminalCommandId,
                 ),
             );
             if (lifecycleV2 !== undefined) {
@@ -1286,7 +1250,6 @@ export class AgentSession implements AcpClientHandler {
                         this.#prompted,
                         this.#sessionTitle ?? "",
                         new Date().toISOString(),
-                        this.#lastTerminalCommandId,
                     ),
                 );
             }

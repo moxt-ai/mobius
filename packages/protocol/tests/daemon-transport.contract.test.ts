@@ -15,6 +15,28 @@ import {
 } from "../src/index.ts";
 
 describe("daemon transport protocol", () => {
+    it.each(["delete", "fork-recorded"])(
+        "Given the removed native %s operation, When a remote client sends it, Then the daemon protocol rejects it",
+        (action) => {
+            expect(() =>
+                decodeServiceToDaemonMessage(
+                    JSON.stringify({
+                        kind: "native.session.request",
+                        action,
+                        additionalDirectoryIds: [],
+                        agentId: "claude",
+                        bindingId: "workspace",
+                        directoryId: "default",
+                        requestId: "request-1",
+                        sessionId: "source",
+                        entryId: "entry-1",
+                        targetSessionId: "target",
+                        throughCommandId: "command-1",
+                    }),
+                ),
+            ).toThrow();
+        },
+    );
     it("Given an older Session response and future additive fields, When a newer boundary decodes it, Then known fields remain usable with documented fallbacks", () => {
         expect(
             decodeSessionsQueriedEvent(

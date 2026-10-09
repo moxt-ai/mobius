@@ -113,21 +113,6 @@ const nativeSessionRequestSchema = z.discriminatedUnion("action", [
             targetSessionId: identifier,
         })
         .readonly(),
-    z
-        .object({
-            ...identity,
-            action: z.literal("fork-recorded"),
-            targetSessionId: identifier,
-            throughCommandId: identifier,
-        })
-        .readonly(),
-    z
-        .object({
-            ...identity,
-            action: z.literal("delete"),
-            entryId: identifier,
-        })
-        .readonly(),
 ]);
 export type NativeSessionRequest = z.infer<typeof nativeSessionRequestSchema>;
 const nativeSessionCommandSchema = z.discriminatedUnion("action", [
@@ -146,21 +131,6 @@ const nativeSessionCommandSchema = z.discriminatedUnion("action", [
             action: z.enum(["import", "fork"]),
             entryId: identifier,
             targetSessionId: identifier,
-        })
-        .readonly(),
-    z
-        .object({
-            ...identity,
-            action: z.literal("fork-recorded"),
-            targetSessionId: identifier,
-            throughCommandId: identifier,
-        })
-        .readonly(),
-    z
-        .object({
-            ...identity,
-            action: z.literal("delete"),
-            entryId: identifier,
         })
         .readonly(),
 ]);
@@ -226,18 +196,10 @@ const nativeSessionResultSchema = z.discriminatedUnion("action", [
     z
         .object({
             ...resultEnvelope,
-            action: z.enum(["import", "fork", "fork-recorded"]),
+            action: z.enum(["import", "fork"]),
             targetSessionId: identifier,
             ready: sessionReadyEventSchema,
             title: z.string().max(500),
-        })
-        .readonly(),
-    z
-        .object({
-            ...resultEnvelope,
-            action: z.literal("delete"),
-            entryId: identifier,
-            deletedSessionIds: z.array(identifier).max(500).readonly(),
         })
         .readonly(),
 ]);

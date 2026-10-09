@@ -148,19 +148,48 @@ test("Given a completed real claude Session, When it is forked and immediately p
         expect(await finish(peer.sessionId, sourceCommandId)).toContain("CLAUDE_FORK_REPLY");
 
         const childSessionId = randomUUID();
+        const identity = {
+            additionalDirectoryIds: [],
+            agentId: "claude",
+            bindingId: peer.bindingId,
+            directoryId: "default",
+            kind: "native.session.request",
+            sessionId: peer.sessionId,
+        } as const;
+        const listRequestId = randomUUID();
+        peer.send(encodeNativeSessionCommand({ ...identity, action: "list", cursor: null, requestId: listRequestId }));
+        let entryId: string;
+        for (;;) {
+            const message = await peer.nextMessage();
+            const kind = decodeMessageKind(message);
+            if (kind === "session.operation.failed") {
+                throw new Error(message);
+            }
+            if (kind !== "native.session.result") {
+                continue;
+            }
+            const result = decodeNativeSessionResult(message);
+            if (result.requestId !== listRequestId) {
+                continue;
+            }
+            if (result.action !== "list") {
+                throw new Error("Expected native sessions");
+            }
+            const entry = result.entries.find((entry) => entry.mobiusSessionIds.includes(peer.sessionId));
+            if (entry === undefined) {
+                throw new Error("Missing source native session");
+            }
+            entryId = entry.entryId;
+            break;
+        }
         const requestId = randomUUID();
         peer.send(
             encodeNativeSessionCommand({
-                action: "fork-recorded",
-                additionalDirectoryIds: [],
-                agentId: "claude",
-                bindingId: peer.bindingId,
-                directoryId: "default",
-                kind: "native.session.request",
+                ...identity,
+                action: "fork",
                 requestId,
-                sessionId: peer.sessionId,
+                entryId,
                 targetSessionId: childSessionId,
-                throughCommandId: sourceCommandId,
             }),
         );
         for (;;) {
@@ -174,8 +203,8 @@ test("Given a completed real claude Session, When it is forked and immediately p
                 if (result.requestId !== requestId) {
                     continue;
                 }
-                if (result.action !== "fork-recorded") {
-                    throw new Error(`Expected fork-recorded, received ${result.action}`);
+                if (result.action !== "fork") {
+                    throw new Error(`Expected fork, received ${result.action}`);
                 }
                 expect(result.targetSessionId).toBe(childSessionId);
                 break;

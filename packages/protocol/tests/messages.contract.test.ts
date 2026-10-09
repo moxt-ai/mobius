@@ -7,14 +7,12 @@ import {
     type AgentMessageDeltaEvent,
     decodeAgentActivityEvent,
     decodeAgentMessageDeltaEvent,
-    decodeNativeSessionRequest,
     decodeSessionCancelCommand,
     decodeSessionPromptCommand,
     decodeSessionRecordingDirectory,
     decodeSessionRecordingHistory,
     decodeSessionRecordingWrite,
     encodeAgentActivityEvent,
-    encodeNativeSessionRequest,
     ProtocolMessageError,
     SESSION_CANCEL_KIND,
     SESSION_EVENT_KIND,
@@ -23,23 +21,6 @@ import {
 } from "../src/index.ts";
 
 describe("session Recording protocol", () => {
-    it("Given Web selects a terminal recorded Turn, When it requests a native fork, Then source and destination identity round-trip", () => {
-        const request = {
-            action: "fork-recorded",
-            additionalDirectoryIds: [],
-            agentId: "codex",
-            bindingId: "workspace",
-            directoryId: "default",
-            kind: "native.session.request",
-            requestId: "request-fork-1",
-            sessionId: "session-parent",
-            targetSessionId: "session-child",
-            throughCommandId: "command-1",
-        } as const;
-
-        expect(decodeNativeSessionRequest(encodeNativeSessionRequest(request))).toEqual(request);
-    });
-
     it("Given Recording has Sessions for a Runtime, When Web loads its directory, Then identity and display metadata remain bound to each Session", () => {
         const directory = {
             sessions: [

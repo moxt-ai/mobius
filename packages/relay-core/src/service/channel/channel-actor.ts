@@ -78,10 +78,10 @@ import { SessionRuntimeError } from "../../entity/do/session.ts";
 import type { BestEffortRecording } from "./best-effort-recording.ts";
 import { LiveSessionEventRelay } from "./live-session-event-relay.ts";
 
-type NativeImportAction = "import" | "fork" | "fork-recorded";
+type NativeImportAction = "import" | "fork";
 
 function isNativeImportAction(action: string): action is NativeImportAction {
-    return action === "import" || action === "fork" || action === "fork-recorded";
+    return action === "import" || action === "fork";
 }
 
 const NATIVE_IMPORT_DEADLINE_MILLISECONDS = 5 * 60 * 1_000;
@@ -314,7 +314,7 @@ export class ChannelActor {
             if (kind === NATIVE_SESSION_REQUEST_KIND) {
                 const request = decodeNativeSessionRequest(message);
                 const command: NativeSessionCommand = decodeNativeSessionCommand(message);
-                if (request.action === "import" || request.action === "fork" || request.action === "fork-recorded") {
+                if (request.action === "import" || request.action === "fork") {
                     const now = this.#clock.now();
                     this.expireNativeImports(now);
                     if (

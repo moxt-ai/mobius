@@ -105,7 +105,6 @@ export function createDaemonCommandHandler({
         audit,
         diagnostics,
         nativeSessions,
-        publisher,
         signal: signal,
         socket,
         timer,
