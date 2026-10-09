@@ -1,4 +1,4 @@
-import type { NativeSessionEntry, NativeSessionHistory, SessionCapabilities } from "@moxt-ai/mobius-sdk";
+import type { NativeSessionEntry, SessionCapabilities } from "@moxt-ai/mobius-sdk";
 import { MobiusChannelError } from "@moxt-ai/mobius-sdk/channel";
 import {
     ArrowLeft,
@@ -25,6 +25,7 @@ import { NativeSessionHistoryView } from "@/components/chat-message-list";
 import { Button } from "@/components/ui/button";
 import { useWorkspaceRoutes } from "@/components/workspace-route-provider";
 import type { AgentOption } from "@/domain/channel";
+import type { NativeSessionHistory } from "@/domain/native-history";
 import { cn } from "@/lib/utils";
 import { manageNativeSession, type NativeSessionScope } from "@/services/mobius-transport";
 import { useChatStore } from "@/store/chat-store";

@@ -1,6 +1,5 @@
 import type {
     AgentContentEvent,
-    NativeSessionHistory,
     PromptImage,
     PromptResource,
     SessionCapabilities,
@@ -32,6 +31,7 @@ import {
     type TurnTiming,
     UNTIMED_TURN,
 } from "@/domain/channel";
+import type { NativeSessionHistory } from "@/domain/native-history";
 
 const EMPTY_CAPABILITIES: SessionCapabilities = {
     additionalDirectories: false,

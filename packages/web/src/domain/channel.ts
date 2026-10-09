@@ -1,7 +1,6 @@
 import type {
     AgentDisplayContent,
     AgentInstallationStage,
-    NativeSessionHistory,
     NativeSessionResult,
     PromptImage,
     PromptResource,
@@ -9,6 +8,7 @@ import type {
     SessionElicitationRequestedEvent,
     SessionPermissionRequestedEvent,
 } from "@moxt-ai/mobius-sdk";
+import type { NativeSessionHistory } from "@/domain/native-history";
 
 export type RecordedSessionExecution =
     | { readonly kind: "unavailable" }

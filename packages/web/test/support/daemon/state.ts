@@ -17,10 +17,18 @@ const EMPTY_HISTORY: History = {
 /** Recovery reads the state emitted by the peer. Product services and transports remain real. */
 export class FakeAgentDaemonState {
     readonly #sessions = new Map<string, Session>();
+    readonly #nativeEvents = new Map<string, readonly p.SessionEventV2[]>();
     readonly #transient = new Set<string>();
     readonly #inspected = new Map<string, p.SessionReadyEvent>();
     readonly observe = (encoded: string): void => {
         const event = p.decodeDaemonToServiceMessage(encoded);
+        if (event.kind === "session.event.v2") {
+            this.#nativeEvents.set(event.event.sessionId, [
+                ...(this.#nativeEvents.get(event.event.sessionId) ?? []),
+                event.event,
+            ]);
+            return;
+        }
         if (event.kind !== "session.ready") {
             return;
         }
@@ -226,19 +234,51 @@ export class FakeAgentDaemonState {
                     }),
                 );
                 return true;
-            case "session.live-history.page.load": {
-                const history = this.#sessions.get(c.sessionId)?.history ?? EMPTY_HISTORY;
-                const end = c.cursor === null ? history.messages.length : Number(c.cursor);
-                const start = Math.max(0, end - c.limit);
+            case "session.live-history.page.load":
                 send(
-                    p.encodeSessionLiveHistoryPageLoaded({
-                        kind: "session.live-history.page.loaded",
+                    p.encodeSessionOperationFailedEvent({
+                        kind: "session.operation.failed",
                         requestId: c.requestId,
                         sessionId: c.sessionId,
-                        page: {
-                            ...history,
-                            messages: history.messages.slice(start, end),
-                            nextCursor: start === 0 ? null : start.toString(),
+                        code: "unsupported_operation",
+                        message: "Use native V2 events",
+                    }),
+                );
+                return true;
+            case "session.live-history.v2.page.load": {
+                const events =
+                    this.#nativeEvents.get(c.sessionId) ??
+                    (this.#sessions.get(c.sessionId)?.history.messages ?? []).map(
+                        (message, index): p.SessionEventV2 => ({
+                            eventId: `native-${index}`,
+                            position: (index + 1).toString(),
+                            provenance: { kind: "original" },
+                            recordedAt: "2026-01-01T00:00:00.000Z",
+                            sessionId: c.sessionId,
+                            type: "acp",
+                            payload: {
+                                sessionUpdate: message.role === "user" ? "user_message_chunk" : "agent_message_chunk",
+                                messageId: `message-${index}`,
+                                content: { type: "text", text: message.text },
+                            },
+                        }),
+                    );
+                const end = c.cursor === null ? events.length : Number(c.cursor);
+                const start = Math.max(0, end - c.eventLimit);
+                send(
+                    p.encodeSessionLiveHistoryV2PageLoaded({
+                        kind: "session.live-history.v2.page.loaded",
+                        requestId: c.requestId,
+                        sessionId: c.sessionId,
+                        events: {
+                            executingPromptRequest: null,
+                            history: {
+                                version: 2,
+                                events: events.slice(start, end),
+                                nextCursor: start === 0 ? null : start.toString(),
+                                tailCursor: events.at(-1)?.eventId ?? "",
+                                truncated: start > 0,
+                            },
                         },
                     }),
                 );
