@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { decodeSessionEventV2, type SessionEventPayloadV2 } from "@moxt-ai/mobius-protocol";
 import { and, asc, eq, gte, lte } from "drizzle-orm";
 import type { NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
@@ -15,6 +16,7 @@ interface PositionedSessionEventV2 {
 
 interface SessionEventsV2 {
     readonly hot: PositionedSessionEventV2[];
+    readonly sessionGenerationId: string;
     nextPosition: number;
 }
 
@@ -26,20 +28,26 @@ type FlushSchedule =
 export interface AcpSessionEventPageV2 {
     readonly events: readonly SessionEventPayloadV2[];
     readonly nextCursor: string | null;
+    readonly sessionGenerationId: string;
     readonly startPosition: number;
     readonly truncated: boolean;
 }
 
+export interface AcpSessionEventPositionV2 {
+    readonly position: number;
+    readonly sessionGenerationId: string;
+}
+
 export interface AcpSessionEventStoreV2 {
-    readonly append: (sessionId: string, event: SessionEventPayloadV2) => number;
+    readonly append: (sessionId: string, event: SessionEventPayloadV2) => AcpSessionEventPositionV2;
     readonly close: () => void;
-    readonly generationId: string;
     readonly page: (sessionId: string, eventLimit: number, cursor: string | null) => AcpSessionEventPageV2;
     readonly remove: (sessionId: string) => void;
     readonly reset: (sessionId: string) => void;
 }
 
 function eventPage(
+    sessionGenerationId: string,
     eventCount: number,
     eventLimit: number,
     cursor: string | null,
@@ -54,32 +62,39 @@ function eventPage(
     return {
         events: read(startPosition + 1, endPosition),
         nextCursor: startPosition === 0 ? null : startPosition.toString(),
+        sessionGenerationId,
         startPosition: startPosition + 1,
         truncated: startPosition > 0,
     };
 }
 
 export class MemoryAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
-    readonly generationId: string;
-    readonly #events = new Map<string, SessionEventPayloadV2[]>();
+    readonly #events = new Map<string, SessionEventsV2>();
 
-    constructor(generationId: string) {
-        this.generationId = generationId;
-    }
+    readonly #session = (sessionId: string): SessionEventsV2 => {
+        const session = this.#events.get(sessionId) ?? {
+            hot: [],
+            nextPosition: 1,
+            sessionGenerationId: randomUUID(),
+        };
+        this.#events.set(sessionId, session);
+        return session;
+    };
 
-    readonly append = (sessionId: string, event: SessionEventPayloadV2): number => {
-        const events = this.#events.get(sessionId) ?? [];
-        events.push(event);
-        this.#events.set(sessionId, events);
-        return events.length;
+    readonly append = (sessionId: string, event: SessionEventPayloadV2): AcpSessionEventPositionV2 => {
+        const session = this.#session(sessionId);
+        const position = session.nextPosition;
+        session.hot.push({ event, position });
+        session.nextPosition += 1;
+        return { position, sessionGenerationId: session.sessionGenerationId };
     };
 
     readonly close = (): void => this.#events.clear();
 
     readonly page = (sessionId: string, eventLimit: number, cursor: string | null): AcpSessionEventPageV2 => {
-        const events = this.#events.get(sessionId) ?? [];
-        return eventPage(events.length, eventLimit, cursor, (startPosition, endPosition) =>
-            events.slice(startPosition - 1, endPosition),
+        const session = this.#session(sessionId);
+        return eventPage(session.sessionGenerationId, session.nextPosition - 1, eventLimit, cursor, (start, end) =>
+            session.hot.filter(({ position }) => position >= start && position <= end).map(({ event }) => event),
         );
     };
 
@@ -87,7 +102,9 @@ export class MemoryAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
         this.#events.delete(sessionId);
     };
 
-    readonly reset = this.remove;
+    readonly reset = (sessionId: string): void => {
+        this.#events.set(sessionId, { hot: [], nextPosition: 1, sessionGenerationId: randomUUID() });
+    };
 }
 
 const cachedEventRowSchema = z.object({ eventJson: z.string(), position: z.number().int().positive() });
@@ -100,6 +117,7 @@ function decodeCachedEvent(value: unknown): SessionEventPayloadV2 {
         position: "1",
         provenance: { kind: "original" },
         recordedAt: "1970-01-01T00:00:00.000Z",
+        sessionGenerationId: "cached-generation",
         sessionId: "cached-session",
     });
     return event.type === "acp"
@@ -108,7 +126,6 @@ function decodeCachedEvent(value: unknown): SessionEventPayloadV2 {
 }
 
 export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
-    readonly generationId: string;
     readonly #database: NodeSQLiteDatabase;
     readonly #ignoredPersistedSessions = new Set<string>();
     readonly #localDatabase: LocalSqliteDatabase;
@@ -116,8 +133,7 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
     #flushSchedule: FlushSchedule = { kind: "idle" };
     #isLocalDBAvailable = true;
 
-    constructor(localDatabase: LocalSqliteDatabase, generationId: string) {
-        this.generationId = generationId;
+    constructor(localDatabase: LocalSqliteDatabase) {
         this.#localDatabase = localDatabase;
         this.#database = localDatabase.orm;
         try {
@@ -128,11 +144,21 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
         }
     }
 
-    readonly append = (sessionId: string, event: SessionEventPayloadV2): number => {
+    readonly #session = (sessionId: string): SessionEventsV2 => {
+        const session = this.#sessions.get(sessionId) ?? {
+            hot: [],
+            nextPosition: 1,
+            sessionGenerationId: randomUUID(),
+        };
+        this.#sessions.set(sessionId, session);
+        return session;
+    };
+
+    readonly append = (sessionId: string, event: SessionEventPayloadV2): AcpSessionEventPositionV2 => {
         if (this.#flushSchedule.kind === "closed") {
             throw new Error("The V2 Session event store is closed");
         }
-        const session = this.#sessions.get(sessionId) ?? { hot: [], nextPosition: 1 };
+        const session = this.#session(sessionId);
         const position = session.nextPosition;
         session.hot.push({ event, position });
         session.nextPosition += 1;
@@ -140,7 +166,7 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
         if (session.hot.length > HOT_EVENT_HIGH_WATER_MARK) {
             this.#scheduleFlush();
         }
-        return position;
+        return { position, sessionGenerationId: session.sessionGenerationId };
     };
 
     readonly #scheduleFlush = (): void => {
@@ -163,12 +189,21 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
         }
         const batches = [...this.#sessions.entries()].flatMap(([sessionId, session]) => {
             const count = includeHotTail ? session.hot.length : Math.max(0, session.hot.length - HOT_EVENT_RETENTION);
-            return count === 0 ? [] : [{ count, events: session.hot.slice(0, count), sessionId }];
+            return count === 0
+                ? []
+                : [
+                      {
+                          count,
+                          events: session.hot.slice(0, count),
+                          sessionGenerationId: session.sessionGenerationId,
+                          sessionId,
+                      },
+                  ];
         });
         const values = batches.flatMap((batch) =>
             batch.events.map(({ event, position }) => ({
                 eventJson: JSON.stringify(event),
-                generationId: this.generationId,
+                generationId: batch.sessionGenerationId,
                 position,
                 sessionId: batch.sessionId,
             })),
@@ -196,8 +231,9 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
 
     readonly page = (sessionId: string, eventLimit: number, cursor: string | null): AcpSessionEventPageV2 => {
         const session = this.#sessions.get(sessionId);
-        const eventCount = (session?.nextPosition ?? 1) - 1;
-        return eventPage(eventCount, eventLimit, cursor, (startPosition, endPosition) => {
+        const current = session ?? this.#session(sessionId);
+        const eventCount = current.nextPosition - 1;
+        return eventPage(current.sessionGenerationId, eventCount, eventLimit, cursor, (startPosition, endPosition) => {
             const persisted = this.#ignoredPersistedSessions.has(sessionId)
                 ? []
                 : this.#database
@@ -205,7 +241,7 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
                       .from(sessionEventV2)
                       .where(
                           and(
-                              eq(sessionEventV2.generationId, this.generationId),
+                              eq(sessionEventV2.generationId, current.sessionGenerationId),
                               eq(sessionEventV2.sessionId, sessionId),
                               gte(sessionEventV2.position, startPosition),
                               lte(sessionEventV2.position, endPosition),
@@ -226,7 +262,7 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
         });
     };
 
-    readonly #deletePersisted = (sessionId: string): void => {
+    readonly #deletePersisted = (sessionId: string, sessionGenerationId?: string): void => {
         if (!this.#isLocalDBAvailable) {
             this.#ignoredPersistedSessions.add(sessionId);
             return;
@@ -234,7 +270,14 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
         try {
             this.#database
                 .delete(sessionEventV2)
-                .where(and(eq(sessionEventV2.generationId, this.generationId), eq(sessionEventV2.sessionId, sessionId)))
+                .where(
+                    sessionGenerationId === undefined
+                        ? eq(sessionEventV2.sessionId, sessionId)
+                        : and(
+                              eq(sessionEventV2.generationId, sessionGenerationId),
+                              eq(sessionEventV2.sessionId, sessionId),
+                          ),
+                )
                 .run();
             this.#ignoredPersistedSessions.delete(sessionId);
         } catch (cause) {
@@ -249,7 +292,11 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
         this.#sessions.delete(sessionId);
     };
 
-    readonly reset = this.remove;
+    readonly reset = (sessionId: string): void => {
+        const previous = this.#sessions.get(sessionId);
+        this.#deletePersisted(sessionId, previous?.sessionGenerationId);
+        this.#sessions.set(sessionId, { hot: [], nextPosition: 1, sessionGenerationId: randomUUID() });
+    };
 
     readonly close = (): void => {
         if (this.#flushSchedule.kind === "closed") {

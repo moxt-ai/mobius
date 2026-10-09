@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
 import type { NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
 import { z } from "zod";
@@ -69,7 +68,7 @@ export class MemoryAcpSessionStore implements AcpSessionStore {
     readonly eventsV2: AcpSessionEventStoreV2;
     readonly #sessions = new Map<string, AcpStoredSession>();
 
-    constructor(eventsV2: AcpSessionEventStoreV2 = new MemoryAcpSessionEventStoreV2(randomUUID())) {
+    constructor(eventsV2: AcpSessionEventStoreV2 = new MemoryAcpSessionEventStoreV2()) {
         this.eventsV2 = eventsV2;
     }
 
@@ -135,7 +134,7 @@ export class SqliteAcpSessionStore implements AcpSessionStore {
 
     constructor(
         localDatabase: LocalSqliteDatabase,
-        eventsV2: AcpSessionEventStoreV2 = new MemoryAcpSessionEventStoreV2(randomUUID()),
+        eventsV2: AcpSessionEventStoreV2 = new MemoryAcpSessionEventStoreV2(),
     ) {
         this.eventsV2 = eventsV2;
         this.#localDatabase = localDatabase;

@@ -1,4 +1,3 @@
-import { createHash, randomUUID } from "node:crypto";
 import type {
     ContentBlockV2,
     PromptExecutionContextV2,
@@ -7,6 +6,7 @@ import type {
     SessionEventV2,
     SessionPromptCommand,
 } from "@moxt-ai/mobius-protocol";
+import type { AcpSessionEventPositionV2 } from "./acp/session-event-store-v2.ts";
 import type { DaemonSessionEventPublisher } from "./relay-connection/session-event-publisher.ts";
 
 interface QueuedPromptRequestV2 {
@@ -52,25 +52,24 @@ function promptContent(command: SessionPromptCommand): readonly ContentBlockV2[]
 }
 
 export function sessionEventV2(
-    daemonGenerationId: string,
+    sessionGenerationId: string,
     sessionId: string,
     position: number,
     event: SessionEventPayloadV2,
     recordedAt: string,
 ): SessionEventV2 {
-    const sessionPrefix = createHash("sha256").update(sessionId).digest("hex").slice(0, 16);
     return {
-        eventId: `event-${daemonGenerationId}-${sessionPrefix}-${position.toString().padStart(16, "0")}`,
+        eventId: `event-${sessionGenerationId}-${position.toString().padStart(16, "0")}`,
         ...event,
         position: position.toString(),
         provenance: { kind: "original" },
         recordedAt,
+        sessionGenerationId,
         sessionId,
     };
 }
 
 export class DaemonSessionEventLogV2 {
-    readonly daemonGenerationId: string;
     readonly #publisher: DaemonSessionEventPublisher;
     readonly #terminal = new Map<string, SessionEventV2>();
     readonly #publications = new Map<string, SessionEventV2[]>();
@@ -80,11 +79,9 @@ export class DaemonSessionEventLogV2 {
     constructor(
         publisher: DaemonSessionEventPublisher,
         recordLifecycle: (sessionId: string, event: SessionEventPayloadV2) => Promise<boolean>,
-        daemonGenerationId: string = randomUUID(),
     ) {
         this.#recordLifecycle = recordLifecycle;
         this.#publisher = publisher;
-        this.daemonGenerationId = daemonGenerationId;
     }
 
     readonly requested = (command: SessionPromptCommand): void => {
@@ -120,8 +117,14 @@ export class DaemonSessionEventLogV2 {
         throw new Error("The executing prompt was not registered in the V2 queue");
     };
 
-    readonly record = (sessionId: string, event: SessionEventPayloadV2, position: number): void => {
-        const recorded = this.event(sessionId, position, event, new Date().toISOString());
+    readonly record = (sessionId: string, event: SessionEventPayloadV2, position: AcpSessionEventPositionV2): void => {
+        const recorded = this.event(
+            sessionId,
+            position.sessionGenerationId,
+            position.position,
+            event,
+            new Date().toISOString(),
+        );
         if (
             event.type === "lifecycle-metadata" &&
             (event.payload.kind === "prompt.completed" ||
@@ -172,10 +175,11 @@ export class DaemonSessionEventLogV2 {
 
     readonly event = (
         sessionId: string,
+        sessionGenerationId: string,
         position: number,
         event: SessionEventPayloadV2,
         recordedAt: string,
-    ): SessionEventV2 => sessionEventV2(this.daemonGenerationId, sessionId, position, event, recordedAt);
+    ): SessionEventV2 => sessionEventV2(sessionGenerationId, sessionId, position, event, recordedAt);
 
     readonly queueChanged = async (sessionId: string): Promise<void> => {
         await this.#recordLifecycle(sessionId, {

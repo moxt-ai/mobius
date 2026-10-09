@@ -38,7 +38,13 @@ export async function executeSessionLiveHistoryV2PageLoad(
         const replay = await sessions.loadSessionEventsV2(loadOptions, command.eventLimit, command.cursor);
         signal.throwIfAborted();
         const events = replay.events.map((event, index) =>
-            eventLogV2.event(command.sessionId, replay.startPosition + index, event, "1970-01-01T00:00:00.000Z"),
+            eventLogV2.event(
+                command.sessionId,
+                replay.sessionGenerationId,
+                replay.startPosition + index,
+                event,
+                "1970-01-01T00:00:00.000Z",
+            ),
         );
         const tailCursor = events.at(-1)?.eventId ?? "";
         audit.record({
@@ -49,9 +55,9 @@ export async function executeSessionLiveHistoryV2PageLoad(
         send(socket, {
             events: {
                 events: {
-                    daemonGenerationId: eventLogV2.daemonGenerationId,
                     events,
                     nextCursor: replay.nextCursor,
+                    sessionGenerationId: replay.sessionGenerationId,
                     tailCursor,
                     truncated: replay.truncated,
                     version: 2,

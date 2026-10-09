@@ -17,6 +17,7 @@ const event = {
     position: "0",
     provenance: { kind: "original" },
     recordedAt: "2026-10-09T00:00:00.000Z",
+    sessionGenerationId: "session-generation-live",
     sessionId: "live-session",
     type: "acp",
     payload: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Live reply" } },
