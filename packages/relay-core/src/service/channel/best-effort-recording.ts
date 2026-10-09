@@ -18,7 +18,7 @@ export class BestEffortRecording {
     }
 
     readonly publish = (target: SessionRecordingTarget, envelope: SessionEventEnvelopeV2): void => {
-        const bytes = new TextEncoder().encode(JSON.stringify(envelope.event)).byteLength;
+        const bytes = new TextEncoder().encode(JSON.stringify(envelope.events)).byteLength;
         if (this.#pendingBytes + bytes > MAX_PENDING_BYTES) {
             console.warn("Recording event dropped", { code: "recording_capacity_exceeded" });
             return;

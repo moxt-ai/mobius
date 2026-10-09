@@ -111,12 +111,23 @@ for (const side of [128, 500]) {
                         throw new Error(message);
                     }
                     if (kind === "session.event.v2") {
-                        const event = decodeSessionEventEnvelopeV2(message).event;
-                        events.push(event);
-                        if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.failed") {
-                            throw new Error(JSON.stringify(event));
+                        const batch = decodeSessionEventEnvelopeV2(message).events;
+                        events.push(...batch);
+                        const failure = batch.find(
+                            (event) =>
+                                event.type === "lifecycle-metadata" &&
+                                (event.payload.kind === "prompt.failed" ||
+                                    event.payload.kind === "prompt.failed-before-start"),
+                        );
+                        if (failure !== undefined) {
+                            throw new Error(JSON.stringify(failure));
                         }
-                        if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
+                        if (
+                            batch.some(
+                                (event) =>
+                                    event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed",
+                            )
+                        ) {
                             return events;
                         }
                     }

@@ -4,9 +4,11 @@ import {
     type AcpSessionUpdateV2,
     decodeMobiusSessionExportV2,
     decodeNativeSessionEventsV2,
+    decodeSessionEventEnvelopeV2,
     decodeSessionEventLogPageV2,
     encodeMobiusSessionExportV2,
     encodeNativeSessionEventsV2,
+    encodeSessionEventEnvelopeV2,
     encodeSessionEventLogPageV2,
     ProtocolMessageError,
     type SessionEventV2,
@@ -27,6 +29,25 @@ function event(position: number, update: AcpSessionUpdateV2): SessionEventV2 {
 }
 
 describe("Session Event Log V2 protocol", () => {
+    it("Given several live V2 events, When they cross the daemon transport boundary, Then they round-trip as one ordered batch", () => {
+        const events = [
+            event(1, {
+                content: { text: "first", type: "text" },
+                messageId: "message-1",
+                sessionUpdate: "agent_message_chunk",
+            }),
+            event(2, {
+                content: { text: "second", type: "text" },
+                messageId: "message-1",
+                sessionUpdate: "agent_message_chunk",
+            }),
+        ];
+
+        expect(
+            decodeSessionEventEnvelopeV2(encodeSessionEventEnvelopeV2({ events, kind: "session.event.v2" })),
+        ).toEqual({ events, kind: "session.event.v2" });
+    });
+
     it("Given a bounded committed V2 log, When it is exported across the public boundary, Then binding metadata, raw events, and provenance round-trip", () => {
         const imported = {
             ...event(1, {

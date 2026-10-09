@@ -87,11 +87,15 @@ test("Given real Codex has accepted a steering prompt, When V2 recovery reloads 
                 if (decodeMessageKind(message) !== "session.event.v2") {
                     continue;
                 }
-                const event = decodeSessionEventEnvelopeV2(message).event;
                 if (
-                    event.type === "lifecycle-metadata" &&
-                    event.payload.kind === "prompt.requested" &&
-                    event.payload.content.some((content) => content.type === "text" && content.text === steeringPrompt)
+                    decodeSessionEventEnvelopeV2(message).events.some(
+                        (event) =>
+                            event.type === "lifecycle-metadata" &&
+                            event.payload.kind === "prompt.requested" &&
+                            event.payload.content.some(
+                                (content) => content.type === "text" && content.text === steeringPrompt,
+                            ),
+                    )
                 ) {
                     break;
                 }
@@ -401,27 +405,28 @@ test("Given real Codex with an active turn, When three follow-ups are accepted a
                 if (decodeMessageKind(message) !== "session.event.v2") {
                     continue;
                 }
-                const event = decodeSessionEventEnvelopeV2(message).event;
-                if (
-                    event.type === "lifecycle-metadata" &&
-                    (event.payload.kind === "prompt.failed" || event.payload.kind === "prompt.failed-before-start")
-                ) {
-                    throw new Error(JSON.stringify(event));
-                }
-                if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.started") {
-                    started.push(event.payload.commandId);
-                }
-                if (
-                    event.type === "acp" &&
-                    event.payload.sessionUpdate === "agent_message_chunk" &&
-                    event.payload.content.type === "text"
-                ) {
-                    const current = started.at(-1) ?? active;
-                    replies.set(current, `${replies.get(current) ?? ""}${event.payload.content.text}`);
-                }
-                if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
-                    expect(event.payload.stopReason).toBe("end_turn");
-                    completed.push(event.payload.commandId);
+                for (const event of decodeSessionEventEnvelopeV2(message).events) {
+                    if (
+                        event.type === "lifecycle-metadata" &&
+                        (event.payload.kind === "prompt.failed" || event.payload.kind === "prompt.failed-before-start")
+                    ) {
+                        throw new Error(JSON.stringify(event));
+                    }
+                    if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.started") {
+                        started.push(event.payload.commandId);
+                    }
+                    if (
+                        event.type === "acp" &&
+                        event.payload.sessionUpdate === "agent_message_chunk" &&
+                        event.payload.content.type === "text"
+                    ) {
+                        const current = started.at(-1) ?? active;
+                        replies.set(current, `${replies.get(current) ?? ""}${event.payload.content.text}`);
+                    }
+                    if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
+                        expect(event.payload.stopReason).toBe("end_turn");
+                        completed.push(event.payload.commandId);
+                    }
                 }
             }
             expect(started).toEqual([first, last]);
@@ -439,13 +444,17 @@ test("Given real Codex with an active turn, When three follow-ups are accepted a
                 if (decodeMessageKind(message) !== "session.event.v2") {
                     continue;
                 }
-                const event = decodeSessionEventEnvelopeV2(message).event;
+                const failure = decodeSessionEventEnvelopeV2(message).events.find(
+                    (event) =>
+                        event.type === "lifecycle-metadata" &&
+                        (event.payload.kind === "prompt.failed" || event.payload.kind === "prompt.failed-before-start"),
+                );
                 if (
-                    event.type === "lifecycle-metadata" &&
-                    (event.payload.kind === "prompt.failed" || event.payload.kind === "prompt.failed-before-start")
+                    failure?.type === "lifecycle-metadata" &&
+                    (failure.payload.kind === "prompt.failed" || failure.payload.kind === "prompt.failed-before-start")
                 ) {
-                    expect(event.payload.commandId).toBe(invalid);
-                    expect(event.payload.code).toBe("prompt_queue_target_unavailable");
+                    expect(failure.payload.commandId).toBe(invalid);
+                    expect(failure.payload.code).toBe("prompt_queue_target_unavailable");
                     break;
                 }
             }
@@ -461,16 +470,21 @@ test("Given real Codex with an active turn, When three follow-ups are accepted a
                 if (decodeMessageKind(message) !== "session.event.v2") {
                     continue;
                 }
-                const event = decodeSessionEventEnvelopeV2(message).event;
-                if (
-                    event.type === "lifecycle-metadata" &&
-                    (event.payload.kind === "prompt.failed" || event.payload.kind === "prompt.failed-before-start")
-                ) {
-                    throw new Error(JSON.stringify(event));
+                const events = decodeSessionEventEnvelopeV2(message).events;
+                const failure = events.find(
+                    (event) =>
+                        event.type === "lifecycle-metadata" &&
+                        (event.payload.kind === "prompt.failed" || event.payload.kind === "prompt.failed-before-start"),
+                );
+                if (failure !== undefined) {
+                    throw new Error(JSON.stringify(failure));
                 }
-                if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
-                    expect(event.payload.commandId).toBe(late);
-                    expect(event.payload.stopReason).toBe("end_turn");
+                const completion = events.find(
+                    (event) => event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed",
+                );
+                if (completion?.type === "lifecycle-metadata" && completion.payload.kind === "prompt.completed") {
+                    expect(completion.payload.commandId).toBe(late);
+                    expect(completion.payload.stopReason).toBe("end_turn");
                     expect(acknowledged).toBe(true);
                     break;
                 }

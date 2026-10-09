@@ -32,6 +32,7 @@ import {
     FILE_END_KIND,
     FILE_FAILED_KIND,
     type FileReadCommand,
+    type LifecycleMetadataV2,
     type NativeSessionRequest,
     type NativeSessionResult,
     type RuntimePingCommand,
@@ -61,12 +62,22 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { SessionRuntimeError } from "../../entity/do/session.ts";
 
-function commandReply(encoded: string, prompt = ""): string | null {
+function commandReply(
+    encoded: string,
+    prompt = "",
+    expectedLifecycleKinds: readonly LifecycleMetadataV2["kind"][] = [],
+): string | null {
     if (decodeMessageKind(encoded) !== "session.event.v2") {
         return encoded;
     }
-    const event = decodeSessionEventEnvelopeV2(encoded).event;
-    if (event.type !== "lifecycle-metadata") {
+    const lifecycleEvents = decodeSessionEventEnvelopeV2(encoded).events.filter(
+        (event) => event.type === "lifecycle-metadata",
+    );
+    const event =
+        lifecycleEvents.find(
+            ({ payload }) => payload.kind === "prompt.failed" || payload.kind === "prompt.failed-before-start",
+        ) ?? lifecycleEvents.find(({ payload }) => expectedLifecycleKinds.includes(payload.kind));
+    if (event === undefined) {
         return null;
     }
     const payload = event.payload;
@@ -400,7 +411,21 @@ export async function requestRuntimeControl(
                     if (typeof event.data !== "string") {
                         return;
                     }
-                    const raw = commandReply(event.data, command.kind === "session.prompt" ? command.prompt : "");
+                    const expectedLifecycleKinds: readonly LifecycleMetadataV2["kind"][] =
+                        command.kind === "session.prompt" || command.kind === "session.prompt.disposition"
+                            ? ["prompt.started"]
+                            : command.kind === "session.cancel"
+                              ? ["prompt.completed"]
+                              : command.kind === "session.permission.respond"
+                                ? ["session.permission.resolved"]
+                                : command.kind === "session.elicitation.respond"
+                                  ? ["session.elicitation.resolved"]
+                                  : [];
+                    const raw = commandReply(
+                        event.data,
+                        command.kind === "session.prompt" ? command.prompt : "",
+                        expectedLifecycleKinds,
+                    );
                     if (raw === null) {
                         return;
                     }

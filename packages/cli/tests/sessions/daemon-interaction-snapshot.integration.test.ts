@@ -57,19 +57,22 @@ class Messages {
     readonly nextKind = async (kind: string): Promise<string> => {
         for (;;) {
             const raw = this.#buffered.shift() ?? (await new Promise<string>((resolve) => this.#waiting.push(resolve)));
-            let message = raw;
+            const message = raw;
             if (decodeMessageKind(raw) === SESSION_EVENT_V2_KIND) {
-                const event = decodeSessionEventEnvelopeV2(raw).event;
-                if (event.type !== "lifecycle-metadata") {
-                    continue;
+                const events = decodeSessionEventEnvelopeV2(raw).events.filter(
+                    (event) => event.type === "lifecycle-metadata",
+                );
+                const matching = events.find(
+                    (event) =>
+                        "event" in event.payload && decodeMessageKind(JSON.stringify(event.payload.event)) === kind,
+                );
+                if (matching !== undefined && "event" in matching.payload) {
+                    return JSON.stringify(matching.payload.event);
                 }
-                if ("event" in event.payload) {
-                    message = JSON.stringify(event.payload.event);
-                } else if (event.payload.kind === kind) {
+                if (events.some((event) => event.payload.kind === kind)) {
                     return raw;
-                } else {
-                    continue;
                 }
+                continue;
             }
             if (decodeMessageKind(message) === kind) {
                 return message;

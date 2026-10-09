@@ -394,7 +394,9 @@ export class RuntimeService {
 
     private readonly daemonMessageLane = (message: DaemonToServiceMessage): string => {
         if (message.kind === SESSION_EVENT_V2_KIND) {
-            return `session:${message.event.sessionId}`;
+            return message.events.every((event) => event.sessionId === message.events[0]?.sessionId)
+                ? `session:${message.events[0]?.sessionId ?? "unknown"}`
+                : "runtime";
         }
         return "runtime";
     };

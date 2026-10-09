@@ -21,7 +21,7 @@ const event = {
     type: "acp",
     payload: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Live reply" } },
 };
-function write(runtimeId = "runtime-live", envelope: unknown = { kind: "session.event.v2", event }): Request {
+function write(runtimeId = "runtime-live", envelope: unknown = { kind: "session.event.v2", events: [event] }): Request {
     return new Request("https://recording.internal/v1/session-events", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -88,7 +88,7 @@ it("Given prompt context and a later Agent title, When the Runtime loads its rec
         },
     };
     expect(
-        (await worker.fetch(write("runtime-live", { kind: "session.event.v2", event: requested }), env)).status,
+        (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: [requested] }), env)).status,
     ).toBe(201);
     const titled = {
         ...event,
@@ -96,9 +96,9 @@ it("Given prompt context and a later Agent title, When the Runtime loads its rec
         recordedAt: "2026-10-09T01:00:00.000Z",
         payload: { sessionUpdate: "session_info_update", title: "Agent title" },
     };
-    expect((await worker.fetch(write("runtime-live", { kind: "session.event.v2", event: titled }), env)).status).toBe(
-        201,
-    );
+    expect(
+        (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: [titled] }), env)).status,
+    ).toBe(201);
     expect((await worker.fetch(write(), env)).status).toBe(201);
     const response = await worker.fetch(
         new Request(`https://recording.internal/v1/projects/${projectId}/runtimes/runtime-live/sessions`),
@@ -138,7 +138,7 @@ it("Given an invalid execution context, When submitted at the Recording boundary
             context: { agentId: "codex", directoryId: "default", additionalDirectoryIds: ["../docs"] },
         },
     };
-    expect((await worker.fetch(write("runtime-live", { kind: "session.event.v2", event: invalid }), env)).status).toBe(
-        400,
-    );
+    expect(
+        (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: [invalid] }), env)).status,
+    ).toBe(400);
 });

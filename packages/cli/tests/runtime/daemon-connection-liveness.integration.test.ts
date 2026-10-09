@@ -21,12 +21,14 @@ import {
     RUNTIME_LIVENESS_READY_KIND,
     SESSION_EVENT_V2_KIND,
     SESSION_PROMPT_KIND,
+    type SessionEventV2,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
 } from "../../../protocol/src/index.ts";
 import { AuditStore } from "../../src/audit/audit-store.ts";
 import { createDaemonConfig, LocalAgentDefinition } from "../../src/config.ts";
 import { RuntimeRelayRevokedError } from "../../src/relay-connection/runtime-revocation.ts";
+import { SESSION_EVENT_V2_BATCH_WINDOW_MILLISECONDS } from "../../src/relay-connection/session-event-publisher.ts";
 import type { DaemonScheduledTask, DaemonTimer } from "../../src/relay-connection/timer.ts";
 import { runDaemon } from "../../src/run-daemon.ts";
 
@@ -803,42 +805,47 @@ describe("daemon relay connection liveness", () => {
             if (firstSocket === undefined) {
                 throw new Error("Test relay did not retain the first connection");
             }
-            let firstEventFrame = await firstFrame.next();
-            if (decodeMessageKind(firstEventFrame.text) === RUNTIME_HEARTBEAT_KIND) {
-                const heartbeat = decodeRuntimeHeartbeatEvent(firstEventFrame.text);
-                writeServerTextFrame(
-                    firstSocket,
-                    encodeRuntimeHeartbeatAckEvent({
-                        heartbeatId: heartbeat.heartbeatId,
-                        kind: RUNTIME_HEARTBEAT_ACK_KIND,
-                    }),
-                );
-                firstEventFrame = await firstFrame.next();
-            }
-            while (decodeMessageKind(firstEventFrame.text) !== SESSION_EVENT_V2_KIND) {
-                firstEventFrame = await firstFrame.next();
-            }
-            const ready = decodeSessionEventEnvelopeV2(firstEventFrame.text);
-            expect(ready.event).toMatchObject({ type: "lifecycle-metadata", payload: { kind: "prompt.requested" } });
-            expect(ready).not.toHaveProperty("delivery");
-            // No delivery acknowledgements exist. Reconnection starts receiving live events.
-            let startedFrame = await firstFrame.next();
-            while (decodeMessageKind(startedFrame.text) !== SESSION_EVENT_V2_KIND) {
-                startedFrame = await firstFrame.next();
-            }
-            const started = decodeSessionEventEnvelopeV2(startedFrame.text);
-            expect(started.event).toMatchObject({ type: "lifecycle-metadata", payload: { kind: "prompt.started" } });
-            expect(started).not.toHaveProperty("delivery");
-            let completed = false;
-            while (!completed) {
-                const frame = await firstFrame.next();
-                if (decodeMessageKind(frame.text) !== SESSION_EVENT_V2_KIND) {
-                    continue;
+            const initialEvents: SessionEventV2[] = [];
+            while (
+                !initialEvents.some(
+                    (event) => event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed",
+                )
+            ) {
+                (await timer.waitForTask(SESSION_EVENT_V2_BATCH_WINDOW_MILLISECONDS)).run();
+                let frame = await firstFrame.next();
+                if (decodeMessageKind(frame.text) === RUNTIME_HEARTBEAT_KIND) {
+                    const heartbeat = decodeRuntimeHeartbeatEvent(frame.text);
+                    writeServerTextFrame(
+                        firstSocket,
+                        encodeRuntimeHeartbeatAckEvent({
+                            heartbeatId: heartbeat.heartbeatId,
+                            kind: RUNTIME_HEARTBEAT_ACK_KIND,
+                        }),
+                    );
+                    frame = await firstFrame.next();
                 }
-                const event = decodeSessionEventEnvelopeV2(frame.text);
-                completed =
-                    event.event.type === "lifecycle-metadata" && event.event.payload.kind === "prompt.completed";
+                while (decodeMessageKind(frame.text) !== SESSION_EVENT_V2_KIND) {
+                    frame = await firstFrame.next();
+                }
+                initialEvents.push(...decodeSessionEventEnvelopeV2(frame.text).events);
             }
+            expect(initialEvents).toEqual(
+                expect.arrayContaining([
+                    expect.objectContaining({
+                        type: "lifecycle-metadata",
+                        payload: expect.objectContaining({ kind: "prompt.requested" }),
+                    }),
+                    expect.objectContaining({
+                        type: "lifecycle-metadata",
+                        payload: expect.objectContaining({ kind: "prompt.started" }),
+                    }),
+                    expect.objectContaining({
+                        type: "lifecycle-metadata",
+                        payload: expect.objectContaining({ kind: "prompt.completed" }),
+                    }),
+                ]),
+            );
+            // No delivery acknowledgements exist. Reconnection starts receiving live events.
             // More than the former 16-event window must stream without any delivery ACK.
             for (let turn = 0; turn < 6; turn += 1) {
                 writeServerTextFrame(
@@ -858,6 +865,7 @@ describe("daemon relay connection liveness", () => {
                         targetCommandId: "",
                     }),
                 );
+                (await timer.waitForTask(SESSION_EVENT_V2_BATCH_WINDOW_MILLISECONDS)).run();
                 let terminal = false;
                 let answer = "";
                 while (!terminal) {
@@ -865,16 +873,19 @@ describe("daemon relay connection liveness", () => {
                     if (decodeMessageKind(frame.text) !== SESSION_EVENT_V2_KIND) {
                         continue;
                     }
-                    const event = decodeSessionEventEnvelopeV2(frame.text);
-                    const payload = event.event;
-                    if (
-                        payload.type === "acp" &&
-                        payload.payload.sessionUpdate === "agent_message_chunk" &&
-                        payload.payload.content.type === "text"
-                    ) {
-                        answer += payload.payload.content.text;
+                    for (const event of decodeSessionEventEnvelopeV2(frame.text).events) {
+                        if (
+                            event.type === "acp" &&
+                            event.payload.sessionUpdate === "agent_message_chunk" &&
+                            event.payload.content.type === "text"
+                        ) {
+                            answer += event.payload.content.text;
+                        }
+                        terminal ||= event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed";
                     }
-                    terminal = payload.type === "lifecycle-metadata" && payload.payload.kind === "prompt.completed";
+                    if (!terminal) {
+                        (await timer.waitForTask(SESSION_EVENT_V2_BATCH_WINDOW_MILLISECONDS)).run();
+                    }
                 }
                 expect(answer).toContain("keep broadcasting");
             }
@@ -914,6 +925,7 @@ describe("daemon relay connection liveness", () => {
             const restarted = waitForUpgrade();
             daemon = runDaemon(config, audit, cancellation.signal, timer);
             await restarted;
+            (await timer.waitForTask(SESSION_EVENT_V2_BATCH_WINDOW_MILLISECONDS)).run();
             const freshFrames = clientFrames[2];
             if (freshFrames === undefined) {
                 throw new Error("Test relay did not observe the restarted daemon");
@@ -926,11 +938,15 @@ describe("daemon relay connection liveness", () => {
                 freshFrame = await freshFrames.next();
             }
             const freshReady = decodeSessionEventEnvelopeV2(freshFrame.text);
-            expect(freshReady.event.sessionId).toBe("fresh-session");
-            expect(freshReady.event).toMatchObject({
-                type: "lifecycle-metadata",
-                payload: { kind: "prompt.requested" },
-            });
+            expect(freshReady.events.every((event) => event.sessionId === "fresh-session")).toBe(true);
+            expect(freshReady.events).toEqual(
+                expect.arrayContaining([
+                    expect.objectContaining({
+                        type: "lifecycle-metadata",
+                        payload: expect.objectContaining({ kind: "prompt.requested" }),
+                    }),
+                ]),
+            );
             expect(freshReady).not.toHaveProperty("delivery");
             expect(await readdir(stateDirectory)).not.toContain("events");
         } finally {

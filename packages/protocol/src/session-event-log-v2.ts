@@ -14,6 +14,7 @@ const MAX_CONTENT_LENGTH = 1_000_000;
 const MAX_JSON_DEPTH = 16;
 const MAX_JSON_KEYS = 1_000;
 export const SESSION_EVENT_V2_KIND = "session.event.v2";
+export const SESSION_EVENT_V2_BATCH_MAX_SIZE = 1_000;
 
 const boundedString = z.string().max(MAX_CONTENT_LENGTH);
 const shortString = z.string().max(2_048);
@@ -495,6 +496,12 @@ export const sessionEventV2Schema = z.discriminatedUnion("type", [
         .readonly(),
 ]);
 export type SessionEventV2 = z.infer<typeof sessionEventV2Schema>;
+export const sessionEventBatchV2Schema = z
+    .array(sessionEventV2Schema)
+    .min(1)
+    .max(SESSION_EVENT_V2_BATCH_MAX_SIZE)
+    .readonly();
+export type SessionEventBatchV2 = z.infer<typeof sessionEventBatchV2Schema>;
 const sessionExportV2Schema = z
     .object({
         binding: z
@@ -546,7 +553,7 @@ export const mobiusSessionExportV2Schema = z
     .readonly();
 export type MobiusSessionExportV2 = z.infer<typeof mobiusSessionExportV2Schema>;
 export const sessionEventEnvelopeV2Schema = z
-    .object({ event: sessionEventV2Schema, kind: z.literal(SESSION_EVENT_V2_KIND) })
+    .object({ events: sessionEventBatchV2Schema, kind: z.literal(SESSION_EVENT_V2_KIND) })
     .readonly();
 export type SessionEventEnvelopeV2 = z.infer<typeof sessionEventEnvelopeV2Schema>;
 export const sessionEventLogPageV2Schema = z
@@ -603,6 +610,10 @@ function encode<T>(value: T, schema: z.ZodType<T>): string {
 }
 export const decodeSessionEventV2 = (value: unknown): SessionEventV2 => decode(value, sessionEventV2Schema);
 export const encodeSessionEventV2 = (value: SessionEventV2): string => encode(value, sessionEventV2Schema);
+export const decodeSessionEventBatchV2 = (value: unknown): SessionEventBatchV2 =>
+    decode(value, sessionEventBatchV2Schema);
+export const encodeSessionEventBatchV2 = (value: SessionEventBatchV2): string =>
+    encode(value, sessionEventBatchV2Schema);
 export const decodeMobiusSessionExportV2 = (value: unknown): MobiusSessionExportV2 =>
     decode(value, mobiusSessionExportV2Schema);
 export const encodeMobiusSessionExportV2 = (value: MobiusSessionExportV2): string =>

@@ -255,75 +255,76 @@ test("Given real Codex emits a tool, commentary, and final text, When the comple
                 if (decodeMessageKind(message) !== SESSION_EVENT_V2_KIND) {
                     continue;
                 }
-                const event = decodeSessionEventEnvelopeV2(message).event;
-                if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.started") {
-                    expect(started).toBe(false);
-                    expect(event.payload).toMatchObject({
-                        commandId,
-                        epoch: expect.any(String),
-                    });
-                    started = true;
-                    await providerEntered.promise;
-                    socket.send(
-                        encodeSessionPromptCommand({
-                            additionalDirectoryIds: [],
-                            agentId: "codex",
-                            bindingId: config.bindingId,
-                            commandId: queuedCommandId,
-                            directoryId: "default",
-                            disposition: SessionPromptDisposition.Queue,
-                            images: [],
-                            kind: "session.prompt",
-                            prompt: "This queued prompt should not run",
-                            resources: [],
-                            sessionId,
-                            targetCommandId: commandId,
-                        }),
-                    );
-                } else if (
-                    event.type === "acp" &&
-                    event.payload.sessionUpdate === "agent_message_chunk" &&
-                    event.payload.content.type === "text"
-                ) {
-                    expect(started).toBe(true);
-                    expect(Number(event.position)).toBeGreaterThan(sequence);
-                    sequence = Number(event.position);
-                    text += event.payload.content.text;
-                    expect(text).not.toContain("Checking the live progress boundary.");
-                } else if (
-                    event.type === "acp" &&
-                    event.payload.sessionUpdate === "agent_thought_chunk" &&
-                    event.payload.content.type === "text"
-                ) {
-                    thought += event.payload.content.text;
-                } else if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
-                    const completion = event.payload;
-                    if (completion.commandId === queuedCommandId) {
-                        expect(completion.stopReason).toBe("cancelled");
-                        queuedCancelled = true;
+                for (const event of decodeSessionEventEnvelopeV2(message).events) {
+                    if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.started") {
+                        expect(started).toBe(false);
+                        expect(event.payload).toMatchObject({
+                            commandId,
+                            epoch: expect.any(String),
+                        });
+                        started = true;
+                        await providerEntered.promise;
                         socket.send(
-                            encodeNativeSessionCommand({
-                                action: "active-turn",
+                            encodeSessionPromptCommand({
                                 additionalDirectoryIds: [],
                                 agentId: "codex",
                                 bindingId: config.bindingId,
+                                commandId: queuedCommandId,
                                 directoryId: "default",
-                                kind: "native.session.request",
-                                requestId: randomUUID(),
+                                disposition: SessionPromptDisposition.Queue,
+                                images: [],
+                                kind: "session.prompt",
+                                prompt: "This queued prompt should not run",
+                                resources: [],
                                 sessionId,
-                                targetSessionId: sessionId,
+                                targetCommandId: commandId,
                             }),
                         );
-                    } else {
-                        expect(completion.commandId).toBe(commandId);
-                        expect(queuedCancelled).toBe(true);
-                        completed = true;
+                    } else if (
+                        event.type === "acp" &&
+                        event.payload.sessionUpdate === "agent_message_chunk" &&
+                        event.payload.content.type === "text"
+                    ) {
+                        expect(started).toBe(true);
+                        expect(Number(event.position)).toBeGreaterThan(sequence);
+                        sequence = Number(event.position);
+                        text += event.payload.content.text;
+                        expect(text).not.toContain("Checking the live progress boundary.");
+                    } else if (
+                        event.type === "acp" &&
+                        event.payload.sessionUpdate === "agent_thought_chunk" &&
+                        event.payload.content.type === "text"
+                    ) {
+                        thought += event.payload.content.text;
+                    } else if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
+                        const completion = event.payload;
+                        if (completion.commandId === queuedCommandId) {
+                            expect(completion.stopReason).toBe("cancelled");
+                            queuedCancelled = true;
+                            socket.send(
+                                encodeNativeSessionCommand({
+                                    action: "active-turn",
+                                    additionalDirectoryIds: [],
+                                    agentId: "codex",
+                                    bindingId: config.bindingId,
+                                    directoryId: "default",
+                                    kind: "native.session.request",
+                                    requestId: randomUUID(),
+                                    sessionId,
+                                    targetSessionId: sessionId,
+                                }),
+                            );
+                        } else {
+                            expect(completion.commandId).toBe(commandId);
+                            expect(queuedCancelled).toBe(true);
+                            completed = true;
+                        }
+                    } else if (
+                        event.type === "lifecycle-metadata" &&
+                        (event.payload.kind === "prompt.failed" || event.payload.kind === "prompt.failed-before-start")
+                    ) {
+                        throw new Error(`Real Codex Turn failed: ${JSON.stringify(event)}`);
                     }
-                } else if (
-                    event.type === "lifecycle-metadata" &&
-                    (event.payload.kind === "prompt.failed" || event.payload.kind === "prompt.failed-before-start")
-                ) {
-                    throw new Error(`Real Codex Turn failed: ${JSON.stringify(event)}`);
                 }
             }
             expect(started).toBe(true);

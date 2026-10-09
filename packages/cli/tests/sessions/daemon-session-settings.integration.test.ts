@@ -19,6 +19,7 @@ import {
     SESSION_COMPLETED_KIND,
     SESSION_EVENT_V2_KIND,
     SESSION_FAILED_KIND,
+    type SessionEventV2,
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -102,6 +103,8 @@ class TerminalSessionResult {
     }
 }
 
+const bufferedSessionEvents = new WeakMap<ClientFrames, SessionEventV2[]>();
+
 function _readStringField(value: unknown, field: string): string {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
         return "";
@@ -114,38 +117,52 @@ async function readTerminalSessionResult(
     frames: ClientFrames,
     sessionId: string,
     commandId = "",
+    includeAcpText = true,
 ): Promise<TerminalSessionResult> {
     let text = "";
+    const deferredEvents: SessionEventV2[] = [];
     for (;;) {
-        const message = await frames.next();
-        if (decodeMessageKind(message) === "session.operation.failed") {
-            const failure = decodeSessionOperationFailedEvent(message);
-            if (failure.sessionId === sessionId && (commandId === "" || failure.requestId === commandId)) {
-                return new TerminalSessionResult(SESSION_FAILED_KIND, text, failure.code, "");
+        let events = bufferedSessionEvents.get(frames) ?? [];
+        bufferedSessionEvents.delete(frames);
+        if (events.length === 0) {
+            const message = await frames.next();
+            if (decodeMessageKind(message) === "session.operation.failed") {
+                const failure = decodeSessionOperationFailedEvent(message);
+                if (failure.sessionId === sessionId && (commandId === "" || failure.requestId === commandId)) {
+                    return new TerminalSessionResult(SESSION_FAILED_KIND, text, failure.code, "");
+                }
             }
-        }
-        if (decodeMessageKind(message) !== SESSION_EVENT_V2_KIND) {
-            continue;
-        }
-        const event = decodeSessionEventEnvelopeV2(message).event;
-        if (event.sessionId !== sessionId) {
-            continue;
-        }
-        if (event.type === "acp") {
-            if (event.payload.sessionUpdate === "agent_message_chunk" && event.payload.content.type === "text") {
-                text += event.payload.content.text;
+            if (decodeMessageKind(message) !== SESSION_EVENT_V2_KIND) {
+                continue;
             }
-            continue;
+            events = [...decodeSessionEventEnvelopeV2(message).events];
         }
-        const payload = event.payload;
-        if (!("commandId" in payload) || (commandId !== "" && payload.commandId !== commandId)) {
-            continue;
-        }
-        if (payload.kind === "prompt.completed") {
-            return new TerminalSessionResult(SESSION_COMPLETED_KIND, text, "", payload.stopReason);
-        }
-        if (payload.kind === "prompt.failed" || payload.kind === "prompt.failed-before-start") {
-            return new TerminalSessionResult(SESSION_FAILED_KIND, text, payload.code, "");
+        for (const [index, event] of events.entries()) {
+            if (event.sessionId !== sessionId) {
+                continue;
+            }
+            if (event.type === "acp") {
+                if (event.payload.sessionUpdate === "agent_message_chunk" && event.payload.content.type === "text") {
+                    if (includeAcpText) {
+                        text += event.payload.content.text;
+                    } else {
+                        deferredEvents.push(event);
+                    }
+                }
+                continue;
+            }
+            const payload = event.payload;
+            if (!("commandId" in payload) || (commandId !== "" && payload.commandId !== commandId)) {
+                continue;
+            }
+            if (payload.kind === "prompt.completed") {
+                bufferedSessionEvents.set(frames, [...deferredEvents, ...events.slice(index + 1)]);
+                return new TerminalSessionResult(SESSION_COMPLETED_KIND, text, "", payload.stopReason);
+            }
+            if (payload.kind === "prompt.failed" || payload.kind === "prompt.failed-before-start") {
+                bufferedSessionEvents.set(frames, [...deferredEvents, ...events.slice(index + 1)]);
+                return new TerminalSessionResult(SESSION_FAILED_KIND, text, payload.code, "");
+            }
         }
     }
 }
@@ -155,11 +172,13 @@ async function readCommandActivity(frames: ClientFrames, sessionId: string, _com
         if (decodeMessageKind(message) !== SESSION_EVENT_V2_KIND) {
             continue;
         }
-        const event = decodeSessionEventEnvelopeV2(message).event;
         if (
-            event.sessionId === sessionId &&
-            event.type === "acp" &&
-            (event.payload.sessionUpdate === "tool_call" || event.payload.sessionUpdate === "tool_call_update")
+            decodeSessionEventEnvelopeV2(message).events.some(
+                (event) =>
+                    event.sessionId === sessionId &&
+                    event.type === "acp" &&
+                    (event.payload.sessionUpdate === "tool_call" || event.payload.sessionUpdate === "tool_call_update"),
+            )
         ) {
             return;
         }
@@ -671,7 +690,7 @@ describe("daemon session configuration boundary", () => {
 
             // The steering Turn is accepted and then injected into the running
             // Turn, so only the running Turn carries the Agent's reply.
-            const steeringResult = await readTerminalSessionResult(frames, sessionId, steeringPrompt.commandId);
+            const steeringResult = await readTerminalSessionResult(frames, sessionId, steeringPrompt.commandId, false);
             expect(steeringResult).toMatchObject({ kind: SESSION_COMPLETED_KIND, text: "" });
             const runningResult = await readTerminalSessionResult(frames, sessionId, runningCommandId);
             expect(runningResult.kind).toBe(SESSION_COMPLETED_KIND);
