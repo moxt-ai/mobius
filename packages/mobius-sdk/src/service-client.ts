@@ -9,6 +9,7 @@ import {
     decodeSessionEventBatchV2,
     decodeSessionEventLogPageV2,
     decodeSessionReadyEvent,
+    decodeSessionRestoredEvent,
     decodeSessionsListedEvent,
     decodeSessionsQueriedEvent,
     decodeWorkspaceEntriesEvent,
@@ -1030,6 +1031,20 @@ export class MobiusSessionResources {
                         `runtimes/${encodeURIComponent(runtimeId)}/sessions/${encodeURIComponent(sessionId)}/load`,
                     ),
                     request,
+                    signal,
+                ),
+            ),
+        );
+
+    readonly restore = async (runtimeId: string, sessionId: string, signal: AbortSignal) =>
+        decodeSessionRestoredEvent(
+            JSON.stringify(
+                await this.#executor.post(
+                    projectPath(
+                        this.#projectId,
+                        `runtimes/${encodeURIComponent(runtimeId)}/sessions/${encodeURIComponent(sessionId)}/restore`,
+                    ),
+                    {},
                     signal,
                 ),
             ),

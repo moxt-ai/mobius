@@ -23,6 +23,7 @@ import {
     SESSION_QUERIED_KIND,
     SESSION_QUERY_KIND,
     SESSION_QUEUED_KIND,
+    SESSION_RESTORE_KIND,
     SessionPromptDisposition,
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-protocol";
@@ -37,7 +38,12 @@ import type { DaemonConfig } from "./config.ts";
 import { reportOperationFailure, send, settleAbandonedTurn } from "./daemon-command-results.ts";
 import { executeSessionLiveHistoryV2PageLoad } from "./daemon-history-commands.ts";
 import { executePrompt } from "./daemon-prompt-executor.ts";
-import { executeSessionConfigure, executeSessionPrepare, executeWorkspaceList } from "./daemon-session-commands.ts";
+import {
+    executeSessionConfigure,
+    executeSessionPrepare,
+    executeSessionRestore,
+    executeWorkspaceList,
+} from "./daemon-session-commands.ts";
 import type { DaemonTurnRegistry } from "./daemon-turn-registry.ts";
 import type { ExternalContentStore } from "./external-content/local-external-content-store.ts";
 import { createNativeSessionRequestHandler } from "./native-sessions/handle-native-requests.ts";
@@ -247,6 +253,21 @@ export function createDaemonCommandHandler({
                     .catch((error: unknown) => {
                         reportOperationFailure(socket, command.requestId, "", error);
                     });
+                return;
+            }
+            if (kind === SESSION_RESTORE_KIND) {
+                const command = message;
+                void executeSessionRestore(
+                    socket,
+                    command,
+                    config,
+                    directories,
+                    audit,
+                    sessions,
+                    nativeSessions,
+                    diagnostics,
+                    signal,
+                );
                 return;
             }
             if (kind === SESSION_PERMISSION_RESPOND_KIND) {

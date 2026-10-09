@@ -10,6 +10,7 @@ import {
     decodeSessionElicitationRequestedEvent,
     decodeSessionEventEnvelopeV2,
     decodeSessionPermissionRequestedEvent,
+    decodeSessionRestoredEvent,
     decodeSessionStatusChangedEvent,
     decodeSessionsQueriedEvent,
     encodeNativeSessionRequest,
@@ -18,6 +19,7 @@ import {
     encodeSessionPrepareCommand,
     encodeSessionPromptCommand,
     encodeSessionQueryCommand,
+    encodeSessionRestoreCommand,
     MOBIUS_API_PREFIX,
     NATIVE_SESSION_RESULT_KIND,
     SESSION_ELICITATION_REQUESTED_KIND,
@@ -27,6 +29,7 @@ import {
     SESSION_PERMISSION_RESOLVED_KIND,
     SESSION_QUERIED_KIND,
     SESSION_READY_KIND,
+    SESSION_RESTORED_KIND,
     SESSION_STATUS_CHANGED_KIND,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -302,6 +305,124 @@ test("Given a real daemon prepared a Session, When Platform queries its metadata
     } finally {
         cancellation.abort();
         await daemon;
+        audit.close();
+        for (const socket of websocketServer.clients) {
+            socket.terminate();
+        }
+        await new Promise<void>((resolve) => websocketServer.close(() => resolve()));
+        await new Promise<void>((resolve) => relay.close(() => resolve()));
+        await rm(stateDirectory, { recursive: true, force: true });
+    }
+}, 30_000);
+
+test("Given a real daemon persisted a Session, When Platform restores it by identifier, Then the daemon authorizes its stored identity and returns metadata with readiness", async () => {
+    const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-session-restore-"));
+    const workspace = join(stateDirectory, "workspace");
+    await mkdir(workspace);
+    const relay = createServer((_request, response) => response.writeHead(404).end());
+    const websocketServer = new WebSocketServer({ server: relay });
+    await listen(relay);
+    const relayUrl = new URL(
+        `ws://127.0.0.1:${port(relay).toString()}${MOBIUS_API_PREFIX}/channels/session-restore/daemon`,
+    );
+    relayUrl.searchParams.set("token", "r".repeat(43));
+    const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
+    const agent = new LocalAgentDefinition(
+        "codex",
+        "Codex",
+        process.execPath,
+        [fakeAgentPath, "--agent-name", "Codex"],
+        { MOBIUS_FAKE_ACP_STATE_DIRECTORY: join(stateDirectory, "agent") },
+    );
+    const config = createDaemonConfig(
+        { channelId: "session-restore", defaultWorkspace: workspace, relayUrl },
+        [agent],
+        [],
+        new DaemonLocalContext(stateDirectory),
+    );
+    const audit = new AuditStore();
+    const startDaemon = async () => {
+        const connected = Promise.withResolvers<WebSocket>();
+        websocketServer.once("connection", (socket) => connected.resolve(socket));
+        const cancellation = new AbortController();
+        const completion = runDaemon(config, audit, cancellation.signal);
+        return { cancellation, completion, socket: await connected.promise };
+    };
+    try {
+        const sessionId = "restored_session";
+        const initial = await startDaemon();
+        try {
+            const messages = new Messages(initial.socket);
+            initial.socket.send(JSON.stringify({ kind: "runtime.liveness.ready" }));
+            initial.socket.send(
+                encodeSessionPrepareCommand({
+                    additionalDirectoryIds: [],
+                    agentId: "codex",
+                    bindingId: config.bindingId,
+                    directoryId: "default",
+                    kind: "session.prepare",
+                    requestId: "prepare_request",
+                    sessionId,
+                }),
+            );
+            await messages.nextKind(SESSION_READY_KIND);
+            initial.socket.send(
+                encodeSessionPromptCommand({
+                    additionalDirectoryIds: [],
+                    agentId: "codex",
+                    bindingId: config.bindingId,
+                    commandId: "initial_turn",
+                    directoryId: "default",
+                    disposition: SessionPromptDisposition.Reject,
+                    images: [],
+                    kind: "session.prompt",
+                    prompt: "Persist this Session",
+                    resources: [],
+                    sessionId,
+                    targetCommandId: "",
+                }),
+            );
+            await messages.nextKind("prompt.completed");
+        } finally {
+            initial.cancellation.abort();
+            await initial.completion;
+        }
+
+        const restored = await startDaemon();
+        try {
+            const messages = new Messages(restored.socket);
+            restored.socket.send(JSON.stringify({ kind: "runtime.liveness.ready" }));
+            restored.socket.send(
+                encodeSessionRestoreCommand({
+                    kind: "session.restore",
+                    requestId: "restore_request",
+                    sessionId,
+                }),
+            );
+
+            expect(decodeSessionRestoredEvent(await messages.nextKind(SESSION_RESTORED_KIND))).toMatchObject({
+                entry: {
+                    agentId: "codex",
+                    prompted: true,
+                    sessionId,
+                    status: { kind: "idle" },
+                    title: "Persist this Session",
+                },
+                kind: SESSION_RESTORED_KIND,
+                ready: {
+                    agentId: "codex",
+                    kind: SESSION_READY_KIND,
+                    requestId: "restore_request",
+                    restored: true,
+                    sessionId,
+                },
+                requestId: "restore_request",
+            });
+        } finally {
+            restored.cancellation.abort();
+            await restored.completion;
+        }
+    } finally {
         audit.close();
         for (const socket of websocketServer.clients) {
             socket.terminate();

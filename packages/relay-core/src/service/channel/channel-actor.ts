@@ -29,6 +29,7 @@ import {
     decodeSessionPromptCommand,
     decodeSessionPromptDispositionCommand,
     decodeSessionQueryCommand,
+    decodeSessionRestoreCommand,
     decodeWorkspaceListCommand,
     encodeAgentSettingsDiscoveryFailedEvent,
     encodeDaemonToServiceMessage,
@@ -67,6 +68,8 @@ import {
     SESSION_QUERY_KIND,
     SESSION_QUEUED_KIND,
     SESSION_READY_KIND,
+    SESSION_RESTORE_KIND,
+    SESSION_RESTORED_KIND,
     SESSION_STATUS_CHANGED_KIND,
     type ServiceToDaemonMessage,
     type SessionPromptCommand,
@@ -405,6 +408,8 @@ export class ChannelActor {
                 return;
             case SESSION_QUERIED_KIND:
                 return;
+            case SESSION_RESTORED_KIND:
+                return;
             case SESSION_LISTED_KIND:
                 return;
             case SESSION_CONFIG_UPDATED_KIND:
@@ -471,6 +476,10 @@ export class ChannelActor {
             case SESSION_QUERY_KIND: {
                 const command = decodeSessionQueryCommand(message);
                 return { message: command, requestId: command.requestId, sessionId: "" };
+            }
+            case SESSION_RESTORE_KIND: {
+                const command = decodeSessionRestoreCommand(message);
+                return { message: command, requestId: command.requestId, sessionId: command.sessionId };
             }
             case SESSION_LIST_KIND: {
                 const command = decodeSessionListCommand(message);
