@@ -301,8 +301,8 @@ export class WsTransport implements MobiusHttpTransport {
                 throw new MobiusConnectionError("The Mobius WebSocket transport is closed");
             }
             socket.addEventListener("message", this.#receive);
-            socket.addEventListener("close", this.#disconnected, { once: true });
-            socket.addEventListener("error", this.#disconnected, { once: true });
+            socket.addEventListener("close", () => this.#disconnected(socket), { once: true });
+            socket.addEventListener("error", () => this.#disconnected(socket), { once: true });
             this.#state = this.#connected(socket);
             return socket;
         } catch (cause) {
@@ -366,13 +366,12 @@ export class WsTransport implements MobiusHttpTransport {
         }
     };
 
-    readonly #disconnected = (): void => {
-        if (this.#state.kind === "connected") {
-            globalThis.clearTimeout(this.#state.idleTimeoutId);
+    readonly #disconnected = (socket: WebSocket): void => {
+        if (this.#state.kind !== "connected" || this.#state.socket !== socket) {
+            return;
         }
-        if (this.#state.kind !== "closed") {
-            this.#state = { kind: "disconnected" };
-        }
+        globalThis.clearTimeout(this.#state.idleTimeoutId);
+        this.#state = { kind: "disconnected" };
         this.#failPending(new MobiusConnectionError("The Mobius WebSocket transport disconnected"));
         this.#failSubscriptions(new MobiusConnectionError("The live Session event transport disconnected"));
     };

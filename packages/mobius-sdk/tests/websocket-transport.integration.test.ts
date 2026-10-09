@@ -17,6 +17,7 @@ class BrowserWebSocket extends EventTarget implements WebSocket {
     onopen: WebSocket["onopen"] = null;
     readonly protocol = "";
     readyState: WebSocket["readyState"] = WebSocket.OPEN;
+    readonly subscriptionIds: string[] = [];
     readonly url: string;
     closedWith: { readonly code: number; readonly reason: string } | null = null;
 
@@ -42,8 +43,25 @@ class BrowserWebSocket extends EventTarget implements WebSocket {
         if (typeof value !== "object" || value === null) {
             throw new Error("Expected a WebSocket message");
         }
+        if ("subscriptionId" in value) {
+            if (typeof value.subscriptionId !== "string") {
+                throw new Error("Expected a string subscription identifier");
+            }
+            this.subscriptionIds.push(value.subscriptionId);
+            queueMicrotask(() => {
+                this.dispatchEvent(
+                    new MessageEvent("message", {
+                        data: JSON.stringify({
+                            kind: "session.events.ready",
+                            subscriptionId: value.subscriptionId,
+                        }),
+                    }),
+                );
+            });
+            return;
+        }
         if (!("requestId" in value)) {
-            throw new Error("Expected a request identifier");
+            throw new Error("Expected a request identifier or subscription identifier");
         }
         const requestId = value.requestId;
         if (typeof requestId !== "string") {
@@ -94,6 +112,50 @@ it("Given an idle browser transport, When its connection expires, Then it closes
         reason: "Mobius transport idle timeout",
     });
     expect((await transport.fetch(new Request("https://relay.example.test/second"))).status).toBe(204);
+    expect(connector.sockets).toHaveLength(2);
+
+    transport.close();
+});
+
+it("Given a replacement WebSocket carries a live subscription, When the old socket reports a delayed close, Then the replacement keeps delivering events", async () => {
+    const connector = new BrowserWebSocketConnector();
+    const transport = new WsTransport({ connector });
+
+    expect((await transport.fetch(new Request("https://relay.example.test/first"))).status).toBe(204);
+    const first = connector.sockets[0];
+    if (first === undefined) {
+        throw new Error("Expected the first WebSocket connection");
+    }
+    first.dispatchEvent(new Event("error"));
+    expect((await transport.fetch(new Request("https://relay.example.test/second"))).status).toBe(204);
+    const second = connector.sockets[1];
+    if (second === undefined) {
+        throw new Error("Expected the replacement WebSocket connection");
+    }
+    const events = await transport.openLiveSessionEvents(
+        new Request("https://relay.example.test/mobius/api/v1/projects/project/sessions/session/events-v2"),
+    );
+    const subscriptionId = second.subscriptionIds[0];
+    if (subscriptionId === undefined) {
+        throw new Error("Expected a live event subscription");
+    }
+
+    first.dispatchEvent(new CloseEvent("close", { code: 1006 }));
+    second.dispatchEvent(
+        new MessageEvent("message", {
+            data: JSON.stringify({
+                data: "event-data",
+                eventId: "event-1",
+                kind: "session.events.event",
+                subscriptionId,
+            }),
+        }),
+    );
+
+    expect(await events.getReader().read()).toEqual({
+        done: false,
+        value: { data: "event-data", eventId: "event-1" },
+    });
     expect(connector.sockets).toHaveLength(2);
 
     transport.close();
