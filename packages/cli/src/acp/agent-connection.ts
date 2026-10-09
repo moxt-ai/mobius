@@ -9,7 +9,20 @@ import {
     acpEndpointTerminationError,
     type InProcessAcpEndpoint,
 } from "./in-process/acp-endpoint.ts";
-import { truncate } from "./value-utils.ts";
+import { isRecord, truncate } from "./value-utils.ts";
+
+function requestErrorMessage(error: RequestError): string {
+    const fallback = truncate(error.message, 500);
+    if (error.message !== "Internal error" || !isRecord(error.data)) {
+        return fallback;
+    }
+    const agentError = error.data["error"];
+    if (!isRecord(agentError) || agentError["code"] !== "invalid_prompt") {
+        return fallback;
+    }
+    const message = agentError["message"];
+    return typeof message === "string" && message.length > 0 ? truncate(message, 500) : fallback;
+}
 
 function readableWebStream(input: NodeJS.ReadableStream): ReadableStream<Uint8Array> {
     let streamOpen = true;
@@ -192,7 +205,7 @@ export class AgentConnection {
                     );
                 }
                 if (error instanceof RequestError) {
-                    throw new AcpExecutionError(truncate(error.message, 500), { cause: error }, "acp_agent_error");
+                    throw new AcpExecutionError(requestErrorMessage(error), { cause: error }, "acp_agent_error");
                 }
                 throw error;
             }

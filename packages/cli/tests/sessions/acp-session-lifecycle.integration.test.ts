@@ -591,6 +591,38 @@ child.once("exit", (code) => process.exit(code ?? 84));
         }
     });
 
+    it("Given Codex includes an invalid-prompt detail in an internal ACP error, When Mobius runs that turn, Then the user receives the actionable detail", async () => {
+        const manager = new AgentRuntimeManager();
+        const agent = new LocalAgentDefinition("codex", "Codex", process.execPath, [
+            fakeAgentPath,
+            "--agent-name",
+            "Codex",
+        ]);
+
+        try {
+            await expect(
+                manager.runPrompt({
+                    additionalDirectories: [],
+                    agent,
+                    commandId: "command-invalid-prompt",
+                    cwd: process.cwd(),
+                    images: [],
+                    onActivity: () => Promise.resolve(),
+                    onText: () => Promise.resolve(),
+                    prompt: "fail with invalid prompt detail",
+                    resources: [],
+                    sessionId: "invalid-prompt-session",
+                    signal: new AbortController().signal,
+                }),
+            ).rejects.toMatchObject({
+                code: "acp_agent_error",
+                message: "Invalid prompt: your prompt was flagged as potentially violating our usage policy.",
+            });
+        } finally {
+            await manager.close();
+        }
+    });
+
     it.skipIf(process.platform === "win32")(
         "Given an ACP Agent has a tool subprocess, When the turn is cancelled, Then Mobius retains the process tree until Runtime shutdown",
         async () => {
