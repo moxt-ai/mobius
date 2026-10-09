@@ -8,6 +8,8 @@ import {
     encodeServiceToDaemonMessage,
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_HEARTBEAT_KIND,
+    RUNTIME_PING_KIND,
+    RUNTIME_PONG_KIND,
     SESSION_CANCEL_KIND,
     SESSION_READY_KIND,
 } from "../src/index.ts";
@@ -67,6 +69,10 @@ describe("daemon transport protocol", () => {
 
         expect(decodeServiceToDaemonMessage(encodeServiceToDaemonMessage(serviceMessage))).toEqual(serviceMessage);
         expect(decodeDaemonToServiceMessage(encodeDaemonToServiceMessage(daemonMessage))).toEqual(daemonMessage);
+        const ping = { kind: RUNTIME_PING_KIND, requestId: "ping-1" } as const;
+        const pong = { kind: RUNTIME_PONG_KIND, requestId: "ping-1" } as const;
+        expect(decodeServiceToDaemonMessage(encodeServiceToDaemonMessage(ping))).toEqual(ping);
+        expect(decodeDaemonToServiceMessage(encodeDaemonToServiceMessage(pong))).toEqual(pong);
     });
 
     it("Given a valid message is sent in the wrong direction, When the boundary decodes it, Then the unsupported direction is rejected", () => {
