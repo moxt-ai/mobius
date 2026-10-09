@@ -1,0 +1,170 @@
+import { createHash } from "node:crypto";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import {
+    decodeFileChunkEvent,
+    decodeMessageKind,
+    decodeSessionEventEnvelopeV2,
+    decodeSessionLiveHistoryV2PageLoaded,
+    encodeFileReadCommand,
+    encodeSessionLiveHistoryV2PageLoad,
+    encodeSessionPermissionRespondCommand,
+    encodeSessionPromptCommand,
+    type SessionEventV2,
+    SessionPromptDisposition,
+} from "@moxt-ai/mobius-protocol";
+import { expect, test } from "vitest";
+import { ClaudeCodeAgentSpecification } from "../../src/agent-catalog/agents/claude-code-agent.ts";
+import { ClaudeFixture } from "../support/agents/claude.ts";
+import { withRealDaemon } from "../support/agents/real-daemon.ts";
+import { FakeAnthropicProvider } from "../support/llm/anthropic.ts";
+
+const image = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+    "base64",
+);
+
+function imageKeys(events: readonly SessionEventV2[]): readonly string[] {
+    return events.flatMap((event) => {
+        if (
+            event.type !== "acp" ||
+            (event.payload.sessionUpdate !== "tool_call" && event.payload.sessionUpdate !== "tool_call_update")
+        ) {
+            return [];
+        }
+        return (event.payload.content ?? []).flatMap((item) =>
+            item.type === "content" && item.content.type === "external_image" ? [item.content.imageKey] : [],
+        );
+    });
+}
+
+test("Given real Claude reads an image, When its reply streams and native history reopens, Then clients retrieve identical bytes without base64 in tool output and can continue chatting", async () => {
+    await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-6", "IMAGE_REPLY", {
+        readPath: "picture.png",
+    });
+    await using agent = await ClaudeFixture.create(provider);
+    await withRealDaemon(new ClaudeCodeAgentSpecification(), agent.environment, async (peer) => {
+        const key = createHash("sha256").update(image).digest("hex");
+        await writeFile(join(peer.workspace, "picture.png"), image);
+        const sendPrompt = (commandId: string, prompt: string): void =>
+            peer.send(
+                encodeSessionPromptCommand({
+                    additionalDirectoryIds: [],
+                    agentId: "claude",
+                    bindingId: peer.bindingId,
+                    commandId,
+                    directoryId: "default",
+                    disposition: SessionPromptDisposition.Reject,
+                    images: [],
+                    kind: "session.prompt",
+                    prompt,
+                    resources: [],
+                    sessionId: peer.sessionId,
+                    targetCommandId: "",
+                }),
+            );
+        const finish = async (): Promise<readonly SessionEventV2[]> => {
+            const events: SessionEventV2[] = [];
+            for (;;) {
+                const message = await peer.nextMessage();
+                const kind = decodeMessageKind(message);
+                expect(message).not.toContain(image.toString("base64"));
+                if (kind === "session.operation.failed") {
+                    throw new Error(message);
+                }
+                if (kind === "session.event.v2") {
+                    const batch = decodeSessionEventEnvelopeV2(message).events;
+                    events.push(...batch);
+                    for (const event of batch) {
+                        if (
+                            event.type === "lifecycle-metadata" &&
+                            event.payload.kind === "session.permission.requested"
+                        ) {
+                            const option = event.payload.event.options.find((entry) => entry.kind === "allow_once");
+                            if (option === undefined) {
+                                throw new Error("No one-time image read permission");
+                            }
+                            peer.send(
+                                encodeSessionPermissionRespondCommand({
+                                    kind: "session.permission.respond",
+                                    sessionId: peer.sessionId,
+                                    interactionId: event.payload.event.interactionId,
+                                    optionId: option.optionId,
+                                    outcome: "selected",
+                                }),
+                            );
+                        }
+                    }
+                    const failure = batch.find(
+                        (event) =>
+                            event.type === "lifecycle-metadata" &&
+                            (event.payload.kind === "prompt.failed" ||
+                                event.payload.kind === "prompt.failed-before-start"),
+                    );
+                    if (failure !== undefined) {
+                        throw new Error(JSON.stringify(failure));
+                    }
+                    if (
+                        batch.some(
+                            (event) => event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed",
+                        )
+                    ) {
+                        return events;
+                    }
+                }
+            }
+        };
+        sendPrompt("image-turn", "Use the read tool to inspect picture.png, then reply");
+        expect(imageKeys(await finish())).toContain(key);
+        peer.send(
+            encodeSessionLiveHistoryV2PageLoad({
+                additionalDirectoryIds: [],
+                agentId: "claude",
+                bindingId: peer.bindingId,
+                cursor: null,
+                directoryId: "default",
+                eventLimit: 50,
+                kind: "session.live-history.v2.page.load",
+                requestId: "image-history",
+                sessionId: peer.sessionId,
+            }),
+        );
+        for (;;) {
+            const message = await peer.nextMessage();
+            const kind = decodeMessageKind(message);
+            if (kind === "session.operation.failed") {
+                throw new Error(message);
+            }
+            if (kind === "session.live-history.v2.page.loaded") {
+                expect(message).not.toContain(image.toString("base64"));
+                expect(imageKeys(decodeSessionLiveHistoryV2PageLoaded(message).events.events.events)).toContain(key);
+                break;
+            }
+        }
+        peer.send(
+            encodeFileReadCommand({
+                kind: "file.read",
+                maxBytes: 2_000_000,
+                path: `mobius-content:image:${key}`,
+                requestId: "image-download",
+                sessionId: peer.sessionId,
+            }),
+        );
+        const chunks: Buffer[] = [];
+        for (;;) {
+            const message = await peer.nextMessage();
+            const kind = decodeMessageKind(message);
+            if (kind === "file.failed") {
+                throw new Error(message);
+            }
+            if (kind === "file.chunk") {
+                chunks.push(Buffer.from(decodeFileChunkEvent(message).data, "base64"));
+            } else if (kind === "file.end") {
+                break;
+            }
+        }
+        expect(Buffer.concat(chunks)).toEqual(image);
+        sendPrompt("continue-turn", "Continue with a short reply, without using tools");
+        await finish();
+    });
+});
