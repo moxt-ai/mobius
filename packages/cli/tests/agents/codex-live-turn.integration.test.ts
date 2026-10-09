@@ -391,7 +391,7 @@ test("Given real Codex emits a tool, commentary, and final text, When the comple
                         (update.sessionUpdate === "agent_message_chunk" ||
                             update.sessionUpdate === "agent_thought_chunk") &&
                         update.content.type === "text" &&
-                        update.content.text === "Checking the live progress boundary.",
+                        updates.indexOf(update) > toolIndex,
                 );
                 const finalIndex = updates.findIndex(
                     (update) =>
@@ -399,6 +399,17 @@ test("Given real Codex emits a tool, commentary, and final text, When the comple
                         update.content.type === "text" &&
                         update.content.text.includes("Codex live reply"),
                 );
+                const commentary = updates
+                    .slice(commentaryIndex, finalIndex)
+                    .flatMap((update) =>
+                        (update.sessionUpdate === "agent_message_chunk" ||
+                            update.sessionUpdate === "agent_thought_chunk") &&
+                        update.content.type === "text"
+                            ? [update.content.text]
+                            : [],
+                    )
+                    .join("");
+                expect(commentary).toBe("Checking the live progress boundary.");
                 expect(toolIndex).toBeGreaterThanOrEqual(0);
                 expect(commentaryIndex).toBeGreaterThan(toolIndex);
                 expect(finalIndex).toBeGreaterThan(commentaryIndex);
