@@ -8,7 +8,7 @@ import {
     decodeMessageKind,
     decodeNativeSessionResult,
     decodeSessionElicitationRequestedEvent,
-    decodeSessionEventEnvelope,
+    decodeSessionEventEnvelopeV2,
     decodeSessionPermissionRequestedEvent,
     decodeSessionStatusChangedEvent,
     decodeSessionsQueriedEvent,
@@ -20,10 +20,9 @@ import {
     encodeSessionQueryCommand,
     MOBIUS_API_PREFIX,
     NATIVE_SESSION_RESULT_KIND,
-    SESSION_COMPLETED_KIND,
     SESSION_ELICITATION_REQUESTED_KIND,
     SESSION_ELICITATION_RESOLVED_KIND,
-    SESSION_EVENT_KIND,
+    SESSION_EVENT_V2_KIND,
     SESSION_PERMISSION_REQUESTED_KIND,
     SESSION_PERMISSION_RESOLVED_KIND,
     SESSION_QUERIED_KIND,
@@ -58,8 +57,20 @@ class Messages {
     readonly nextKind = async (kind: string): Promise<string> => {
         for (;;) {
             const raw = this.#buffered.shift() ?? (await new Promise<string>((resolve) => this.#waiting.push(resolve)));
-            const message =
-                decodeMessageKind(raw) === SESSION_EVENT_KIND ? decodeSessionEventEnvelope(raw).payload : raw;
+            let message = raw;
+            if (decodeMessageKind(raw) === SESSION_EVENT_V2_KIND) {
+                const event = decodeSessionEventEnvelopeV2(raw).event;
+                if (event.type !== "lifecycle-metadata") {
+                    continue;
+                }
+                if ("event" in event.payload) {
+                    message = JSON.stringify(event.payload.event);
+                } else if (event.payload.kind === kind) {
+                    return raw;
+                } else {
+                    continue;
+                }
+            }
             if (decodeMessageKind(message) === kind) {
                 return message;
             }
@@ -135,7 +146,6 @@ test("Given an Agent was inspected transiently, When its first Turn materializes
                 targetCommandId: "",
             }),
         );
-        await messages.nextKind(SESSION_READY_KIND);
         expect(decodeSessionStatusChangedEvent(await messages.nextKind(SESSION_STATUS_CHANGED_KIND))).toEqual({
             kind: SESSION_STATUS_CHANGED_KIND,
             sessionId,
@@ -206,7 +216,7 @@ test("Given an Agent was inspected transiently, When its first Turn materializes
             sessionId,
             status: { kind: "idle" },
         });
-        await messages.nextKind(SESSION_COMPLETED_KIND);
+        await messages.nextKind("prompt.completed");
     } finally {
         cancellation.abort();
         await daemon;

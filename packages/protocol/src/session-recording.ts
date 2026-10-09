@@ -1,35 +1,19 @@
 import { z } from "zod";
 import { ProtocolMessageError } from "./codecs/messages.ts";
 import { identifierStringSchema } from "./identifier.ts";
-import { sessionEventEnvelopeSchema } from "./session-events.ts";
+import { sessionEventEnvelopeV2Schema, sessionEventV2Schema } from "./session-event-log-v2.ts";
 
 const sessionRecordingWriteSchema = z
     .object({
-        envelope: sessionEventEnvelopeSchema,
+        envelope: sessionEventEnvelopeV2Schema,
         projectId: identifierStringSchema,
         runtimeId: identifierStringSchema,
     })
     .readonly();
 
-const sessionRecordingEntrySchema = z
-    .object({
-        envelope: sessionEventEnvelopeSchema,
-        recordedAt: z.iso.datetime({ offset: true }),
-    })
-    .readonly();
-
-const sessionRecordingSegmentSchema = z
-    .object({
-        entries: z.array(sessionRecordingEntrySchema).max(100_000).readonly(),
-        recordingEpoch: identifierStringSchema,
-        sessionId: identifierStringSchema,
-        throughCommandId: identifierStringSchema.nullable(),
-    })
-    .readonly();
-
 const sessionRecordingHistorySchema = z
     .object({
-        segments: z.array(sessionRecordingSegmentSchema).min(1).max(32).readonly(),
+        events: z.array(sessionEventV2Schema).max(100_000).readonly(),
         sessionId: identifierStringSchema,
     })
     .readonly();
@@ -53,8 +37,6 @@ const sessionRecordingDirectorySchema = z
     .readonly();
 
 export type SessionRecordingWrite = z.infer<typeof sessionRecordingWriteSchema>;
-export type SessionRecordingEntry = z.infer<typeof sessionRecordingEntrySchema>;
-export type SessionRecordingSegment = z.infer<typeof sessionRecordingSegmentSchema>;
 export type SessionRecordingHistory = z.infer<typeof sessionRecordingHistorySchema>;
 export type SessionRecordingSummary = z.infer<typeof sessionRecordingSummarySchema>;
 export type SessionRecordingDirectory = z.infer<typeof sessionRecordingDirectorySchema>;

@@ -13,7 +13,6 @@ import type { DaemonConfig } from "./config.ts";
 import { operationErrorCode, reportOperationFailure, send } from "./daemon-command-results.ts";
 import { AccumulatingOperationMetrics } from "./infra/operation-metrics.ts";
 import type { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
-import type { DaemonSessionEventPublisher } from "./relay-connection/session-event-publisher.ts";
 export async function executeWorkspaceList(
     socket: WebSocket,
     command: WorkspaceListCommand,
@@ -43,7 +42,6 @@ export async function executeWorkspaceList(
 }
 
 export async function executeSessionPrepare(
-    publisher: DaemonSessionEventPublisher,
     socket: WebSocket,
     command: SessionPrepareCommand,
     config: DaemonConfig,
@@ -110,12 +108,6 @@ export async function executeSessionPrepare(
                     event: "session_configured",
                     sessionId: command.sessionId,
                 });
-                publisher.publish(command.sessionId, {
-                    configOptions,
-                    kind: "session.config.updated",
-                    requestId: command.requestId,
-                    sessionId: command.sessionId,
-                });
             }
             const event: SessionReadyEvent = {
                 additionalDirectories: resolved.additionalDirectoryEntries,
@@ -133,12 +125,6 @@ export async function executeSessionPrepare(
                 sessionId: command.sessionId,
                 runtimeTimings: metrics.snapshot(),
             };
-            // Inspection-only preparation returns readiness to its caller without broadcasting it.
-            if (command.transient !== true) {
-                metrics.measureSync("readiness-commit", () => {
-                    publisher.publish(command.sessionId, event);
-                });
-            }
             return event;
         });
         send(socket, {
@@ -170,7 +156,6 @@ export async function executeSessionPrepare(
 }
 
 export async function executeSessionConfigure(
-    publisher: DaemonSessionEventPublisher,
     socket: WebSocket,
     command: SessionConfigureCommand,
     config: DaemonConfig,
@@ -204,7 +189,7 @@ export async function executeSessionConfigure(
             event: "session_configured",
             sessionId: command.sessionId,
         });
-        publisher.publish(command.sessionId, {
+        send(socket, {
             configOptions,
             kind: "session.config.updated",
             requestId: command.requestId,

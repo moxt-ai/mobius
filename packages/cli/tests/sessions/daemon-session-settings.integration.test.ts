@@ -7,20 +7,17 @@ import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import {
-    AGENT_ACTIVITY_KIND,
-    AGENT_MESSAGE_DELTA_KIND,
     AGENT_SETTINGS_DISCOVER_KIND,
     AGENT_SETTINGS_DISCOVERED_KIND,
-    decodeAgentActivityEvent,
-    decodeAgentMessageDeltaEvent,
     decodeAgentSettingsDiscoveredEvent,
     decodeMessageKind,
-    decodeSessionEventEnvelope,
+    decodeSessionEventEnvelopeV2,
+    decodeSessionOperationFailedEvent,
     encodeAgentSettingsDiscoverCommand,
     encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
     SESSION_COMPLETED_KIND,
-    SESSION_EVENT_KIND,
+    SESSION_EVENT_V2_KIND,
     SESSION_FAILED_KIND,
     type SessionPromptCommand,
     SessionPromptDisposition,
@@ -105,7 +102,7 @@ class TerminalSessionResult {
     }
 }
 
-function readStringField(value: unknown, field: string): string {
+function _readStringField(value: unknown, field: string): string {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
         return "";
     }
@@ -121,48 +118,49 @@ async function readTerminalSessionResult(
     let text = "";
     for (;;) {
         const message = await frames.next();
-        if (decodeMessageKind(message) !== SESSION_EVENT_KIND) {
+        if (decodeMessageKind(message) === "session.operation.failed") {
+            const failure = decodeSessionOperationFailedEvent(message);
+            if (failure.sessionId === sessionId && (commandId === "" || failure.requestId === commandId)) {
+                return new TerminalSessionResult(SESSION_FAILED_KIND, text, failure.code, "");
+            }
+        }
+        if (decodeMessageKind(message) !== SESSION_EVENT_V2_KIND) {
             continue;
         }
-        const envelope = decodeSessionEventEnvelope(message);
-        if (envelope.sessionId !== sessionId) {
+        const event = decodeSessionEventEnvelopeV2(message).event;
+        if (event.sessionId !== sessionId) {
             continue;
         }
-        const kind = decodeMessageKind(envelope.payload);
-        const payload: unknown = JSON.parse(envelope.payload);
-        if (kind === AGENT_MESSAGE_DELTA_KIND) {
-            const delta = decodeAgentMessageDeltaEvent(envelope.payload);
-            if (commandId.length === 0 || delta.commandId === commandId) {
-                text += delta.text;
+        if (event.type === "acp") {
+            if (event.payload.sessionUpdate === "agent_message_chunk" && event.payload.content.type === "text") {
+                text += event.payload.content.text;
             }
             continue;
         }
-        if (commandId.length > 0 && readStringField(payload, "commandId") !== commandId) {
+        const payload = event.payload;
+        if (!("commandId" in payload) || (commandId !== "" && payload.commandId !== commandId)) {
             continue;
         }
-        if (kind === SESSION_COMPLETED_KIND || kind === SESSION_FAILED_KIND) {
-            return new TerminalSessionResult(
-                kind,
-                text,
-                readStringField(payload, "code"),
-                readStringField(payload, "stopReason"),
-            );
+        if (payload.kind === "prompt.completed") {
+            return new TerminalSessionResult(SESSION_COMPLETED_KIND, text, "", payload.stopReason);
+        }
+        if (payload.kind === "prompt.failed" || payload.kind === "prompt.failed-before-start") {
+            return new TerminalSessionResult(SESSION_FAILED_KIND, text, payload.code, "");
         }
     }
 }
-
-async function readCommandActivity(frames: ClientFrames, sessionId: string, commandId: string): Promise<void> {
+async function readCommandActivity(frames: ClientFrames, sessionId: string, _commandId: string): Promise<void> {
     for (;;) {
         const message = await frames.next();
-        if (decodeMessageKind(message) !== SESSION_EVENT_KIND) {
+        if (decodeMessageKind(message) !== SESSION_EVENT_V2_KIND) {
             continue;
         }
-        const envelope = decodeSessionEventEnvelope(message);
-        if (envelope.sessionId !== sessionId || decodeMessageKind(envelope.payload) !== AGENT_ACTIVITY_KIND) {
-            continue;
-        }
-        const activity = decodeAgentActivityEvent(envelope.payload);
-        if (activity.commandId === commandId) {
+        const event = decodeSessionEventEnvelopeV2(message).event;
+        if (
+            event.sessionId === sessionId &&
+            event.type === "acp" &&
+            (event.payload.sessionUpdate === "tool_call" || event.payload.sessionUpdate === "tool_call_update")
+        ) {
             return;
         }
     }

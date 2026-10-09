@@ -394,6 +394,19 @@ export const acpSessionUpdateV2Schema = z.discriminatedUnion("sessionUpdate", [
 export type AcpSessionUpdateV2 = z.infer<typeof acpSessionUpdateV2Schema>;
 
 const lifecycleBase = { commandId: identifier };
+export interface PromptExecutionContextV2 {
+    readonly agentId: string;
+    readonly directoryId: string;
+    readonly additionalDirectoryIds: readonly string[];
+}
+const promptExecutionContextV2Schema: z.ZodType<PromptExecutionContextV2> = z
+    .object({
+        agentId: identifier,
+        directoryId: shortString,
+        additionalDirectoryIds: z.array(identifier).max(16).readonly(),
+    })
+    .readonly();
+
 export const lifecycleMetadataV2Schema = z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("session.queue.changed") }).readonly(),
     z
@@ -413,6 +426,7 @@ export const lifecycleMetadataV2Schema = z.discriminatedUnion("kind", [
             ...lifecycleBase,
             content: z.array(contentBlockV2Schema).min(1).max(100).readonly(),
             kind: z.literal("prompt.requested"),
+            context: promptExecutionContextV2Schema.optional(),
         })
         .readonly(),
     z

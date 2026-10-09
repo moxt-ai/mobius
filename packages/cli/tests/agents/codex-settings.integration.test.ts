@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
     decodeAgentSettingsDiscoveredEvent,
     decodeMessageKind,
-    decodeRecordedSessionEvent,
+    decodeSessionEventV2,
     encodeAgentSettingsDiscoverCommand,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
@@ -64,14 +64,18 @@ test("Given real Codex advertises its settings, When a user selects a model and 
         );
         let text = "";
         for (;;) {
-            const event = decodeRecordedSessionEvent(await peer.nextEvent());
-            if (event.kind === "session.failed") {
+            const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+            if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.failed") {
                 throw new Error(JSON.stringify(event));
             }
-            if (event.kind === "agent.message.delta") {
-                text += event.text;
+            if (
+                event.type === "acp" &&
+                event.payload.sessionUpdate === "agent_message_chunk" &&
+                event.payload.content.type === "text"
+            ) {
+                text += event.payload.content.text;
             }
-            if (event.kind === "session.completed") {
+            if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
                 break;
             }
         }

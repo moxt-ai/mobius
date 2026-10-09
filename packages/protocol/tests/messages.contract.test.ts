@@ -9,100 +9,36 @@ import {
     decodeAgentMessageDeltaEvent,
     decodeSessionCancelCommand,
     decodeSessionPromptCommand,
-    decodeSessionRecordingDirectory,
-    decodeSessionRecordingHistory,
     decodeSessionRecordingWrite,
     encodeAgentActivityEvent,
     ProtocolMessageError,
     SESSION_CANCEL_KIND,
-    SESSION_EVENT_KIND,
     SESSION_PROMPT_KIND,
     SessionPromptDisposition,
 } from "../src/index.ts";
 
 describe("session Recording protocol", () => {
-    it("Given Recording has Sessions for a Runtime, When Web loads its directory, Then identity and display metadata remain bound to each Session", () => {
-        const directory = {
-            sessions: [
-                {
-                    additionalDirectoryIds: ["docs"],
-                    agentId: "codex",
-                    directoryId: "workspace",
-                    runtimeId: "runtime-1",
-                    sessionId: "session-1",
-                    title: "Remember this",
-                    updatedAt: "2026-09-29T00:00:00.000Z",
-                },
-            ],
-        };
-
-        expect(decodeSessionRecordingDirectory(JSON.stringify(directory))).toEqual(directory);
-    });
-
-    it("Given a live Session event is accepted by a Recording provider, When it crosses the provider boundary, Then its Project and Runtime identity remain bound to the event", () => {
-        const request = {
-            envelope: {
-                kind: SESSION_EVENT_KIND,
-                payload: JSON.stringify({
-                    attemptId: "attempt-1",
-                    commandId: "command-1",
-                    epoch: "epoch-1",
-                    kind: "session.started",
-                    prompt: "Remember this",
-                    sequence: 0,
-                    sessionId: "session-1",
+    it("Given the retired envelope, When it crosses the Recording boundary, Then it is rejected", () => {
+        expect(() =>
+            decodeSessionRecordingWrite(
+                JSON.stringify({
+                    projectId: "project",
+                    runtimeId: "runtime",
+                    envelope: { kind: "session.event", sessionId: "session", payload: "{}" },
                 }),
-                sessionId: "session-1",
-            },
-            projectId: "standalone",
-            runtimeId: "runtime-1",
-        };
-
-        expect(decodeSessionRecordingWrite(JSON.stringify(request))).toEqual(request);
+            ),
+        ).toThrow(ProtocolMessageError);
     });
-
-    it("Given Recording has persisted a forked Session, When Web loads that Session, Then it receives ordered lineage segments ending at the selected parent Turn", () => {
-        const history = {
-            segments: [
-                {
-                    entries: [
-                        {
-                            envelope: {
-                                kind: SESSION_EVENT_KIND,
-                                payload: JSON.stringify({ kind: "session.queue.changed", sessionId: "session-1" }),
-                                sessionId: "session-1",
-                            },
-                            recordedAt: "2026-09-29T00:00:00.000Z",
-                        },
-                    ],
-                    recordingEpoch: "recording-epoch-1",
-                    sessionId: "session-1",
-                    throughCommandId: "command-1",
-                },
-            ],
-            sessionId: "session-2",
-        };
-
-        expect(decodeSessionRecordingHistory(JSON.stringify(history))).toEqual(history);
-    });
-
-    it("Given a child Session is forked from a terminal recorded Turn, When the event crosses the Recording boundary, Then its lineage identity round-trips", () => {
-        const request = {
-            envelope: {
-                kind: SESSION_EVENT_KIND,
-                payload: JSON.stringify({
-                    kind: "session.forked",
-                    sessionId: "session-2",
-                    sourceSessionId: "session-1",
-                    throughCommandId: "command-1",
+    it("Given invalid Runtime identity, When it crosses the Recording boundary, Then it is rejected", () => {
+        expect(() =>
+            decodeSessionRecordingWrite(
+                JSON.stringify({
+                    projectId: "project",
+                    runtimeId: "../runtime",
+                    envelope: { kind: "session.event.v2", event: {} },
                 }),
-                sessionId: "session-2",
-            },
-            projectId: "standalone",
-            runtimeId: "runtime-1",
-        };
-
-        expect(decodeSessionRecordingWrite(JSON.stringify(request))).toEqual(request);
+            ),
+        ).toThrow(ProtocolMessageError);
     });
 });
 describe("session prompt protocol", () => {

@@ -1,21 +1,12 @@
 export {
     type AgentInstallCancelRequest,
     type AgentInstallRequest,
-    type CancelRequest,
     type ConnectMobiusClientOptions as ConnectMobiusChannelClientOptions,
     connectMobiusClient as connectMobiusChannelClient,
     type ElicitationResponseRequest,
-    type FileReadResult,
-    type LiveSessionMessage,
     MobiusClient as MobiusChannelClient,
     MobiusClientError as MobiusChannelError,
     type MobiusRelayUrlProvider,
     type PermissionResponseRequest,
-    type PromptObserver,
-    type PromptRequest,
-    type PromptResult,
-    type SessionConfigureRequest,
-    type SessionPrepareRequest,
-    type WorkspaceListRequest,
 } from "./client.ts";
 export * from "./index.ts";

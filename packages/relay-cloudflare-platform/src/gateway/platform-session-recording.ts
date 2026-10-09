@@ -1,4 +1,4 @@
-import { encodeSessionRecordingWrite, isIdentifier, type SessionEventEnvelope } from "@moxt-ai/mobius-protocol";
+import { encodeSessionRecordingWrite, isIdentifier, type SessionEventEnvelopeV2 } from "@moxt-ai/mobius-protocol";
 import type {
     SessionRecording,
     SessionRecordingDeliveryResult,
@@ -26,7 +26,7 @@ export class PlatformSessionRecording implements SessionRecording {
 
     readonly deliver = async (
         target: SessionRecordingTarget,
-        envelope: SessionEventEnvelope,
+        envelope: SessionEventEnvelopeV2,
         signal: AbortSignal,
     ): Promise<SessionRecordingDeliveryResult> => {
         const policy = await this.#policies.readProject(target.projectId, signal);

@@ -1,7 +1,6 @@
 import {
     type DaemonToServiceMessage,
     encodeDaemonToServiceMessage,
-    SESSION_FAILED_KIND,
     type SessionCancelCommand,
 } from "@moxt-ai/mobius-protocol";
 import { WebSocket } from "undici";
@@ -12,7 +11,7 @@ import { LocalAuthorizationError } from "./authorization/local-authorization-err
 import type { DurationMetric } from "./infra/operation-metrics.ts";
 import { PromptArtifactError } from "./prompt-artifact-resolver.ts";
 import type { DaemonOperationState } from "./relay-connection/daemon-operation-state.ts";
-import type { DaemonSessionEventPublisher } from "./relay-connection/session-event-publisher.ts";
+import type { DaemonSessionEventLogV2 } from "./session-event-log-v2.ts";
 
 export interface DaemonTurnCommand {
     readonly commandId: string;
@@ -26,32 +25,17 @@ export function send(socket: WebSocket, message: DaemonToServiceMessage): void {
     socket.send(encodeDaemonToServiceMessage(message));
 }
 
-export function reportFailure(
-    publisher: DaemonSessionEventPublisher,
-    command: DaemonTurnCommand,
-    code: string,
-    message: string,
-): void {
-    publisher.publish(command.sessionId, {
-        code,
-        commandId: command.commandId,
-        kind: SESSION_FAILED_KIND,
-        message,
-        sessionId: command.sessionId,
-    });
-}
-
 /**
  * Settles a Turn claimed by this live Runtime when its active process can no longer execute.
  * A lost connection can deliver cancellation after the process has stopped; the in-memory
  * receipt identifies the Attempt that should be reported as failed.
  */
-export function settleAbandonedTurn(
-    publisher: DaemonSessionEventPublisher,
+export async function settleAbandonedTurn(
+    eventLog: DaemonSessionEventLogV2,
     operations: DaemonOperationState,
     audit: AuditStore,
     cancellation: SessionCancelCommand,
-): void {
+): Promise<void> {
     const attemptId = operations.findUnsettledAttemptId(cancellation.commandId, cancellation.sessionId);
     if (attemptId === null) {
         console.warn("Mobius daemon ignored cancellation for an inactive turn");
@@ -62,13 +46,14 @@ export function settleAbandonedTurn(
         event: "session_abandoned_turn_settled",
         sessionId: cancellation.sessionId,
     });
-    reportFailure(
-        publisher,
-        cancellation,
+    await eventLog.failed(
+        cancellation.sessionId,
+        cancellation.commandId,
         "agent_execution_abandoned",
         "The local Agent execution was abandoned before it completed",
     );
     operations.transitionExecution(cancellation.commandId, "failed");
+    eventLog.publishTerminal(cancellation.sessionId, cancellation.commandId);
 }
 
 export function operationErrorCode(error: unknown): string {

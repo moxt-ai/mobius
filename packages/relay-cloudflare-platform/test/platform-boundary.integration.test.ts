@@ -1,12 +1,10 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
-    AGENT_MESSAGE_DELTA_KIND,
     decodeDaemonToServiceMessage,
     decodeServiceToDaemonMessage,
-    decodeSessionEventEnvelope,
+    decodeSessionEventEnvelopeV2,
     decodeSessionPromptCommand,
-    encodeSessionEventEnvelope,
     encodeSessionEventEnvelopeV2,
     encodeSessionLiveHistoryV2PageLoaded,
     encodeSessionPromptCommand,
@@ -53,9 +51,24 @@ class ControlledRecording implements SessionRecording {
             signal.throwIfAborted();
             return { kind: "failed", code: "write_failed" };
         }
-        this.contents.push(envelope.payload);
+        this.contents.push(JSON.stringify(envelope.event));
         return { kind: "recorded" };
     };
+}
+
+function liveEvent(sessionId: string, text: string): string {
+    return encodeSessionEventEnvelopeV2({
+        kind: "session.event.v2",
+        event: {
+            eventId: "event-1",
+            position: "1",
+            provenance: { kind: "original" },
+            recordedAt: "2026-09-18T00:00:00.000Z",
+            sessionId,
+            type: "acp",
+            payload: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } },
+        },
+    });
 }
 
 const relayOrigin = "https://platform.test";
@@ -228,27 +241,16 @@ describe.sequential("Platform Session-only boundary", () => {
                 throw new Error("Expected a connected daemon");
             }
             client.accept();
-            const event = (text: string) =>
-                encodeSessionEventEnvelope({
-                    kind: "session.event",
-                    sessionId: "unwatched-session",
-                    payload: JSON.stringify({
-                        kind: AGENT_MESSAGE_DELTA_KIND,
-                        commandId: "unwatched-command",
-                        epoch: "unwatched-command",
-                        sequence: 1,
-                        messageId: "message",
-                        sessionId: "unwatched-session",
-                        text,
-                    }),
-                });
+            const event = (text: string) => liveEvent("unwatched-session", text);
             try {
                 await relay.webSocketMessage(daemon, event("first"));
                 await recording.started.promise;
                 await relay.webSocketMessage(daemon, event("second"));
                 recording.release.resolve();
                 await Promise.all(pending);
-                expect(recording.contents.map((payload) => JSON.parse(payload).text)).toEqual(["second"]);
+                expect(recording.contents.map((payload) => JSON.parse(payload).payload.content.text)).toEqual([
+                    "second",
+                ]);
             } finally {
                 recording.release.resolve();
                 await Promise.all(pending);
@@ -773,27 +775,17 @@ describe.sequential("Platform Session-only boundary", () => {
                 throw new Error("Expected the prompt to reach the local Runtime");
             }
             expect(decodeSessionPromptCommand(JSON.stringify(prompt)).prompt).toBe("show the local answer");
-            const answer = encodeSessionEventEnvelope({
-                kind: "session.event",
-                payload: JSON.stringify({
-                    commandId: prompt.commandId,
-                    epoch: prompt.commandId,
-                    kind: AGENT_MESSAGE_DELTA_KIND,
-                    messageId: "local-codex-message",
-                    sequence: 1,
-                    sessionId,
-                    text: "local answer",
-                }),
-                sessionId,
-            });
+            const answer = liveEvent(sessionId, "local answer");
             daemon.send(answer);
-            const received = decodeSessionEventEnvelope(await hostMessages.next());
-            expect(received.payload).toContain("local answer");
+            const received = decodeSessionEventEnvelopeV2(await hostMessages.next());
+            expect(JSON.stringify(received.event.payload)).toContain("local answer");
             expect(received).not.toHaveProperty("cursor");
             expect(received).not.toHaveProperty("sequence");
-            // A retransmission remains a live event; the viewer uses the Runtime's epoch and sequence.
+            // Relay broadcasts the original V2 identity unchanged, including duplicate frames.
             daemon.send(answer);
-            expect(decodeSessionEventEnvelope(await hostMessages.next()).payload).toContain("local answer");
+            expect(JSON.stringify(decodeSessionEventEnvelopeV2(await hostMessages.next()).event.payload)).toContain(
+                "local answer",
+            );
 
             // Given Recording stalls then fails, subsequent live events still reach the viewer.
             await runInDurableObject(environment.RUNTIME_RELAY.getByName(runtimeId), async (_instance, state) => {
@@ -817,27 +809,14 @@ describe.sequential("Platform Session-only boundary", () => {
                 if (daemonSocket === undefined) {
                     throw new Error("Expected a connected daemon");
                 }
-                const frame = (text: string) =>
-                    encodeSessionEventEnvelope({
-                        kind: "session.event",
-                        sessionId,
-                        payload: JSON.stringify({
-                            kind: AGENT_MESSAGE_DELTA_KIND,
-                            commandId: prompt.commandId,
-                            epoch: prompt.commandId,
-                            sequence: 1,
-                            messageId: "recording-isolation",
-                            sessionId,
-                            text,
-                        }),
-                    });
+                const frame = (text: string) => liveEvent(sessionId, text);
                 try {
                     await relay.webSocketMessage(daemonSocket, frame("recording is stalled"));
                     await recording.started.promise;
                     await relay.webSocketMessage(daemonSocket, frame("live output continues"));
                     recording.release.resolve();
                     await Promise.all(pending);
-                    expect(recording.contents.map((payload) => JSON.parse(payload).text)).toEqual([
+                    expect(recording.contents.map((payload) => JSON.parse(payload).payload.content.text)).toEqual([
                         "live output continues",
                     ]);
                 } finally {
@@ -845,8 +824,12 @@ describe.sequential("Platform Session-only boundary", () => {
                     await Promise.all(pending);
                 }
             });
-            expect(decodeSessionEventEnvelope(await hostMessages.next()).payload).toContain("recording is stalled");
-            expect(decodeSessionEventEnvelope(await hostMessages.next()).payload).toContain("live output continues");
+            expect(JSON.stringify(decodeSessionEventEnvelopeV2(await hostMessages.next()).event.payload)).toContain(
+                "recording is stalled",
+            );
+            expect(JSON.stringify(decodeSessionEventEnvelopeV2(await hostMessages.next()).event.payload)).toContain(
+                "live output continues",
+            );
             const browserAccess = await responseJson(
                 await worker.fetch(
                     new Request(
@@ -986,7 +969,7 @@ describe.sequential("Platform Session-only boundary", () => {
                 JSON.stringify({
                     headers: [["authorization", `Bearer ${text(browserAccess, "credential")}`]],
                     kind: "session.events.subscribe",
-                    path: `${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/events`,
+                    path: `${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/events-v2`,
                     subscriptionId: "subscription-1",
                 }),
             );
@@ -995,7 +978,9 @@ describe.sequential("Platform Session-only boundary", () => {
                 subscriptionId: "subscription-1",
             });
             daemon.send(answer);
-            expect(decodeSessionEventEnvelope(await hostMessages.next()).payload).toContain("local answer");
+            expect(JSON.stringify(decodeSessionEventEnvelopeV2(await hostMessages.next()).event.payload)).toContain(
+                "local answer",
+            );
             expect(JSON.parse(await transportMessages.next())).toMatchObject({
                 data: expect.stringContaining("local answer"),
                 eventId: "",

@@ -6,7 +6,6 @@ import {
     decodeSessionCancelCommand,
     decodeSessionConfigureCommand,
     decodeSessionElicitationRespondCommand,
-    decodeSessionEventEnvelope,
     decodeSessionEventEnvelopeV2,
     decodeSessionLiveHistoryV2PageLoad,
     decodeSessionPermissionRespondCommand,
@@ -623,79 +622,6 @@ export function createPlatformApplication(
             );
             context.header("Cache-Control", "no-store");
             return context.json({ accepted: true });
-        })
-        .get("/:sessionId/events", sessionAccessTargetMiddleware, async (context) => {
-            if (context.req.header("upgrade")?.toLowerCase() !== "websocket") {
-                return context.json(
-                    { error: { code: "websocket_upgrade_required", message: "A WebSocket upgrade is required" } },
-                    426,
-                );
-            }
-            const authorization = context.req.header("authorization") ?? "";
-            const credential = authorization.match(/^Bearer ([^\s]+)$/u)?.[1];
-            if (credential === undefined) {
-                return context.json(
-                    { error: { code: "session_access_required", message: "A Session credential is required" } },
-                    401,
-                );
-            }
-            const target = await context.var.sessionAccess.authorizeLiveEvents(
-                context.var.sessionAccessTarget,
-                credential,
-                context.req.raw.signal,
-            );
-            const host = await context.var.relay.services.runtimePairings.openProjectSessionEventHost(
-                new ProjectScope(target.projectId),
-                target.runtimeId,
-                context.req.raw.signal,
-            );
-            const pair = new WebSocketPair();
-            const client = pair[0];
-            const server = pair[1];
-            let closed = false;
-            const expirationTimeout = setTimeout(
-                () => close(),
-                Math.max(0, target.expiresAtEpochMilliseconds - Date.now()),
-            );
-            const close = (): void => {
-                if (closed) {
-                    return;
-                }
-                closed = true;
-                clearTimeout(expirationTimeout);
-                server.close(1000, "Session event subscription closed");
-                void host.close();
-            };
-            server.accept();
-            host.socket.addEventListener("message", (event) => {
-                if (closed || typeof event.data !== "string") {
-                    return;
-                }
-                try {
-                    const kind = decodeMessageKind(event.data);
-                    if (kind === "runtime.status") {
-                        if (!decodeRuntimeStatusEvent(event.data).online) {
-                            close();
-                        }
-                        return;
-                    }
-                    if (kind === "session.event") {
-                        const envelope = decodeSessionEventEnvelope(event.data);
-                        if (envelope.sessionId === context.req.param("sessionId")) {
-                            server.send(event.data);
-                        }
-                    }
-                } catch {
-                    server.close(1007, "Invalid Runtime event");
-                    void host.close();
-                }
-            });
-            host.socket.addEventListener("close", close, { once: true });
-            host.socket.addEventListener("error", close, { once: true });
-            server.addEventListener("close", close, { once: true });
-            server.addEventListener("error", close, { once: true });
-            host.socket.accept();
-            return new Response(null, { status: 101, webSocket: client });
         })
         .get("/:sessionId/events-v2", sessionAccessTargetMiddleware, async (context) => {
             const credential = (context.req.header("authorization") ?? "").match(/^Bearer ([^\s]+)$/u)?.[1];

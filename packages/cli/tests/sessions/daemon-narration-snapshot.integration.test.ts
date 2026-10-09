@@ -7,17 +7,11 @@ import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import {
-    AGENT_ACTIVITY_KIND,
-    AGENT_ACTIVITY_NARRATION_KIND,
-    decodeAgentActivityEvent,
-    decodeAgentActivityNarrationEvent,
     decodeMessageKind,
-    decodeSessionEventEnvelope,
+    decodeSessionEventEnvelopeV2,
     encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
-    SESSION_COMPLETED_KIND,
-    SESSION_EVENT_KIND,
-    SESSION_FAILED_KIND,
+    SESSION_EVENT_V2_KIND,
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -191,24 +185,25 @@ describe("daemon narration delivery", () => {
             let completedNarration = false;
             for (;;) {
                 const message = await frames.next();
-                if (decodeMessageKind(message) !== SESSION_EVENT_KIND) {
+                if (decodeMessageKind(message) !== SESSION_EVENT_V2_KIND) {
                     continue;
                 }
-                const { payload } = decodeSessionEventEnvelope(message);
-                const kind = decodeMessageKind(payload);
-                if (kind === AGENT_ACTIVITY_NARRATION_KIND) {
-                    narration += decodeAgentActivityNarrationEvent(payload).text;
+                const event = decodeSessionEventEnvelopeV2(message).event;
+                if (
+                    event.type === "acp" &&
+                    event.payload.sessionUpdate === "agent_thought_chunk" &&
+                    event.payload.content.type === "text"
+                ) {
+                    narration += event.payload.content.text;
+                    completedNarration = true;
                 }
-                if (kind === AGENT_ACTIVITY_KIND) {
-                    const activity = decodeAgentActivityEvent(payload);
-                    if (activity.activityType === "reasoning" && activity.status === "completed") {
-                        completedNarration = true;
-                    }
+                if (
+                    event.type === "lifecycle-metadata" &&
+                    (event.payload.kind === "prompt.failed" || event.payload.kind === "prompt.failed-before-start")
+                ) {
+                    throw new Error(message);
                 }
-                if (kind === SESSION_FAILED_KIND) {
-                    throw new Error(payload);
-                }
-                if (kind === SESSION_COMPLETED_KIND) {
+                if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
                     break;
                 }
             }

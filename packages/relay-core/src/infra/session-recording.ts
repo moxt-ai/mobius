@@ -1,4 +1,4 @@
-import type { SessionEventEnvelope } from "@moxt-ai/mobius-protocol";
+import type { SessionEventEnvelopeV2 } from "@moxt-ai/mobius-protocol";
 
 export interface SessionRecordingTarget {
     readonly projectId: string;
@@ -14,7 +14,7 @@ export type SessionRecordingDeliveryResult =
 export interface SessionRecording {
     readonly deliver: (
         target: SessionRecordingTarget,
-        envelope: SessionEventEnvelope,
+        envelope: SessionEventEnvelopeV2,
         signal: AbortSignal,
     ) => Promise<SessionRecordingDeliveryResult>;
 }

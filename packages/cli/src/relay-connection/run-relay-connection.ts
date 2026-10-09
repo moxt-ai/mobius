@@ -90,7 +90,6 @@ export async function runRelayConnection({
         installations,
         nativeSessions,
         operations,
-        publisher,
         eventLogV2,
         externalContent,
         activeTurns,

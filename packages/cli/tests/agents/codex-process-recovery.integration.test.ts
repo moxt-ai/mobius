@@ -2,11 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-    decodeRecordedSessionEvent,
-    encodeSessionPromptCommand,
-    SessionPromptDisposition,
-} from "@moxt-ai/mobius-protocol";
+import { decodeSessionEventV2, encodeSessionPromptCommand, SessionPromptDisposition } from "@moxt-ai/mobius-protocol";
 import { expect, test } from "vitest";
 import { CodexAgentSpecification } from "../../src/agent-catalog/agents/codex-agent.ts";
 import { CodexFixture } from "../support/agents/codex.ts";
@@ -46,31 +42,47 @@ test("Given an existing real Codex conversation, When the process exits or its t
                     );
                     let text = "";
                     for (;;) {
-                        const event = decodeRecordedSessionEvent(await peer.nextEvent());
-                        if ("commandId" in event && event.commandId !== commandId) {
+                        const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+                        if (
+                            event.type === "lifecycle-metadata" &&
+                            "commandId" in event.payload &&
+                            event.payload.commandId !== commandId
+                        ) {
                             continue;
                         }
-                        if (event.kind === "agent.message.delta") {
-                            text += event.text;
+                        if (
+                            event.type === "acp" &&
+                            event.payload.sessionUpdate === "agent_message_chunk" &&
+                            event.payload.content.type === "text"
+                        ) {
+                            text += event.payload.content.text;
                         }
-                        if (event.kind === "session.failed" || event.kind === "session.completed") {
+                        if (
+                            (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.failed") ||
+                            (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed")
+                        ) {
                             return { event, text };
                         }
                     }
                 };
                 expect(await run()).toMatchObject({
-                    event: { kind: "session.completed" },
+                    event: { payload: { kind: "prompt.completed" } },
                     text: expect.stringContaining("RECOVERED_REPLY"),
                 });
                 for (const fault of ["before-ack", "after-ack", "invalid-frame"]) {
                     await writeFile(faultPath, fault);
                     const failed = await run();
                     expect(failed.event).toMatchObject({
-                        kind: "session.failed",
-                        code: fault === "invalid-frame" ? "codex_app_server_protocol_error" : "codex_app_server_exited",
+                        payload: {
+                            kind: "prompt.failed",
+                            code:
+                                fault === "invalid-frame"
+                                    ? "codex_app_server_protocol_error"
+                                    : "codex_app_server_exited",
+                        },
                     });
                     expect(await run()).toMatchObject({
-                        event: { kind: "session.completed" },
+                        event: { payload: { kind: "prompt.completed" } },
                         text: expect.stringContaining("RECOVERED_REPLY"),
                     });
                 }

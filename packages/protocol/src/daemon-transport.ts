@@ -46,6 +46,7 @@ import {
     decodeFileEndEvent,
     decodeFileFailedEvent,
     decodeFileReadCommand,
+    decodeSessionConfigUpdatedEvent,
     decodeSessionConfigureCommand,
     decodeSessionElicitationRespondCommand,
     decodeSessionListCommand,
@@ -74,6 +75,7 @@ import {
     encodeFileEndEvent,
     encodeFileFailedEvent,
     encodeFileReadCommand,
+    encodeSessionConfigUpdatedEvent,
     encodeSessionConfigureCommand,
     encodeSessionElicitationRespondCommand,
     encodeSessionListCommand,
@@ -92,6 +94,7 @@ import {
     FILE_END_KIND,
     FILE_FAILED_KIND,
     FILE_READ_KIND,
+    SESSION_CONFIG_UPDATED_KIND,
     SESSION_CONFIGURE_KIND,
     SESSION_ELICITATION_RESPOND_KIND,
     SESSION_LIST_KIND,
@@ -133,7 +136,6 @@ import {
     encodeSessionEventEnvelopeV2,
     SESSION_EVENT_V2_KIND,
 } from "./session-event-log-v2.ts";
-import { decodeSessionEventEnvelope, encodeSessionEventEnvelope, SESSION_EVENT_KIND } from "./session-events.ts";
 import {
     decodeSessionLiveHistoryV2PageLoad,
     decodeSessionLiveHistoryV2PageLoaded,
@@ -276,6 +278,11 @@ export function encodeServiceToDaemonMessage(message: ServiceToDaemonMessage): s
 }
 
 const daemonToServiceSignatures = {
+    [SESSION_CONFIG_UPDATED_KIND]: defineMessageSignature(
+        SESSION_CONFIG_UPDATED_KIND,
+        encodeSessionConfigUpdatedEvent,
+        decodeSessionConfigUpdatedEvent,
+    ),
     [AGENT_INSTALL_CANCELLED_KIND]: defineMessageSignature(
         AGENT_INSTALL_CANCELLED_KIND,
         encodeAgentInstallCancelledEvent,
@@ -346,11 +353,6 @@ const daemonToServiceSignatures = {
         decodeRuntimeHeartbeatEvent,
     ),
     [RUNTIME_PONG_KIND]: defineMessageSignature(RUNTIME_PONG_KIND, encodeRuntimePongEvent, decodeRuntimePongEvent),
-    [SESSION_EVENT_KIND]: defineMessageSignature(
-        SESSION_EVENT_KIND,
-        encodeSessionEventEnvelope,
-        decodeSessionEventEnvelope,
-    ),
     [SESSION_EVENT_V2_KIND]: defineMessageSignature(
         SESSION_EVENT_V2_KIND,
         encodeSessionEventEnvelopeV2,

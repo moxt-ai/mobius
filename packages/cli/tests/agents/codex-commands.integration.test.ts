@@ -1,9 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-    decodeRecordedSessionEvent,
-    encodeSessionPromptCommand,
-    SessionPromptDisposition,
-} from "@moxt-ai/mobius-protocol";
+import { decodeSessionEventV2, encodeSessionPromptCommand, SessionPromptDisposition } from "@moxt-ai/mobius-protocol";
 import { expect, test } from "vitest";
 import { CodexAgentSpecification } from "../../src/agent-catalog/agents/codex-agent.ts";
 import { CodexFixture } from "../support/agents/codex.ts";
@@ -34,18 +30,26 @@ test("Given a real Codex conversation, When the user compacts it and continues, 
             );
             let text = "";
             for (;;) {
-                const event = decodeRecordedSessionEvent(await peer.nextEvent());
-                if ("commandId" in event && event.commandId !== commandId) {
+                const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+                if (
+                    event.type === "lifecycle-metadata" &&
+                    "commandId" in event.payload &&
+                    event.payload.commandId !== commandId
+                ) {
                     continue;
                 }
-                if (event.kind === "session.failed") {
+                if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.failed") {
                     throw new Error(JSON.stringify(event));
                 }
-                if (event.kind === "agent.message.delta") {
-                    text += event.text;
+                if (
+                    event.type === "acp" &&
+                    event.payload.sessionUpdate === "agent_message_chunk" &&
+                    event.payload.content.type === "text"
+                ) {
+                    text += event.payload.content.text;
                 }
-                if (event.kind === "session.completed") {
-                    expect(event.stopReason).toBe("end_turn");
+                if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
+                    expect(event.payload.stopReason).toBe("end_turn");
                     break;
                 }
             }

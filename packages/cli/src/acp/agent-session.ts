@@ -165,7 +165,7 @@ export class AgentSession implements AcpClientHandler {
             commandId: () => this.#turn.commandId,
             assertNativeSession: (sessionId) => this.assertNativeSession(sessionId),
             observer: getObserver,
-            recordSessionEventV2: this.#recordLifecycleEventV2,
+            recordSessionEventV2: this.recordLifecycleEventV2,
         });
         this.#connection = new AgentConnection(agent, cwd, this);
         this.#contentExternalizer = contentExternalizer;
@@ -836,9 +836,18 @@ export class AgentSession implements AcpClientHandler {
         if (this.#turn.running) {
             throw new AcpExecutionError("Another prompt is already running in this conversation", {}, "session_busy");
         }
+        if (!this.#capabilities.loadSession && this.#sessionLoad.kind === "not-requested") {
+            this.#sessionLoad = {
+                kind: "loaded",
+                history: new AcpHistoryReplay(this.#store.eventsV2, this.#mobiusSessionId),
+                response: {},
+            };
+        }
         const completedHistory = this.#capabilities.loadSession
             ? await this.#completedHistory(options.signal, "ACP agent exited while loading history before a prompt")
-            : null;
+            : this.#sessionLoad.kind === "loaded"
+              ? this.#sessionLoad.history
+              : null;
         const prompt = this.buildPrompt(options);
         if (this.#sessionTitle === null || this.#sessionTitle.length === 0) {
             this.#sessionTitle = truncate(options.prompt, 500);
@@ -868,11 +877,16 @@ export class AgentSession implements AcpClientHandler {
             completedHistory === null ? null : new AcpHistoryReplay(this.#store.eventsV2, this.#mobiusSessionId);
         const lifecycleV2 = options.lifecycleV2;
         if (lifecycleV2 !== undefined) {
-            await this.#recordLifecycleEventV2({
-                payload: { commandId: options.commandId, content: lifecycleV2.content, kind: "prompt.requested" },
+            await this.recordLifecycleEventV2({
+                payload: {
+                    commandId: options.commandId,
+                    content: lifecycleV2.content,
+                    kind: "prompt.requested",
+                    ...(lifecycleV2.context === undefined ? {} : { context: lifecycleV2.context }),
+                },
                 type: "lifecycle-metadata",
             });
-            await this.#recordLifecycleEventV2({
+            await this.recordLifecycleEventV2({
                 payload: {
                     attemptId: lifecycleV2.attemptId,
                     commandId: options.commandId,
@@ -935,7 +949,7 @@ export class AgentSession implements AcpClientHandler {
                 ),
             );
             if (lifecycleV2 !== undefined) {
-                await this.#recordLifecycleEventV2({
+                await this.recordLifecycleEventV2({
                     payload: { commandId: options.commandId, kind: "prompt.completed", stopReason: result.stopReason },
                     type: "lifecycle-metadata",
                 });
@@ -948,14 +962,17 @@ export class AgentSession implements AcpClientHandler {
                     ? error
                     : new AcpExecutionError("ACP agent execution failed", { cause: error });
             if (lifecycleV2 !== undefined) {
-                await this.#recordLifecycleEventV2({
-                    payload: {
-                        attemptId: lifecycleV2.attemptId,
-                        code: failure.code,
-                        commandId: options.commandId,
-                        kind: "prompt.failed",
-                        message: truncate(failure.message, 500),
-                    },
+                await this.recordLifecycleEventV2({
+                    payload:
+                        options.cancellationRequested?.() === true
+                            ? { commandId: options.commandId, kind: "prompt.completed", stopReason: "cancelled" }
+                            : {
+                                  attemptId: lifecycleV2.attemptId,
+                                  code: failure.code,
+                                  commandId: options.commandId,
+                                  kind: "prompt.failed",
+                                  message: truncate(failure.message, 500),
+                              },
                     type: "lifecycle-metadata",
                 });
             }
@@ -986,11 +1003,16 @@ export class AgentSession implements AcpClientHandler {
         const prompt = this.buildPrompt(options);
         const lifecycleV2 = options.lifecycleV2;
         if (lifecycleV2 !== undefined) {
-            await this.#recordLifecycleEventV2({
-                payload: { commandId: options.commandId, content: lifecycleV2.content, kind: "prompt.requested" },
+            await this.recordLifecycleEventV2({
+                payload: {
+                    commandId: options.commandId,
+                    content: lifecycleV2.content,
+                    kind: "prompt.requested",
+                    ...(lifecycleV2.context === undefined ? {} : { context: lifecycleV2.context }),
+                },
                 type: "lifecycle-metadata",
             });
-            await this.#recordLifecycleEventV2({
+            await this.recordLifecycleEventV2({
                 payload: {
                     attemptId: lifecycleV2.attemptId,
                     commandId: options.commandId,
@@ -1020,7 +1042,7 @@ export class AgentSession implements AcpClientHandler {
             const outcome = response["outcome"];
             if (outcome === "injected" || outcome === "startedNewTurn") {
                 if (lifecycleV2 !== undefined) {
-                    await this.#recordLifecycleEventV2({
+                    await this.recordLifecycleEventV2({
                         payload: { commandId: options.commandId, kind: "prompt.completed", stopReason: "steered" },
                         type: "lifecycle-metadata",
                     });
@@ -1048,7 +1070,7 @@ export class AgentSession implements AcpClientHandler {
                     ? error
                     : new AcpExecutionError("ACP agent execution failed", { cause: error });
             if (lifecycleV2 !== undefined) {
-                await this.#recordLifecycleEventV2({
+                await this.recordLifecycleEventV2({
                     payload: {
                         attemptId: lifecycleV2.attemptId,
                         code: failure.code,
@@ -1092,7 +1114,15 @@ export class AgentSession implements AcpClientHandler {
 
     readonly onUpdate = (notification: SessionNotification): Promise<void> => this.#updates.receive(notification);
 
-    readonly #recordLifecycleEventV2 = async (event: SessionEventPayloadV2): Promise<void> => {
+    readonly recordControlEventV2 = async (event: SessionEventPayloadV2): Promise<boolean> => {
+        if (this.#sessionLoad.kind !== "loaded") {
+            return false;
+        }
+        await this.recordLifecycleEventV2(event);
+        return true;
+    };
+
+    readonly recordLifecycleEventV2 = async (event: SessionEventPayloadV2): Promise<void> => {
         if (event.type !== "lifecycle-metadata" || this.#sessionLoad.kind !== "loaded") {
             return;
         }

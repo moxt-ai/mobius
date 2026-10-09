@@ -106,7 +106,7 @@ it("Given an established event subscription, When the browser transport closes, 
         JSON.stringify({
             headers: [],
             kind: "session.events.subscribe",
-            path: "/mobius/api/v1/projects/project/sessions/session/events",
+            path: "/mobius/api/v1/projects/project/sessions/session/events-v2",
             subscriptionId: "subscription-1",
         }),
     );
@@ -150,7 +150,7 @@ it("Given an established event subscription is quiet, When the transport idle de
             JSON.stringify({
                 headers: [],
                 kind: "session.events.subscribe",
-                path: "/mobius/api/v1/projects/project/sessions/session/events",
+                path: "/mobius/api/v1/projects/project/sessions/session/events-v2",
                 subscriptionId: "subscription-1",
             }),
         );
