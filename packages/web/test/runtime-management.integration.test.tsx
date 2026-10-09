@@ -1,8 +1,6 @@
 import { decodeSessionPrepareCommand, MOBIUS_API_PREFIX, SESSION_PREPARE_KIND } from "@moxt-ai/mobius-protocol";
-import { type AgentDaemonSocket, FakeAgentDaemon } from "@moxt-ai/mobius-test/agent-daemon";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-
 import { closeMobiusTransport } from "@/services/mobius-transport";
 import {
     completeRenderedPrompt,
@@ -11,6 +9,7 @@ import {
     sendReadySession,
     setupWebIntegrationEnvironment,
 } from "./app-integration-harness.ts";
+import { type AgentDaemonSocket, FakeAgentDaemon } from "./support/daemon/connection.ts";
 
 interface ClaimedRuntimePairing {
     readonly channelId: string;
