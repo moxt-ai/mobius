@@ -56,6 +56,7 @@ class ControllableDaemonTask implements DaemonScheduledTask {
 }
 
 class ControllableDaemonTimer implements DaemonTimer {
+    readonly batchWindowMilliseconds: number[] = [];
     readonly #scheduled: ControllableDaemonTask[] = [];
     readonly #waiters: Array<(task: ControllableDaemonTask) => void> = [];
 
@@ -64,6 +65,7 @@ class ControllableDaemonTimer implements DaemonTimer {
         if (milliseconds !== SESSION_EVENT_V2_BATCH_WINDOW_MILLISECONDS) {
             return task;
         }
+        this.batchWindowMilliseconds.push(milliseconds);
         const waiter = this.#waiters.shift();
         if (waiter === undefined) {
             this.#scheduled.push(task);
@@ -433,6 +435,7 @@ describe("daemon V2 live delivery", () => {
             expect(text).toBe(
                 `Gathering contextOpenCode turn 1: ${Array.from({ length: 64 }, (_, index) => `token-${index} `).join("")}`,
             );
+            expect(fixture.timer.batchWindowMilliseconds).toContain(100);
             expect(fixture.liveBatchSizes.some((size) => size > 1)).toBe(true);
             const page = await history(fixture, command);
             expect(page.events.map(({ eventId, type, payload }) => ({ eventId, type, payload }))).toEqual(
