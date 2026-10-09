@@ -211,7 +211,7 @@ describe("ACP conversation sessions", () => {
     });
 
     it.skipIf(process.platform === "win32")(
-        "Given an ACP Turn keeps running, When days elapse, Then Mobius keeps it active until cancellation and releases the process tree",
+        "Given an ACP Turn keeps running, When it is cancelled, Then Mobius keeps its Agent process for the next Turn",
         async () => {
             const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-long-turn-"));
             const adapterPath = join(temporaryDirectory, "pi-acp");
@@ -291,10 +291,28 @@ child.once("exit", (code) => process.exit(code ?? 84));
                 await manager.cancelPrompt("pi-hanging-conversation");
 
                 await expect(hangingTurn).resolves.toEqual({ stopReason: "cancelled" });
-                expect(processExists(piPid)).toBe(false);
+                expect(processExists(piPid)).toBe(true);
+                const resumedChunks: string[] = [];
+                await manager.runPrompt({
+                    additionalDirectories: [],
+                    agent,
+                    commandId: "pi-after-cancellation",
+                    cwd: process.cwd(),
+                    images: [],
+                    onActivity: () => Promise.resolve(),
+                    onText: (text) => {
+                        resumedChunks.push(text);
+                        return Promise.resolve();
+                    },
+                    prompt: "continue in the retained process",
+                    resources: [],
+                    sessionId: "pi-hanging-conversation",
+                    signal: new AbortController().signal,
+                });
+                expect(resumedChunks.join("")).toBe("Pi turn 2: continue in the retained process");
+                expect(processExists(piPid)).toBe(true);
             } finally {
                 vi.useRealTimers();
-                await manager.cancelPrompt("pi-hanging-conversation");
                 await manager.close();
                 await rm(temporaryDirectory, { force: true, recursive: true });
             }
@@ -577,7 +595,7 @@ child.once("exit", (code) => process.exit(code ?? 84));
     });
 
     it.skipIf(process.platform === "win32")(
-        "Given an ACP Agent leaves a tool subprocess alive after cancelling, When the turn is cancelled, Then Mobius releases the process tree and resumes the saved session",
+        "Given an ACP Agent has a tool subprocess, When the turn is cancelled, Then Mobius retains the process tree until Runtime shutdown",
         async () => {
             const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-cancel-tree-"));
             const manager = new AgentRuntimeManager();
@@ -640,7 +658,7 @@ agent.once("exit", (code) => process.exit(code ?? 84));
                 await expect(cancelledTurn).resolves.toEqual({
                     stopReason: "cancelled",
                 });
-                expect(processExists(childPid)).toBe(false);
+                expect(processExists(childPid)).toBe(true);
                 const nextChunks: string[] = [];
                 await manager.runPrompt({
                     additionalDirectories: [],
@@ -659,6 +677,9 @@ agent.once("exit", (code) => process.exit(code ?? 84));
                     signal: new AbortController().signal,
                 });
                 expect(nextChunks.join("")).toBe("Codex turn 2: continue");
+                expect(processExists(childPid)).toBe(true);
+                await manager.close();
+                expect(processExists(childPid)).toBe(false);
             } finally {
                 await manager.close();
                 if (childPid > 0 && processExists(childPid)) {

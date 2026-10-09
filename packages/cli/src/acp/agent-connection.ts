@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { type ClientConnection, ndJsonStream, RequestError } from "@agentclientprotocol/sdk";
 import type { AcpAgentDefinition } from "../config.ts";
-import { captureProcessTree, type ProcessTreeIdentity, stopProcessTree } from "../process/executable.ts";
+import { stopProcessTree } from "../process/executable.ts";
 import { AcpExecutionError } from "./acp-error.ts";
 import { type AcpClientHandler, createAcpClient } from "./create-client.ts";
 import {
@@ -147,16 +147,14 @@ export class AgentConnection {
     get inProcessAgent(): InProcessAcpEndpoint | null {
         return this.#process.kind === "in-process" ? this.#process.endpoint : null;
     }
-    readonly captureProcessTree = async (): Promise<readonly ProcessTreeIdentity[]> =>
-        this.#process.kind === "child" ? await captureProcessTree(this.#process.child) : [];
-    readonly closeProcess = async (capturedProcesses: readonly ProcessTreeIdentity[] = []): Promise<void> => {
+    readonly closeProcess = async (): Promise<void> => {
         try {
             if (this.#process.kind === "in-process") {
                 // The in-process agent owns its app-server child and its process tree.
                 await this.#process.endpoint.close();
                 return;
             }
-            await stopProcessTree(this.#process.child, capturedProcesses);
+            await stopProcessTree(this.#process.child);
         } finally {
             this.connection.close();
         }
