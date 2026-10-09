@@ -876,9 +876,10 @@ describe.sequential("Platform Session-only boundary", () => {
                 sessionId,
                 type: "acp" as const,
             };
-            daemon.send(encodeSessionEventEnvelopeV2({ event: rawEvent, kind: "session.event.v2" }));
+            const secondRawEvent = { ...rawEvent, eventId: "event-v2-2", position: "2" };
+            daemon.send(encodeSessionEventEnvelopeV2({ events: [rawEvent, secondRawEvent], kind: "session.event.v2" }));
             expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "session.event.v2" });
-            expect(JSON.parse(await v2Messages.next())).toEqual(rawEvent);
+            expect(JSON.parse(await v2Messages.next())).toEqual([rawEvent, secondRawEvent]);
             const historyResponse = worker.fetch(
                 new Request(
                     `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/events-v2?limit=50`,

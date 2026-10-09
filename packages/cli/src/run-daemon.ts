@@ -139,7 +139,7 @@ export async function runDaemon(
     const sessionStore = new SqliteAcpSessionStore(sessionDatabase, eventsV2);
     await using externalContent = new LocalExternalContentStore(stateDirectory);
     const operations = new DaemonOperationState();
-    const publisher = new DaemonSessionEventPublisher();
+    const publisher = new DaemonSessionEventPublisher(timer);
     const eventLogV2 = new DaemonSessionEventLogV2(
         publisher,
         (sessionId, event) => agentRuntime.recordLifecycleEventV2(sessionId, event),

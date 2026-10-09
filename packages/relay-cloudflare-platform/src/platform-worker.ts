@@ -715,8 +715,11 @@ export function createPlatformApplication(
                     }
                     if (kind === "session.event.v2") {
                         const envelope = decodeSessionEventEnvelopeV2(event.data);
-                        if (envelope.event.sessionId === context.req.param("sessionId")) {
-                            server.send(JSON.stringify(envelope.event));
+                        const events = envelope.events.filter(
+                            (sessionEvent) => sessionEvent.sessionId === context.req.param("sessionId"),
+                        );
+                        if (events.length > 0) {
+                            server.send(JSON.stringify(events));
                         }
                     }
                 } catch {

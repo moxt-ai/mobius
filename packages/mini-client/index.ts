@@ -594,18 +594,19 @@ async function compactCommand(directory: string, flags: ReadonlyMap<string, stri
         let subscription: MobiusLiveEventSubscriptionV2 | undefined;
         const observer: MobiusLiveSessionEventObserverV2 = {
             reconcile: () => Promise.resolve(),
-            receive: (event) => {
-                if (event.type === "acp" && event.payload.sessionUpdate === "available_commands_update") {
-                    advertisedCommands = event.payload.availableCommands.map((command) => ({
-                        description: command.description,
-                        inputHint: command.input?.hint ?? "",
-                        name: command.name,
-                    }));
-                    return Promise.resolve(
-                        !advertisedCommands.some((candidate) => candidate.name.toLowerCase() === "compact"),
-                    );
+            receive: (events) => {
+                for (const event of events) {
+                    if (event.type === "acp" && event.payload.sessionUpdate === "available_commands_update") {
+                        advertisedCommands = event.payload.availableCommands.map((command) => ({
+                            description: command.description,
+                            inputHint: command.input?.hint ?? "",
+                            name: command.name,
+                        }));
+                    }
                 }
-                return Promise.resolve(true);
+                return Promise.resolve(
+                    !advertisedCommands.some((candidate) => candidate.name.toLowerCase() === "compact"),
+                );
             },
         };
         try {
@@ -751,13 +752,15 @@ async function getCommand(directory: string, flags: ReadonlyMap<string, string>)
                     terminal.resolve();
                 }
             },
-            receive: async (event) => {
-                if (seen.has(event.eventId)) {
-                    return true;
+            receive: async (events) => {
+                const unseen = events.filter((event) => !seen.has(event.eventId));
+                for (const event of unseen) {
+                    seen.add(event.eventId);
                 }
-                seen.add(event.eventId);
-                output({ event, sessionId: session.sessionId });
-                if (isFollowedTerminal(event)) {
+                if (unseen.length > 0) {
+                    output({ events: unseen, sessionId: session.sessionId });
+                }
+                if (unseen.some(isFollowedTerminal)) {
                     terminal.resolve();
                     return false;
                 }

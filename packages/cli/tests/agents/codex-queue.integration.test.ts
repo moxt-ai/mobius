@@ -87,11 +87,15 @@ test("Given real Codex has accepted a steering prompt, When V2 recovery reloads 
                 if (decodeMessageKind(message) !== "session.event.v2") {
                     continue;
                 }
-                const event = decodeSessionEventEnvelopeV2(message).event;
                 if (
-                    event.type === "lifecycle-metadata" &&
-                    event.payload.kind === "prompt.requested" &&
-                    event.payload.content.some((content) => content.type === "text" && content.text === steeringPrompt)
+                    decodeSessionEventEnvelopeV2(message).events.some(
+                        (event) =>
+                            event.type === "lifecycle-metadata" &&
+                            event.payload.kind === "prompt.requested" &&
+                            event.payload.content.some(
+                                (content) => content.type === "text" && content.text === steeringPrompt,
+                            ),
+                    )
                 ) {
                     break;
                 }
