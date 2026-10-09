@@ -1,10 +1,8 @@
 import {
-    decodeAgentCatalogRefreshCommand,
     decodeAgentSettingsDiscoverCommand,
     decodeNativeSessionRequest,
     decodeSessionConfigureCommand,
     decodeSessionListCommand,
-    decodeSessionLiveHistoryPageLoad,
     decodeSessionLiveHistoryV2PageLoad,
     decodeSessionPrepareCommand,
     decodeSessionPromptCommand,
@@ -54,11 +52,6 @@ const configureSessionSchema = v.strictObject({
     configId: identifier,
     value: v.string(),
     valueType: v.picklist(["boolean", "select"]),
-});
-const nativeMessagesSchema = v.strictObject({
-    ...sessionIdentitySchema.entries,
-    cursor: v.nullable(v.string()),
-    limit: v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(200)),
 });
 const nativeEventsV2Schema = v.strictObject({
     ...sessionIdentitySchema.entries,
@@ -279,31 +272,6 @@ export function createProjectRuntimeRoutes() {
             },
         )
         .post(
-            "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/native-messages",
-            bodyParser<RelayHttpEnvironment>(),
-            async (context) => {
-                const body = validated(nativeMessagesSchema, context.req.valid("json"));
-                const command = decodeSessionLiveHistoryPageLoad(
-                    JSON.stringify({
-                        ...body,
-                        bindingId: "workspace",
-                        kind: "session.live-history.page.load",
-                        requestId: crypto.randomUUID(),
-                        sessionId: validateIdentifier(context.req.param("sessionId"), "session_id"),
-                    }),
-                );
-                const result = await context.env.services.runtimePairings.requestControl(
-                    validateIdentifier(context.req.param("projectId"), "project_id"),
-                    validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
-                    bearerToken(context.req.raw),
-                    command,
-                    context.req.raw.signal,
-                );
-                context.header("Cache-Control", "no-store");
-                return context.json(result);
-            },
-        )
-        .post(
             "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/native-events-v2",
             bodyParser<RelayHttpEnvironment>(),
             async (context) => {
@@ -401,25 +369,6 @@ export function createProjectRuntimeRoutes() {
             },
         )
         .post(
-            "/projects/:projectId/runtimes/:runtimeId/agent-catalog/refresh",
-            bodyParser<RelayHttpEnvironment>(),
-            async (context) => {
-                assertExactKeys(context.req.valid("json"), []);
-                const command = decodeAgentCatalogRefreshCommand(
-                    JSON.stringify({ kind: "agent.catalog.refresh", requestId: crypto.randomUUID() }),
-                );
-                await context.env.services.runtimePairings.refreshAgentCatalog(
-                    validateIdentifier(context.req.param("projectId"), "project_id"),
-                    validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
-                    bearerToken(context.req.raw),
-                    command,
-                    context.req.raw.signal,
-                );
-                context.header("Cache-Control", "no-store");
-                return context.json({ ok: true });
-            },
-        )
-        .post(
             "/projects/:projectId/runtimes/:runtimeId/agents/:agentId/settings",
             bodyParser<RelayHttpEnvironment>(),
             async (context) => {
@@ -453,30 +402,24 @@ export function createProjectRuntimeRoutes() {
             async (context) => {
                 const body = context.req.valid("json");
                 if (
-                    body["action"] !== "create" &&
                     body["action"] !== "list" &&
                     body["action"] !== "find" &&
                     body["action"] !== "import" &&
-                    body["action"] !== "fork" &&
-                    body["action"] !== "preview"
+                    body["action"] !== "fork"
                 ) {
                     throw new PairingDirectoryError("invalid_request", "Choose a supported native session operation");
                 }
                 assertExactKeys(
                     body,
-                    body["action"] === "create"
-                        ? ["action", "agentId", "directoryId", "additionalDirectoryIds"]
-                        : body["action"] === "list"
-                          ? ["action", "agentId", "directoryId", "additionalDirectoryIds", "cursor", "discoveryId"]
-                          : body["action"] === "find"
-                            ? ["action", "agentId", "directoryId", "additionalDirectoryIds", "nativeSessionId"]
-                            : ["action", "agentId", "directoryId", "additionalDirectoryIds", "entryId", "discoveryId"],
+                    body["action"] === "list"
+                        ? ["action", "agentId", "directoryId", "additionalDirectoryIds", "cursor", "discoveryId"]
+                        : body["action"] === "find"
+                          ? ["action", "agentId", "directoryId", "additionalDirectoryIds", "nativeSessionId"]
+                          : ["action", "agentId", "directoryId", "additionalDirectoryIds", "entryId", "discoveryId"],
                 );
                 const { discoveryId, ...input } = body;
                 const sessionId =
-                    input["action"] === "create" ||
-                    (input["action"] === "list" && discoveryId === null) ||
-                    input["action"] === "find"
+                    (input["action"] === "list" && discoveryId === null) || input["action"] === "find"
                         ? crypto.randomUUID()
                         : validateIdentifier(readString(body, "discoveryId"), "discovery_id");
                 const command = decodeNativeSessionRequest(

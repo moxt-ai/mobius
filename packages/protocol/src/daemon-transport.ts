@@ -21,9 +21,6 @@ import {
     UnsupportedProtocolMessageKindError,
 } from "./codecs/messages.ts";
 import {
-    AGENT_CATALOG_REFRESH_FAILED_KIND,
-    AGENT_CATALOG_REFRESH_KIND,
-    AGENT_CATALOG_REFRESHED_KIND,
     AGENT_INSTALL_CANCEL_KIND,
     AGENT_INSTALL_CANCELLED_KIND,
     AGENT_INSTALL_COMPLETED_KIND,
@@ -34,9 +31,6 @@ import {
     AGENT_SETTINGS_DISCOVER_KIND,
     AGENT_SETTINGS_DISCOVERED_KIND,
     AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
-    decodeAgentCatalogRefreshCommand,
-    decodeAgentCatalogRefreshedEvent,
-    decodeAgentCatalogRefreshFailedEvent,
     decodeAgentInstallCancelCommand,
     decodeAgentInstallCancelledEvent,
     decodeAgentInstallCompletedEvent,
@@ -65,9 +59,6 @@ import {
     decodeSessionsQueriedEvent,
     decodeWorkspaceEntriesEvent,
     decodeWorkspaceListCommand,
-    encodeAgentCatalogRefreshCommand,
-    encodeAgentCatalogRefreshedEvent,
-    encodeAgentCatalogRefreshFailedEvent,
     encodeAgentInstallCancelCommand,
     encodeAgentInstallCancelledEvent,
     encodeAgentInstallCompletedEvent,
@@ -144,16 +135,10 @@ import {
 } from "./session-event-log-v2.ts";
 import { decodeSessionEventEnvelope, encodeSessionEventEnvelope, SESSION_EVENT_KIND } from "./session-events.ts";
 import {
-    decodeSessionLiveHistoryPageLoad,
-    decodeSessionLiveHistoryPageLoaded,
     decodeSessionLiveHistoryV2PageLoad,
     decodeSessionLiveHistoryV2PageLoaded,
-    encodeSessionLiveHistoryPageLoad,
-    encodeSessionLiveHistoryPageLoaded,
     encodeSessionLiveHistoryV2PageLoad,
     encodeSessionLiveHistoryV2PageLoaded,
-    SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
-    SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
     SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND,
     SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND,
 } from "./session-live-history.ts";
@@ -180,11 +165,6 @@ function defineMessageSignature<TMessage extends { readonly kind: string }>(
 }
 
 const serviceToDaemonSignatures = {
-    [AGENT_CATALOG_REFRESH_KIND]: defineMessageSignature(
-        AGENT_CATALOG_REFRESH_KIND,
-        encodeAgentCatalogRefreshCommand,
-        decodeAgentCatalogRefreshCommand,
-    ),
     [AGENT_INSTALL_CANCEL_KIND]: defineMessageSignature(
         AGENT_INSTALL_CANCEL_KIND,
         encodeAgentInstallCancelCommand,
@@ -243,11 +223,6 @@ const serviceToDaemonSignatures = {
         encodeSessionElicitationRespondCommand,
         decodeSessionElicitationRespondCommand,
     ),
-    [SESSION_LIVE_HISTORY_PAGE_LOAD_KIND]: defineMessageSignature(
-        SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
-        encodeSessionLiveHistoryPageLoad,
-        decodeSessionLiveHistoryPageLoad,
-    ),
     [SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND]: defineMessageSignature(
         SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND,
         encodeSessionLiveHistoryV2PageLoad,
@@ -301,16 +276,6 @@ export function encodeServiceToDaemonMessage(message: ServiceToDaemonMessage): s
 }
 
 const daemonToServiceSignatures = {
-    [AGENT_CATALOG_REFRESHED_KIND]: defineMessageSignature(
-        AGENT_CATALOG_REFRESHED_KIND,
-        encodeAgentCatalogRefreshedEvent,
-        decodeAgentCatalogRefreshedEvent,
-    ),
-    [AGENT_CATALOG_REFRESH_FAILED_KIND]: defineMessageSignature(
-        AGENT_CATALOG_REFRESH_FAILED_KIND,
-        encodeAgentCatalogRefreshFailedEvent,
-        decodeAgentCatalogRefreshFailedEvent,
-    ),
     [AGENT_INSTALL_CANCELLED_KIND]: defineMessageSignature(
         AGENT_INSTALL_CANCELLED_KIND,
         encodeAgentInstallCancelledEvent,
@@ -395,11 +360,6 @@ const daemonToServiceSignatures = {
         SESSION_OPERATION_FAILED_KIND,
         encodeSessionOperationFailedEvent,
         decodeSessionOperationFailedEvent,
-    ),
-    [SESSION_LIVE_HISTORY_PAGE_LOADED_KIND]: defineMessageSignature(
-        SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
-        encodeSessionLiveHistoryPageLoaded,
-        decodeSessionLiveHistoryPageLoaded,
     ),
     [SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND]: defineMessageSignature(
         SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND,

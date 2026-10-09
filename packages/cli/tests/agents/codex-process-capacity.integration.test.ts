@@ -1,18 +1,16 @@
 import { randomUUID } from "node:crypto";
 import {
     decodeMessageKind,
-    decodeNativeSessionResult,
     decodeRecordedSessionEvent,
-    decodeSessionLiveHistoryPageLoaded,
-    encodeNativeSessionCommand,
-    encodeSessionLiveHistoryPageLoad,
+    decodeSessionLiveHistoryV2PageLoaded,
+    encodeSessionLiveHistoryV2PageLoad,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { expect, test } from "vitest";
 import { CodexAgentSpecification } from "../../src/agent-catalog/agents/codex-agent.ts";
 import { CodexFixture } from "../support/agents/codex.ts";
-import { withRealDaemon } from "../support/agents/real-daemon.ts";
+import { prepareNewRealSession, withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 
 test("Given a real Codex conversation, When more Sessions are opened than the daemon can retain, Then the original native Session continues with its history intact", async () => {
@@ -25,32 +23,7 @@ test("Given a real Codex conversation, When more Sessions are opened than the da
             directoryId: "default",
             additionalDirectoryIds: [],
         };
-        const create = async (): Promise<string> => {
-            const requestId = randomUUID();
-            peer.send(
-                encodeNativeSessionCommand({
-                    ...identity,
-                    kind: "native.session.request",
-                    action: "create",
-                    requestId,
-                    sessionId: peer.sessionId,
-                }),
-            );
-            for (;;) {
-                const message = await peer.nextMessage();
-                if (decodeMessageKind(message) === "session.operation.failed") {
-                    throw new Error(message);
-                }
-                if (decodeMessageKind(message) === "native.session.result") {
-                    const result = decodeNativeSessionResult(message);
-                    expect(result.requestId).toBe(requestId);
-                    if (result.action !== "create") {
-                        throw new Error("Expected created Session");
-                    }
-                    return result.nativeSessionId;
-                }
-            }
-        };
+        const create = async (): Promise<string> => await prepareNewRealSession(peer, "codex");
         const sessionId = await create();
         const prompt = async (text: string): Promise<void> => {
             const commandId = randomUUID();
@@ -91,13 +64,13 @@ test("Given a real Codex conversation, When more Sessions are opened than the da
         }
         await prompt("Continue the original conversation after opening other Sessions");
         peer.send(
-            encodeSessionLiveHistoryPageLoad({
+            encodeSessionLiveHistoryV2PageLoad({
                 ...identity,
-                kind: "session.live-history.page.load",
+                kind: "session.live-history.v2.page.load",
                 requestId: randomUUID(),
                 sessionId,
                 cursor: null,
-                limit: 50,
+                eventLimit: 200,
             }),
         );
         for (;;) {
@@ -105,18 +78,21 @@ test("Given a real Codex conversation, When more Sessions are opened than the da
             if (decodeMessageKind(message) === "session.operation.failed") {
                 throw new Error(message);
             }
-            if (decodeMessageKind(message) !== "session.live-history.page.loaded") {
+            if (decodeMessageKind(message) !== "session.live-history.v2.page.loaded") {
                 continue;
             }
-            const { page } = decodeSessionLiveHistoryPageLoaded(message);
-            expect(page.status).toBe("available");
-            if (page.status === "available") {
-                expect(page.messages.filter((entry) => entry.role === "user").map((entry) => entry.text)).toEqual([
-                    "Original conversation before opening other Sessions",
-                    "Continue the original conversation after opening other Sessions",
-                ]);
-                expect(page.messages.filter((entry) => entry.role === "assistant")).toHaveLength(2);
-            }
+            const page = decodeSessionLiveHistoryV2PageLoaded(message).events.events;
+            const updates = page.events.flatMap((event) => (event.type === "acp" ? [event.payload] : []));
+            const userText = updates.flatMap((update) =>
+                update.sessionUpdate === "user_message_chunk" && update.content.type === "text"
+                    ? [update.content.text]
+                    : [],
+            );
+            expect(userText).toEqual([
+                "Original conversation before opening other Sessions",
+                "Continue the original conversation after opening other Sessions",
+            ]);
+            expect(updates.filter((update) => update.sessionUpdate === "agent_message_chunk")).toHaveLength(2);
             break;
         }
     });

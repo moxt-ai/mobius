@@ -16,7 +16,7 @@ import {
     decodeRuntimeHeartbeatEvent,
     decodeSessionCompletedEvent,
     decodeSessionEventEnvelope,
-    decodeSessionLiveHistoryPageLoaded,
+    decodeSessionLiveHistoryV2PageLoaded,
     decodeSessionOperationFailedEvent,
     decodeSessionPromptCommand,
     decodeSessionStartedEvent,
@@ -25,7 +25,7 @@ import {
     encodeRuntimeHeartbeatAckEvent,
     encodeRuntimeLivenessReadyEvent,
     encodeSessionCancelCommand,
-    encodeSessionLiveHistoryPageLoad,
+    encodeSessionLiveHistoryV2PageLoad,
     encodeSessionPromptCommand,
     FILE_CHUNK_KIND,
     FILE_END_KIND,
@@ -39,7 +39,7 @@ import {
     SESSION_COMPLETED_KIND,
     SESSION_EVENT_KIND,
     SESSION_FAILED_KIND,
-    SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
+    SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND,
     SESSION_OPERATION_FAILED_KIND,
     SESSION_STARTED_KIND,
     SessionPromptDisposition,
@@ -138,7 +138,7 @@ test("Given real Codex emits a tool, commentary, and final text, When the comple
         const socket = await connected.promise;
         const messages = new Messages(socket);
         const sessionId = "new_codex_live_turn";
-        for (const turnNumber of [1, 2]) {
+        for (const _turnNumber of [1, 2]) {
             providerEntered = Promise.withResolvers<void>();
             releaseProvider = Promise.withResolvers<void>();
             const commandId = randomUUID();
@@ -162,7 +162,7 @@ test("Given real Codex emits a tool, commentary, and final text, When the comple
             let completed = false;
             let sequence = 0;
             let epoch: string | undefined;
-            let recoveryPosition: {
+            let _recoveryPosition: {
                 readonly commandId: string;
                 readonly epoch: string;
                 readonly sequence: number;
@@ -210,7 +210,7 @@ test("Given real Codex emits a tool, commentary, and final text, When the comple
                     expect(result.action).toBe("active-turn");
                     if (result.action === "active-turn") {
                         if (result.turn !== null) {
-                            recoveryPosition = {
+                            _recoveryPosition = {
                                 commandId: result.turn.commandId,
                                 epoch: result.turn.epoch,
                                 sequence: result.turn.sequence,
@@ -235,8 +235,8 @@ test("Given real Codex emits a tool, commentary, and final text, When the comple
                     }
                     snapshotVerified = true;
                     socket.send(
-                        encodeSessionLiveHistoryPageLoad({
-                            kind: "session.live-history.page.load",
+                        encodeSessionLiveHistoryV2PageLoad({
+                            kind: "session.live-history.v2.page.load",
                             requestId: randomUUID(),
                             sessionId,
                             agentId: "codex",
@@ -244,22 +244,21 @@ test("Given real Codex emits a tool, commentary, and final text, When the comple
                             directoryId: "default",
                             additionalDirectoryIds: [],
                             cursor: null,
-                            limit: 50,
+                            eventLimit: 200,
                         }),
                     );
                     continue;
                 }
-                if (decodeMessageKind(message) === SESSION_LIVE_HISTORY_PAGE_LOADED_KIND) {
-                    const { page } = decodeSessionLiveHistoryPageLoaded(message);
-                    expect(page.status).toBe("available");
-                    if (page.status === "available") {
-                        expect(recoveryPosition).not.toBeNull();
-                        expect(page.streamPosition).toEqual(recoveryPosition);
-                        expect(page.messages.filter((item) => item.role === "user")).toHaveLength(turnNumber);
-                        expect(
-                            page.messages.some((item) => item.role === "assistant" && item.activities.length > 0),
-                        ).toBe(true);
-                    }
+                if (decodeMessageKind(message) === SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND) {
+                    const recovered = decodeSessionLiveHistoryV2PageLoaded(message).events;
+                    expect(
+                        recovered.events.events.some(
+                            (event) =>
+                                event.type === "acp" &&
+                                (event.payload.sessionUpdate === "tool_call" ||
+                                    event.payload.sessionUpdate === "tool_call_update"),
+                        ),
+                    ).toBe(true);
                     releaseProvider.resolve();
                     continue;
                 }
@@ -365,8 +364,8 @@ test("Given real Codex emits a tool, commentary, and final text, When the comple
                 break;
             }
             socket.send(
-                encodeSessionLiveHistoryPageLoad({
-                    kind: "session.live-history.page.load",
+                encodeSessionLiveHistoryV2PageLoad({
+                    kind: "session.live-history.v2.page.load",
                     requestId: randomUUID(),
                     sessionId,
                     agentId: "codex",
@@ -374,47 +373,46 @@ test("Given real Codex emits a tool, commentary, and final text, When the comple
                     directoryId: "default",
                     additionalDirectoryIds: [],
                     cursor: null,
-                    limit: 50,
+                    eventLimit: 200,
                 }),
             );
             for (;;) {
                 const message = await messages.next();
-                if (decodeMessageKind(message) !== SESSION_LIVE_HISTORY_PAGE_LOADED_KIND) {
+                if (decodeMessageKind(message) !== SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND) {
                     continue;
                 }
-                const { page } = decodeSessionLiveHistoryPageLoaded(message);
-                expect(page.status).toBe("available");
-                if (page.status === "available") {
-                    expect(page.messages.filter((item) => item.role === "user")).toHaveLength(turnNumber);
-                    const firstUserIndex = page.messages.findIndex((item) => item.role === "user");
-                    const nextUserIndex = page.messages.findIndex(
-                        (item, index) => index > firstUserIndex && item.role === "user",
-                    );
-                    const firstTurn = page.messages.slice(
-                        firstUserIndex + 1,
-                        nextUserIndex < 0 ? page.messages.length : nextUserIndex,
-                    );
-                    const toolIndex = firstTurn.findIndex(
-                        (item) =>
-                            item.role === "assistant" &&
-                            item.activities.some((activity) => activity.activityType === "tool"),
-                    );
-                    const commentaryIndex = firstTurn.findIndex(
-                        (item) =>
-                            item.role === "assistant" &&
-                            item.activities.some(
-                                (activity) =>
-                                    activity.activityType === "reasoning" &&
-                                    activity.output === "Checking the live progress boundary.",
-                            ),
-                    );
-                    const finalIndex = firstTurn.findIndex(
-                        (item) => item.role === "assistant" && item.text.includes("Codex live reply"),
-                    );
-                    expect(toolIndex).toBeGreaterThanOrEqual(0);
-                    expect(commentaryIndex).toBeGreaterThan(toolIndex);
-                    expect(finalIndex).toBeGreaterThan(commentaryIndex);
-                }
+                const page = decodeSessionLiveHistoryV2PageLoaded(message).events.events;
+                const updates = page.events.flatMap((event) => (event.type === "acp" ? [event.payload] : []));
+                const toolIndex = updates.findIndex(
+                    (update) => update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update",
+                );
+                const commentaryIndex = updates.findIndex(
+                    (update) =>
+                        (update.sessionUpdate === "agent_message_chunk" ||
+                            update.sessionUpdate === "agent_thought_chunk") &&
+                        update.content.type === "text" &&
+                        updates.indexOf(update) > toolIndex,
+                );
+                const finalIndex = updates.findIndex(
+                    (update) =>
+                        update.sessionUpdate === "agent_message_chunk" &&
+                        update.content.type === "text" &&
+                        update.content.text.includes("Codex live reply"),
+                );
+                const commentary = updates
+                    .slice(commentaryIndex, finalIndex)
+                    .flatMap((update) =>
+                        (update.sessionUpdate === "agent_message_chunk" ||
+                            update.sessionUpdate === "agent_thought_chunk") &&
+                        update.content.type === "text"
+                            ? [update.content.text]
+                            : [],
+                    )
+                    .join("");
+                expect(commentary).toBe("Checking the live progress boundary.");
+                expect(toolIndex).toBeGreaterThanOrEqual(0);
+                expect(commentaryIndex).toBeGreaterThan(toolIndex);
+                expect(finalIndex).toBeGreaterThan(commentaryIndex);
                 break;
             }
         }

@@ -1,7 +1,4 @@
 import {
-    AGENT_CATALOG_REFRESH_FAILED_KIND,
-    AGENT_CATALOG_REFRESH_KIND,
-    AGENT_CATALOG_REFRESHED_KIND,
     AGENT_INSTALL_CANCEL_KIND,
     AGENT_INSTALL_CANCELLED_KIND,
     AGENT_INSTALL_COMPLETED_KIND,
@@ -13,7 +10,6 @@ import {
     AGENT_SETTINGS_DISCOVERED_KIND,
     AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
     type DaemonToServiceMessage,
-    decodeAgentCatalogRefreshCommand,
     decodeAgentInstallCancelCommand,
     decodeAgentInstallRequestCommand,
     decodeAgentSettingsDiscoverCommand,
@@ -27,7 +23,6 @@ import {
     decodeSessionConfigureCommand,
     decodeSessionElicitationRespondCommand,
     decodeSessionListCommand,
-    decodeSessionLiveHistoryPageLoad,
     decodeSessionLiveHistoryV2PageLoad,
     decodeSessionPermissionRespondCommand,
     decodeSessionPrepareCommand,
@@ -35,7 +30,6 @@ import {
     decodeSessionPromptDispositionCommand,
     decodeSessionQueryCommand,
     decodeWorkspaceListCommand,
-    encodeAgentCatalogRefreshFailedEvent,
     encodeAgentSettingsDiscoveryFailedEvent,
     encodeDaemonToServiceMessage,
     encodeRuntimeStatusEvent,
@@ -62,8 +56,6 @@ import {
     SESSION_FAILED_KIND,
     SESSION_LIST_KIND,
     SESSION_LISTED_KIND,
-    SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
-    SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
     SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND,
     SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND,
     SESSION_OPERATION_FAILED_KIND,
@@ -95,7 +87,6 @@ function isNativeImportAction(action: string): action is NativeImportAction {
 const NATIVE_IMPORT_DEADLINE_MILLISECONDS = 5 * 60 * 1_000;
 const MAX_PENDING_NATIVE_IMPORTS = 4;
 const AGENT_SETTINGS_DISCOVERY_DEADLINE_MILLISECONDS = 2 * 60 * 1_000;
-const AGENT_CATALOG_REFRESH_DEADLINE_MILLISECONDS = 2 * 60 * 1_000;
 
 class PendingAgentSettingsDiscovery {
     readonly agentId: string;
@@ -104,16 +95,6 @@ class PendingAgentSettingsDiscovery {
 
     constructor(agentId: string, expiresAt: number, socket: ChannelSocket) {
         this.agentId = agentId;
-        this.expiresAt = expiresAt;
-        this.socket = socket;
-    }
-}
-
-class PendingAgentCatalogRefresh {
-    readonly expiresAt: number;
-    readonly socket: ChannelSocket;
-
-    constructor(expiresAt: number, socket: ChannelSocket) {
         this.expiresAt = expiresAt;
         this.socket = socket;
     }
@@ -136,14 +117,12 @@ export class SystemRelayClock implements RelayClock {
 
 export interface ChannelSocket {
     readonly close: (code: number, reason: string) => void;
-    readonly consumeAgentCatalogRefresh: (requestId: string, now: number) => boolean;
     readonly consumeAgentSettingsDiscovery: (requestId: string, agentId: string, now: number) => boolean;
     readonly consumeAgentSettingsDiscoveryFailure: (requestId: string, now: number) => boolean;
     readonly isOpen: () => boolean;
     readonly isSame: (socket: ChannelSocket) => boolean;
     readonly permitsLiveSessionHistory: () => boolean;
     readonly send: (message: string) => void;
-    readonly trackAgentCatalogRefresh: (requestId: string, expiresAt: number) => void;
     readonly trackAgentSettingsDiscovery: (requestId: string, agentId: string, expiresAt: number) => void;
 }
 
@@ -153,7 +132,6 @@ export interface ChannelPeers {
 }
 
 export class ChannelActor {
-    readonly #pendingAgentCatalogRefreshes = new Map<string, PendingAgentCatalogRefresh>();
     readonly #pendingAgentSettingsDiscoveries = new Map<string, PendingAgentSettingsDiscovery>();
     readonly #pendingLiveSessionHistory = new Map<
         string,
@@ -161,19 +139,13 @@ export class ChannelActor {
     >();
     readonly #pendingNativeImports = new Map<
         string,
-        | {
-              readonly action: NativeImportAction;
-              readonly sessionId: string;
-              readonly agentId: string;
-              readonly directoryId: string;
-              readonly expiresAt: number;
-          }
-        | {
-              readonly action: "preview";
-              readonly sessionId: string;
-              readonly entryId: string;
-              readonly expiresAt: number;
-          }
+        {
+            readonly action: NativeImportAction;
+            readonly sessionId: string;
+            readonly agentId: string;
+            readonly directoryId: string;
+            readonly expiresAt: number;
+        }
     >();
     readonly #clock: RelayClock;
     readonly #peers: ChannelPeers;
@@ -198,7 +170,6 @@ export class ChannelActor {
 
     readonly attachDaemon = async (replacedExistingConnection: boolean, _signal: AbortSignal): Promise<void> => {
         if (replacedExistingConnection) {
-            this.failPendingAgentCatalogRefreshes();
             this.failPendingAgentSettingsDiscoveries();
             this.#pendingNativeImports.clear();
         }
@@ -223,7 +194,6 @@ export class ChannelActor {
         if (anotherDaemonOnline) {
             return;
         }
-        this.failPendingAgentCatalogRefreshes();
         this.failPendingAgentSettingsDiscoveries();
         this.#pendingNativeImports.clear();
         this.broadcastRuntimeStatus(false);
@@ -251,7 +221,6 @@ export class ChannelActor {
                     if (
                         pending === undefined ||
                         pending.expiresAt <= this.#clock.now() ||
-                        pending.action === "preview" ||
                         pending.action !== result.action ||
                         pending.sessionId !== result.targetSessionId ||
                         pending.agentId !== result.ready.agentId
@@ -260,21 +229,6 @@ export class ChannelActor {
                     }
                     if (pending.directoryId !== result.ready.directoryId) {
                         throw new ProtocolMessageError("The native session result resolved to a different binding");
-                    }
-                } else if (result.action === "preview") {
-                    const pending = this.#pendingNativeImports.get(result.requestId);
-                    if (
-                        pending === undefined ||
-                        pending.expiresAt <= this.#clock.now() ||
-                        (pending.action === "preview"
-                            ? result.reason !== "requested" ||
-                              pending.sessionId !== result.sessionId ||
-                              pending.sessionId !== result.targetSessionId ||
-                              pending.entryId !== result.entryId
-                            : result.reason !== "continuation_unavailable" ||
-                              pending.sessionId !== result.targetSessionId)
-                    ) {
-                        throw new ProtocolMessageError("The native preview does not match a pending import");
                     }
                 }
                 this.broadcast(this.#peers.hosts(), encodeDaemonToServiceMessage(message));
@@ -293,15 +247,7 @@ export class ChannelActor {
                 this.returnAgentSettingsDiscoveryFailure(message.requestId, encodeDaemonToServiceMessage(message));
                 return;
             }
-            if (kind === AGENT_CATALOG_REFRESHED_KIND) {
-                this.returnAgentCatalogRefreshResult(message.requestId, encodeDaemonToServiceMessage(message));
-                return;
-            }
-            if (kind === AGENT_CATALOG_REFRESH_FAILED_KIND) {
-                this.returnAgentCatalogRefreshResult(message.requestId, encodeDaemonToServiceMessage(message));
-                return;
-            }
-            if (kind === SESSION_LIVE_HISTORY_PAGE_LOADED_KIND || kind === SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND) {
+            if (kind === SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND) {
                 const result = message;
                 const pending = this.#pendingLiveSessionHistory.get(result.requestId);
                 if (pending === undefined || pending.expiresAt <= this.#clock.now()) {
@@ -365,32 +311,9 @@ export class ChannelActor {
                 this.forwardAgentSettingsDiscovery(socket, command, command.requestId, command.agentId);
                 return;
             }
-            if (kind === AGENT_CATALOG_REFRESH_KIND) {
-                const command = decodeAgentCatalogRefreshCommand(message);
-                this.forwardAgentCatalogRefresh(socket, command, command.requestId);
-                return;
-            }
             if (kind === NATIVE_SESSION_REQUEST_KIND) {
                 const request = decodeNativeSessionRequest(message);
                 const command: NativeSessionCommand = decodeNativeSessionCommand(message);
-                if (command.action === "preview") {
-                    const now = this.#clock.now();
-                    this.expireNativeImports(now);
-                    if (
-                        this.#pendingNativeImports.has(request.requestId) ||
-                        this.#pendingNativeImports.size >= MAX_PENDING_NATIVE_IMPORTS
-                    ) {
-                        throw new ProtocolMessageError("Another native session operation is pending");
-                    }
-                    if (this.hasOnlineDaemon()) {
-                        this.#pendingNativeImports.set(request.requestId, {
-                            action: "preview",
-                            sessionId: command.sessionId,
-                            entryId: command.entryId,
-                            expiresAt: now + NATIVE_IMPORT_DEADLINE_MILLISECONDS,
-                        });
-                    }
-                }
                 if (request.action === "import" || request.action === "fork" || request.action === "fork-recorded") {
                     const now = this.#clock.now();
                     this.expireNativeImports(now);
@@ -413,14 +336,11 @@ export class ChannelActor {
                 this.forwardControl(socket, command, request.requestId, request.sessionId, request);
                 return;
             }
-            if (kind === SESSION_LIVE_HISTORY_PAGE_LOAD_KIND || kind === SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND) {
+            if (kind === SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND) {
                 if (!socket.permitsLiveSessionHistory()) {
                     throw new ProtocolMessageError("Live Session history requires an internal connection");
                 }
-                const command =
-                    kind === SESSION_LIVE_HISTORY_PAGE_LOAD_KIND
-                        ? decodeSessionLiveHistoryPageLoad(message)
-                        : decodeSessionLiveHistoryV2PageLoad(message);
+                const command = decodeSessionLiveHistoryV2PageLoad(message);
                 const now = this.#clock.now();
                 for (const [requestId, pending] of this.#pendingLiveSessionHistory) {
                     if (pending.expiresAt <= now) {
@@ -475,10 +395,6 @@ export class ChannelActor {
 
     private readonly validateDaemonControl = (message: DaemonToServiceMessage): void => {
         switch (message.kind) {
-            case AGENT_CATALOG_REFRESHED_KIND:
-                return;
-            case AGENT_CATALOG_REFRESH_FAILED_KIND:
-                return;
             case AGENT_SETTINGS_DISCOVERED_KIND:
                 return;
             case AGENT_SETTINGS_DISCOVERY_FAILED_KIND:
@@ -645,82 +561,6 @@ export class ChannelActor {
                 }),
             );
         }
-    };
-
-    private readonly forwardAgentCatalogRefresh = (
-        socket: ChannelSocket,
-        message: ServiceToDaemonMessage,
-        requestId: string,
-    ): void => {
-        const now = this.#clock.now();
-        const expiresAt = now + AGENT_CATALOG_REFRESH_DEADLINE_MILLISECONDS;
-        this.expireAgentCatalogRefreshes(now);
-        if (this.#pendingAgentCatalogRefreshes.has(requestId)) {
-            throw new ProtocolMessageError("Another local Agent catalog refresh is pending");
-        }
-        socket.trackAgentCatalogRefresh(requestId, expiresAt);
-        this.#pendingAgentCatalogRefreshes.set(requestId, new PendingAgentCatalogRefresh(expiresAt, socket));
-        if (!this.sendToDaemon(message)) {
-            this.#pendingAgentCatalogRefreshes.delete(requestId);
-            socket.consumeAgentCatalogRefresh(requestId, now);
-            socket.send(
-                encodeAgentCatalogRefreshFailedEvent({
-                    code: "runtime_offline",
-                    kind: AGENT_CATALOG_REFRESH_FAILED_KIND,
-                    message: "The local runtime is offline",
-                    requestId,
-                }),
-            );
-        }
-    };
-
-    private readonly returnAgentCatalogRefreshResult = (requestId: string, message: string): void => {
-        const now = this.#clock.now();
-        this.expireAgentCatalogRefreshes(now);
-        const pending = this.#pendingAgentCatalogRefreshes.get(requestId);
-        if (pending !== undefined) {
-            this.#pendingAgentCatalogRefreshes.delete(requestId);
-            pending.socket.consumeAgentCatalogRefresh(requestId, now);
-            this.sendAgentCatalogRefreshResult(pending, message);
-            return;
-        }
-        const recipient = this.#peers.hosts().find((socket) => socket.consumeAgentCatalogRefresh(requestId, now));
-        if (recipient?.isOpen()) {
-            recipient.send(message);
-        }
-    };
-
-    private readonly sendAgentCatalogRefreshResult = (pending: PendingAgentCatalogRefresh, message: string): void => {
-        if (pending.socket.isOpen()) {
-            pending.socket.send(message);
-        }
-    };
-
-    private readonly expireAgentCatalogRefreshes = (now: number): void => {
-        for (const [requestId, pending] of this.#pendingAgentCatalogRefreshes) {
-            if (pending.expiresAt <= now) {
-                this.#pendingAgentCatalogRefreshes.delete(requestId);
-                pending.socket.consumeAgentCatalogRefresh(requestId, now);
-            }
-        }
-    };
-
-    private readonly failPendingAgentCatalogRefreshes = (): void => {
-        const now = this.#clock.now();
-        for (const [requestId, pending] of this.#pendingAgentCatalogRefreshes) {
-            pending.socket.consumeAgentCatalogRefresh(requestId, now);
-            if (pending.socket.isOpen()) {
-                pending.socket.send(
-                    encodeAgentCatalogRefreshFailedEvent({
-                        code: "runtime_offline",
-                        kind: AGENT_CATALOG_REFRESH_FAILED_KIND,
-                        message: "The local runtime is offline",
-                        requestId,
-                    }),
-                );
-            }
-        }
-        this.#pendingAgentCatalogRefreshes.clear();
     };
 
     private readonly forwardAgentSettingsDiscovery = (

@@ -1,14 +1,7 @@
-import { decodeSessionPrepareCommand, MOBIUS_API_PREFIX, SESSION_PREPARE_KIND } from "@moxt-ai/mobius-protocol";
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { closeMobiusTransport } from "@/services/mobius-transport";
-import {
-    completeRenderedPrompt,
-    createTestApplication,
-    openPairedApplication,
-    sendReadySession,
-    setupWebIntegrationEnvironment,
-} from "./app-integration-harness.ts";
+import { openPairedApplication, setupWebIntegrationEnvironment } from "./app-integration-harness.ts";
 import { type AgentDaemonSocket, FakeAgentDaemon } from "./support/daemon/connection.ts";
 
 interface ClaimedRuntimePairing {
@@ -31,61 +24,64 @@ function decodeClaimedRuntimePairing(value: unknown): ClaimedRuntimePairing {
     if (
         !isRecord(value) ||
         typeof value["channelId"] !== "string" ||
-        typeof value["daemonToken"] !== "string" ||
+        typeof value["runtimeCredential"] !== "string" ||
         typeof value["runtimeId"] !== "string"
     ) {
         throw new Error("The Relay returned an invalid claimed Runtime pairing");
     }
     return {
         channelId: value["channelId"],
-        daemonToken: value["daemonToken"],
+        daemonToken: value["runtimeCredential"],
         runtimeId: value["runtimeId"],
     };
 }
 
-async function claimRuntimePairing(pairingCode: string, readyAgent = true): Promise<ClaimedRuntime> {
-    const response = await fetch(new URL(`${MOBIUS_API_PREFIX}/pairings/claim`, window.location.origin), {
-        body: JSON.stringify({
-            agents: readyAgent
-                ? [
-                      {
-                          agentPath: "/usr/local/bin/claude",
-                          agentVersion: "claude 2.1.0",
-                          capabilities: {
-                              additionalDirectories: true,
-                              audioPrompt: false,
-                              closeSession: true,
-                              deleteSession: true,
-                              embeddedContextPrompt: true,
-                              imagePrompt: true,
-                              listSessions: true,
-                              loadSession: true,
-                              promptQueueing: false,
-                              resumeSession: true,
-                              steering: false,
-                              unstableForkSession: false,
+async function claimRuntimePairing(pairingCode: string, pairingId: string, readyAgent = true): Promise<ClaimedRuntime> {
+    const response = await fetch(
+        new URL(`${MOBIUS_API_PREFIX}/v1/runtime-pairings/${pairingId}/redeem`, window.location.origin),
+        {
+            body: JSON.stringify({
+                agents: readyAgent
+                    ? [
+                          {
+                              agentPath: "/usr/local/bin/claude",
+                              agentVersion: "claude 2.1.0",
+                              capabilities: {
+                                  additionalDirectories: true,
+                                  audioPrompt: false,
+                                  closeSession: true,
+                                  deleteSession: true,
+                                  embeddedContextPrompt: true,
+                                  imagePrompt: true,
+                                  listSessions: true,
+                                  loadSession: true,
+                                  promptQueueing: false,
+                                  resumeSession: true,
+                                  steering: false,
+                                  unstableForkSession: false,
+                              },
+                              id: "claude-code",
+                              label: "Claude Code",
                           },
-                          id: "claude-code",
-                          label: "Claude Code",
-                      },
-                  ]
-                : [],
-            installableAgents: readyAgent
-                ? []
-                : [
-                      {
-                          id: "codex",
-                          label: "Codex",
-                          status: "agent_not_installed",
-                      },
-                  ],
-            machineName: "Second integration machine",
-            pairingCode,
-            workspaceName: "second-workspace",
-        }),
-        headers: { "content-type": "application/json" },
-        method: "POST",
-    });
+                      ]
+                    : [],
+                installableAgents: readyAgent
+                    ? []
+                    : [
+                          {
+                              id: "codex",
+                              label: "Codex",
+                              status: "agent_not_installed",
+                          },
+                      ],
+                machineName: "Second integration machine",
+                pairingCode,
+                workspaceName: "second-workspace",
+            }),
+            headers: { "content-type": "application/json" },
+            method: "POST",
+        },
+    );
     expect(response.status).toBe(200);
     const claimed = decodeClaimedRuntimePairing(await response.json());
     const daemonUrl = new URL(`${MOBIUS_API_PREFIX}/channels/${claimed.channelId}/daemon`, window.location.origin);
@@ -101,181 +97,14 @@ async function claimRuntimePairing(pairingCode: string, readyAgent = true): Prom
 setupWebIntegrationEnvironment();
 
 describe.sequential("Project Runtime management", () => {
-    it("Given an owned Project with two paired machines, When the user starts a chat on the second machine, Then its Agent responds in a Project Runtime route", async () => {
-        const paired = await openPairedApplication({
-            path: (channelId) => `/channels/${encodeURIComponent(channelId)}/sessions/new/settings`,
-        });
-        const additionalDaemons: FakeAgentDaemon[] = [];
-
-        try {
-            await screen.findByRole("heading", { level: 1, name: "Agent settings" });
-            fireEvent.click(screen.getByRole("link", { name: "Local machines" }));
-            await screen.findByRole("heading", { level: 1, name: "Local machines" });
-
-            fireEvent.click(await screen.findByRole("button", { name: "Pair another machine" }));
-            const pairingCode = (await screen.findByRole("textbox", { name: "One-time pairing code" })).getAttribute(
-                "value",
-            );
-            if (pairingCode === null) {
-                throw new Error("Expected the Web pairing flow to expose a pairing code");
-            }
-            const claimed = await claimRuntimePairing(pairingCode);
-            additionalDaemons.push(claimed.daemon);
-            fireEvent.click(screen.getByRole("button", { name: "Check connection" }));
-
-            await screen.findByText("Second integration machine is connected.");
-            const directory = await screen.findByRole("list", { name: "Project runtimes" });
-            const secondMachine = within(directory).getByText("Second integration machine").closest("li");
-            if (secondMachine === null) {
-                throw new Error("Expected the second Runtime list item");
-            }
-            fireEvent.click(
-                within(secondMachine).getByRole("button", { name: "Open chat on Second integration machine" }),
-            );
-
-            await waitFor(() => {
-                expect(window.location.pathname).toMatch(
-                    new RegExp(
-                        `^/projects/${paired.credential.projectId}/runtimes/${claimed.runtimeId}/sessions/[a-zA-Z0-9._:-]+$`,
-                        "u",
-                    ),
-                );
-            });
-            const preparation = decodeSessionPrepareCommand(await claimed.daemon.receive(SESSION_PREPARE_KIND));
-            expect(preparation.agentId).toBe("claude-code");
-            await sendReadySession(claimed.daemon, preparation);
-            await completeRenderedPrompt(
-                claimed.daemon,
-                "Which machine are you running on?",
-                "I am running on the second integration machine.",
-            );
-        } finally {
-            for (const daemon of additionalDaemons) {
-                daemon.close();
-            }
-            await paired.close();
-        }
-    });
-
-    it("Given the owner is already in a Project Runtime, When the browser reloads that URL without navigation state, Then device access still opens the owning channel", async () => {
-        const paired = await openPairedApplication({
-            path: (channelId) => `/channels/${encodeURIComponent(channelId)}/sessions/new/settings`,
-        });
-        const additionalDaemons: FakeAgentDaemon[] = [];
-
-        try {
-            await screen.findByRole("heading", { level: 1, name: "Agent settings" });
-            fireEvent.click(screen.getByRole("link", { name: "Local machines" }));
-            await screen.findByRole("heading", { level: 1, name: "Local machines" });
-
-            fireEvent.click(await screen.findByRole("button", { name: "Pair another machine" }));
-            const pairingCode = (await screen.findByRole("textbox", { name: "One-time pairing code" })).getAttribute(
-                "value",
-            );
-            if (pairingCode === null) {
-                throw new Error("Expected the Web pairing flow to expose a pairing code");
-            }
-            const claimed = await claimRuntimePairing(pairingCode);
-            additionalDaemons.push(claimed.daemon);
-            fireEvent.click(screen.getByRole("button", { name: "Check connection" }));
-            await screen.findByText("Second integration machine is connected.");
-
-            const directory = await screen.findByRole("list", { name: "Project runtimes" });
-            const secondMachine = within(directory).getByText("Second integration machine").closest("li");
-            if (secondMachine === null) {
-                throw new Error("Expected the second Runtime list item");
-            }
-            fireEvent.click(
-                within(secondMachine).getByRole("button", { name: "Open chat on Second integration machine" }),
-            );
-            await waitFor(() => {
-                expect(window.location.pathname).toMatch(
-                    new RegExp(
-                        `^/projects/${paired.credential.projectId}/runtimes/${claimed.runtimeId}/sessions/[a-zA-Z0-9._:-]+$`,
-                        "u",
-                    ),
-                );
-            });
-            const preparation = decodeSessionPrepareCommand(await claimed.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(claimed.daemon, preparation);
-
-            // A reload drops `location.state` while keeping the credential store and the URL.
-            cleanup();
-            await closeMobiusTransport();
-            const runtimePath = `/projects/${paired.credential.projectId}/runtimes/${claimed.runtimeId}`;
-            window.history.replaceState(null, "", runtimePath);
-            createTestApplication();
-
-            await screen.findByRole("combobox", { name: "Message the local agent" });
-            fireEvent.click(screen.getByRole("link", { name: "Access from other devices" }));
-
-            await screen.findByRole("heading", { level: 1, name: "Access from other devices" });
-            expect(screen.queryByText("Channel unavailable")).toBeNull();
-        } finally {
-            for (const daemon of additionalDaemons) {
-                daemon.close();
-            }
-            await paired.close();
-        }
-    });
-
-    it("Given another paired machine has no ready Agent, When the owner opens it, Then Web enters that Runtime and shows Agent setup", async () => {
-        const paired = await openPairedApplication({
-            path: (channelId) => `/channels/${encodeURIComponent(channelId)}/sessions/new/settings`,
-        });
-        const additionalDaemons: FakeAgentDaemon[] = [];
-
-        try {
-            await screen.findByRole("heading", { level: 1, name: "Agent settings" });
-            fireEvent.click(screen.getByRole("link", { name: "Local machines" }));
-            await screen.findByRole("heading", { level: 1, name: "Local machines" });
-
-            fireEvent.click(await screen.findByRole("button", { name: "Pair another machine" }));
-            const pairingCode = (await screen.findByRole("textbox", { name: "One-time pairing code" })).getAttribute(
-                "value",
-            );
-            if (pairingCode === null) {
-                throw new Error("Expected the Web pairing flow to expose a pairing code");
-            }
-            const claimed = await claimRuntimePairing(pairingCode, false);
-            additionalDaemons.push(claimed.daemon);
-            fireEvent.click(screen.getByRole("button", { name: "Check connection" }));
-
-            await screen.findByText("Second integration machine is connected.");
-            const directory = await screen.findByRole("list", { name: "Project runtimes" });
-            const secondMachine = within(directory).getByText("Second integration machine").closest("li");
-            if (secondMachine === null) {
-                throw new Error("Expected the second Runtime list item");
-            }
-            fireEvent.click(
-                within(secondMachine).getByRole("button", { name: "Set up an Agent on Second integration machine" }),
-            );
-
-            await screen.findByRole("heading", { level: 1, name: "Local Agents" });
-            expect(screen.getByText("Not installed")).toBeTruthy();
-            expect(screen.queryByRole("button", { name: "Install integration" })).toBeNull();
-            expect(screen.getByRole("button", { name: "Check again" })).toBeTruthy();
-            expect(window.location.pathname).toBe(
-                `/projects/${paired.credential.projectId}/runtimes/${claimed.runtimeId}`,
-            );
-        } finally {
-            for (const daemon of additionalDaemons) {
-                daemon.close();
-            }
-            await paired.close();
-        }
-    });
-
     it("Given an owned Project with one paired Runtime, When another machine is paired and revoked from Web, Then both machines are shown independently and the current machine stays online", async ({
         signal,
     }) => {
-        const paired = await openPairedApplication({
-            path: (channelId) => `/channels/${encodeURIComponent(channelId)}/sessions/new/settings`,
-        });
+        const paired = await openPairedApplication();
         const additionalDaemons: FakeAgentDaemon[] = [];
 
         try {
-            await screen.findByRole("heading", { level: 1, name: "Agent settings" });
+            await screen.findByRole("heading", { level: 1, name: "Local Agents" });
             fireEvent.click(screen.getByRole("link", { name: "Local machines" }));
 
             await screen.findByRole("heading", { level: 1, name: "Local machines" });
@@ -294,7 +123,11 @@ describe.sequential("Project Runtime management", () => {
             expect(pairingCommand.getAttribute("value")).toContain(`--code ${pairingCode}`);
             expect(pairingCommand.getAttribute("value")).not.toContain(paired.credential.hostToken);
 
-            const additional = await claimRuntimePairing(pairingCode);
+            const pairingId = pairingCommand.getAttribute("value")?.match(/--pairing ([a-zA-Z0-9._:-]+)/)?.[1];
+            if (pairingId === undefined) {
+                throw new Error("Missing pairing ID in command");
+            }
+            const additional = await claimRuntimePairing(pairingCode, pairingId);
             const additionalDaemon = additional.daemon;
             additionalDaemons.push(additionalDaemon);
             fireEvent.click(screen.getByRole("button", { name: "Check connection" }));
@@ -325,126 +158,6 @@ describe.sequential("Project Runtime management", () => {
                 expect(within(remainingDirectory).getByText("Integration machine")).toBeTruthy();
                 expect(within(remainingDirectory).getByText("Online")).toBeTruthy();
             });
-        } finally {
-            for (const daemon of additionalDaemons) {
-                daemon.close();
-            }
-            await paired.close();
-        }
-    });
-
-    it("Given a browser linked by one-time access, When it opens Local machines, Then it can see Runtimes without owner pairing or revocation controls", async () => {
-        const paired = await openPairedApplication({
-            path: (channelId) => `/channels/${encodeURIComponent(channelId)}/access`,
-        });
-
-        try {
-            await screen.findByRole("heading", { level: 1, name: "Access from other devices" });
-            fireEvent.click(await screen.findByRole("button", { name: "Create one-time access link" }));
-            const accessLink = (
-                await screen.findByRole("textbox", {
-                    name: "One-time access link",
-                })
-            ).getAttribute("value");
-            if (accessLink === null) {
-                throw new Error("Expected a one-time linked-browser access URL");
-            }
-
-            cleanup();
-            await closeMobiusTransport();
-            window.localStorage.clear();
-            window.history.replaceState(null, "", accessLink);
-            createTestApplication();
-
-            const linkedPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, linkedPreparation);
-            await screen.findByRole("combobox", { name: "Message the local agent" });
-            fireEvent.click(screen.getByRole("link", { name: "Local machines" }));
-
-            await screen.findByRole("heading", { level: 1, name: "Local machines" });
-            expect(
-                await screen.findByText(
-                    "This browser has linked-device access. It can open a chat on any online Project Runtime, but only the original owner browser can pair or revoke local machines.",
-                ),
-            ).toBeTruthy();
-            const directory = await screen.findByRole("list", { name: "Project runtimes" });
-            expect(within(directory).getByText("Integration machine")).toBeTruthy();
-            expect(screen.queryByRole("button", { name: "Pair another machine" })).toBeNull();
-            expect(within(directory).queryByRole("button", { name: /Revoke/ })).toBeNull();
-        } finally {
-            await paired.close();
-        }
-    });
-
-    it("Given a browser linked by one-time access, When it opens another paired machine, Then that machine's Agent responds", async () => {
-        const paired = await openPairedApplication({
-            path: (channelId) => `/channels/${encodeURIComponent(channelId)}/sessions/new/settings`,
-        });
-        const additionalDaemons: FakeAgentDaemon[] = [];
-
-        try {
-            await screen.findByRole("heading", { level: 1, name: "Agent settings" });
-            fireEvent.click(screen.getByRole("link", { name: "Local machines" }));
-            await screen.findByRole("heading", { level: 1, name: "Local machines" });
-
-            fireEvent.click(await screen.findByRole("button", { name: "Pair another machine" }));
-            const pairingCode = (await screen.findByRole("textbox", { name: "One-time pairing code" })).getAttribute(
-                "value",
-            );
-            if (pairingCode === null) {
-                throw new Error("Expected the Web pairing flow to expose a pairing code");
-            }
-            const claimed = await claimRuntimePairing(pairingCode);
-            additionalDaemons.push(claimed.daemon);
-            fireEvent.click(screen.getByRole("button", { name: "Check connection" }));
-            await screen.findByText("Second integration machine is connected.");
-
-            fireEvent.click(screen.getByRole("link", { name: "Access from other devices" }));
-            fireEvent.click(await screen.findByRole("button", { name: "Create one-time access link" }));
-            const accessLink = (
-                await screen.findByRole("textbox", {
-                    name: "One-time access link",
-                })
-            ).getAttribute("value");
-            if (accessLink === null) {
-                throw new Error("Expected a one-time linked-browser access URL");
-            }
-
-            cleanup();
-            await closeMobiusTransport();
-            window.localStorage.clear();
-            window.history.replaceState(null, "", accessLink);
-            createTestApplication();
-
-            const linkedPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, linkedPreparation);
-            await screen.findByRole("combobox", { name: "Message the local agent" });
-            fireEvent.click(screen.getByRole("link", { name: "Local machines" }));
-
-            const directory = await screen.findByRole("list", { name: "Project runtimes" });
-            const secondMachine = within(directory).getByText("Second integration machine").closest("li");
-            if (secondMachine === null) {
-                throw new Error("Expected the second Runtime list item");
-            }
-            fireEvent.click(
-                within(secondMachine).getByRole("button", { name: "Open chat on Second integration machine" }),
-            );
-
-            await waitFor(() => {
-                expect(window.location.pathname).toMatch(
-                    new RegExp(
-                        `^/projects/${paired.credential.projectId}/runtimes/${claimed.runtimeId}/sessions/[a-zA-Z0-9._:-]+$`,
-                        "u",
-                    ),
-                );
-            });
-            const preparation = decodeSessionPrepareCommand(await claimed.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(claimed.daemon, preparation);
-            await completeRenderedPrompt(
-                claimed.daemon,
-                "Which machine are you running on?",
-                "I am running on the second integration machine.",
-            );
         } finally {
             for (const daemon of additionalDaemons) {
                 daemon.close();

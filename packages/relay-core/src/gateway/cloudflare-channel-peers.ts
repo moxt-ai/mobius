@@ -2,10 +2,6 @@ import * as v from "valibot";
 import type { ChannelSocket } from "../service/channel/channel-actor.ts";
 import type { RuntimePeers, RuntimeSocket, RuntimeSocketIdentity } from "../service/channel/runtime-service.ts";
 
-const pendingAgentCatalogRefreshSchema = v.object({
-    expiresAt: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
-    requestId: v.pipe(v.string(), v.minLength(1)),
-});
 const pendingAgentSettingsDiscoverySchema = v.object({
     agentId: v.pipe(v.string(), v.minLength(1)),
     expiresAt: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
@@ -18,7 +14,6 @@ const attachmentSchema = v.union([
         credentialId: v.string(),
         runtimeId: v.string(),
         projectId: v.string(),
-        pendingAgentCatalogRefreshes: v.optional(v.array(pendingAgentCatalogRefreshSchema), []),
         pendingAgentSettingsDiscoveries: v.optional(v.array(pendingAgentSettingsDiscoverySchema), []),
     }),
     v.object({
@@ -57,24 +52,6 @@ export class CloudflareChannelSocket implements RuntimeSocket {
         return attachment;
     };
     readonly close = (code: number, reason: string): void => this.#socket.close(code, reason);
-    readonly consumeAgentCatalogRefresh = (requestId: string, now: number): boolean => {
-        const attachment = this.hostAttachment();
-        let consumed = false;
-        const pendingAgentCatalogRefreshes = attachment.pendingAgentCatalogRefreshes.filter((pending) => {
-            if (pending.expiresAt <= now) {
-                return false;
-            }
-            if (pending.requestId === requestId) {
-                consumed = true;
-                return false;
-            }
-            return true;
-        });
-        if (consumed || pendingAgentCatalogRefreshes.length !== attachment.pendingAgentCatalogRefreshes.length) {
-            this.#socket.serializeAttachment({ ...attachment, pendingAgentCatalogRefreshes });
-        }
-        return consumed;
-    };
     readonly consumeAgentSettingsDiscovery = (requestId: string, agentId: string, now: number): boolean => {
         const attachment = this.hostAttachment();
         let consumed = false;
@@ -119,16 +96,6 @@ export class CloudflareChannelSocket implements RuntimeSocket {
         return identity.role === "relay" || (identity.role === "host" && identity.credentialId.startsWith("ctl_"));
     };
     readonly send = (message: string): void => this.#socket.send(message);
-    readonly trackAgentCatalogRefresh = (requestId: string, expiresAt: number): void => {
-        const attachment = this.hostAttachment();
-        this.#socket.serializeAttachment({
-            ...attachment,
-            pendingAgentCatalogRefreshes: [
-                ...attachment.pendingAgentCatalogRefreshes.filter((pending) => pending.expiresAt > Date.now()),
-                { expiresAt, requestId },
-            ],
-        });
-    };
     readonly trackAgentSettingsDiscovery = (requestId: string, agentId: string, expiresAt: number): void => {
         const attachment = this.hostAttachment();
         this.#socket.serializeAttachment({

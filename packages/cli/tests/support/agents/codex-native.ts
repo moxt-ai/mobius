@@ -71,11 +71,13 @@ export async function codexFixture(
         });
     };
     const seed = async (title: string): Promise<string> => {
-        const created = await service.execute({ ...identity, action: "create" }, AbortSignal.timeout(30_000));
-        if (created.action !== "create") {
-            throw new Error("Expected native Codex creation");
-        }
-        const sessionId = created.nativeSessionId;
+        const sessionId = await sessions.createNativeSession({
+            agent,
+            cwd: workspace,
+            additionalDirectories: [],
+            sessionId: identity.sessionId,
+            signal: AbortSignal.timeout(30_000),
+        });
         await prompt(sessionId, title);
         return sessionId;
     };

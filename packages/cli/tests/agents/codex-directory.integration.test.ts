@@ -4,7 +4,7 @@ import { expect, it } from "vitest";
 import { readCodexFullHistory } from "../../src/native-sessions/codex-history.ts";
 import { codexFixture } from "../support/agents/codex-native.ts";
 
-it("Given saved Codex threads, When its directory is listed through the in-process Agent, Then every thread becomes an authorized entry whose history previews", async () => {
+it("Given saved Codex threads, When its directory is listed through the in-process Agent, Then every thread becomes an authorized entry whose conversation can be opened", async () => {
     const f = await codexFixture();
     try {
         await f.seed("Thread from the Codex CLI");
@@ -17,18 +17,31 @@ it("Given saved Codex threads, When its directory is listed through the in-proce
         }
         expect(entry.title).toBe("Thread from the Codex CLI");
         expect(typeof entry.updatedAt).toBe("string");
-        const preview = await f.service.execute(
-            { ...f.identity, action: "preview", entryId: entry.entryId },
+        const opened = await f.service.execute(
+            { ...f.identity, action: "import", entryId: entry.entryId, targetSessionId: "opened-codex-conversation" },
             AbortSignal.timeout(30_000),
         );
-        expect(preview).toMatchObject({
-            action: "preview",
-            reason: "requested",
-            history: {
-                status: "available",
-                messages: expect.arrayContaining([{ role: "user", text: "Thread from the Codex CLI" }]),
+        expect(opened.action).toBe("import");
+        if (opened.action !== "import") {
+            throw new Error("Expected an imported conversation");
+        }
+        const replay = await f.sessions.loadSessionEventsV2(
+            {
+                agent: f.agent,
+                cwd: f.workspace,
+                additionalDirectories: [],
+                sessionId: opened.ready.sessionId,
+                signal: AbortSignal.timeout(30_000),
             },
-        });
+            50,
+            null,
+        );
+        expect(replay.events.flatMap((event) => (event.type === "acp" ? [event.payload] : []))).toContainEqual(
+            expect.objectContaining({
+                sessionUpdate: "user_message_chunk",
+                content: { type: "text", text: "Thread from the Codex CLI" },
+            }),
+        );
     } finally {
         await f.close();
     }
@@ -91,11 +104,6 @@ it("Given an open Codex conversation with fifteen turns, When history is read wh
         if (entry === undefined) {
             throw new Error("Missing native conversation");
         }
-        const preview = await f.service.execute(
-            { ...f.identity, action: "preview", entryId: entry.entryId },
-            AbortSignal.timeout(30_000),
-        );
-        expect(preview).toMatchObject({ action: "preview", history: { status: "available" } });
         const { history } = await readCodexFullHistory(f.agent, f.workspace, id, AbortSignal.timeout(30_000));
         expect(history).toMatchObject({ status: "available", truncated: false });
         if (history.status !== "available") {

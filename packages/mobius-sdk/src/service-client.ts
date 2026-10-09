@@ -3,7 +3,6 @@ import {
     type Attempt,
     decodeAgentSettingsDiscoveredEvent,
     decodeMobiusSessionExportV2,
-    decodeNativeMessagePage,
     decodeNativeSessionEventsV2,
     decodeNativeSessionResult,
     decodeSessionConfigUpdatedEvent,
@@ -21,7 +20,6 @@ import {
     MOBIUS_API_PREFIX,
     type MobiusSessionExportV2,
     type NativeEventPageRequestV2,
-    type NativeMessagePage,
     type NativeSessionEventsV2,
     type NativeSessionRequest,
     type NativeSessionResult,
@@ -76,7 +74,7 @@ import {
     type MobiusInteractionResponseRequest,
     type MobiusLinkedChannelDevice,
     type MobiusMessagePage,
-    MobiusPageRequest,
+    type MobiusPageRequest,
     MobiusPairedRuntimePairingStatus,
     type MobiusRedeemedChannelCredential,
     type MobiusRuntimeDescriptor,
@@ -969,10 +967,6 @@ export class MobiusRuntimeResources {
     readonly nativeSessions = async (
         runtimeId: string,
         request:
-            | Omit<
-                  Extract<NativeSessionRequest, { readonly action: "create" }>,
-                  "kind" | "requestId" | "sessionId" | "bindingId"
-              >
             | (Omit<
                   Extract<NativeSessionRequest, { readonly action: "list" }>,
                   "kind" | "requestId" | "sessionId" | "bindingId"
@@ -980,7 +974,7 @@ export class MobiusRuntimeResources {
             | (Omit<
                   Extract<NativeSessionRequest, { readonly action: "import" | "fork" }>,
                   "kind" | "requestId" | "sessionId" | "targetSessionId" | "bindingId" | "action"
-              > & { readonly action: "import" | "fork" | "preview"; readonly discoveryId: string }),
+              > & { readonly action: "import" | "fork"; readonly discoveryId: string }),
         signal: AbortSignal,
     ) =>
         decodeNativeSessionResult(
@@ -1350,71 +1344,6 @@ export class MobiusSessionResources {
             path.searchParams.set("cursor", page.cursor);
         }
         return decodeMobiusMessagePage(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal));
-    };
-
-    readonly queryNativeMessages = async (
-        ...request:
-            | readonly [
-                  runtimeId: string,
-                  sessionId: string,
-                  identity: {
-                      readonly additionalDirectoryIds: readonly string[];
-                      readonly agentId: string;
-                      readonly directoryId: string;
-                  },
-                  page: MobiusPageRequest,
-                  signal: AbortSignal,
-              ]
-            | readonly [
-                  runtimeId: string,
-                  sessionId: string,
-                  identity: {
-                      readonly additionalDirectoryIds: readonly string[];
-                      readonly agentId: string;
-                      readonly directoryId: string;
-                  },
-                  signal: AbortSignal,
-              ]
-            | readonly [sessionId: string, page: MobiusPageRequest, signal: AbortSignal]
-            | readonly [sessionId: string, signal: AbortSignal]
-    ): Promise<NativeMessagePage> => {
-        if (request.length === 2 || request.length === 3) {
-            const sessionId = request[0];
-            const page = request.length === 2 ? new MobiusPageRequest(50, "") : request[1];
-            const signal = request.length === 2 ? request[1] : request[2];
-            const path = requestUrl(
-                new URL("https://mobius.invalid/"),
-                sessionPath(this.#projectId, sessionId, "native-messages"),
-            );
-            path.searchParams.set("limit", page.limit.toString());
-            if (page.cursor.length > 0) {
-                path.searchParams.set("cursor", page.cursor);
-            }
-            return decodeNativeMessagePage(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal));
-        }
-        const [runtimeId, sessionId, identity, page, signal] =
-            request.length === 4
-                ? [request[0], request[1], request[2], new MobiusPageRequest(50, ""), request[3]]
-                : request;
-        try {
-            const result = await this.#executor.post(
-                projectPath(
-                    this.#projectId,
-                    `runtimes/${encodeURIComponent(runtimeId)}/sessions/${encodeURIComponent(sessionId)}/native-messages`,
-                ),
-                { ...identity, cursor: page.cursor.length === 0 ? null : page.cursor, limit: page.limit },
-                signal,
-            );
-            if (typeof result !== "object" || result === null || !("page" in result)) {
-                throw new MobiusProtocolError("The service returned invalid native messages");
-            }
-            return decodeNativeMessagePage(Reflect.get(result, "page"));
-        } catch (cause) {
-            if (cause instanceof MobiusError) {
-                throw cause;
-            }
-            throw new MobiusProtocolError("The service returned invalid native messages", { cause });
-        }
     };
 
     readonly queryRuntimeNativeEventsV2 = async (

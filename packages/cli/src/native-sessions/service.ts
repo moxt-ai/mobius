@@ -18,8 +18,6 @@ import type { AuditStore } from "../audit/audit-store.ts";
 import { LocalAuthorizationError } from "../authorization/local-authorization-error.ts";
 import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
 import type { DaemonConfig } from "../config.ts";
-import { nativeSessionAdapter } from "./agent-adapter.ts";
-import { supportsNativeChat } from "./chat-agent.ts";
 
 interface ListedTarget {
     readonly scope: string;
@@ -95,25 +93,6 @@ export class NativeSessionService {
                 sessionId: command.sessionId,
                 targetSessionId: command.targetSessionId,
                 ...(await this.#activeTurn(command, options)),
-            };
-        }
-        if (command.action === "create") {
-            if (!supportsNativeChat(options.agent.id)) {
-                throw new AcpExecutionError(
-                    "Native session creation is unavailable for this Agent",
-                    {},
-                    "native_session_unsupported",
-                );
-            }
-            const nativeSessionId = await this.#sessions.createNativeSession(options);
-            signal.throwIfAborted();
-            this.record(command, "native_session_created");
-            return {
-                action: "create",
-                kind: "native.session.result",
-                nativeSessionId: decodeIdentifier(nativeSessionId),
-                requestId: command.requestId,
-                sessionId: command.sessionId,
             };
         }
         if (command.action === "fork-recorded") {
@@ -316,44 +295,6 @@ export class NativeSessionService {
             );
         }
         const target = await this.resolveTarget(command, options, selected);
-        if (command.action === "history") {
-            const history = await nativeSessionAdapter(options.agent.id).history({
-                sessions: this.#sessions,
-                directories: this.#directories,
-                bindingId: command.bindingId,
-                options: { ...options, cwd: target.cwd, additionalDirectories: target.additionalDirectories },
-                nativeSessionId: target.info.sessionId,
-            });
-            signal.throwIfAborted();
-            this.record(command, "native_session_history_read");
-            return {
-                ...envelope,
-                action: "history",
-                entryId: command.entryId,
-                history,
-                title: target.info.title ?? "Untitled session",
-            };
-        }
-        if (command.action === "preview") {
-            const history = await nativeSessionAdapter(options.agent.id).preview({
-                sessions: this.#sessions,
-                directories: this.#directories,
-                bindingId: command.bindingId,
-                options: { ...options, cwd: target.cwd, additionalDirectories: target.additionalDirectories },
-                nativeSessionId: target.info.sessionId,
-            });
-            signal.throwIfAborted();
-            this.record(command, "native_session_previewed");
-            return {
-                ...envelope,
-                action: "preview",
-                entryId: command.entryId,
-                targetSessionId: command.sessionId,
-                reason: "requested",
-                title: target.info.title ?? "Untitled session",
-                history,
-            };
-        }
         if (command.action === "delete") {
             if (!prepared.capabilities.deleteSession) {
                 throw new AcpExecutionError(

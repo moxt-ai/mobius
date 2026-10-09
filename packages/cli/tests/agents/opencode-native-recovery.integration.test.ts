@@ -1,10 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
     decodeMessageKind,
-    decodeNativeSessionResult,
     decodeRecordedSessionEvent,
     decodeSessionQueuedEvent,
-    encodeNativeSessionCommand,
     encodeSessionCancelCommand,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
@@ -12,7 +10,7 @@ import {
 import { expect, test } from "vitest";
 import { OpenCodeAgentSpecification } from "../../src/agent-catalog/agents/opencode-agent.ts";
 import { OpenCodeFixture } from "../support/agents/opencode.ts";
-import { withRealDaemon } from "../support/agents/real-daemon.ts";
+import { prepareNewRealSession, withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 
 test("Given a real opencode native Session, When the active prompt is cancelled with a follow-up queued, Then the queued prompt restores that Session and completes", async () => {
@@ -30,34 +28,7 @@ test("Given a real opencode native Session, When the active prompt is cancelled 
     await using agent = await OpenCodeFixture.create(provider);
     try {
         await withRealDaemon(new OpenCodeAgentSpecification(), agent.environment, async (peer) => {
-            const requestId = randomUUID();
-            peer.send(
-                encodeNativeSessionCommand({
-                    kind: "native.session.request",
-                    action: "create",
-                    requestId,
-                    agentId: "opencode",
-                    bindingId: peer.bindingId,
-                    directoryId: "default",
-                    additionalDirectoryIds: [],
-                    sessionId: peer.sessionId,
-                }),
-            );
-            let nativeId = "";
-            while (nativeId.length === 0) {
-                const message = await peer.nextMessage();
-                if (decodeMessageKind(message) === "session.operation.failed") {
-                    throw new Error(message);
-                }
-                if (decodeMessageKind(message) === "native.session.result") {
-                    const result = decodeNativeSessionResult(message);
-                    expect(result.requestId).toBe(requestId);
-                    if (result.action !== "create") {
-                        throw new Error("Expected native Session creation");
-                    }
-                    nativeId = result.nativeSessionId;
-                }
-            }
+            const nativeId = await prepareNewRealSession(peer, "opencode");
             const sendPrompt = (commandId: string, targetCommandId = ""): void =>
                 peer.send(
                     encodeSessionPromptCommand({

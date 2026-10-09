@@ -8,7 +8,6 @@ import {
     decodeSessionElicitationRespondCommand,
     decodeSessionEventEnvelope,
     decodeSessionEventEnvelopeV2,
-    decodeSessionLiveHistoryPageLoad,
     decodeSessionLiveHistoryV2PageLoad,
     decodeSessionPermissionRespondCommand,
     decodeSessionPromptCommand,
@@ -269,60 +268,6 @@ export function createPlatformApplication(
             );
             context.header("Cache-Control", "no-store");
             return context.json({ ...target, kind: "expiring" });
-        })
-        .get("/:sessionId/native-messages", sessionAccessTargetMiddleware, async (context) => {
-            const credential = (context.req.header("authorization") ?? "").match(/^Bearer ([^\s]+)$/u)?.[1];
-            if (credential === undefined) {
-                return context.json(
-                    { error: { code: "session_access_required", message: "A Session credential is required" } },
-                    401,
-                );
-            }
-            const access = await context.var.sessionAccess.authorizeSession(
-                context.var.sessionAccessTarget,
-                credential,
-                ProjectPermission.SessionRead,
-                context.req.raw.signal,
-            );
-            const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
-            const identity = {
-                additionalDirectoryIds: v.parse(
-                    v.pipe(v.array(v.pipe(v.string(), v.minLength(1), v.maxLength(2048))), v.maxLength(16)),
-                    context.req.queries("additionalDirectoryId") ?? [],
-                ),
-                agentId: v.parse(sessionIdentifier, context.req.query("agentId")),
-                directoryId: v.parse(
-                    v.pipe(v.string(), v.minLength(1), v.maxLength(2048)),
-                    context.req.query("directoryId"),
-                ),
-            };
-            const limit = v.parse(
-                v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(200)),
-                Number(context.req.query("limit") ?? "50"),
-            );
-            const result = await context.var.relay.services.runtimePairings.requestProjectScopeControl(
-                new ProjectScope(access.projectId),
-                access.runtimeId,
-                decodeSessionLiveHistoryPageLoad(
-                    JSON.stringify({
-                        additionalDirectoryIds: identity.additionalDirectoryIds,
-                        agentId: identity.agentId,
-                        bindingId: "workspace",
-                        cursor: context.req.query("cursor") ?? null,
-                        directoryId: identity.directoryId,
-                        kind: "session.live-history.page.load",
-                        limit,
-                        requestId: crypto.randomUUID(),
-                        sessionId,
-                    }),
-                ),
-                context.req.raw.signal,
-            );
-            if (result.kind !== "session.live-history.page.loaded") {
-                throw new PairingDirectoryError("invalid_request", "The Runtime returned invalid Session history");
-            }
-            context.header("Cache-Control", "no-store");
-            return context.json(result.page);
         })
         .get("/:sessionId/native-events-v2", sessionAccessTargetMiddleware, async (context) => {
             const credential = (context.req.header("authorization") ?? "").match(/^Bearer ([^\s]+)$/u)?.[1];

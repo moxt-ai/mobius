@@ -1,5 +1,4 @@
 import {
-    ArrowLeft,
     CheckCircle2,
     LoaderCircle,
     Menu,
@@ -10,19 +9,18 @@ import {
     ShieldCheck,
     Terminal,
 } from "lucide-react";
-import { Link } from "react-router";
 
 import { AgentInstallationCardsView } from "@/components/agent-installation-panel";
 import { Button } from "@/components/ui/button";
 import type { AgentInstallationViewState, AgentOption, InstallableAgentOption } from "@/domain/channel";
-import { recheckLocalAgents } from "@/services/mobius-transport";
-import { useChatStore } from "@/store/chat-store";
+import { recheckLocalAgents } from "@/services/runtime-transport";
+import { useRuntimeStore } from "@/store/runtime-store";
 
 function countLabel(count: number, singular: string): string {
     return `${count.toString()} ${count === 1 ? singular : `${singular}s`}`;
 }
 
-interface AgentSettingsViewProps {
+interface LocalAgentsViewProps {
     readonly agents: readonly AgentOption[];
     readonly desktopSidebarCollapsed: boolean;
     readonly installableAgents: readonly InstallableAgentOption[];
@@ -36,7 +34,7 @@ interface AgentSettingsViewProps {
     readonly sidebarOpen: boolean;
 }
 
-function AgentSettingsView({
+function LocalAgentsView({
     agents,
     desktopSidebarCollapsed,
     installableAgents,
@@ -48,17 +46,17 @@ function AgentSettingsView({
     runtimeCanSend,
     runtimeLabel,
     sidebarOpen,
-}: AgentSettingsViewProps) {
+}: LocalAgentsViewProps) {
     const checking = installations.some((installation) => installation.canCancel);
     return (
         <>
-            <header className="chat-header z-10 flex shrink-0 items-center border-b-[0.5px] border-black/6 bg-background/92 px-2.5 supports-[backdrop-filter]:backdrop-blur-xl md:px-[18px]">
+            <header className="management-header z-10 flex shrink-0 items-center border-b-[0.5px] border-black/6 bg-background/92 px-2.5 supports-[backdrop-filter]:backdrop-blur-xl md:px-[18px]">
                 <Button
-                    aria-controls="conversation-sidebar"
+                    aria-controls="runtime-navigation"
                     aria-expanded={sidebarOpen}
-                    aria-label="Open conversation sidebar"
+                    aria-label="Open management navigation"
                     className="mr-[7px] size-11 lg:hidden"
-                    id="conversation-sidebar-trigger"
+                    id="runtime-navigation-trigger"
                     onClick={onOpenSidebar}
                     size="icon"
                     variant="ghost"
@@ -66,11 +64,11 @@ function AgentSettingsView({
                     <Menu aria-hidden="true" className="size-[18px]" />
                 </Button>
                 <Button
-                    aria-label={desktopSidebarCollapsed ? "Show conversation sidebar" : "Hide conversation sidebar"}
+                    aria-label={desktopSidebarCollapsed ? "Show management navigation" : "Hide management navigation"}
                     className="mr-2 hidden lg:inline-flex"
                     onClick={onToggleDesktopSidebar}
                     size="icon"
-                    title={desktopSidebarCollapsed ? "Show conversation sidebar" : "Hide conversation sidebar"}
+                    title={desktopSidebarCollapsed ? "Show management navigation" : "Hide management navigation"}
                     variant="ghost"
                 >
                     {desktopSidebarCollapsed ? (
@@ -82,15 +80,7 @@ function AgentSettingsView({
                 <span className="inline-flex size-8 items-center justify-center rounded-[9px] bg-[#eefaf3] text-[#218854]">
                     <Settings aria-hidden="true" className="size-4" />
                 </span>
-                <h1 className="ml-2 text-sm font-semibold tracking-[-0.01em]">Agent settings</h1>
-                <Link
-                    className="ml-auto inline-flex min-h-11 items-center gap-1.5 rounded-lg px-3 text-xs font-medium text-muted-foreground no-underline transition-colors duration-150 hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
-                    relative="path"
-                    to=".."
-                >
-                    <ArrowLeft aria-hidden="true" className="size-3.5" />
-                    Back to chat
-                </Link>
+                <h1 className="ml-2 text-sm font-semibold tracking-[-0.01em]">Local Agents</h1>
             </header>
 
             <div className="min-h-0 flex-1 overflow-y-auto">
@@ -103,7 +93,7 @@ function AgentSettingsView({
                             className="mt-2 text-[28px] leading-9 font-semibold tracking-[-0.035em]"
                             id="local-agents-heading"
                         >
-                            Local Agents
+                            Ready Agents
                         </h2>
                         <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
                             See which Agent CLIs Mobius detected on {machineName}, including their reported version and
@@ -191,13 +181,6 @@ function AgentSettingsView({
                                                 </dd>
                                             </div>
                                         </dl>
-                                        <Link
-                                            className="mt-3 inline-flex min-h-11 items-center rounded-lg px-3 text-xs font-medium text-foreground no-underline transition-colors duration-150 hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
-                                            relative="path"
-                                            to=".."
-                                        >
-                                            Use in chat
-                                        </Link>
                                     </li>
                                 ))}
                             </ul>
@@ -271,7 +254,7 @@ function AgentSettingsView({
     );
 }
 
-export function AgentSettingsPage({
+export function LocalAgentsPage({
     channelId,
     desktopSidebarCollapsed,
     onToggleDesktopSidebar,
@@ -280,15 +263,15 @@ export function AgentSettingsPage({
     readonly desktopSidebarCollapsed: boolean;
     readonly onToggleDesktopSidebar: () => void;
 }) {
-    const agents = useChatStore((state) => state.agents);
-    const installableAgents = useChatStore((state) => state.installableAgents);
-    const installations = useChatStore((state) => state.agentInstallations);
-    const machineName = useChatStore((state) => state.machineName);
-    const runtime = useChatStore((state) => state.runtime);
-    const setSidebarOpen = useChatStore((state) => state.setSidebarOpen);
-    const sidebarOpen = useChatStore((state) => state.sidebarOpen);
+    const agents = useRuntimeStore((state) => state.agents);
+    const installableAgents = useRuntimeStore((state) => state.installableAgents);
+    const installations = useRuntimeStore((state) => state.agentInstallations);
+    const machineName = useRuntimeStore((state) => state.machineName);
+    const runtime = useRuntimeStore((state) => state.runtime);
+    const setSidebarOpen = useRuntimeStore((state) => state.setSidebarOpen);
+    const sidebarOpen = useRuntimeStore((state) => state.sidebarOpen);
     return (
-        <AgentSettingsView
+        <LocalAgentsView
             agents={agents}
             desktopSidebarCollapsed={desktopSidebarCollapsed}
             installableAgents={installableAgents}

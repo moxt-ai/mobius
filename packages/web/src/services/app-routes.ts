@@ -47,19 +47,12 @@ export type ChannelAccessSettings =
 
 export abstract class WorkspaceRoutePaths {
     abstract readonly access: ChannelAccessSettings;
-    abstract readonly newSessionPath: string;
-    abstract readonly newSessionSettingsPath: string;
     abstract readonly rootPath: string;
     abstract readonly runtimesPath: string;
-    abstract readonly isSessionSettingsPath: (path: string) => boolean;
-    abstract readonly sessionPath: (sessionId: string) => string;
-    abstract readonly sessionSettingsPath: (sessionId: string) => string;
 }
 
 export class ChannelWorkspaceRoutePaths extends WorkspaceRoutePaths {
     readonly access: ChannelAccessSettings;
-    readonly newSessionPath: string;
-    readonly newSessionSettingsPath: string;
     readonly rootPath: string;
     readonly runtimesPath: string;
 
@@ -67,23 +60,12 @@ export class ChannelWorkspaceRoutePaths extends WorkspaceRoutePaths {
         super();
         this.access = { kind: "available", path: channelAccessRoutePath(channelId) };
         this.rootPath = channelRoutePath(channelId);
-        this.newSessionPath = `${this.rootPath}/sessions/new`;
-        this.newSessionSettingsPath = `${this.newSessionPath}/settings`;
         this.runtimesPath = channelRuntimesRoutePath(channelId);
     }
-
-    readonly isSessionSettingsPath = (path: string): boolean =>
-        path.startsWith(`${this.rootPath}/sessions/`) && path.endsWith("/settings");
-
-    readonly sessionPath = (sessionId: string): string => `${this.rootPath}/sessions/${encodeURIComponent(sessionId)}`;
-
-    readonly sessionSettingsPath = (sessionId: string): string => `${this.sessionPath(sessionId)}/settings`;
 }
 
 export class ProjectRuntimeWorkspaceRoutePaths extends WorkspaceRoutePaths {
     readonly access: ChannelAccessSettings;
-    readonly newSessionPath: string;
-    readonly newSessionSettingsPath: string;
     readonly rootPath: string;
     readonly runtimesPath: string;
 
@@ -97,15 +79,6 @@ export class ProjectRuntimeWorkspaceRoutePaths extends WorkspaceRoutePaths {
                 ? { kind: "available", path: channelAccessRoutePath(accessChannelId) }
                 : { kind: "unavailable" };
         this.rootPath = projectRuntimeRoutePath(projectId, runtimeId);
-        this.newSessionPath = `${this.rootPath}/sessions/new`;
-        this.newSessionSettingsPath = `${this.newSessionPath}/settings`;
         this.runtimesPath = `${this.rootPath}/machines`;
     }
-
-    readonly isSessionSettingsPath = (path: string): boolean =>
-        path.startsWith(`${this.rootPath}/sessions/`) && path.endsWith("/settings");
-
-    readonly sessionPath = (sessionId: string): string => `${this.rootPath}/sessions/${encodeURIComponent(sessionId)}`;
-
-    readonly sessionSettingsPath = (sessionId: string): string => `${this.sessionPath(sessionId)}/settings`;
 }

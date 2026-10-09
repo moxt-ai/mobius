@@ -1,82 +1,13 @@
-import type { decodeSessionLiveHistoryPageLoad, decodeSessionLiveHistoryV2PageLoad } from "@moxt-ai/mobius-protocol";
+import type { decodeSessionLiveHistoryV2PageLoad } from "@moxt-ai/mobius-protocol";
 import type { WebSocket } from "undici";
 import type { AgentRuntimeManager } from "./acp/agent-runtime-manager.ts";
 import type { AuditStore } from "./audit/audit-store.ts";
 import { resolveSessionDirectories } from "./authorization/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
 import type { DaemonConfig } from "./config.ts";
-import type { ActiveTurnRecovery } from "./daemon-active-turn.ts";
-import { operationErrorCode, operationErrorMessage, reportOperationFailure, send } from "./daemon-command-results.ts";
-import { paginateLiveSessionHistory } from "./native-sessions/live-history-page.ts";
+import { operationErrorCode, reportOperationFailure, send } from "./daemon-command-results.ts";
 import type { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
 import type { DaemonSessionEventLogV2 } from "./session-event-log-v2.ts";
-export async function executeSessionLiveHistoryPageLoad(
-    socket: WebSocket,
-    command: ReturnType<typeof decodeSessionLiveHistoryPageLoad>,
-    config: DaemonConfig,
-    directories: WorkspaceDirectoryService,
-    audit: AuditStore,
-    sessions: AgentRuntimeManager,
-    activeTurn: (sessionId: string) => ActiveTurnRecovery | null,
-    signal: AbortSignal,
-): Promise<void> {
-    try {
-        const resolved = await resolveSessionDirectories(
-            directories,
-            config.bindingId,
-            command.directoryId,
-            command.additionalDirectoryIds,
-            signal,
-        );
-        const history = await sessions.loadSessionHistory({
-            additionalDirectories: resolved.additionalDirectories,
-            agent: config.catalog.find(command.agentId),
-            cwd: resolved.cwd,
-            sessionId: command.sessionId,
-            signal,
-        });
-        signal.throwIfAborted();
-        const page = paginateLiveSessionHistory(
-            history,
-            activeTurn(command.sessionId),
-            command.sessionId,
-            command.cursor,
-            command.limit,
-        );
-        audit.record({
-            commandId: command.requestId,
-            event: "session_history_loaded",
-            sessionId: command.sessionId,
-        });
-        send(socket, {
-            kind: "session.live-history.page.loaded",
-            page,
-            requestId: command.requestId,
-            sessionId: command.sessionId,
-        });
-    } catch (error) {
-        if (signal.aborted) {
-            return;
-        }
-        audit.record({
-            commandId: command.requestId,
-            details: { code: operationErrorCode(error) },
-            event: "session_history_unavailable",
-            sessionId: command.sessionId,
-        });
-        send(socket, {
-            kind: "session.live-history.page.loaded",
-            page: {
-                status: "unavailable",
-                cause: { code: operationErrorCode(error), message: operationErrorMessage(error) },
-                nextCursor: null,
-            },
-            requestId: command.requestId,
-            sessionId: command.sessionId,
-        });
-    }
-}
-
 export async function executeSessionLiveHistoryV2PageLoad(
     socket: WebSocket,
     command: ReturnType<typeof decodeSessionLiveHistoryV2PageLoad>,

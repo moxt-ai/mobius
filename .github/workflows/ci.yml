@@ -58,6 +58,8 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm --filter @moxt-ai/mobius build
       - run: pnpm test
+      - name: Verify Web Runtime administration
+        run: pnpm --filter @moxt-ai/mobius-web test:integration
       - name: Install real Agents and production adapters
         run: >-
           npm install --global

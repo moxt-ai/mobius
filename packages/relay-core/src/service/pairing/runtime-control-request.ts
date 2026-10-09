@@ -1,10 +1,6 @@
 import {
-    type AgentCatalogRefreshCommand,
-    type AgentCatalogRefreshedEvent,
     type AgentSettingsDiscoverCommand,
     type AgentSettingsDiscoveredEvent,
-    decodeAgentCatalogRefreshedEvent,
-    decodeAgentCatalogRefreshFailedEvent,
     decodeAgentSettingsDiscoveredEvent,
     decodeAgentSettingsDiscoveryFailedEvent,
     decodeFileBeginEvent,
@@ -20,7 +16,6 @@ import {
     decodeSessionElicitationResolvedEvent,
     decodeSessionEventEnvelope,
     decodeSessionFailedEvent,
-    decodeSessionLiveHistoryPageLoaded,
     decodeSessionLiveHistoryV2PageLoaded,
     decodeSessionOperationFailedEvent,
     decodeSessionPermissionResolvedEvent,
@@ -48,8 +43,6 @@ import {
     type SessionElicitationResolvedEvent,
     type SessionElicitationRespondCommand,
     type SessionListCommand,
-    type SessionLiveHistoryPageLoad,
-    type SessionLiveHistoryPageLoaded,
     type SessionLiveHistoryV2PageLoad,
     type SessionLiveHistoryV2PageLoaded,
     type SessionPermissionResolvedEvent,
@@ -76,7 +69,6 @@ export type RuntimeControlCommand =
     | SessionCancelCommand
     | SessionPromptDispositionCommand
     | SessionPromptCommand
-    | SessionLiveHistoryPageLoad
     | SessionLiveHistoryV2PageLoad
     | SessionElicitationRespondCommand
     | SessionPermissionRespondCommand
@@ -90,7 +82,6 @@ export type RuntimeControlResult =
     | SessionCompletedEvent
     | SessionStartedEvent
     | SessionQueuedEvent
-    | SessionLiveHistoryPageLoaded
     | SessionLiveHistoryV2PageLoaded
     | SessionElicitationResolvedEvent
     | SessionPermissionResolvedEvent
@@ -322,75 +313,6 @@ export async function requestRuntimeAgentSettings(
     }
 }
 
-export async function requestRuntimeAgentCatalogRefresh(
-    socket: WebSocket,
-    command: AgentCatalogRefreshCommand,
-    signal: AbortSignal,
-): Promise<AgentCatalogRefreshedEvent> {
-    const deadline = AbortSignal.any([signal, AbortSignal.timeout(120000)]);
-    let cleanup = () => {};
-    try {
-        deadline.throwIfAborted();
-        return await new Promise<AgentCatalogRefreshedEvent>((resolve, reject) => {
-            const onClose = () => reject(new SessionRuntimeError("runtime_offline", "The Runtime connection closed"));
-            const onAbort = () => reject(deadline.reason);
-            const onMessage = (event: MessageEvent) => {
-                try {
-                    if (typeof event.data !== "string") {
-                        return;
-                    }
-                    const raw =
-                        decodeMessageKind(event.data) === "session.event"
-                            ? decodeSessionEventEnvelope(event.data).payload
-                            : event.data;
-                    const kind = decodeMessageKind(raw);
-                    if (kind === "runtime.status") {
-                        if (!decodeRuntimeStatusEvent(raw).online) {
-                            reject(new SessionRuntimeError("runtime_offline", "The Runtime connection closed"));
-                        }
-                        return;
-                    }
-                    if (kind === "agent.catalog.refresh.failed") {
-                        const failed = decodeAgentCatalogRefreshFailedEvent(raw);
-                        if (failed.requestId === command.requestId) {
-                            reject(new SessionRuntimeError(failed.code, failed.message));
-                        }
-                        return;
-                    }
-                    if (kind !== "agent.catalog.refreshed") {
-                        return;
-                    }
-                    const refreshed = decodeAgentCatalogRefreshedEvent(raw);
-                    if (refreshed.requestId === command.requestId) {
-                        resolve(refreshed);
-                    }
-                } catch (cause) {
-                    reject(
-                        new SessionRuntimeError("invalid_request", "The Runtime returned an invalid response", {
-                            cause,
-                        }),
-                    );
-                }
-            };
-            cleanup = () => {
-                deadline.removeEventListener("abort", onAbort);
-                socket.removeEventListener("message", onMessage);
-                socket.removeEventListener("close", onClose);
-                socket.removeEventListener("error", onClose);
-            };
-            socket.addEventListener("message", onMessage);
-            socket.addEventListener("close", onClose);
-            socket.addEventListener("error", onClose);
-            deadline.addEventListener("abort", onAbort, { once: true });
-            socket.accept();
-            socket.send(encodeServiceToDaemonMessage(command));
-        });
-    } finally {
-        cleanup();
-        socket.close(1000, "Operation finished");
-    }
-}
-
 export async function requestRuntimeControl(
     socket: WebSocket,
     command: RuntimeControlCommand,
@@ -472,27 +394,23 @@ export async function requestRuntimeControl(
                                       : null;
                     const resolved =
                         result ??
-                        (command.kind === "session.live-history.page.load" &&
-                        kind === "session.live-history.page.loaded"
-                            ? decodeSessionLiveHistoryPageLoaded(raw)
-                            : command.kind === "session.live-history.v2.page.load" &&
-                                kind === "session.live-history.v2.page.loaded"
-                              ? decodeSessionLiveHistoryV2PageLoaded(raw)
-                              : command.kind === "session.prompt" && kind === "session.queued"
-                                ? decodeSessionQueuedEvent(raw)
-                                : (command.kind === "session.prompt" ||
-                                        command.kind === "session.prompt.disposition") &&
-                                    kind === "session.started"
-                                  ? decodeSessionStartedEvent(raw)
-                                  : command.kind === "session.cancel" && kind === "session.completed"
-                                    ? decodeSessionCompletedEvent(raw)
-                                    : command.kind === "session.permission.respond" &&
-                                        kind === "session.permission.resolved"
-                                      ? decodeSessionPermissionResolvedEvent(raw)
-                                      : command.kind === "session.elicitation.respond" &&
-                                          kind === "session.elicitation.resolved"
-                                        ? decodeSessionElicitationResolvedEvent(raw)
-                                        : null);
+                        (command.kind === "session.live-history.v2.page.load" &&
+                        kind === "session.live-history.v2.page.loaded"
+                            ? decodeSessionLiveHistoryV2PageLoaded(raw)
+                            : command.kind === "session.prompt" && kind === "session.queued"
+                              ? decodeSessionQueuedEvent(raw)
+                              : (command.kind === "session.prompt" || command.kind === "session.prompt.disposition") &&
+                                  kind === "session.started"
+                                ? decodeSessionStartedEvent(raw)
+                                : command.kind === "session.cancel" && kind === "session.completed"
+                                  ? decodeSessionCompletedEvent(raw)
+                                  : command.kind === "session.permission.respond" &&
+                                      kind === "session.permission.resolved"
+                                    ? decodeSessionPermissionResolvedEvent(raw)
+                                    : command.kind === "session.elicitation.respond" &&
+                                        kind === "session.elicitation.resolved"
+                                      ? decodeSessionElicitationResolvedEvent(raw)
+                                      : null);
                     const resolvedRequestId =
                         resolved !== null && "requestId" in resolved
                             ? resolved.requestId

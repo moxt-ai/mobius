@@ -6,34 +6,6 @@ import { describe, expect, it, vi } from "vitest";
 import { fixture } from "./native-session-fixture.ts";
 
 describe("native session history", () => {
-    // Keep distinct native identity/history paths; Pi uses the same ACP fixture path as Claude.
-    it.each(["Claude Code", "OpenCode"])(
-        "Given a saved %s conversation, When Chat opens its history, Then Runtime returns the native messages",
-        async (agentName) => {
-            const f = await fixture(agentName);
-            try {
-                await f.seed("Earlier message");
-                const entry = (await f.list()).entries[0];
-                if (entry === undefined) {
-                    throw new Error("Missing Claude Code conversation");
-                }
-                const result = await f.service.execute(
-                    { ...f.identity, action: "history", entryId: entry.entryId },
-                    new AbortController().signal,
-                );
-                expect(result).toMatchObject({
-                    action: "history",
-                    history: {
-                        status: "available",
-                        messages: expect.arrayContaining([{ role: "user", text: "Earlier message" }]),
-                    },
-                });
-            } finally {
-                await f.close();
-            }
-        },
-    );
-
     it("Given ACP replays committed native updates, When Runtime loads V2 source facts, Then every accepted notification is exposed once without V1 activity folding", async () => {
         const f = await fixture("OpenCode");
         try {
@@ -128,62 +100,6 @@ describe("native session history", () => {
         }
     });
 
-    it("Given a long OpenCode Session, When Runtime previews or loads its native messages, Then both return the latest 50 messages", async () => {
-        const f = await fixture("OpenCode");
-        const sessionId = "long-working-session";
-        try {
-            for (let index = 1; index <= 55; index += 1) {
-                await f.sessions.runPrompt({
-                    additionalDirectories: [],
-                    agent: f.agent,
-                    commandId: `command-${index.toString()}`,
-                    cwd: f.workspace,
-                    images: [],
-                    onActivity: async () => {},
-                    onText: async () => {},
-                    prompt: `Question ${index.toString()}`,
-                    resources: [],
-                    sessionId,
-                    signal: new AbortController().signal,
-                });
-            }
-
-            const entry = (await f.list()).entries[0];
-            if (entry === undefined) {
-                throw new Error("Missing OpenCode conversation");
-            }
-            const preview = await f.service.execute(
-                { ...f.identity, action: "preview", entryId: entry.entryId },
-                new AbortController().signal,
-            );
-            const loaded = await f.sessions.loadSessionHistory({
-                additionalDirectories: [],
-                agent: f.agent,
-                cwd: f.workspace,
-                sessionId,
-                signal: new AbortController().signal,
-            });
-
-            for (const history of [preview.action === "preview" ? preview.history : null, loaded]) {
-                expect(history).toMatchObject({
-                    status: "available",
-                    messages: expect.arrayContaining([
-                        { role: "user", text: "Question 31" },
-                        { role: "user", text: "Question 55" },
-                    ]),
-                    truncated: true,
-                });
-                if (history?.status !== "available") {
-                    throw new Error("Expected OpenCode native messages");
-                }
-                expect(history.messages).toHaveLength(50);
-                expect(history.messages).not.toContainEqual({ role: "user", text: "Question 30" });
-            }
-        } finally {
-            await f.close();
-        }
-    });
-
     it("Given OpenCode emits persisted history only on the first session load, When Chat requests history after preparation, Then Runtime returns messages from that load", async () => {
         const f = await fixture("OpenCode", "replay-history-once");
         const signal = new AbortController().signal;
@@ -269,20 +185,6 @@ describe("native session history", () => {
                 throw new Error("Missing saved native conversation");
             }
             const original = await readFile(join(f.native, source), "utf8");
-            const preview = await f.service.execute(
-                { ...f.identity, action: "preview", entryId: entry.entryId },
-                new AbortController().signal,
-            );
-            expect(preview).toMatchObject({
-                action: "preview",
-                reason: "requested",
-                history: {
-                    status: "available",
-                    messages: expect.arrayContaining([{ role: "user", text: "Original context" }]),
-                },
-            });
-            expect(await readdir(f.native)).toEqual(files);
-            expect(await readFile(join(f.native, source), "utf8")).toBe(original);
             const fork = await f.service.execute(
                 {
                     ...f.identity,

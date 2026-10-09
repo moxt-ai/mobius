@@ -155,14 +155,6 @@ const sessionHistorySchema = z
 export type NativeSessionHistory = z.infer<typeof sessionHistorySchema>;
 export type NativeHistoryMessage = z.infer<typeof historyMessage>;
 export type NativeMessageActivity = z.infer<typeof nativeMessageActivitySchema>;
-const nativeMessagePageSchema = z
-    .discriminatedUnion("status", [
-        availableSessionHistoryObjectSchema.extend({ nextCursor: z.string().max(512).nullable() }).readonly(),
-        unavailableSessionHistoryObjectSchema.extend({ nextCursor: z.null() }).readonly(),
-    ])
-    .refine(withinHistoryContentLimits);
-export type NativeMessagePage = z.infer<typeof nativeMessagePageSchema>;
-
 export const decodeNativeSessionHistory = (value: unknown): NativeSessionHistory => {
     try {
         return sessionHistorySchema.parse(value);
@@ -170,11 +162,4 @@ export const decodeNativeSessionHistory = (value: unknown): NativeSessionHistory
         throw new ProtocolMessageError("Invalid native session history", { cause });
     }
 };
-export const decodeNativeMessagePage = (value: unknown): NativeMessagePage => {
-    try {
-        return nativeMessagePageSchema.parse(value);
-    } catch (cause) {
-        throw new ProtocolMessageError("Invalid native message page", { cause });
-    }
-};
-export { nativeMessagePageSchema, sessionHistorySchema };
+export { sessionHistorySchema };

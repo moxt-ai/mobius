@@ -1,6 +1,5 @@
 import type { ServiceToDaemonMessage } from "@moxt-ai/mobius-protocol";
 import {
-    AGENT_CATALOG_REFRESH_KIND,
     AGENT_INSTALL_CANCEL_KIND,
     AGENT_INSTALL_REQUEST_KIND,
     AGENT_SETTINGS_DISCOVER_KIND,
@@ -16,7 +15,6 @@ import {
     SESSION_ELICITATION_RESPOND_KIND,
     SESSION_LIST_KIND,
     SESSION_LISTED_KIND,
-    SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
     SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND,
     SESSION_PERMISSION_RESPOND_KIND,
     SESSION_PREPARE_KIND,
@@ -30,7 +28,6 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { WebSocket } from "undici";
 import type { AgentRuntimeManager } from "./acp/agent-runtime-manager.ts";
-import { createAgentCatalogRefreshHandler } from "./agent-catalog/handle-agent-catalog-refresh.ts";
 import { createAgentSettingsDiscoveryHandler } from "./agent-catalog/handle-agent-settings-discovery.ts";
 import type { AgentInstallationManager } from "./agent-installation/agent-installation-manager.ts";
 import { streamLocalFile } from "./artifacts/local-file-streamer.ts";
@@ -38,7 +35,7 @@ import type { AuditStore } from "./audit/audit-store.ts";
 import type { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
 import type { DaemonConfig } from "./config.ts";
 import { reportOperationFailure, send, settleAbandonedTurn } from "./daemon-command-results.ts";
-import { executeSessionLiveHistoryPageLoad, executeSessionLiveHistoryV2PageLoad } from "./daemon-history-commands.ts";
+import { executeSessionLiveHistoryV2PageLoad } from "./daemon-history-commands.ts";
 import { executePrompt } from "./daemon-prompt-executor.ts";
 import { executeSessionConfigure, executeSessionPrepare, executeWorkspaceList } from "./daemon-session-commands.ts";
 import type { DaemonTurnRegistry } from "./daemon-turn-registry.ts";
@@ -67,7 +64,6 @@ export interface DaemonCommandOptions {
     readonly signal: AbortSignal;
     readonly runtimeSignal: AbortSignal;
     readonly timer: DaemonTimer;
-    readonly resolveAgentCatalogEnvironment: (signal: AbortSignal) => Promise<Readonly<NodeJS.ProcessEnv>>;
 }
 
 export function createDaemonCommandHandler({
@@ -87,7 +83,6 @@ export function createDaemonCommandHandler({
     signal,
     runtimeSignal,
     timer,
-    resolveAgentCatalogEnvironment,
 }: DaemonCommandOptions): {
     readonly handle: (message: ServiceToDaemonMessage) => void;
     readonly settle: () => Promise<void>;
@@ -102,21 +97,10 @@ export function createDaemonCommandHandler({
         signal: signal,
         timer,
     });
-    const handleCatalogRefresh = createAgentCatalogRefreshHandler({
-        config,
-        audit,
-        diagnostics,
-        socket,
-        signal: signal,
-        timer,
-        resolveEnvironment: resolveAgentCatalogEnvironment,
-    });
     const queueChanged = (sessionId: string): void => {
         publisher.publish(sessionId, { kind: "session.queue.changed", sessionId });
         eventLogV2.queueChanged(sessionId);
     };
-    const activeTurnRecovery = (sessionId: string) =>
-        activeTurns.recovery((command) => command.sessionId === sessionId);
     const nativeRequestHandler = createNativeSessionRequestHandler({
         audit,
         diagnostics,
@@ -132,20 +116,6 @@ export function createDaemonCommandHandler({
             const kind = message.kind;
             if (kind === RUNTIME_PING_KIND) {
                 send(socket, { kind: RUNTIME_PONG_KIND, requestId: message.requestId });
-                return;
-            }
-            if (kind === SESSION_LIVE_HISTORY_PAGE_LOAD_KIND) {
-                const command = message;
-                void executeSessionLiveHistoryPageLoad(
-                    socket,
-                    command,
-                    config,
-                    directories,
-                    audit,
-                    sessions,
-                    activeTurnRecovery,
-                    signal,
-                );
                 return;
             }
             if (kind === SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND) {
@@ -168,10 +138,6 @@ export function createDaemonCommandHandler({
             }
             if (kind === AGENT_SETTINGS_DISCOVER_KIND) {
                 handleSettingsDiscovery.handle(message);
-                return;
-            }
-            if (kind === AGENT_CATALOG_REFRESH_KIND) {
-                handleCatalogRefresh.handle(message);
                 return;
             }
             if (kind === NATIVE_SESSION_REQUEST_KIND) {
@@ -409,11 +375,7 @@ export function createDaemonCommandHandler({
                 });
         },
         settle: async (): Promise<void> => {
-            await Promise.all([
-                nativeRequestHandler.settle(),
-                handleSettingsDiscovery.settle(),
-                handleCatalogRefresh.settle(),
-            ]);
+            await Promise.all([nativeRequestHandler.settle(), handleSettingsDiscovery.settle()]);
         },
     };
 }

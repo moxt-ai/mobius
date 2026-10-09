@@ -1,18 +1,4 @@
 export const dataTestId = Object.freeze({
-    agentActivity: "mobius-agent-activity",
-    agentMessage: "mobius-agent-message",
-    attachPromptFiles: "mobius-attach-prompt-files",
-    conversationLink: "mobius-conversation-link",
-    conversationTitle: "mobius-conversation-title",
-    conversationTitleHeader: "mobius-conversation-title-header",
-    newChat: "mobius-new-chat",
-    promptAttachment: "mobius-prompt-attachment",
-    promptFileInput: "mobius-prompt-file-input",
-    promptInput: "mobius-prompt-input",
     recordingChoice: "mobius-recording-choice",
     recordingContinue: "mobius-recording-continue",
-    runSettingsTrigger: "mobius-run-settings-trigger",
-    sendPrompt: "mobius-send-prompt",
-    turnProcess: "mobius-turn-process",
-    turnProcessSummary: "mobius-turn-process-summary",
 });

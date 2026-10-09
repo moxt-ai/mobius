@@ -101,7 +101,6 @@ async function installDetectedAgentIntegrations(
 
 export interface RunDaemonOptions {
     readonly onConnectionStatus?: (status: "online" | "reconnecting") => void;
-    readonly resolveAgentCatalogEnvironment?: (signal: AbortSignal) => Promise<Readonly<NodeJS.ProcessEnv>>;
 }
 
 export async function runDaemon(
@@ -200,12 +199,6 @@ export async function runDaemon(
     let connectionAnnounced = false;
     let catalogPublished = false;
     let readinessAnnounced = false;
-    const resolveAgentCatalogEnvironment =
-        options.resolveAgentCatalogEnvironment ??
-        (async (catalogSignal: AbortSignal): Promise<Readonly<NodeJS.ProcessEnv>> => {
-            catalogSignal.throwIfAborted();
-            return config.localContext.environment;
-        });
     const startAutomaticIntegrationProvisioning = (): void => {
         if (!connectionAnnounced || !catalogPublished || automaticIntegrationProvisioningStarted) {
             return;
@@ -282,7 +275,6 @@ export async function runDaemon(
                     },
                     signal,
                     timer,
-                    resolveAgentCatalogEnvironment,
                 });
             } catch (error) {
                 if (signal.aborted) {
