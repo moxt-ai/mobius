@@ -17,9 +17,6 @@ import {
     UnsupportedProtocolMessageKindError,
 } from "./codecs/messages.ts";
 import {
-    AGENT_CATALOG_REFRESH_FAILED_KIND,
-    AGENT_CATALOG_REFRESH_KIND,
-    AGENT_CATALOG_REFRESHED_KIND,
     AGENT_INSTALL_CANCEL_KIND,
     AGENT_INSTALL_CANCELLED_KIND,
     AGENT_INSTALL_COMPLETED_KIND,
@@ -30,9 +27,6 @@ import {
     AGENT_SETTINGS_DISCOVER_KIND,
     AGENT_SETTINGS_DISCOVERED_KIND,
     AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
-    decodeAgentCatalogRefreshCommand,
-    decodeAgentCatalogRefreshedEvent,
-    decodeAgentCatalogRefreshFailedEvent,
     decodeAgentInstallCancelCommand,
     decodeAgentInstallCancelledEvent,
     decodeAgentInstallCompletedEvent,
@@ -61,9 +55,6 @@ import {
     decodeSessionsQueriedEvent,
     decodeWorkspaceEntriesEvent,
     decodeWorkspaceListCommand,
-    encodeAgentCatalogRefreshCommand,
-    encodeAgentCatalogRefreshedEvent,
-    encodeAgentCatalogRefreshFailedEvent,
     encodeAgentInstallCancelCommand,
     encodeAgentInstallCancelledEvent,
     encodeAgentInstallCompletedEvent,
@@ -168,11 +159,6 @@ function defineMessageSignature<TMessage extends { readonly kind: string }>(
 }
 
 const serviceToDaemonSignatures = {
-    [AGENT_CATALOG_REFRESH_KIND]: defineMessageSignature(
-        AGENT_CATALOG_REFRESH_KIND,
-        encodeAgentCatalogRefreshCommand,
-        decodeAgentCatalogRefreshCommand,
-    ),
     [AGENT_INSTALL_CANCEL_KIND]: defineMessageSignature(
         AGENT_INSTALL_CANCEL_KIND,
         encodeAgentInstallCancelCommand,
@@ -283,16 +269,6 @@ export function encodeServiceToDaemonMessage(message: ServiceToDaemonMessage): s
 }
 
 const daemonToServiceSignatures = {
-    [AGENT_CATALOG_REFRESHED_KIND]: defineMessageSignature(
-        AGENT_CATALOG_REFRESHED_KIND,
-        encodeAgentCatalogRefreshedEvent,
-        decodeAgentCatalogRefreshedEvent,
-    ),
-    [AGENT_CATALOG_REFRESH_FAILED_KIND]: defineMessageSignature(
-        AGENT_CATALOG_REFRESH_FAILED_KIND,
-        encodeAgentCatalogRefreshFailedEvent,
-        decodeAgentCatalogRefreshFailedEvent,
-    ),
     [AGENT_INSTALL_CANCELLED_KIND]: defineMessageSignature(
         AGENT_INSTALL_CANCELLED_KIND,
         encodeAgentInstallCancelledEvent,

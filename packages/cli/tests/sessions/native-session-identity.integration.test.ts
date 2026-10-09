@@ -211,10 +211,13 @@ describe("native session identity", () => {
         async (agentName) => {
             const f = await fixture(agentName, "supported", "native");
             const signal = new AbortController().signal;
-            const created = await f.service.execute({ ...f.identity, action: "create" }, signal);
-            if (created.action !== "create") {
-                throw new Error("Expected a native Agent session");
-            }
+            const nativeSessionId = await f.sessions.createNativeSession({
+                agent: f.agent,
+                cwd: f.workspace,
+                additionalDirectories: [],
+                sessionId: f.identity.sessionId,
+                signal,
+            });
             const restarted = new AgentRuntimeManager(
                 new NullAcpSessionObserver(),
                 new MemoryAcpSessionStore(),
@@ -227,7 +230,7 @@ describe("native session identity", () => {
                     additionalDirectories: [],
                     cwd: f.workspace,
                     signal,
-                    sessionId: created.nativeSessionId,
+                    sessionId: nativeSessionId,
                     commandId: crypto.randomUUID(),
                     prompt: "Continue this chat",
                     images: [],
@@ -240,7 +243,7 @@ describe("native session identity", () => {
                     additionalDirectories: [],
                     cwd: f.workspace,
                     signal,
-                    sessionId: created.nativeSessionId,
+                    sessionId: nativeSessionId,
                 });
                 expect(history).toMatchObject({
                     status: "available",

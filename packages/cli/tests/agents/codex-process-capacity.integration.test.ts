@@ -1,10 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
     decodeMessageKind,
-    decodeNativeSessionResult,
     decodeRecordedSessionEvent,
     decodeSessionLiveHistoryV2PageLoaded,
-    encodeNativeSessionCommand,
     encodeSessionLiveHistoryV2PageLoad,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
@@ -12,7 +10,7 @@ import {
 import { expect, test } from "vitest";
 import { CodexAgentSpecification } from "../../src/agent-catalog/agents/codex-agent.ts";
 import { CodexFixture } from "../support/agents/codex.ts";
-import { withRealDaemon } from "../support/agents/real-daemon.ts";
+import { prepareNewRealSession, withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 
 test("Given a real Codex conversation, When more Sessions are opened than the daemon can retain, Then the original native Session continues with its history intact", async () => {
@@ -25,32 +23,7 @@ test("Given a real Codex conversation, When more Sessions are opened than the da
             directoryId: "default",
             additionalDirectoryIds: [],
         };
-        const create = async (): Promise<string> => {
-            const requestId = randomUUID();
-            peer.send(
-                encodeNativeSessionCommand({
-                    ...identity,
-                    kind: "native.session.request",
-                    action: "create",
-                    requestId,
-                    sessionId: peer.sessionId,
-                }),
-            );
-            for (;;) {
-                const message = await peer.nextMessage();
-                if (decodeMessageKind(message) === "session.operation.failed") {
-                    throw new Error(message);
-                }
-                if (decodeMessageKind(message) === "native.session.result") {
-                    const result = decodeNativeSessionResult(message);
-                    expect(result.requestId).toBe(requestId);
-                    if (result.action !== "create") {
-                        throw new Error("Expected created Session");
-                    }
-                    return result.nativeSessionId;
-                }
-            }
-        };
+        const create = async (): Promise<string> => await prepareNewRealSession(peer, "codex");
         const sessionId = await create();
         const prompt = async (text: string): Promise<void> => {
             const commandId = randomUUID();

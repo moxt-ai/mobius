@@ -1,6 +1,5 @@
 import type { ServiceToDaemonMessage } from "@moxt-ai/mobius-protocol";
 import {
-    AGENT_CATALOG_REFRESH_KIND,
     AGENT_INSTALL_CANCEL_KIND,
     AGENT_INSTALL_REQUEST_KIND,
     AGENT_SETTINGS_DISCOVER_KIND,
@@ -27,7 +26,6 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { WebSocket } from "undici";
 import type { AgentRuntimeManager } from "./acp/agent-runtime-manager.ts";
-import { createAgentCatalogRefreshHandler } from "./agent-catalog/handle-agent-catalog-refresh.ts";
 import { createAgentSettingsDiscoveryHandler } from "./agent-catalog/handle-agent-settings-discovery.ts";
 import type { AgentInstallationManager } from "./agent-installation/agent-installation-manager.ts";
 import { streamLocalFile } from "./artifacts/local-file-streamer.ts";
@@ -64,7 +62,6 @@ export interface DaemonCommandOptions {
     readonly signal: AbortSignal;
     readonly runtimeSignal: AbortSignal;
     readonly timer: DaemonTimer;
-    readonly resolveAgentCatalogEnvironment: (signal: AbortSignal) => Promise<Readonly<NodeJS.ProcessEnv>>;
 }
 
 export function createDaemonCommandHandler({
@@ -84,7 +81,6 @@ export function createDaemonCommandHandler({
     signal,
     runtimeSignal,
     timer,
-    resolveAgentCatalogEnvironment,
 }: DaemonCommandOptions): {
     readonly handle: (message: ServiceToDaemonMessage) => void;
     readonly settle: () => Promise<void>;
@@ -98,15 +94,6 @@ export function createDaemonCommandHandler({
         socket,
         signal: signal,
         timer,
-    });
-    const handleCatalogRefresh = createAgentCatalogRefreshHandler({
-        config,
-        audit,
-        diagnostics,
-        socket,
-        signal: signal,
-        timer,
-        resolveEnvironment: resolveAgentCatalogEnvironment,
     });
     const queueChanged = (sessionId: string): void => {
         publisher.publish(sessionId, { kind: "session.queue.changed", sessionId });
@@ -145,10 +132,6 @@ export function createDaemonCommandHandler({
             }
             if (kind === AGENT_SETTINGS_DISCOVER_KIND) {
                 handleSettingsDiscovery.handle(message);
-                return;
-            }
-            if (kind === AGENT_CATALOG_REFRESH_KIND) {
-                handleCatalogRefresh.handle(message);
                 return;
             }
             if (kind === NATIVE_SESSION_REQUEST_KIND) {
@@ -386,11 +369,7 @@ export function createDaemonCommandHandler({
                 });
         },
         settle: async (): Promise<void> => {
-            await Promise.all([
-                nativeRequestHandler.settle(),
-                handleSettingsDiscovery.settle(),
-                handleCatalogRefresh.settle(),
-            ]);
+            await Promise.all([nativeRequestHandler.settle(), handleSettingsDiscovery.settle()]);
         },
     };
 }

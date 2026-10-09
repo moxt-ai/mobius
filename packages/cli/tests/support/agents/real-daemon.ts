@@ -7,8 +7,10 @@ import {
     decodeMessageKind,
     decodeRuntimeHeartbeatEvent,
     decodeSessionEventEnvelope,
+    decodeSessionReadyEvent,
     encodeRuntimeHeartbeatAckEvent,
     encodeRuntimeLivenessReadyEvent,
+    encodeSessionPrepareCommand,
     MOBIUS_API_PREFIX,
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_HEARTBEAT_KIND,
@@ -153,5 +155,39 @@ export async function withRealDaemon(
             await new Promise<void>((resolve) => relay.close(() => resolve()));
         }
         await rm(directory, { recursive: true, force: true });
+    }
+}
+
+/** Opens a new conversation through the same preparation command the Web uses. */
+export async function prepareNewRealSession(
+    peer: Parameters<Parameters<typeof withRealDaemon>[2]>[0],
+    agentId: string,
+): Promise<string> {
+    const requestId = randomUUID();
+    const sessionId = `draft-${randomUUID()}`;
+    peer.send(
+        encodeSessionPrepareCommand({
+            kind: "session.prepare",
+            requestId,
+            sessionId,
+            agentId,
+            bindingId: peer.bindingId,
+            directoryId: "default",
+            additionalDirectoryIds: [],
+        }),
+    );
+    for (;;) {
+        peer.signal.throwIfAborted();
+        const message = await peer.nextMessage();
+        const kind = decodeMessageKind(message);
+        if (kind === "session.operation.failed") {
+            throw new Error(message);
+        }
+        if (kind === "session.ready") {
+            const ready = decodeSessionReadyEvent(message);
+            if (ready.requestId === requestId) {
+                return ready.sessionId;
+            }
+        }
     }
 }

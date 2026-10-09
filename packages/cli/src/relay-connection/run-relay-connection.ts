@@ -56,7 +56,6 @@ export interface RelayConnectionOptions {
     readonly onConnected: () => void;
     readonly signal: AbortSignal;
     readonly timer: DaemonTimer;
-    readonly resolveAgentCatalogEnvironment: (signal: AbortSignal) => Promise<Readonly<NodeJS.ProcessEnv>>;
 }
 
 export async function runRelayConnection({
@@ -77,7 +76,6 @@ export async function runRelayConnection({
     onConnected,
     signal,
     timer,
-    resolveAgentCatalogEnvironment,
 }: RelayConnectionOptions): Promise<void> {
     const relayUrl = new URL(config.relayUrl);
     relayUrl.searchParams.set("liveness", "1");
@@ -101,7 +99,6 @@ export async function runRelayConnection({
         signal: connectionController.signal,
         runtimeSignal: signal,
         timer,
-        resolveAgentCatalogEnvironment,
     });
     installationObserver.connect(socket);
     onConnected();

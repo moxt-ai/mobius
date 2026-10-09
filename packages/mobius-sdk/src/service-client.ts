@@ -967,10 +967,6 @@ export class MobiusRuntimeResources {
     readonly nativeSessions = async (
         runtimeId: string,
         request:
-            | Omit<
-                  Extract<NativeSessionRequest, { readonly action: "create" }>,
-                  "kind" | "requestId" | "sessionId" | "bindingId"
-              >
             | (Omit<
                   Extract<NativeSessionRequest, { readonly action: "list" }>,
                   "kind" | "requestId" | "sessionId" | "bindingId"
@@ -978,7 +974,7 @@ export class MobiusRuntimeResources {
             | (Omit<
                   Extract<NativeSessionRequest, { readonly action: "import" | "fork" }>,
                   "kind" | "requestId" | "sessionId" | "targetSessionId" | "bindingId" | "action"
-              > & { readonly action: "import" | "fork" | "preview"; readonly discoveryId: string }),
+              > & { readonly action: "import" | "fork"; readonly discoveryId: string }),
         signal: AbortSignal,
     ) =>
         decodeNativeSessionResult(

@@ -1,11 +1,9 @@
 import { randomUUID } from "node:crypto";
 import {
     decodeMessageKind,
-    decodeNativeSessionResult,
     decodeRecordedSessionEvent,
     decodeSessionLiveHistoryV2PageLoaded,
     decodeSessionQueuedEvent,
-    encodeNativeSessionCommand,
     encodeSessionCancelCommand,
     encodeSessionLiveHistoryV2PageLoad,
     encodeSessionPromptCommand,
@@ -14,39 +12,14 @@ import {
 import { expect, test } from "vitest";
 import { CodexAgentSpecification } from "../../src/agent-catalog/agents/codex-agent.ts";
 import { CodexFixture } from "../support/agents/codex.ts";
-import { withRealDaemon } from "../support/agents/real-daemon.ts";
+import { prepareNewRealSession, withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 
 test("Given a newly created real Codex Session, When Chat requests its V2 history before the first prompt, Then Runtime returns an empty replay without resuming the active Codex thread", async () => {
     await using provider = await FakeOpenAiProvider.start("mobius-test-model", "UNUSED_REPLY");
     await using agent = await CodexFixture.create(provider);
     await withRealDaemon(new CodexAgentSpecification(), agent.environment, async (peer) => {
-        const createRequestId = randomUUID();
-        peer.send(
-            encodeNativeSessionCommand({
-                kind: "native.session.request",
-                action: "create",
-                requestId: createRequestId,
-                agentId: "codex",
-                bindingId: peer.bindingId,
-                directoryId: "default",
-                additionalDirectoryIds: [],
-                sessionId: peer.sessionId,
-            }),
-        );
-        let sessionId = "";
-        while (sessionId.length === 0) {
-            const message = await peer.nextMessage();
-            if (decodeMessageKind(message) === "session.operation.failed") {
-                throw new Error(message);
-            }
-            if (decodeMessageKind(message) === "native.session.result") {
-                const result = decodeNativeSessionResult(message);
-                if (result.action === "create") {
-                    sessionId = result.nativeSessionId;
-                }
-            }
-        }
+        const sessionId = await prepareNewRealSession(peer, "codex");
         const requestId = randomUUID();
         peer.send(
             encodeSessionLiveHistoryV2PageLoad({
@@ -103,34 +76,7 @@ test("Given a real codex native Session, When the active prompt is cancelled wit
     await using agent = await CodexFixture.create(provider);
     try {
         await withRealDaemon(new CodexAgentSpecification(), agent.environment, async (peer) => {
-            const requestId = randomUUID();
-            peer.send(
-                encodeNativeSessionCommand({
-                    kind: "native.session.request",
-                    action: "create",
-                    requestId,
-                    agentId: "codex",
-                    bindingId: peer.bindingId,
-                    directoryId: "default",
-                    additionalDirectoryIds: [],
-                    sessionId: peer.sessionId,
-                }),
-            );
-            let nativeId = "";
-            while (nativeId.length === 0) {
-                const message = await peer.nextMessage();
-                if (decodeMessageKind(message) === "session.operation.failed") {
-                    throw new Error(message);
-                }
-                if (decodeMessageKind(message) === "native.session.result") {
-                    const result = decodeNativeSessionResult(message);
-                    expect(result.requestId).toBe(requestId);
-                    if (result.action !== "create") {
-                        throw new Error("Expected native Session creation");
-                    }
-                    nativeId = result.nativeSessionId;
-                }
-            }
+            const nativeId = await prepareNewRealSession(peer, "codex");
             const sendPrompt = (commandId: string, targetCommandId = ""): void =>
                 peer.send(
                     encodeSessionPromptCommand({

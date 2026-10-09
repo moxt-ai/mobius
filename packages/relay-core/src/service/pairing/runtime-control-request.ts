@@ -1,10 +1,6 @@
 import {
-    type AgentCatalogRefreshCommand,
-    type AgentCatalogRefreshedEvent,
     type AgentSettingsDiscoverCommand,
     type AgentSettingsDiscoveredEvent,
-    decodeAgentCatalogRefreshedEvent,
-    decodeAgentCatalogRefreshFailedEvent,
     decodeAgentSettingsDiscoveredEvent,
     decodeAgentSettingsDiscoveryFailedEvent,
     decodeFileBeginEvent,
@@ -284,75 +280,6 @@ export async function requestRuntimeAgentSettings(
                     const result = decodeAgentSettingsDiscoveredEvent(raw);
                     if (result.requestId === command.requestId) {
                         resolve(result);
-                    }
-                } catch (cause) {
-                    reject(
-                        new SessionRuntimeError("invalid_request", "The Runtime returned an invalid response", {
-                            cause,
-                        }),
-                    );
-                }
-            };
-            cleanup = () => {
-                deadline.removeEventListener("abort", onAbort);
-                socket.removeEventListener("message", onMessage);
-                socket.removeEventListener("close", onClose);
-                socket.removeEventListener("error", onClose);
-            };
-            socket.addEventListener("message", onMessage);
-            socket.addEventListener("close", onClose);
-            socket.addEventListener("error", onClose);
-            deadline.addEventListener("abort", onAbort, { once: true });
-            socket.accept();
-            socket.send(encodeServiceToDaemonMessage(command));
-        });
-    } finally {
-        cleanup();
-        socket.close(1000, "Operation finished");
-    }
-}
-
-export async function requestRuntimeAgentCatalogRefresh(
-    socket: WebSocket,
-    command: AgentCatalogRefreshCommand,
-    signal: AbortSignal,
-): Promise<AgentCatalogRefreshedEvent> {
-    const deadline = AbortSignal.any([signal, AbortSignal.timeout(120000)]);
-    let cleanup = () => {};
-    try {
-        deadline.throwIfAborted();
-        return await new Promise<AgentCatalogRefreshedEvent>((resolve, reject) => {
-            const onClose = () => reject(new SessionRuntimeError("runtime_offline", "The Runtime connection closed"));
-            const onAbort = () => reject(deadline.reason);
-            const onMessage = (event: MessageEvent) => {
-                try {
-                    if (typeof event.data !== "string") {
-                        return;
-                    }
-                    const raw =
-                        decodeMessageKind(event.data) === "session.event"
-                            ? decodeSessionEventEnvelope(event.data).payload
-                            : event.data;
-                    const kind = decodeMessageKind(raw);
-                    if (kind === "runtime.status") {
-                        if (!decodeRuntimeStatusEvent(raw).online) {
-                            reject(new SessionRuntimeError("runtime_offline", "The Runtime connection closed"));
-                        }
-                        return;
-                    }
-                    if (kind === "agent.catalog.refresh.failed") {
-                        const failed = decodeAgentCatalogRefreshFailedEvent(raw);
-                        if (failed.requestId === command.requestId) {
-                            reject(new SessionRuntimeError(failed.code, failed.message));
-                        }
-                        return;
-                    }
-                    if (kind !== "agent.catalog.refreshed") {
-                        return;
-                    }
-                    const refreshed = decodeAgentCatalogRefreshedEvent(raw);
-                    if (refreshed.requestId === command.requestId) {
-                        resolve(refreshed);
                     }
                 } catch (cause) {
                     reject(

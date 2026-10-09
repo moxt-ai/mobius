@@ -12,7 +12,7 @@ import {
 import { expect, test } from "vitest";
 import { ClaudeCodeAgentSpecification } from "../../src/agent-catalog/agents/claude-code-agent.ts";
 import { ClaudeFixture } from "../support/agents/claude.ts";
-import { withRealDaemon } from "../support/agents/real-daemon.ts";
+import { prepareNewRealSession, withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeAnthropicProvider } from "../support/llm/anthropic.ts";
 
 test("Given a real claude native Session, When the active prompt is cancelled with a follow-up queued, Then the queued prompt restores that Session and completes", async () => {
@@ -30,34 +30,7 @@ test("Given a real claude native Session, When the active prompt is cancelled wi
     await using agent = await ClaudeFixture.create(provider);
     try {
         await withRealDaemon(new ClaudeCodeAgentSpecification(), agent.environment, async (peer) => {
-            const requestId = randomUUID();
-            peer.send(
-                encodeNativeSessionCommand({
-                    kind: "native.session.request",
-                    action: "create",
-                    requestId,
-                    agentId: "claude",
-                    bindingId: peer.bindingId,
-                    directoryId: "default",
-                    additionalDirectoryIds: [],
-                    sessionId: peer.sessionId,
-                }),
-            );
-            let nativeId = "";
-            while (nativeId.length === 0) {
-                const message = await peer.nextMessage();
-                if (decodeMessageKind(message) === "session.operation.failed") {
-                    throw new Error(message);
-                }
-                if (decodeMessageKind(message) === "native.session.result") {
-                    const result = decodeNativeSessionResult(message);
-                    expect(result.requestId).toBe(requestId);
-                    if (result.action !== "create") {
-                        throw new Error("Expected native Session creation");
-                    }
-                    nativeId = result.nativeSessionId;
-                }
-            }
+            const nativeId = await prepareNewRealSession(peer, "claude");
             const sendPrompt = (commandId: string, targetCommandId = ""): void =>
                 peer.send(
                     encodeSessionPromptCommand({

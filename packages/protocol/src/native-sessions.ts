@@ -9,11 +9,7 @@ import {
     sessionReadyEventSchema,
 } from "./control-messages.ts";
 import { identifierStringSchema as identifier } from "./identifier.ts";
-import {
-    SESSION_HISTORY_CHARACTER_LIMIT,
-    SESSION_HISTORY_MESSAGE_LIMIT,
-    sessionHistorySchema,
-} from "./session-history.ts";
+import { SESSION_HISTORY_CHARACTER_LIMIT, SESSION_HISTORY_MESSAGE_LIMIT } from "./session-history.ts";
 
 export const NATIVE_SESSION_REQUEST_KIND = "native.session.request";
 export const NATIVE_SESSION_RESULT_KIND = "native.session.result";
@@ -100,10 +96,7 @@ const identity = {
 };
 
 const nativeSessionRequestSchema = z.discriminatedUnion("action", [
-    z.object({ ...identity, action: z.literal("create") }).readonly(),
     z.object({ ...identity, action: z.literal("active-turn"), targetSessionId: identifier }).readonly(),
-    z.object({ ...identity, action: z.literal("preview"), entryId: identifier }).readonly(),
-    z.object({ ...identity, action: z.literal("history"), entryId: identifier }).readonly(),
     z.object({ ...identity, action: z.literal("find"), nativeSessionId: identifier }).readonly(),
     z
         .object({
@@ -138,10 +131,7 @@ const nativeSessionRequestSchema = z.discriminatedUnion("action", [
 ]);
 export type NativeSessionRequest = z.infer<typeof nativeSessionRequestSchema>;
 const nativeSessionCommandSchema = z.discriminatedUnion("action", [
-    z.object({ ...identity, action: z.literal("create") }).readonly(),
     z.object({ ...identity, action: z.literal("active-turn"), targetSessionId: identifier }).readonly(),
-    z.object({ ...identity, action: z.literal("preview"), entryId: identifier }).readonly(),
-    z.object({ ...identity, action: z.literal("history"), entryId: identifier }).readonly(),
     z.object({ ...identity, action: z.literal("find"), nativeSessionId: identifier }).readonly(),
     z
         .object({
@@ -198,7 +188,6 @@ const resultEnvelope = {
     kind: z.literal(NATIVE_SESSION_RESULT_KIND),
 };
 const nativeSessionResultSchema = z.discriminatedUnion("action", [
-    z.object({ ...resultEnvelope, action: z.literal("create"), nativeSessionId: identifier }).readonly(),
     z
         .object({
             ...resultEnvelope,
@@ -240,26 +229,6 @@ const nativeSessionResultSchema = z.discriminatedUnion("action", [
             action: z.enum(["import", "fork", "fork-recorded"]),
             targetSessionId: identifier,
             ready: sessionReadyEventSchema,
-            title: z.string().max(500),
-        })
-        .readonly(),
-    z
-        .object({
-            ...resultEnvelope,
-            action: z.literal("preview"),
-            entryId: identifier,
-            targetSessionId: identifier,
-            reason: z.enum(["continuation_unavailable", "requested"]),
-            history: sessionHistorySchema,
-            title: z.string().max(500),
-        })
-        .readonly(),
-    z
-        .object({
-            ...resultEnvelope,
-            action: z.literal("history"),
-            entryId: identifier,
-            history: sessionHistorySchema,
             title: z.string().max(500),
         })
         .readonly(),

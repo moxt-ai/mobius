@@ -1,11 +1,9 @@
 import type { NativeSessionEntry, SessionCapabilities } from "@moxt-ai/mobius-sdk";
 import { MobiusChannelError } from "@moxt-ai/mobius-sdk/channel";
 import {
-    ArrowLeft,
     ArrowRight,
     ChevronRight,
     CircleAlert,
-    Eye,
     Folder,
     GitFork,
     History,
@@ -21,11 +19,9 @@ import {
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { AgentProductIcon } from "@/components/agent-product-icon";
-import { NativeSessionHistoryView } from "@/components/chat-message-list";
 import { Button } from "@/components/ui/button";
 import { useWorkspaceRoutes } from "@/components/workspace-route-provider";
 import type { AgentOption } from "@/domain/channel";
-import type { NativeSessionHistory } from "@/domain/native-history";
 import { cn } from "@/lib/utils";
 import { manageNativeSession, type NativeSessionScope } from "@/services/mobius-transport";
 import { useChatStore } from "@/store/chat-store";
@@ -35,14 +31,6 @@ interface SessionPage {
     readonly entries: readonly NativeSessionEntry[];
     readonly nextCursor: string | null;
     readonly notice: string;
-}
-
-interface PreviewState {
-    readonly kind: "preview";
-    readonly page: SessionPage;
-    readonly entry: NativeSessionEntry;
-    readonly history: NativeSessionHistory;
-    readonly message: string | null;
 }
 
 type BrowserState =
@@ -55,7 +43,6 @@ type BrowserState =
           readonly page: SessionPage;
           readonly message: string;
       }
-    | PreviewState
     | {
           readonly kind: "confirm-delete";
           readonly page: SessionPage;
@@ -66,7 +53,6 @@ type BrowserState =
           readonly page: SessionPage;
           readonly entry: NativeSessionEntry;
           readonly action: "import" | "fork" | "delete";
-          readonly previous: PreviewState | { readonly kind: "ready"; readonly page: SessionPage };
       }
     | {
           readonly kind: "action-failed";
@@ -83,7 +69,7 @@ function errorMessage(error: unknown): string {
             case "acp_execution_failed":
                 return "The Agent couldn’t complete this request. Try again.";
             case "native_history_unavailable":
-                return "This session couldn’t be opened or previewed. Close it in the other app, then try again.";
+                return "This session couldn’t be opened. Close it in the other app, then try again.";
             case "native_session_not_found":
             case "native_session_cursor_expired":
             case "native_session_target_changed":
@@ -188,7 +174,6 @@ function NativeSessionList({
     const navigate = useNavigate();
     const requestRef = useRef<AbortController | null>(null);
     const cancelRef = useRef<HTMLButtonElement>(null);
-    const previewTitleRef = useRef<HTMLHeadingElement>(null);
     const [state, setState] = useState<BrowserState>({ kind: "loading" });
     const [query, setQuery] = useState("");
     const page = "page" in state ? state.page : null;
@@ -243,24 +228,17 @@ function NativeSessionList({
         if (state.kind === "confirm-delete") {
             cancelRef.current?.focus();
         }
-        if (state.kind === "preview") {
-            previewTitleRef.current?.focus();
-        }
     }, [state.kind]);
 
     const act = async (
         entry: NativeSessionEntry,
         action: "import" | "fork" | "delete",
         current: SessionPage,
-        previous: PreviewState | { readonly kind: "ready"; readonly page: SessionPage } = {
-            kind: "ready",
-            page: current,
-        },
     ): Promise<void> => {
         requestRef.current?.abort();
         const controller = new AbortController();
         requestRef.current = controller;
-        setState({ kind: "acting", page: current, entry, action, previous });
+        setState({ kind: "acting", page: current, entry, action });
         try {
             const result = await manageNativeSession(
                 scope,
@@ -272,14 +250,6 @@ function NativeSessionList({
                 useChatStore.getState().openNativeConversation(result);
                 await navigate(routes.sessionPath(result.ready.sessionId));
                 onClose();
-            } else if (result.action === "preview") {
-                setState({
-                    kind: "preview",
-                    page: current,
-                    entry,
-                    history: result.history,
-                    message: null,
-                });
             } else if (result.action === "delete") {
                 useChatStore.getState().applyNativeSessionDeletion(result.deletedSessionIds);
                 setState({
@@ -295,10 +265,6 @@ function NativeSessionList({
             }
         } catch (error) {
             if (controller.signal.aborted) {
-                return;
-            }
-            if (previous.kind === "preview") {
-                setState({ ...previous, message: errorMessage(error) });
                 return;
             }
             setState({
@@ -317,67 +283,6 @@ function NativeSessionList({
             });
         }
     };
-
-    if (state.kind === "preview") {
-        return (
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-                <div className="shrink-0 border-b-[0.5px] border-black/6 px-5 pt-2 pb-4">
-                    <Button
-                        className="-ml-2 min-h-11 px-2 text-xs text-muted-foreground"
-                        variant="ghost"
-                        onClick={() => setState({ kind: "ready", page: state.page })}
-                    >
-                        <ArrowLeft aria-hidden="true" className="size-3.5" /> All {agent.label} sessions
-                    </Button>
-                    <h3
-                        className="line-clamp-2 text-sm leading-5 font-semibold outline-none"
-                        ref={previewTitleRef}
-                        tabIndex={-1}
-                    >
-                        {state.entry.title}
-                    </h3>
-                    <p className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                        <Eye aria-hidden="true" className="size-3.5" /> Saved history · Read only
-                    </p>
-                    <p className="mt-1 truncate text-[11px] text-muted-foreground" title={state.entry.directoryLabel}>
-                        {state.entry.directoryLabel}
-                    </p>
-                </div>
-                <div className="conversation-scroll min-h-0 flex-1 overflow-y-auto px-5 py-5">
-                    <NativeSessionHistoryView history={state.history} agentLabel={agent.label} />
-                </div>
-                <div className="shrink-0 border-t-[0.5px] border-black/6 px-5 py-3">
-                    <p className="text-xs leading-5 text-copy-secondary" role="status">
-                        {agent.label} couldn’t resume this session. Another app may still be using it. Close it there,
-                        then continue here, or fork a separate conversation.
-                    </p>
-                    {state.message !== null && (
-                        <p className="mt-2 text-xs leading-5 text-destructive" role="alert">
-                            {state.message}
-                        </p>
-                    )}
-                    <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
-                        {state.page.capabilities.unstableForkSession && (
-                            <Button
-                                className="min-h-11 rounded-lg px-3 text-xs"
-                                variant="ghost"
-                                onClick={() => void act(state.entry, "fork", state.page, state)}
-                            >
-                                <GitFork aria-hidden="true" className="size-3.5" /> Fork session
-                            </Button>
-                        )}
-                        <Button
-                            className="min-h-11 rounded-lg px-3 text-xs"
-                            variant="outline"
-                            onClick={() => void act(state.entry, "import", state.page, state)}
-                        >
-                            <RefreshCw aria-hidden="true" className="size-3.5" /> Continue original
-                        </Button>
-                    </div>
-                </div>
-            </div>
-        );
-    }
 
     if (state.kind === "confirm-delete") {
         return (
@@ -432,7 +337,7 @@ function NativeSessionList({
                     className="mt-2 min-h-11 text-xs"
                     onClick={() => {
                         requestRef.current?.abort();
-                        setState(state.previous);
+                        setState({ kind: "ready", page: state.page });
                     }}
                     variant="ghost"
                 >
