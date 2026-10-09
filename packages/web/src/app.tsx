@@ -10,8 +10,8 @@ import {
     useOutletContext,
     useParams,
 } from "react-router";
-import { AgentSettingsPage } from "@/components/agent-settings-page";
 import { ChannelAccessPage } from "@/components/channel-access-panel";
+import { LocalAgentsPage } from "@/components/local-agents-page";
 import { PairingPage } from "@/components/pairing-page";
 import { RuntimeManagementPage } from "@/components/runtime-management-page";
 import { WorkspaceRouteProvider } from "@/components/workspace-route-provider";
@@ -161,7 +161,7 @@ function ManagementRoute({ projectRuntime }: { readonly projectRuntime: boolean 
 function AgentsRoute() {
     const context = useOutletContext<ManagementContext>();
     return (
-        <AgentSettingsPage
+        <LocalAgentsPage
             channelId={context.connection.channelId}
             desktopSidebarCollapsed={context.desktopSidebarCollapsed}
             onToggleDesktopSidebar={context.onToggleDesktopSidebar}

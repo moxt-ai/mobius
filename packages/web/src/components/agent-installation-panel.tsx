@@ -1,8 +1,4 @@
-import { Cable, CheckCircle2, CircleAlert, LoaderCircle, RefreshCw, Settings, Terminal } from "lucide-react";
-import { Link } from "react-router";
-
-import { Button } from "@/components/ui/button";
-import { useWorkspaceRoutes } from "@/components/workspace-route-provider";
+import { Cable, CheckCircle2, CircleAlert, LoaderCircle } from "lucide-react";
 import {
     type AgentInstallationViewState,
     AgentIntegrationOption,
@@ -12,8 +8,6 @@ import {
     MissingAgentOption,
     SucceededAgentInstallationState,
 } from "@/domain/channel";
-import { recheckLocalAgents } from "@/services/runtime-transport";
-import { useRuntimeStore } from "@/store/runtime-store";
 
 interface AgentInstallationCardsViewProps {
     readonly agents: readonly InstallableAgentOption[];
@@ -106,68 +100,5 @@ export function AgentInstallationCardsView({ agents, installations }: AgentInsta
                 );
             })}
         </div>
-    );
-}
-
-export function AgentInstallationPanel() {
-    const agents = useRuntimeStore((state) => state.installableAgents);
-    const installations = useRuntimeStore((state) => state.agentInstallations);
-    const runtime = useRuntimeStore((state) => state.runtime);
-    const checking = installations.some((installation) => installation.canCancel);
-    return (
-        <>
-            <AgentInstallationCardsView agents={agents} installations={installations} />
-            <Button
-                className="mx-auto mt-5 min-h-11 px-4 text-xs"
-                disabled={!runtime.canSend || checking || agents.length === 0}
-                onClick={() => void recheckLocalAgents()}
-            >
-                {checking ? (
-                    <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin motion-reduce:animate-none" />
-                ) : (
-                    <RefreshCw aria-hidden="true" className="size-3.5" />
-                )}
-                {checking ? "Checking local Agents…" : "Check again"}
-            </Button>
-        </>
-    );
-}
-
-export function AgentInstallationPage() {
-    const machineName = useRuntimeStore((state) => state.machineName);
-    const runtime = useRuntimeStore((state) => state.runtime);
-    const routes = useWorkspaceRoutes();
-    return (
-        <main className="flex min-h-dvh overflow-y-auto bg-background p-4 sm:p-6">
-            <section className="pairing-card mx-auto my-auto w-full max-w-[720px] rounded-2xl bg-white px-5 py-7 text-center sm:px-10 sm:py-9">
-                <span className="mx-auto inline-flex size-12 items-center justify-center rounded-2xl bg-[#eefaf3] text-[#218854]">
-                    <Terminal aria-hidden="true" className="size-5" />
-                </span>
-                <h1 className="mt-5 text-2xl font-semibold tracking-[-0.03em]">Local Agents</h1>
-                <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
-                    No Agent integration is ready on {machineName} yet. Mobius automatically installs and verifies
-                    integrations while detecting local Agents. Install any missing Agent CLI yourself, then choose Check
-                    again.
-                </p>
-                {!runtime.canSend && (
-                    <p className="mt-3 text-xs font-medium text-[#a85d00]">
-                        Keep the Mobius daemon online while it checks Agents and installs integrations.
-                    </p>
-                )}
-                <AgentInstallationPanel />
-                <p className="mt-6 text-xs leading-5 text-muted-foreground">
-                    Check again re-runs local detection and automatic integration setup, so an Agent installed after the
-                    daemon started can be detected without pairing again. Provider sign-in may still be required
-                    afterward.
-                </p>
-                <Link
-                    className="mx-auto mt-4 inline-flex min-h-11 items-center gap-2 rounded-lg px-3 text-xs font-medium text-muted-foreground no-underline transition-colors duration-150 hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
-                    to={routes.rootPath}
-                >
-                    <Settings aria-hidden="true" className="size-3.5" />
-                    Open Agent settings
-                </Link>
-            </section>
-        </main>
     );
 }

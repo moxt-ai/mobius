@@ -1,5 +1,5 @@
 import { mobiusApiUrl } from "@moxt-ai/mobius-sdk";
-import { connectMobiusChannelClient, type MobiusChannelClient } from "@moxt-ai/mobius-sdk/channel";
+import { connectMobiusChannelClient, type MobiusChannelClient, MobiusChannelError } from "@moxt-ai/mobius-sdk/channel";
 import {
     CancelledAgentInstallationState,
     type ChannelConnection,
@@ -148,16 +148,23 @@ export async function recheckLocalAgents(): Promise<void> {
             useRuntimeStore.getState().installationChanged(new RequestingAgentInstallationState(agent.id, requestId));
             try {
                 await client.installAgent({ agentId: agent.id, requestId });
-            } catch {
-                if (!current.controller.signal.aborted) {
+            } catch (error) {
+                if (
+                    !current.controller.signal.aborted &&
+                    useRuntimeStore
+                        .getState()
+                        .agentInstallations.some((item) => item.agentId === agent.id && item.canCancel)
+                ) {
                     useRuntimeStore
                         .getState()
                         .installationChanged(
                             new FailedAgentInstallationState(
                                 agent.id,
                                 requestId,
-                                "installation_failed",
-                                "The Agent integration could not be checked.",
+                                error instanceof MobiusChannelError ? error.code : "installation_failed",
+                                error instanceof MobiusChannelError
+                                    ? error.message
+                                    : "The Agent integration could not be checked.",
                             ),
                         );
                 }

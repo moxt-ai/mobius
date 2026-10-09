@@ -22,7 +22,7 @@ function countLabel(count: number, singular: string): string {
     return `${count.toString()} ${count === 1 ? singular : `${singular}s`}`;
 }
 
-interface AgentSettingsViewProps {
+interface LocalAgentsViewProps {
     readonly agents: readonly AgentOption[];
     readonly desktopSidebarCollapsed: boolean;
     readonly installableAgents: readonly InstallableAgentOption[];
@@ -36,7 +36,7 @@ interface AgentSettingsViewProps {
     readonly sidebarOpen: boolean;
 }
 
-function AgentSettingsView({
+function LocalAgentsView({
     agents,
     desktopSidebarCollapsed,
     installableAgents,
@@ -48,7 +48,7 @@ function AgentSettingsView({
     runtimeCanSend,
     runtimeLabel,
     sidebarOpen,
-}: AgentSettingsViewProps) {
+}: LocalAgentsViewProps) {
     const checking = installations.some((installation) => installation.canCancel);
     return (
         <>
@@ -264,7 +264,7 @@ function AgentSettingsView({
     );
 }
 
-export function AgentSettingsPage({
+export function LocalAgentsPage({
     channelId,
     desktopSidebarCollapsed,
     onToggleDesktopSidebar,
@@ -281,7 +281,7 @@ export function AgentSettingsPage({
     const setSidebarOpen = useRuntimeStore((state) => state.setSidebarOpen);
     const sidebarOpen = useRuntimeStore((state) => state.sidebarOpen);
     return (
-        <AgentSettingsView
+        <LocalAgentsView
             agents={agents}
             desktopSidebarCollapsed={desktopSidebarCollapsed}
             installableAgents={installableAgents}
