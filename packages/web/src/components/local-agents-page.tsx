@@ -1,5 +1,4 @@
 import {
-    ArrowLeft,
     CheckCircle2,
     LoaderCircle,
     Menu,
@@ -10,7 +9,6 @@ import {
     ShieldCheck,
     Terminal,
 } from "lucide-react";
-import { Link } from "react-router";
 
 import { AgentInstallationCardsView } from "@/components/agent-installation-panel";
 import { Button } from "@/components/ui/button";
@@ -83,14 +81,6 @@ function LocalAgentsView({
                     <Settings aria-hidden="true" className="size-4" />
                 </span>
                 <h1 className="ml-2 text-sm font-semibold tracking-[-0.01em]">Local Agents</h1>
-                <Link
-                    className="ml-auto inline-flex min-h-11 items-center gap-1.5 rounded-lg px-3 text-xs font-medium text-muted-foreground no-underline transition-colors duration-150 hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
-                    relative="path"
-                    to=".."
-                >
-                    <ArrowLeft aria-hidden="true" className="size-3.5" />
-                    Back to Agents
-                </Link>
             </header>
 
             <div className="min-h-0 flex-1 overflow-y-auto">

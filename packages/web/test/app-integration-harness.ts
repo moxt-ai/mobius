@@ -4,7 +4,7 @@ import { cleanup, configure, render } from "@testing-library/react";
 
 import { createElement } from "react";
 
-import { afterAll, beforeAll, expect } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 
 import { App } from "@/app";
 
@@ -220,6 +220,9 @@ export interface WebIntegrationEnvironment {
 }
 
 export function setupWebIntegrationEnvironment(): WebIntegrationEnvironment {
+    beforeEach(() => vi.useFakeTimers({ now: new Date("2026-10-09T00:00:00Z"), toFake: ["Date"] }));
+    afterEach(() => vi.useRealTimers());
+
     let closeRelay = (): Promise<void> => Promise.resolve();
     let evictRuntime = (_channelId: string): Promise<void> =>
         Promise.reject(new Error("The Web integration relay is not running"));
