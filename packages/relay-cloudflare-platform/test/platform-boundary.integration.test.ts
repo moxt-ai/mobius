@@ -67,6 +67,7 @@ function liveEvent(sessionId: string, text: string): string {
                 position: "1",
                 provenance: { kind: "original" },
                 recordedAt: "2026-09-18T00:00:00.000Z",
+                sessionGenerationId: "session-generation-1",
                 sessionId,
                 type: "acp",
                 payload: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } },
@@ -914,6 +915,7 @@ describe.sequential("Platform Session-only boundary", () => {
                 position: "1",
                 provenance: { kind: "original" as const },
                 recordedAt: "2026-09-18T00:00:00.000Z",
+                sessionGenerationId: "session-generation-1",
                 sessionId,
                 type: "acp" as const,
             };
@@ -973,7 +975,7 @@ describe.sequential("Platform Session-only boundary", () => {
                 encodeSessionLiveHistoryV2PageLoaded({
                     events: {
                         events: {
-                            daemonGenerationId: "daemon-generation-1",
+                            sessionGenerationId: "session-generation-1",
                             events: [rawEvent],
                             nextCursor: null,
                             tailCursor: rawEvent.eventId,
@@ -988,7 +990,7 @@ describe.sequential("Platform Session-only boundary", () => {
                 }),
             );
             expect(await responseJson(await historyResponse, 200)).toEqual({
-                daemonGenerationId: "daemon-generation-1",
+                sessionGenerationId: "session-generation-1",
                 events: [rawEvent],
                 nextCursor: null,
                 tailCursor: rawEvent.eventId,

@@ -23,6 +23,7 @@ function event(position: number, update: AcpSessionUpdateV2): SessionEventV2 {
         position: position.toString(),
         provenance: { kind: "original" },
         recordedAt,
+        sessionGenerationId: "session-generation-1",
         sessionId: "session-1",
         type: "acp",
     };
@@ -168,7 +169,7 @@ describe("Session Event Log V2 protocol", () => {
             },
         ] as const;
         const page = {
-            daemonGenerationId: "daemon-generation-1",
+            sessionGenerationId: "session-generation-1",
             events: updates.map((update, index) => event(index + 1, update)),
             nextCursor: null,
             tailCursor: "event-15",
@@ -181,7 +182,7 @@ describe("Session Event Log V2 protocol", () => {
 
     it("Given ACP sends omitted, null, and concrete tool patches, When V2 decodes them, Then field presence remains distinct", () => {
         const page = {
-            daemonGenerationId: "daemon-generation-1",
+            sessionGenerationId: "session-generation-1",
             events: [
                 event(1, { sessionUpdate: "tool_call_update", toolCallId: "tool-1" }),
                 event(2, { rawOutput: null, sessionUpdate: "tool_call_update", toolCallId: "tool-1" }),
@@ -231,7 +232,7 @@ describe("Session Event Log V2 protocol", () => {
         });
         const recovery = {
             events: {
-                daemonGenerationId: "daemon-generation-1",
+                sessionGenerationId: "session-generation-1",
                 events: [historyEvent, executingEvent],
                 nextCursor: "older-message-cursor",
                 tailCursor: "event-2",
@@ -246,7 +247,7 @@ describe("Session Event Log V2 protocol", () => {
 
     it("Given ACP updates and lifecycle metadata, When they cross the V2 event boundary, Then their ordered union is retained", () => {
         const page = {
-            daemonGenerationId: "daemon-generation-1",
+            sessionGenerationId: "session-generation-1",
             events: [
                 {
                     ...event(1, {
@@ -276,7 +277,7 @@ describe("Session Event Log V2 protocol", () => {
         ]) {
             expect(() =>
                 decodeSessionEventLogPageV2({
-                    daemonGenerationId: "daemon-generation-1",
+                    sessionGenerationId: "session-generation-1",
                     events: [
                         {
                             eventId: "event-1",
@@ -284,6 +285,7 @@ describe("Session Event Log V2 protocol", () => {
                             position: "1",
                             provenance: { kind: "original" },
                             recordedAt,
+                            sessionGenerationId: "session-generation-1",
                             sessionId: "session-1",
                             type: "acp",
                         },

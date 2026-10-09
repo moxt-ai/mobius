@@ -483,6 +483,7 @@ const sessionEventFieldsV2 = {
     position: positionSchema,
     provenance: provenanceSchema,
     recordedAt: z.iso.datetime({ offset: true }),
+    sessionGenerationId: identifier,
     sessionId: identifier,
 };
 export const sessionEventV2Schema = z.discriminatedUnion("type", [
@@ -558,9 +559,9 @@ export const sessionEventEnvelopeV2Schema = z
 export type SessionEventEnvelopeV2 = z.infer<typeof sessionEventEnvelopeV2Schema>;
 export const sessionEventLogPageV2Schema = z
     .object({
-        daemonGenerationId: identifier,
         events: z.array(sessionEventV2Schema).max(MAX_EVENT_COUNT).readonly(),
         nextCursor: z.string().min(1).max(512).nullable(),
+        sessionGenerationId: identifier,
         tailCursor: z.string().max(512),
         truncated: z.boolean(),
         version: z.literal(2),

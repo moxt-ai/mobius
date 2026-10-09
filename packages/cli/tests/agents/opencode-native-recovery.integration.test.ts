@@ -49,10 +49,25 @@ test("Given a real opencode native Session, When the active prompt is cancelled 
                         targetCommandId,
                     }),
                 );
-            const finish = async (commandId: string, reason: string): Promise<string> => {
+            const finish = async (
+                commandId: string,
+                reason: string,
+            ): Promise<{
+                readonly eventId: string;
+                readonly requested: boolean;
+                readonly text: string;
+            }> => {
                 let text = "";
+                let requested = false;
                 for (;;) {
                     const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+                    if (
+                        event.type === "lifecycle-metadata" &&
+                        event.payload.kind === "prompt.requested" &&
+                        event.payload.commandId === commandId
+                    ) {
+                        requested = true;
+                    }
                     if (
                         event.type === "lifecycle-metadata" &&
                         event.payload.kind === "prompt.failed" &&
@@ -75,13 +90,17 @@ test("Given a real opencode native Session, When the active prompt is cancelled 
                         expect(event.payload.commandId).toBe(commandId);
                         expect(event.sessionId).toBe(nativeId);
                         expect(event.payload.stopReason).toBe(reason);
-                        return text;
+                        return {
+                            eventId: event.eventId,
+                            requested,
+                            text,
+                        };
                     }
                 }
             };
             const initial = randomUUID();
             sendPrompt(initial);
-            expect(await finish(initial, "end_turn")).toContain("NATIVE_RECOVERY_REPLY");
+            expect((await finish(initial, "end_turn")).text).toContain("NATIVE_RECOVERY_REPLY");
             holdResponse = true;
             const active = randomUUID();
             sendPrompt(active);
@@ -104,10 +123,13 @@ test("Given a real opencode native Session, When the active prompt is cancelled 
                 }
             }
             peer.send(encodeSessionCancelCommand({ kind: "session.cancel", commandId: active, sessionId: nativeId }));
-            await finish(active, "cancelled");
+            const cancelled = await finish(active, "cancelled");
             holdResponse = false;
             release.resolve();
-            expect(await finish(queued, "end_turn")).toContain("NATIVE_RECOVERY_REPLY");
+            const resumed = await finish(queued, "end_turn");
+            expect(resumed.text).toContain("NATIVE_RECOVERY_REPLY");
+            expect(resumed.requested).toBe(true);
+            expect(resumed.eventId).not.toBe(cancelled.eventId);
         });
     } finally {
         release.resolve();

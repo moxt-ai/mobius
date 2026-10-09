@@ -45,7 +45,7 @@ test("Given a newly created real Codex Session, When Chat requests its V2 histor
             expect(decodeSessionLiveHistoryV2PageLoaded(message)).toMatchObject({
                 events: {
                     events: {
-                        daemonGenerationId: expect.any(String),
+                        sessionGenerationId: expect.any(String),
                         events: [],
                         nextCursor: null,
                         truncated: false,

@@ -225,7 +225,7 @@ test("Given real Codex advances between repeated prompts, When V2 recovery pagin
                     continue;
                 }
                 expect(result.events.queuedPromptRequests).toEqual([]);
-                const daemonGenerationId = result.events.events.daemonGenerationId;
+                const sessionGenerationId = result.events.events.sessionGenerationId;
                 const historyEvents = [...result.events.events.events];
                 let cursor = result.events.events.nextCursor;
                 while (cursor !== null) {
@@ -252,7 +252,7 @@ test("Given real Codex advances between repeated prompts, When V2 recovery pagin
                         if (older.requestId !== olderRequestId) {
                             continue;
                         }
-                        expect(older.events.events.daemonGenerationId).toBe(daemonGenerationId);
+                        expect(older.events.events.sessionGenerationId).toBe(sessionGenerationId);
                         historyEvents.unshift(...older.events.events.events);
                         cursor = older.events.events.nextCursor;
                         break;
@@ -288,7 +288,7 @@ test("Given real Codex advances between repeated prompts, When V2 recovery pagin
                 expect(historyEvents.map((event) => event.eventId)).toEqual(
                     historyEvents.map((event) => event.eventId).toSorted(),
                 );
-                expect(historyEvents.every((event) => event.eventId.startsWith(`event-${daemonGenerationId}-`))).toBe(
+                expect(historyEvents.every((event) => event.eventId.startsWith(`event-${sessionGenerationId}-`))).toBe(
                     true,
                 );
                 break;

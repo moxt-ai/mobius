@@ -19,6 +19,7 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { WebSocket } from "undici";
 import type { AcpSessionObserver } from "./acp/agent-runtime-manager.ts";
+import type { AcpSessionEventPositionV2 } from "./acp/session-event-store-v2.ts";
 import {
     type AgentInstallation,
     CancelledInstallation,
@@ -34,17 +35,22 @@ import { send } from "./daemon-command-results.ts";
 
 export class DaemonAcpObserver implements AcpSessionObserver {
     readonly #record: (sessionId: string, event: RecordedSessionEvent) => void;
-    readonly #recordV2: (sessionId: string, event: SessionEventPayloadV2, position: number) => void;
+    readonly #recordV2: (sessionId: string, event: SessionEventPayloadV2, position: AcpSessionEventPositionV2) => void;
 
     constructor(
         record: (sessionId: string, event: RecordedSessionEvent) => void,
-        recordV2: (sessionId: string, event: SessionEventPayloadV2, position: number) => void = () => undefined,
+        recordV2: (sessionId: string, event: SessionEventPayloadV2, position: AcpSessionEventPositionV2) => void = () =>
+            undefined,
     ) {
         this.#record = record;
         this.#recordV2 = recordV2;
     }
 
-    readonly onSessionEventV2 = (sessionId: string, event: SessionEventPayloadV2, position: number): Promise<void> => {
+    readonly onSessionEventV2 = (
+        sessionId: string,
+        event: SessionEventPayloadV2,
+        position: AcpSessionEventPositionV2,
+    ): Promise<void> => {
         this.#recordV2(sessionId, event, position);
         return Promise.resolve();
     };

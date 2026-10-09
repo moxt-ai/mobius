@@ -52,7 +52,6 @@ describe("ACP conversation sessions", () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-tiering-"));
         const store = new CachedAcpSessionEventStoreV2(
             openSessionEventCacheV2Database(join(temporaryDirectory, "events.sqlite")),
-            "daemon-generation-tiering",
         );
         try {
             for (let position = 1; position <= 300; position += 1) {
@@ -78,13 +77,11 @@ describe("ACP conversation sessions", () => {
         }
     });
 
-    it("Given V2 Session events cached by one daemon generation, When a new daemon generation opens the cache, Then stale V2 events are unavailable", async () => {
+    it("Given V2 Session events cached by one process, When a new process opens the cache, Then stale V2 events are unavailable under a new Session generation", async () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-cache-"));
         const databasePath = join(temporaryDirectory, "events.sqlite");
-        const first = new CachedAcpSessionEventStoreV2(
-            openSessionEventCacheV2Database(databasePath),
-            "daemon-generation-1",
-        );
+        const first = new CachedAcpSessionEventStoreV2(openSessionEventCacheV2Database(databasePath));
+        let firstGeneration = "";
         try {
             first.append("session-1", {
                 payload: {
@@ -102,7 +99,9 @@ describe("ACP conversation sessions", () => {
                 },
                 type: "acp",
             });
-            expect(first.page("session-1", 10, null).events).toEqual([
+            const page = first.page("session-1", 10, null);
+            firstGeneration = page.sessionGenerationId;
+            expect(page.events).toEqual([
                 {
                     payload: {
                         commandId: "command-1",
@@ -124,13 +123,11 @@ describe("ACP conversation sessions", () => {
             first.close();
         }
 
-        const second = new CachedAcpSessionEventStoreV2(
-            openSessionEventCacheV2Database(databasePath),
-            "daemon-generation-2",
-        );
+        const second = new CachedAcpSessionEventStoreV2(openSessionEventCacheV2Database(databasePath));
         try {
-            expect(second.generationId).toBe("daemon-generation-2");
-            expect(second.page("session-1", 10, null).events).toEqual([]);
+            const page = second.page("session-1", 10, null);
+            expect(page.sessionGenerationId).not.toBe(firstGeneration);
+            expect(page.events).toEqual([]);
         } finally {
             second.close();
             await rm(temporaryDirectory, { force: true, recursive: true });

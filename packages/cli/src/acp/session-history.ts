@@ -10,7 +10,7 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { type AcpActivity, AcpActivityTracker } from "./activity.ts";
 import { isProgressMessage, normalizeContentBlock } from "./activity-content.ts";
-import type { AcpSessionEventStoreV2 } from "./session-event-store-v2.ts";
+import type { AcpSessionEventPositionV2, AcpSessionEventStoreV2 } from "./session-event-store-v2.ts";
 
 type ReplayMessage =
     | {
@@ -92,11 +92,12 @@ export class AcpHistoryReplay {
     readonly record = async (
         update: SessionNotification["update"],
         rawUpdate: AcpSessionUpdateV2,
-        onRecorded: (position: number) => Promise<void> = () => Promise.resolve(),
+        onRecorded: (position: AcpSessionEventPositionV2) => Promise<void> = () => Promise.resolve(),
     ): Promise<number> => {
         const position = this.#events.append(this.#sessionId, { payload: rawUpdate, type: "acp" });
         await onRecorded(position);
-        return await this.#applyUpdate(update, position);
+        await this.#applyUpdate(update, position.position);
+        return position.position;
     };
 
     readonly #applyUpdate = async (update: SessionNotification["update"], position: number): Promise<number> => {
@@ -193,7 +194,7 @@ export class AcpHistoryReplay {
         return position;
     };
 
-    readonly recordLifecycle = (event: SessionEventPayloadV2): number => {
+    readonly recordLifecycle = (event: SessionEventPayloadV2): AcpSessionEventPositionV2 => {
         if (event.type !== "lifecycle-metadata") {
             throw new Error("Lifecycle history only accepts lifecycle metadata");
         }

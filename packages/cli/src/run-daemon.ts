@@ -124,13 +124,11 @@ export async function runDaemon(
         stateDirectory,
     });
     const channelHash = createHash("sha256").update(config.channelId).digest("hex");
-    const daemonGenerationId = randomUUID();
     const sessionDatabase = openAcpSessionDatabase(join(stateDirectory, "sessions", `${channelHash}.sqlite`));
     let eventsV2: CachedAcpSessionEventStoreV2;
     try {
         eventsV2 = new CachedAcpSessionEventStoreV2(
             openSessionEventCacheV2Database(join(stateDirectory, "sessions", `${channelHash}.events.sqlite`)),
-            daemonGenerationId,
         );
     } catch (error) {
         sessionDatabase.close();
@@ -140,10 +138,8 @@ export async function runDaemon(
     await using externalContent = new LocalExternalContentStore(stateDirectory);
     const operations = new DaemonOperationState();
     const publisher = new DaemonSessionEventPublisher(timer);
-    const eventLogV2 = new DaemonSessionEventLogV2(
-        publisher,
-        (sessionId, event) => agentRuntime.recordLifecycleEventV2(sessionId, event),
-        daemonGenerationId,
+    const eventLogV2 = new DaemonSessionEventLogV2(publisher, (sessionId, event) =>
+        agentRuntime.recordLifecycleEventV2(sessionId, event),
     );
     const activeTurns = new DaemonTurnRegistry(operations);
     const agentRuntime = new AgentRuntimeManager(

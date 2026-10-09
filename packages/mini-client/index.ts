@@ -704,14 +704,14 @@ async function nativeEventsV2(
         throw new MiniClientError("event_log_unavailable", "The Runtime returned no V2 event-log page");
     }
     const events = pages.toReversed().flatMap((page) => page.events.events);
-    if (pages.some((page) => page.events.daemonGenerationId !== newest.events.daemonGenerationId)) {
-        throw new MiniClientError("event_log_generation_changed", "The Runtime restarted while history was loading");
+    if (pages.some((page) => page.events.sessionGenerationId !== newest.events.sessionGenerationId)) {
+        throw new MiniClientError("event_log_generation_changed", "The Session reloaded while history was loading");
     }
     return {
         events: {
-            daemonGenerationId: newest.events.daemonGenerationId,
             events,
             nextCursor: cursor,
+            sessionGenerationId: newest.events.sessionGenerationId,
             tailCursor: events.at(-1)?.eventId ?? "",
             truncated: cursor !== null,
             version: 2,
