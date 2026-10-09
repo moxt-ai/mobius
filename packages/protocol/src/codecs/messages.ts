@@ -22,10 +22,14 @@ import {
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_HEARTBEAT_KIND,
     RUNTIME_LIVENESS_READY_KIND,
+    RUNTIME_PING_KIND,
+    RUNTIME_PONG_KIND,
     RUNTIME_STATUS_KIND,
     type RuntimeHeartbeatAckEvent,
     type RuntimeHeartbeatEvent,
     type RuntimeLivenessReadyEvent,
+    type RuntimePingCommand,
+    type RuntimePongEvent,
     type RuntimeStatusEvent,
     SESSION_CANCEL_KIND,
     SESSION_COMPLETED_KIND,
@@ -414,6 +418,18 @@ export function decodeRuntimeHeartbeatAckEvent(encoded: string): RuntimeHeartbea
     };
 }
 
+export function decodeRuntimePingCommand(encoded: string): RuntimePingCommand {
+    const value = parseJson(encoded);
+    assertKind(value, RUNTIME_PING_KIND);
+    return { kind: RUNTIME_PING_KIND, requestId: readIdentifier(value, "requestId") };
+}
+
+export function decodeRuntimePongEvent(encoded: string): RuntimePongEvent {
+    const value = parseJson(encoded);
+    assertKind(value, RUNTIME_PONG_KIND);
+    return { kind: RUNTIME_PONG_KIND, requestId: readIdentifier(value, "requestId") };
+}
+
 export function decodeSessionStartedEvent(encoded: string): SessionStartedEvent {
     const value = parseJson(encoded);
     assertKind(value, SESSION_STARTED_KIND);
@@ -532,6 +548,14 @@ export function encodeRuntimeHeartbeatEvent(message: RuntimeHeartbeatEvent): str
 
 export function encodeRuntimeHeartbeatAckEvent(message: RuntimeHeartbeatAckEvent): string {
     return JSON.stringify(decodeRuntimeHeartbeatAckEvent(JSON.stringify(message)));
+}
+
+export function encodeRuntimePingCommand(message: RuntimePingCommand): string {
+    return JSON.stringify(decodeRuntimePingCommand(JSON.stringify(message)));
+}
+
+export function encodeRuntimePongEvent(message: RuntimePongEvent): string {
+    return JSON.stringify(decodeRuntimePongEvent(JSON.stringify(message)));
 }
 
 export function encodeSessionStartedEvent(message: SessionStartedEvent): string {

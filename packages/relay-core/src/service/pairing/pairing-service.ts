@@ -140,6 +140,42 @@ export class PairingService {
         }
     };
 
+    readonly measureRuntimeLatency = async (
+        projectId: string,
+        runtimeId: string,
+        token: string,
+        signal: AbortSignal,
+    ): Promise<number> => {
+        const deadline = AbortSignal.any([signal, AbortSignal.timeout(15_000)]);
+        const access = await this.#pairings.openControlHost(
+            projectId,
+            runtimeId,
+            token,
+            ProjectPermission.RuntimeRead,
+            deadline,
+        );
+        try {
+            const response = await this.#channels.acceptHost(
+                access,
+                new Request("https://runtime.internal/host", { headers: { Upgrade: "websocket" } }),
+                deadline,
+            );
+            const socket = response.webSocket;
+            if (socket === null) {
+                throw new PairingDirectoryError("runtime_unavailable", "The Runtime connection is unavailable");
+            }
+            const startedAt = performance.now();
+            await requestRuntimeControl(
+                socket,
+                { kind: "runtime.ping", requestId: `ping_${crypto.randomUUID()}` },
+                deadline,
+            );
+            return Math.max(0, Math.round(performance.now() - startedAt));
+        } finally {
+            await this.#pairings.closeControlHost(access, AbortSignal.timeout(15_000));
+        }
+    };
+
     readonly requestProjectScopeControl = async (
         scope: ProjectScope,
         runtimeId: string,
