@@ -1,0 +1,1 @@
+DROP TABLE `session_event_v2`;
