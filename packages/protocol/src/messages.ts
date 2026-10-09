@@ -8,6 +8,8 @@ export const RUNTIME_STATUS_KIND = "runtime.status";
 export const RUNTIME_LIVENESS_READY_KIND = "runtime.liveness.ready";
 export const RUNTIME_HEARTBEAT_KIND = "runtime.heartbeat";
 export const RUNTIME_HEARTBEAT_ACK_KIND = "runtime.heartbeat.ack";
+export const RUNTIME_PING_KIND = "runtime.ping";
+export const RUNTIME_PONG_KIND = "runtime.pong";
 export const SESSION_STARTED_KIND = "session.started";
 export const SESSION_QUEUED_KIND = "session.queued";
 export const AGENT_MESSAGE_DELTA_KIND = "agent.message.delta";
@@ -80,6 +82,16 @@ export interface RuntimeHeartbeatEvent {
 export interface RuntimeHeartbeatAckEvent {
     readonly heartbeatId: string;
     readonly kind: typeof RUNTIME_HEARTBEAT_ACK_KIND;
+}
+
+export interface RuntimePingCommand {
+    readonly kind: typeof RUNTIME_PING_KIND;
+    readonly requestId: string;
+}
+
+export interface RuntimePongEvent {
+    readonly kind: typeof RUNTIME_PONG_KIND;
+    readonly requestId: string;
 }
 
 export interface SessionStartedEvent {

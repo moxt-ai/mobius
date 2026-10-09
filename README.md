@@ -18,8 +18,10 @@ Mobius makes those Agents available remotely. From another device, users can fin
 resume available conversations, give instructions, queue follow-up work, stop execution,
 answer permission requests and view results, including files and images. Developers
 can offer this experience without implementing remote access separately for each
-Agent. Mobius can be used on its own; [Morty](https://github.com/moxt-ai/morty) provides
-a ready-to-use Bot and browser chat experience.
+Agent. Mobius can be used on its own through its SDK and Relay. Its bundled Web app
+provides pairing, Runtime management and Agent configuration; it does not provide a
+second chat product. [Morty](https://github.com/moxt-ai/morty) provides the Bot and
+browser chat experience, including conversations, live replies and history.
 
 Ongoing work should feel like a live broadcast. Multiple devices can watch the same
 conversation and see instructions sent from elsewhere. Publishing continues when
@@ -90,7 +92,8 @@ The local command applies the committed D1 migration before starting Wrangler. T
 credential file is ignored by Git. The bundled Web app never receives this deployment
 credential. Its deployment adapter creates a Project and its Project-scoped owner
 credential, then uses the generic `MobiusClient` for Runtime pairing,
-Runtime discovery, Session history, and Session operations. The browser persists the
+Runtime discovery and management, and Agent configuration. Conversation operations
+remain available to SDK clients such as Morty. The browser persists the
 Project credential after pairing so page loads and WebSocket reconnects return to the
 same Project.
 

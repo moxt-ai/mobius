@@ -8,6 +8,8 @@ import {
     FILE_READ_KIND,
     NATIVE_SESSION_CANCEL_KIND,
     NATIVE_SESSION_REQUEST_KIND,
+    RUNTIME_PING_KIND,
+    RUNTIME_PONG_KIND,
     SESSION_CANCEL_KIND,
     SESSION_CONFIGURE_KIND,
     SESSION_ELICITATION_RESPOND_KIND,
@@ -112,6 +114,10 @@ export function createDaemonCommandHandler({
     return {
         handle: (message: ServiceToDaemonMessage): void => {
             const kind = message.kind;
+            if (kind === RUNTIME_PING_KIND) {
+                send(socket, { kind: RUNTIME_PONG_KIND, requestId: message.requestId });
+                return;
+            }
             if (kind === SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND) {
                 void executeSessionLiveHistoryV2PageLoad(
                     socket,

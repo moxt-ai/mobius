@@ -18,6 +18,7 @@ import {
     decodeNativeSessionCancel,
     decodeNativeSessionCommand,
     decodeNativeSessionRequest,
+    decodeRuntimePingCommand,
     decodeSessionCancelCommand,
     decodeSessionConfigureCommand,
     decodeSessionElicitationRespondCommand,
@@ -44,6 +45,8 @@ import {
     NATIVE_SESSION_RESULT_KIND,
     type NativeSessionCommand,
     ProtocolMessageError,
+    RUNTIME_PING_KIND,
+    RUNTIME_PONG_KIND,
     RUNTIME_STATUS_KIND,
     SESSION_CANCEL_KIND,
     SESSION_CONFIGURE_KIND,
@@ -416,6 +419,8 @@ export class ChannelActor {
                 return;
             case WORKSPACE_ENTRIES_KIND:
                 return;
+            case RUNTIME_PONG_KIND:
+                return;
             case SESSION_OPERATION_FAILED_KIND:
                 return;
             case SESSION_READY_KIND:
@@ -504,6 +509,10 @@ export class ChannelActor {
             case FILE_READ_KIND: {
                 const command = decodeFileReadCommand(message);
                 return { message: command, requestId: command.requestId, sessionId: command.sessionId };
+            }
+            case RUNTIME_PING_KIND: {
+                const command = decodeRuntimePingCommand(message);
+                return { message: command, requestId: command.requestId, sessionId: "" };
             }
             default:
                 throw new UnsupportedProtocolMessageKindError("service-to-daemon", kind);
