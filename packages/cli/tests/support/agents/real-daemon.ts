@@ -120,6 +120,7 @@ export async function withRealDaemon(
             waiter = Promise.withResolvers<string>();
             return await waiter.promise;
         };
+        const pendingEvents: string[] = [];
         const sessionId = `real_${specification.id}_${randomUUID()}`;
         await scenario({
             bindingId: config.bindingId,
@@ -135,10 +136,20 @@ export async function withRealDaemon(
             },
             nextMessage,
             nextEvent: async () => {
+                const pending = pendingEvents.shift();
+                if (pending !== undefined) {
+                    return pending;
+                }
                 for (;;) {
                     const message = await nextMessage();
                     if (decodeMessageKind(message) === "session.event.v2") {
-                        return JSON.stringify(decodeSessionEventEnvelopeV2(message).event);
+                        pendingEvents.push(
+                            ...decodeSessionEventEnvelopeV2(message).events.map((event) => JSON.stringify(event)),
+                        );
+                        const event = pendingEvents.shift();
+                        if (event !== undefined) {
+                            return event;
+                        }
                     }
                 }
             },

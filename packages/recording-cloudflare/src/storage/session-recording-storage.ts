@@ -21,7 +21,10 @@ export class SessionRecordingStorage {
     }
     readonly append = (write: SessionRecordingWrite): boolean =>
         this.#storage.transactionSync(() => {
-            const event = write.envelope.event;
+            const [event, ...remainingEvents] = write.envelope.events;
+            if (event === undefined || remainingEvents.some((candidate) => candidate.sessionId !== event.sessionId)) {
+                return false;
+            }
             const metadata = this.#database
                 .select()
                 .from(recordingMetadata)
@@ -77,7 +80,7 @@ export class SessionRecordingStorage {
             .from(recordedSessionEvent)
             .orderBy(asc(recordedSessionEvent.ordinal))
             .all()
-            .map((row) => decodeSessionEventEnvelopeV2(JSON.parse(row.envelopeJson)).event);
+            .flatMap((row) => decodeSessionEventEnvelopeV2(JSON.parse(row.envelopeJson)).events);
         return { events, sessionId };
     };
 }

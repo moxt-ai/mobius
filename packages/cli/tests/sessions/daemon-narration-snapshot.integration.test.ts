@@ -188,22 +188,28 @@ describe("daemon narration delivery", () => {
                 if (decodeMessageKind(message) !== SESSION_EVENT_V2_KIND) {
                     continue;
                 }
-                const event = decodeSessionEventEnvelopeV2(message).event;
-                if (
-                    event.type === "acp" &&
-                    event.payload.sessionUpdate === "agent_thought_chunk" &&
-                    event.payload.content.type === "text"
-                ) {
-                    narration += event.payload.content.text;
-                    completedNarration = true;
+                const events = decodeSessionEventEnvelopeV2(message).events;
+                for (const event of events) {
+                    if (
+                        event.type === "acp" &&
+                        event.payload.sessionUpdate === "agent_thought_chunk" &&
+                        event.payload.content.type === "text"
+                    ) {
+                        narration += event.payload.content.text;
+                        completedNarration = true;
+                    }
+                    if (
+                        event.type === "lifecycle-metadata" &&
+                        (event.payload.kind === "prompt.failed" || event.payload.kind === "prompt.failed-before-start")
+                    ) {
+                        throw new Error(message);
+                    }
                 }
                 if (
-                    event.type === "lifecycle-metadata" &&
-                    (event.payload.kind === "prompt.failed" || event.payload.kind === "prompt.failed-before-start")
+                    events.some(
+                        (event) => event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed",
+                    )
                 ) {
-                    throw new Error(message);
-                }
-                if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
                     break;
                 }
             }

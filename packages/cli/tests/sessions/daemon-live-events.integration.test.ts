@@ -28,10 +28,59 @@ import { describe, expect, it } from "vitest";
 import { LocalAgentDefinition } from "../../src/agent-catalog/local-agent.ts";
 import { AuditStore } from "../../src/audit/audit-store.ts";
 import { createDaemonConfig, DaemonLocalContext } from "../../src/config.ts";
+import { SESSION_EVENT_V2_BATCH_WINDOW_MILLISECONDS } from "../../src/relay-connection/session-event-publisher.ts";
+import type { DaemonScheduledTask, DaemonTimer } from "../../src/relay-connection/timer.ts";
 import { runDaemon } from "../../src/run-daemon.ts";
 
 const websocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
+
+class ControllableDaemonTask implements DaemonScheduledTask {
+    #cancelled = false;
+    readonly #callback: () => void;
+
+    constructor(callback: () => void) {
+        this.#callback = callback;
+    }
+
+    readonly cancel = (): void => {
+        this.#cancelled = true;
+    };
+
+    readonly run = (): void => {
+        if (!this.#cancelled) {
+            this.#cancelled = true;
+            this.#callback();
+        }
+    };
+}
+
+class ControllableDaemonTimer implements DaemonTimer {
+    readonly #scheduled: ControllableDaemonTask[] = [];
+    readonly #waiters: Array<(task: ControllableDaemonTask) => void> = [];
+
+    readonly schedule = (callback: () => void, milliseconds: number): DaemonScheduledTask => {
+        const task = new ControllableDaemonTask(callback);
+        if (milliseconds !== SESSION_EVENT_V2_BATCH_WINDOW_MILLISECONDS) {
+            return task;
+        }
+        const waiter = this.#waiters.shift();
+        if (waiter === undefined) {
+            this.#scheduled.push(task);
+        } else {
+            waiter(task);
+        }
+        return task;
+    };
+
+    readonly nextBatch = (): Promise<ControllableDaemonTask> => {
+        const task = this.#scheduled.shift();
+        if (task !== undefined) {
+            return Promise.resolve(task);
+        }
+        return new Promise((resolve) => this.#waiters.push(resolve));
+    };
+}
 
 class ClientFrames {
     #buffered = Buffer.alloc(0);
@@ -120,7 +169,9 @@ async function startControlledDaemon(): Promise<{
     readonly close: () => Promise<void>;
     readonly config: ReturnType<typeof createDaemonConfig>;
     readonly frames: ClientFrames;
+    readonly liveBatchSizes: number[];
     readonly socket: Duplex;
+    readonly timer: ControllableDaemonTimer;
 }> {
     const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-timeline-"));
     const workspace = join(stateDirectory, "workspace");
@@ -171,13 +222,16 @@ async function startControlledDaemon(): Promise<{
     );
     const cancellation = new AbortController();
     const audit = new AuditStore();
-    const daemon = runDaemon(config, audit, cancellation.signal);
+    const timer = new ControllableDaemonTimer();
+    const daemon = runDaemon(config, audit, cancellation.signal, timer);
     const socket = await socketReady.promise;
     return {
         agent,
         config,
         frames: new ClientFrames(socket),
+        liveBatchSizes: [],
         socket,
+        timer,
         close: async () => {
             cancellation.abort();
             await daemon;
@@ -192,6 +246,7 @@ async function startControlledDaemon(): Promise<{
 }
 
 type Fixture = Awaited<ReturnType<typeof startControlledDaemon>>;
+const pendingLiveEvents = new WeakMap<Fixture, SessionEventV2[]>();
 function prompt(fixture: Fixture, text: string): SessionPromptCommand {
     return {
         additionalDirectoryIds: [],
@@ -209,6 +264,13 @@ function prompt(fixture: Fixture, text: string): SessionPromptCommand {
     };
 }
 async function nextLive(fixture: Fixture): Promise<SessionEventV2> {
+    const pending = pendingLiveEvents.get(fixture) ?? [];
+    const buffered = pending.shift();
+    if (buffered !== undefined) {
+        return buffered;
+    }
+    const task = await fixture.timer.nextBatch();
+    task.run();
     for (;;) {
         const frame = await fixture.frames.next();
         expect(decodeMessageKind(frame)).not.toBe("session.event");
@@ -218,14 +280,21 @@ async function nextLive(fixture: Fixture): Promise<SessionEventV2> {
         if (decodeMessageKind(frame) !== SESSION_EVENT_V2_KIND) {
             continue;
         }
-        const event = decodeSessionEventEnvelopeV2(frame).event;
-        if (
-            event.type === "lifecycle-metadata" &&
-            (event.payload.kind === "prompt.failed" || event.payload.kind === "prompt.failed-before-start")
-        ) {
+        const events = [...decodeSessionEventEnvelopeV2(frame).events];
+        fixture.liveBatchSizes.push(events.length);
+        const failure = events.find(
+            (event) =>
+                event.type === "lifecycle-metadata" &&
+                (event.payload.kind === "prompt.failed" || event.payload.kind === "prompt.failed-before-start"),
+        );
+        if (failure !== undefined) {
             throw new Error(frame);
         }
-        return event;
+        const event = events.shift();
+        if (event !== undefined) {
+            pendingLiveEvents.set(fixture, events);
+            return event;
+        }
     }
 }
 async function cancel(fixture: Fixture, command: SessionPromptCommand): Promise<void> {
@@ -364,6 +433,7 @@ describe("daemon V2 live delivery", () => {
             expect(text).toBe(
                 `Gathering contextOpenCode turn 1: ${Array.from({ length: 64 }, (_, index) => `token-${index} `).join("")}`,
             );
+            expect(fixture.liveBatchSizes.some((size) => size > 1)).toBe(true);
             const page = await history(fixture, command);
             expect(page.events.map(({ eventId, type, payload }) => ({ eventId, type, payload }))).toEqual(
                 live.map(({ eventId, type, payload }) => ({ eventId, type, payload })),

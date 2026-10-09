@@ -61,7 +61,14 @@ export function createRecordingWorker(): RecordingWorker {
                     throw cause;
                 }
                 const { projectId, runtimeId } = write;
-                const sessionId = write.envelope.event.sessionId;
+                const [firstEvent, ...remainingEvents] = write.envelope.events;
+                if (
+                    firstEvent === undefined ||
+                    remainingEvents.some((event) => event.sessionId !== firstEvent.sessionId)
+                ) {
+                    return errorResponse("invalid_envelope", 400);
+                }
+                const sessionId = firstEvent.sessionId;
                 const body = JSON.stringify(write);
                 const recorded = await environment.SESSION_RECORDING.getByName(
                     JSON.stringify([projectId, sessionId]),

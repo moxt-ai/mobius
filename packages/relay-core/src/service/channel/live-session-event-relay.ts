@@ -25,9 +25,17 @@ export class LiveSessionEventRelay {
             }
         }
         // Recording is another consumer, including when no browsers are watching.
-        this.#recording.publish(
-            { projectId: this.#projectId, runtimeId: this.#runtimeId, sessionId: envelope.event.sessionId },
-            envelope,
-        );
+        const eventsBySession = new Map<string, (typeof envelope.events)[number][]>();
+        for (const event of envelope.events) {
+            const events = eventsBySession.get(event.sessionId) ?? [];
+            events.push(event);
+            eventsBySession.set(event.sessionId, events);
+        }
+        for (const [sessionId, events] of eventsBySession) {
+            this.#recording.publish(
+                { projectId: this.#projectId, runtimeId: this.#runtimeId, sessionId },
+                { events, kind: envelope.kind },
+            );
+        }
     };
 }

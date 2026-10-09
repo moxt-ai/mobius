@@ -51,7 +51,7 @@ class ControlledRecording implements SessionRecording {
             signal.throwIfAborted();
             return { kind: "failed", code: "write_failed" };
         }
-        this.contents.push(JSON.stringify(envelope.event));
+        this.contents.push(...envelope.events.map((event) => JSON.stringify(event)));
         return { kind: "recorded" };
     };
 }
@@ -59,15 +59,17 @@ class ControlledRecording implements SessionRecording {
 function liveEvent(sessionId: string, text: string): string {
     return encodeSessionEventEnvelopeV2({
         kind: "session.event.v2",
-        event: {
-            eventId: "event-1",
-            position: "1",
-            provenance: { kind: "original" },
-            recordedAt: "2026-09-18T00:00:00.000Z",
-            sessionId,
-            type: "acp",
-            payload: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } },
-        },
+        events: [
+            {
+                eventId: "event-1",
+                position: "1",
+                provenance: { kind: "original" },
+                recordedAt: "2026-09-18T00:00:00.000Z",
+                sessionId,
+                type: "acp",
+                payload: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } },
+            },
+        ],
     });
 }
 
@@ -778,14 +780,16 @@ describe.sequential("Platform Session-only boundary", () => {
             const answer = liveEvent(sessionId, "local answer");
             daemon.send(answer);
             const received = decodeSessionEventEnvelopeV2(await hostMessages.next());
-            expect(JSON.stringify(received.event.payload)).toContain("local answer");
+            expect(JSON.stringify(received.events.map((event) => event.payload))).toContain("local answer");
             expect(received).not.toHaveProperty("cursor");
             expect(received).not.toHaveProperty("sequence");
             // Relay broadcasts the original V2 identity unchanged, including duplicate frames.
             daemon.send(answer);
-            expect(JSON.stringify(decodeSessionEventEnvelopeV2(await hostMessages.next()).event.payload)).toContain(
-                "local answer",
-            );
+            expect(
+                JSON.stringify(
+                    decodeSessionEventEnvelopeV2(await hostMessages.next()).events.map((event) => event.payload),
+                ),
+            ).toContain("local answer");
 
             // Given Recording stalls then fails, subsequent live events still reach the viewer.
             await runInDurableObject(environment.RUNTIME_RELAY.getByName(runtimeId), async (_instance, state) => {
@@ -824,12 +828,16 @@ describe.sequential("Platform Session-only boundary", () => {
                     await Promise.all(pending);
                 }
             });
-            expect(JSON.stringify(decodeSessionEventEnvelopeV2(await hostMessages.next()).event.payload)).toContain(
-                "recording is stalled",
-            );
-            expect(JSON.stringify(decodeSessionEventEnvelopeV2(await hostMessages.next()).event.payload)).toContain(
-                "live output continues",
-            );
+            expect(
+                JSON.stringify(
+                    decodeSessionEventEnvelopeV2(await hostMessages.next()).events.map((event) => event.payload),
+                ),
+            ).toContain("recording is stalled");
+            expect(
+                JSON.stringify(
+                    decodeSessionEventEnvelopeV2(await hostMessages.next()).events.map((event) => event.payload),
+                ),
+            ).toContain("live output continues");
             const browserAccess = await responseJson(
                 await worker.fetch(
                     new Request(
@@ -979,9 +987,11 @@ describe.sequential("Platform Session-only boundary", () => {
                 subscriptionId: "subscription-1",
             });
             daemon.send(answer);
-            expect(JSON.stringify(decodeSessionEventEnvelopeV2(await hostMessages.next()).event.payload)).toContain(
-                "local answer",
-            );
+            expect(
+                JSON.stringify(
+                    decodeSessionEventEnvelopeV2(await hostMessages.next()).events.map((event) => event.payload),
+                ),
+            ).toContain("local answer");
             expect(JSON.parse(await transportMessages.next())).toMatchObject({
                 data: expect.stringContaining("local answer"),
                 eventId: "",
