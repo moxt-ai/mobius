@@ -103,18 +103,4 @@ describe.sequential("Agent integration installation", () => {
             await paired.close();
         }
     });
-
-    it("Given chat has a ready Agent and other local Agents need setup, When the conversation sidebar opens, Then setup cards stay out of the sidebar", async () => {
-        const paired = await openPairedApplication({
-            installableAgents: [{ id: "pi", label: "Pi", status: "agent_not_installed" }],
-        });
-
-        try {
-            await screen.findByRole("button", { name: "New chat" });
-            expect(screen.queryByRole("heading", { name: "Agent integrations" })).toBeNull();
-            expect(screen.queryByText("Pi")).toBeNull();
-        } finally {
-            await paired.close();
-        }
-    });
 });

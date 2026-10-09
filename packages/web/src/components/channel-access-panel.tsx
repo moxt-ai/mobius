@@ -18,7 +18,7 @@ import { Button } from "@/components/ui/button";
 import type { CreatedChannelAccessGrant, LinkedChannelDevice } from "@/domain/channel";
 import { PairingApiError } from "@/domain/channel";
 import { createChannelAccessGrant, readAccessChannelDevices, revokeLinkedChannelDevice } from "@/services/pairing-api";
-import { useChatStore } from "@/store/chat-store";
+import { useRuntimeStore } from "@/store/runtime-store";
 
 abstract class DeviceDirectoryState {}
 
@@ -202,7 +202,7 @@ function ChannelAccessPanel({ channelId }: { readonly channelId: string }) {
                     </h2>
                     <p className="mt-2 text-sm leading-6 text-muted-foreground">
                         Create a link that works once for 10 minutes. The new browser gets its own revocable credential
-                        and can chat on any of the Project's local machines; your owner credential is never put in the
+                        and can access any of the Project's local machines; your owner credential is never put in the
                         link.
                     </p>
                 </div>
@@ -225,8 +225,8 @@ function ChannelAccessPanel({ channelId }: { readonly channelId: string }) {
 
             {directory instanceof LinkedDeviceDirectoryState && (
                 <div className="mt-5 rounded-xl border-[0.5px] border-black/10 bg-white px-5 py-4 text-sm leading-6 text-muted-foreground shadow-[0_1px_3px_rgba(0,0,0,0.03)]">
-                    This browser has linked-device access. It can use the channel and chat on any of the Project's local
-                    machines, but only the original browser can create links or revoke devices.
+                    This browser has linked-device access. It can access the Project's local machines, but only the
+                    original browser can create links or revoke devices.
                 </div>
             )}
 
@@ -371,18 +371,18 @@ export function ChannelAccessPage({
     readonly desktopSidebarCollapsed: boolean;
     readonly onToggleDesktopSidebar: () => void;
 }) {
-    const setSidebarOpen = useChatStore((state) => state.setSidebarOpen);
-    const sidebarOpen = useChatStore((state) => state.sidebarOpen);
+    const setSidebarOpen = useRuntimeStore((state) => state.setSidebarOpen);
+    const sidebarOpen = useRuntimeStore((state) => state.sidebarOpen);
 
     return (
         <>
-            <header className="chat-header z-10 flex shrink-0 items-center border-b-[0.5px] border-black/6 bg-background/92 px-2.5 supports-[backdrop-filter]:backdrop-blur-xl md:px-[18px]">
+            <header className="management-header z-10 flex shrink-0 items-center border-b-[0.5px] border-black/6 bg-background/92 px-2.5 supports-[backdrop-filter]:backdrop-blur-xl md:px-[18px]">
                 <Button
-                    aria-controls="conversation-sidebar"
+                    aria-controls="runtime-navigation"
                     aria-expanded={sidebarOpen}
-                    aria-label="Open conversation sidebar"
+                    aria-label="Open management navigation"
                     className="mr-[7px] size-11 lg:hidden"
-                    id="conversation-sidebar-trigger"
+                    id="runtime-navigation-trigger"
                     onClick={() => setSidebarOpen(true)}
                     size="icon"
                     variant="ghost"
@@ -390,11 +390,11 @@ export function ChannelAccessPage({
                     <Menu aria-hidden="true" className="size-[18px]" />
                 </Button>
                 <Button
-                    aria-label={desktopSidebarCollapsed ? "Show conversation sidebar" : "Hide conversation sidebar"}
+                    aria-label={desktopSidebarCollapsed ? "Show management navigation" : "Hide management navigation"}
                     className="mr-2 hidden lg:inline-flex"
                     onClick={onToggleDesktopSidebar}
                     size="icon"
-                    title={desktopSidebarCollapsed ? "Show conversation sidebar" : "Hide conversation sidebar"}
+                    title={desktopSidebarCollapsed ? "Show management navigation" : "Hide management navigation"}
                     variant="ghost"
                 >
                     {desktopSidebarCollapsed ? (
@@ -410,13 +410,13 @@ export function ChannelAccessPage({
                     Access from other devices
                 </h1>
                 <Link
-                    aria-label="Back to chat"
+                    aria-label="Back to Agents"
                     className="ml-auto inline-flex size-11 shrink-0 items-center justify-center rounded-lg text-xs font-medium text-muted-foreground no-underline transition-colors duration-150 hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none sm:min-h-11 sm:w-auto sm:gap-1.5 sm:px-3"
                     relative="path"
                     to=".."
                 >
                     <ArrowLeft aria-hidden="true" className="size-3.5" />
-                    <span className="hidden sm:inline">Back to chat</span>
+                    <span className="hidden sm:inline">Back to Agents</span>
                 </Link>
             </header>
 

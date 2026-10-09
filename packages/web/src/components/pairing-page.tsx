@@ -158,8 +158,8 @@ function RecordingChoice({
                 <p className="mt-5 text-xs font-semibold tracking-[0.06em] text-[#218854] uppercase">First pairing</p>
                 <h1 className="mt-2 text-2xl font-semibold tracking-[-0.03em]">Keep durable conversation history?</h1>
                 <p className="mt-3 text-sm leading-6 text-muted-foreground">
-                    Recording stores Session events in the optional Recording Worker. When enabled, this Web app loads
-                    conversation history from Recording instead of asking your local daemon.
+                    Recording makes captured history available to clients without the connected machine. It is optional
+                    and may have gaps; it does not keep an offline Agent running.
                 </p>
 
                 <label className="mt-7 flex min-h-20 cursor-pointer items-start gap-3 rounded-xl border border-black/10 bg-[#f7f8f9] px-4 py-4 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[#2fb872]">
@@ -223,7 +223,7 @@ function PairingConnected({ machineName }: { readonly machineName: string }) {
             <p className="mt-5 text-xs font-semibold tracking-[0.06em] text-[#218854] uppercase">Machine paired</p>
             <h1 className="mt-2 text-2xl font-semibold tracking-[-0.03em]">Opening your channel</h1>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                {machineName} is connected. Your chat workspace is ready.
+                {machineName} is connected. Your Runtime is ready to manage.
             </p>
             <LoaderCircle className="mt-6 size-5 animate-spin text-[#279a60]" />
         </section>
@@ -303,7 +303,7 @@ function PairingInstructions({ pairing }: { readonly pairing: CreatedPairing }) 
                                         {copyLabel}
                                     </button>
                                 </div>
-                                <code className="conversation-scroll block max-h-28 overflow-auto px-3 py-3.5 font-mono text-[11px] leading-[19px] break-all whitespace-pre-wrap">
+                                <code className="pairing-command-scroll block max-h-28 overflow-auto px-3 py-3.5 font-mono text-[11px] leading-[19px] break-all whitespace-pre-wrap">
                                     {command}
                                 </code>
                             </div>
@@ -340,7 +340,7 @@ function PairingInstructions({ pairing }: { readonly pairing: CreatedPairing }) 
                         <div>
                             <p className="text-xs font-semibold">Codex or Claude Code</p>
                             <p className="mt-0.5 text-[11px] leading-[17px] text-muted-foreground">
-                                Choose an agent independently for every new conversation.
+                                Use Morty to chat with the Agents on your machine.
                             </p>
                         </div>
                     </div>

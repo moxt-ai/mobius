@@ -12,8 +12,8 @@ import {
     MissingAgentOption,
     SucceededAgentInstallationState,
 } from "@/domain/channel";
-import { recheckLocalAgents } from "@/services/mobius-transport";
-import { useChatStore } from "@/store/chat-store";
+import { recheckLocalAgents } from "@/services/runtime-transport";
+import { useRuntimeStore } from "@/store/runtime-store";
 
 interface AgentInstallationCardsViewProps {
     readonly agents: readonly InstallableAgentOption[];
@@ -110,9 +110,9 @@ export function AgentInstallationCardsView({ agents, installations }: AgentInsta
 }
 
 export function AgentInstallationPanel() {
-    const agents = useChatStore((state) => state.installableAgents);
-    const installations = useChatStore((state) => state.agentInstallations);
-    const runtime = useChatStore((state) => state.runtime);
+    const agents = useRuntimeStore((state) => state.installableAgents);
+    const installations = useRuntimeStore((state) => state.agentInstallations);
+    const runtime = useRuntimeStore((state) => state.runtime);
     const checking = installations.some((installation) => installation.canCancel);
     return (
         <>
@@ -134,8 +134,8 @@ export function AgentInstallationPanel() {
 }
 
 export function AgentInstallationPage() {
-    const machineName = useChatStore((state) => state.machineName);
-    const runtime = useChatStore((state) => state.runtime);
+    const machineName = useRuntimeStore((state) => state.machineName);
+    const runtime = useRuntimeStore((state) => state.runtime);
     const routes = useWorkspaceRoutes();
     return (
         <main className="flex min-h-dvh overflow-y-auto bg-background p-4 sm:p-6">
@@ -162,7 +162,7 @@ export function AgentInstallationPage() {
                 </p>
                 <Link
                     className="mx-auto mt-4 inline-flex min-h-11 items-center gap-2 rounded-lg px-3 text-xs font-medium text-muted-foreground no-underline transition-colors duration-150 hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
-                    to={routes.newSessionSettingsPath}
+                    to={routes.rootPath}
                 >
                     <Settings aria-hidden="true" className="size-3.5" />
                     Open Agent settings

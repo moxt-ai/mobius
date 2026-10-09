@@ -1,7 +1,4 @@
-import { decodeMessageKind, encodeSessionEventEnvelope, SESSION_EVENT_KIND } from "@moxt-ai/mobius-protocol";
-import { FakeAgentDaemonState } from "./state.ts";
-
-export { FakeAgentDaemonState };
+import { decodeMessageKind } from "@moxt-ai/mobius-protocol";
 
 interface SocketEvent {
     readonly code?: number;
@@ -50,7 +47,6 @@ async function waitFor<T>(operation: Promise<T>, signal: AbortSignal): Promise<T
 
 /** A stateful peer at the public daemon/server protocol boundary. */
 export class FakeAgentDaemon implements AsyncDisposable {
-    readonly #state: FakeAgentDaemonState;
     readonly #closed: Promise<void>;
     #closeCode = 1006;
     #closeReason = "Connection closed unexpectedly";
@@ -58,9 +54,8 @@ export class FakeAgentDaemon implements AsyncDisposable {
     readonly #pending: PendingMessage[] = [];
     readonly #socket: AgentDaemonSocket;
 
-    private constructor(socket: AgentDaemonSocket, state: FakeAgentDaemonState) {
+    private constructor(socket: AgentDaemonSocket) {
         this.#socket = socket;
-        this.#state = state;
         this.#closed = new Promise((resolve) => {
             if (socket.readyState === 3) {
                 resolve();
@@ -88,10 +83,10 @@ export class FakeAgentDaemon implements AsyncDisposable {
             if (typeof message !== "string") {
                 return;
             }
-            if (this.#state.reply(message, (reply) => this.#socket.send(reply))) {
+            const kind = decodeMessageKind(message);
+            if (kind === "runtime.liveness.ready" || kind === "runtime.heartbeat.ack") {
                 return;
             }
-            const kind = decodeMessageKind(message);
             let pendingIndex = this.#pending.findIndex(
                 (candidate) => candidate.kind === kind && candidate.accepts(message),
             );
@@ -124,7 +119,6 @@ export class FakeAgentDaemon implements AsyncDisposable {
         url: URL,
         createSocket: (url: URL) => AgentDaemonSocket,
         signal = AbortSignal.timeout(8_000),
-        state = new FakeAgentDaemonState(),
     ): Promise<FakeAgentDaemon> {
         const socket = createSocket(url);
         await new Promise<void>((resolve, reject) => {
@@ -156,7 +150,7 @@ export class FakeAgentDaemon implements AsyncDisposable {
             socket.addEventListener("open", open, { once: true });
             signal.addEventListener("abort", abort, { once: true });
         });
-        return new FakeAgentDaemon(socket, state);
+        return new FakeAgentDaemon(socket);
     }
 
     readonly available = (kind: string): number =>
@@ -211,15 +205,9 @@ export class FakeAgentDaemon implements AsyncDisposable {
     };
 
     readonly send = (message: string): void => {
-        this.#state.observe(message);
         this.#socket.send(message);
     };
 
-    readonly sendSessionEvent = async (sessionId: string, payload: string, signal?: AbortSignal): Promise<void> => {
-        signal?.throwIfAborted();
-        this.#state.record(sessionId, payload);
-        this.#socket.send(encodeSessionEventEnvelope({ kind: SESSION_EVENT_KIND, payload, sessionId }));
-    };
     async [Symbol.asyncDispose](): Promise<void> {
         this.close();
         await this.#closed;
