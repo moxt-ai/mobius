@@ -94,7 +94,7 @@ export class MemoryAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
     readonly page = (sessionId: string, eventLimit: number, cursor: string | null): AcpSessionEventPageV2 => {
         const session = this.#session(sessionId);
         return eventPage(session.sessionGenerationId, session.nextPosition - 1, eventLimit, cursor, (start, end) =>
-            session.hot.filter(({ position }) => position >= start && position <= end).map(({ event }) => event),
+            session.hot.slice(start - 1, end).map(({ event }) => event),
         );
     };
 
