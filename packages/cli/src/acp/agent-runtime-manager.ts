@@ -433,13 +433,7 @@ export class AgentRuntimeManager {
         await this.#executions.cancel(sessionId, async () => {
             const runtime = this.#executionProcesses.get(sessionId);
             if (runtime !== undefined) {
-                try {
-                    await runtime.cancel();
-                } finally {
-                    if (this.#executionProcesses.detach(sessionId, runtime)) {
-                        this.#processes.releaseClosed(runtime);
-                    }
-                }
+                await runtime.cancel();
             }
         });
     };

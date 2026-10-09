@@ -30,7 +30,7 @@ import type { AcpAgentDefinition } from "../config.ts";
 import type { AcpContentExternalizer } from "../external-content/acp-content-externalizer.ts";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
 import { embedLocalHistoryImages } from "../native-sessions/history-images.ts";
-import { type ProcessTreeIdentity, revalidateExecutable } from "../process/executable.ts";
+import { revalidateExecutable } from "../process/executable.ts";
 import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp-error.ts";
 import { imageDisplayContent, isProgressMessage, normalizeContentBlock } from "./activity-content.ts";
 import { AgentConnection } from "./agent-connection.ts";
@@ -1086,16 +1086,11 @@ export class AgentSession implements AcpClientHandler {
     };
 
     readonly cancel = async (): Promise<void> => {
-        const capturedProcesses = await this.#connection.captureProcessTree();
-        try {
-            await this.#interactions.cancelPendingInteractions();
-            if (this.#turn.running) {
-                await this.#connection.connection.agent.notify(methods.agent.session.cancel, {
-                    sessionId: this.#updates.sessionId(),
-                });
-            }
-        } finally {
-            await this.closeProcess(capturedProcesses);
+        await this.#interactions.cancelPendingInteractions();
+        if (this.#turn.running) {
+            await this.#connection.connection.agent.notify(methods.agent.session.cancel, {
+                sessionId: this.#updates.sessionId(),
+            });
         }
     };
 
@@ -1327,8 +1322,7 @@ export class AgentSession implements AcpClientHandler {
         }
     };
 
-    readonly closeProcess = (capturedProcesses: readonly ProcessTreeIdentity[] = []): Promise<void> =>
-        this.#connection.closeProcess(capturedProcesses);
+    readonly closeProcess = (): Promise<void> => this.#connection.closeProcess();
     readonly race = <T>(operation: Promise<T>, exitMessage: string, signal: AbortSignal): Promise<T> =>
         this.#connection.race(operation, exitMessage, signal);
 
