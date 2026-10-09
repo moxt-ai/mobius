@@ -43,10 +43,11 @@ class ClientFrames {
             if (message === null) {
                 return;
             }
-            this.#messages.push(message);
             const resolve = this.#resolvers.shift();
             if (resolve !== undefined) {
                 resolve(message);
+            } else {
+                this.#messages.push(message);
             }
         }
     }
