@@ -5,13 +5,12 @@ import { and, desc, eq } from "drizzle-orm";
 import { drizzle, type NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
 import { z } from "zod";
 import { acpSessionStoreMigrations } from "../generated/acp-session-store-migrations.ts";
-import { acpSession, deletedAcpSession } from "../schema/acp-session-store/index.ts";
+import { acpSession } from "../schema/acp-session-store/index.ts";
 
 export class AcpStoredSession {
     readonly additionalDirectories: readonly string[];
     readonly agentId: string;
     readonly cwd: string;
-    readonly lastTerminalCommandId: string | null;
     readonly nativeSessionId: string;
     readonly prompted: boolean;
     readonly sessionId: string;
@@ -27,12 +26,10 @@ export class AcpStoredSession {
         prompted: boolean,
         title: string,
         updatedAt = new Date().toISOString(),
-        lastTerminalCommandId: string | null = null,
     ) {
         this.additionalDirectories = [...additionalDirectories];
         this.agentId = agentId;
         this.cwd = cwd;
-        this.lastTerminalCommandId = lastTerminalCommandId;
         this.nativeSessionId = nativeSessionId;
         this.prompted = prompted;
         this.sessionId = sessionId;
@@ -59,15 +56,10 @@ export class FoundAcpStoredSession extends AcpStoredSessionLookup {
     }
 }
 
-export class DeletedAcpStoredSession extends AcpStoredSessionLookup {
-    readonly found = false;
-}
-
 export interface AcpSessionStore {
     readonly close: () => void;
     readonly findNative: (agentId: string, nativeSessionId: string) => readonly AcpStoredSession[];
     readonly list: () => readonly AcpStoredSession[];
-    readonly markDeleted: (agentId: string, nativeSessionId: string) => readonly string[];
     readonly read: (sessionId: string) => AcpStoredSessionLookup;
     readonly remove: (sessionId: string) => void;
     readonly write: (session: AcpStoredSession) => void;
@@ -75,11 +67,9 @@ export interface AcpSessionStore {
 
 export class MemoryAcpSessionStore implements AcpSessionStore {
     readonly #sessions = new Map<string, AcpStoredSession>();
-    readonly #deleted = new Set<string>();
 
     readonly close = (): void => {
         this.#sessions.clear();
-        this.#deleted.clear();
     };
 
     readonly findNative = (agentId: string, nativeSessionId: string): readonly AcpStoredSession[] =>
@@ -90,19 +80,7 @@ export class MemoryAcpSessionStore implements AcpSessionStore {
     readonly list = (): readonly AcpStoredSession[] =>
         [...this.#sessions.values()].toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 
-    readonly markDeleted = (agentId: string, nativeSessionId: string): readonly string[] => {
-        const ids = this.findNative(agentId, nativeSessionId).map((session) => session.sessionId);
-        for (const id of ids) {
-            this.#sessions.delete(id);
-            this.#deleted.add(id);
-        }
-        return ids;
-    };
-
     readonly read = (sessionId: string): AcpStoredSessionLookup => {
-        if (this.#deleted.has(sessionId)) {
-            return new DeletedAcpStoredSession();
-        }
         const session = this.#sessions.get(sessionId);
         return session === undefined ? new MissingAcpStoredSession() : new FoundAcpStoredSession(session);
     };
@@ -120,15 +98,12 @@ const storedSessionRowSchema = z.object({
     additionalDirectories: z.string(),
     agentId: z.string(),
     cwd: z.string(),
-    lastTerminalCommandId: z.string().nullable(),
     nativeSessionId: z.string(),
     prompted: z.boolean(),
     sessionId: z.string(),
     title: z.string(),
     updatedAt: z.string(),
 });
-
-const sessionIdRowSchema = z.object({ sessionId: z.string() });
 
 function decodeStoredSession(value: unknown): AcpStoredSession {
     const row = storedSessionRowSchema.parse(value);
@@ -143,7 +118,6 @@ function decodeStoredSession(value: unknown): AcpStoredSession {
         row.prompted,
         row.title,
         row.updatedAt,
-        row.lastTerminalCommandId,
     );
 }
 
@@ -184,17 +158,6 @@ export class SqliteAcpSessionStore implements AcpSessionStore {
         }
     };
 
-    readonly #transaction = (operation: () => void): void => {
-        this.#sqliteDatabase.exec("BEGIN IMMEDIATE");
-        try {
-            operation();
-            this.#sqliteDatabase.exec("COMMIT");
-        } catch (error) {
-            this.#sqliteDatabase.exec("ROLLBACK");
-            throw error;
-        }
-    };
-
     readonly close = (): void => {
         this.#sqliteDatabase.close();
     };
@@ -210,35 +173,7 @@ export class SqliteAcpSessionStore implements AcpSessionStore {
     readonly list = (): readonly AcpStoredSession[] =>
         this.#database.select().from(acpSession).orderBy(desc(acpSession.updatedAt)).all().map(decodeStoredSession);
 
-    readonly markDeleted = (agentId: string, nativeSessionId: string): readonly string[] => {
-        const ids = this.#database
-            .select({ sessionId: acpSession.sessionId })
-            .from(acpSession)
-            .where(and(eq(acpSession.agentId, agentId), eq(acpSession.nativeSessionId, nativeSessionId)))
-            .all()
-            .map((row) => sessionIdRowSchema.parse(row).sessionId);
-        this.#transaction(() => {
-            this.#database
-                .delete(acpSession)
-                .where(and(eq(acpSession.agentId, agentId), eq(acpSession.nativeSessionId, nativeSessionId)))
-                .run();
-            for (const id of ids) {
-                this.#database.insert(deletedAcpSession).values({ sessionId: id }).onConflictDoNothing().run();
-            }
-        });
-        return ids;
-    };
-
     readonly read = (sessionId: string): AcpStoredSessionLookup => {
-        const deleted = this.#database
-            .select({ sessionId: deletedAcpSession.sessionId })
-            .from(deletedAcpSession)
-            .where(eq(deletedAcpSession.sessionId, sessionId))
-            .get();
-        if (deleted !== undefined) {
-            sessionIdRowSchema.parse(deleted);
-            return new DeletedAcpStoredSession();
-        }
         const row = this.#database.select().from(acpSession).where(eq(acpSession.sessionId, sessionId)).get();
         return row === undefined ? new MissingAcpStoredSession() : new FoundAcpStoredSession(decodeStoredSession(row));
     };
@@ -252,23 +187,16 @@ export class SqliteAcpSessionStore implements AcpSessionStore {
             additionalDirectories: JSON.stringify(session.additionalDirectories),
             agentId: session.agentId,
             cwd: session.cwd,
-            lastTerminalCommandId: session.lastTerminalCommandId,
             nativeSessionId: session.nativeSessionId,
             prompted: session.prompted,
             sessionId: session.sessionId,
             title: session.title,
             updatedAt: session.updatedAt,
         };
-        this.#transaction(() => {
-            this.#database.delete(deletedAcpSession).where(eq(deletedAcpSession.sessionId, session.sessionId)).run();
-            this.#database
-                .insert(acpSession)
-                .values(value)
-                .onConflictDoUpdate({
-                    target: acpSession.sessionId,
-                    set: value,
-                })
-                .run();
-        });
+        this.#database
+            .insert(acpSession)
+            .values(value)
+            .onConflictDoUpdate({ target: acpSession.sessionId, set: value })
+            .run();
     };
 }

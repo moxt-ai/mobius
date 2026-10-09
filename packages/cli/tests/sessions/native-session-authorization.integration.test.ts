@@ -110,7 +110,7 @@ describe("native session authorization", () => {
         }
     });
 
-    it("Given a listed session uses a linked directory, When that directory changes before deletion, Then the local boundary requires a refreshed selection before deleting the session", async () => {
+    it("Given a listed session uses a linked directory, When that directory changes before import, Then the local boundary requires a refreshed selection before importing the session", async () => {
         const f = await fixture("Claude Code");
         try {
             const inside = join(f.workspace, "inside");
@@ -128,7 +128,7 @@ describe("native session authorization", () => {
             await symlink(outside, alias);
             await expect(
                 f.service.execute(
-                    { ...f.identity, action: "delete", entryId: entry.entryId },
+                    { ...f.identity, action: "import", entryId: entry.entryId, targetSessionId: "import-target" },
                     new AbortController().signal,
                 ),
             ).rejects.toMatchObject({ code: "native_session_target_changed" });

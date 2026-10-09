@@ -21,7 +21,6 @@ import { AgentProcessPool, type AgentProcessRetention } from "./agent-process-po
 import type { NativeSessionOrigin, NativeSessionPage } from "./native-session.ts";
 import {
     type AcpSessionStore,
-    DeletedAcpStoredSession,
     FoundAcpStoredSession,
     MemoryAcpSessionStore,
     MissingAcpStoredSession,
@@ -260,13 +259,7 @@ export class AgentRuntimeManager {
     ): Promise<AcpPreparedSession> =>
         this.#operations.run(options, async (options) => {
             const stored = metrics.measureSync("session-state-read", () => this.#store.read(options.sessionId));
-            if (stored instanceof DeletedAcpStoredSession) {
-                throw new AcpExecutionError(
-                    "The native Agent session was deleted. Start a new chat.",
-                    {},
-                    "native_session_deleted",
-                );
-            }
+
             if (
                 stored instanceof FoundAcpStoredSession &&
                 this.#nativeOperations.has(`${stored.session.agentId}:${stored.session.nativeSessionId}`)
@@ -829,8 +822,7 @@ export class AgentRuntimeManager {
             if (
                 this.#executionProcesses.get(options.sessionId) !== undefined ||
                 this.#executionProcesses.pending(options.sessionId) !== undefined ||
-                this.#store.read(options.sessionId) instanceof FoundAcpStoredSession ||
-                this.#store.read(options.sessionId) instanceof DeletedAcpStoredSession
+                this.#store.read(options.sessionId) instanceof FoundAcpStoredSession
             ) {
                 throw new AcpExecutionError(
                     "The destination conversation already exists",
@@ -877,50 +869,6 @@ export class AgentRuntimeManager {
                     throw error;
                 } finally {
                     this.#nativeOperations.delete(key);
-                }
-            });
-        });
-
-    readonly deleteNativeSession = async (
-        options: AcpPrepareOptions,
-        nativeSessionId: string,
-    ): Promise<readonly string[]> =>
-        this.#operations.run(options, async (options) => {
-            return await this.#queryProcesses.use(options, async (runtime) => {
-                const key = `${options.agent.id}:${nativeSessionId}`;
-                const linked = this.#store.findNative(options.agent.id, nativeSessionId);
-                if (
-                    this.#nativeOperations.has(key) ||
-                    linked.some(
-                        (entry) =>
-                            this.#executions.command(entry.sessionId) !== undefined ||
-                            this.#executionProcesses.pending(entry.sessionId) !== undefined,
-                    )
-                ) {
-                    throw new AcpExecutionError(
-                        "Wait for the native session's running operation to finish",
-                        {},
-                        "session_busy",
-                    );
-                }
-                this.#nativeOperations.add(key);
-                try {
-                    for (const entry of linked) {
-                        const active = this.#executionProcesses.get(entry.sessionId);
-                        if (active !== undefined && active !== runtime) {
-                            await this.#retireSessionProcess(entry.sessionId, active, async () => await active.close());
-                        }
-                    }
-                    options.signal.throwIfAborted();
-                    await runtime.deleteNativeSession(nativeSessionId, options.signal);
-                    const deleted = this.#store.markDeleted(options.agent.id, nativeSessionId);
-                    if (runtime.nativeSessionId() === nativeSessionId) {
-                        await this.#queryProcesses.retire(options.sessionId, runtime);
-                    }
-                    return deleted;
-                } finally {
-                    this.#nativeOperations.delete(key);
-                    this.#processes.notifyChanged();
                 }
             });
         });

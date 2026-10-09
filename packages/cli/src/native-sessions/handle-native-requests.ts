@@ -4,7 +4,6 @@ import { AcpExecutionError } from "../acp/agent-runtime-manager.ts";
 import type { AuditStore } from "../audit/audit-store.ts";
 import { operationErrorCode, reportOperationFailure, send } from "../daemon-command-results.ts";
 import type { RelayConnectionDiagnostics } from "../relay-connection/diagnostics.ts";
-import type { DaemonSessionEventPublisher } from "../relay-connection/session-event-publisher.ts";
 import type { DaemonTimer } from "../relay-connection/timer.ts";
 import type { NativeSessionService } from "./service.ts";
 
@@ -19,14 +18,13 @@ interface NativeRequestDependencies {
     readonly audit: AuditStore;
     readonly diagnostics: RelayConnectionDiagnostics;
     readonly nativeSessions: NativeSessionService;
-    readonly publisher: DaemonSessionEventPublisher;
     readonly signal: AbortSignal;
     readonly socket: WebSocket;
     readonly timer: DaemonTimer;
 }
 
 export function createNativeSessionRequestHandler(dependencies: NativeRequestDependencies) {
-    const { audit, diagnostics, nativeSessions, publisher, signal, socket, timer } = dependencies;
+    const { audit, diagnostics, nativeSessions, signal, socket, timer } = dependencies;
     const pending = new Map<string, PendingRequest>();
 
     const cancel = (command: NativeSessionCancel): void => {
@@ -86,17 +84,6 @@ export function createNativeSessionRequestHandler(dependencies: NativeRequestDep
                 }
                 operationSignal.throwIfAborted();
                 const result = await nativeSessions.execute(command, operationSignal);
-                if (command.action === "fork-recorded" && result.action === "fork-recorded") {
-                    publisher.publishBatch(result.ready.sessionId, [
-                        result.ready,
-                        {
-                            kind: "session.forked",
-                            sessionId: result.ready.sessionId,
-                            sourceSessionId: command.sessionId,
-                            throughCommandId: command.throughCommandId,
-                        },
-                    ]);
-                }
                 if (socket.readyState === WebSocket.OPEN) {
                     send(socket, result);
                 }
