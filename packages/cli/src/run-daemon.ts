@@ -5,6 +5,7 @@ import { styleText } from "node:util";
 import { AGENT_INSTALL_REQUEST_KIND, type RecordedSessionEvent } from "@moxt-ai/mobius-protocol";
 
 import { AgentRuntimeManager } from "./acp/agent-runtime-manager.ts";
+import { CachedAcpSessionEventStoreV2 } from "./acp/session-event-store-v2.ts";
 import { SqliteAcpSessionStore } from "./acp/session-store.ts";
 import { supportedLocalAgentSpecifications } from "./agent-catalog/discover-local-agents.ts";
 import { AgentIntegrationDefinition } from "./agent-catalog/local-agent.ts";
@@ -19,6 +20,7 @@ import { AuditInstallationEvents, DaemonAcpObserver, DaemonInstallationObserver 
 import { DaemonTurnRegistry } from "./daemon-turn-registry.ts";
 import { AcpContentExternalizer } from "./external-content/acp-content-externalizer.ts";
 import { LocalExternalContentStore } from "./external-content/local-external-content-store.ts";
+import { openAcpSessionDatabase, openSessionEventCacheV2Database } from "./local-databases.ts";
 import { readCodexFullHistory } from "./native-sessions/codex-history.ts";
 import { NativeSessionService } from "./native-sessions/service.ts";
 import { DaemonOperationState } from "./relay-connection/daemon-operation-state.ts";
@@ -121,13 +123,24 @@ export async function runDaemon(
         publishCatalog: async (installationSignal) => await publishAgentCatalog(config, installationSignal),
         stateDirectory,
     });
-    const sessionStore = new SqliteAcpSessionStore(
-        join(stateDirectory, "sessions", `${createHash("sha256").update(config.channelId).digest("hex")}.sqlite`),
-    );
+    const channelHash = createHash("sha256").update(config.channelId).digest("hex");
+    const daemonGenerationId = randomUUID();
+    const sessionDatabase = openAcpSessionDatabase(join(stateDirectory, "sessions", `${channelHash}.sqlite`));
+    let eventsV2: CachedAcpSessionEventStoreV2;
+    try {
+        eventsV2 = new CachedAcpSessionEventStoreV2(
+            openSessionEventCacheV2Database(join(stateDirectory, "sessions", `${channelHash}.events.sqlite`)),
+            daemonGenerationId,
+        );
+    } catch (error) {
+        sessionDatabase.close();
+        throw error;
+    }
+    const sessionStore = new SqliteAcpSessionStore(sessionDatabase, eventsV2);
     await using externalContent = new LocalExternalContentStore(stateDirectory);
     const operations = new DaemonOperationState();
     const publisher = new DaemonSessionEventPublisher();
-    const eventLogV2 = new DaemonSessionEventLogV2(publisher);
+    const eventLogV2 = new DaemonSessionEventLogV2(publisher, daemonGenerationId);
     const activeTurns = new DaemonTurnRegistry(operations);
     const recordSessionEvent = (sessionId: string, event: RecordedSessionEvent): void => {
         publisher.publish(sessionId, activeTurns.recordEvent(event));

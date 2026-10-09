@@ -10,6 +10,7 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { type AcpActivity, AcpActivityTracker } from "./activity.ts";
 import { isProgressMessage, normalizeContentBlock } from "./activity-content.ts";
+import type { AcpSessionEventStoreV2 } from "./session-event-store-v2.ts";
 
 type ReplayMessage =
     | {
@@ -59,16 +60,9 @@ function historyContentCharacters(messages: readonly NativeHistoryMessage[]): nu
 export class AcpHistoryReplay {
     readonly #activities = new Map<string, AcpActivity>();
     readonly #messages: ReplayMessage[] = [];
-    readonly #events: SessionEventPayloadV2[] = [];
-    readonly #records: (
-        | {
-              readonly kind: "acp";
-              readonly update: SessionNotification["update"];
-              readonly rawUpdate: AcpSessionUpdateV2;
-          }
-        | { readonly event: SessionEventPayloadV2; readonly kind: "lifecycle" }
-    )[] = [];
+    readonly #events: AcpSessionEventStoreV2;
     readonly #turnActivityIds = new Set<string>();
+    readonly #sessionId: string;
     readonly #activityTracker = new AcpActivityTracker(
         async (activity) => {
             this.#activities.set(activity.activityId, activity);
@@ -90,14 +84,22 @@ export class AcpHistoryReplay {
     #characters = 0;
     #truncated = false;
 
+    constructor(events: AcpSessionEventStoreV2, sessionId: string) {
+        this.#events = events;
+        this.#sessionId = sessionId;
+    }
+
     readonly record = async (
         update: SessionNotification["update"],
         rawUpdate: AcpSessionUpdateV2,
         onRecorded: (position: number) => Promise<void> = () => Promise.resolve(),
     ): Promise<number> => {
-        this.#records.push({ kind: "acp", rawUpdate, update });
-        this.#events.push({ payload: rawUpdate, type: "acp" });
-        await onRecorded(this.#events.length);
+        const position = this.#events.append(this.#sessionId, { payload: rawUpdate, type: "acp" });
+        await onRecorded(position);
+        return await this.#applyUpdate(update, position);
+    };
+
+    readonly #applyUpdate = async (update: SessionNotification["update"], position: number): Promise<number> => {
         if (update.sessionUpdate === "agent_thought_chunk") {
             if (update.content.type === "text") {
                 await this.#activityTracker.recordNarrative(
@@ -106,30 +108,30 @@ export class AcpHistoryReplay {
                     update.content.text,
                 );
             }
-            return this.#events.length;
+            return position;
         }
         if (update.sessionUpdate === "tool_call") {
             await this.#activityTracker.recordToolCall(update);
-            return this.#events.length;
+            return position;
         }
         if (update.sessionUpdate === "tool_call_update") {
             await this.#activityTracker.recordToolCallUpdate(update);
-            return this.#events.length;
+            return position;
         }
         if (update.sessionUpdate === "plan") {
             await this.#activityTracker.recordPlan(update);
-            return this.#events.length;
+            return position;
         }
         if (update.sessionUpdate === "plan_update") {
             await this.#activityTracker.recordPlanUpdate(update);
-            return this.#events.length;
+            return position;
         }
         if (update.sessionUpdate === "plan_removed") {
             await this.#activityTracker.removePlan(update);
-            return this.#events.length;
+            return position;
         }
         if (update.sessionUpdate !== "user_message_chunk" && update.sessionUpdate !== "agent_message_chunk") {
-            return this.#events.length;
+            return position;
         }
         if (update.sessionUpdate === "agent_message_chunk" && isProgressMessage(update)) {
             if (update.content.type === "text") {
@@ -139,14 +141,14 @@ export class AcpHistoryReplay {
                     update.content.text,
                 );
             }
-            return this.#events.length;
+            return position;
         }
         const role = update.sessionUpdate === "user_message_chunk" ? "user" : "assistant";
         const content = update.content;
         if (role === "assistant" && content.type !== "text") {
             await this.#activityTracker.finishNarrative();
             this.recordAssistantContent(update.messageId ?? null, normalizeContentBlock(content));
-            return this.#events.length;
+            return position;
         }
         const text =
             content.type === "text"
@@ -159,7 +161,7 @@ export class AcpHistoryReplay {
                         : "[image attachment]"
                   : `[${content.type} attachment]`;
         if (text.length === 0) {
-            return this.#events.length;
+            return position;
         }
         const previous = this.#messages.at(-1);
         const id = update.messageId ?? null;
@@ -188,49 +190,39 @@ export class AcpHistoryReplay {
         this.#characters += bounded.length;
         this.#lastMessageId = id;
         this.trimMessages();
-        return this.#events.length;
+        return position;
     };
 
     readonly recordLifecycle = (event: SessionEventPayloadV2): number => {
         if (event.type !== "lifecycle-metadata") {
             throw new Error("Lifecycle history only accepts lifecycle metadata");
         }
-        this.#records.push({ event, kind: "lifecycle" });
-        this.#events.push(event);
-        return this.#events.length;
+        return this.#events.append(this.#sessionId, event);
     };
 
-    readonly eventCount = (): number => this.#events.length;
-
     readonly append = async (replay: AcpHistoryReplay): Promise<void> => {
-        for (const record of replay.#records) {
-            if (record.kind === "acp") {
-                await this.record(record.update, record.rawUpdate);
-            } else {
-                this.recordLifecycle(record.event);
-            }
+        await replay.#activityTracker.finish();
+        for (const [activityId, activity] of replay.#activities) {
+            this.#activities.set(activityId, activity);
         }
+        for (const message of replay.#messages.slice(replay.#firstMessageIndex)) {
+            this.#messages.push(message);
+            this.#characters += message.text.length;
+        }
+        this.#turnActivityIds.clear();
+        for (const activityId of replay.#turnActivityIds) {
+            this.#turnActivityIds.add(activityId);
+        }
+        this.#lastMessageId = replay.#lastMessageId;
+        this.#truncated ||= replay.#truncated;
+        this.trimMessages();
     };
 
     readonly eventPage = (
         eventLimit: number,
         cursor: string | null,
-        appended: AcpHistoryReplay | null = null,
-    ): import("./session-contracts.ts").AcpNativeEventReplayV2 => {
-        const events = appended === null ? this.#events : [...this.#events, ...appended.#events];
-        const parsedCursor = cursor === null ? events.length : Number(cursor);
-        if (!Number.isSafeInteger(parsedCursor) || parsedCursor < 0 || parsedCursor > events.length) {
-            throw new Error("The native event cursor is invalid");
-        }
-        const endUpdate = parsedCursor;
-        const startUpdate = Math.max(0, endUpdate - eventLimit);
-        return {
-            nextCursor: startUpdate === 0 ? null : startUpdate.toString(),
-            startPosition: startUpdate + 1,
-            truncated: startUpdate > 0,
-            events: events.slice(startUpdate, endUpdate),
-        };
-    };
+    ): import("./session-contracts.ts").AcpNativeEventReplayV2 =>
+        this.#events.page(this.#sessionId, eventLimit, cursor);
 
     readonly snapshot = async (): Promise<NativeSessionHistory> => {
         await this.#activityTracker.finish();

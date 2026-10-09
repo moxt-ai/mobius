@@ -1,0 +1,82 @@
+{
+    "version": "7",
+    "dialect": "sqlite",
+    "id": "ce4ccd1d-4dac-465d-8361-98ca807519f8",
+    "prevIds": ["00000000-0000-0000-0000-000000000000"],
+    "ddl": [
+        {
+            "name": "session_event_v2",
+            "entityType": "tables"
+        },
+        {
+            "type": "text",
+            "notNull": true,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "event_json",
+            "entityType": "columns",
+            "table": "session_event_v2"
+        },
+        {
+            "type": "text",
+            "notNull": true,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "generation_id",
+            "entityType": "columns",
+            "table": "session_event_v2"
+        },
+        {
+            "type": "integer",
+            "notNull": true,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "position",
+            "entityType": "columns",
+            "table": "session_event_v2"
+        },
+        {
+            "type": "text",
+            "notNull": true,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "session_id",
+            "entityType": "columns",
+            "table": "session_event_v2"
+        },
+        {
+            "columns": ["generation_id", "session_id", "position"],
+            "nameExplicit": false,
+            "name": "session_event_v2_pk",
+            "entityType": "pks",
+            "table": "session_event_v2"
+        },
+        {
+            "columns": [
+                {
+                    "value": "generation_id",
+                    "isExpression": false
+                },
+                {
+                    "value": "session_id",
+                    "isExpression": false
+                },
+                {
+                    "value": "position",
+                    "isExpression": false
+                }
+            ],
+            "isUnique": false,
+            "where": null,
+            "origin": "manual",
+            "name": "session_event_v2_generation_session_position_index",
+            "entityType": "indexes",
+            "table": "session_event_v2"
+        }
+    ],
+    "renames": []
+}

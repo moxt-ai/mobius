@@ -9,10 +9,12 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 import { AgentRuntimeManager, createWritableAcpStream } from "../../src/acp/agent-runtime-manager.ts";
+import { CachedAcpSessionEventStoreV2 } from "../../src/acp/session-event-store-v2.ts";
 import { FoundAcpStoredSession, MemoryAcpSessionStore, SqliteAcpSessionStore } from "../../src/acp/session-store.ts";
 import { LocalAgentDefinition } from "../../src/config.ts";
 import { acpSessionStoreMigrations } from "../../src/generated/acp-session-store-migrations.ts";
 import { AccumulatingOperationMetrics } from "../../src/infra/operation-metrics.ts";
+import { openAcpSessionDatabase, openSessionEventCacheV2Database } from "../../src/local-databases.ts";
 
 const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
 
@@ -44,6 +46,97 @@ function processExists(pid: number): boolean {
 }
 
 describe("ACP conversation sessions", () => {
+    it("Given more V2 events than the memory tier retains, When history is paged after background caching, Then one ordered sequence is returned", async () => {
+        vi.useFakeTimers({ toFake: ["clearImmediate", "setImmediate"] });
+        vi.setSystemTime(new Date("2026-10-09T00:00:00.000Z"));
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-tiering-"));
+        const store = new CachedAcpSessionEventStoreV2(
+            openSessionEventCacheV2Database(join(temporaryDirectory, "events.sqlite")),
+            "daemon-generation-tiering",
+        );
+        try {
+            for (let position = 1; position <= 300; position += 1) {
+                store.append("session-1", {
+                    payload: {
+                        commandId: `command-${position.toString()}`,
+                        content: [{ text: `prompt ${position.toString()}`, type: "text" }],
+                        kind: "prompt.requested",
+                    },
+                    type: "lifecycle-metadata",
+                });
+            }
+            await vi.runAllTimersAsync();
+
+            const page = store.page("session-1", 200, null);
+            expect(page.events).toHaveLength(200);
+            expect(page.events[0]).toMatchObject({ payload: { commandId: "command-101" } });
+            expect(page.events.at(-1)).toMatchObject({ payload: { commandId: "command-300" } });
+        } finally {
+            store.close();
+            vi.useRealTimers();
+            await rm(temporaryDirectory, { force: true, recursive: true });
+        }
+    });
+
+    it("Given V2 Session events cached by one daemon generation, When a new daemon generation opens the cache, Then stale V2 events are unavailable", async () => {
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-cache-"));
+        const databasePath = join(temporaryDirectory, "events.sqlite");
+        const first = new CachedAcpSessionEventStoreV2(
+            openSessionEventCacheV2Database(databasePath),
+            "daemon-generation-1",
+        );
+        try {
+            first.append("session-1", {
+                payload: {
+                    commandId: "command-1",
+                    content: [{ text: "cached prompt", type: "text" }],
+                    kind: "prompt.requested",
+                },
+                type: "lifecycle-metadata",
+            });
+            first.append("session-1", {
+                payload: {
+                    content: { text: "cached update", type: "text" },
+                    messageId: "message-1",
+                    sessionUpdate: "user_message_chunk",
+                },
+                type: "acp",
+            });
+            expect(first.page("session-1", 10, null).events).toEqual([
+                {
+                    payload: {
+                        commandId: "command-1",
+                        content: [{ text: "cached prompt", type: "text" }],
+                        kind: "prompt.requested",
+                    },
+                    type: "lifecycle-metadata",
+                },
+                {
+                    payload: {
+                        content: { text: "cached update", type: "text" },
+                        messageId: "message-1",
+                        sessionUpdate: "user_message_chunk",
+                    },
+                    type: "acp",
+                },
+            ]);
+        } finally {
+            first.close();
+        }
+
+        const second = new CachedAcpSessionEventStoreV2(
+            openSessionEventCacheV2Database(databasePath),
+            "daemon-generation-2",
+        );
+        try {
+            expect(second.generationId).toBe("daemon-generation-2");
+            expect(second.page("session-1", 10, null).events).toEqual([]);
+        } finally {
+            second.close();
+            await rm(temporaryDirectory, { force: true, recursive: true });
+        }
+    });
+
     it("Given an ACP Session database from the persisted-event release, When Mobius opens it, Then the unused event table is removed", async () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-session-store-migration-"));
         const databasePath = join(temporaryDirectory, "sessions.sqlite");
@@ -57,7 +150,7 @@ describe("ACP conversation sessions", () => {
             legacyDatabase.close();
         }
 
-        const store = new SqliteAcpSessionStore(databasePath);
+        const store = new SqliteAcpSessionStore(openAcpSessionDatabase(databasePath));
         store.close();
         const migratedDatabase = new DatabaseSync(databasePath, { readOnly: true });
         try {
@@ -82,7 +175,7 @@ describe("ACP conversation sessions", () => {
             "Claude Code",
         ]);
         const signal = new AbortController().signal;
-        const firstStore = new SqliteAcpSessionStore(databasePath);
+        const firstStore = new SqliteAcpSessionStore(openAcpSessionDatabase(databasePath));
         const firstRuntime = new AgentRuntimeManager(undefined, firstStore, null, "native");
 
         try {
@@ -104,7 +197,7 @@ describe("ACP conversation sessions", () => {
             firstStore.close();
         }
 
-        const restartedStore = new SqliteAcpSessionStore(databasePath);
+        const restartedStore = new SqliteAcpSessionStore(openAcpSessionDatabase(databasePath));
         const restartedRuntime = new AgentRuntimeManager(undefined, restartedStore, null, "native");
         try {
             expect(restartedRuntime.findSessions([sessionId])).toEqual([

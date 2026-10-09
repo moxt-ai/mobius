@@ -316,13 +316,18 @@ export class AgentSession implements AcpClientHandler {
             );
         }
         const history = await this.#completedHistory(signal, "ACP agent exited while loading history");
-        return history.eventPage(eventLimit, cursor, this.#turnHistory);
+        return history.eventPage(eventLimit, cursor);
     };
 
     async #completedHistory(signal: AbortSignal, exitMessage: string): Promise<AcpHistoryReplay> {
         if (!this.#prompted && this.#nativeHistoryOwnership.kind === "fresh-session") {
             if (this.#sessionLoad.kind === "not-requested") {
-                this.#sessionLoad = { history: new AcpHistoryReplay(), kind: "loaded", response: {} };
+                this.#store.eventsV2.reset(this.#mobiusSessionId);
+                this.#sessionLoad = {
+                    history: new AcpHistoryReplay(this.#store.eventsV2, this.#mobiusSessionId),
+                    kind: "loaded",
+                    response: {},
+                };
             }
             if (this.#sessionLoad.kind === "loaded") {
                 return this.#sessionLoad.history;
@@ -338,7 +343,8 @@ export class AgentSession implements AcpClientHandler {
         if (this.#sessionLoad.kind === "capturing") {
             return await waitForSharedOperation(this.#sessionLoad.completion, signal);
         }
-        const history = new AcpHistoryReplay();
+        this.#store.eventsV2.reset(this.#mobiusSessionId);
+        const history = new AcpHistoryReplay(this.#store.eventsV2, this.#mobiusSessionId);
         const completion = Promise.resolve().then(async (): Promise<LoadedSession> => {
             try {
                 const response = await this.race(
@@ -858,7 +864,8 @@ export class AgentSession implements AcpClientHandler {
             this.prepareAgentContent,
         );
         this.#turn = running;
-        this.#turnHistory = completedHistory === null ? null : new AcpHistoryReplay();
+        this.#turnHistory =
+            completedHistory === null ? null : new AcpHistoryReplay(this.#store.eventsV2, this.#mobiusSessionId);
         const lifecycleV2 = options.lifecycleV2;
         if (lifecycleV2 !== undefined) {
             await this.#recordLifecycleEventV2({
@@ -1092,7 +1099,7 @@ export class AgentSession implements AcpClientHandler {
         const position =
             this.#turnHistory === null
                 ? this.#sessionLoad.history.recordLifecycle(event)
-                : this.#sessionLoad.history.eventCount() + this.#turnHistory.recordLifecycle(event);
+                : this.#turnHistory.recordLifecycle(event);
         await this.#getObserver().onSessionEventV2?.(this.#mobiusSessionId, event, position);
     };
 
@@ -1115,14 +1122,8 @@ export class AgentSession implements AcpClientHandler {
         } else {
             const onSessionEventV2 = this.#getObserver().onSessionEventV2;
             if (this.#turnHistory !== null) {
-                const completedEventCount =
-                    this.#sessionLoad.kind === "loaded" ? this.#sessionLoad.history.eventCount() : 0;
-                await this.#turnHistory.record(update, rawUpdate, async (turnPosition) => {
-                    await onSessionEventV2?.(
-                        this.#mobiusSessionId,
-                        { payload: rawUpdate, type: "acp" },
-                        completedEventCount + turnPosition,
-                    );
+                await this.#turnHistory.record(update, rawUpdate, async (position) => {
+                    await onSessionEventV2?.(this.#mobiusSessionId, { payload: rawUpdate, type: "acp" }, position);
                 });
             } else if (this.#sessionLoad.kind === "loaded") {
                 await this.#sessionLoad.history.record(update, rawUpdate, async (position) => {

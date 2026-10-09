@@ -7,8 +7,17 @@ interface MigrationSource {
 }
 
 async function sqlFiles(directory: string): Promise<MigrationSource[]> {
-    const names = (await readdir(directory)).filter((name) => name.endsWith(".sql")).sort();
-    return names.map((name) => ({ name, path: join(directory, name) }));
+    const entries = await readdir(directory, { withFileTypes: true });
+    const sources = await Promise.all(
+        entries.map(async (entry): Promise<readonly MigrationSource[]> => {
+            const path = join(directory, entry.name);
+            if (entry.isDirectory()) {
+                return await sqlFiles(path);
+            }
+            return entry.name.endsWith(".sql") ? [{ name: relative(directory, path), path }] : [];
+        }),
+    );
+    return sources.flat().toSorted((left, right) => left.path.localeCompare(right.path));
 }
 
 async function writeMigrationModule(
@@ -43,6 +52,11 @@ await writeMigrationModule(
     join(cli, "src/generated/acp-session-store-migrations.ts"),
     "acpSessionStoreMigrations",
     await sqlFiles(join(cli, "migrations/acp-session-store")),
+);
+await writeMigrationModule(
+    join(cli, "src/generated/session-event-cache-migrations.ts"),
+    "sessionEventCacheMigrations",
+    await sqlFiles(join(cli, "migrations/session-event-cache")),
 );
 
 await writeMigrationModule(
