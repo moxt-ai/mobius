@@ -12,6 +12,8 @@ export const SESSION_LIST_KIND = "session.list";
 export const SESSION_LISTED_KIND = "session.listed";
 export const SESSION_QUERY_KIND = "session.query";
 export const SESSION_QUERIED_KIND = "session.queried";
+export const SESSION_RESTORE_KIND = "session.restore";
+export const SESSION_RESTORED_KIND = "session.restored";
 export const SESSION_STATUS_CHANGED_KIND = "session.status.changed";
 export const SESSION_CONFIGURE_KIND = "session.configure";
 export const SESSION_CONFIG_UPDATED_KIND = "session.config.updated";
@@ -133,6 +135,16 @@ const sessionsQueriedEventSchema = z
     .readonly();
 
 export type SessionsQueriedEvent = z.infer<typeof sessionsQueriedEventSchema>;
+
+const sessionRestoreCommandSchema = z
+    .object({
+        kind: z.literal(SESSION_RESTORE_KIND),
+        requestId: IDENTIFIER,
+        sessionId: IDENTIFIER,
+    })
+    .readonly();
+
+export type SessionRestoreCommand = z.infer<typeof sessionRestoreCommandSchema>;
 
 const fileReadCommandSchema = z
     .object({
@@ -624,6 +636,17 @@ export const sessionReadyEventSchema = z
 
 export type SessionReadyEvent = z.infer<typeof sessionReadyEventSchema>;
 
+const sessionRestoredEventSchema = z
+    .object({
+        entry: sessionMetadataSchema,
+        kind: z.literal(SESSION_RESTORED_KIND),
+        ready: sessionReadyEventSchema,
+        requestId: IDENTIFIER,
+    })
+    .readonly();
+
+export type SessionRestoredEvent = z.infer<typeof sessionRestoredEventSchema>;
+
 const sessionConfigureCommandSchema = z
     .object({
         ...sessionIdentityFields,
@@ -994,6 +1017,14 @@ export const decodeSessionsQueriedEvent = (encoded: string): SessionsQueriedEven
     decode(encoded, sessionsQueriedEventSchema);
 export const encodeSessionsQueriedEvent = (message: SessionsQueriedEvent): string =>
     encode(message, sessionsQueriedEventSchema);
+export const decodeSessionRestoreCommand = (encoded: string): SessionRestoreCommand =>
+    decode(encoded, sessionRestoreCommandSchema);
+export const encodeSessionRestoreCommand = (message: SessionRestoreCommand): string =>
+    encode(message, sessionRestoreCommandSchema);
+export const decodeSessionRestoredEvent = (encoded: string): SessionRestoredEvent =>
+    decode(encoded, sessionRestoredEventSchema);
+export const encodeSessionRestoredEvent = (message: SessionRestoredEvent): string =>
+    encode(message, sessionRestoredEventSchema);
 export const decodeSessionStatusChangedEvent = (encoded: string): SessionStatusChangedEvent =>
     decode(encoded, sessionStatusChangedEventSchema);
 export const encodeSessionStatusChangedEvent = (message: SessionStatusChangedEvent): string =>

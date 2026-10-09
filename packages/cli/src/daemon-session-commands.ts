@@ -2,9 +2,11 @@ import type {
     SessionConfigureCommand,
     SessionPrepareCommand,
     SessionReadyEvent,
+    SessionRestoreCommand,
     WorkspaceListCommand,
 } from "@moxt-ai/mobius-protocol";
 import type { WebSocket } from "undici";
+import { AcpExecutionError } from "./acp/acp-error.ts";
 import type { AgentRuntimeManager } from "./acp/agent-runtime-manager.ts";
 import type { AuditStore } from "./audit/audit-store.ts";
 import { resolveSessionDirectories } from "./authorization/resolve-session-directories.ts";
@@ -12,7 +14,92 @@ import type { WorkspaceDirectoryService } from "./authorization/workspace-direct
 import type { DaemonConfig } from "./config.ts";
 import { operationErrorCode, reportOperationFailure, send } from "./daemon-command-results.ts";
 import { AccumulatingOperationMetrics } from "./infra/operation-metrics.ts";
+import type { NativeSessionService } from "./native-sessions/service.ts";
 import type { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
+
+async function prepareSession(
+    command: SessionPrepareCommand,
+    config: DaemonConfig,
+    directories: WorkspaceDirectoryService,
+    audit: AuditStore,
+    sessions: AgentRuntimeManager,
+    metrics: AccumulatingOperationMetrics,
+    signal: AbortSignal,
+): Promise<SessionReadyEvent> {
+    return await metrics.measure("prepare-total", async () => {
+        const resolved = await metrics.measure(
+            "workspace-resolve",
+            async () =>
+                await resolveSessionDirectories(
+                    directories,
+                    config.bindingId,
+                    command.directoryId,
+                    command.additionalDirectoryIds,
+                    signal,
+                ),
+        );
+        const agent = config.catalog.find(command.agentId);
+        const preparation = {
+            additionalDirectories: resolved.additionalDirectories,
+            agent,
+            cwd: resolved.cwd,
+            sessionId: command.sessionId,
+            signal,
+        };
+        const prepared =
+            command.transient === true
+                ? await sessions.inspectSession(preparation, metrics)
+                : await sessions.prepareSession(preparation, metrics);
+        const configuration = command.configuration;
+        const configOptions =
+            configuration === undefined
+                ? prepared.configOptions
+                : await metrics.measure(
+                      "configuration",
+                      async () =>
+                          await sessions.configureSession({
+                              ...preparation,
+                              booleanValue: configuration.booleanValue,
+                              configId: configuration.configId,
+                              requestId: command.requestId,
+                              value: configuration.value,
+                              valueType: configuration.valueType,
+                          }),
+                  );
+        const listing = await metrics.measure(
+            "workspace-list",
+            async () => await directories.list(config.bindingId, command.directoryId, signal),
+        );
+        audit.record({
+            commandId: command.requestId,
+            event: "session_prepared",
+            sessionId: command.sessionId,
+        });
+        if (command.configuration !== undefined) {
+            audit.record({
+                commandId: command.requestId,
+                event: "session_configured",
+                sessionId: command.sessionId,
+            });
+        }
+        return {
+            additionalDirectories: resolved.additionalDirectoryEntries,
+            agentId: command.agentId,
+            agentName: prepared.agentName,
+            agentVersion: prepared.agentVersion,
+            capabilities: prepared.capabilities,
+            commands: prepared.commands,
+            configOptions,
+            directoryId: command.directoryId,
+            directoryLabel: listing.directoryLabel,
+            kind: "session.ready",
+            requestId: command.requestId,
+            restored: prepared.restored,
+            sessionId: command.sessionId,
+        };
+    });
+}
+
 export async function executeWorkspaceList(
     socket: WebSocket,
     command: WorkspaceListCommand,
@@ -53,80 +140,7 @@ export async function executeSessionPrepare(
 ): Promise<void> {
     const metrics = new AccumulatingOperationMetrics();
     try {
-        const readyEvent = await metrics.measure("prepare-total", async () => {
-            const resolved = await metrics.measure(
-                "workspace-resolve",
-                async () =>
-                    await resolveSessionDirectories(
-                        directories,
-                        config.bindingId,
-                        command.directoryId,
-                        command.additionalDirectoryIds,
-                        signal,
-                    ),
-            );
-            const agent = config.catalog.find(command.agentId);
-            const preparation = {
-                additionalDirectories: resolved.additionalDirectories,
-                agent,
-                cwd: resolved.cwd,
-                sessionId: command.sessionId,
-                signal,
-            };
-            const prepared =
-                command.transient === true
-                    ? await sessions.inspectSession(preparation, metrics)
-                    : await sessions.prepareSession(preparation, metrics);
-            const configuration = command.configuration;
-            const configOptions =
-                configuration === undefined
-                    ? prepared.configOptions
-                    : await metrics.measure(
-                          "configuration",
-                          async () =>
-                              await sessions.configureSession({
-                                  ...preparation,
-                                  booleanValue: configuration.booleanValue,
-                                  configId: configuration.configId,
-                                  requestId: command.requestId,
-                                  value: configuration.value,
-                                  valueType: configuration.valueType,
-                              }),
-                      );
-            const listing = await metrics.measure(
-                "workspace-list",
-                async () => await directories.list(config.bindingId, command.directoryId, signal),
-            );
-            audit.record({
-                commandId: command.requestId,
-                event: "session_prepared",
-                sessionId: command.sessionId,
-            });
-            if (command.configuration !== undefined) {
-                audit.record({
-                    commandId: command.requestId,
-                    event: "session_configured",
-                    sessionId: command.sessionId,
-                });
-            }
-            const event: SessionReadyEvent = {
-                additionalDirectories: resolved.additionalDirectoryEntries,
-                agentId: command.agentId,
-                agentName: prepared.agentName,
-                agentVersion: prepared.agentVersion,
-                capabilities: prepared.capabilities,
-                commands: prepared.commands,
-                configOptions,
-                directoryId: command.directoryId,
-                directoryLabel: listing.directoryLabel,
-                kind: "session.ready",
-                requestId: command.requestId,
-                restored: prepared.restored,
-                sessionId: command.sessionId,
-                runtimeTimings: metrics.snapshot(),
-            };
-            return event;
-        });
+        const readyEvent = await prepareSession(command, config, directories, audit, sessions, metrics, signal);
         send(socket, {
             ...readyEvent,
             runtimeTimings: metrics.snapshot(),
@@ -149,6 +163,70 @@ export async function executeSessionPrepare(
                 code: operationErrorCode(error),
             },
             event: "session_prepare_failed",
+            sessionId: command.sessionId,
+        });
+        reportOperationFailure(socket, command.requestId, command.sessionId, error, metrics.snapshot());
+    }
+}
+
+export async function executeSessionRestore(
+    socket: WebSocket,
+    command: SessionRestoreCommand,
+    config: DaemonConfig,
+    directories: WorkspaceDirectoryService,
+    audit: AuditStore,
+    sessions: AgentRuntimeManager,
+    nativeSessions: NativeSessionService,
+    diagnostics: RelayConnectionDiagnostics,
+    signal: AbortSignal,
+): Promise<void> {
+    const metrics = new AccumulatingOperationMetrics();
+    try {
+        const entry = await metrics.measure("session-lookup", async () => {
+            const [found] = await nativeSessions.querySessions([command.sessionId], signal);
+            if (found === undefined) {
+                throw new AcpExecutionError("The Session was not found", {}, "session_not_found");
+            }
+            return found;
+        });
+        const ready = await prepareSession(
+            {
+                additionalDirectoryIds: entry.additionalDirectories.map((directory) => directory.directoryId),
+                agentId: entry.agentId,
+                bindingId: config.bindingId,
+                directoryId: entry.directoryId,
+                kind: "session.prepare",
+                requestId: command.requestId,
+                sessionId: command.sessionId,
+                sessionState: "provisioned",
+            },
+            config,
+            directories,
+            audit,
+            sessions,
+            metrics,
+            signal,
+        );
+        send(socket, {
+            entry,
+            kind: "session.restored",
+            ready: { ...ready, runtimeTimings: metrics.snapshot() },
+            requestId: command.requestId,
+        });
+    } catch (error) {
+        diagnostics.daemonDiagnostic(
+            "session_restore_failed",
+            command.requestId,
+            {
+                code: operationErrorCode(error),
+                sessionId: command.sessionId,
+            },
+            error,
+        );
+        audit.record({
+            commandId: command.requestId,
+            details: { code: operationErrorCode(error) },
+            event: "session_restore_failed",
             sessionId: command.sessionId,
         });
         reportOperationFailure(socket, command.requestId, command.sessionId, error, metrics.snapshot());

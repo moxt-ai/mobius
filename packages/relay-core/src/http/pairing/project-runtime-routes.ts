@@ -7,6 +7,7 @@ import {
     decodeSessionPrepareCommand,
     decodeSessionPromptCommand,
     decodeSessionQueryCommand,
+    decodeSessionRestoreCommand,
     decodeWorkspaceListCommand,
     type Identifier,
     isIdentifier,
@@ -61,6 +62,7 @@ const nativeEventsV2Schema = v.strictObject({
 const sessionQuerySchema = v.strictObject({
     sessionIds: v.pipe(v.array(identifier), v.minLength(1), v.maxLength(500)),
 });
+const sessionRestoreSchema = v.strictObject({});
 const sessionListQuerySchema = v.strictObject({
     limit: v.pipe(v.string(), v.regex(/^[1-9][0-9]{0,2}$/), v.transform(Number), v.safeInteger(), v.maxValue(500)),
 });
@@ -242,6 +244,29 @@ export function createProjectRuntimeRoutes() {
                         requestId: crypto.randomUUID(),
                         sessionId: validateIdentifier(context.req.param("sessionId"), "session_id"),
                         sessionState: "provisioned",
+                    }),
+                );
+                const result = await context.env.services.runtimePairings.requestControl(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
+                    bearerToken(context.req.raw),
+                    command,
+                    context.req.raw.signal,
+                );
+                context.header("Cache-Control", "no-store");
+                return context.json(result);
+            },
+        )
+        .post(
+            "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/restore",
+            bodyParser<RelayHttpEnvironment>(),
+            async (context) => {
+                validated(sessionRestoreSchema, context.req.valid("json"));
+                const command = decodeSessionRestoreCommand(
+                    JSON.stringify({
+                        kind: "session.restore",
+                        requestId: crypto.randomUUID(),
+                        sessionId: validateIdentifier(context.req.param("sessionId"), "session_id"),
                     }),
                 );
                 const result = await context.env.services.runtimePairings.requestControl(
