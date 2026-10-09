@@ -522,7 +522,7 @@ describe("daemon relay connection liveness", () => {
         }
     });
 
-    it("Given an Agent emits many updates and history is loaded between turns, When the daemon records both turns, Then replay capture does not swallow later live ACP updates", async () => {
+    it("Given an Agent emits many updates and history is paginated between turns, When the daemon records both turns, Then every live ACP update remains in the replay", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-activity-coalescing-"));
         const defaultWorkspace = join(stateDirectory, "workspace");
         await mkdir(defaultWorkspace);
@@ -545,7 +545,6 @@ describe("daemon relay connection liveness", () => {
         let agentText = "";
         let removeObserver = (): void => undefined;
         let completedPrompts = 0;
-        let completedV1Prompts = 0;
         let resolveCompleted = (): void => undefined;
         const completed = new Promise<void>((resolve) => {
             resolveCompleted = resolve;
@@ -632,14 +631,10 @@ describe("daemon relay connection liveness", () => {
                 if (transportKind === SESSION_EVENT_V2_KIND) {
                     const event = decodeSessionEventEnvelopeV2(frame.text).event;
                     eventLogV2.push(event);
-                    if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
-                        completedPrompts += 1;
-                        requestHistory();
-                    }
                     return;
                 }
                 if (transportKind === SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND) {
-                    const page = decodeSessionLiveHistoryV2PageLoaded(frame.text).events.history;
+                    const page = decodeSessionLiveHistoryV2PageLoaded(frame.text).events.events;
                     historyPages.push(page.events);
                     if (page.nextCursor === null) {
                         if (completedPrompts === 0) {
@@ -695,8 +690,9 @@ describe("daemon relay connection liveness", () => {
                     return;
                 }
                 if (kind === SESSION_COMPLETED_KIND) {
-                    completedV1Prompts += 1;
-                    if (completedV1Prompts === 2) {
+                    completedPrompts += 1;
+                    requestHistory();
+                    if (completedPrompts === 2) {
                         resolveCompleted();
                     }
                 }
@@ -743,20 +739,11 @@ describe("daemon relay connection liveness", () => {
             expect(agentText).toBe(
                 "Echo from ACP: stream verbose activityEcho from ACP: stream another verbose activity",
             );
-            expect(eventLogV2[0]).toMatchObject({ payload: { kind: "prompt.requested" }, type: "lifecycle-metadata" });
-            expect(eventLogV2[1]).toMatchObject({
-                payload: { kind: "prompt.started" },
-                type: "lifecycle-metadata",
-            });
-            expect(eventLogV2.at(-1)).toMatchObject({
-                payload: { kind: "prompt.completed" },
-                type: "lifecycle-metadata",
-            });
             expect(
-                eventLogV2.some(
+                eventLogV2.filter(
                     (event) => event.type === "acp" && event.payload.sessionUpdate === "user_message_chunk",
                 ),
-            ).toBe(false);
+            ).toHaveLength(2);
             expect(
                 eventLogV2.filter(
                     (event) => event.type === "acp" && event.payload.sessionUpdate === "agent_thought_chunk",
@@ -768,7 +755,16 @@ describe("daemon relay connection liveness", () => {
                 ),
             ).toHaveLength(6);
             expect(historyPages.every((page) => page.length <= 25)).toBe(true);
-            expect(historyEvents.every((event) => event.type === "acp")).toBe(true);
+            expect(
+                historyEvents.flatMap((event) => (event.type === "lifecycle-metadata" ? [event.payload.kind] : [])),
+            ).toEqual([
+                "prompt.requested",
+                "prompt.started",
+                "prompt.completed",
+                "prompt.requested",
+                "prompt.started",
+                "prompt.completed",
+            ]);
             expect(
                 historyEvents.flatMap((event) =>
                     event.type === "acp" &&
@@ -780,9 +776,13 @@ describe("daemon relay connection liveness", () => {
                 ),
             ).toEqual([
                 "stream verbose activity",
-                "Echo from ACP: stream verbose activity",
+                "Gathering context",
+                "Echo from ACP: ",
+                "stream verbose activity",
                 "stream another verbose activity",
-                "Echo from ACP: stream another verbose activity",
+                "Gathering context",
+                "Echo from ACP: ",
+                "stream another verbose activity",
             ]);
         } finally {
             cancellation.abort();

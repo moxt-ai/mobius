@@ -73,8 +73,14 @@ test("Given a newly created real Codex Session, When Chat requests its V2 histor
             }
             expect(decodeSessionLiveHistoryV2PageLoaded(message)).toMatchObject({
                 events: {
-                    executingPromptRequest: null,
-                    history: { events: [], nextCursor: null, truncated: false, version: 2 },
+                    events: {
+                        daemonGenerationId: expect.any(String),
+                        events: [],
+                        nextCursor: null,
+                        truncated: false,
+                        version: 2,
+                    },
+                    queuedPromptRequests: [],
                 },
                 requestId,
                 sessionId,
@@ -243,7 +249,7 @@ test("Given a real codex native Session, When the active prompt is cancelled wit
                 if (decodeMessageKind(message) !== "session.live-history.v2.page.loaded") {
                     continue;
                 }
-                const replay = decodeSessionLiveHistoryV2PageLoaded(message).events.history.events;
+                const replay = decodeSessionLiveHistoryV2PageLoaded(message).events.events.events;
                 const userText = replay.flatMap((event) =>
                     event.type === "acp" &&
                     event.payload.sessionUpdate === "user_message_chunk" &&

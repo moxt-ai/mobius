@@ -17,13 +17,19 @@ export { AcpExecutionError };
 
 export async function runAcpPrompt(options: RunAcpPromptOptions): Promise<AcpPromptResult> {
     const agentRuntime = new AgentRuntimeManager();
+    const commandId = crypto.randomUUID();
     try {
         return await agentRuntime.runPrompt({
             additionalDirectories: [],
             agent: new LocalAgentDefinition("test-agent", "Test agent", options.agentCommand, options.agentArguments),
             cwd: options.cwd,
-            commandId: crypto.randomUUID(),
+            commandId,
             images: [],
+            lifecycleV2: {
+                attemptId: crypto.randomUUID(),
+                content: [{ text: options.prompt, type: "text" }],
+                epoch: crypto.randomUUID(),
+            },
             onActivity: options.onActivity,
             ...(options.onNarration === undefined ? {} : { onNarration: options.onNarration }),
             onText: options.onText,

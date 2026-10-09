@@ -52,6 +52,11 @@ export async function completeAcpControls(session: Awaited<ReturnType<typeof cre
         commandId: "controls-command",
         prompt: "exercise ACP controls",
         images: [{ data: "aW1hZ2U=", mimeType: "image/png", name: "preview.png" }],
+        lifecycleV2: {
+            attemptId: "controls-attempt",
+            content: [{ text: "exercise ACP controls", type: "text" }],
+            epoch: "controls-epoch",
+        },
         resources: [
             {
                 type: "embedded",

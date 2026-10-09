@@ -113,14 +113,16 @@ class ControlledAgentState {
     ): Promise<acp.PromptResponse> => {
         const turnNumber = this.turnCount(sessionId) + 1;
         this.rememberSession(sessionId, turnNumber);
-        this.#record({
+        const userUpdate = {
             sessionId,
             update: {
                 content: { text: prompt, type: "text" },
                 messageId: `user-${turnNumber.toString()}`,
                 sessionUpdate: "user_message_chunk",
             },
-        });
+        } as const;
+        this.#record(userUpdate);
+        await send(userUpdate);
         const completion = Promise.withResolvers<acp.PromptResponse>();
         const active: ActiveReply = {
             completion,
@@ -156,6 +158,16 @@ class ControlledAgentState {
         if (active === undefined) {
             return { outcome: "promptRequired", reason: "noRunningTurn" };
         }
+        const userUpdate = {
+            sessionId,
+            update: {
+                content: { text: prompt, type: "text" },
+                messageId: `user-${active.turnNumber.toString()}-steer-${crypto.randomUUID()}`,
+                sessionUpdate: "user_message_chunk",
+            },
+        } as const;
+        this.#record(userUpdate);
+        await active.send(userUpdate);
         await this.#apply(active, this.#options.reply(prompt, active.turnNumber, "steer"));
         return { outcome: "injected" };
     };
@@ -247,6 +259,7 @@ class ControlledAgentState {
                 name: output.title,
                 rawInput: {},
                 rawOutput: output.output,
+                content: [...output.content],
                 sessionUpdate: "tool_call",
                 status: "completed",
                 title: output.title,

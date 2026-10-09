@@ -149,7 +149,7 @@ for (const side of [128, 500]) {
                 if (kind === "session.live-history.v2.page.loaded") {
                     expect(message).not.toContain(image.toString("base64"));
                     expect(message.length).toBeLessThan(50_000);
-                    expect(imageKeys(decodeSessionLiveHistoryV2PageLoaded(message).events.history.events)).toContain(
+                    expect(imageKeys(decodeSessionLiveHistoryV2PageLoaded(message).events.events.events)).toContain(
                         key,
                     );
                     break;

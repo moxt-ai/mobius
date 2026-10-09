@@ -6,6 +6,7 @@ import type {
     SessionConfigUpdatedEvent,
     SessionElicitationRequestedEvent,
     SessionElicitationResolvedEvent,
+    SessionEventPayloadV2,
     SessionInfoUpdatedEvent,
     SessionPermissionRequestedEvent,
     SessionPermissionResolvedEvent,
@@ -26,6 +27,7 @@ export class RecordingObserver implements AcpSessionObserver {
     readonly permissionResolutions: SessionPermissionResolvedEvent[] = [];
     readonly elicitationResolutions: SessionElicitationResolvedEvent[] = [];
     readonly usage: SessionUsageUpdatedEvent[] = [];
+    readonly eventsV2: { readonly event: SessionEventPayloadV2; readonly position: number }[] = [];
     readonly permissionArrived = Promise.withResolvers<SessionPermissionRequestedEvent>();
     readonly elicitationArrived = Promise.withResolvers<SessionElicitationRequestedEvent>();
 
@@ -73,6 +75,11 @@ export class RecordingObserver implements AcpSessionObserver {
 
     readonly onUsage = (event: SessionUsageUpdatedEvent): Promise<void> => {
         this.usage.push(event);
+        return Promise.resolve();
+    };
+
+    readonly onSessionEventV2 = (_sessionId: string, event: SessionEventPayloadV2, position: number): Promise<void> => {
+        this.eventsV2.push({ event, position });
         return Promise.resolve();
     };
 }

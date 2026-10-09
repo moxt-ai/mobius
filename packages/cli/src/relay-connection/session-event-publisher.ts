@@ -11,18 +11,9 @@ import { WebSocket } from "undici";
 
 const MAX_BUFFERED_BYTES = 32 * 1024 * 1024;
 
-interface SessionEventV2Store {
-    readonly appendExecutingPromptEventV2: (event: SessionEventV2) => void;
-}
-
-/** V1 delivery is best-effort. V2 events are committed before live delivery and recovered separately. */
+/** Live delivery is best-effort. Recovery snapshots are owned by the daemon's local Session cache. */
 export class DaemonSessionEventPublisher {
     #socket: WebSocket | null = null;
-    readonly #store: SessionEventV2Store;
-
-    constructor(store: SessionEventV2Store) {
-        this.#store = store;
-    }
 
     readonly connect = (socket: WebSocket): void => {
         this.#socket = socket;
@@ -83,7 +74,6 @@ export class DaemonSessionEventPublisher {
     };
 
     readonly publishV2 = (event: SessionEventV2): void => {
-        this.#store.appendExecutingPromptEventV2(event);
         const socket = this.#socket;
         if (socket === null || socket.readyState !== WebSocket.OPEN) {
             return;
@@ -96,7 +86,7 @@ export class DaemonSessionEventPublisher {
         try {
             socket.send(encoded);
         } catch {
-            // Socket liveness owns reconnection. Missed events are recovered from committed history.
+            // Socket liveness owns reconnection. Missed events are recovered from the local cache.
         }
     };
 }

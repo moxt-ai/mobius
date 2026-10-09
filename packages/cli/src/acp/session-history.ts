@@ -6,6 +6,7 @@ import {
     type NativeMessageActivity,
     type NativeSessionHistory,
     SESSION_HISTORY_CHARACTER_LIMIT,
+    type SessionEventPayloadV2,
 } from "@moxt-ai/mobius-protocol";
 import { type AcpActivity, AcpActivityTracker } from "./activity.ts";
 import { isProgressMessage, normalizeContentBlock } from "./activity-content.ts";
@@ -58,7 +59,15 @@ function historyContentCharacters(messages: readonly NativeHistoryMessage[]): nu
 export class AcpHistoryReplay {
     readonly #activities = new Map<string, AcpActivity>();
     readonly #messages: ReplayMessage[] = [];
-    readonly #updates: AcpSessionUpdateV2[] = [];
+    readonly #events: SessionEventPayloadV2[] = [];
+    readonly #records: (
+        | {
+              readonly kind: "acp";
+              readonly update: SessionNotification["update"];
+              readonly rawUpdate: AcpSessionUpdateV2;
+          }
+        | { readonly event: SessionEventPayloadV2; readonly kind: "lifecycle" }
+    )[] = [];
     readonly #turnActivityIds = new Set<string>();
     readonly #activityTracker = new AcpActivityTracker(
         async (activity) => {
@@ -81,8 +90,14 @@ export class AcpHistoryReplay {
     #characters = 0;
     #truncated = false;
 
-    readonly record = async (update: SessionNotification["update"], rawUpdate: AcpSessionUpdateV2): Promise<void> => {
-        this.#updates.push(rawUpdate);
+    readonly record = async (
+        update: SessionNotification["update"],
+        rawUpdate: AcpSessionUpdateV2,
+        onRecorded: (position: number) => Promise<void> = () => Promise.resolve(),
+    ): Promise<number> => {
+        this.#records.push({ kind: "acp", rawUpdate, update });
+        this.#events.push({ payload: rawUpdate, type: "acp" });
+        await onRecorded(this.#events.length);
         if (update.sessionUpdate === "agent_thought_chunk") {
             if (update.content.type === "text") {
                 await this.#activityTracker.recordNarrative(
@@ -91,30 +106,30 @@ export class AcpHistoryReplay {
                     update.content.text,
                 );
             }
-            return;
+            return this.#events.length;
         }
         if (update.sessionUpdate === "tool_call") {
             await this.#activityTracker.recordToolCall(update);
-            return;
+            return this.#events.length;
         }
         if (update.sessionUpdate === "tool_call_update") {
             await this.#activityTracker.recordToolCallUpdate(update);
-            return;
+            return this.#events.length;
         }
         if (update.sessionUpdate === "plan") {
             await this.#activityTracker.recordPlan(update);
-            return;
+            return this.#events.length;
         }
         if (update.sessionUpdate === "plan_update") {
             await this.#activityTracker.recordPlanUpdate(update);
-            return;
+            return this.#events.length;
         }
         if (update.sessionUpdate === "plan_removed") {
             await this.#activityTracker.removePlan(update);
-            return;
+            return this.#events.length;
         }
         if (update.sessionUpdate !== "user_message_chunk" && update.sessionUpdate !== "agent_message_chunk") {
-            return;
+            return this.#events.length;
         }
         if (update.sessionUpdate === "agent_message_chunk" && isProgressMessage(update)) {
             if (update.content.type === "text") {
@@ -124,14 +139,14 @@ export class AcpHistoryReplay {
                     update.content.text,
                 );
             }
-            return;
+            return this.#events.length;
         }
         const role = update.sessionUpdate === "user_message_chunk" ? "user" : "assistant";
         const content = update.content;
         if (role === "assistant" && content.type !== "text") {
             await this.#activityTracker.finishNarrative();
             this.recordAssistantContent(update.messageId ?? null, normalizeContentBlock(content));
-            return;
+            return this.#events.length;
         }
         const text =
             content.type === "text"
@@ -144,7 +159,7 @@ export class AcpHistoryReplay {
                         : "[image attachment]"
                   : `[${content.type} attachment]`;
         if (text.length === 0) {
-            return;
+            return this.#events.length;
         }
         const previous = this.#messages.at(-1);
         const id = update.messageId ?? null;
@@ -173,14 +188,38 @@ export class AcpHistoryReplay {
         this.#characters += bounded.length;
         this.#lastMessageId = id;
         this.trimMessages();
+        return this.#events.length;
+    };
+
+    readonly recordLifecycle = (event: SessionEventPayloadV2): number => {
+        if (event.type !== "lifecycle-metadata") {
+            throw new Error("Lifecycle history only accepts lifecycle metadata");
+        }
+        this.#records.push({ event, kind: "lifecycle" });
+        this.#events.push(event);
+        return this.#events.length;
+    };
+
+    readonly eventCount = (): number => this.#events.length;
+
+    readonly append = async (replay: AcpHistoryReplay): Promise<void> => {
+        for (const record of replay.#records) {
+            if (record.kind === "acp") {
+                await this.record(record.update, record.rawUpdate);
+            } else {
+                this.recordLifecycle(record.event);
+            }
+        }
     };
 
     readonly eventPage = (
         eventLimit: number,
         cursor: string | null,
+        appended: AcpHistoryReplay | null = null,
     ): import("./session-contracts.ts").AcpNativeEventReplayV2 => {
-        const parsedCursor = cursor === null ? this.#updates.length : Number(cursor);
-        if (!Number.isSafeInteger(parsedCursor) || parsedCursor < 0 || parsedCursor > this.#updates.length) {
+        const events = appended === null ? this.#events : [...this.#events, ...appended.#events];
+        const parsedCursor = cursor === null ? events.length : Number(cursor);
+        if (!Number.isSafeInteger(parsedCursor) || parsedCursor < 0 || parsedCursor > events.length) {
             throw new Error("The native event cursor is invalid");
         }
         const endUpdate = parsedCursor;
@@ -189,7 +228,7 @@ export class AcpHistoryReplay {
             nextCursor: startUpdate === 0 ? null : startUpdate.toString(),
             startPosition: startUpdate + 1,
             truncated: startUpdate > 0,
-            updates: this.#updates.slice(startUpdate, endUpdate),
+            events: events.slice(startUpdate, endUpdate),
         };
     };
 

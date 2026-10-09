@@ -403,10 +403,7 @@ export const lifecycleMetadataV2Schema = z.discriminatedUnion("kind", [
         .object({ event: sessionPermissionResolvedEventSchema, kind: z.literal("session.permission.resolved") })
         .readonly(),
     z
-        .object({
-            event: sessionElicitationRequestedEventSchema,
-            kind: z.literal("session.elicitation.requested"),
-        })
+        .object({ event: sessionElicitationRequestedEventSchema, kind: z.literal("session.elicitation.requested") })
         .readonly(),
     z
         .object({ event: sessionElicitationResolvedEventSchema, kind: z.literal("session.elicitation.resolved") })
@@ -540,6 +537,7 @@ export const sessionEventEnvelopeV2Schema = z
 export type SessionEventEnvelopeV2 = z.infer<typeof sessionEventEnvelopeV2Schema>;
 export const sessionEventLogPageV2Schema = z
     .object({
+        daemonGenerationId: identifier,
         events: z.array(sessionEventV2Schema).max(MAX_EVENT_COUNT).readonly(),
         nextCursor: z.string().min(1).max(512).nullable(),
         tailCursor: z.string().max(512),
@@ -552,21 +550,17 @@ export const nativeEventPageRequestV2Schema = z
     .object({ cursor: z.string().min(1).max(512).nullable(), eventLimit: z.number().int().min(1).max(10_000) })
     .readonly();
 export type NativeEventPageRequestV2 = z.infer<typeof nativeEventPageRequestV2Schema>;
-const executingPromptRequestEventLogV2Schema = z
+const queuedPromptRequestEventLogV2Schema = z
     .object({
-        attemptId: identifier,
         commandId: identifier,
-        epoch: identifier,
-        events: z.array(sessionEventV2Schema).max(MAX_EVENT_COUNT).readonly(),
-        tailCursor: z.string().max(512),
-        truncated: z.boolean(),
+        content: z.array(contentBlockV2Schema).min(1).max(100).readonly(),
     })
     .readonly();
-export type ExecutingPromptRequestEventLogV2 = z.infer<typeof executingPromptRequestEventLogV2Schema>;
+export type QueuedPromptRequestEventLogV2 = z.infer<typeof queuedPromptRequestEventLogV2Schema>;
 export const nativeSessionEventsV2Schema = z
     .object({
-        executingPromptRequest: executingPromptRequestEventLogV2Schema.nullable(),
-        history: sessionEventLogPageV2Schema,
+        events: sessionEventLogPageV2Schema,
+        queuedPromptRequests: z.array(queuedPromptRequestEventLogV2Schema).max(MAX_COLLECTION_SIZE).readonly(),
     })
     .readonly();
 export type NativeSessionEventsV2 = z.infer<typeof nativeSessionEventsV2Schema>;

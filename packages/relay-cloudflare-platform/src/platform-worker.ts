@@ -797,7 +797,7 @@ export function createPlatformApplication(
                     );
                 }
                 context.header("Cache-Control", "no-store");
-                return context.json(result.events.history);
+                return context.json(result.events.events);
             }
             const host = await context.var.relay.services.runtimePairings.openProjectSessionEventHost(
                 new ProjectScope(target.projectId),

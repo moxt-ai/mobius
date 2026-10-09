@@ -120,7 +120,7 @@ if (process.argv.includes("--version")) {
                     if (messageKind !== "session.live-history.v2.page.loaded") {
                         continue;
                     }
-                    const events = decodeSessionLiveHistoryV2PageLoaded(message).events.history.events;
+                    const events = decodeSessionLiveHistoryV2PageLoaded(message).events.events.events;
                     expect(JSON.stringify(events).length).toBeLessThan(10_000);
                     expect(JSON.stringify(events)).not.toContain("iVBORw0KGgoAAAANSUhEUg");
                     for (const event of events) {
@@ -175,121 +175,6 @@ if (process.argv.includes("--version")) {
                 expect(createHash("sha256").update(image).digest("hex")).toBe(imageKey);
                 expect(audio).toEqual(Buffer.from([1, 2, 3, 4]));
                 expect(resource.toString("utf8")).toBe("Generated resource");
-            },
-        );
-    } finally {
-        await rm(directory, { force: true, recursive: true });
-    }
-});
-
-test("Given an ACP Agent fails to load native history, When Chat requests V2 history, Then the public failure has a correlated local diagnostic with the sanitized cause chain", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "mobius-history-diagnostics-"));
-    const executableDirectory = join(directory, "bin");
-    const executable = join(executableDirectory, "opencode");
-    await mkdir(executableDirectory);
-    await writeFile(
-        executable,
-        `#!${process.execPath}
-if (process.argv.includes("--version")) {
-  process.stdout.write("1.18.29\\n");
-} else {
-  process.argv.push(
-    "--agent-name", "OpenCode",
-    "--agent-version", "1.18.29",
-    "--http-mcp",
-    "--no-additional-directories",
-    "--no-delete-session",
-    "--no-fork-session",
-    "--no-embedded-context",
-  );
-  await import(${JSON.stringify(new URL(`file://${fakeAgentPath}`).toString())});
-}
-`,
-        { mode: 0o700 },
-    );
-    await chmod(executable, 0o700);
-    try {
-        await withRealDaemon(
-            new OpenCodeAgentSpecification(),
-            {
-                MOBIUS_FAKE_ACP_FAIL_HISTORY_LOAD: "1",
-                PATH: executableDirectory,
-            },
-            async (peer) => {
-                peer.send(
-                    encodeSessionPrepareCommand({
-                        additionalDirectoryIds: [],
-                        agentId: "opencode",
-                        bindingId: peer.bindingId,
-                        directoryId: "default",
-                        kind: "session.prepare",
-                        requestId: "prepare-history-session",
-                        sessionId: peer.sessionId,
-                    }),
-                );
-                for (;;) {
-                    if (decodeMessageKind(await peer.nextMessage()) === "session.ready") {
-                        break;
-                    }
-                }
-
-                peer.send(
-                    encodeSessionPromptCommand({
-                        additionalDirectoryIds: [],
-                        agentId: "opencode",
-                        bindingId: peer.bindingId,
-                        commandId: "history-seed-turn",
-                        directoryId: "default",
-                        disposition: SessionPromptDisposition.Reject,
-                        images: [],
-                        kind: "session.prompt",
-                        prompt: "Seed native history",
-                        resources: [],
-                        sessionId: peer.sessionId,
-                        targetCommandId: "",
-                    }),
-                );
-                for (;;) {
-                    const event = await peer.nextEvent();
-                    if (decodeMessageKind(event) === "session.completed") {
-                        break;
-                    }
-                }
-
-                const requestId = "load-v2-history-with-agent-failure";
-                peer.send(
-                    encodeSessionLiveHistoryV2PageLoad({
-                        additionalDirectoryIds: [],
-                        agentId: "opencode",
-                        bindingId: peer.bindingId,
-                        cursor: null,
-                        directoryId: "default",
-                        eventLimit: 50,
-                        kind: "session.live-history.v2.page.load",
-                        requestId,
-                        sessionId: peer.sessionId,
-                    }),
-                );
-                let failure: ReturnType<typeof decodeSessionOperationFailedEvent>;
-                for (;;) {
-                    const message = await peer.nextMessage();
-                    if (decodeMessageKind(message) === "session.operation.failed") {
-                        failure = decodeSessionOperationFailedEvent(message);
-                        break;
-                    }
-                }
-                expect(failure).toMatchObject({
-                    code: "acp_agent_error",
-                    requestId,
-                    sessionId: peer.sessionId,
-                });
-                const diagnostics = await peer.readDiagnostics();
-                expect(diagnostics).toContain(`"event":"session_history_v2_load_failed"`);
-                expect(diagnostics).toContain(`"requestId":"${requestId}"`);
-                expect(diagnostics).toContain(`"sessionId":"${peer.sessionId}"`);
-                expect(diagnostics).toContain(`"failureName":"AcpExecutionError"`);
-                expect(diagnostics).toContain(`"cause1Name":"RequestError"`);
-                expect(diagnostics).toContain(`"cause1Code":"-32603"`);
             },
         );
     } finally {

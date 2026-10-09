@@ -10,7 +10,12 @@ import {
     SESSION_ELICITATION_RESOLVED_KIND,
     SESSION_PERMISSION_REQUESTED_KIND,
     SESSION_PERMISSION_RESOLVED_KIND,
+    type SessionElicitationRequestedEvent,
+    type SessionElicitationResolvedEvent,
+    type SessionEventPayloadV2,
     type SessionPermissionOption,
+    type SessionPermissionRequestedEvent,
+    type SessionPermissionResolvedEvent,
 } from "@moxt-ai/mobius-protocol";
 import { AcpExecutionError } from "./acp-error.ts";
 import { normalizeElicitationFields, validateElicitationContent } from "./elicitation.ts";
@@ -27,6 +32,7 @@ interface SessionInteractionContext {
     readonly commandId: () => string;
     readonly assertNativeSession: (sessionId: string) => void;
     readonly observer: () => AcpSessionObserver;
+    readonly recordSessionEventV2: (event: SessionEventPayloadV2) => Promise<void>;
 }
 export class AcpSessionInteractions {
     readonly #pendingPermissions = new Map<string, PendingPermission>();
@@ -36,6 +42,34 @@ export class AcpSessionInteractions {
     constructor(context: SessionInteractionContext) {
         this.#context = context;
     }
+    readonly #notifyPermissionRequested = async (event: SessionPermissionRequestedEvent): Promise<void> => {
+        await this.#context.recordSessionEventV2({
+            payload: { event, kind: "session.permission.requested" },
+            type: "lifecycle-metadata",
+        });
+        await this.#context.observer().onPermission(event);
+    };
+    readonly #notifyPermissionResolved = async (event: SessionPermissionResolvedEvent): Promise<void> => {
+        await this.#context.recordSessionEventV2({
+            payload: { event, kind: "session.permission.resolved" },
+            type: "lifecycle-metadata",
+        });
+        await this.#context.observer().onPermissionResolved(event);
+    };
+    readonly #notifyElicitationRequested = async (event: SessionElicitationRequestedEvent): Promise<void> => {
+        await this.#context.recordSessionEventV2({
+            payload: { event, kind: "session.elicitation.requested" },
+            type: "lifecycle-metadata",
+        });
+        await this.#context.observer().onElicitation(event);
+    };
+    readonly #notifyElicitationResolved = async (event: SessionElicitationResolvedEvent): Promise<void> => {
+        await this.#context.recordSessionEventV2({
+            payload: { event, kind: "session.elicitation.resolved" },
+            type: "lifecycle-metadata",
+        });
+        await this.#context.observer().onElicitationResolved(event);
+    };
     readonly respondPermission = async (options: AcpPermissionResponseOptions): Promise<void> => {
         const pending = this.#pendingPermissions.get(options.interactionId);
         if (pending === undefined) {
@@ -61,7 +95,7 @@ export class AcpSessionInteractions {
             );
         }
         this.#pendingPermissions.delete(options.interactionId);
-        await this.#context.observer().onPermissionResolved({
+        await this.#notifyPermissionResolved({
             interactionId: options.interactionId,
             kind: SESSION_PERMISSION_RESOLVED_KIND,
             optionId: options.outcome === "selected" ? options.optionId : "",
@@ -102,7 +136,7 @@ export class AcpSessionInteractions {
             );
         }
         this.#pendingElicitations.delete(options.interactionId);
-        await this.#context.observer().onElicitationResolved({
+        await this.#notifyElicitationResolved({
             action: options.action,
             interactionId: options.interactionId,
             kind: SESSION_ELICITATION_RESOLVED_KIND,
@@ -135,7 +169,7 @@ export class AcpSessionInteractions {
         };
         signal.addEventListener("abort", abort, { once: true });
         try {
-            await this.#context.observer().onPermission({
+            await this.#notifyPermissionRequested({
                 commandId: this.#context.commandId(),
                 interactionId,
                 kind: SESSION_PERMISSION_REQUESTED_KIND,
@@ -185,7 +219,7 @@ export class AcpSessionInteractions {
         };
         signal.addEventListener("abort", abort, { once: true });
         try {
-            await this.#context.observer().onElicitation({
+            await this.#notifyElicitationRequested({
                 accepted: false,
                 commandId: this.#context.commandId(),
                 elicitationId,
@@ -213,7 +247,7 @@ export class AcpSessionInteractions {
             return;
         }
         this.#acceptedUrlElicitations.delete(notification.elicitationId);
-        await this.#context.observer().onElicitationResolved({
+        await this.#notifyElicitationResolved({
             action: "complete",
             interactionId,
             kind: SESSION_ELICITATION_RESOLVED_KIND,
@@ -227,7 +261,7 @@ export class AcpSessionInteractions {
             return;
         }
         this.#pendingPermissions.delete(interactionId);
-        await this.#context.observer().onPermissionResolved({
+        await this.#notifyPermissionResolved({
             interactionId,
             kind: SESSION_PERMISSION_RESOLVED_KIND,
             optionId: "",
@@ -242,7 +276,7 @@ export class AcpSessionInteractions {
             return;
         }
         this.#pendingElicitations.delete(interactionId);
-        await this.#context.observer().onElicitationResolved({
+        await this.#notifyElicitationResolved({
             action: "cancel",
             interactionId,
             kind: SESSION_ELICITATION_RESOLVED_KIND,
@@ -262,7 +296,7 @@ export class AcpSessionInteractions {
             await this.cancelElicitation(interactionId);
         }
         for (const interactionId of acceptedElicitationIds) {
-            await this.#context.observer().onElicitationResolved({
+            await this.#notifyElicitationResolved({
                 action: "cancel",
                 interactionId,
                 kind: SESSION_ELICITATION_RESOLVED_KIND,

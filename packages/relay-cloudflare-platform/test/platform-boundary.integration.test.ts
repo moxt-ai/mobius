@@ -854,14 +854,15 @@ describe.sequential("Platform Session-only boundary", () => {
             daemon.send(
                 encodeSessionLiveHistoryV2PageLoaded({
                     events: {
-                        executingPromptRequest: null,
-                        history: {
+                        events: {
+                            daemonGenerationId: "daemon-generation-1",
                             events: [rawEvent],
                             nextCursor: null,
                             tailCursor: rawEvent.eventId,
                             truncated: false,
                             version: 2,
                         },
+                        queuedPromptRequests: [],
                     },
                     kind: "session.live-history.v2.page.loaded",
                     requestId: historyLoad.requestId,
@@ -869,6 +870,7 @@ describe.sequential("Platform Session-only boundary", () => {
                 }),
             );
             expect(await responseJson(await historyResponse, 200)).toEqual({
+                daemonGenerationId: "daemon-generation-1",
                 events: [rawEvent],
                 nextCursor: null,
                 tailCursor: rawEvent.eventId,

@@ -21,6 +21,7 @@ import {
     type SessionCapabilities,
     type SessionCommand,
     type SessionConfigOption,
+    type SessionEventPayloadV2,
 } from "@moxt-ai/mobius-protocol";
 import type { LocalRasterImage } from "../authorization/local-raster.ts";
 import { readInlineRaster, readLocalRaster } from "../authorization/local-raster.ts";
@@ -141,6 +142,7 @@ export class AgentSession implements AcpClientHandler {
     #sessionTitle: string | null = null;
     #sessionUpdatedAt = "";
     #turn: AcpTurnState = new IdleAcpTurn();
+    #turnHistory: AcpHistoryReplay | null = null;
 
     private constructor(
         agent: AcpAgentDefinition,
@@ -169,6 +171,7 @@ export class AgentSession implements AcpClientHandler {
             commandId: () => this.#turn.commandId,
             assertNativeSession: (sessionId) => this.assertNativeSession(sessionId),
             observer: getObserver,
+            recordSessionEventV2: this.#recordLifecycleEventV2,
         });
         this.#connection = new AgentConnection(agent, cwd, this);
         this.#contentExternalizer = contentExternalizer;
@@ -302,8 +305,8 @@ export class AgentSession implements AcpClientHandler {
                 },
             };
         }
-        const loaded = await this.#loadSession(signal, "ACP agent exited while loading history");
-        return await embedLocalHistoryImages(await loaded.history.snapshot(), signal);
+        const history = await this.#completedHistory(signal, "ACP agent exited while loading history");
+        return await embedLocalHistoryImages(await history.snapshot(), signal);
     };
 
     readonly loadHistoryEventsV2 = async (
@@ -311,9 +314,6 @@ export class AgentSession implements AcpClientHandler {
         cursor: string | null,
         signal: AbortSignal,
     ): Promise<AcpNativeEventReplayV2> => {
-        if (!this.#prompted && this.#nativeHistoryOwnership.kind === "fresh-session") {
-            return new AcpHistoryReplay().eventPage(eventLimit, cursor);
-        }
         if (!this.#capabilities.loadSession) {
             throw new AcpExecutionError(
                 "This Agent restores context but does not provide message history.",
@@ -321,9 +321,21 @@ export class AgentSession implements AcpClientHandler {
                 "native_history_unsupported",
             );
         }
-        const loaded = await this.#loadSession(signal, "ACP agent exited while loading history");
-        return loaded.history.eventPage(eventLimit, cursor);
+        const history = await this.#completedHistory(signal, "ACP agent exited while loading history");
+        return history.eventPage(eventLimit, cursor, this.#turnHistory);
     };
+
+    async #completedHistory(signal: AbortSignal, exitMessage: string): Promise<AcpHistoryReplay> {
+        if (!this.#prompted && this.#nativeHistoryOwnership.kind === "fresh-session") {
+            if (this.#sessionLoad.kind === "not-requested") {
+                this.#sessionLoad = { history: new AcpHistoryReplay(), kind: "loaded", response: {} };
+            }
+            if (this.#sessionLoad.kind === "loaded") {
+                return this.#sessionLoad.history;
+            }
+        }
+        return (await this.#loadSession(signal, exitMessage)).history;
+    }
 
     async #loadSession(signal: AbortSignal, exitMessage: string): Promise<LoadedSession> {
         if (this.#sessionLoad.kind === "loaded") {
@@ -851,19 +863,9 @@ export class AgentSession implements AcpClientHandler {
         if (this.#turn.running) {
             throw new AcpExecutionError("Another prompt is already running in this conversation", {}, "session_busy");
         }
-        switch (this.#sessionLoad.kind) {
-            case "not-requested":
-                break;
-            case "loaded":
-                this.#sessionLoad = { kind: "not-requested" };
-                break;
-            case "capturing":
-                throw new AcpExecutionError("Session history is still loading", {}, "session_busy");
-            default: {
-                const unexpected: never = this.#sessionLoad;
-                throw new Error(`Unexpected Session load state: ${JSON.stringify(unexpected)}`);
-            }
-        }
+        const completedHistory = this.#capabilities.loadSession
+            ? await this.#completedHistory(options.signal, "ACP agent exited while loading history before a prompt")
+            : null;
         const prompt = this.buildPrompt(options);
         if (this.#sessionTitle === null || this.#sessionTitle.length === 0) {
             this.#sessionTitle = truncate(options.prompt, 500);
@@ -890,6 +892,23 @@ export class AgentSession implements AcpClientHandler {
             this.prepareAgentContent,
         );
         this.#turn = running;
+        this.#turnHistory = completedHistory === null ? null : new AcpHistoryReplay();
+        const lifecycleV2 = options.lifecycleV2;
+        if (lifecycleV2 !== undefined) {
+            await this.#recordLifecycleEventV2({
+                payload: { commandId: options.commandId, content: lifecycleV2.content, kind: "prompt.requested" },
+                type: "lifecycle-metadata",
+            });
+            await this.#recordLifecycleEventV2({
+                payload: {
+                    attemptId: lifecycleV2.attemptId,
+                    commandId: options.commandId,
+                    epoch: lifecycleV2.epoch,
+                    kind: "prompt.started",
+                },
+                type: "lifecycle-metadata",
+            });
+        }
         this.#nativePrompt = {
             commandId: options.commandId,
             previousTurnId: this.#connection.inProcessAgent?.nativeTurnId?.() ?? null,
@@ -944,16 +963,40 @@ export class AgentSession implements AcpClientHandler {
                     this.#lastTerminalCommandId,
                 ),
             );
+            if (lifecycleV2 !== undefined) {
+                await this.#recordLifecycleEventV2({
+                    payload: { commandId: options.commandId, kind: "prompt.completed", stopReason: result.stopReason },
+                    type: "lifecycle-metadata",
+                });
+            }
             return result;
         } catch (error) {
             await running.activities.finish();
+            const failure =
+                error instanceof AcpExecutionError
+                    ? error
+                    : new AcpExecutionError("ACP agent execution failed", { cause: error });
+            if (lifecycleV2 !== undefined) {
+                await this.#recordLifecycleEventV2({
+                    payload: {
+                        attemptId: lifecycleV2.attemptId,
+                        code: failure.code,
+                        commandId: options.commandId,
+                        kind: "prompt.failed",
+                        message: truncate(failure.message, 500),
+                    },
+                    type: "lifecycle-metadata",
+                });
+            }
             if (error instanceof AcpExecutionError) {
                 throw error;
             }
-            throw new AcpExecutionError("ACP agent execution failed", {
-                cause: error,
-            });
+            throw failure;
         } finally {
+            if (completedHistory !== null && this.#turnHistory !== null) {
+                await completedHistory.append(this.#turnHistory);
+            }
+            this.#turnHistory = null;
             this.#turn = new IdleAcpTurn();
         }
     };
@@ -970,41 +1013,83 @@ export class AgentSession implements AcpClientHandler {
             throw new AcpExecutionError("The target turn is no longer active", {}, "steering_target_unavailable");
         }
         const prompt = this.buildPrompt(options);
-        const response: unknown = await this.race(
-            this.#connection.connection.agent.request("_session/steering", {
-                _meta: { steering: { idleBehavior: "promptRequired" } },
-                prompt,
-                sessionId: this.#updates.sessionId(),
-            }),
-            "ACP agent exited during steering",
-            options.signal,
-        );
-        if (!isRecord(response)) {
+        const lifecycleV2 = options.lifecycleV2;
+        if (lifecycleV2 !== undefined) {
+            await this.#recordLifecycleEventV2({
+                payload: { commandId: options.commandId, content: lifecycleV2.content, kind: "prompt.requested" },
+                type: "lifecycle-metadata",
+            });
+            await this.#recordLifecycleEventV2({
+                payload: {
+                    attemptId: lifecycleV2.attemptId,
+                    commandId: options.commandId,
+                    epoch: lifecycleV2.epoch,
+                    kind: "prompt.started",
+                },
+                type: "lifecycle-metadata",
+            });
+        }
+        try {
+            const response: unknown = await this.race(
+                this.#connection.connection.agent.request("_session/steering", {
+                    _meta: { steering: { idleBehavior: "promptRequired" } },
+                    prompt,
+                    sessionId: this.#updates.sessionId(),
+                }),
+                "ACP agent exited during steering",
+                options.signal,
+            );
+            if (!isRecord(response)) {
+                throw new AcpExecutionError(
+                    "ACP agent returned an invalid steering response",
+                    {},
+                    "acp_invalid_steering_response",
+                );
+            }
+            const outcome = response["outcome"];
+            if (outcome === "injected" || outcome === "startedNewTurn") {
+                if (lifecycleV2 !== undefined) {
+                    await this.#recordLifecycleEventV2({
+                        payload: { commandId: options.commandId, kind: "prompt.completed", stopReason: "steered" },
+                        type: "lifecycle-metadata",
+                    });
+                }
+                return outcome;
+            }
+            if (outcome === "promptRequired") {
+                throw new AcpExecutionError(
+                    "The target turn finished before steering could be injected",
+                    {},
+                    "steering_target_unavailable",
+                );
+            }
+            if (outcome === "failed") {
+                throw new AcpExecutionError("The Agent could not inject steering", {}, "steering_failed");
+            }
             throw new AcpExecutionError(
                 "ACP agent returned an invalid steering response",
                 {},
                 "acp_invalid_steering_response",
             );
+        } catch (error) {
+            const failure =
+                error instanceof AcpExecutionError
+                    ? error
+                    : new AcpExecutionError("ACP agent execution failed", { cause: error });
+            if (lifecycleV2 !== undefined) {
+                await this.#recordLifecycleEventV2({
+                    payload: {
+                        attemptId: lifecycleV2.attemptId,
+                        code: failure.code,
+                        commandId: options.commandId,
+                        kind: "prompt.failed",
+                        message: truncate(failure.message, 500),
+                    },
+                    type: "lifecycle-metadata",
+                });
+            }
+            throw failure;
         }
-        const outcome = response["outcome"];
-        if (outcome === "injected" || outcome === "startedNewTurn") {
-            return outcome;
-        }
-        if (outcome === "promptRequired") {
-            throw new AcpExecutionError(
-                "The target turn finished before steering could be injected",
-                {},
-                "steering_target_unavailable",
-            );
-        }
-        if (outcome === "failed") {
-            throw new AcpExecutionError("The Agent could not inject steering", {}, "steering_failed");
-        }
-        throw new AcpExecutionError(
-            "ACP agent returned an invalid steering response",
-            {},
-            "acp_invalid_steering_response",
-        );
     };
 
     readonly cancel = async (): Promise<void> => {
@@ -1036,6 +1121,17 @@ export class AgentSession implements AcpClientHandler {
 
     readonly onUpdate = (notification: SessionNotification): Promise<void> => this.#updates.receive(notification);
 
+    readonly #recordLifecycleEventV2 = async (event: SessionEventPayloadV2): Promise<void> => {
+        if (event.type !== "lifecycle-metadata" || this.#sessionLoad.kind !== "loaded") {
+            return;
+        }
+        const position =
+            this.#turnHistory === null
+                ? this.#sessionLoad.history.recordLifecycle(event)
+                : this.#sessionLoad.history.eventCount() + this.#turnHistory.recordLifecycle(event);
+        await this.#getObserver().onSessionEventV2?.(this.#mobiusSessionId, event, position);
+    };
+
     readonly selectNativeSession = (sessionId: string): void => {
         this.#updates.select(sessionId);
         this.#nativeHistoryOwnership = { kind: "agent-owned" };
@@ -1053,9 +1149,21 @@ export class AgentSession implements AcpClientHandler {
         if (this.#sessionLoad.kind === "capturing") {
             await this.#sessionLoad.history.record(update, rawUpdate);
         } else {
-            const onAcpUpdate = this.#getObserver().onAcpUpdate;
-            if (onAcpUpdate !== undefined) {
-                await onAcpUpdate(this.#mobiusSessionId, rawUpdate);
+            const onSessionEventV2 = this.#getObserver().onSessionEventV2;
+            if (this.#turnHistory !== null) {
+                const completedEventCount =
+                    this.#sessionLoad.kind === "loaded" ? this.#sessionLoad.history.eventCount() : 0;
+                await this.#turnHistory.record(update, rawUpdate, async (turnPosition) => {
+                    await onSessionEventV2?.(
+                        this.#mobiusSessionId,
+                        { payload: rawUpdate, type: "acp" },
+                        completedEventCount + turnPosition,
+                    );
+                });
+            } else if (this.#sessionLoad.kind === "loaded") {
+                await this.#sessionLoad.history.record(update, rawUpdate, async (position) => {
+                    await onSessionEventV2?.(this.#mobiusSessionId, { payload: rawUpdate, type: "acp" }, position);
+                });
             }
         }
         if (

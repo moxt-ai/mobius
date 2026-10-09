@@ -4,6 +4,7 @@ import * as acp from "@agentclientprotocol/sdk";
 import { countPromptBlock, isRecord, readAgentName, readPromptText, waitForAbort } from "../../support/acp-process.ts";
 import { publishContentScenario } from "./acp-content.ts";
 import { runInteractionScenario } from "./acp-interactions.ts";
+import { oversizedHistoryUpdate } from "./acp-native-history.ts";
 import {
     nativeHistory,
     nativeMetadata,
@@ -60,6 +61,20 @@ export function registerTurns(agent: ReturnType<typeof acp.agent>) {
                 ),
             });
             nativeHistory.set(context.params.sessionId, transcript);
+            await context.client.notify(acp.methods.client.session.update, {
+                sessionId: context.params.sessionId,
+                update: {
+                    content: { text: prompt, type: "text" },
+                    messageId: `user-${turnNumber.toString()}`,
+                    sessionUpdate: "user_message_chunk",
+                },
+            });
+            if (process.env["MOBIUS_FAKE_ACP_OVERSIZED_HISTORY_IMAGE"] === "1") {
+                await context.client.notify(acp.methods.client.session.update, {
+                    sessionId: context.params.sessionId,
+                    update: oversizedHistoryUpdate(`tool-${turnNumber.toString()}`),
+                });
+            }
             await context.client.notify(acp.methods.client.session.update, {
                 sessionId: context.params.sessionId,
                 update: {

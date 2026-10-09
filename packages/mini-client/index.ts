@@ -696,35 +696,27 @@ async function nativeEventsV2(
             signal,
         );
         pages.push(page);
-        cursor = page.history.nextCursor;
+        cursor = page.events.nextCursor;
     } while (cursor !== null && pages.length < 100);
     const newest = pages[0];
     if (newest === undefined) {
         throw new MiniClientError("event_log_unavailable", "The Runtime returned no V2 event-log page");
     }
-    const events = pages.toReversed().flatMap((page) => page.history.events);
+    const events = pages.toReversed().flatMap((page) => page.events.events);
+    if (pages.some((page) => page.events.daemonGenerationId !== newest.events.daemonGenerationId)) {
+        throw new MiniClientError("event_log_generation_changed", "The Runtime restarted while history was loading");
+    }
     return {
-        executingPromptRequest: newest.executingPromptRequest,
-        history: {
+        events: {
+            daemonGenerationId: newest.events.daemonGenerationId,
             events,
             nextCursor: cursor,
             tailCursor: events.at(-1)?.eventId ?? "",
             truncated: cursor !== null,
             version: 2,
         },
+        queuedPromptRequests: newest.queuedPromptRequests,
     };
-}
-
-function terminalV2(event: SessionEventV2): boolean {
-    if (event.type !== "lifecycle-metadata") {
-        return false;
-    }
-    const payload = event.payload;
-    return (
-        payload.kind === "prompt.completed" ||
-        payload.kind === "prompt.failed" ||
-        payload.kind === "prompt.failed-before-start"
-    );
 }
 
 async function getCommand(directory: string, flags: ReadonlyMap<string, string>): Promise<void> {
@@ -742,16 +734,22 @@ async function getCommand(directory: string, flags: ReadonlyMap<string, string>)
             return;
         }
         const seen = new Set<string>();
+        const followedCommandId = targetTurnId(session);
+        const terminal = Promise.withResolvers<void>();
+        const isFollowedTerminal = (event: SessionEventV2): boolean =>
+            event.type === "lifecycle-metadata" &&
+            (event.payload.kind === "prompt.completed" || event.payload.kind === "prompt.failed") &&
+            event.payload.commandId === followedCommandId;
         const observer: MobiusLiveSessionEventObserverV2 = {
             reconcile: async (liveConnection) => {
                 const events = await nativeEventsV2(service, session, signal);
-                for (const event of events.history.events) {
-                    seen.add(event.eventId);
-                }
-                for (const event of events.executingPromptRequest?.events ?? []) {
+                for (const event of events.events.events) {
                     seen.add(event.eventId);
                 }
                 output({ connection: liveConnection.kind, events, sessionId: session.sessionId });
+                if (events.events.events.some(isFollowedTerminal)) {
+                    terminal.resolve();
+                }
             },
             receive: async (event) => {
                 if (seen.has(event.eventId)) {
@@ -759,11 +757,15 @@ async function getCommand(directory: string, flags: ReadonlyMap<string, string>)
                 }
                 seen.add(event.eventId);
                 output({ event, sessionId: session.sessionId });
-                return !terminalV2(event);
+                if (isFollowedTerminal(event)) {
+                    terminal.resolve();
+                    return false;
+                }
+                return true;
             },
         };
         subscription = await service.events.subscribeLiveV2(session.sessionId, observer, signal);
-        await subscription.completed;
+        await Promise.race([subscription.completed, terminal.promise]);
     } finally {
         subscription?.close();
         connection.close();
