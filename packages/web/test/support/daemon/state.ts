@@ -17,12 +17,38 @@ const EMPTY_HISTORY: History = {
 /** Recovery reads the state emitted by the peer. Product services and transports remain real. */
 export class FakeAgentDaemonState {
     readonly #sessions = new Map<string, Session>();
+    readonly #executingEvents = new Map<string, p.ExecutingPromptRequestEventLogV2>();
     readonly #nativeEvents = new Map<string, readonly p.SessionEventV2[]>();
     readonly #transient = new Set<string>();
     readonly #inspected = new Map<string, p.SessionReadyEvent>();
     readonly observe = (encoded: string): void => {
         const event = p.decodeDaemonToServiceMessage(encoded);
         if (event.kind === "session.event.v2") {
+            const raw = event.event;
+            if (raw.type === "lifecycle-metadata" && raw.payload.kind === "prompt.started") {
+                this.#executingEvents.set(raw.sessionId, {
+                    commandId: raw.payload.commandId,
+                    attemptId: raw.payload.attemptId,
+                    epoch: raw.payload.epoch,
+                    events: [],
+                    tailCursor: "",
+                    truncated: false,
+                });
+            }
+            const current = this.#executingEvents.get(raw.sessionId);
+            if (current !== undefined) {
+                this.#executingEvents.set(raw.sessionId, {
+                    ...current,
+                    events: [...current.events, raw],
+                    tailCursor: raw.eventId,
+                });
+            }
+            if (
+                raw.type === "lifecycle-metadata" &&
+                (raw.payload.kind === "prompt.completed" || raw.payload.kind === "prompt.failed")
+            ) {
+                this.#executingEvents.delete(raw.sessionId);
+            }
             this.#nativeEvents.set(event.event.sessionId, [
                 ...(this.#nativeEvents.get(event.event.sessionId) ?? []),
                 event.event,
@@ -263,7 +289,11 @@ export class FakeAgentDaemonState {
                             },
                         }),
                     );
-                const end = c.cursor === null ? events.length : Number(c.cursor);
+                const executingIds = new Set(
+                    this.#executingEvents.get(c.sessionId)?.events.map((event) => event.eventId) ?? [],
+                );
+                const historyEvents = events.filter((event) => !executingIds.has(event.eventId));
+                const end = c.cursor === null ? historyEvents.length : Number(c.cursor);
                 const start = Math.max(0, end - c.eventLimit);
                 send(
                     p.encodeSessionLiveHistoryV2PageLoaded({
@@ -271,12 +301,12 @@ export class FakeAgentDaemonState {
                         requestId: c.requestId,
                         sessionId: c.sessionId,
                         events: {
-                            executingPromptRequest: null,
+                            executingPromptRequest: this.#executingEvents.get(c.sessionId) ?? null,
                             history: {
                                 version: 2,
-                                events: events.slice(start, end),
+                                events: historyEvents.slice(start, end),
                                 nextCursor: start === 0 ? null : start.toString(),
-                                tailCursor: events.at(-1)?.eventId ?? "",
+                                tailCursor: historyEvents.at(-1)?.eventId ?? "",
                                 truncated: start > 0,
                             },
                         },

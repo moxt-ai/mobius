@@ -249,6 +249,14 @@ export function nativeEventHistory(events: readonly SessionEventV2[], truncated:
             transcript.append(event.payload, Number(event.position));
         } else if (event.type === "lifecycle-metadata" && "commandId" in event.payload) {
             transcript.coverCommand(event.payload.commandId);
+            if (event.payload.kind === "prompt.requested") {
+                for (const content of event.payload.content) {
+                    transcript.append(
+                        { sessionUpdate: "user_message_chunk", messageId: event.payload.commandId, content },
+                        Number(event.position),
+                    );
+                }
+            }
         }
     }
     return transcript.history(truncated);

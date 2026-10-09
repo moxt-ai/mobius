@@ -6,6 +6,7 @@ import {
     encodeFileBeginEvent,
     encodeFileChunkEvent,
     encodeFileEndEvent,
+    encodeSessionStartedEvent,
     FILE_READ_KIND,
     SESSION_PREPARE_KIND,
 } from "@moxt-ai/mobius-protocol";
@@ -141,6 +142,72 @@ it("Given a long native conversation with tool activity and an external image, W
         expect(screen.getByText("Inspect workspace")).toBeTruthy();
         expect(screen.getByText(/Earlier history is not shown/)).toBeTruthy();
         expect(screen.queryByText("Previous answer 0")).toBeNull();
+    } finally {
+        await paired.close();
+        vi.useRealTimers();
+    }
+});
+
+it("Given an executing prompt, When a user reopens the conversation, Then its current reply is recovered from the V2 executing log", async ({
+    signal,
+}) => {
+    vi.useFakeTimers({ now: new Date("2026-10-09T00:00:00Z"), toFake: ["Date"] });
+    const paired = await openReadyApplication();
+    try {
+        const previous = await completeRenderedPrompt(paired.daemon, "Start this conversation", "Previous answer");
+        const commandId = crypto.randomUUID();
+        const epoch = crypto.randomUUID();
+        const attemptId = crypto.randomUUID();
+        await paired.daemon.sendSessionEvent(
+            previous.sessionId,
+            encodeSessionStartedEvent({
+                kind: "session.started",
+                commandId,
+                epoch,
+                attemptId,
+                sessionId: previous.sessionId,
+                prompt: "Continue working",
+                sequence: 0,
+            }),
+        );
+        paired.daemon.send(
+            encodeDaemonToServiceMessage({
+                kind: "session.event.v2",
+                event: {
+                    type: "lifecycle-metadata",
+                    eventId: "current-start",
+                    position: "1",
+                    provenance: { kind: "original" },
+                    recordedAt: "2026-10-09T00:00:00Z",
+                    sessionId: previous.sessionId,
+                    payload: { kind: "prompt.started", commandId, epoch, attemptId },
+                },
+            }),
+        );
+        paired.daemon.send(
+            encodeDaemonToServiceMessage({
+                kind: "session.event.v2",
+                event: {
+                    type: "acp",
+                    eventId: "current-reply",
+                    position: "2",
+                    provenance: { kind: "original" },
+                    recordedAt: "2026-10-09T00:00:00Z",
+                    sessionId: previous.sessionId,
+                    payload: {
+                        sessionUpdate: "agent_message_chunk",
+                        content: { type: "text", text: "Still working on the current reply" },
+                    },
+                },
+            }),
+        );
+        cleanup();
+        await closeMobiusTransport();
+        createTestApplication();
+        const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND, signal));
+        await sendReadySession(paired.daemon, prepare);
+        await waitForDocumentState(() => screen.queryByText("Still working on the current reply") !== null, signal);
+        expect(screen.getAllByText("Still working on the current reply")).toHaveLength(1);
     } finally {
         await paired.close();
         vi.useRealTimers();
