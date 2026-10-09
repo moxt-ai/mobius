@@ -7,7 +7,7 @@ import type {
 } from "@moxt-ai/mobius-protocol";
 import type { WebSocket } from "undici";
 import { AcpExecutionError } from "./acp/acp-error.ts";
-import type { AgentRuntimeManager } from "./acp/agent-runtime-manager.ts";
+import type { AcpSessionRecovery, AgentRuntimeManager } from "./acp/agent-runtime-manager.ts";
 import type { AuditStore } from "./audit/audit-store.ts";
 import { resolveSessionDirectories } from "./authorization/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
@@ -19,6 +19,7 @@ import type { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.
 
 async function prepareSession(
     command: SessionPrepareCommand,
+    recovery: AcpSessionRecovery,
     config: DaemonConfig,
     directories: WorkspaceDirectoryService,
     audit: AuditStore,
@@ -49,7 +50,9 @@ async function prepareSession(
         const prepared =
             command.transient === true
                 ? await sessions.inspectSession(preparation, metrics)
-                : await sessions.prepareSession(preparation, metrics);
+                : recovery.kind === "history-required"
+                  ? await sessions.restoreSession(preparation, metrics)
+                  : await sessions.prepareSession(preparation, metrics);
         const configuration = command.configuration;
         const configOptions =
             configuration === undefined
@@ -140,7 +143,16 @@ export async function executeSessionPrepare(
 ): Promise<void> {
     const metrics = new AccumulatingOperationMetrics();
     try {
-        const readyEvent = await prepareSession(command, config, directories, audit, sessions, metrics, signal);
+        const readyEvent = await prepareSession(
+            command,
+            { kind: "interactive-only" },
+            config,
+            directories,
+            audit,
+            sessions,
+            metrics,
+            signal,
+        );
         send(socket, {
             ...readyEvent,
             runtimeTimings: metrics.snapshot(),
@@ -200,6 +212,7 @@ export async function executeSessionRestore(
                 sessionId: command.sessionId,
                 sessionState: "provisioned",
             },
+            { kind: "history-required" },
             config,
             directories,
             audit,

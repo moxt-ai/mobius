@@ -57,6 +57,7 @@ import {
     type AcpPromptContentOptions,
     type AcpPromptResult,
     type AcpSessionObserver,
+    type AcpSessionRecovery,
     type AcpSteerOptions,
     type AcpTurnOptions,
 } from "./session-contracts.ts";
@@ -237,6 +238,7 @@ export class AgentSession implements AcpClientHandler {
 
     static readonly start = async (
         options: AcpPrepareOptions,
+        recovery: AcpSessionRecovery,
         getObserver: () => AcpSessionObserver,
         store: AcpSessionStore,
         metrics: OperationMetrics,
@@ -246,7 +248,7 @@ export class AgentSession implements AcpClientHandler {
             options,
             getObserver,
             store,
-            async (runtime) => await runtime.initialize(options.signal, options.origin),
+            async (runtime) => await runtime.initialize(options.signal, recovery, options.origin),
             metrics,
             contentExternalizer,
         );
@@ -301,6 +303,17 @@ export class AgentSession implements AcpClientHandler {
         }
         const history = await this.#completedHistory(signal, "ACP agent exited while loading history");
         return await embedLocalHistoryImages(await history.snapshot(), signal);
+    };
+
+    readonly ensureHistoryLoaded = async (signal: AbortSignal): Promise<void> => {
+        if (!this.#capabilities.loadSession) {
+            throw new AcpExecutionError(
+                "This Agent restores context but does not provide message history.",
+                {},
+                "native_history_unsupported",
+            );
+        }
+        await this.#completedHistory(signal, "ACP agent exited while loading history");
     };
 
     readonly loadHistoryEventsV2 = async (
@@ -493,7 +506,11 @@ export class AgentSession implements AcpClientHandler {
         );
     }
 
-    readonly initialize = async (signal: AbortSignal, origin?: NativeSessionOrigin): Promise<void> => {
+    readonly initialize = async (
+        signal: AbortSignal,
+        recovery: AcpSessionRecovery,
+        origin?: NativeSessionOrigin,
+    ): Promise<void> => {
         await this.#initializeAgent(signal);
         let stored = this.#metrics.measureSync("session-state-read", () =>
             origin?.kind === "import"
@@ -573,7 +590,19 @@ export class AgentSession implements AcpClientHandler {
             this.#prompted = stored.session.prompted;
             this.#sessionTitle = stored.session.title;
             this.#restored = true;
-            if (this.#capabilities.resumeSession) {
+            if (recovery.kind === "history-required") {
+                if (!this.#capabilities.loadSession) {
+                    throw new AcpExecutionError(
+                        "This Agent restores context but does not provide message history.",
+                        {},
+                        "native_history_unsupported",
+                    );
+                }
+                lifecycleResponse = await this.#metrics.measure(
+                    "session-load",
+                    async () => (await this.#loadSession(signal, "ACP agent exited while loading a session")).response,
+                );
+            } else if (this.#capabilities.resumeSession) {
                 lifecycleResponse = await this.#metrics.measure(
                     "session-resume",
                     async () =>
