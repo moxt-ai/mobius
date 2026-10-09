@@ -121,7 +121,7 @@ class ControlledAgentState {
                 sessionUpdate: "user_message_chunk",
             },
         } as const;
-        if (this.#options.echoUserMessage === true) {
+        if (this.#options.echoUserMessage !== false) {
             this.#record(userUpdate);
             await send(userUpdate);
         }
@@ -168,7 +168,7 @@ class ControlledAgentState {
                 sessionUpdate: "user_message_chunk",
             },
         } as const;
-        if (this.#options.echoUserMessage === true) {
+        if (this.#options.echoUserMessage !== false) {
             this.#record(userUpdate);
             await active.send(userUpdate);
         }
