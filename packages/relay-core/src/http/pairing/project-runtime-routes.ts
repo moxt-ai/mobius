@@ -4,7 +4,6 @@ import {
     decodeNativeSessionRequest,
     decodeSessionConfigureCommand,
     decodeSessionListCommand,
-    decodeSessionLiveHistoryPageLoad,
     decodeSessionLiveHistoryV2PageLoad,
     decodeSessionPrepareCommand,
     decodeSessionPromptCommand,
@@ -54,11 +53,6 @@ const configureSessionSchema = v.strictObject({
     configId: identifier,
     value: v.string(),
     valueType: v.picklist(["boolean", "select"]),
-});
-const nativeMessagesSchema = v.strictObject({
-    ...sessionIdentitySchema.entries,
-    cursor: v.nullable(v.string()),
-    limit: v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(200)),
 });
 const nativeEventsV2Schema = v.strictObject({
     ...sessionIdentitySchema.entries,
@@ -253,31 +247,6 @@ export function createProjectRuntimeRoutes() {
                         ...body,
                         bindingId: "workspace",
                         kind: "session.configure",
-                        requestId: crypto.randomUUID(),
-                        sessionId: validateIdentifier(context.req.param("sessionId"), "session_id"),
-                    }),
-                );
-                const result = await context.env.services.runtimePairings.requestControl(
-                    validateIdentifier(context.req.param("projectId"), "project_id"),
-                    validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
-                    bearerToken(context.req.raw),
-                    command,
-                    context.req.raw.signal,
-                );
-                context.header("Cache-Control", "no-store");
-                return context.json(result);
-            },
-        )
-        .post(
-            "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/native-messages",
-            bodyParser<RelayHttpEnvironment>(),
-            async (context) => {
-                const body = validated(nativeMessagesSchema, context.req.valid("json"));
-                const command = decodeSessionLiveHistoryPageLoad(
-                    JSON.stringify({
-                        ...body,
-                        bindingId: "workspace",
-                        kind: "session.live-history.page.load",
                         requestId: crypto.randomUUID(),
                         sessionId: validateIdentifier(context.req.param("sessionId"), "session_id"),
                     }),

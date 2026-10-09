@@ -138,16 +138,10 @@ import {
 } from "./session-event-log-v2.ts";
 import { decodeSessionEventEnvelope, encodeSessionEventEnvelope, SESSION_EVENT_KIND } from "./session-events.ts";
 import {
-    decodeSessionLiveHistoryPageLoad,
-    decodeSessionLiveHistoryPageLoaded,
     decodeSessionLiveHistoryV2PageLoad,
     decodeSessionLiveHistoryV2PageLoaded,
-    encodeSessionLiveHistoryPageLoad,
-    encodeSessionLiveHistoryPageLoaded,
     encodeSessionLiveHistoryV2PageLoad,
     encodeSessionLiveHistoryV2PageLoaded,
-    SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
-    SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
     SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND,
     SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND,
 } from "./session-live-history.ts";
@@ -235,11 +229,6 @@ const serviceToDaemonSignatures = {
         SESSION_ELICITATION_RESPOND_KIND,
         encodeSessionElicitationRespondCommand,
         decodeSessionElicitationRespondCommand,
-    ),
-    [SESSION_LIVE_HISTORY_PAGE_LOAD_KIND]: defineMessageSignature(
-        SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
-        encodeSessionLiveHistoryPageLoad,
-        decodeSessionLiveHistoryPageLoad,
     ),
     [SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND]: defineMessageSignature(
         SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND,
@@ -387,11 +376,6 @@ const daemonToServiceSignatures = {
         SESSION_OPERATION_FAILED_KIND,
         encodeSessionOperationFailedEvent,
         decodeSessionOperationFailedEvent,
-    ),
-    [SESSION_LIVE_HISTORY_PAGE_LOADED_KIND]: defineMessageSignature(
-        SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
-        encodeSessionLiveHistoryPageLoaded,
-        decodeSessionLiveHistoryPageLoaded,
     ),
     [SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND]: defineMessageSignature(
         SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND,

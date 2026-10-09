@@ -20,12 +20,12 @@ import {
     decodeSessionCompletedEvent,
     decodeSessionEventEnvelope,
     decodeSessionFailedEvent,
-    decodeSessionLiveHistoryPageLoaded,
+    decodeSessionLiveHistoryV2PageLoaded,
     decodeSessionQueuedEvent,
     decodeSessionStartedEvent,
     encodeNativeSessionRequest,
     encodeSessionCancelCommand,
-    encodeSessionLiveHistoryPageLoad,
+    encodeSessionLiveHistoryV2PageLoad,
     encodeSessionPromptCommand,
     encodeSessionPromptDispositionCommand,
     MOBIUS_API_PREFIX,
@@ -35,7 +35,7 @@ import {
     SESSION_EVENT_KIND,
     SESSION_FAILED_KIND,
     SESSION_HISTORY_CHARACTER_LIMIT,
-    SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
+    SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND,
     SESSION_PROMPT_DISPOSITION_KIND,
     SESSION_QUEUED_KIND,
     SESSION_STARTED_KIND,
@@ -294,38 +294,33 @@ describe("daemon assistant text coalescing", () => {
 
             sendText(
                 fixture.socket,
-                encodeSessionLiveHistoryPageLoad({
+                encodeSessionLiveHistoryV2PageLoad({
                     additionalDirectoryIds: [],
                     agentId: fixture.agent.id,
                     bindingId: fixture.config.bindingId,
                     cursor: null,
                     directoryId: "default",
-                    kind: "session.live-history.page.load",
-                    limit: 50,
+                    kind: "session.live-history.v2.page.load",
+                    eventLimit: 200,
                     requestId: "reopened_ordered_history",
                     sessionId: prompt.sessionId,
                 }),
             );
             do {
                 result = await fixture.frames.next();
-            } while (decodeMessageKind(result) !== SESSION_LIVE_HISTORY_PAGE_LOADED_KIND);
-            const page = decodeSessionLiveHistoryPageLoaded(result).page;
-            expect(page).toMatchObject({ status: "available" });
-            if (page.status !== "available") {
-                throw new Error("Expected live history");
-            }
-            expect(page.messages).toEqual(
-                latest.messages.map((message) =>
-                    message.role === "user"
-                        ? { role: "user", text: message.text }
-                        : {
-                              activities: message.activities,
-                              content: message.content,
-                              role: "assistant",
-                              text: message.text,
-                          },
-                ),
+            } while (decodeMessageKind(result) !== SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND);
+            const recovery = decodeSessionLiveHistoryV2PageLoaded(result).events.executingPromptRequest;
+            expect(recovery?.commandId).toBe(prompt.commandId);
+            const updates = recovery?.events.flatMap((event) => (event.type === "acp" ? [event.payload] : [])) ?? [];
+            const toolUpdateIndex = updates.findIndex((update) => update.sessionUpdate === "tool_call");
+            const finalUpdateIndex = updates.findIndex(
+                (update) =>
+                    update.sessionUpdate === "agent_message_chunk" &&
+                    update.content.type === "text" &&
+                    updates.indexOf(update) > toolUpdateIndex,
             );
+            expect(toolUpdateIndex).toBeGreaterThanOrEqual(0);
+            expect(finalUpdateIndex).toBeGreaterThan(toolUpdateIndex);
 
             sendText(
                 fixture.socket,
@@ -623,79 +618,34 @@ describe("daemon assistant text coalescing", () => {
             });
             sendText(
                 socket,
-                encodeSessionLiveHistoryPageLoad({
+                encodeSessionLiveHistoryV2PageLoad({
                     additionalDirectoryIds: [],
                     agentId: agent.id,
                     bindingId: config.bindingId,
                     cursor: null,
                     directoryId: "default",
-                    kind: "session.live-history.page.load",
-                    limit: 50,
+                    kind: "session.live-history.v2.page.load",
+                    eventLimit: 200,
                     requestId: "native_messages_with_active_turn",
                     sessionId,
                 }),
             );
             do {
                 result = await next();
-            } while (decodeMessageKind(result) !== SESSION_LIVE_HISTORY_PAGE_LOADED_KIND);
-            const activePage = decodeSessionLiveHistoryPageLoaded(result).page;
-            expect(activePage).toMatchObject({ status: "available" });
-            if (activePage.status !== "available") {
-                throw new Error("Expected active native history");
-            }
-            expect(activePage.truncated).toBe(false);
-            expect(activePage.nextCursor).not.toBeNull();
-            const activeText = activePage.messages
-                .flatMap((message) => (message.role === "assistant" ? [message.text] : []))
+            } while (decodeMessageKind(result) !== SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND);
+            const activeLog = decodeSessionLiveHistoryV2PageLoaded(result).events.executingPromptRequest;
+            expect(activeLog?.commandId).toBe(prompt.commandId);
+            expect(activeLog?.truncated).toBe(false);
+            const recoveredText = activeLog?.events
+                .flatMap((event) =>
+                    event.type === "acp" &&
+                    event.payload.sessionUpdate === "agent_message_chunk" &&
+                    event.payload.content.type === "text"
+                        ? [event.payload.content.text]
+                        : [],
+                )
                 .join("");
-            expect(output.endsWith(activeText)).toBe(true);
-            expect(activeText.length).toBeLessThan(output.length);
-            expect(
-                activePage.messages.reduce(
-                    (characters, message) =>
-                        characters +
-                        message.text.length +
-                        (message.role === "assistant"
-                            ? JSON.stringify(message.activities).length + JSON.stringify(message.content).length
-                            : 0),
-                    0,
-                ),
-            ).toBeLessThanOrEqual(SESSION_HISTORY_CHARACTER_LIMIT);
-            const activePages = [activePage];
-            let activeCursor = activePage.nextCursor;
-            while (activeCursor !== null) {
-                sendText(
-                    socket,
-                    encodeSessionLiveHistoryPageLoad({
-                        additionalDirectoryIds: [],
-                        agentId: agent.id,
-                        bindingId: config.bindingId,
-                        cursor: activeCursor,
-                        directoryId: "default",
-                        kind: "session.live-history.page.load",
-                        limit: 50,
-                        requestId: `older_active_history_${activePages.length.toString()}`,
-                        sessionId,
-                    }),
-                );
-                do {
-                    result = await next();
-                } while (decodeMessageKind(result) !== SESSION_LIVE_HISTORY_PAGE_LOADED_KIND);
-                const olderPage = decodeSessionLiveHistoryPageLoaded(result).page;
-                if (olderPage.status !== "available") {
-                    throw new Error("Expected an older active native history page");
-                }
-                expect(olderPage.truncated).toBe(false);
-                activePages.push(olderPage);
-                activeCursor = olderPage.nextCursor;
-            }
-            const recoveredPages = activePages.toReversed().flatMap((page) => page.messages);
-            expect(
-                recoveredPages.flatMap((message) => (message.role === "assistant" ? [message.text] : [])).join(""),
-            ).toBe(output);
-            expect(new Set(activePages.flatMap((page) => page.coveredMessageIds))).toEqual(
-                new Set([`${prompt.commandId}:user`, `${prompt.commandId}:agent`]),
-            );
+            expect(recoveredText).toBe(`Gathering context${output}`);
             sendText(socket, encodeSessionPromptCommand({ ...prompt, commandId: "second_burst_turn" }));
             let rejected: string;
             for (;;) {
@@ -936,33 +886,39 @@ describe("daemon assistant text coalescing", () => {
             expect(recoveredContent).toContainEqual(activeContent);
             sendText(
                 socket,
-                encodeSessionLiveHistoryPageLoad({
+                encodeSessionLiveHistoryV2PageLoad({
                     additionalDirectoryIds: [],
                     agentId: agent.id,
                     bindingId: config.bindingId,
                     cursor: null,
                     directoryId: "default",
-                    kind: "session.live-history.page.load",
-                    limit: 50,
+                    kind: "session.live-history.v2.page.load",
+                    eventLimit: 200,
                     requestId: "paged_history_with_active_activity",
                     sessionId,
                 }),
             );
             do {
                 result = await next();
-            } while (decodeMessageKind(result) !== SESSION_LIVE_HISTORY_PAGE_LOADED_KIND);
-            const activePage = decodeSessionLiveHistoryPageLoaded(result).page;
-            expect(activePage).toMatchObject({ status: "available" });
-            if (activePage.status !== "available") {
-                throw new Error("Expected active Session history page");
-            }
-            expect(activePage.messages[0]).toMatchObject({ role: "user", text: prompt.prompt });
+            } while (decodeMessageKind(result) !== SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND);
+            const activeLog = decodeSessionLiveHistoryV2PageLoaded(result).events.executingPromptRequest;
+            expect(activeLog?.commandId).toBe(prompt.commandId);
+            const updates = activeLog?.events.flatMap((event) => (event.type === "acp" ? [event.payload] : [])) ?? [];
+            expect(updates).toContainEqual(
+                expect.objectContaining({
+                    sessionUpdate: "tool_call_update",
+                    toolCallId: "tool-1",
+                    status: "completed",
+                }),
+            );
             expect(
-                activePage.messages.flatMap((message) => (message.role === "assistant" ? message.activities : [])),
-            ).toEqual(recoveredActivities);
-            expect(
-                activePage.messages.flatMap((message) => (message.role === "assistant" ? message.content : [])),
-            ).toEqual(recoveredContent);
+                updates.some(
+                    (update) =>
+                        update.sessionUpdate === "agent_message_chunk" &&
+                        update.content.type === "external_resource" &&
+                        update.content.uri === activeContent.uri,
+                ),
+            ).toBe(true);
             const cancelledQueuedPrompt: SessionPromptCommand = {
                 ...prompt,
                 commandId: "cancelled_queued_follow_up",

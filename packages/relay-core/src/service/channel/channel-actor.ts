@@ -26,7 +26,6 @@ import {
     decodeSessionConfigureCommand,
     decodeSessionElicitationRespondCommand,
     decodeSessionListCommand,
-    decodeSessionLiveHistoryPageLoad,
     decodeSessionLiveHistoryV2PageLoad,
     decodeSessionPermissionRespondCommand,
     decodeSessionPrepareCommand,
@@ -59,8 +58,6 @@ import {
     SESSION_FAILED_KIND,
     SESSION_LIST_KIND,
     SESSION_LISTED_KIND,
-    SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
-    SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
     SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND,
     SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND,
     SESSION_OPERATION_FAILED_KIND,
@@ -298,7 +295,7 @@ export class ChannelActor {
                 this.returnAgentCatalogRefreshResult(message.requestId, encodeDaemonToServiceMessage(message));
                 return;
             }
-            if (kind === SESSION_LIVE_HISTORY_PAGE_LOADED_KIND || kind === SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND) {
+            if (kind === SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND) {
                 const result = message;
                 const pending = this.#pendingLiveSessionHistory.get(result.requestId);
                 if (pending === undefined || pending.expiresAt <= this.#clock.now()) {
@@ -410,14 +407,11 @@ export class ChannelActor {
                 this.forwardControl(socket, command, request.requestId, request.sessionId, request);
                 return;
             }
-            if (kind === SESSION_LIVE_HISTORY_PAGE_LOAD_KIND || kind === SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND) {
+            if (kind === SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND) {
                 if (!socket.permitsLiveSessionHistory()) {
                     throw new ProtocolMessageError("Live Session history requires an internal connection");
                 }
-                const command =
-                    kind === SESSION_LIVE_HISTORY_PAGE_LOAD_KIND
-                        ? decodeSessionLiveHistoryPageLoad(message)
-                        : decodeSessionLiveHistoryV2PageLoad(message);
+                const command = decodeSessionLiveHistoryV2PageLoad(message);
                 const now = this.#clock.now();
                 for (const [requestId, pending] of this.#pendingLiveSessionHistory) {
                     if (pending.expiresAt <= now) {

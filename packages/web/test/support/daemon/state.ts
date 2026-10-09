@@ -234,17 +234,6 @@ export class FakeAgentDaemonState {
                     }),
                 );
                 return true;
-            case "session.live-history.page.load":
-                send(
-                    p.encodeSessionOperationFailedEvent({
-                        kind: "session.operation.failed",
-                        requestId: c.requestId,
-                        sessionId: c.sessionId,
-                        code: "unsupported_operation",
-                        message: "Use native V2 events",
-                    }),
-                );
-                return true;
             case "session.live-history.v2.page.load": {
                 const events =
                     this.#nativeEvents.get(c.sessionId) ??

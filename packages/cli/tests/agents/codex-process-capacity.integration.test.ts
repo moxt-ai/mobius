@@ -3,9 +3,9 @@ import {
     decodeMessageKind,
     decodeNativeSessionResult,
     decodeRecordedSessionEvent,
-    decodeSessionLiveHistoryPageLoaded,
+    decodeSessionLiveHistoryV2PageLoaded,
     encodeNativeSessionCommand,
-    encodeSessionLiveHistoryPageLoad,
+    encodeSessionLiveHistoryV2PageLoad,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -91,13 +91,13 @@ test("Given a real Codex conversation, When more Sessions are opened than the da
         }
         await prompt("Continue the original conversation after opening other Sessions");
         peer.send(
-            encodeSessionLiveHistoryPageLoad({
+            encodeSessionLiveHistoryV2PageLoad({
                 ...identity,
-                kind: "session.live-history.page.load",
+                kind: "session.live-history.v2.page.load",
                 requestId: randomUUID(),
                 sessionId,
                 cursor: null,
-                limit: 50,
+                eventLimit: 200,
             }),
         );
         for (;;) {
@@ -105,18 +105,21 @@ test("Given a real Codex conversation, When more Sessions are opened than the da
             if (decodeMessageKind(message) === "session.operation.failed") {
                 throw new Error(message);
             }
-            if (decodeMessageKind(message) !== "session.live-history.page.loaded") {
+            if (decodeMessageKind(message) !== "session.live-history.v2.page.loaded") {
                 continue;
             }
-            const { page } = decodeSessionLiveHistoryPageLoaded(message);
-            expect(page.status).toBe("available");
-            if (page.status === "available") {
-                expect(page.messages.filter((entry) => entry.role === "user").map((entry) => entry.text)).toEqual([
-                    "Original conversation before opening other Sessions",
-                    "Continue the original conversation after opening other Sessions",
-                ]);
-                expect(page.messages.filter((entry) => entry.role === "assistant")).toHaveLength(2);
-            }
+            const page = decodeSessionLiveHistoryV2PageLoaded(message).events.history;
+            const updates = page.events.flatMap((event) => (event.type === "acp" ? [event.payload] : []));
+            const userText = updates.flatMap((update) =>
+                update.sessionUpdate === "user_message_chunk" && update.content.type === "text"
+                    ? [update.content.text]
+                    : [],
+            );
+            expect(userText).toEqual([
+                "Original conversation before opening other Sessions",
+                "Continue the original conversation after opening other Sessions",
+            ]);
+            expect(updates.filter((update) => update.sessionUpdate === "agent_message_chunk")).toHaveLength(2);
             break;
         }
     });
