@@ -98,9 +98,29 @@ function selectTool(
     completedToolCalls: number,
     patch?: string,
     readPath?: string,
+    mcpImage = false,
 ): SelectedTool | undefined {
     const callId = `call_mobius_${(completedToolCalls + 1).toString()}`;
-    if (readPath !== undefined) {
+    if ((readPath !== undefined || mcpImage) && tools.length > 0) {
+        const exec = tools.find((tool) => tool.kind === "custom" && /(?:^|\.)exec$/u.test(tool.name));
+        if (exec !== undefined) {
+            return {
+                ...exec,
+                name: "exec",
+                callId,
+                input: mcpImage
+                    ? 'const result = await tools.mcp__image_test__image({}); for (const part of result.content) { if (part.type === "image") image(part); else if (part.type === "text") text(part.text); }'
+                    : `const cwd = await tools.exec_command({cmd:"pwd"}); const result = await tools.view_image({path:cwd.output.trim()+"/"+${JSON.stringify(readPath)}}); image(result.image_url);`,
+            };
+        }
+        if (mcpImage) {
+            const tool = tools.find((entry) => entry.name.includes("image_test"));
+            if (tool === undefined) {
+                throw new Error("The Agent did not expose the image MCP tool");
+            }
+            return { ...tool, callId, input: "{}" };
+        }
+
         const read = tools.find((tool) => /(?:^|\.)(?:read|read_file)$/iu.test(tool.name));
         const path = stringProperty(read?.parameters, ["filePath", "path", "file"]);
         if (read === undefined || path === undefined) {
@@ -439,6 +459,7 @@ export class FakeOpenAiProvider implements AsyncDisposable {
             readonly commentary?: string;
             readonly patch?: string;
             readonly readPath?: string;
+            readonly mcpImage?: boolean;
         } = {},
     ): Promise<FakeOpenAiProvider> {
         const requests: ProviderRequestDiagnostic[] = [];
@@ -485,7 +506,7 @@ export class FakeOpenAiProvider implements AsyncDisposable {
             const scenario = activeScenario ?? selectedScenario;
             const tool =
                 completedToolCalls < scenario.toolCalls
-                    ? selectTool(tools, scenario, completedToolCalls, options.patch, options.readPath)
+                    ? selectTool(tools, scenario, completedToolCalls, options.patch, options.readPath, options.mcpImage)
                     : undefined;
             const selectedAnswer = fakeProviderResponse(answer, scenario);
             const selectedChunks = responseChunks(selectedAnswer, scenario);

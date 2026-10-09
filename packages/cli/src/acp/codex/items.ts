@@ -1,4 +1,6 @@
+import { pathToFileURL } from "node:url";
 import type { ContentBlock, ToolCallContent, ToolCallStatus, ToolCallUpdate, ToolKind } from "@agentclientprotocol/sdk";
+import { z } from "zod";
 
 import { type ThreadItem, threadItemSchema } from "./app-server-protocol.ts";
 
@@ -27,6 +29,15 @@ function boundedParagraphs(values: readonly string[], limit: number): string {
 function textContent(text: string): ToolCallContent {
     const block: ContentBlock = { text: truncate(text, TOOL_OUTPUT_CHARACTER_LIMIT), type: "text" };
     return { content: block, type: "content" };
+}
+
+function structuredToolText(value: unknown): readonly ToolCallContent[] {
+    const result = z.object({ content: z.array(z.unknown()) }).safeParse(value);
+    const items = Array.isArray(value) ? value : result.success ? result.data.content : [];
+    return items.flatMap((item) => {
+        const text = z.object({ type: z.enum(["text", "inputText"]), text: z.string() }).safeParse(item);
+        return text.success ? [textContent(text.data.text)] : [];
+    });
 }
 
 function firstLine(value: string): string {
@@ -68,6 +79,22 @@ function mcpStatus(status: "inProgress" | "completed" | "failed"): ToolCallStatu
  * Mobius does not present (user messages, reasoning, plans, and item kinds a newer Codex added).
  */
 function presentToolItem(item: ThreadItem): ToolCallPresentation | null {
+    if (item.type === "imageView") {
+        return {
+            content: [
+                {
+                    type: "content",
+                    content: { type: "image", data: "", mimeType: "", uri: pathToFileURL(item.path).href },
+                },
+            ],
+            kind: "read",
+            locations: [{ path: item.path }],
+            rawInput: { path: item.path },
+            rawOutput: null,
+            status: "completed",
+            title: "View image",
+        };
+    }
     if (item.type === "imageGeneration") {
         const failed = item.failure != null || item.status === "failed";
         const content: ToolCallContent[] = [];
@@ -136,13 +163,7 @@ function presentToolItem(item: ThreadItem): ToolCallPresentation | null {
     }
     if (item.type === "mcpToolCall") {
         const label = `${item.server}/${item.tool}`;
-        const content: ToolCallContent[] = [];
-        if (item.result != null) {
-            content.push(textContent(JSON.stringify(item.result)));
-        }
-        if (item.error != null) {
-            content.push(textContent(JSON.stringify(item.error)));
-        }
+        const content = structuredToolText(item.error ?? item.result);
         return {
             content,
             kind: "other",
@@ -155,13 +176,13 @@ function presentToolItem(item: ThreadItem): ToolCallPresentation | null {
     }
     if (item.type === "dynamicToolCall") {
         const label = item.namespace == null ? item.tool : `${item.namespace}/${item.tool}`;
-        const content: ToolCallContent[] = (item.contentItems ?? []).map((entry) => textContent(JSON.stringify(entry)));
+        const content = structuredToolText(item.contentItems);
         return {
             content,
             kind: "other",
             locations: [],
             rawInput: item.arguments ?? null,
-            rawOutput: item.success === true ? null : (item.contentItems ?? null),
+            rawOutput: item.contentItems ?? null,
             status: mcpStatus(item.status),
             title: truncate(label, TITLE_CHARACTER_LIMIT),
         };
@@ -180,12 +201,17 @@ export function toolCallUpdate(
         return null;
     }
     return {
-        content: [...presentation.content],
+        content: item.type === "imageView" && lifecycle === "started" ? [] : [...presentation.content],
         kind: presentation.kind,
         locations: [...presentation.locations],
         rawInput: presentation.rawInput,
         rawOutput: presentation.rawOutput,
-        status: lifecycle === "completed" && presentation.status === "in_progress" ? "completed" : presentation.status,
+        status:
+            item.type === "imageView" && lifecycle === "started"
+                ? "in_progress"
+                : lifecycle === "completed" && presentation.status === "in_progress"
+                  ? "completed"
+                  : presentation.status,
         title: presentation.title,
         toolCallId: item.id,
     };
