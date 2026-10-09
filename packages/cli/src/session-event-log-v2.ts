@@ -63,12 +63,13 @@ export function sessionEventV2(
 }
 
 export class DaemonSessionEventLogV2 {
-    readonly daemonGenerationId = randomUUID();
+    readonly daemonGenerationId: string;
     readonly #publisher: DaemonSessionEventPublisher;
     readonly #queued = new Map<string, QueuedPromptRequestV2>();
 
-    constructor(publisher: DaemonSessionEventPublisher) {
+    constructor(publisher: DaemonSessionEventPublisher, daemonGenerationId: string = randomUUID()) {
         this.#publisher = publisher;
+        this.daemonGenerationId = daemonGenerationId;
     }
 
     readonly requested = (command: SessionPromptCommand): void => {

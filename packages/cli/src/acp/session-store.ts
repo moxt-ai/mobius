@@ -1,11 +1,10 @@
-import { chmodSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { randomUUID } from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
-import { drizzle, type NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
+import type { NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
 import { z } from "zod";
-import { acpSessionStoreMigrations } from "../generated/acp-session-store-migrations.ts";
+import type { LocalSqliteDatabase } from "../infra/local-sqlite-database.ts";
 import { acpSession } from "../schema/acp-session-store/index.ts";
+import { type AcpSessionEventStoreV2, MemoryAcpSessionEventStoreV2 } from "./session-event-store-v2.ts";
 
 export class AcpStoredSession {
     readonly additionalDirectories: readonly string[];
@@ -58,6 +57,7 @@ export class FoundAcpStoredSession extends AcpStoredSessionLookup {
 
 export interface AcpSessionStore {
     readonly close: () => void;
+    readonly eventsV2: AcpSessionEventStoreV2;
     readonly findNative: (agentId: string, nativeSessionId: string) => readonly AcpStoredSession[];
     readonly list: () => readonly AcpStoredSession[];
     readonly read: (sessionId: string) => AcpStoredSessionLookup;
@@ -66,10 +66,16 @@ export interface AcpSessionStore {
 }
 
 export class MemoryAcpSessionStore implements AcpSessionStore {
+    readonly eventsV2: AcpSessionEventStoreV2;
     readonly #sessions = new Map<string, AcpStoredSession>();
+
+    constructor(eventsV2: AcpSessionEventStoreV2 = new MemoryAcpSessionEventStoreV2(randomUUID())) {
+        this.eventsV2 = eventsV2;
+    }
 
     readonly close = (): void => {
         this.#sessions.clear();
+        this.eventsV2.close();
     };
 
     readonly findNative = (agentId: string, nativeSessionId: string): readonly AcpStoredSession[] =>
@@ -87,6 +93,7 @@ export class MemoryAcpSessionStore implements AcpSessionStore {
 
     readonly remove = (sessionId: string): void => {
         this.#sessions.delete(sessionId);
+        this.eventsV2.remove(sessionId);
     };
 
     readonly write = (session: AcpStoredSession): void => {
@@ -122,44 +129,25 @@ function decodeStoredSession(value: unknown): AcpStoredSession {
 }
 
 export class SqliteAcpSessionStore implements AcpSessionStore {
+    readonly eventsV2: AcpSessionEventStoreV2;
     readonly #database: NodeSQLiteDatabase;
-    readonly #sqliteDatabase: DatabaseSync;
+    readonly #localDatabase: LocalSqliteDatabase;
 
-    constructor(path: string) {
-        mkdirSync(dirname(path), { mode: 0o700, recursive: true });
-        this.#sqliteDatabase = new DatabaseSync(path);
-        chmodSync(path, 0o600);
-        this.#migrate();
-        this.#database = drizzle({ client: this.#sqliteDatabase });
+    constructor(
+        localDatabase: LocalSqliteDatabase,
+        eventsV2: AcpSessionEventStoreV2 = new MemoryAcpSessionEventStoreV2(randomUUID()),
+    ) {
+        this.eventsV2 = eventsV2;
+        this.#localDatabase = localDatabase;
+        this.#database = localDatabase.orm;
     }
 
-    readonly #migrate = (): void => {
-        const version = z
-            .object({ user_version: z.number().int().nonnegative() })
-            .parse(this.#sqliteDatabase.prepare("PRAGMA user_version").get()).user_version;
-        if (version > acpSessionStoreMigrations.length) {
-            this.#sqliteDatabase.close();
-            throw new Error("The ACP Session database was created by a newer Mobius version");
-        }
-        for (let index = version; index < acpSessionStoreMigrations.length; index += 1) {
-            const migration = acpSessionStoreMigrations[index];
-            if (migration === undefined) {
-                throw new Error("The ACP Session migration is unavailable");
-            }
-            this.#sqliteDatabase.exec("BEGIN IMMEDIATE");
-            try {
-                this.#sqliteDatabase.exec(migration.sql);
-                this.#sqliteDatabase.exec(`PRAGMA user_version = ${index + 1}`);
-                this.#sqliteDatabase.exec("COMMIT");
-            } catch (error) {
-                this.#sqliteDatabase.exec("ROLLBACK");
-                throw error;
-            }
-        }
-    };
-
     readonly close = (): void => {
-        this.#sqliteDatabase.close();
+        try {
+            this.#localDatabase.close();
+        } finally {
+            this.eventsV2.close();
+        }
     };
 
     readonly findNative = (agentId: string, nativeSessionId: string): readonly AcpStoredSession[] =>
@@ -180,6 +168,7 @@ export class SqliteAcpSessionStore implements AcpSessionStore {
 
     readonly remove = (sessionId: string): void => {
         this.#database.delete(acpSession).where(eq(acpSession.sessionId, sessionId)).run();
+        this.eventsV2.remove(sessionId);
     };
 
     readonly write = (session: AcpStoredSession): void => {

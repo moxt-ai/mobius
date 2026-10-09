@@ -1,6 +1,6 @@
 {
     "name": "@moxt-ai/mobius",
-    "version": "0.0.175",
+    "version": "0.0.176",
     "description": "Mobius CLI for pairing and running local AI agent services.",
     "type": "module",
     "bin": {
@@ -54,6 +54,7 @@
     "devDependencies": {
         "@moxt-ai/mobius-protocol": "workspace:*",
         "@types/node": "^24.13.5",
+        "drizzle-kit": "1.0.0-rc.4",
         "drizzle-orm": "1.0.0-rc.4",
         "esbuild": "0.28.2",
         "@moxt-ai/mobius-sdk": "workspace:*",
