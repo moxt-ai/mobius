@@ -15,7 +15,6 @@ import {
     type SessionPromptCommand,
     type SessionReadyEvent,
 } from "@moxt-ai/mobius-protocol";
-import { type AgentDaemonSocket, FakeAgentDaemon, FakeAgentDaemonState } from "@moxt-ai/mobius-test/agent-daemon";
 import { cleanup, configure, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createElement } from "react";
 import { afterAll, beforeAll, expect } from "vitest";
@@ -24,6 +23,7 @@ import type { AgentOption, ChannelConnection, InstallableAgentOption } from "@/d
 import { MobiusChat } from "@/index";
 import { closeMobiusTransport } from "@/services/mobius-transport";
 import { startLocalRelay } from "./relay-harness.ts";
+import { type AgentDaemonSocket, FakeAgentDaemon, FakeAgentDaemonState } from "./support/daemon/connection.ts";
 
 export function createTestApplication() {
     const application = render(createElement(App));
@@ -48,11 +48,7 @@ interface CreatedPairing {
     readonly hostToken: string;
     readonly pairingCode: string;
     readonly projectId: string;
-}
-
-interface ClaimedPairing {
-    readonly channelId: string;
-    readonly daemonToken: string;
+    readonly runtimeId: string;
 }
 
 const ASYNC_UI_TIMEOUT_MS = 8_000;
@@ -61,35 +57,6 @@ configure({ asyncUtilTimeout: ASYNC_UI_TIMEOUT_MS });
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function decodeCreatedPairing(value: unknown): CreatedPairing {
-    if (
-        !isRecord(value) ||
-        typeof value["channelId"] !== "string" ||
-        typeof value["hostToken"] !== "string" ||
-        typeof value["pairingCode"] !== "string" ||
-        typeof value["projectId"] !== "string" ||
-        Object.hasOwn(value, "tenantId")
-    ) {
-        throw new Error("The relay returned invalid browser pairing credentials");
-    }
-    return {
-        channelId: value["channelId"],
-        hostToken: value["hostToken"],
-        pairingCode: value["pairingCode"],
-        projectId: value["projectId"],
-    };
-}
-
-function decodeClaimedPairing(value: unknown): ClaimedPairing {
-    if (!isRecord(value) || typeof value["channelId"] !== "string" || typeof value["daemonToken"] !== "string") {
-        throw new Error("The relay returned invalid daemon pairing credentials");
-    }
-    return {
-        channelId: value["channelId"],
-        daemonToken: value["daemonToken"],
-    };
 }
 
 function setHappyDomUrl(url: URL): void {
@@ -156,51 +123,98 @@ export async function pairDaemon(options: PairDaemonOptions = {}): Promise<{
     readonly daemon: FakeAgentDaemon;
     readonly reconnectDaemon: () => Promise<FakeAgentDaemon>;
 }> {
-    const createdResponse = await fetch(new URL(`${MOBIUS_API_PREFIX}/pairings`, window.location.origin), {
-        method: "POST",
-    });
+    const projectResponse = await fetch(
+        new URL(`${MOBIUS_API_PREFIX}/v1/standalone/projects`, window.location.origin),
+        { method: "POST" },
+    );
+    expect(projectResponse.status).toBe(201);
+    const project: unknown = await projectResponse.json();
+    if (!isRecord(project) || typeof project["projectId"] !== "string" || typeof project["token"] !== "string") {
+        throw new Error("Invalid project bootstrap");
+    }
+    const projectId = project["projectId"];
+    const hostToken = project["token"];
+    const configuration = await fetch(
+        new URL(`${MOBIUS_API_PREFIX}/v1/projects/${projectId}/recording`, window.location.origin),
+        {
+            body: JSON.stringify({ enabled: false }),
+            method: "PUT",
+            headers: { authorization: `Bearer ${hostToken}`, "content-type": "application/json" },
+        },
+    );
+    expect(configuration.status).toBe(200);
+    const createdResponse = await fetch(
+        new URL(`${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtime-pairings`, window.location.origin),
+        {
+            body: JSON.stringify({ idempotencyKey: crypto.randomUUID() }),
+            method: "POST",
+            headers: { authorization: `Bearer ${hostToken}`, "content-type": "application/json" },
+        },
+    );
     expect(createdResponse.status).toBe(201);
-    const created = decodeCreatedPairing(await createdResponse.json());
-    const claimResponse = await fetch(new URL(`${MOBIUS_API_PREFIX}/pairings/claim`, window.location.origin), {
-        body: JSON.stringify({
-            agents: options.agents?.map((agent) => ({
-                ...agent,
-                ...(options.agentSettingsDiscovery === true ? { agentSettingsDiscovery: true } : {}),
-                ...(options.sessionTurnConfiguration === true ? { sessionTurnConfiguration: true } : {}),
-            })) ?? [
-                {
-                    agentPath: "/usr/local/bin/codex",
-                    agentVersion: "codex 0.153.0",
+    const pairing: unknown = await createdResponse.json();
+    if (!isRecord(pairing) || typeof pairing["pairingId"] !== "string" || typeof pairing["pairingCode"] !== "string") {
+        throw new Error("Invalid Runtime pairing");
+    }
+    const claimResponse = await fetch(
+        new URL(`${MOBIUS_API_PREFIX}/v1/runtime-pairings/${pairing["pairingId"]}/redeem`, window.location.origin),
+        {
+            body: JSON.stringify({
+                agents: options.agents?.map((agent) => ({
+                    ...agent,
                     ...(options.agentSettingsDiscovery === true ? { agentSettingsDiscovery: true } : {}),
                     ...(options.sessionTurnConfiguration === true ? { sessionTurnConfiguration: true } : {}),
-                    capabilities: {
-                        additionalDirectories: true,
-                        audioPrompt: false,
-                        closeSession: true,
-                        deleteSession: true,
-                        embeddedContextPrompt: true,
-                        imagePrompt: true,
-                        listSessions: true,
-                        loadSession: true,
-                        promptQueueing: false,
-                        resumeSession: true,
-                        steering: false,
-                        unstableForkSession: false,
+                })) ?? [
+                    {
+                        agentPath: "/usr/local/bin/codex",
+                        agentVersion: "codex 0.153.0",
+                        ...(options.agentSettingsDiscovery === true ? { agentSettingsDiscovery: true } : {}),
+                        ...(options.sessionTurnConfiguration === true ? { sessionTurnConfiguration: true } : {}),
+                        capabilities: {
+                            additionalDirectories: true,
+                            audioPrompt: false,
+                            closeSession: true,
+                            deleteSession: true,
+                            embeddedContextPrompt: true,
+                            imagePrompt: true,
+                            listSessions: true,
+                            loadSession: true,
+                            promptQueueing: false,
+                            resumeSession: true,
+                            steering: false,
+                            unstableForkSession: false,
+                        },
+                        id: "codex",
+                        label: "Codex",
                     },
-                    id: "codex",
-                    label: "Codex",
-                },
-            ],
-            installableAgents: options.installableAgents ?? [],
-            machineName: "Integration machine",
-            pairingCode: created.pairingCode,
-            workspaceName: "mobius",
-        }),
-        headers: { "content-type": "application/json" },
-        method: "POST",
-    });
+                ],
+                installableAgents: options.installableAgents ?? [],
+                machineName: "Integration machine",
+                pairingCode: pairing["pairingCode"],
+                workspaceName: "mobius",
+            }),
+            headers: { "content-type": "application/json" },
+            method: "POST",
+        },
+    );
     expect(claimResponse.status).toBe(200);
-    const claimed = decodeClaimedPairing(await claimResponse.json());
+    const redeemed: unknown = await claimResponse.json();
+    if (
+        !isRecord(redeemed) ||
+        typeof redeemed["channelId"] !== "string" ||
+        typeof redeemed["runtimeCredential"] !== "string" ||
+        typeof redeemed["runtimeId"] !== "string"
+    ) {
+        throw new Error("Invalid redeemed Runtime");
+    }
+    const claimed = { channelId: redeemed["channelId"], daemonToken: redeemed["runtimeCredential"] };
+    const created = {
+        channelId: claimed.channelId,
+        projectId,
+        hostToken,
+        pairingCode: pairing["pairingCode"],
+        runtimeId: redeemed["runtimeId"],
+    };
     const daemonUrl = new URL(`${MOBIUS_API_PREFIX}/channels/${claimed.channelId}/daemon`, window.location.origin);
     daemonUrl.protocol = "ws:";
     daemonUrl.searchParams.set("token", claimed.daemonToken);
@@ -238,7 +252,7 @@ export async function openPairedApplication(options: OpenPairedApplicationOption
     window.history.replaceState(
         null,
         "",
-        path?.(paired.channelId) ?? `/channels/${encodeURIComponent(paired.channelId)}`,
+        path?.(paired.channelId) ?? `/projects/${paired.credential.projectId}/runtimes/${paired.credential.runtimeId}`,
     );
     window.localStorage.clear();
     saveBrowserCredential(paired.channelId, paired.credential);
@@ -273,6 +287,7 @@ export function saveBrowserCredential(channelId: string, credential: CreatedPair
         JSON.stringify({
             hostToken: credential.hostToken,
             ownerChannelId: channelId,
+            authority: "standalone-project-owner",
             projectId: credential.projectId,
         }),
     );
@@ -338,12 +353,18 @@ export async function completeRenderedPrompt(
         expect(promptInput.getAttribute("placeholder")).toContain("Ask the local agent");
     });
     fireEvent.change(promptInput, { target: { value: promptText } });
-    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+    const sendButton = screen.getByRole("button", { name: "Send message" });
+    await waitFor(() => expect(sendButton.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(sendButton);
     const prompt = decodeSessionPromptCommand(await daemon.receive(SESSION_PROMPT_KIND));
+    const epoch = crypto.randomUUID();
     await daemon.sendSessionEvent(
         prompt.sessionId,
         encodeSessionStartedEvent({
             commandId: prompt.commandId,
+            epoch,
+            prompt: prompt.prompt,
+            sequence: 0,
             kind: "session.started",
             attemptId: crypto.randomUUID(),
             sessionId: prompt.sessionId,
@@ -354,6 +375,8 @@ export async function completeRenderedPrompt(
         encodeAgentMessageDeltaEvent({
             commandId: prompt.commandId,
             kind: "agent.message.delta",
+            epoch,
+            sequence: 1,
             messageId: `agent-${prompt.commandId}`,
             sessionId: prompt.sessionId,
             text: responseText,
