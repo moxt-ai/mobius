@@ -957,10 +957,11 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
 
     readonly #completeTurn = async (turn: {
         readonly error?: { readonly message: string } | null | undefined;
+        readonly id: string;
         readonly status: string;
     }): Promise<void> => {
         const active = this.#turn;
-        if (active === null) {
+        if (active === null || active.turn.id !== turn.id) {
             return;
         }
         // Keep this Turn reachable by termination and cancellation until its output has drained.

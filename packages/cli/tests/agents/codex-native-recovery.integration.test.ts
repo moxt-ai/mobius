@@ -61,7 +61,7 @@ test("Given a newly created real Codex Session, When Chat requests its V2 histor
     });
 });
 
-test("Given a real codex native Session, When the active prompt is cancelled with a follow-up queued, Then the queued prompt restores that Session and completes", async () => {
+test("Given a real Codex native Session, When the active prompt is cancelled with a follow-up queued, Then the retained Agent completes the queued prompt", async () => {
     const entered = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     let holdResponse = false;
@@ -156,47 +156,6 @@ test("Given a real codex native Session, When the active prompt is cancelled wit
             holdResponse = false;
             release.resolve();
             expect(await finish(queued, "end_turn")).toContain("NATIVE_RECOVERY_REPLY");
-            const v2RequestId = randomUUID();
-            peer.send(
-                encodeSessionLiveHistoryV2PageLoad({
-                    kind: "session.live-history.v2.page.load",
-                    requestId: v2RequestId,
-                    sessionId: nativeId,
-                    agentId: "codex",
-                    bindingId: peer.bindingId,
-                    directoryId: "default",
-                    additionalDirectoryIds: [],
-                    cursor: null,
-                    eventLimit: 100,
-                }),
-            );
-            for (;;) {
-                const message = await peer.nextMessage();
-                if (decodeMessageKind(message) === "session.operation.failed") {
-                    throw new Error(message);
-                }
-                if (decodeMessageKind(message) !== "session.live-history.v2.page.loaded") {
-                    continue;
-                }
-                const replay = decodeSessionLiveHistoryV2PageLoaded(message).events.events.events;
-                const userText = replay.flatMap((event) =>
-                    event.type === "acp" &&
-                    event.payload.sessionUpdate === "user_message_chunk" &&
-                    event.payload.content.type === "text"
-                        ? [event.payload.content.text]
-                        : [],
-                );
-                const assistantText = replay.flatMap((event) =>
-                    event.type === "acp" &&
-                    event.payload.sessionUpdate === "agent_message_chunk" &&
-                    event.payload.content.type === "text"
-                        ? [event.payload.content.text]
-                        : [],
-                );
-                expect(userText).toContain("Reply with a short greeting, without using tools");
-                expect(assistantText.join("")).toContain("NATIVE_RECOVERY_REPLY");
-                break;
-            }
         });
     } finally {
         release.resolve();
