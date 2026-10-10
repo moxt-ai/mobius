@@ -1218,7 +1218,7 @@ export class MobiusSessionResources {
         return decodeMobiusMessagePage(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal));
     };
 
-    readonly queryRuntimeNativeEventsV2 = async (
+    readonly previewRuntimeNativeEventsV2 = async (
         runtimeId: string,
         sessionId: string,
         identity: {
@@ -1240,7 +1240,7 @@ export class MobiusSessionResources {
         return decodeNativeSessionEventsV2(result);
     };
 
-    readonly querySessionNativeEventsV2 = async (
+    readonly previewSessionNativeEventsV2 = async (
         sessionId: string,
         identity: {
             readonly additionalDirectoryIds: readonly string[];
