@@ -85,8 +85,9 @@ if (process.argv.includes("--version")) {
                 expect(diagnostics).toContain(`"sessionId":"${peer.sessionId}"`);
                 expect(diagnostics).toContain(`"failureName":"RetryableAcpInitializationError"`);
                 expect(diagnostics).toContain(`"cause1Name":"AcpExecutionError"`);
-                expect(diagnostics).toContain(`"cause1Message":"Internal error"`);
+                expect(diagnostics).toContain(`"cause1Message":"Persistent fake ACP initialization failure"`);
                 expect(diagnostics).toContain(`"cause2Name":"RequestError"`);
+                expect(diagnostics).toContain(`"cause2Message":"Internal error"`);
                 expect(diagnostics).toContain(`"cause2Code":"-32603"`);
             },
         );
