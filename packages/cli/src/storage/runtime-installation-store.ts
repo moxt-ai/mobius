@@ -118,6 +118,23 @@ interface ChannelIndex {
     readonly installationId: string;
 }
 
+interface EncodedVerifiedRuntimeConnection {
+    readonly activation: RuntimeConnectionActivation;
+    readonly appId: string;
+    readonly applicationId: string;
+    readonly channelId: string;
+    readonly connectionId: string;
+    readonly defaultWorkspace: string;
+    readonly installationId: string;
+    readonly kind: "verified";
+    readonly pairingId: string;
+    readonly relayOrigin: string;
+    readonly relayProxy?: RelayProxyPolicy;
+    readonly runtimeCredential: string;
+    readonly runtimeId: string;
+    readonly version: 5;
+}
+
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -307,6 +324,25 @@ function decodeVerifiedConnection(value: Readonly<Record<string, unknown>>): Ver
     );
 }
 
+function encodeVerifiedConnection(connection: VerifiedRuntimeConnection): EncodedVerifiedRuntimeConnection {
+    return {
+        activation: connection.activation,
+        applicationId: connection.applicationId,
+        appId: connection.appId,
+        channelId: connection.channelId,
+        connectionId: connection.connectionId,
+        defaultWorkspace: connection.defaultWorkspace,
+        installationId: connection.installationId,
+        kind: connection.kind,
+        pairingId: connection.pairingId,
+        relayOrigin: connection.relayOrigin.toString(),
+        relayProxy: connection.relayProxy,
+        runtimeCredential: connection.runtimeCredential,
+        runtimeId: connection.runtimeId,
+        version: 5,
+    };
+}
+
 function decodeConnection(value: unknown): VerifiedRuntimeConnection {
     if (!isRecord(value)) {
         throw new RuntimeInstallationStoreError("invalid_connection", "The saved Runtime connection is invalid");
@@ -353,11 +389,7 @@ async function readJsonFile(path: string, signal: AbortSignal, missingCode: stri
     }
 }
 
-async function writeJsonAtomically(
-    path: string,
-    value: Readonly<Record<string, unknown>>,
-    signal: AbortSignal,
-): Promise<void> {
+async function writeJsonAtomically(path: string, value: Readonly<object>, signal: AbortSignal): Promise<void> {
     signal.throwIfAborted();
     const directory = dirname(path);
     const temporaryPath = join(directory, `.${randomUUID()}.tmp`);
@@ -605,26 +637,7 @@ export class RuntimeInstallationStore {
         signal: AbortSignal,
     ): Promise<void> => {
         const connectionPath = this.connectionPath(connection.connectionId);
-        await writeJsonAtomically(
-            connectionPath,
-            {
-                activation: connection.activation,
-                applicationId: connection.applicationId,
-                appId: connection.appId,
-                channelId: connection.channelId,
-                connectionId: connection.connectionId,
-                defaultWorkspace: connection.defaultWorkspace,
-                installationId: connection.installationId,
-                kind: connection.kind,
-                pairingId: connection.pairingId,
-                relayOrigin: connection.relayOrigin.toString(),
-                relayProxy: connection.relayProxy,
-                runtimeCredential: connection.runtimeCredential,
-                runtimeId: connection.runtimeId,
-                version: 5,
-            },
-            signal,
-        );
+        await writeJsonAtomically(connectionPath, encodeVerifiedConnection(connection), signal);
     };
 }
 
