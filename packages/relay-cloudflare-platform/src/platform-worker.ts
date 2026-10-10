@@ -16,7 +16,6 @@ import {
     type Identifier,
     isIdentifier,
     MOBIUS_API_PREFIX,
-    RUNTIME_WORKSPACE_BINDING_ID,
 } from "@moxt-ai/mobius-protocol";
 import {
     acceptWebSocketHttpTransport,
@@ -639,27 +638,12 @@ export function createPlatformApplication(
                 context.req.raw.signal,
             );
             if (context.req.header("upgrade")?.toLowerCase() !== "websocket") {
-                const identity = await runtimeSessionIdentity(
-                    context.var.relay,
-                    {
-                        projectId: target.projectId,
-                        runtimeId: target.runtimeId,
-                        sessionId: context.req.param("sessionId"),
-                    },
-                    context.req.raw.signal,
-                );
                 const result = await context.var.relay.services.runtimePairings.requestProjectScopeControl(
                     new ProjectScope(target.projectId),
                     target.runtimeId,
                     decodeSessionLiveHistoryV2PageLoad(
                         JSON.stringify({
-                            additionalDirectoryIds: identity.additionalDirectories.map(
-                                (directory) => directory.directoryId,
-                            ),
-                            agentId: identity.agentId,
-                            bindingId: RUNTIME_WORKSPACE_BINDING_ID,
                             cursor: context.req.query("cursor") ?? null,
-                            directoryId: identity.directoryId,
                             eventLimit: v.parse(
                                 v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(10_000)),
                                 Number(context.req.query("limit") ?? "50"),

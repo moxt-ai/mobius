@@ -99,11 +99,7 @@ if (process.argv.includes("--version")) {
                 }
                 peer.send(
                     encodeSessionLiveHistoryV2PageLoad({
-                        additionalDirectoryIds: [],
-                        agentId: "opencode",
-                        bindingId: peer.bindingId,
                         cursor: null,
-                        directoryId: "default",
                         eventLimit: 50,
                         kind: "session.live-history.v2.page.load",
                         requestId: "load-external-image-history",

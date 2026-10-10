@@ -103,11 +103,7 @@ test("Given real Codex has accepted a steering prompt, When V2 recovery reloads 
             const requestId = randomUUID();
             peer.send(
                 encodeSessionLiveHistoryV2PageLoad({
-                    additionalDirectoryIds: [],
-                    agentId: "codex",
-                    bindingId: peer.bindingId,
                     cursor: null,
-                    directoryId: "default",
                     eventLimit: 50,
                     kind: "session.live-history.v2.page.load",
                     requestId,
@@ -204,11 +200,7 @@ test("Given real Codex advances between repeated prompts, When V2 recovery pagin
             const requestId = randomUUID();
             peer.send(
                 encodeSessionLiveHistoryV2PageLoad({
-                    additionalDirectoryIds: [],
-                    agentId: "codex",
-                    bindingId: peer.bindingId,
                     cursor: null,
-                    directoryId: "default",
                     eventLimit: 1,
                     kind: "session.live-history.v2.page.load",
                     requestId,
@@ -232,11 +224,7 @@ test("Given real Codex advances between repeated prompts, When V2 recovery pagin
                     const olderRequestId = randomUUID();
                     peer.send(
                         encodeSessionLiveHistoryV2PageLoad({
-                            additionalDirectoryIds: [],
-                            agentId: "codex",
-                            bindingId: peer.bindingId,
                             cursor,
-                            directoryId: "default",
                             eventLimit: 1,
                             kind: "session.live-history.v2.page.load",
                             requestId: olderRequestId,
@@ -361,11 +349,7 @@ test("Given real Codex with an active turn, When three follow-ups are accepted a
             expect(accepted).toEqual(expect.arrayContaining([first, cancelled, last]));
             peer.send(
                 encodeSessionLiveHistoryV2PageLoad({
-                    additionalDirectoryIds: [],
-                    agentId: "codex",
-                    bindingId: peer.bindingId,
                     cursor: null,
-                    directoryId: "default",
                     eventLimit: 25,
                     kind: "session.live-history.v2.page.load",
                     requestId: randomUUID(),

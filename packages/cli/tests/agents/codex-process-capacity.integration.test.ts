@@ -69,7 +69,6 @@ test("Given a real Codex conversation, When more Sessions are opened than the da
         await prompt("Continue the original conversation after opening other Sessions");
         peer.send(
             encodeSessionLiveHistoryV2PageLoad({
-                ...identity,
                 kind: "session.live-history.v2.page.load",
                 requestId: randomUUID(),
                 sessionId,

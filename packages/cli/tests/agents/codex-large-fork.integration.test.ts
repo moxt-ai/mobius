@@ -114,7 +114,6 @@ test("Given real Codex saved more than 32 MiB of answers, When a user forks thro
         const historyId = randomUUID();
         peer.send(
             encodeSessionLiveHistoryV2PageLoad({
-                ...identity,
                 kind: "session.live-history.v2.page.load",
                 sessionId: targetSessionId,
                 requestId: historyId,

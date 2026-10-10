@@ -118,11 +118,7 @@ test("Given real Claude reads an image, When its reply streams and native histor
         expect(imageKeys(await finish())).toContain(key);
         peer.send(
             encodeSessionLiveHistoryV2PageLoad({
-                additionalDirectoryIds: [],
-                agentId: "claude",
-                bindingId: peer.bindingId,
                 cursor: null,
-                directoryId: "default",
                 eventLimit: 50,
                 kind: "session.live-history.v2.page.load",
                 requestId: "image-history",

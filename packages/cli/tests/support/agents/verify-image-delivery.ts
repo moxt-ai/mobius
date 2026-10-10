@@ -114,11 +114,7 @@ export async function verifyImageDelivery(
     expect(imageReferences(await finish())).toContain(input.reference);
     peer.send(
         encodeSessionLiveHistoryV2PageLoad({
-            additionalDirectoryIds: [],
-            agentId: input.agentId,
-            bindingId: peer.bindingId,
             cursor: null,
-            directoryId: "default",
             eventLimit: 50,
             kind: "session.live-history.v2.page.load",
             requestId: "image-history",

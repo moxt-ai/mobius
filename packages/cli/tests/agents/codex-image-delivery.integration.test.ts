@@ -4,11 +4,14 @@ import { join } from "node:path";
 import {
     decodeFileChunkEvent,
     decodeMessageKind,
+    decodeNativeSessionResult,
     decodeSessionEventEnvelopeV2,
     decodeSessionLiveHistoryV2PageLoaded,
     encodeFileReadCommand,
+    encodeNativeSessionCommand,
     encodeSessionLiveHistoryV2PageLoad,
     encodeSessionPromptCommand,
+    type NativeSessionResult,
     type SessionEventV2,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -133,6 +136,55 @@ test("Given saved Codex image generation, When the real daemon reopens it throug
             join(directory, `rollout-2026-10-09T06-58-30-${sessionId}.jsonl`),
             `${payloads.map((entry, ordinal) => JSON.stringify({ timestamp, ordinal, ...entry })).join("\n")}\n`,
         );
+        const managedSessionId = "imported-image-session";
+        const identity = {
+            additionalDirectoryIds: [],
+            agentId: "codex",
+            bindingId: peer.bindingId,
+            directoryId: "default",
+            kind: "native.session.request",
+            sessionId: managedSessionId,
+        } as const;
+        const resultFor = async (requestId: string): Promise<NativeSessionResult> => {
+            for (;;) {
+                const message = await peer.nextMessage();
+                const kind = decodeMessageKind(message);
+                if (kind === "session.operation.failed") {
+                    throw new Error(message);
+                }
+                if (kind !== "native.session.result") {
+                    continue;
+                }
+                const result = decodeNativeSessionResult(message);
+                if (result.requestId === requestId) {
+                    return result;
+                }
+            }
+        };
+        peer.send(encodeNativeSessionCommand({ ...identity, action: "list", cursor: null, requestId: "image-list" }));
+        const listed = await resultFor("image-list");
+        if (listed.action !== "list") {
+            throw new Error("Expected native Session directory");
+        }
+        const source = listed.entries.find((entry) => entry.nativeSessionId === sessionId);
+        if (source === undefined) {
+            throw new Error("Missing saved image Session");
+        }
+        peer.send(
+            encodeNativeSessionCommand({
+                ...identity,
+                action: "import",
+                entryId: source.entryId,
+                requestId: "image-import",
+                targetSessionId: managedSessionId,
+            }),
+        );
+        const imported = await resultFor("image-import");
+        expect(imported).toMatchObject({
+            action: "import",
+            ready: { restored: true, sessionId: managedSessionId },
+            targetSessionId: managedSessionId,
+        });
         const key = createHash("sha256").update(image).digest("hex");
         const sendPrompt = (commandId: string, prompt: string): void =>
             peer.send(
@@ -147,7 +199,7 @@ test("Given saved Codex image generation, When the real daemon reopens it throug
                     kind: "session.prompt",
                     prompt,
                     resources: [],
-                    sessionId,
+                    sessionId: managedSessionId,
                     targetCommandId: "",
                 }),
             );
@@ -175,15 +227,11 @@ test("Given saved Codex image generation, When the real daemon reopens it throug
         };
         peer.send(
             encodeSessionLiveHistoryV2PageLoad({
-                additionalDirectoryIds: [],
-                agentId: "codex",
-                bindingId: peer.bindingId,
                 cursor: null,
-                directoryId: "default",
                 eventLimit: 50,
                 kind: "session.live-history.v2.page.load",
                 requestId: "image-history",
-                sessionId,
+                sessionId: managedSessionId,
             }),
         );
         for (;;) {
@@ -205,7 +253,7 @@ test("Given saved Codex image generation, When the real daemon reopens it throug
                 maxBytes: 2_000_000,
                 path: `mobius-content:image:${key}`,
                 requestId: "image-download",
-                sessionId,
+                sessionId: managedSessionId,
             }),
         );
         const chunks: Buffer[] = [];

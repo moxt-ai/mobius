@@ -15,7 +15,6 @@ import {
     encodeSessionPreviewHistoryPageLoaded,
     encodeSessionPromptCommand,
     encodeSessionStatusChangedEvent,
-    encodeSessionsQueriedEvent,
     MOBIUS_API_PREFIX,
 } from "@moxt-ai/mobius-protocol";
 import {
@@ -943,31 +942,10 @@ describe.sequential("Platform Session-only boundary", () => {
                 ),
                 environment,
             );
-            const query = decodeServiceToDaemonMessage(await daemonMessages.next());
-            if (query.kind !== "session.query") {
-                throw new Error("Expected a Session query before loading V2 history");
+            const historyLoad = decodeServiceToDaemonMessage(await daemonMessages.next());
+            if (historyLoad.kind !== "session.live-history.v2.page.load") {
+                throw new Error("Expected history loading without a preceding Session query");
             }
-            expect(decodeServiceToDaemonMessage(await hostMessages.next()).kind).toBe("session.query");
-            daemon.send(
-                encodeSessionsQueriedEvent({
-                    entries: [
-                        {
-                            additionalDirectories: [],
-                            agentId: "codex",
-                            directoryId: "root",
-                            directoryLabel: "Workspace",
-                            prompted: true,
-                            sessionId,
-                            status: { kind: "idle" },
-                            title: "Local session",
-                            updatedAt: "2026-09-18T00:00:00.000Z",
-                        },
-                    ],
-                    kind: "session.queried",
-                    requestId: query.requestId,
-                }),
-            );
-            expect(decodeDaemonToServiceMessage(await hostMessages.next()).kind).toBe("session.queried");
             daemon.send(
                 encodeSessionStatusChangedEvent({
                     kind: "session.status.changed",
@@ -995,10 +973,6 @@ describe.sequential("Platform Session-only boundary", () => {
                 title: "Renamed session",
                 updatedAt: "2026-09-18T00:01:00.000Z",
             });
-            const historyLoad = decodeServiceToDaemonMessage(await daemonMessages.next());
-            if (historyLoad.kind !== "session.live-history.v2.page.load") {
-                throw new Error("Expected a V2 Session history request");
-            }
             daemon.send(
                 encodeSessionLiveHistoryV2PageLoaded({
                     events: {
