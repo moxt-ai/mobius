@@ -327,7 +327,9 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                         "thread/fork",
                         {
                             cwd: context.params.cwd,
-                            excludeTurns: false,
+                            // Fork keeps the native context; its response only needs the new identity
+                            // and settings. History is read through the separate history boundary.
+                            excludeTurns: true,
                             threadId: context.params.sessionId,
                         },
                         AbortSignal.any([context.signal, AbortSignal.timeout(APPROVAL_TIMEOUT_MILLISECONDS)]),
@@ -336,7 +338,6 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 this.#nativeSessionId = forked.thread.id;
                 this.#settings.selectRestoredThread(forked);
                 await this.#settings.probeCollaborationMode(this.#nativeSessionId, context.signal);
-                await this.#replayHistory(forked.thread.turns);
                 await this.#emitAvailableCommands();
                 return { configOptions: this.#settings.configOptions(), sessionId: forked.thread.id };
             })
