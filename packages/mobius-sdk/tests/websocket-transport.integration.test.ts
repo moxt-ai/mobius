@@ -19,11 +19,14 @@ class BrowserWebSocket extends EventTarget implements WebSocket {
     readonly protocol = "";
     readyState: WebSocket["readyState"] = WebSocket.OPEN;
     readonly subscriptionIds: string[] = [];
+    readonly requestBodies: string[] = [];
+    readonly responseBody: string;
     readonly url: string;
     closedWith: { readonly code: number; readonly reason: string } | null = null;
 
-    constructor(url: string) {
+    constructor(url: string, responseBody = "") {
         super();
+        this.responseBody = responseBody;
         this.url = url;
     }
 
@@ -68,11 +71,15 @@ class BrowserWebSocket extends EventTarget implements WebSocket {
         if (typeof requestId !== "string") {
             throw new Error("Expected a string request identifier");
         }
+        if (!("body" in value) || typeof value.body !== "string") {
+            throw new Error("Expected a string request body");
+        }
+        this.requestBodies.push(value.body);
         queueMicrotask(() => {
             this.dispatchEvent(
                 new MessageEvent("message", {
                     data: JSON.stringify({
-                        body: "",
+                        body: this.responseBody,
                         headers: [],
                         kind: "http.response",
                         requestId,
@@ -87,10 +94,12 @@ class BrowserWebSocket extends EventTarget implements WebSocket {
 class BrowserWebSocketConnector implements MobiusWebSocketConnector {
     #remainingReconnectFailures: number;
     connectAttempts = 0;
+    readonly responseBody: string;
     readonly sockets: BrowserWebSocket[] = [];
 
-    constructor(reconnectFailures = 0) {
+    constructor(reconnectFailures = 0, responseBody = "") {
         this.#remainingReconnectFailures = reconnectFailures;
+        this.responseBody = responseBody;
     }
 
     readonly connect = async (endpoint: URL, signal: AbortSignal): Promise<WebSocket> => {
@@ -100,7 +109,7 @@ class BrowserWebSocketConnector implements MobiusWebSocketConnector {
             this.#remainingReconnectFailures -= 1;
             throw new Error("The controlled WebSocket reconnect failed because the network is unavailable");
         }
-        const socket = new BrowserWebSocket(endpoint.toString());
+        const socket = new BrowserWebSocket(endpoint.toString(), this.responseBody);
         this.sockets.push(socket);
         return socket;
     };
@@ -108,6 +117,25 @@ class BrowserWebSocketConnector implements MobiusWebSocketConnector {
 
 afterEach(() => {
     vi.useRealTimers();
+});
+
+it("Given a Unicode JSON request and response, When the browser uses the WebSocket transport, Then it transfers their text without Base64 wrapping", async () => {
+    const responseBody = JSON.stringify({ message: "Olá, Mobius" });
+    const connector = new BrowserWebSocketConnector(0, responseBody);
+    const transport = new WsTransport({ connector });
+    const requestBody = JSON.stringify({ prompt: "show café ☕" });
+
+    const response = await transport.fetch(
+        new Request("https://relay.example.test/mobius/api/v1/projects/project/sessions", {
+            body: requestBody,
+            headers: { "content-type": "application/json" },
+            method: "POST",
+        }),
+    );
+
+    expect(connector.sockets[0]?.requestBodies).toEqual([requestBody]);
+    expect(await response.text()).toBe(responseBody);
+    transport.close();
 });
 
 it("Given an idle browser transport, When its connection expires, Then it closes cleanly and the next request reconnects", async () => {

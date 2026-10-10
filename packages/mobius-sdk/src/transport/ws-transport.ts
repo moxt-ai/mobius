@@ -1,5 +1,4 @@
 import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
-import { fromByteArray, toByteArray } from "base64-js";
 import { MobiusApiError, MobiusConnectionError, MobiusProtocolError, MobiusValidationError } from "../errors.ts";
 import type { MobiusHttpTransport, MobiusTransportSessionEvent } from "./http-transport.ts";
 
@@ -59,17 +58,6 @@ const SAFE_WEBSOCKET_CLOSE_REASONS = new Set(["WebSocket transport closed", "Web
 function webSocketCloseError(event: CloseEvent, action: "connect" | "remain connected"): MobiusConnectionError {
     const reason = SAFE_WEBSOCKET_CLOSE_REASONS.has(event.reason) ? `: ${event.reason}` : "";
     return new MobiusConnectionError(`The Mobius WebSocket could not ${action} (close code ${event.code}${reason})`);
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-    return fromByteArray(bytes);
-}
-
-function base64ToBytes(encoded: string): ArrayBuffer {
-    const decoded = toByteArray(encoded);
-    const buffer = new ArrayBuffer(decoded.byteLength);
-    new Uint8Array(buffer).set(decoded);
-    return buffer;
 }
 
 function wsRecord(value: unknown): Readonly<Record<string, unknown>> {
@@ -184,7 +172,7 @@ export class WsTransport implements MobiusHttpTransport {
         request.signal.throwIfAborted();
         request.signal.throwIfAborted();
         const requestId = crypto.randomUUID();
-        const body = new Uint8Array(await request.arrayBuffer());
+        const body = await request.text();
         request.signal.throwIfAborted();
         const response = new Promise<Response>((resolve, reject) => {
             const abort = (): void => {
@@ -206,7 +194,7 @@ export class WsTransport implements MobiusHttpTransport {
         try {
             socket.send(
                 JSON.stringify({
-                    body: bytesToBase64(body),
+                    body,
                     headers: Array.from(request.headers.entries()),
                     kind: WS_REQUEST_KIND,
                     method: request.method,
@@ -377,9 +365,9 @@ export class WsTransport implements MobiusHttpTransport {
             if (typeof status !== "number" || !Number.isSafeInteger(status) || status < 200 || status > 599) {
                 throw new MobiusProtocolError("The WebSocket transport returned an invalid response status");
             }
-            const encodedBody = wsString(message, "body", 16_777_216);
+            const body = wsString(message, "body", 16_777_216);
             pending.resolve(
-                new Response(base64ToBytes(encodedBody), {
+                new Response(body, {
                     headers: wsHeaders(message["headers"]),
                     status,
                 }),

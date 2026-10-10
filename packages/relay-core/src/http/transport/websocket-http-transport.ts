@@ -1,5 +1,4 @@
 import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
-import { fromByteArray, toByteArray } from "base64-js";
 import { type HttpError, toHttpError } from "../../entity/http-error.ts";
 import { logger } from "../../infra/logger.ts";
 
@@ -83,26 +82,12 @@ function string(value: Readonly<Record<string, unknown>>, field: string, maximum
     return candidate;
 }
 
-function decodeBody(encoded: string): ArrayBuffer {
-    if (encoded.length > MAX_BODY_BYTES * 2) {
+function requestBody(value: Readonly<Record<string, unknown>>): string {
+    const body = string(value, "body", MAX_BODY_BYTES);
+    if (new TextEncoder().encode(body).byteLength > MAX_BODY_BYTES) {
         throw transportError("request_too_large");
     }
-    let decoded: Uint8Array;
-    try {
-        decoded = toByteArray(encoded);
-    } catch {
-        throw transportError("invalid_message");
-    }
-    if (decoded.byteLength > MAX_BODY_BYTES) {
-        throw transportError("request_too_large");
-    }
-    const buffer = new ArrayBuffer(decoded.byteLength);
-    new Uint8Array(buffer).set(decoded);
-    return buffer;
-}
-
-function encodeBody(bytes: Uint8Array): string {
-    return fromByteArray(bytes);
+    return body;
 }
 
 function headers(value: unknown): Headers {
@@ -165,8 +150,8 @@ function requestFromMessage(
     if (!["DELETE", "GET", "PATCH", "POST", "PUT"].includes(method)) {
         throw transportError("invalid_method");
     }
-    const body = decodeBody(string(value, "body", MAX_BODY_BYTES * 2));
-    if (method === "GET" && body.byteLength > 0) {
+    const body = requestBody(value);
+    if (method === "GET" && body.length > 0) {
         throw transportError("invalid_message");
     }
     const requestHeaders = headers(value["headers"]);
@@ -175,7 +160,7 @@ function requestFromMessage(
     }
     return {
         request: new Request(endpoint, {
-            body: body.byteLength === 0 || method === "GET" ? null : body,
+            body: body.length === 0 || method === "GET" ? null : body,
             headers: requestHeaders,
             method,
             signal,
@@ -404,13 +389,13 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                 if (mediaType.startsWith("text/event-stream")) {
                     throw transportError("streaming_response_unsupported");
                 }
-                const body = new Uint8Array(await response.arrayBuffer());
-                if (body.byteLength > MAX_BODY_BYTES) {
+                const body = await response.text();
+                if (new TextEncoder().encode(body).byteLength > MAX_BODY_BYTES) {
                     throw transportError("response_too_large");
                 }
                 server.send(
                     JSON.stringify({
-                        body: encodeBody(body),
+                        body,
                         headers: responseHeaders(response),
                         kind: RESPONSE_KIND,
                         requestId,
