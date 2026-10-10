@@ -51,6 +51,59 @@ class PendingDaemonBoundary {
     };
 }
 
+class TextDaemonBoundary {
+    requestBody: string | null = null;
+    readonly responseBody: string;
+
+    constructor(responseBody: string) {
+        this.responseBody = responseBody;
+    }
+
+    readonly fetch = async (request: Request): Promise<Response> => {
+        this.requestBody = await request.text();
+        return new Response(this.responseBody, { headers: { "content-type": "application/json" } });
+    };
+}
+
+it("Given a Unicode JSON request and response, When the relay carries them over WebSocket, Then it transfers their text without Base64 wrapping", async () => {
+    const requestBody = JSON.stringify({ prompt: "show café ☕" });
+    const responseBody = JSON.stringify({ message: "Olá, Mobius" });
+    const daemon = new TextDaemonBoundary(responseBody);
+    const response = acceptWebSocketHttpTransport(
+        new Request("https://platform.test/mobius/api/v1/transport", {
+            headers: { Upgrade: "websocket" },
+        }),
+        daemon.fetch,
+    );
+    const socket = response.webSocket;
+    if (socket === null) {
+        throw new Error("Expected a WebSocket transport response");
+    }
+    socket.accept();
+    const message = nextMessage(socket);
+
+    socket.send(
+        JSON.stringify({
+            body: requestBody,
+            headers: [["content-type", "application/json"]],
+            kind: "http.request",
+            method: "POST",
+            path: "/mobius/api/v1/projects/project/sessions",
+            requestId: "text-body",
+        }),
+    );
+
+    expect(JSON.parse(await message)).toEqual({
+        body: responseBody,
+        headers: [["content-type", "application/json"]],
+        kind: "http.response",
+        requestId: "text-body",
+        status: 200,
+    });
+    expect(daemon.requestBody).toBe(requestBody);
+    socket.close();
+});
+
 it("Given a daemon request fails with a 5XX error, When the WebSocket transport reports it, Then the client receives its detailed code and message", async () => {
     const daemon = new FailingDaemonBoundary();
     const response = acceptWebSocketHttpTransport(
