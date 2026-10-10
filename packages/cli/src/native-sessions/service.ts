@@ -37,6 +37,31 @@ interface AuthorizedNativeSession {
     readonly additionalEntries: readonly WorkspaceEntry[];
 }
 
+const MAXIMUM_SESSION_TITLE_LENGTH = 500;
+const forkSuffixPattern = / \(Fork #([1-9][0-9]*)\)$/u;
+
+function nextForkTitle(sourceTitle: string, sessions: readonly AcpStoredSession[]): string {
+    let highest = 0;
+    for (const session of sessions) {
+        const match = forkSuffixPattern.exec(session.title);
+        const encodedNumber = match?.[1];
+        if (encodedNumber === undefined) {
+            continue;
+        }
+        const number = Number(encodedNumber);
+        if (!Number.isSafeInteger(number)) {
+            continue;
+        }
+        const suffix = ` (Fork #${number})`;
+        if (`${sourceTitle.slice(0, MAXIMUM_SESSION_TITLE_LENGTH - suffix.length)}${suffix}` === session.title) {
+            highest = Math.max(highest, number);
+        }
+    }
+    const number = highest + 1;
+    const suffix = ` (Fork #${number})`;
+    return `${sourceTitle.slice(0, MAXIMUM_SESSION_TITLE_LENGTH - suffix.length)}${suffix}`;
+}
+
 export class NativeSessionService {
     readonly #entries = new Map<string, ListedTarget>();
     readonly #cursors = new Map<string, ListedCursor>();
@@ -249,6 +274,11 @@ export class NativeSessionService {
                 "native_session_unsupported",
             );
         }
+        const sourceTitle = target.info.title ?? "Untitled session";
+        const title =
+            action === "fork"
+                ? nextForkTitle(sourceTitle, this.#sessions.listSessions(Number.MAX_SAFE_INTEGER))
+                : sourceTitle;
         const opened = await this.#sessions.openNativeSession(
             {
                 ...options,
@@ -256,7 +286,9 @@ export class NativeSessionService {
                 sessionId: command.targetSessionId,
                 additionalDirectories: target.additionalDirectories,
             },
-            { kind: action, nativeSessionId: target.info.sessionId },
+            action === "fork"
+                ? { kind: "fork", nativeSessionId: target.info.sessionId, title }
+                : { kind: "import", nativeSessionId: target.info.sessionId },
         );
         signal.throwIfAborted();
         const ready: SessionReadyEvent = {
@@ -280,7 +312,7 @@ export class NativeSessionService {
             action,
             ready,
             targetSessionId: command.targetSessionId,
-            title: target.info.title ?? "Untitled session",
+            title,
         };
     };
 
