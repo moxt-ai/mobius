@@ -205,6 +205,33 @@ describe("native session history", () => {
             vi.useRealTimers();
         }
     });
+    it("Given a titled local conversation, When it is forked repeatedly, Then each child receives the next numbered fork title", async () => {
+        const f = await fixture("Claude Code");
+        try {
+            await f.seed("Original context");
+            const entry = (await f.list()).entries[0];
+            if (entry === undefined) {
+                throw new Error("Missing native conversation");
+            }
+
+            const first = await f.service.execute(
+                { ...f.identity, action: "fork", entryId: entry.entryId, targetSessionId: "first-forked-copy" },
+                new AbortController().signal,
+            );
+            const second = await f.service.execute(
+                { ...f.identity, action: "fork", entryId: entry.entryId, targetSessionId: "second-forked-copy" },
+                new AbortController().signal,
+            );
+
+            expect(first).toMatchObject({ action: "fork", title: "Original context (Fork #1)" });
+            expect(second).toMatchObject({ action: "fork", title: "Original context (Fork #2)" });
+            expect(f.sessions.listSessions(10).map((session) => session.title)).toEqual(
+                expect.arrayContaining(["Original context (Fork #1)", "Original context (Fork #2)"]),
+            );
+        } finally {
+            await f.close();
+        }
+    });
     it.each(["import", "fork"] satisfies readonly ("import" | "fork")[])(
         "Given native history loading is unavailable, When a saved conversation is %sed, Then Runtime opens it without loading history",
         async (action) => {
