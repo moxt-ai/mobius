@@ -64,6 +64,8 @@ export class RelayConnectionDiagnostics {
         this.#route = describeEnvironmentProxyRoute(relayUrl);
     }
 
+    readonly snapshot = () => this.#localLog.snapshot();
+
     readonly catalogFailed = (failure: unknown): void => {
         const details: Record<string, string> = { ...this.#route, relayOrigin: this.#relayOrigin };
         addFailureDetails(details, failure);
@@ -145,6 +147,7 @@ export class RelayConnectionDiagnostics {
         }
         this.#localLog.record(
             `Mobius daemon diagnostic ${JSON.stringify({
+                timestamp: new Date().toISOString(),
                 channelId: this.#channelId,
                 event,
                 requestId,
@@ -165,7 +168,12 @@ export class RelayConnectionDiagnostics {
             event,
             sessionId: this.#channelId,
         });
-        const encoded = JSON.stringify({ channelId: this.#channelId, event, ...details });
+        const encoded = JSON.stringify({
+            timestamp: new Date().toISOString(),
+            channelId: this.#channelId,
+            event,
+            ...details,
+        });
         this.#localLog.record(`Mobius relay diagnostic ${encoded}`);
         if (warning) {
             process.stderr.write(`Mobius relay diagnostic ${encoded}\n`);

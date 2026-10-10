@@ -9,6 +9,7 @@ import {
     decodeFileFailedEvent,
     decodeMessageKind,
     decodeNativeSessionResult,
+    decodeRuntimeDiagnosticsResult,
     decodeRuntimePongEvent,
     decodeRuntimeStatusEvent,
     decodeSessionCompletedEvent,
@@ -37,6 +38,8 @@ import {
     type LifecycleMetadataV2,
     type NativeSessionRequest,
     type NativeSessionResult,
+    type RuntimeDiagnosticsRequest,
+    type RuntimeDiagnosticsResult,
     type RuntimePingCommand,
     type RuntimePongEvent,
     type SessionCancelCommand,
@@ -130,6 +133,7 @@ function commandReply(
 }
 
 export type RuntimeControlCommand =
+    | RuntimeDiagnosticsRequest
     | RuntimePingCommand
     | NativeSessionRequest
     | SessionPrepareCommand
@@ -145,6 +149,7 @@ export type RuntimeControlCommand =
     | SessionQueryCommand
     | SessionRestoreCommand;
 export type RuntimeControlResult =
+    | RuntimeDiagnosticsResult
     | RuntimePongEvent
     | NativeSessionResult
     | SessionReadyEvent
@@ -465,21 +470,23 @@ export async function requestRuntimeControl(
                         return;
                     }
                     const result =
-                        command.kind === "runtime.ping" && kind === "runtime.pong"
-                            ? decodeRuntimePongEvent(raw)
-                            : command.kind === "native.session.request" && kind === "native.session.result"
-                              ? decodeNativeSessionResult(raw)
-                              : command.kind === "session.list" && kind === "session.listed"
-                                ? decodeSessionsListedEvent(raw)
-                                : command.kind === "session.query" && kind === "session.queried"
-                                  ? decodeSessionsQueriedEvent(raw)
-                                  : command.kind === "session.restore" && kind === "session.restored"
-                                    ? decodeSessionRestoredEvent(raw)
-                                    : command.kind === "session.prepare" && kind === "session.ready"
-                                      ? decodeSessionReadyEvent(raw)
-                                      : command.kind === "session.configure" && kind === "session.config.updated"
-                                        ? decodeSessionConfigUpdatedEvent(raw)
-                                        : null;
+                        command.kind === "runtime.diagnostics.read" && kind === "runtime.diagnostics.result"
+                            ? decodeRuntimeDiagnosticsResult(raw)
+                            : command.kind === "runtime.ping" && kind === "runtime.pong"
+                              ? decodeRuntimePongEvent(raw)
+                              : command.kind === "native.session.request" && kind === "native.session.result"
+                                ? decodeNativeSessionResult(raw)
+                                : command.kind === "session.list" && kind === "session.listed"
+                                  ? decodeSessionsListedEvent(raw)
+                                  : command.kind === "session.query" && kind === "session.queried"
+                                    ? decodeSessionsQueriedEvent(raw)
+                                    : command.kind === "session.restore" && kind === "session.restored"
+                                      ? decodeSessionRestoredEvent(raw)
+                                      : command.kind === "session.prepare" && kind === "session.ready"
+                                        ? decodeSessionReadyEvent(raw)
+                                        : command.kind === "session.configure" && kind === "session.config.updated"
+                                          ? decodeSessionConfigUpdatedEvent(raw)
+                                          : null;
                     const resolved =
                         result ??
                         (command.kind === "session.preview-history.page.load" &&

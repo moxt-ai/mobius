@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import {
     decodeMessageKind,
+    decodeRuntimeDiagnosticsResult,
     decodeSessionOperationFailedEvent,
     encodeSessionPrepareCommand,
 } from "@moxt-ai/mobius-protocol";
@@ -89,6 +90,22 @@ if (process.argv.includes("--version")) {
                 expect(diagnostics).toContain(`"cause2Name":"RequestError"`);
                 expect(diagnostics).toContain(`"cause2Message":"Internal error"`);
                 expect(diagnostics).toContain(`"cause2Code":"-32603"`);
+                peer.send(JSON.stringify({ kind: "runtime.diagnostics.read", requestId: "bug-report-diagnostics" }));
+                for (;;) {
+                    const message = await peer.nextMessage();
+                    if (decodeMessageKind(message) !== "runtime.diagnostics.result") {
+                        continue;
+                    }
+                    const exported = decodeRuntimeDiagnosticsResult(message);
+                    expect(exported.requestId).toBe("bug-report-diagnostics");
+                    expect(exported.entries).toContainEqual(
+                        expect.objectContaining({ event: "session_prepare_failed", requestId, cause2Code: "-32603" }),
+                    );
+                    expect(JSON.stringify(exported)).not.toContain("Persistent fake ACP initialization failure");
+                    expect(JSON.stringify(exported)).not.toContain(peer.workspace);
+                    expect(exported.version).toMatch(/^0\.0\.\d+$/u);
+                    break;
+                }
             },
         );
     } finally {

@@ -29,6 +29,7 @@ import {
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-protocol";
 import { WebSocket } from "undici";
+import packageMetadata from "../package.json" with { type: "json" };
 import type { AgentRuntimeManager } from "./acp/agent-runtime-manager.ts";
 import { createAgentSettingsDiscoveryHandler } from "./agent-catalog/handle-agent-settings-discovery.ts";
 import type { AgentInstallationManager } from "./agent-installation/agent-installation-manager.ts";
@@ -121,6 +122,38 @@ export function createDaemonCommandHandler({
     return {
         handle: (message: ServiceToDaemonMessage): void => {
             const kind = message.kind;
+            if (kind === "runtime.diagnostics.read") {
+                // This fixed capability cannot select files, paths or arbitrary local state.
+                audit.record({
+                    event: "runtime_diagnostics_read",
+                    commandId: message.requestId,
+                    sessionId: "runtime",
+                    details: {},
+                });
+                try {
+                    send(socket, {
+                        kind: "runtime.diagnostics.result",
+                        requestId: message.requestId,
+                        version: packageMetadata.version,
+                        ...diagnostics.snapshot(),
+                    });
+                } catch {
+                    audit.record({
+                        event: "runtime_diagnostics_failed",
+                        commandId: message.requestId,
+                        sessionId: "runtime",
+                        details: { code: "diagnostics_unavailable" },
+                    });
+                    send(socket, {
+                        kind: "session.operation.failed",
+                        requestId: message.requestId,
+                        sessionId: "runtime",
+                        code: "diagnostics_unavailable",
+                        message: "Local diagnostics are unavailable.",
+                    });
+                }
+                return;
+            }
             if (kind === RUNTIME_PING_KIND) {
                 send(socket, { kind: RUNTIME_PONG_KIND, requestId: message.requestId });
                 return;
