@@ -17,7 +17,7 @@ function requestErrorMessage(error: RequestError): string {
         return fallback;
     }
     const agentError = error.data["error"];
-    if (!isRecord(agentError) || agentError["code"] !== "invalid_prompt") {
+    if (!isRecord(agentError)) {
         return fallback;
     }
     const message = agentError["message"];
