@@ -147,7 +147,7 @@ describe("native session preparation", () => {
                 ),
             ).rejects.toMatchObject({
                 code: "acp_agent_error",
-                message: "Native history unavailable",
+                message: "Native history unavailable in the current working directory",
             });
         } finally {
             delete process.env["MOBIUS_FAKE_ACP_FAIL_HISTORY_LOAD"];
