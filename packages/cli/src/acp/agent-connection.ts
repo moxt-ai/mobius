@@ -17,11 +17,14 @@ function requestErrorMessage(error: RequestError): string {
         return fallback;
     }
     const agentError = error.data["error"];
-    if (!isRecord(agentError)) {
-        return fallback;
+    if (isRecord(agentError)) {
+        const message = agentError["message"];
+        if (typeof message === "string" && message.length > 0) {
+            return truncate(message, 500);
+        }
     }
-    const message = agentError["message"];
-    return typeof message === "string" && message.length > 0 ? truncate(message, 500) : fallback;
+    const details = error.data["details"];
+    return typeof details === "string" && details.length > 0 ? truncate(details, 500) : fallback;
 }
 
 function readableWebStream(input: NodeJS.ReadableStream): ReadableStream<Uint8Array> {

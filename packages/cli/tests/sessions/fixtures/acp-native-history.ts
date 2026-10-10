@@ -55,7 +55,7 @@ export function registerHistory(agent: ReturnType<typeof acp.agent>) {
     return agent.onRequest(acp.methods.agent.session.load, async (context) => {
         if (process.env["MOBIUS_FAKE_ACP_FAIL_HISTORY_LOAD"] === "1") {
             throw acp.RequestError.internalError({
-                error: { code: "native_history_unavailable", message: "Native history unavailable" },
+                details: "Native history unavailable in the current working directory",
             });
         }
         acquireWriter(context.params.sessionId);
