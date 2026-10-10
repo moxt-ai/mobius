@@ -28,12 +28,11 @@ const VERIFIED_CONNECTION_KEYS: readonly string[] = [
     "kind",
     "pairingId",
     "relayOrigin",
-    "relayProxy",
     "runtimeCredential",
     "runtimeId",
     "version",
 ];
-const LEGACY_VERIFIED_CONNECTION_KEYS = VERIFIED_CONNECTION_KEYS.filter((key) => key !== "relayProxy");
+const VERIFIED_CONNECTION_OPTIONAL_KEYS: readonly string[] = ["relayProxy"];
 
 export interface RuntimeInstallationStoreOptions {
     readonly applicationId: string;
@@ -126,6 +125,18 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 function hasExactKeys(value: Readonly<Record<string, unknown>>, expectedKeys: readonly string[]): boolean {
     const keys = Object.keys(value);
     return keys.length === expectedKeys.length && expectedKeys.every((key) => Object.hasOwn(value, key));
+}
+
+function hasRequiredAndOptionalKeys(
+    value: Readonly<Record<string, unknown>>,
+    requiredKeys: readonly string[],
+    optionalKeys: readonly string[],
+): boolean {
+    const keys = Object.keys(value);
+    return (
+        requiredKeys.every((key) => Object.hasOwn(value, key)) &&
+        keys.every((key) => requiredKeys.includes(key) || optionalKeys.includes(key))
+    );
 }
 
 function isNodeError(error: unknown, code: string): boolean {
@@ -245,9 +256,11 @@ function decodeChannelIndex(value: unknown): ChannelIndex {
 }
 
 function decodeVerifiedConnection(value: Readonly<Record<string, unknown>>): VerifiedRuntimeConnection {
-    const current = value["version"] === 6 && hasExactKeys(value, VERIFIED_CONNECTION_KEYS);
-    const legacy = value["version"] === 5 && hasExactKeys(value, LEGACY_VERIFIED_CONNECTION_KEYS);
-    if ((!current && !legacy) || value["kind"] !== "verified") {
+    if (
+        value["version"] !== 5 ||
+        !hasRequiredAndOptionalKeys(value, VERIFIED_CONNECTION_KEYS, VERIFIED_CONNECTION_OPTIONAL_KEYS) ||
+        value["kind"] !== "verified"
+    ) {
         throw new RuntimeInstallationStoreError("invalid_connection", "The saved Runtime connection is invalid");
     }
     const applicationId = value["applicationId"];
@@ -259,7 +272,7 @@ function decodeVerifiedConnection(value: Readonly<Record<string, unknown>>): Ver
     const storedInstallationId = value["installationId"];
     const pairingId = value["pairingId"];
     const relayOrigin = value["relayOrigin"];
-    const relayProxy = legacy ? "direct" : value["relayProxy"];
+    const relayProxy = value["relayProxy"] ?? "direct";
     const runtimeCredential = value["runtimeCredential"];
     const runtimeId = value["runtimeId"];
     if (
@@ -608,7 +621,7 @@ export class RuntimeInstallationStore {
                 relayProxy: connection.relayProxy,
                 runtimeCredential: connection.runtimeCredential,
                 runtimeId: connection.runtimeId,
-                version: 6,
+                version: 5,
             },
             signal,
         );

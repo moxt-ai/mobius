@@ -48,6 +48,44 @@ describe("Runtime installation storage", () => {
         }
     });
 
+    it("Given a saved connection without a proxy policy, When the Runtime restores it, Then it uses the direct route", async () => {
+        const stateRoot = await mkdtemp(join(tmpdir(), "mobius-connection-without-proxy-policy-"));
+        const signal = new AbortController().signal;
+        try {
+            const installation = await openRuntimeInstallationStore(
+                { applicationId: "dev.mobius.cli", stateDirectory: stateRoot },
+                signal,
+            );
+            const connectionId = `mcn_${"0".repeat(32)}`;
+            await mkdir(join(installation.stateDirectory, "connections"), { recursive: true });
+            await writeFile(
+                installation.connectionPath(connectionId),
+                JSON.stringify({
+                    activation: "active",
+                    appId: "app_saved",
+                    applicationId: installation.applicationId,
+                    channelId: "saved_channel",
+                    connectionId,
+                    defaultWorkspace: "/workspace/saved",
+                    installationId: installation.installationId,
+                    kind: "verified",
+                    pairingId: "saved_pairing",
+                    relayOrigin: "https://relay.example.com/",
+                    runtimeCredential: "a".repeat(43),
+                    runtimeId: "saved_runtime",
+                    version: 5,
+                }),
+                { mode: 0o600 },
+            );
+
+            await expect(installation.readConnection(connectionId, signal)).resolves.toMatchObject({
+                relayProxy: "direct",
+            });
+        } finally {
+            await rm(stateRoot, { force: true, recursive: true });
+        }
+    });
+
     it("Given Mobius and Moxt installations on one user state root, When each saves a Runtime connection, Then each resumes only its own opaque connection from isolated state", async () => {
         const stateRoot = await mkdtemp(join(tmpdir(), "mobius-runtime-installations-"));
         const signal = new AbortController().signal;
