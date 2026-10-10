@@ -145,6 +145,9 @@ export async function runDaemon(
     const agentRuntime = new AgentRuntimeManager(
         new DaemonAcpObserver((_sessionId, event) => {
             activeTurns.recordEvent(event);
+            if (event.kind === "session.info.updated") {
+                publisher.publishInfo(event);
+            }
         }, eventLogV2.record),
         sessionStore,
         {

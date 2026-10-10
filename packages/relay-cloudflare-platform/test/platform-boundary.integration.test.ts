@@ -8,6 +8,7 @@ import {
     encodeSessionConfigUpdatedEvent,
     encodeSessionConfigureCommand,
     encodeSessionEventEnvelopeV2,
+    encodeSessionInfoUpdatedEvent,
     encodeSessionLiveHistoryV2PageLoaded,
     encodeSessionOperationFailedEvent,
     encodeSessionPreviewHistoryPageLoaded,
@@ -968,6 +969,21 @@ describe.sequential("Platform Session-only boundary", () => {
                 kind: "session.status.changed",
                 sessionId,
                 status: { commandId: "command-1", kind: "working" },
+            });
+            daemon.send(
+                encodeSessionInfoUpdatedEvent({
+                    kind: "session.info.updated",
+                    sessionId,
+                    title: "Renamed session",
+                    updatedAt: "2026-09-18T00:01:00.000Z",
+                }),
+            );
+            expect(decodeDaemonToServiceMessage(await hostMessages.next())).toEqual({
+                kind: "session.info.updated",
+                projectId,
+                sessionId,
+                title: "Renamed session",
+                updatedAt: "2026-09-18T00:01:00.000Z",
             });
             const historyLoad = decodeServiceToDaemonMessage(await daemonMessages.next());
             if (historyLoad.kind !== "session.live-history.v2.page.load") {

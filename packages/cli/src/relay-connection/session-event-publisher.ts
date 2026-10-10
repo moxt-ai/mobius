@@ -4,6 +4,7 @@ import {
     SESSION_EVENT_V2_BATCH_MAX_SIZE,
     SESSION_EVENT_V2_KIND,
     type SessionEventV2,
+    type SessionInfoUpdatedEvent,
     type SessionStatusChangedEvent,
 } from "@moxt-ai/mobius-protocol";
 import { WebSocket } from "undici";
@@ -44,6 +45,7 @@ export class DaemonSessionEventPublisher {
         this.#send({ kind: "session.operation.failed", sessionId, requestId, code, message });
     };
     readonly publishStatus = (event: SessionStatusChangedEvent): void => this.#send(event);
+    readonly publishInfo = (event: SessionInfoUpdatedEvent): void => this.#send(event);
 
     readonly #send = (message: DaemonToServiceMessage): void => {
         const socket = this.#socket;
