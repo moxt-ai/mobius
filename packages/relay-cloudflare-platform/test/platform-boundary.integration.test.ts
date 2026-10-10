@@ -5,6 +5,7 @@ import {
     decodeServiceToDaemonMessage,
     decodeSessionEventEnvelopeV2,
     decodeSessionPromptCommand,
+    decodeSessionRecordingHistory,
     encodeSessionConfigUpdatedEvent,
     encodeSessionConfigureCommand,
     encodeSessionEventEnvelopeV2,
@@ -114,6 +115,15 @@ function bindings(): PlatformRelayBindings {
         R2_BUCKET_WNAM: env.R2_BUCKET_WNAM,
         RUNTIME_RELAY: env.RUNTIME_RELAY,
     };
+}
+
+/** The installed Recording provider scenarios use, matching the deployed Platform service binding. */
+function recordingBindings(): PlatformRelayBindings {
+    const providerId = env.RECORDING_PROVIDER_ID;
+    if (env.RECORDING === undefined || typeof providerId !== "string") {
+        throw new Error("Expected the Recording provider binding");
+    }
+    return { ...bindings(), RECORDING: env.RECORDING, RECORDING_PROVIDER_ID: providerId };
 }
 
 function developerHeaders(): Headers {
@@ -1180,5 +1190,229 @@ describe.sequential("Platform Session-only boundary", () => {
             daemon.close(1000, "Test complete");
             host.close(1000, "Test complete");
         }
+    });
+});
+
+describe.sequential("Platform Recording policy configuration", () => {
+    /** Creates an App and Project through the production dashboard boundary. */
+    async function createPolicyTarget(
+        worker: ReturnType<typeof createTestMobiusPlatformApp>,
+        environment: PlatformRelayBindings,
+    ) {
+        const tenants = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/platform/tenants`, {
+                    headers: developerHeaders(),
+                }),
+                environment,
+            ),
+            200,
+        );
+        const tenantValues = tenants["tenants"];
+        if (!Array.isArray(tenantValues) || tenantValues.length === 0) {
+            throw new Error("Expected a Platform tenant");
+        }
+        const app = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps`, {
+                    body: JSON.stringify({
+                        displayName: "Recording enabled App",
+                        tenantId: text(record(tenantValues[0]), "tenantId"),
+                    }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const appId = text(app, "appId");
+        const project = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${appId}/projects`, {
+                    body: JSON.stringify({
+                        displayName: "Recording enabled Project",
+                        idempotencyKey: `recording-enabled-${appId}`,
+                        locationHint: "apac",
+                    }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        return { appId, projectId: text(project, "projectId") };
+    }
+
+    async function recordThroughRelay(projectId: string, sessionId: string, textContent: string) {
+        return await runInDurableObject(env.RUNTIME_RELAY.getByName(projectId), async (_instance, state) => {
+            const pending: Promise<void>[] = [];
+            const database = new DurableObjectSqlDatabase(state.storage);
+            const context = createPlatformDurableObjectContext(state, recordingBindings(), { database });
+            const relay = new RuntimeRelay(
+                createDurableObjectDependencies({
+                    doDatabase: database,
+                    storages: context.storages,
+                    gateways: context.gateways,
+                    utilities: {
+                        waitUntil: (operation) => {
+                            pending.push(operation);
+                        },
+                    },
+                }),
+            );
+            const response = await relay.fetch(
+                new Request(`https://runtime.internal/projects/${projectId}/daemon`, {
+                    headers: {
+                        Upgrade: "websocket",
+                        "x-mobius-runtime-id": projectId,
+                        "x-mobius-channel-id": projectId,
+                    },
+                }),
+            );
+            expect(response.status).toBe(101);
+            const client = response.webSocket;
+            const daemon = state.getWebSockets("daemon")[0];
+            if (client === null || daemon === undefined) {
+                throw new Error("Expected a connected daemon");
+            }
+            client.accept();
+            try {
+                await relay.webSocketMessage(
+                    daemon,
+                    encodeSessionEventEnvelopeV2({
+                        kind: "session.event.v2",
+                        events: [
+                            {
+                                eventId: `event-${sessionId}`,
+                                position: "1",
+                                provenance: { kind: "original" },
+                                recordedAt: "2026-09-18T00:00:00.000Z",
+                                sessionGenerationId: "session-generation-1",
+                                sessionId,
+                                type: "acp",
+                                payload: {
+                                    sessionUpdate: "agent_message_chunk",
+                                    content: { type: "text", text: textContent },
+                                },
+                            },
+                        ],
+                    }),
+                );
+                await Promise.all(pending.splice(0));
+            } finally {
+                client.close(1000, "Test complete");
+                await Promise.allSettled(pending);
+            }
+        });
+    }
+
+    /** Reads durable history back through the Recording Worker's own HTTP boundary. */
+    async function readRecordedHistory(projectId: string, sessionId: string): Promise<Response> {
+        const providerId = env.RECORDING_PROVIDER_ID;
+        if (env.RECORDING === undefined || typeof providerId !== "string") {
+            throw new Error("Expected the Recording provider binding");
+        }
+        return await env.RECORDING.fetch(
+            new Request(
+                `https://recording.internal/v1/projects/${projectId}/runtimes/${projectId}/sessions/${sessionId}/events`,
+            ),
+        );
+    }
+
+    it("Given an installed Recording provider, When a developer enables App policy, Then the Project inherits it and broadcasts are durably recorded", async () => {
+        const worker = createTestMobiusPlatformApp(
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
+            createPlatformGateways,
+        );
+        const environment = recordingBindings();
+        const { appId, projectId } = await createPolicyTarget(worker, environment);
+        const appPolicyUrl = `${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${appId}/recording-policy`;
+
+        expect(
+            await responseJson(
+                await worker.fetch(new Request(appPolicyUrl, { headers: developerHeaders() }), environment),
+                200,
+            ),
+        ).toEqual({
+            effectiveMode: "disabled",
+            inheritedFrom: "system",
+            mode: "inherit",
+            providerAvailable: true,
+        });
+        expect(
+            await responseJson(
+                await worker.fetch(
+                    new Request(appPolicyUrl, {
+                        body: JSON.stringify({ mode: "enabled" }),
+                        headers: developerHeaders(),
+                        method: "PUT",
+                    }),
+                    environment,
+                ),
+                200,
+            ),
+        ).toMatchObject({
+            effectiveMode: "enabled",
+            inheritedFrom: "app",
+            mode: "enabled",
+            providerAvailable: true,
+        });
+
+        const projectPolicyUrl = `${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/projects/${projectId}/recording-policy`;
+        expect(
+            await responseJson(
+                await worker.fetch(new Request(projectPolicyUrl, { headers: developerHeaders() }), environment),
+                200,
+            ),
+        ).toMatchObject({ effectiveMode: "enabled", inheritedFrom: "app", mode: "inherit" });
+
+        await recordThroughRelay(projectId, "inherited-session", "inherited answer");
+        const recorded = await readRecordedHistory(projectId, "inherited-session");
+        expect(recorded.status).toBe(200);
+        expect(decodeSessionRecordingHistory(await recorded.text())).toMatchObject({
+            events: [{ payload: { content: { text: "inherited answer" } } }],
+            sessionId: "inherited-session",
+        });
+    });
+
+    it("Given an enabled App policy, When a Project overrides it as disabled, Then that Project's broadcasts are not recorded", async () => {
+        const worker = createTestMobiusPlatformApp(
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
+            createPlatformGateways,
+        );
+        const environment = recordingBindings();
+        const { appId, projectId } = await createPolicyTarget(worker, environment);
+        await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${appId}/recording-policy`, {
+                    body: JSON.stringify({ mode: "enabled" }),
+                    headers: developerHeaders(),
+                    method: "PUT",
+                }),
+                environment,
+            ),
+            200,
+        );
+        const projectPolicyUrl = `${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/projects/${projectId}/recording-policy`;
+        expect(
+            await responseJson(
+                await worker.fetch(
+                    new Request(projectPolicyUrl, {
+                        body: JSON.stringify({ mode: "disabled" }),
+                        headers: developerHeaders(),
+                        method: "PUT",
+                    }),
+                    environment,
+                ),
+                200,
+            ),
+        ).toMatchObject({ effectiveMode: "disabled", inheritedFrom: "project", mode: "disabled" });
+
+        await recordThroughRelay(projectId, "disabled-session", "unrecorded answer");
+        const recorded = await readRecordedHistory(projectId, "disabled-session");
+        expect(recorded.status).toBe(404);
+        await recorded.body?.cancel();
     });
 });

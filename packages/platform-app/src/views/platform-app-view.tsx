@@ -1,7 +1,9 @@
+import type { MobiusRecordingPolicyMode } from "@moxt-ai/mobius-sdk/platform";
 import { AppWindow, Check, Clipboard, LoaderCircle, Pencil, Plus, Trash2, X } from "lucide-react";
 import { type ReactNode, useCallback, useEffect } from "react";
 import { ConfirmAction } from "../components/confirm-action.tsx";
 import { CreateNameDialog } from "../components/create-name-dialog.tsx";
+import { RecordingPanel } from "../components/recording-panel.tsx";
 import { SecretDialog } from "../components/secret-dialog.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.tsx";
 import { platformDataTestId } from "../data-testid.ts";
@@ -61,9 +63,15 @@ export function PlatformApp({ endpoint, getToken, userControl, organization, org
         appTab,
         setAppTab,
         setApps,
+        appRecording,
+        setAppRecording,
+        failAppRecording,
         credentials,
         setCredentials,
         failCredentials,
+        projects,
+        setProjects,
+        failProjects,
         selectedAppId,
         setSelectedAppId,
         rename,
@@ -146,6 +154,61 @@ export function PlatformApp({ endpoint, getToken, userControl, organization, org
         return () => controller.abort();
     }, [client, selectedAppId, setCredentials, failCredentials, setError]);
 
+    useEffect(() => {
+        if (selectedAppId.length === 0) {
+            return;
+        }
+        const controller = new AbortController();
+        void client()
+            .readAppRecordingPolicy(selectedAppId, AbortSignal.any([controller.signal, AbortSignal.timeout(20_000)]))
+            .then((policy) => {
+                if (!controller.signal.aborted) {
+                    setAppRecording(selectedAppId, policy);
+                }
+            })
+            .catch((cause: unknown) => {
+                if (!controller.signal.aborted) {
+                    failAppRecording(selectedAppId);
+                    setError(cause instanceof Error ? cause.message : "Could not load recording settings");
+                }
+            });
+        return () => controller.abort();
+    }, [client, selectedAppId, setAppRecording, failAppRecording, setError]);
+
+    /** Loads this App's Projects together with the Recording policy that resolves for each one. */
+    const refreshProjects = useCallback(
+        async (appId: string, signal: AbortSignal): Promise<void> => {
+            const clientInstance = client();
+            const listed = await clientInstance.listProjects(appId, signal);
+            signal.throwIfAborted();
+            const items = await Promise.all(
+                listed.map(async (project) => ({
+                    policy: await clientInstance.readProjectRecordingPolicy(project.projectId, signal),
+                    project,
+                })),
+            );
+            signal.throwIfAborted();
+            setProjects(appId, items);
+        },
+        [client, setProjects],
+    );
+
+    useEffect(() => {
+        if (selectedAppId.length === 0) {
+            return;
+        }
+        const controller = new AbortController();
+        void refreshProjects(selectedAppId, AbortSignal.any([controller.signal, AbortSignal.timeout(20_000)])).catch(
+            (cause: unknown) => {
+                if (!controller.signal.aborted) {
+                    failProjects(selectedAppId);
+                    setError(cause instanceof Error ? cause.message : "Could not load projects");
+                }
+            },
+        );
+        return () => controller.abort();
+    }, [refreshProjects, selectedAppId, failProjects, setError]);
+
     const selectedApp = apps.find((app) => app.appId === selectedAppId);
 
     const createApp = async (name: string): Promise<boolean> => {
@@ -181,6 +244,35 @@ export function PlatformApp({ endpoint, getToken, userControl, organization, org
                 secret: created.credential,
             });
             setSecretVisible(false);
+        });
+    };
+
+    const writeAppRecording = (mode: MobiusRecordingPolicyMode): void => {
+        if (selectedApp === undefined) {
+            return;
+        }
+        void perform("app-recording", async () => {
+            const policy = await client().writeAppRecordingPolicy(selectedApp.appId, mode, AbortSignal.timeout(20_000));
+            setAppRecording(selectedApp.appId, policy);
+            // Project rows inherit the App setting, so refresh their resolved policies.
+            await refreshProjects(selectedApp.appId, AbortSignal.timeout(20_000));
+            setNotice(mode === "inherit" ? "Recording inherits the platform default." : `Recording ${mode}.`);
+        });
+    };
+
+    const writeProjectRecording = (projectId: string, mode: MobiusRecordingPolicyMode): void => {
+        if (projects.kind !== "ready") {
+            return;
+        }
+        void perform(`project-recording-${projectId}`, async () => {
+            const policy = await client().writeProjectRecordingPolicy(projectId, mode, AbortSignal.timeout(20_000));
+            setProjects(
+                selectedAppId,
+                projects.items.map((item) =>
+                    item.project.projectId === projectId ? { policy, project: item.project } : item,
+                ),
+            );
+            setNotice(mode === "inherit" ? "Recording inherits the app setting." : `Recording ${mode}.`);
         });
     };
 
@@ -396,11 +488,23 @@ export function PlatformApp({ endpoint, getToken, userControl, organization, org
                                 ) : null}
                                 <Tabs
                                     value={appTab}
-                                    onValueChange={(value) => setAppTab(value === "options" ? "options" : "api-keys")}
+                                    onValueChange={(value) =>
+                                        setAppTab(value === "recording" ? "recording" : "api-keys")
+                                    }
                                 >
                                     <TabsList className="mt-6" aria-label="Application settings">
                                         <TabsTrigger value="api-keys">API keys</TabsTrigger>
+                                        <TabsTrigger value="recording">Recording</TabsTrigger>
                                     </TabsList>
+                                    <TabsContent value="recording">
+                                        <RecordingPanel
+                                            appRecording={appRecording}
+                                            busy={busy}
+                                            onAppModeChange={writeAppRecording}
+                                            onProjectModeChange={writeProjectRecording}
+                                            projects={projects}
+                                        />
+                                    </TabsContent>
                                     <TabsContent value="api-keys">
                                         <div className="mt-6 flex flex-col items-start justify-between gap-4 md:flex-row md:items-center [&_h3]:m-0 [&_h3]:text-xl [&_h3]:font-bold [&_p]:mt-1.5 [&_p]:text-sm [&_p]:text-[#69766f]">
                                             <div>
