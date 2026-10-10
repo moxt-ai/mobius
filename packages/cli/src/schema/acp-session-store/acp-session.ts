@@ -6,6 +6,7 @@ export const acpSession = sqliteTable("acp_session", {
     nativeSessionId: text("native_session_id").notNull(),
     cwd: text("cwd").notNull(),
     additionalDirectories: text("additional_directories").notNull(),
+    configurations: text("configurations").notNull().default("[]"),
     prompted: integer("prompted", { mode: "boolean" }).notNull(),
     title: text("title").notNull(),
     updatedAt: text("updated_at").notNull(),

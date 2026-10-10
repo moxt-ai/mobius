@@ -244,7 +244,11 @@ const threadTurnSchema = z.object({
     items: z.array(z.unknown()).max(100_000),
 });
 const threadTurnsSchema = z.array(threadTurnSchema).max(100_000);
+const collaborationModeSchema = z.object({
+    mode: z.enum(["default", "plan"]),
+});
 const threadLifecycleResponseSchema = z.object({
+    collaborationMode: collaborationModeSchema.nullish(),
     model: boundedText(256).nullish(),
     reasoningEffort: boundedText(256).nullish(),
     serviceTier: boundedText(256).nullish(),
@@ -306,11 +310,7 @@ export const modelListResponseSchema = z.object({
 export const threadSettingsUpdatedSchema = z.object({
     threadId: boundedText(256),
     threadSettings: z.object({
-        collaborationMode: z
-            .object({
-                mode: z.enum(["default", "plan"]),
-            })
-            .nullish(),
+        collaborationMode: collaborationModeSchema.nullish(),
     }),
 });
 
