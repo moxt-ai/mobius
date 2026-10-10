@@ -21,6 +21,7 @@ import {
 import { sessionFailureMeta } from "../session-failure.ts";
 import { CodexAppServerClient, type CodexAppServerServerRequest } from "./app-server-client.ts";
 import {
+    CODEX_HISTORY_TURN_PAGE_LIMIT,
     commandApprovalParamsSchema,
     errorNotificationSchema,
     fileChangeApprovalParamsSchema,
@@ -33,6 +34,7 @@ import {
     threadResumeResponseSchema,
     threadSettingsUpdatedSchema,
     threadStartResponseSchema,
+    threadTurnsPageSchema,
     turnNotificationSchema,
     turnSchema,
     turnSteerResponseSchema,
@@ -310,14 +312,14 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 const resumed = threadResumeResponseSchema.parse(
                     await this.#appServer.request(
                         "thread/resume",
-                        { cwd: context.params.cwd, excludeTurns: false, threadId: context.params.sessionId },
+                        { cwd: context.params.cwd, excludeTurns: true, threadId: context.params.sessionId },
                         AbortSignal.any([context.signal, AbortSignal.timeout(APPROVAL_TIMEOUT_MILLISECONDS)]),
                     ),
                 );
                 this.#nativeSessionId = resumed.thread.id;
                 this.#settings.selectRestoredThread(resumed);
                 await this.#settings.probeCollaborationMode(this.#nativeSessionId, context.signal);
-                await this.#replayHistory(resumed.thread.turns);
+                await this.#replaySavedHistory(context.signal);
                 await this.#emitAvailableCommands();
                 return { configOptions: this.#settings.configOptions() };
             })
@@ -424,16 +426,50 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
         return this.#closePromise;
     };
 
-    /**
-     * Reads the model catalog once per app-server. A failure leaves the catalog empty, which costs
-     * the Run settings panel its model selector; it must not cost the conversation itself, so the
-     * turn lifecycle continues without settings rather than failing initialization.
-     */
+    // ACP load requires chronological replay. Resume only restores execution;
+    // native pages supply history without a single full-transcript response.
+    readonly #replaySavedHistory = async (signal: AbortSignal): Promise<void> => {
+        const deadline = AbortSignal.any([signal, AbortSignal.timeout(60_000)]);
+        const seenCursors = new Set<string>();
+        let cursor: string | null = null;
+        for (;;) {
+            deadline.throwIfAborted();
+            const page = threadTurnsPageSchema.parse(
+                await this.#appServer.request(
+                    "thread/turns/list",
+                    {
+                        threadId: this.#nativeSessionId,
+                        limit: CODEX_HISTORY_TURN_PAGE_LIMIT,
+                        sortDirection: "asc",
+                        itemsView: "full",
+                        ...(cursor === null ? {} : { cursor }),
+                    },
+                    deadline,
+                ),
+            );
+            await this.#replayHistory(page.data, deadline);
+            if (page.nextCursor == null) {
+                return;
+            }
+            if (page.data.length === 0 || seenCursors.has(page.nextCursor)) {
+                throw new AcpExecutionError(
+                    "Codex repeated a history page cursor",
+                    {},
+                    "invalid_native_session_response",
+                );
+            }
+            seenCursors.add(page.nextCursor);
+            cursor = page.nextCursor;
+        }
+    };
+
     readonly #replayHistory = async (
-        turns: readonly { readonly items: readonly unknown[] }[] | null | undefined,
+        turns: readonly { readonly items: readonly unknown[] }[],
+        signal: AbortSignal,
     ): Promise<void> => {
-        for (const turn of turns ?? []) {
+        for (const turn of turns) {
             for (const rawItem of turn.items) {
+                signal.throwIfAborted();
                 const item = decodeThreadItem(rawItem);
                 if (item === null) {
                     continue;

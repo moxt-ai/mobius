@@ -3,7 +3,9 @@ import {
     decodeMessageKind,
     decodeNativeSessionResult,
     decodeSessionEventV2,
+    decodeSessionLiveHistoryV2PageLoaded,
     encodeNativeSessionCommand,
+    encodeSessionLiveHistoryV2PageLoad,
     encodeSessionPromptCommand,
     type NativeSessionResult,
     SessionPromptDisposition,
@@ -14,7 +16,7 @@ import { CodexFixture } from "../support/agents/codex.ts";
 import { prepareNewRealSession, withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 
-test("Given real Codex saved more than 32 MiB of answers, When a user forks through the daemon, Then an independent native conversation opens without transferring all historical turns", async () => {
+test("Given real Codex saved more than 32 MiB of answers, When a user forks through the daemon, Then the copy opens, recent history is readable and a new prompt completes", async () => {
     await using provider = await FakeOpenAiProvider.start("mobius-test-model", "Large saved answer. ".repeat(45_000));
     await using agent = await CodexFixture.create(provider);
     await withRealDaemon(new CodexAgentSpecification(), agent.environment, async (peer) => {
@@ -109,5 +111,66 @@ test("Given real Codex saved more than 32 MiB of answers, When a user forks thro
             targetSessionId,
             ready: { restored: true, sessionId: targetSessionId },
         });
+        const historyId = randomUUID();
+        peer.send(
+            encodeSessionLiveHistoryV2PageLoad({
+                ...identity,
+                kind: "session.live-history.v2.page.load",
+                sessionId: targetSessionId,
+                requestId: historyId,
+                cursor: null,
+                eventLimit: 10,
+            }),
+        );
+        for (;;) {
+            const message = await peer.nextMessage();
+            if (decodeMessageKind(message) === "session.operation.failed") {
+                throw new Error(message);
+            }
+            if (decodeMessageKind(message) !== "session.live-history.v2.page.loaded") {
+                continue;
+            }
+            const loaded = decodeSessionLiveHistoryV2PageLoaded(message);
+            if (loaded.requestId !== historyId) {
+                continue;
+            }
+            expect(loaded.events.events.nextCursor).not.toBeNull();
+            expect(
+                loaded.events.events.events.some(
+                    (event) =>
+                        event.type === "acp" &&
+                        event.payload.sessionUpdate === "user_message_chunk" &&
+                        event.payload.content.type === "text" &&
+                        event.payload.content.text.includes("Question 39"),
+                ),
+            ).toBe(true);
+            break;
+        }
+        const continuedId = randomUUID();
+        peer.send(
+            encodeSessionPromptCommand({
+                ...identity,
+                kind: "session.prompt",
+                sessionId: targetSessionId,
+                commandId: continuedId,
+                prompt: "Continue this fork without using tools",
+                images: [],
+                resources: [],
+                disposition: SessionPromptDisposition.Reject,
+                targetCommandId: "",
+            }),
+        );
+        for (;;) {
+            const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+            if (
+                event.type !== "lifecycle-metadata" ||
+                (event.payload.kind !== "prompt.failed" && event.payload.kind !== "prompt.completed") ||
+                event.payload.commandId !== continuedId
+            ) {
+                continue;
+            }
+            expect(event.payload.kind).toBe("prompt.completed");
+            break;
+        }
     });
 });

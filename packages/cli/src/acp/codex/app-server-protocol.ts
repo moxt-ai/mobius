@@ -251,6 +251,12 @@ const threadLifecycleResponseSchema = z.object({
     thread: z.object({ id: boundedText(256), turns: threadTurnsSchema }),
 });
 
+export const CODEX_HISTORY_TURN_PAGE_LIMIT = 20;
+export const threadTurnsPageSchema = z.object({
+    data: z.array(threadTurnSchema).max(CODEX_HISTORY_TURN_PAGE_LIMIT),
+    nextCursor: boundedText(1_024).nullish(),
+});
+
 export const threadResumeResponseSchema = threadLifecycleResponseSchema;
 export const threadForkResponseSchema = threadLifecycleResponseSchema;
 
