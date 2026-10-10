@@ -511,6 +511,9 @@ export class AgentSession implements AcpClientHandler {
         recovery: AcpSessionRecovery,
         origin?: NativeSessionOrigin,
     ): Promise<void> => {
+        if (origin?.kind === "fork") {
+            this.#sessionTitle = origin.title;
+        }
         await this.#initializeAgent(signal);
         let stored = this.#metrics.measureSync("session-state-read", () =>
             origin?.kind === "import"

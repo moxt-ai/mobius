@@ -27,4 +27,4 @@ export type NativeSessionPage = z.infer<typeof nativeSessionPageSchema>;
 
 export type NativeSessionOrigin =
     | { readonly kind: "import"; readonly nativeSessionId: string }
-    | { readonly kind: "fork"; readonly nativeSessionId: string };
+    | { readonly kind: "fork"; readonly nativeSessionId: string; readonly title: string };
