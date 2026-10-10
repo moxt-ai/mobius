@@ -6,6 +6,7 @@ import {
     decodeSessionsQueriedEvent,
     encodeDaemonToServiceMessage,
     encodeServiceToDaemonMessage,
+    encodeSessionInfoUpdatedEvent,
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_HEARTBEAT_KIND,
     RUNTIME_PING_KIND,
@@ -21,6 +22,21 @@ describe("daemon transport protocol", () => {
                 JSON.stringify({ kind: "session.event", sessionId: "session", payload: "{}" }),
             ),
         ).toThrow();
+    });
+    it("Given an existing Session information update, When the daemon transport decodes it, Then its established fields remain available", () => {
+        const event = encodeSessionInfoUpdatedEvent({
+            kind: "session.info.updated",
+            sessionId: "session-1",
+            title: "Session title",
+            updatedAt: "2026-10-10T00:00:00.000Z",
+        });
+
+        expect(decodeDaemonToServiceMessage(event)).toEqual({
+            kind: "session.info.updated",
+            sessionId: "session-1",
+            title: "Session title",
+            updatedAt: "2026-10-10T00:00:00.000Z",
+        });
     });
     it.each(["delete", "fork-recorded"])(
         "Given the removed native %s operation, When a remote client sends it, Then the daemon protocol rejects it",

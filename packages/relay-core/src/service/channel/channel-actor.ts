@@ -56,6 +56,7 @@ import {
     SESSION_ELICITATION_RESPOND_KIND,
     SESSION_EVENT_V2_KIND,
     SESSION_FAILED_KIND,
+    SESSION_INFO_UPDATED_KIND,
     SESSION_LIST_KIND,
     SESSION_LISTED_KIND,
     SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND,
@@ -156,6 +157,7 @@ export class ChannelActor {
     >();
     readonly #clock: RelayClock;
     readonly #peers: ChannelPeers;
+    readonly #projectId: string;
     readonly #runtimeId: string;
     readonly #liveEvents: LiveSessionEventRelay;
 
@@ -171,6 +173,7 @@ export class ChannelActor {
         const { peers, recording, clock = new SystemRelayClock() } = cx.gateways;
         this.#clock = clock;
         this.#peers = peers;
+        this.#projectId = projectId;
         this.#runtimeId = runtimeId;
         this.#liveEvents = new LiveSessionEventRelay(projectId, runtimeId, peers, recording);
     }
@@ -219,6 +222,13 @@ export class ChannelActor {
             const kind = message.kind;
             if (kind === SESSION_EVENT_V2_KIND) {
                 this.#liveEvents.receive(message);
+                return;
+            }
+            if (kind === SESSION_INFO_UPDATED_KIND) {
+                this.broadcast(
+                    this.#peers.hosts(),
+                    encodeDaemonToServiceMessage({ ...message, projectId: this.#projectId }),
+                );
                 return;
             }
             if (kind === NATIVE_SESSION_RESULT_KIND) {
