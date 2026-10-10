@@ -103,7 +103,32 @@ import {
 const DEFAULT_OPERATION_TIMEOUT_MILLISECONDS = 20_000;
 const DEFAULT_STREAM_CONNECTION_TIMEOUT_MILLISECONDS = 15_000;
 const DEFAULT_STREAM_LIVENESS_TIMEOUT_MILLISECONDS = 45_000;
-const DEFAULT_STREAM_RECONNECT_ATTEMPTS = 4;
+const DEFAULT_STREAM_RECONNECT_ATTEMPTS = 7;
+
+function sanitizedConnectionCauseMessage(value: string): string {
+    return Array.from(value, (character) => {
+        const codePoint = character.codePointAt(0);
+        return codePoint !== undefined && (codePoint < 32 || codePoint === 127) ? " " : character;
+    })
+        .join("")
+        .trim()
+        .slice(0, 1_024);
+}
+
+function connectionCauseMessages(cause: unknown): readonly string[] {
+    const messages: string[] = [];
+    const visited = new Set<unknown>();
+    let current = cause;
+    while (current instanceof Error && messages.length < 4 && !visited.has(current)) {
+        visited.add(current);
+        const message = sanitizedConnectionCauseMessage(current.message);
+        if (message.length > 0) {
+            messages.push(message);
+        }
+        current = current.cause;
+    }
+    return messages;
+}
 
 export interface MobiusCredentialProvider {
     readonly credential: (signal: AbortSignal) => Promise<string>;
@@ -1609,10 +1634,10 @@ export class MobiusLiveEventSubscriptionV2 {
                 }
                 attempts += 1;
                 if (attempts > this.#maximumReconnectAttempts) {
-                    const message =
-                        cause instanceof MobiusError
-                            ? `The live V2 Session event stream could not recover. Cause: ${cause.message}`
-                            : "The live V2 Session event stream could not recover";
+                    const details = connectionCauseMessages(cause);
+                    const message = `The live V2 Session event stream could not recover${
+                        details.length > 0 ? `. Cause: ${details.join(". Caused by: ")}` : ""
+                    }`;
                     const failure = new MobiusConnectionError(message, { cause });
                     if (connectionState.kind === "initial") {
                         rejectConnected(failure);

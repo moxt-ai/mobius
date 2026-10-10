@@ -54,6 +54,12 @@ const WS_RESPONSE_KIND = "http.response";
 const WS_ERROR_KIND = "http.error";
 const EVENT_SUBSCRIBE_KIND = "session.events.subscribe";
 const EVENT_UNSUBSCRIBE_KIND = "session.events.unsubscribe";
+const SAFE_WEBSOCKET_CLOSE_REASONS = new Set(["WebSocket transport closed", "WebSocket transport idle timeout"]);
+
+function webSocketCloseError(event: CloseEvent, action: "connect" | "remain connected"): MobiusConnectionError {
+    const reason = SAFE_WEBSOCKET_CLOSE_REASONS.has(event.reason) ? `: ${event.reason}` : "";
+    return new MobiusConnectionError(`The Mobius WebSocket could not ${action} (close code ${event.code}${reason})`);
+}
 
 function bytesToBase64(bytes: Uint8Array): string {
     return fromByteArray(bytes);
@@ -124,8 +130,9 @@ class PlatformMobiusWebSocketConnector implements MobiusWebSocketConnector {
                 reject(cause);
             };
             const abort = (): void => fail(signal.reason);
-            const close = (): void => fail(new Error("The Mobius WebSocket closed before connecting"));
-            const error = (event: Event): void => fail(event);
+            const close = (event: CloseEvent): void => fail(webSocketCloseError(event, "connect"));
+            const error = (): void =>
+                fail(new MobiusConnectionError("The browser reported an error while connecting the Mobius WebSocket"));
             const open = (): void => {
                 if (completed) {
                     return;
@@ -289,7 +296,7 @@ export class WsTransport implements MobiusHttpTransport {
     readonly #connect = async (requestUrl: URL): Promise<WebSocket> => {
         const controller = new AbortController();
         const timeout = globalThis.setTimeout(
-            () => controller.abort(new Error("The Mobius WebSocket transport connection timed out")),
+            () => controller.abort(new MobiusConnectionError("The Mobius WebSocket connection timed out")),
             this.#connectionTimeoutMilliseconds,
         );
         const endpoint = new URL(`${MOBIUS_API_PREFIX}/v1/transport`, requestUrl.origin);
@@ -301,13 +308,30 @@ export class WsTransport implements MobiusHttpTransport {
                 throw new MobiusConnectionError("The Mobius WebSocket transport is closed");
             }
             socket.addEventListener("message", this.#receive);
-            socket.addEventListener("close", () => this.#disconnected(socket), { once: true });
-            socket.addEventListener("error", () => this.#disconnected(socket), { once: true });
+            socket.addEventListener(
+                "close",
+                (event) => this.#disconnected(socket, webSocketCloseError(event, "remain connected")),
+                {
+                    once: true,
+                },
+            );
+            socket.addEventListener(
+                "error",
+                () =>
+                    this.#disconnected(
+                        socket,
+                        new MobiusConnectionError("The browser reported an error on the Mobius WebSocket"),
+                    ),
+                { once: true },
+            );
             this.#state = this.#connected(socket);
             return socket;
         } catch (cause) {
             if (this.#state.kind !== "closed") {
                 this.#state = { kind: "disconnected" };
+            }
+            if (cause instanceof MobiusConnectionError) {
+                throw cause;
             }
             throw new MobiusConnectionError("The Mobius WebSocket transport could not connect", { cause });
         } finally {
@@ -366,14 +390,14 @@ export class WsTransport implements MobiusHttpTransport {
         }
     };
 
-    readonly #disconnected = (socket: WebSocket): void => {
+    readonly #disconnected = (socket: WebSocket, cause: MobiusConnectionError): void => {
         if (this.#state.kind !== "connected" || this.#state.socket !== socket) {
             return;
         }
         globalThis.clearTimeout(this.#state.idleTimeoutId);
         this.#state = { kind: "disconnected" };
-        this.#failPending(new MobiusConnectionError("The Mobius WebSocket transport disconnected"));
-        this.#failSubscriptions(new MobiusConnectionError("The live Session event transport disconnected"));
+        this.#failPending(cause);
+        this.#failSubscriptions(cause);
     };
 
     readonly #failPending = (cause: unknown): void => {
