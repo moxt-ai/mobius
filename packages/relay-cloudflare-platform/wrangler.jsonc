@@ -56,7 +56,9 @@
         { "binding": "R2_BUCKET_APAC", "bucket_name": "mobius-platform-local-apac-objects" },
         { "binding": "R2_BUCKET_WNAM", "bucket_name": "mobius-platform-local-wnam-objects" }
     ],
+    "services": [{ "binding": "RECORDING", "service": "mobius-recording-local" }],
     "vars": {
+        "RECORDING_PROVIDER_ID": "recording-local",
         "MOBIUS_PLATFORM_ALLOWED_ORIGINS": "[\"*\"]",
         "MOBIUS_PLATFORM_OIDC_PROVIDERS": "[]",
         "MOBIUS_PLATFORM_OPERATOR_SUBJECTS": "[]"
@@ -93,7 +95,8 @@
             "r2_buckets": [
                 { "binding": "R2_BUCKET_APAC", "bucket_name": "mobius-cloud-staging-apac-objects" },
                 { "binding": "R2_BUCKET_WNAM", "bucket_name": "mobius-cloud-staging-wnam-objects" }
-            ]
+            ],
+            "services": [{ "binding": "RECORDING", "service": "mobius-recording-staging" }]
         },
         "production": {
             "name": "mobius-platform-production",
@@ -118,7 +121,8 @@
             "r2_buckets": [
                 { "binding": "R2_BUCKET_APAC", "bucket_name": "mobius-cloud-production-apac-objects" },
                 { "binding": "R2_BUCKET_WNAM", "bucket_name": "mobius-cloud-production-wnam-objects" }
-            ]
+            ],
+            "services": [{ "binding": "RECORDING", "service": "mobius-recording-production" }]
         }
     }
 }

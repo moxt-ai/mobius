@@ -77,10 +77,11 @@ jobs:
       !cancelled() &&
       needs.validate.result == 'success' &&
       needs.validate-worker-config.result == 'success' &&
+      needs.deploy-cloudflare-recording.result == 'success' &&
       github.repository == 'moxt-ai/mobius' &&
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    needs: [validate, validate-worker-config]
+    needs: [validate, validate-worker-config, deploy-cloudflare-recording]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -90,9 +91,11 @@ jobs:
           - environment: staging
             domain: mobius.moxt.ws
             database: mobius-platform-staging-control-plane-wnam
+            recording-provider: recording-staging
           - environment: production
             domain: mobius.moxt.ai
             database: mobius-platform-production-control-plane-wnam
+            recording-provider: recording-production
     environment:
       name: ${{ matrix.environment }}
       url: https://${{ matrix.domain }}
@@ -133,6 +136,7 @@ jobs:
           MOBIUS_PLATFORM_OPERATOR_SUBJECTS: ${{ vars.MOBIUS_PLATFORM_OPERATOR_SUBJECTS }}
           SESSION_ACTIVE_SESSIONS_PER_PROJECT: ${{ vars.SESSION_ACTIVE_SESSIONS_PER_PROJECT }}
           DEPLOY_ENVIRONMENT: ${{ matrix.environment }}
+          RECORDING_PROVIDER_ID: ${{ matrix.recording-provider }}
         shell: bash
         run: |
           node scripts/validate-worker-config.ts
@@ -149,6 +153,7 @@ jobs:
           pnpm --dir packages/relay-cloudflare-platform exec wrangler deploy \
             --config wrangler.jsonc \
             --env "$DEPLOY_ENVIRONMENT" \
+            --var RECORDING_PROVIDER_ID:"$RECORDING_PROVIDER_ID" \
             --secrets-file "$secrets_file" \
             "${args[@]}" \
             --message "GitHub ${GITHUB_REPOSITORY}@${GITHUB_SHA}"
@@ -199,7 +204,7 @@ jobs:
           exit 1
 
   deploy-cloudflare-recording:
-    name: Deploy Recording (production)
+    name: Deploy Recording (${{ matrix.environment }})
     if: >-
       !cancelled() &&
       needs.validate.result == 'success' &&
@@ -209,9 +214,13 @@ jobs:
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    environment: production
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [staging, production]
+    environment: ${{ matrix.environment }}
     concurrency:
-      group: deploy-mobius-recording-production
+      group: deploy-mobius-recording-${{ matrix.environment }}
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
@@ -228,10 +237,11 @@ jobs:
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          DEPLOY_ENVIRONMENT: ${{ matrix.environment }}
         run: >-
           pnpm --dir packages/recording-cloudflare exec wrangler deploy
           --config wrangler.jsonc
-          --env production
+          --env "$DEPLOY_ENVIRONMENT"
           --message "GitHub ${GITHUB_REPOSITORY}@${GITHUB_SHA}"
 
   deploy-cloudflare-standalone:

@@ -113,6 +113,45 @@ function requestedPermissions(value: readonly string[]): readonly string[] {
     return Object.freeze([...value]);
 }
 
+const MOBIUS_EFFECTIVE_RECORDING_POLICY_MODES = Object.freeze(["enabled", "disabled"] as const);
+
+function recordingPolicyMode(value: Readonly<Record<string, unknown>>, field: string): MobiusRecordingPolicyMode {
+    const candidate = value[field];
+    if (typeof candidate !== "string" || !(MOBIUS_RECORDING_POLICY_MODES as readonly string[]).includes(candidate)) {
+        throw new MobiusProtocolError(`The Platform returned an invalid ${field}`);
+    }
+    return candidate as MobiusRecordingPolicyMode;
+}
+
+function effectiveRecordingPolicyMode(
+    value: Readonly<Record<string, unknown>>,
+    field: string,
+): MobiusEffectiveRecordingPolicyMode {
+    const candidate = value[field];
+    if (
+        typeof candidate !== "string" ||
+        !(MOBIUS_EFFECTIVE_RECORDING_POLICY_MODES as readonly string[]).includes(candidate)
+    ) {
+        throw new MobiusProtocolError(`The Platform returned an invalid ${field}`);
+    }
+    return candidate as MobiusEffectiveRecordingPolicyMode;
+}
+
+function recordingPolicySource(value: Readonly<Record<string, unknown>>, field: string): MobiusRecordingPolicySource {
+    const candidate = value[field];
+    if (candidate !== "system" && candidate !== "app" && candidate !== "project") {
+        throw new MobiusProtocolError(`The Platform returned an invalid ${field}`);
+    }
+    return candidate;
+}
+
+function requestedRecordingPolicyMode(value: MobiusRecordingPolicyMode): MobiusRecordingPolicyMode {
+    if (!(MOBIUS_RECORDING_POLICY_MODES as readonly string[]).includes(value)) {
+        throw new MobiusValidationError("The Platform Recording policy mode is invalid");
+    }
+    return value;
+}
+
 export class MobiusOidcCredentialProvider extends StaticMobiusCredentialProvider {}
 
 export class MobiusAppCredentialProvider extends StaticMobiusCredentialProvider {
@@ -337,6 +376,26 @@ export class MobiusCredentialRevocation {
     constructor(value: Readonly<Record<string, unknown>>) {
         this.credentialId = identifier(value, "credentialId");
         this.revokedAt = timestamp(value, "revokedAt");
+    }
+}
+
+export const MOBIUS_RECORDING_POLICY_MODES = Object.freeze(["inherit", "enabled", "disabled"] as const);
+
+export type MobiusRecordingPolicyMode = (typeof MOBIUS_RECORDING_POLICY_MODES)[number];
+export type MobiusEffectiveRecordingPolicyMode = Exclude<MobiusRecordingPolicyMode, "inherit">;
+export type MobiusRecordingPolicySource = "system" | "app" | "project";
+
+export class MobiusPlatformRecordingPolicy {
+    readonly effectiveMode: MobiusEffectiveRecordingPolicyMode;
+    readonly inheritedFrom: MobiusRecordingPolicySource;
+    readonly mode: MobiusRecordingPolicyMode;
+    readonly providerAvailable: boolean;
+
+    constructor(value: Readonly<Record<string, unknown>>) {
+        this.effectiveMode = effectiveRecordingPolicyMode(value, "effectiveMode");
+        this.inheritedFrom = recordingPolicySource(value, "inheritedFrom");
+        this.mode = recordingPolicyMode(value, "mode");
+        this.providerAvailable = boolean(value, "providerAvailable");
     }
 }
 
@@ -662,6 +721,66 @@ export class MobiusPlatformDeveloperClient {
                     signal,
                 ),
                 "AppCredential revocation",
+            ),
+        );
+
+    readonly readAppRecordingPolicy = async (
+        appId: string,
+        signal: AbortSignal,
+    ): Promise<MobiusPlatformRecordingPolicy> =>
+        new MobiusPlatformRecordingPolicy(
+            record(
+                await this.#executor.get(
+                    `dashboard/v1/apps/${encodeURIComponent(requestedIdentifier(appId, "App identifier"))}/recording-policy`,
+                    signal,
+                ),
+                "Recording policy",
+            ),
+        );
+
+    readonly writeAppRecordingPolicy = async (
+        appId: string,
+        mode: MobiusRecordingPolicyMode,
+        signal: AbortSignal,
+    ): Promise<MobiusPlatformRecordingPolicy> =>
+        new MobiusPlatformRecordingPolicy(
+            record(
+                await this.#executor.put(
+                    `dashboard/v1/apps/${encodeURIComponent(requestedIdentifier(appId, "App identifier"))}/recording-policy`,
+                    { mode: requestedRecordingPolicyMode(mode) },
+                    signal,
+                ),
+                "Recording policy",
+            ),
+        );
+
+    readonly readProjectRecordingPolicy = async (
+        projectId: string,
+        signal: AbortSignal,
+    ): Promise<MobiusPlatformRecordingPolicy> =>
+        new MobiusPlatformRecordingPolicy(
+            record(
+                await this.#executor.get(
+                    `dashboard/v1/projects/${encodeURIComponent(requestedIdentifier(projectId, "Project identifier"))}/recording-policy`,
+                    signal,
+                ),
+                "Recording policy",
+            ),
+        );
+
+    readonly writeProjectRecordingPolicy = async (
+        projectId: string,
+        mode: MobiusRecordingPolicyMode,
+        signal: AbortSignal,
+    ): Promise<MobiusPlatformRecordingPolicy> =>
+        new MobiusPlatformRecordingPolicy(
+            record(
+                await this.#executor.put(
+                    `dashboard/v1/projects/${encodeURIComponent(requestedIdentifier(projectId, "Project identifier"))}/recording-policy`,
+                    { mode: requestedRecordingPolicyMode(mode) },
+                    signal,
+                ),
+                "Recording policy",
             ),
         );
 }
