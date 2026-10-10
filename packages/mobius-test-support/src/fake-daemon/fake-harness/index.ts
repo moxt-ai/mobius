@@ -243,6 +243,18 @@ class ControlledAgentState {
             await active.send(notification);
             return;
         }
+        if (output.kind === "session-title") {
+            const notification: acp.SessionNotification = {
+                sessionId: active.sessionId,
+                update: {
+                    sessionUpdate: "session_info_update",
+                    title: output.title,
+                },
+            };
+            this.#record(notification);
+            await active.send(notification);
+            return;
+        }
         if (output.activityType === "reasoning") {
             const notification: acp.SessionNotification = {
                 sessionId: active.sessionId,
