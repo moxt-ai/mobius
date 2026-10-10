@@ -3,12 +3,14 @@ import type { NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
 import { z } from "zod";
 import type { LocalSqliteDatabase } from "../infra/local-sqlite-database.ts";
 import { acpSession } from "../schema/acp-session-store/index.ts";
+import { type AcpStoredSessionConfiguration, decodeStoredSessionConfigurations } from "./session-configuration.ts";
 import { type AcpSessionEventStoreV2, MemoryAcpSessionEventStoreV2 } from "./session-event-store-v2.ts";
 
 export class AcpStoredSession {
     readonly additionalDirectories: readonly string[];
     readonly agentId: string;
     readonly cwd: string;
+    readonly configurations: readonly AcpStoredSessionConfiguration[];
     readonly nativeSessionId: string;
     readonly prompted: boolean;
     readonly sessionId: string;
@@ -24,10 +26,12 @@ export class AcpStoredSession {
         prompted: boolean,
         title: string,
         updatedAt = new Date().toISOString(),
+        configurations: readonly AcpStoredSessionConfiguration[] = [],
     ) {
         this.additionalDirectories = [...additionalDirectories];
         this.agentId = agentId;
         this.cwd = cwd;
+        this.configurations = configurations.map((configuration) => ({ ...configuration }));
         this.nativeSessionId = nativeSessionId;
         this.prompted = prompted;
         this.sessionId = sessionId;
@@ -103,6 +107,7 @@ export class MemoryAcpSessionStore implements AcpSessionStore {
 const storedSessionRowSchema = z.object({
     additionalDirectories: z.string(),
     agentId: z.string(),
+    configurations: z.string(),
     cwd: z.string(),
     nativeSessionId: z.string(),
     prompted: z.boolean(),
@@ -115,6 +120,8 @@ function decodeStoredSession(value: unknown): AcpStoredSession {
     const row = storedSessionRowSchema.parse(value);
     const decodedAdditionalDirectories: unknown = JSON.parse(row.additionalDirectories);
     const additionalDirectories = z.array(z.string()).parse(decodedAdditionalDirectories);
+    const decodedConfigurations: unknown = JSON.parse(row.configurations);
+    const configurations = decodeStoredSessionConfigurations(decodedConfigurations);
     return new AcpStoredSession(
         row.sessionId,
         row.agentId,
@@ -124,6 +131,7 @@ function decodeStoredSession(value: unknown): AcpStoredSession {
         row.prompted,
         row.title,
         row.updatedAt,
+        configurations,
     );
 }
 
@@ -174,6 +182,7 @@ export class SqliteAcpSessionStore implements AcpSessionStore {
         const value = {
             additionalDirectories: JSON.stringify(session.additionalDirectories),
             agentId: session.agentId,
+            configurations: JSON.stringify(session.configurations),
             cwd: session.cwd,
             nativeSessionId: session.nativeSessionId,
             prompted: session.prompted,

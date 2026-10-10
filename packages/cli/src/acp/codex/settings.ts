@@ -60,7 +60,7 @@ const FULL_ACCESS_MODE: AgentMode = Object.freeze({
 });
 
 const AGENT_MODES: readonly AgentMode[] = Object.freeze([READ_ONLY_MODE, AGENT_MODE, FULL_ACCESS_MODE]);
-const DEFAULT_MODE = AGENT_MODE;
+const DEFAULT_MODE = FULL_ACCESS_MODE;
 
 /** Initial approval mode selected by the host configuration. */
 function initialMode(environment: Readonly<Record<string, string>>): string {
@@ -223,9 +223,6 @@ function effortSetting(model: CodexModel | undefined, currentValue: string): Ses
 export class CodexSettings {
     readonly #appServer: CodexAppServerClient;
     #models: readonly CodexModel[] = [];
-    // Whether the current turn must carry a policy at all. Until the user picks a mode, Codex's own
-    // configuration decides, so `turn/start` omits the fields and inherits what the host set up.
-    #policySelected = false;
     // Whether a collaboration mode choice has been made in this session. A restored thread keeps
     // the mode Codex already persisted, so the first turn does not reset it to Build.
     #collaborationModeSelected = false;
@@ -271,16 +268,9 @@ export class CodexSettings {
         const mode = AGENT_MODES.find((candidate) => candidate.id === selection.mode) ?? DEFAULT_MODE;
         const supportsFast = this.#model(selection.model)?.additionalSpeedTiers?.includes(FAST_TIER) === true;
         return {
-            // Until a mode is chosen, `config.toml` decides the sandbox and approval
-            // policy, and those fields stay off the turn so the host's own setup is
-            // inherited rather than overridden.
-            ...(this.#policySelected
-                ? {
-                      approvalPolicy: mode.approvalPolicy,
-                      approvalsReviewer: mode.approvalsReviewer,
-                      sandboxPolicy: mode.sandboxPolicy,
-                  }
-                : {}),
+            approvalPolicy: mode.approvalPolicy,
+            approvalsReviewer: mode.approvalsReviewer,
+            sandboxPolicy: mode.sandboxPolicy,
             // The collaboration mode rides on the turn: Codex applies it to the
             // thread, where it persists until changed. "Build" is Codex's `default`
             // mode, so it is only sent once a choice exists to apply.
@@ -371,6 +361,7 @@ export class CodexSettings {
     };
 
     readonly selectRestoredThread = (thread: {
+        readonly collaborationMode?: { readonly mode: "default" | "plan" } | null | undefined;
         readonly model?: string | null | undefined;
         readonly reasoningEffort?: string | null | undefined;
         readonly serviceTier?: string | null | undefined;
@@ -384,6 +375,7 @@ export class CodexSettings {
         this.#selection = {
             ...this.#selection,
             ...supported,
+            collaborationMode: thread.collaborationMode?.mode ?? this.#selection.collaborationMode,
             fastMode: thread.serviceTier === SERVICE_TIER_FAST,
         };
     };
@@ -426,7 +418,6 @@ export class CodexSettings {
                 );
             }
             this.#selection = { ...this.#selection, mode: value };
-            this.#policySelected = true;
             return;
         }
         if (configId === COLLABORATION_MODE_SETTING_ID) {

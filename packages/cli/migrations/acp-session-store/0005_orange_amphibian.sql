@@ -1,0 +1,1 @@
+ALTER TABLE `acp_session` ADD `configurations` text DEFAULT '[]' NOT NULL;

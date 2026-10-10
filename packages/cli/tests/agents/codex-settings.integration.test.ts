@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
     decodeAgentSettingsDiscoveredEvent,
     decodeMessageKind,
@@ -12,82 +15,143 @@ import { CodexAgentSpecification } from "../../src/agent-catalog/agents/codex-ag
 import { CodexFixture } from "../support/agents/codex.ts";
 import { withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
+import { fakeProviderPrompts } from "../support/llm/scenarios.ts";
 
-test("Given real Codex advertises its settings, When a user selects a model and reasoning effort, Then the LLM receives those settings and the conversation answers", async () => {
-    await using provider = await FakeOpenAiProvider.start("mobius-test-model", "SETTINGS_REPLY");
-    await using codex = await CodexFixture.create(provider);
-    await withRealDaemon(new CodexAgentSpecification(), codex.environment, async (peer) => {
-        const requestId = randomUUID();
-        peer.send(encodeAgentSettingsDiscoverCommand({ kind: "agent.settings.discover", agentId: "codex", requestId }));
-        let discovered: ReturnType<typeof decodeAgentSettingsDiscoveredEvent>;
-        for (;;) {
-            const message = await peer.nextMessage();
-            if (decodeMessageKind(message) === "agent.settings.discovered") {
-                discovered = decodeAgentSettingsDiscoveredEvent(message);
-                break;
-            }
-        }
-        expect(discovered.requestId).toBe(requestId);
-        const model = discovered.settings.find((setting) => setting.id === "model")?.values[0]?.value;
-        const effort = discovered.settings
-            .find((setting) => setting.id === "reasoning_effort")
-            ?.values.find((option) => option.value === "high")?.value;
-        if (model === undefined || effort === undefined) {
-            throw new Error("Codex did not advertise model/effort settings");
-        }
-        expect(discovered.settings.find((setting) => setting.id === "fast-mode")).toMatchObject({ type: "boolean" });
-        expect(discovered.settings.find((setting) => setting.id === "collaboration_mode")?.values).toContainEqual(
-            expect.objectContaining({ value: "plan" }),
-        );
-        peer.send(
-            encodeSessionPromptCommand({
-                kind: "session.prompt",
-                commandId: randomUUID(),
-                sessionId: peer.sessionId,
-                agentId: "codex",
-                bindingId: peer.bindingId,
-                directoryId: "default",
-                additionalDirectoryIds: [],
-                images: [],
-                resources: [],
-                prompt: "Reply with the selected settings",
-                disposition: SessionPromptDisposition.Reject,
-                targetCommandId: "",
-                sessionConfigurations: [
-                    { configId: "model", valueType: "select", value: model, booleanValue: false },
-                    { configId: "reasoning_effort", valueType: "select", value: effort, booleanValue: false },
-                    { configId: "mode", valueType: "select", value: "agent-full-access", booleanValue: false },
-                    { configId: "fast-mode", valueType: "boolean", value: "", booleanValue: true },
-                    { configId: "collaboration_mode", valueType: "select", value: "plan", booleanValue: false },
-                ],
-            }),
-        );
-        let text = "";
-        for (;;) {
-            const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
-            if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.failed") {
-                throw new Error(JSON.stringify(event));
-            }
-            if (
-                event.type === "acp" &&
-                event.payload.sessionUpdate === "agent_message_chunk" &&
-                event.payload.content.type === "text"
-            ) {
-                text += event.payload.content.text;
-            }
-            if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
-                break;
-            }
-        }
-        expect(text).toContain("SETTINGS_REPLY");
-        expect(provider.diagnostics()).toEqual(
-            expect.arrayContaining([
-                expect.objectContaining({
-                    model,
-                    reasoning: expect.objectContaining({ effort }),
-                    serviceTier: "priority",
-                }),
-            ]),
-        );
+async function writeTurnPolicyRecorder(codex: CodexFixture, launcher: string, recording: string): Promise<void> {
+    await writeFile(
+        launcher,
+        `#!${process.execPath}
+import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+const child = spawn(${JSON.stringify(codex.executable)}, process.argv.slice(2), {
+    stdio: ["pipe", "pipe", "inherit"], env: { ...process.env, ...${JSON.stringify(codex.environment)} },
+});
+createInterface({input: process.stdin}).on("line", line => {
+    const message = JSON.parse(line);
+    if (message.method === "turn/start") {
+        const params = message.params ?? {};
+        writeFileSync(${JSON.stringify(recording)}, JSON.stringify({
+            approvalPolicy: params.approvalPolicy,
+            approvalsReviewer: params.approvalsReviewer,
+            sandboxPolicy: params.sandboxPolicy,
+        }));
+    }
+    if (!child.stdin.destroyed) child.stdin.write(line + "\\n");
+});
+createInterface({input: child.stdout}).on("line", line => process.stdout.write(line + "\\n"));
+child.stdin.on("error", () => {});
+child.once("error", () => process.exit(1));
+child.once("exit", code => process.exit(code ?? 1));
+`,
+        { mode: 0o700 },
+    );
+}
+
+test("Given Codex defaults to Full access, When a user runs a tool with selected settings, Then the turn receives Full access policy and completes without approval", async () => {
+    await using provider = await FakeOpenAiProvider.start("mobius-test-model", "SETTINGS_REPLY", {
+        patch: "*** Begin Patch\n*** Add File: full-access-check.txt\n+full access\n*** End Patch",
     });
+    await using codex = await CodexFixture.create(provider, { approvalPolicy: "on-request" });
+    const directory = await mkdtemp(join(tmpdir(), "mobius-codex-settings-"));
+    const launcher = join(directory, "codex.mjs");
+    const recording = join(directory, "turn-policy.json");
+    await writeTurnPolicyRecorder(codex, launcher, recording);
+    const environment = Object.fromEntries(
+        Object.entries({ ...codex.environment, MOBIUS_CODEX_PATH: launcher }).filter(
+            ([name]) => name !== "INITIAL_AGENT_MODE",
+        ),
+    );
+    try {
+        await withRealDaemon(new CodexAgentSpecification(), environment, async (peer) => {
+            const requestId = randomUUID();
+            peer.send(
+                encodeAgentSettingsDiscoverCommand({ kind: "agent.settings.discover", agentId: "codex", requestId }),
+            );
+            let discovered: ReturnType<typeof decodeAgentSettingsDiscoveredEvent>;
+            for (;;) {
+                const message = await peer.nextMessage();
+                if (decodeMessageKind(message) === "agent.settings.discovered") {
+                    discovered = decodeAgentSettingsDiscoveredEvent(message);
+                    break;
+                }
+            }
+            expect(discovered.requestId).toBe(requestId);
+            const model = discovered.settings.find((setting) => setting.id === "model")?.values[0]?.value;
+            const effort = discovered.settings
+                .find((setting) => setting.id === "reasoning_effort")
+                ?.values.find((option) => option.value === "high")?.value;
+            if (model === undefined || effort === undefined) {
+                throw new Error("Codex did not advertise model/effort settings");
+            }
+            expect(discovered.settings.find((setting) => setting.id === "fast-mode")).toMatchObject({
+                type: "boolean",
+            });
+            expect(discovered.settings.find((setting) => setting.id === "collaboration_mode")?.values).toContainEqual(
+                expect.objectContaining({ value: "plan" }),
+            );
+            expect(discovered.settings.find((setting) => setting.id === "mode")).toMatchObject({
+                defaultValue: "agent-full-access",
+            });
+            peer.send(
+                encodeSessionPromptCommand({
+                    kind: "session.prompt",
+                    commandId: randomUUID(),
+                    sessionId: peer.sessionId,
+                    agentId: "codex",
+                    bindingId: peer.bindingId,
+                    directoryId: "default",
+                    additionalDirectoryIds: [],
+                    images: [],
+                    resources: [],
+                    prompt: fakeProviderPrompts.successfulTool,
+                    disposition: SessionPromptDisposition.Reject,
+                    targetCommandId: "",
+                    sessionConfigurations: [
+                        { configId: "model", valueType: "select", value: model, booleanValue: false },
+                        { configId: "reasoning_effort", valueType: "select", value: effort, booleanValue: false },
+                        { configId: "fast-mode", valueType: "boolean", value: "", booleanValue: true },
+                        { configId: "collaboration_mode", valueType: "select", value: "plan", booleanValue: false },
+                    ],
+                }),
+            );
+            let text = "";
+            for (;;) {
+                const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+                if (event.type === "lifecycle-metadata" && event.payload.kind === "session.permission.requested") {
+                    throw new Error("Codex requested approval while Full access was the default mode");
+                }
+                if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.failed") {
+                    throw new Error(JSON.stringify(event));
+                }
+                if (
+                    event.type === "acp" &&
+                    event.payload.sessionUpdate === "agent_message_chunk" &&
+                    event.payload.content.type === "text"
+                ) {
+                    text += event.payload.content.text;
+                }
+                if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
+                    break;
+                }
+            }
+            expect(text).toContain("SETTINGS_REPLY");
+            expect(provider.diagnostics()).toEqual(
+                expect.arrayContaining([
+                    expect.objectContaining({
+                        model,
+                        reasoning: expect.objectContaining({ effort }),
+                        serviceTier: "priority",
+                    }),
+                ]),
+            );
+        });
+        expect(JSON.parse(await readFile(recording, "utf8"))).toEqual({
+            approvalPolicy: "never",
+            approvalsReviewer: "user",
+            sandboxPolicy: { type: "dangerFullAccess" },
+        });
+    } finally {
+        await rm(directory, { force: true, recursive: true });
+    }
 });

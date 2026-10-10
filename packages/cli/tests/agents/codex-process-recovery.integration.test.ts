@@ -2,7 +2,14 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { decodeSessionEventV2, encodeSessionPromptCommand, SessionPromptDisposition } from "@moxt-ai/mobius-protocol";
+import {
+    decodeMessageKind,
+    decodeSessionEventV2,
+    decodeSessionReadyEvent,
+    encodeSessionPrepareCommand,
+    encodeSessionPromptCommand,
+    SessionPromptDisposition,
+} from "@moxt-ai/mobius-protocol";
 import { expect, test } from "vitest";
 import { CodexAgentSpecification } from "../../src/agent-catalog/agents/codex-agent.ts";
 import { CodexFixture } from "../support/agents/codex.ts";
@@ -85,6 +92,104 @@ test("Given an existing real Codex conversation, When the process exits or its t
                         event: { payload: { kind: "prompt.completed" } },
                         text: expect.stringContaining("RECOVERED_REPLY"),
                     });
+                }
+            },
+        );
+    } finally {
+        await rm(directory, { recursive: true, force: true });
+    }
+});
+
+test("Given a real Codex conversation in Plan mode, When its process recovers before Go, Then the resumed settings still show Plan mode", async () => {
+    await using provider = await FakeOpenAiProvider.start("mobius-test-model", "PLAN_RECOVERY_REPLY");
+    await using codex = await CodexFixture.create(provider);
+    const directory = await mkdtemp(join(tmpdir(), "mobius-codex-plan-recovery-"));
+    const launcher = join(directory, "codex.mjs");
+    const faultPath = join(directory, "fault");
+    try {
+        await writeCodexFaultLauncher(codex, launcher, faultPath);
+        await withRealDaemon(
+            new CodexAgentSpecification(),
+            { ...codex.environment, MOBIUS_CODEX_PATH: launcher },
+            async (peer) => {
+                const run = async (plan: boolean) => {
+                    const commandId = randomUUID();
+                    peer.send(
+                        encodeSessionPromptCommand({
+                            kind: "session.prompt",
+                            commandId,
+                            sessionId: peer.sessionId,
+                            agentId: "codex",
+                            bindingId: peer.bindingId,
+                            directoryId: "default",
+                            additionalDirectoryIds: [],
+                            images: [],
+                            resources: [],
+                            prompt: plan ? "Give me a plan" : "Go.",
+                            disposition: SessionPromptDisposition.Reject,
+                            targetCommandId: "",
+                            ...(plan
+                                ? {
+                                      sessionConfigurations: [
+                                          {
+                                              configId: "collaboration_mode",
+                                              valueType: "select" as const,
+                                              value: "plan",
+                                              booleanValue: false,
+                                          },
+                                      ],
+                                  }
+                                : {}),
+                        }),
+                    );
+                    for (;;) {
+                        const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+                        if (
+                            event.type === "lifecycle-metadata" &&
+                            "commandId" in event.payload &&
+                            event.payload.commandId !== commandId
+                        ) {
+                            continue;
+                        }
+                        if (
+                            (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.failed") ||
+                            (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed")
+                        ) {
+                            return event;
+                        }
+                    }
+                };
+
+                expect(await run(true)).toMatchObject({ payload: { kind: "prompt.completed" } });
+                await writeFile(faultPath, "before-ack");
+                expect(await run(false)).toMatchObject({ payload: { kind: "prompt.failed" } });
+                expect(await run(false)).toMatchObject({ payload: { kind: "prompt.completed" } });
+
+                const requestId = randomUUID();
+                peer.send(
+                    encodeSessionPrepareCommand({
+                        kind: "session.prepare",
+                        requestId,
+                        sessionId: peer.sessionId,
+                        agentId: "codex",
+                        bindingId: peer.bindingId,
+                        directoryId: "default",
+                        additionalDirectoryIds: [],
+                    }),
+                );
+                for (;;) {
+                    const message = await peer.nextMessage();
+                    if (decodeMessageKind(message) !== "session.ready") {
+                        continue;
+                    }
+                    const ready = decodeSessionReadyEvent(message);
+                    if (ready.requestId !== requestId) {
+                        continue;
+                    }
+                    expect(ready.configOptions.find((option) => option.id === "collaboration_mode")).toMatchObject({
+                        currentValue: "plan",
+                    });
+                    break;
                 }
             },
         );
