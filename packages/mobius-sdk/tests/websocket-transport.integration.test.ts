@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 
 import { afterEach, expect, it, vi } from "vitest";
+import { MobiusClient, StaticMobiusCredentialProvider } from "../src/index.ts";
 import { type MobiusWebSocketConnector, WsTransport } from "../src/platform.ts";
 
 class BrowserWebSocket extends EventTarget implements WebSocket {
@@ -84,10 +85,21 @@ class BrowserWebSocket extends EventTarget implements WebSocket {
 }
 
 class BrowserWebSocketConnector implements MobiusWebSocketConnector {
+    #remainingReconnectFailures: number;
+    connectAttempts = 0;
     readonly sockets: BrowserWebSocket[] = [];
+
+    constructor(reconnectFailures = 0) {
+        this.#remainingReconnectFailures = reconnectFailures;
+    }
 
     readonly connect = async (endpoint: URL, signal: AbortSignal): Promise<WebSocket> => {
         signal.throwIfAborted();
+        this.connectAttempts += 1;
+        if (this.connectAttempts > 1 && this.#remainingReconnectFailures > 0) {
+            this.#remainingReconnectFailures -= 1;
+            throw new Error("The controlled WebSocket reconnect failed because the network is unavailable");
+        }
         const socket = new BrowserWebSocket(endpoint.toString());
         this.sockets.push(socket);
         return socket;
@@ -158,5 +170,71 @@ it("Given a replacement WebSocket carries a live subscription, When the old sock
     });
     expect(connector.sockets).toHaveLength(2);
 
+    transport.close();
+});
+
+it("Given an idle Session stream and a brief network interruption, When connectivity returns within ten seconds, Then the SDK recovers the live subscription", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "clearTimeout", "setTimeout"] });
+    vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+    const connector = new BrowserWebSocketConnector(6);
+    const transport = new WsTransport({ connector });
+    const client = new MobiusClient({
+        credentialProvider: new StaticMobiusCredentialProvider("test-credential"),
+        endpoint: "https://relay.example.test",
+        projectId: "project-1",
+        transport,
+    });
+    const reconciliations: string[] = [];
+    const controller = new AbortController();
+    const subscription = await client.events.subscribeLiveV2(
+        "session-1",
+        {
+            receive: async () => true,
+            reconcile: async (connection) => {
+                reconciliations.push(connection.kind);
+            },
+        },
+        controller.signal,
+    );
+    const completed = subscription.completed;
+    void completed.catch(() => undefined);
+
+    connector.sockets[0]?.dispatchEvent(new Event("error"));
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(connector.connectAttempts).toBe(8);
+    expect(connector.sockets).toHaveLength(2);
+    expect(reconciliations).toEqual(["initial", "reconnected"]);
+
+    controller.abort();
+    await completed;
+    transport.close();
+});
+
+it("Given a live Session stream cannot reconnect, When its retry budget expires, Then the SDK exposes the sanitized transport reason", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "clearTimeout", "setTimeout"] });
+    vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+    const connector = new BrowserWebSocketConnector(1);
+    const transport = new WsTransport({ connector });
+    const client = new MobiusClient({
+        credentialProvider: new StaticMobiusCredentialProvider("test-credential"),
+        endpoint: "https://relay.example.test",
+        maxStreamReconnectAttempts: 1,
+        projectId: "project-1",
+        transport,
+    });
+    const controller = new AbortController();
+    const subscription = await client.events.subscribeLiveV2(
+        "session-1",
+        { receive: async () => true, reconcile: async () => undefined },
+        controller.signal,
+    );
+
+    connector.sockets[0]?.dispatchEvent(new Event("error"));
+    await vi.advanceTimersByTimeAsync(250);
+
+    await expect(subscription.completed).rejects.toThrow(
+        "The live V2 Session event stream could not recover. Cause: The Mobius WebSocket transport could not connect. Caused by: The controlled WebSocket reconnect failed because the network is unavailable",
+    );
     transport.close();
 });
