@@ -1,6 +1,6 @@
 import { createReadStream } from "node:fs";
 import { realpath, stat } from "node:fs/promises";
-import { basename, isAbsolute, normalize, resolve } from "node:path";
+import { basename, extname, isAbsolute, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
     type DaemonToServiceMessage,
@@ -73,7 +73,10 @@ export async function streamLocalFile(
     send({
         byteLength: before.size,
         kind: FILE_BEGIN_KIND,
-        mediaType: external?.mediaType ?? raster?.mimeType ?? "application/octet-stream",
+        mediaType:
+            external?.mediaType ??
+            raster?.mimeType ??
+            (extname(target).toLowerCase() === ".svg" ? "image/svg+xml" : "application/octet-stream"),
         modifiedAt: before.mtime.toISOString(),
         name: external?.name ?? (basename(target) || "file"),
         requestId: command.requestId,
