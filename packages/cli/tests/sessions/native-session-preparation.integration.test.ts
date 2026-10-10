@@ -125,4 +125,33 @@ describe("native session preparation", () => {
             vi.useRealTimers();
         }
     });
+
+    it("Given an Agent returns a detailed internal ACP error, When a user imports its native session, Then the actionable detail is reported", async () => {
+        const f = await fixture("Codex", "load-only");
+        try {
+            const nativeSessionId = await f.seed("Unavailable native history");
+            const entry = (await f.list()).entries.find((candidate) => candidate.nativeSessionId === nativeSessionId);
+            if (entry === undefined) {
+                throw new Error("Missing native conversation");
+            }
+            process.env["MOBIUS_FAKE_ACP_FAIL_HISTORY_LOAD"] = "1";
+            await expect(
+                f.service.execute(
+                    {
+                        ...f.identity,
+                        action: "import",
+                        entryId: entry.entryId,
+                        targetSessionId: "failed-import",
+                    },
+                    new AbortController().signal,
+                ),
+            ).rejects.toMatchObject({
+                code: "acp_agent_error",
+                message: "Native history unavailable",
+            });
+        } finally {
+            delete process.env["MOBIUS_FAKE_ACP_FAIL_HISTORY_LOAD"];
+            await f.close();
+        }
+    });
 });

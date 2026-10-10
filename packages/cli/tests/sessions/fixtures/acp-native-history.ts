@@ -54,7 +54,9 @@ export function oversizedHistoryUpdate(toolCallId: string) {
 export function registerHistory(agent: ReturnType<typeof acp.agent>) {
     return agent.onRequest(acp.methods.agent.session.load, async (context) => {
         if (process.env["MOBIUS_FAKE_ACP_FAIL_HISTORY_LOAD"] === "1") {
-            throw acp.RequestError.internalError(undefined, "Native history unavailable");
+            throw acp.RequestError.internalError({
+                error: { code: "native_history_unavailable", message: "Native history unavailable" },
+            });
         }
         acquireWriter(context.params.sessionId);
         const directory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
