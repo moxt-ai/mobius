@@ -42,6 +42,7 @@ export {
     type AcpPrepareOptions,
     type AcpPromptResult,
     type AcpSessionObserver,
+    type AcpSessionRecovery,
     type AcpSteerOptions,
     type AcpTurnOptions,
     NullAcpSessionObserver,
@@ -59,6 +60,7 @@ import {
     type AcpPrepareOptions,
     type AcpPromptResult,
     type AcpSessionObserver,
+    type AcpSessionRecovery,
     type AcpSteerOptions,
     type AcpTurnOptions,
     NullAcpSessionObserver,
@@ -158,6 +160,7 @@ export class AgentRuntimeManager {
 
     async #startPreparation(
         options: AcpPrepareOptions,
+        recovery: AcpSessionRecovery,
         metrics: OperationMetrics = unmeasuredOperationMetrics,
     ): Promise<AgentSession> {
         return await this.#executionProcesses.prepare(options.sessionId, async () => {
@@ -171,6 +174,7 @@ export class AgentRuntimeManager {
                             this.#store.read(options.sessionId) instanceof MissingAcpStoredSession
                             ? { ...options, origin: { kind: "import", nativeSessionId: options.sessionId } }
                             : options,
+                        recovery,
                         () => this.#observer,
                         this.#store,
                         metrics,
@@ -183,6 +187,7 @@ export class AgentRuntimeManager {
     async #replacePreparation(
         existing: AgentSession,
         options: AcpPrepareOptions,
+        recovery: AcpSessionRecovery,
         metrics: OperationMetrics,
     ): Promise<AgentSession> {
         return await this.#executionProcesses.prepare(options.sessionId, async () => {
@@ -197,6 +202,7 @@ export class AgentRuntimeManager {
                 async () =>
                     await AgentSession.start(
                         options,
+                        recovery,
                         () => this.#observer,
                         this.#store,
                         metrics,
@@ -215,6 +221,7 @@ export class AgentRuntimeManager {
                 async () =>
                     await AgentSession.start(
                         options,
+                        { kind: "interactive-only" },
                         () => this.#observer,
                         this.#store,
                         unmeasuredOperationMetrics,
@@ -262,11 +269,12 @@ export class AgentRuntimeManager {
         });
     }
 
-    readonly prepareSession = async (
+    async #prepareSession(
         options: AcpPrepareOptions,
+        recovery: AcpSessionRecovery,
         metrics: OperationMetrics = unmeasuredOperationMetrics,
-    ): Promise<AcpPreparedSession> =>
-        this.#operations.run(options, async (options) => {
+    ): Promise<AcpPreparedSession> {
+        return await this.#operations.run(options, async (options) => {
             const stored = metrics.measureSync("session-state-read", () => this.#store.read(options.sessionId));
 
             if (
@@ -283,14 +291,26 @@ export class AgentRuntimeManager {
                 );
                 if (runtime.belongsTo(options.agent.id, options.cwd, options.additionalDirectories)) {
                     this.#executionProcesses.touch(options.sessionId, runtime);
+                    if (recovery.kind === "history-required") {
+                        await metrics.measure(
+                            "session-load",
+                            async () => await runtime.ensureHistoryLoaded(options.signal),
+                        );
+                    }
                     return runtime.prepared();
                 }
-                return await this.prepareSession(options, metrics);
+                return await this.#prepareSession(options, recovery, metrics);
             }
             const existing = this.#executionProcesses.get(options.sessionId);
             if (existing !== undefined) {
                 if (existing.belongsTo(options.agent.id, options.cwd, options.additionalDirectories)) {
                     this.#executionProcesses.touch(options.sessionId, existing);
+                    if (recovery.kind === "history-required") {
+                        await metrics.measure(
+                            "session-load",
+                            async () => await existing.ensureHistoryLoaded(options.signal),
+                        );
+                    }
                     return existing.prepared();
                 }
                 if (!existing.canRebind()) {
@@ -300,12 +320,23 @@ export class AgentRuntimeManager {
                         "session_identity_mismatch",
                     );
                 }
-                const runtime = await this.#replacePreparation(existing, options, metrics);
+                const runtime = await this.#replacePreparation(existing, options, recovery, metrics);
                 return runtime.prepared();
             }
-            const runtime = await this.#startPreparation(options, metrics);
+            const runtime = await this.#startPreparation(options, recovery, metrics);
             return runtime.prepared();
         });
+    }
+
+    readonly prepareSession = async (
+        options: AcpPrepareOptions,
+        metrics: OperationMetrics = unmeasuredOperationMetrics,
+    ): Promise<AcpPreparedSession> => await this.#prepareSession(options, { kind: "interactive-only" }, metrics);
+
+    readonly restoreSession = async (
+        options: AcpPrepareOptions,
+        metrics: OperationMetrics = unmeasuredOperationMetrics,
+    ): Promise<AcpPreparedSession> => await this.#prepareSession(options, { kind: "history-required" }, metrics);
 
     /**
      * Opens a short-lived native ACP session only to read the local Agent's
@@ -324,6 +355,7 @@ export class AgentRuntimeManager {
                             ...options,
                             sessionId: `agent-settings-${crypto.randomUUID()}`,
                         },
+                        { kind: "interactive-only" },
                         () => this.#agentSettingsObserver,
                         new MemoryAcpSessionStore(),
                         unmeasuredOperationMetrics,
@@ -373,7 +405,7 @@ export class AgentRuntimeManager {
                 );
             }
             return await this.#executionProcesses.use(options.sessionId, async () => {
-                const runtime = await this.#startPreparation(options, metrics);
+                const runtime = await this.#startPreparation(options, { kind: "interactive-only" }, metrics);
                 try {
                     return runtime.prepared();
                 } finally {
@@ -395,7 +427,7 @@ export class AgentRuntimeManager {
             }
             const existing = this.#executionProcesses.get(options.sessionId);
             if (existing === undefined) {
-                return (await this.#startPreparation(options)).prepared();
+                return (await this.#startPreparation(options, { kind: "interactive-only" })).prepared();
             }
             if (!existing.belongsTo(options.agent.id, options.cwd, options.additionalDirectories)) {
                 throw new AcpExecutionError(
@@ -621,7 +653,7 @@ export class AgentRuntimeManager {
             const temporaryOptions = { ...options, sessionId: temporarySessionId };
             return await this.#executionProcesses.use(temporarySessionId, async () => {
                 try {
-                    const runtime = await this.#startPreparation(temporaryOptions);
+                    const runtime = await this.#startPreparation(temporaryOptions, { kind: "interactive-only" });
                     let adopted = false;
                     try {
                         const nativeSessionId = runtime.nativeSessionId();
@@ -839,7 +871,7 @@ export class AgentRuntimeManager {
             return await this.#executionProcesses.use(options.sessionId, async () => {
                 this.#nativeOperations.add(key);
                 try {
-                    const runtime = await this.#startPreparation({ ...options, origin });
+                    const runtime = await this.#startPreparation({ ...options, origin }, { kind: "interactive-only" });
                     const openedKey = `${options.agent.id}:${runtime.nativeSessionId()}`;
                     this.#nativeOperations.add(openedKey);
                     try {

@@ -9,12 +9,14 @@ import {
     decodeNativeSessionResult,
     decodeSessionElicitationRequestedEvent,
     decodeSessionEventEnvelopeV2,
+    decodeSessionLiveHistoryV2PageLoaded,
     decodeSessionPermissionRequestedEvent,
     decodeSessionRestoredEvent,
     decodeSessionStatusChangedEvent,
     decodeSessionsQueriedEvent,
     encodeNativeSessionRequest,
     encodeSessionElicitationRespondCommand,
+    encodeSessionLiveHistoryV2PageLoad,
     encodeSessionPermissionRespondCommand,
     encodeSessionPrepareCommand,
     encodeSessionPromptCommand,
@@ -315,7 +317,7 @@ test("Given a real daemon prepared a Session, When Platform queries its metadata
     }
 }, 30_000);
 
-test("Given a real daemon persisted a Session, When Platform restores it by identifier, Then the daemon authorizes its stored identity and returns metadata with readiness", async () => {
+test("Given a real daemon persisted a Session, When Platform restores it by identifier, Then history is loaded once and remains available for paging", async () => {
     const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-session-restore-"));
     const workspace = join(stateDirectory, "workspace");
     await mkdir(workspace);
@@ -331,7 +333,7 @@ test("Given a real daemon persisted a Session, When Platform restores it by iden
         "codex",
         "Codex",
         process.execPath,
-        [fakeAgentPath, "--agent-name", "Codex"],
+        [fakeAgentPath, "--agent-name", "Codex", "--replay-history-once"],
         { MOBIUS_FAKE_ACP_STATE_DIRECTORY: join(stateDirectory, "agent") },
     );
     const config = createDaemonConfig(
@@ -400,7 +402,8 @@ test("Given a real daemon persisted a Session, When Platform restores it by iden
                 }),
             );
 
-            expect(decodeSessionRestoredEvent(await messages.nextKind(SESSION_RESTORED_KIND))).toMatchObject({
+            const restoredEvent = decodeSessionRestoredEvent(await messages.nextKind(SESSION_RESTORED_KIND));
+            expect(restoredEvent).toMatchObject({
                 entry: {
                     agentId: "codex",
                     prompted: true,
@@ -418,6 +421,26 @@ test("Given a real daemon persisted a Session, When Platform restores it by iden
                 },
                 requestId: "restore_request",
             });
+            expect(restoredEvent.ready.runtimeTimings?.map((timing) => timing.name)).toContain("session-load");
+            expect(restoredEvent.ready.runtimeTimings?.map((timing) => timing.name)).not.toContain("session-resume");
+
+            restored.socket.send(
+                encodeSessionLiveHistoryV2PageLoad({
+                    additionalDirectoryIds: [],
+                    agentId: "codex",
+                    bindingId: config.bindingId,
+                    cursor: null,
+                    directoryId: "default",
+                    eventLimit: 200,
+                    kind: "session.live-history.v2.page.load",
+                    requestId: "history_request",
+                    sessionId,
+                }),
+            );
+            const history = decodeSessionLiveHistoryV2PageLoaded(
+                await messages.nextKind("session.live-history.v2.page.loaded"),
+            );
+            expect(JSON.stringify(history.events.events.events)).toContain("Persist this Session");
         } finally {
             restored.cancellation.abort();
             await restored.completion;

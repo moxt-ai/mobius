@@ -50,6 +50,18 @@ export function registerTurns(agent: ReturnType<typeof acp.agent>) {
             if (prompt === "fail with model unavailable") {
                 throw acp.RequestError.internalError(undefined, "Model unavailable: opencode/jev-1.13-free");
             }
+            if (prompt === "fail with invalid prompt detail") {
+                throw acp.RequestError.internalError({
+                    error: {
+                        code: "invalid_prompt",
+                        message: "Invalid prompt: your prompt was flagged as potentially violating our usage policy.",
+                        param: null,
+                        type: "invalid_request_error",
+                    },
+                    status: 400,
+                    type: "error",
+                });
+            }
             const turnNumber = previousState.turnCount + 1;
             const transcript = nativeHistory.get(context.params.sessionId) ?? [];
             transcript.push({

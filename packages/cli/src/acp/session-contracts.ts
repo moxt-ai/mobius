@@ -33,6 +33,8 @@ export interface AcpPrepareOptions {
     readonly origin?: NativeSessionOrigin;
 }
 
+export type AcpSessionRecovery = { readonly kind: "history-required" } | { readonly kind: "interactive-only" };
+
 export interface AcpNativeHistoryReader {
     readonly read: (
         options: AcpPrepareOptions,
