@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { AgentRuntimeManager, NullAcpSessionObserver } from "../../src/acp/agent-runtime-manager.ts";
+import {
+    AgentRuntimeManager,
+    acpNativeHistoryReader,
+    NullAcpSessionObserver,
+} from "../../src/acp/agent-runtime-manager.ts";
 import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
 
 import { fixture } from "./native-session-fixture.ts";
@@ -176,7 +180,7 @@ describe("native session identity", () => {
             const restarted = new AgentRuntimeManager(
                 new NullAcpSessionObserver(),
                 new MemoryAcpSessionStore(),
-                null,
+                acpNativeHistoryReader,
                 "native",
             );
             try {

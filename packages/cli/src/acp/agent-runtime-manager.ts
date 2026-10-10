@@ -17,6 +17,7 @@ import { AcpContentExternalizer } from "../external-content/acp-content-external
 import { UnretainedExternalContentStore } from "../external-content/local-external-content-store.ts";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
 import { isNativeChatSessionId } from "../native-sessions/chat-agent.ts";
+import { nativeHistoryEventsV2 } from "../native-sessions/native-history-events-v2.ts";
 import { AcpExecutionError } from "./acp-error.ts";
 import { AgentProcessPool, type AgentProcessRetention } from "./agent-process-pool.ts";
 import type { NativeSessionOrigin, NativeSessionPage } from "./native-session.ts";
@@ -45,6 +46,7 @@ export {
     type AcpSessionRecovery,
     type AcpSteerOptions,
     type AcpTurnOptions,
+    acpNativeHistoryReader,
     NullAcpSessionObserver,
 } from "./session-contracts.ts";
 
@@ -63,6 +65,7 @@ import {
     type AcpSessionRecovery,
     type AcpSteerOptions,
     type AcpTurnOptions,
+    acpNativeHistoryReader,
     NullAcpSessionObserver,
 } from "./session-contracts.ts";
 
@@ -78,7 +81,7 @@ export class AgentRuntimeManager {
     readonly #agentSettingsObserver = new NullAcpSessionObserver();
     readonly #nativeOperations = new Set<string>();
     readonly #store: AcpSessionStore;
-    readonly #nativeHistoryReader: AcpNativeHistoryReader | null;
+    readonly #nativeHistoryReader: AcpNativeHistoryReader;
     readonly #sessionIdentity: "assigned" | "native";
     readonly #onSessionStatusChanged: (event: SessionStatusChangedEvent) => void;
     readonly #contentExternalizer: AcpContentExternalizer;
@@ -87,7 +90,7 @@ export class AgentRuntimeManager {
     constructor(
         observer: AcpSessionObserver = new NullAcpSessionObserver(),
         store: AcpSessionStore = new MemoryAcpSessionStore(),
-        nativeHistoryReader: AcpNativeHistoryReader | null = null,
+        nativeHistoryReader: AcpNativeHistoryReader = acpNativeHistoryReader,
         sessionIdentity: "assigned" | "native" = "assigned",
         onSessionStatusChanged: (event: SessionStatusChangedEvent) => void = () => undefined,
         contentExternalizer: AcpContentExternalizer = new AcpContentExternalizer(new UnretainedExternalContentStore()),
@@ -768,6 +771,16 @@ export class AgentRuntimeManager {
             }
             this.#nativeOperations.add(key);
             try {
+                const historyAccess = this.#nativeHistoryReader.access(options);
+                if (historyAccess.kind === "direct") {
+                    // Preview is read-only. Direct readers must not resume the source session
+                    // or require its writer lock; ACP access owns the session/load fallback.
+                    const history = await historyAccess.read(nativeSessionId, () => null);
+                    if (history.status === "unavailable") {
+                        throw new AcpExecutionError(history.cause.message, {}, history.cause.code);
+                    }
+                    return nativeHistoryEventsV2(nativeSessionId, history, eventLimit, cursor);
+                }
                 return await this.#queryProcesses.previewEventsV2(options, nativeSessionId, eventLimit, cursor);
             } finally {
                 this.#nativeOperations.delete(key);
@@ -779,15 +792,9 @@ export class AgentRuntimeManager {
             return await this.#executionProcesses.use(options.sessionId, async () => {
                 const runtime = await this.ensureSession(options);
                 const stored = this.#store.read(options.sessionId);
-                if (stored instanceof FoundAcpStoredSession && this.#nativeHistoryReader !== null) {
-                    const history = await this.#nativeHistoryReader.read(
-                        options,
-                        stored.session.nativeSessionId,
-                        runtime.nativeHistoryTurn,
-                    );
-                    if (history !== null) {
-                        return history;
-                    }
+                const historyAccess = this.#nativeHistoryReader.access(options);
+                if (stored instanceof FoundAcpStoredSession && historyAccess.kind === "direct") {
+                    return await historyAccess.read(stored.session.nativeSessionId, runtime.nativeHistoryTurn);
                 }
                 return await runtime.loadHistory(options.signal);
             });

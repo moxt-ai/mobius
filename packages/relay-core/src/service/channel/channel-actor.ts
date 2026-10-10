@@ -26,6 +26,7 @@ import {
     decodeSessionLiveHistoryV2PageLoad,
     decodeSessionPermissionRespondCommand,
     decodeSessionPrepareCommand,
+    decodeSessionPreviewHistoryPageLoad,
     decodeSessionPromptCommand,
     decodeSessionPromptDispositionCommand,
     decodeSessionQueryCommand,
@@ -62,6 +63,8 @@ import {
     SESSION_OPERATION_FAILED_KIND,
     SESSION_PERMISSION_RESPOND_KIND,
     SESSION_PREPARE_KIND,
+    SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND,
+    SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND,
     SESSION_PROMPT_DISPOSITION_KIND,
     SESSION_PROMPT_KIND,
     SESSION_QUERIED_KIND,
@@ -140,6 +143,7 @@ export class ChannelActor {
         string,
         { readonly expiresAt: number; readonly socket: ChannelSocket }
     >();
+    readonly #pendingPreviewHistory = new Map<string, { readonly expiresAt: number; readonly socket: ChannelSocket }>();
     readonly #pendingNativeImports = new Map<
         string,
         {
@@ -174,7 +178,9 @@ export class ChannelActor {
     readonly attachDaemon = async (replacedExistingConnection: boolean, _signal: AbortSignal): Promise<void> => {
         if (replacedExistingConnection) {
             this.failPendingAgentSettingsDiscoveries();
+            this.#pendingLiveSessionHistory.clear();
             this.#pendingNativeImports.clear();
+            this.#pendingPreviewHistory.clear();
         }
         this.broadcastRuntimeStatus(true);
     };
@@ -198,7 +204,9 @@ export class ChannelActor {
             return;
         }
         this.failPendingAgentSettingsDiscoveries();
+        this.#pendingLiveSessionHistory.clear();
         this.#pendingNativeImports.clear();
+        this.#pendingPreviewHistory.clear();
         this.broadcastRuntimeStatus(false);
     };
 
@@ -247,13 +255,11 @@ export class ChannelActor {
                 return;
             }
             if (kind === SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND) {
-                const result = message;
-                const pending = this.#pendingLiveSessionHistory.get(result.requestId);
-                if (pending === undefined || pending.expiresAt <= this.#clock.now()) {
-                    throw new ProtocolMessageError("The live Session history response is not pending");
-                }
-                pending.socket.send(encodeDaemonToServiceMessage(message));
-                this.#pendingLiveSessionHistory.delete(result.requestId);
+                this.returnLiveHistoryPage(message);
+                return;
+            }
+            if (kind === SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND) {
+                this.returnPreviewHistoryPage(message);
                 return;
             }
             if (kind === SESSION_OPERATION_FAILED_KIND) {
@@ -339,25 +345,14 @@ export class ChannelActor {
                 if (!socket.permitsLiveSessionHistory()) {
                     throw new ProtocolMessageError("Live Session history requires an internal connection");
                 }
-                const command = decodeSessionLiveHistoryV2PageLoad(message);
-                const now = this.#clock.now();
-                for (const [requestId, pending] of this.#pendingLiveSessionHistory) {
-                    if (pending.expiresAt <= now) {
-                        this.#pendingLiveSessionHistory.delete(requestId);
-                    }
+                this.forwardLiveHistoryPage(socket, decodeSessionLiveHistoryV2PageLoad(message));
+                return;
+            }
+            if (kind === SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND) {
+                if (!socket.permitsLiveSessionHistory()) {
+                    throw new ProtocolMessageError("Session preview history requires an internal connection");
                 }
-                if (
-                    this.#pendingLiveSessionHistory.has(command.requestId) ||
-                    this.#pendingLiveSessionHistory.size >= 16
-                ) {
-                    throw new ProtocolMessageError("Too many live Session history operations are pending");
-                }
-                this.#pendingLiveSessionHistory.set(command.requestId, { expiresAt: now + 30_000, socket });
-                if (!this.sendToDaemon(command)) {
-                    this.#pendingLiveSessionHistory.delete(command.requestId);
-                    socket.close(1013, "Runtime offline");
-                    return;
-                }
+                this.forwardPreviewHistoryPage(socket, decodeSessionPreviewHistoryPageLoad(message));
                 return;
             }
             if (kind === SESSION_PERMISSION_RESPOND_KIND) {
@@ -653,6 +648,68 @@ export class ChannelActor {
     ): void => {
         if (pending.socket.isOpen()) {
             pending.socket.send(message);
+        }
+    };
+
+    private readonly returnLiveHistoryPage = (
+        message: Extract<DaemonToServiceMessage, { readonly kind: typeof SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND }>,
+    ): void => {
+        const pending = this.#pendingLiveSessionHistory.get(message.requestId);
+        if (pending === undefined || pending.expiresAt <= this.#clock.now()) {
+            throw new ProtocolMessageError("The live Session history response is not pending");
+        }
+        pending.socket.send(encodeDaemonToServiceMessage(message));
+        this.#pendingLiveSessionHistory.delete(message.requestId);
+    };
+
+    private readonly returnPreviewHistoryPage = (
+        message: Extract<DaemonToServiceMessage, { readonly kind: typeof SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND }>,
+    ): void => {
+        const pending = this.#pendingPreviewHistory.get(message.requestId);
+        if (pending === undefined || pending.expiresAt <= this.#clock.now()) {
+            throw new ProtocolMessageError("The Session preview history response is not pending");
+        }
+        pending.socket.send(encodeDaemonToServiceMessage(message));
+        this.#pendingPreviewHistory.delete(message.requestId);
+    };
+
+    private readonly forwardLiveHistoryPage = (
+        socket: ChannelSocket,
+        command: Extract<ServiceToDaemonMessage, { readonly kind: typeof SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND }>,
+    ): void => {
+        const now = this.#clock.now();
+        for (const [requestId, pending] of this.#pendingLiveSessionHistory) {
+            if (pending.expiresAt <= now) {
+                this.#pendingLiveSessionHistory.delete(requestId);
+            }
+        }
+        if (this.#pendingLiveSessionHistory.has(command.requestId) || this.#pendingLiveSessionHistory.size >= 16) {
+            throw new ProtocolMessageError("Too many live Session history operations are pending");
+        }
+        this.#pendingLiveSessionHistory.set(command.requestId, { expiresAt: now + 30_000, socket });
+        if (!this.sendToDaemon(command)) {
+            this.#pendingLiveSessionHistory.delete(command.requestId);
+            socket.close(1013, "Runtime offline");
+        }
+    };
+
+    private readonly forwardPreviewHistoryPage = (
+        socket: ChannelSocket,
+        command: Extract<ServiceToDaemonMessage, { readonly kind: typeof SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND }>,
+    ): void => {
+        const now = this.#clock.now();
+        for (const [requestId, pending] of this.#pendingPreviewHistory) {
+            if (pending.expiresAt <= now) {
+                this.#pendingPreviewHistory.delete(requestId);
+            }
+        }
+        if (this.#pendingPreviewHistory.has(command.requestId) || this.#pendingPreviewHistory.size >= 16) {
+            throw new ProtocolMessageError("Too many Session preview history operations are pending");
+        }
+        this.#pendingPreviewHistory.set(command.requestId, { expiresAt: now + 30_000, socket });
+        if (!this.sendToDaemon(command)) {
+            this.#pendingPreviewHistory.delete(command.requestId);
+            socket.close(1013, "Runtime offline");
         }
     };
 

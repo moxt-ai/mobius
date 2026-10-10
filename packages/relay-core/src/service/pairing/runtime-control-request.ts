@@ -19,6 +19,7 @@ import {
     decodeSessionLiveHistoryV2PageLoaded,
     decodeSessionOperationFailedEvent,
     decodeSessionPermissionResolvedEvent,
+    decodeSessionPreviewHistoryPageLoaded,
     decodeSessionQueuedEvent,
     decodeSessionReadyEvent,
     decodeSessionRestoredEvent,
@@ -50,6 +51,8 @@ import {
     type SessionPermissionResolvedEvent,
     type SessionPermissionRespondCommand,
     type SessionPrepareCommand,
+    type SessionPreviewHistoryPageLoad,
+    type SessionPreviewHistoryPageLoaded,
     type SessionPromptCommand,
     type SessionPromptDispositionCommand,
     type SessionQueryCommand,
@@ -134,6 +137,7 @@ export type RuntimeControlCommand =
     | SessionCancelCommand
     | SessionPromptDispositionCommand
     | SessionPromptCommand
+    | SessionPreviewHistoryPageLoad
     | SessionLiveHistoryV2PageLoad
     | SessionElicitationRespondCommand
     | SessionPermissionRespondCommand
@@ -148,6 +152,7 @@ export type RuntimeControlResult =
     | SessionCompletedEvent
     | SessionStartedEvent
     | SessionQueuedEvent
+    | SessionPreviewHistoryPageLoaded
     | SessionLiveHistoryV2PageLoaded
     | SessionElicitationResolvedEvent
     | SessionPermissionResolvedEvent
@@ -477,23 +482,27 @@ export async function requestRuntimeControl(
                                         : null;
                     const resolved =
                         result ??
-                        (command.kind === "session.live-history.v2.page.load" &&
-                        kind === "session.live-history.v2.page.loaded"
-                            ? decodeSessionLiveHistoryV2PageLoaded(raw)
-                            : command.kind === "session.prompt" && kind === "session.queued"
-                              ? decodeSessionQueuedEvent(raw)
-                              : (command.kind === "session.prompt" || command.kind === "session.prompt.disposition") &&
-                                  kind === "session.started"
-                                ? decodeSessionStartedEvent(raw)
-                                : command.kind === "session.cancel" && kind === "session.completed"
-                                  ? decodeSessionCompletedEvent(raw)
-                                  : command.kind === "session.permission.respond" &&
-                                      kind === "session.permission.resolved"
-                                    ? decodeSessionPermissionResolvedEvent(raw)
-                                    : command.kind === "session.elicitation.respond" &&
-                                        kind === "session.elicitation.resolved"
-                                      ? decodeSessionElicitationResolvedEvent(raw)
-                                      : null);
+                        (command.kind === "session.preview-history.page.load" &&
+                        kind === "session.preview-history.page.loaded"
+                            ? decodeSessionPreviewHistoryPageLoaded(raw)
+                            : command.kind === "session.live-history.v2.page.load" &&
+                                kind === "session.live-history.v2.page.loaded"
+                              ? decodeSessionLiveHistoryV2PageLoaded(raw)
+                              : command.kind === "session.prompt" && kind === "session.queued"
+                                ? decodeSessionQueuedEvent(raw)
+                                : (command.kind === "session.prompt" ||
+                                        command.kind === "session.prompt.disposition") &&
+                                    kind === "session.started"
+                                  ? decodeSessionStartedEvent(raw)
+                                  : command.kind === "session.cancel" && kind === "session.completed"
+                                    ? decodeSessionCompletedEvent(raw)
+                                    : command.kind === "session.permission.respond" &&
+                                        kind === "session.permission.resolved"
+                                      ? decodeSessionPermissionResolvedEvent(raw)
+                                      : command.kind === "session.elicitation.respond" &&
+                                          kind === "session.elicitation.resolved"
+                                        ? decodeSessionElicitationResolvedEvent(raw)
+                                        : null);
                     const resolvedRequestId =
                         resolved !== null && "requestId" in resolved
                             ? resolved.requestId

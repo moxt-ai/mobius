@@ -2,7 +2,11 @@ import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { NativeSessionCommand } from "@moxt-ai/mobius-protocol";
-import { AgentRuntimeManager, NullAcpSessionObserver } from "../../../src/acp/agent-runtime-manager.ts";
+import {
+    AgentRuntimeManager,
+    acpNativeHistoryReader,
+    NullAcpSessionObserver,
+} from "../../../src/acp/agent-runtime-manager.ts";
 import { CodexAcpAgent } from "../../../src/acp/codex/agent.ts";
 import { MemoryAcpSessionStore } from "../../../src/acp/session-store.ts";
 import { InProcessAcpAgentDefinition } from "../../../src/agent-catalog/local-agent.ts";
@@ -31,7 +35,12 @@ export async function codexFixture(
         codex.environment,
     );
     const store = new MemoryAcpSessionStore();
-    const sessions = new AgentRuntimeManager(new NullAcpSessionObserver(), store, null, sessionIdentity);
+    const sessions = new AgentRuntimeManager(
+        new NullAcpSessionObserver(),
+        store,
+        acpNativeHistoryReader,
+        sessionIdentity,
+    );
     const audit = new AuditStore();
     const config = createDaemonConfig(
         {

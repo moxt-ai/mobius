@@ -9,6 +9,8 @@ import {
     encodeSessionConfigureCommand,
     encodeSessionEventEnvelopeV2,
     encodeSessionLiveHistoryV2PageLoaded,
+    encodeSessionOperationFailedEvent,
+    encodeSessionPreviewHistoryPageLoaded,
     encodeSessionPromptCommand,
     encodeSessionStatusChangedEvent,
     encodeSessionsQueriedEvent,
@@ -996,6 +998,78 @@ describe.sequential("Platform Session-only boundary", () => {
                 tailCursor: rawEvent.eventId,
                 truncated: false,
                 version: 2,
+            });
+            const previewHistoryResponse = worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/native-events-preview?agentId=codex&directoryId=root&eventLimit=50`,
+                    { headers: { authorization: `Bearer ${text(browserAccess, "credential")}` } },
+                ),
+                environment,
+            );
+            const previewHistoryLoad = decodeServiceToDaemonMessage(await daemonMessages.next());
+            if (previewHistoryLoad.kind !== "session.preview-history.page.load") {
+                throw new Error("Expected a native Session preview history request");
+            }
+            daemon.send(
+                encodeSessionPreviewHistoryPageLoaded({
+                    events: {
+                        events: {
+                            sessionGenerationId: "native-session-generation-1",
+                            events: [rawEvent],
+                            nextCursor: null,
+                            tailCursor: rawEvent.eventId,
+                            truncated: false,
+                            version: 2,
+                        },
+                        queuedPromptRequests: [],
+                    },
+                    kind: "session.preview-history.page.loaded",
+                    requestId: previewHistoryLoad.requestId,
+                    sessionId,
+                }),
+            );
+            expect(await responseJson(await previewHistoryResponse, 200)).toEqual({
+                events: {
+                    sessionGenerationId: "native-session-generation-1",
+                    events: [rawEvent],
+                    nextCursor: null,
+                    tailCursor: rawEvent.eventId,
+                    truncated: false,
+                    version: 2,
+                },
+                queuedPromptRequests: [],
+            });
+            const failedPreviewHistoryResponse = worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/native-events-preview?agentId=codex&directoryId=root&eventLimit=50`,
+                    { headers: { authorization: `Bearer ${text(browserAccess, "credential")}` } },
+                ),
+                environment,
+            );
+            const failedPreviewHistoryLoad = decodeServiceToDaemonMessage(await daemonMessages.next());
+            if (failedPreviewHistoryLoad.kind !== "session.preview-history.page.load") {
+                throw new Error("Expected a native Session preview history request");
+            }
+            daemon.send(
+                encodeSessionOperationFailedEvent({
+                    code: "native_history_unavailable",
+                    kind: "session.operation.failed",
+                    message: "The Codex thread is not loaded",
+                    requestId: failedPreviewHistoryLoad.requestId,
+                    sessionId,
+                }),
+            );
+            expect(decodeDaemonToServiceMessage(await hostMessages.next())).toMatchObject({
+                code: "native_history_unavailable",
+                kind: "session.operation.failed",
+                message: "The Codex thread is not loaded",
+                requestId: failedPreviewHistoryLoad.requestId,
+            });
+            expect(await responseJson(await failedPreviewHistoryResponse, 503)).toEqual({
+                error: {
+                    code: "native_history_unavailable",
+                    message: "The Codex thread is not loaded",
+                },
             });
             v2Socket.close(1000, "V2 browser test complete");
             const transportResponse = await worker.fetch(
