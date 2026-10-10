@@ -18,6 +18,7 @@ import {
     SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND,
     SESSION_PERMISSION_RESPOND_KIND,
     SESSION_PREPARE_KIND,
+    SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND,
     SESSION_PROMPT_DISPOSITION_KIND,
     SESSION_PROMPT_KIND,
     SESSION_QUERIED_KIND,
@@ -36,7 +37,10 @@ import type { AuditStore } from "./audit/audit-store.ts";
 import type { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
 import type { DaemonConfig } from "./config.ts";
 import { reportOperationFailure, send, settleAbandonedTurn } from "./daemon-command-results.ts";
-import { executeSessionLiveHistoryV2PageLoad } from "./daemon-history-commands.ts";
+import {
+    executeSessionLiveHistoryV2PageLoad,
+    executeSessionPreviewHistoryPageLoad,
+} from "./daemon-history-commands.ts";
 import { executePrompt } from "./daemon-prompt-executor.ts";
 import {
     executeSessionConfigure,
@@ -123,6 +127,20 @@ export function createDaemonCommandHandler({
             }
             if (kind === SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND) {
                 void executeSessionLiveHistoryV2PageLoad(
+                    socket,
+                    message,
+                    config,
+                    directories,
+                    audit,
+                    diagnostics,
+                    sessions,
+                    eventLogV2,
+                    signal,
+                );
+                return;
+            }
+            if (kind === SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND) {
+                void executeSessionPreviewHistoryPageLoad(
                     socket,
                     message,
                     config,

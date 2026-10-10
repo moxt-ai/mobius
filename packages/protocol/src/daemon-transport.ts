@@ -145,10 +145,16 @@ import {
 import {
     decodeSessionLiveHistoryV2PageLoad,
     decodeSessionLiveHistoryV2PageLoaded,
+    decodeSessionPreviewHistoryPageLoad,
+    decodeSessionPreviewHistoryPageLoaded,
     encodeSessionLiveHistoryV2PageLoad,
     encodeSessionLiveHistoryV2PageLoaded,
+    encodeSessionPreviewHistoryPageLoad,
+    encodeSessionPreviewHistoryPageLoaded,
     SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND,
     SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND,
+    SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND,
+    SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND,
 } from "./session-live-history.ts";
 
 interface MessageSignature<TMessage extends { readonly kind: string }> {
@@ -173,6 +179,11 @@ function defineMessageSignature<TMessage extends { readonly kind: string }>(
 }
 
 const serviceToDaemonSignatures = {
+    [SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND]: defineMessageSignature(
+        SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND,
+        encodeSessionPreviewHistoryPageLoad,
+        decodeSessionPreviewHistoryPageLoad,
+    ),
     [AGENT_INSTALL_CANCEL_KIND]: defineMessageSignature(
         AGENT_INSTALL_CANCEL_KIND,
         encodeAgentInstallCancelCommand,
@@ -289,6 +300,11 @@ export function encodeServiceToDaemonMessage(message: ServiceToDaemonMessage): s
 }
 
 const daemonToServiceSignatures = {
+    [SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND]: defineMessageSignature(
+        SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND,
+        encodeSessionPreviewHistoryPageLoaded,
+        decodeSessionPreviewHistoryPageLoaded,
+    ),
     [SESSION_CONFIG_UPDATED_KIND]: defineMessageSignature(
         SESSION_CONFIG_UPDATED_KIND,
         encodeSessionConfigUpdatedEvent,

@@ -1232,7 +1232,7 @@ export class MobiusSessionResources {
         const result = await this.#executor.post(
             projectPath(
                 this.#projectId,
-                `runtimes/${encodeURIComponent(runtimeId)}/sessions/${encodeURIComponent(sessionId)}/native-events-v2`,
+                `runtimes/${encodeURIComponent(runtimeId)}/sessions/${encodeURIComponent(sessionId)}/native-events-preview`,
             ),
             { ...identity, cursor: page.cursor, eventLimit: page.eventLimit },
             signal,
@@ -1252,7 +1252,7 @@ export class MobiusSessionResources {
     ): Promise<NativeSessionEventsV2> => {
         const path = requestUrl(
             new URL("https://mobius.invalid/"),
-            sessionPath(this.#projectId, sessionId, "native-events-v2"),
+            sessionPath(this.#projectId, sessionId, "native-events-preview"),
         );
         path.searchParams.set("agentId", identity.agentId);
         path.searchParams.set("directoryId", identity.directoryId);
@@ -1609,9 +1609,11 @@ export class MobiusLiveEventSubscriptionV2 {
                 }
                 attempts += 1;
                 if (attempts > this.#maximumReconnectAttempts) {
-                    const failure = new MobiusConnectionError("The live V2 Session event stream could not recover", {
-                        cause,
-                    });
+                    const message =
+                        cause instanceof MobiusError
+                            ? `The live V2 Session event stream could not recover. Cause: ${cause.message}`
+                            : "The live V2 Session event stream could not recover";
+                    const failure = new MobiusConnectionError(message, { cause });
                     if (connectionState.kind === "initial") {
                         rejectConnected(failure);
                     }

@@ -8,7 +8,11 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { AgentRuntimeManager, createWritableAcpStream } from "../../src/acp/agent-runtime-manager.ts";
+import {
+    AgentRuntimeManager,
+    acpNativeHistoryReader,
+    createWritableAcpStream,
+} from "../../src/acp/agent-runtime-manager.ts";
 import { CachedAcpSessionEventStoreV2 } from "../../src/acp/session-event-store-v2.ts";
 import { FoundAcpStoredSession, MemoryAcpSessionStore, SqliteAcpSessionStore } from "../../src/acp/session-store.ts";
 import { LocalAgentDefinition } from "../../src/config.ts";
@@ -173,7 +177,7 @@ describe("ACP conversation sessions", () => {
         ]);
         const signal = new AbortController().signal;
         const firstStore = new SqliteAcpSessionStore(openAcpSessionDatabase(databasePath));
-        const firstRuntime = new AgentRuntimeManager(undefined, firstStore, null, "native");
+        const firstRuntime = new AgentRuntimeManager(undefined, firstStore, acpNativeHistoryReader, "native");
 
         try {
             await firstRuntime.runPrompt({
@@ -195,7 +199,7 @@ describe("ACP conversation sessions", () => {
         }
 
         const restartedStore = new SqliteAcpSessionStore(openAcpSessionDatabase(databasePath));
-        const restartedRuntime = new AgentRuntimeManager(undefined, restartedStore, null, "native");
+        const restartedRuntime = new AgentRuntimeManager(undefined, restartedStore, acpNativeHistoryReader, "native");
         try {
             expect(restartedRuntime.findSessions([sessionId])).toEqual([
                 expect.objectContaining({ agentId: "claude", prompted: true, sessionId }),

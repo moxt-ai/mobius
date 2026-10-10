@@ -678,7 +678,7 @@ async function cancelCommand(directory: string, flags: ReadonlyMap<string, strin
     }
 }
 
-async function nativeEventsV2(
+async function sessionEventsV2(
     service: MobiusClient,
     session: MiniClientSession,
     signal: AbortSignal,
@@ -686,18 +686,9 @@ async function nativeEventsV2(
     const pages: NativeSessionEventsV2[] = [];
     let cursor: string | null = null;
     do {
-        const page = await service.sessions.querySessionNativeEventsV2(
-            session.sessionId,
-            {
-                additionalDirectoryIds: session.additionalDirectoryIds,
-                agentId: session.agentId,
-                directoryId: session.directoryId,
-            },
-            { cursor, eventLimit: 50 },
-            signal,
-        );
-        pages.push(page);
-        cursor = page.events.nextCursor;
+        const page = await service.events.listV2(session.sessionId, new MobiusPageRequest(50, cursor ?? ""), signal);
+        pages.push({ events: page, queuedPromptRequests: [] });
+        cursor = page.nextCursor;
     } while (cursor !== null && pages.length < 100);
     const newest = pages[0];
     if (newest === undefined) {
@@ -731,7 +722,7 @@ async function getCommand(directory: string, flags: ReadonlyMap<string, string>)
     let subscription: MobiusLiveEventSubscriptionV2 | undefined;
     try {
         if (!follow) {
-            output({ events: await nativeEventsV2(service, session, signal), sessionId: session.sessionId });
+            output({ events: await sessionEventsV2(service, session, signal), sessionId: session.sessionId });
             return;
         }
         const seen = new Set<string>();
@@ -743,7 +734,7 @@ async function getCommand(directory: string, flags: ReadonlyMap<string, string>)
             event.payload.commandId === followedCommandId;
         const observer: MobiusLiveSessionEventObserverV2 = {
             reconcile: async (liveConnection) => {
-                const events = await nativeEventsV2(service, session, signal);
+                const events = await sessionEventsV2(service, session, signal);
                 for (const event of events.events.events) {
                     seen.add(event.eventId);
                 }

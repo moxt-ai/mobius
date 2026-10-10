@@ -148,18 +148,22 @@ export async function runDaemon(
         }, eventLogV2.record),
         sessionStore,
         {
-            read: async (options, nativeSessionId, nativeTurn) =>
+            access: (options) =>
                 options.agent.id === "codex"
-                    ? (
-                          await readCodexFullHistory(
-                              options.agent,
-                              options.cwd,
-                              nativeSessionId,
-                              options.signal,
-                              nativeTurn,
-                          )
-                      ).history
-                    : null,
+                    ? {
+                          kind: "direct",
+                          read: async (nativeSessionId, nativeTurn) =>
+                              (
+                                  await readCodexFullHistory(
+                                      options.agent,
+                                      options.cwd,
+                                      nativeSessionId,
+                                      options.signal,
+                                      nativeTurn,
+                                  )
+                              ).history,
+                      }
+                    : { kind: "acp" },
         },
         "native",
         publisher.publishStatus,

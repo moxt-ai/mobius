@@ -9,6 +9,7 @@ import {
     decodeSessionEventEnvelopeV2,
     decodeSessionLiveHistoryV2PageLoad,
     decodeSessionPermissionRespondCommand,
+    decodeSessionPreviewHistoryPageLoad,
     decodeSessionPromptCommand,
     decodeSessionPromptDispositionCommand,
     decodeSessionQueryCommand,
@@ -22,6 +23,7 @@ import {
     CloudflareChannelRuntime,
     createMobiusApplication,
     createWorkerContext,
+    errorMiddleware,
     instrumentD1Database,
     PairingDirectoryError,
     ProjectPermission,
@@ -276,7 +278,7 @@ export function createPlatformApplication(
             context.header("Cache-Control", "no-store");
             return context.json({ ...target, kind: "expiring" });
         })
-        .get("/:sessionId/native-events-v2", sessionAccessTargetMiddleware, async (context) => {
+        .get("/:sessionId/native-events-preview", sessionAccessTargetMiddleware, async (context) => {
             const credential = (context.req.header("authorization") ?? "").match(/^Bearer ([^\s]+)$/u)?.[1];
             if (credential === undefined) {
                 return context.json(
@@ -298,7 +300,7 @@ export function createPlatformApplication(
             const result = await context.var.relay.services.runtimePairings.requestProjectScopeControl(
                 new ProjectScope(access.projectId),
                 access.runtimeId,
-                decodeSessionLiveHistoryV2PageLoad(
+                decodeSessionPreviewHistoryPageLoad(
                     JSON.stringify({
                         additionalDirectoryIds: v.parse(
                             v.pipe(v.array(v.pipe(v.string(), v.minLength(1), v.maxLength(2048))), v.maxLength(16)),
@@ -311,7 +313,7 @@ export function createPlatformApplication(
                             v.pipe(v.string(), v.minLength(1), v.maxLength(2048)),
                             context.req.query("directoryId"),
                         ),
-                        kind: "session.live-history.v2.page.load",
+                        kind: "session.preview-history.page.load",
                         eventLimit,
                         requestId: crypto.randomUUID(),
                         sessionId,
@@ -319,7 +321,7 @@ export function createPlatformApplication(
                 ),
                 context.req.raw.signal,
             );
-            if (result.kind !== "session.live-history.v2.page.loaded") {
+            if (result.kind !== "session.preview-history.page.loaded") {
                 throw new PairingDirectoryError("invalid_request", "The Runtime returned invalid V2 Session events");
             }
             context.header("Cache-Control", "no-store");
@@ -746,6 +748,7 @@ export function createPlatformApplication(
         .all("/*", projectHandler);
 
     const application = new Hono<DispatchEnvironment>()
+        .use("*", errorMiddleware)
         .use("*", requestTimeoutMiddleware<DispatchEnvironment>(PLATFORM_REQUEST_TIMEOUT_MILLISECONDS))
         .use("*", async (context, next) => {
             const routed = await routeProjectDurableObject(context.req.raw, context.env, authentication.allowedOrigins);

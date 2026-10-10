@@ -3,8 +3,8 @@ import {
     decodeNativeSessionRequest,
     decodeSessionConfigureCommand,
     decodeSessionListCommand,
-    decodeSessionLiveHistoryV2PageLoad,
     decodeSessionPrepareCommand,
+    decodeSessionPreviewHistoryPageLoad,
     decodeSessionPromptCommand,
     decodeSessionQueryCommand,
     decodeSessionRestoreCommand,
@@ -306,15 +306,15 @@ export function createProjectRuntimeRoutes() {
             },
         )
         .post(
-            "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/native-events-v2",
+            "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/native-events-preview",
             bodyParser<RelayHttpEnvironment>(),
             async (context) => {
                 const body = validated(nativeEventsV2Schema, context.req.valid("json"));
-                const command = decodeSessionLiveHistoryV2PageLoad(
+                const command = decodeSessionPreviewHistoryPageLoad(
                     JSON.stringify({
                         ...body,
                         bindingId: "workspace",
-                        kind: "session.live-history.v2.page.load",
+                        kind: "session.preview-history.page.load",
                         requestId: crypto.randomUUID(),
                         sessionId: validateIdentifier(context.req.param("sessionId"), "session_id"),
                     }),
@@ -326,7 +326,7 @@ export function createProjectRuntimeRoutes() {
                     command,
                     context.req.raw.signal,
                 );
-                if (result.kind !== "session.live-history.v2.page.loaded") {
+                if (result.kind !== "session.preview-history.page.loaded") {
                     throw new PairingDirectoryError(
                         "invalid_request",
                         "The Runtime returned invalid V2 Session events",

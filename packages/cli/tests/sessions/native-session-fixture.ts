@@ -2,7 +2,12 @@ import { mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AcpSessionUpdateV2, NativeSessionCommand, SessionEventPayloadV2 } from "@moxt-ai/mobius-protocol";
-import { AgentRuntimeManager, NullAcpSessionObserver } from "../../src/acp/agent-runtime-manager.ts";
+import {
+    type AcpNativeHistoryReader,
+    AgentRuntimeManager,
+    acpNativeHistoryReader,
+    NullAcpSessionObserver,
+} from "../../src/acp/agent-runtime-manager.ts";
 import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
 import { AuditStore } from "../../src/audit/audit-store.ts";
 import { WorkspaceDirectoryService } from "../../src/authorization/workspace-directory.ts";
@@ -38,6 +43,7 @@ export async function fixture(
         | "exclusive-writer"
         | "persist-after-first-prompt" = "supported",
     sessionIdentity: "assigned" | "native" = "assigned",
+    nativeHistoryReader: AcpNativeHistoryReader = acpNativeHistoryReader,
 ) {
     const temporary = await realpath(await mkdtemp(join(tmpdir(), "mobius-native-boundary-")));
     const workspace = join(temporary, "workspace");
@@ -49,7 +55,8 @@ export async function fixture(
     // Controlled ACP peers are used only for protocol-specific scenarios.
     const executable = join(temporary, "agent.mjs");
     await writeFile(executable, `#!${process.execPath}\nawait import(${JSON.stringify(acpUrl)});\n`, { mode: 0o700 });
-    const agentId = label === "Claude Code" ? "claude" : label === "Pi" ? "pi" : "opencode";
+    const agentId =
+        label === "Claude Code" ? "claude" : label === "Codex" ? "codex" : label === "Pi" ? "pi" : "opencode";
     const agent = new LocalAgentDefinition(agentId, label, executable, [
         "--agent-name",
         label,
@@ -68,7 +75,7 @@ export async function fixture(
     ]);
     const store = new MemoryAcpSessionStore();
     const observer = new NativeSessionObserver();
-    let sessions = new AgentRuntimeManager(observer, store, { read: async () => null }, sessionIdentity);
+    let sessions = new AgentRuntimeManager(observer, store, nativeHistoryReader, sessionIdentity);
     const audit = new AuditStore();
     const config = createDaemonConfig(
         {
@@ -158,7 +165,7 @@ export async function fixture(
         },
         restart: async () => {
             await sessions.close();
-            sessions = new AgentRuntimeManager(observer, store, { read: async () => null }, sessionIdentity);
+            sessions = new AgentRuntimeManager(observer, store, nativeHistoryReader, sessionIdentity);
             service = new NativeSessionService(config, directories, sessions, audit, async () => ({
                 turn: null,
                 queued: [],

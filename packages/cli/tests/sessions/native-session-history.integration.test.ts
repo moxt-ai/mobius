@@ -6,6 +6,202 @@ import { describe, expect, it, vi } from "vitest";
 import { fixture } from "./native-session-fixture.ts";
 
 describe("native session history", () => {
+    it("Given Codex already owns a native session writer, When Chat previews that session, Then Runtime reads history without requesting another writer", async () => {
+        const f = await fixture("Codex", "exclusive-writer", "assigned", {
+            access: () => ({
+                kind: "direct",
+                read: async () => ({
+                    coveredCommandIds: [],
+                    coveredMessageIds: [],
+                    messages: [
+                        { role: "user", text: "Read without resuming" },
+                        { activities: [], content: [], role: "assistant", text: "Preview available" },
+                    ],
+                    status: "available",
+                    truncated: false,
+                }),
+            }),
+        });
+        const signal = new AbortController().signal;
+        try {
+            const nativeSessionId = await f.seed("Writer-owned Codex session");
+            await f.sessions.openNativeSession(
+                {
+                    additionalDirectories: [],
+                    agent: f.agent,
+                    cwd: f.workspace,
+                    sessionId: "active-codex-session",
+                    signal,
+                },
+                { kind: "import", nativeSessionId },
+            );
+
+            const preview = await f.sessions.previewNativeSessionEventsV2(
+                {
+                    additionalDirectories: [],
+                    agent: f.agent,
+                    cwd: f.workspace,
+                    sessionId: "codex-preview",
+                    signal,
+                },
+                nativeSessionId,
+                50,
+                null,
+            );
+
+            expect(
+                preview.events.flatMap((event) =>
+                    event.type === "acp" &&
+                    (event.payload.sessionUpdate === "user_message_chunk" ||
+                        event.payload.sessionUpdate === "agent_message_chunk") &&
+                    event.payload.content.type === "text"
+                        ? [event.payload.content.text]
+                        : [],
+                ),
+            ).toEqual(["Read without resuming", "Preview available"]);
+        } finally {
+            await f.close();
+        }
+    });
+
+    it("Given Chat imports a Codex conversation, When the imported Chat opens, Then its source history remains visible without requesting another writer", async () => {
+        const f = await fixture("Codex", "exclusive-writer", "assigned", {
+            access: () => ({
+                kind: "direct",
+                read: async () => ({
+                    coveredCommandIds: [],
+                    coveredMessageIds: [],
+                    messages: [
+                        { role: "user", text: "Imported Codex source" },
+                        { activities: [], content: [], role: "assistant", text: "Imported Codex response" },
+                    ],
+                    status: "available",
+                    truncated: false,
+                }),
+            }),
+        });
+        const signal = new AbortController().signal;
+        try {
+            await f.seed("Writer-owned Codex session");
+            const entry = (await f.list()).entries[0];
+            if (entry === undefined) {
+                throw new Error("Missing native conversation");
+            }
+            const sessionId = "imported-codex-session";
+            await f.service.execute(
+                { ...f.identity, action: "import", entryId: entry.entryId, targetSessionId: sessionId },
+                signal,
+            );
+
+            const replay = await f.sessions.loadSessionEventsV2(
+                {
+                    additionalDirectories: [],
+                    agent: f.agent,
+                    cwd: f.workspace,
+                    sessionId,
+                    signal,
+                },
+                50,
+                null,
+            );
+
+            expect(
+                replay.events.flatMap((event) =>
+                    event.type === "acp" &&
+                    (event.payload.sessionUpdate === "user_message_chunk" ||
+                        event.payload.sessionUpdate === "agent_message_chunk") &&
+                    event.payload.content.type === "text"
+                        ? [event.payload.content.text]
+                        : [],
+                ),
+            ).toEqual(["Writer-owned Codex session", "Codex turn 1: Writer-owned Codex session"]);
+        } finally {
+            await f.close();
+        }
+    });
+
+    it("Given Chat imports a Claude Code conversation, When the imported Chat opens, Then its source history is visible", async () => {
+        const f = await fixture("Claude Code", "exclusive-writer");
+        const signal = new AbortController().signal;
+        try {
+            await f.seed("Imported Claude source");
+            const entry = (await f.list()).entries[0];
+            if (entry === undefined) {
+                throw new Error("Missing native conversation");
+            }
+            const sessionId = "imported-claude-session";
+            await f.service.execute(
+                { ...f.identity, action: "import", entryId: entry.entryId, targetSessionId: sessionId },
+                signal,
+            );
+
+            const replay = await f.sessions.loadSessionEventsV2(
+                {
+                    additionalDirectories: [],
+                    agent: f.agent,
+                    cwd: f.workspace,
+                    sessionId,
+                    signal,
+                },
+                50,
+                null,
+            );
+
+            expect(
+                replay.events.flatMap((event) =>
+                    event.type === "acp" &&
+                    event.payload.sessionUpdate === "user_message_chunk" &&
+                    event.payload.content.type === "text"
+                        ? [event.payload.content.text]
+                        : [],
+                ),
+            ).toContain("Imported Claude source");
+        } finally {
+            await f.close();
+        }
+    });
+
+    it("Given Chat forks a Claude Code conversation, When the forked Chat opens, Then its copied history is visible", async () => {
+        const f = await fixture("Claude Code", "exclusive-writer");
+        const signal = new AbortController().signal;
+        try {
+            await f.seed("Forked Claude source");
+            const entry = (await f.list()).entries[0];
+            if (entry === undefined) {
+                throw new Error("Missing native conversation");
+            }
+            const sessionId = "forked-claude-session";
+            await f.service.execute(
+                { ...f.identity, action: "fork", entryId: entry.entryId, targetSessionId: sessionId },
+                signal,
+            );
+
+            const replay = await f.sessions.loadSessionEventsV2(
+                {
+                    additionalDirectories: [],
+                    agent: f.agent,
+                    cwd: f.workspace,
+                    sessionId,
+                    signal,
+                },
+                50,
+                null,
+            );
+
+            expect(
+                replay.events.flatMap((event) =>
+                    event.type === "acp" &&
+                    event.payload.sessionUpdate === "user_message_chunk" &&
+                    event.payload.content.type === "text"
+                        ? [event.payload.content.text]
+                        : [],
+                ),
+            ).toContain("Forked Claude source");
+        } finally {
+            await f.close();
+        }
+    });
+
     it("Given ACP replays committed native updates, When Runtime loads V2 source facts, Then every accepted notification is exposed once without V1 activity folding", async () => {
         const f = await fixture("OpenCode");
         try {

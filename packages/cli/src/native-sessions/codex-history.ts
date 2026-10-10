@@ -122,6 +122,16 @@ interface CodexHistorySnapshot {
     readonly history: NativeSessionHistory;
 }
 
+class CodexHistoryResponseError extends Error {
+    readonly code: number;
+
+    constructor(response: { readonly code: number; readonly message: string }) {
+        super(response.message);
+        this.code = response.code;
+        this.name = "CodexHistoryResponseError";
+    }
+}
+
 function bounded(value: string, maximum: number): string {
     return value.slice(0, maximum);
 }
@@ -669,7 +679,7 @@ async function readCodexHistoryWithOptions(
                     fail(
                         new AcpExecutionError(
                             "Saved Codex history could not be read.",
-                            { cause: message.error },
+                            { cause: new CodexHistoryResponseError(message.error) },
                             "native_history_unavailable",
                         ),
                     );

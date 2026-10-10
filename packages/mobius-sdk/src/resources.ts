@@ -986,7 +986,7 @@ export class MobiusPageRequest {
     readonly limit: number;
 
     constructor(limit: number, cursor: string) {
-        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || cursor.length > 512) {
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500 || cursor.length > 512) {
             throw new MobiusValidationError("The page request is invalid");
         }
         this.cursor = cursor;

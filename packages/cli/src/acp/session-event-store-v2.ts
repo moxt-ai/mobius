@@ -68,6 +68,17 @@ function eventPage(
     };
 }
 
+export function pageAcpSessionEventsV2(
+    sessionGenerationId: string,
+    events: readonly SessionEventPayloadV2[],
+    eventLimit: number,
+    cursor: string | null,
+): AcpSessionEventPageV2 {
+    return eventPage(sessionGenerationId, events.length, eventLimit, cursor, (startPosition, endPosition) =>
+        events.slice(startPosition - 1, endPosition),
+    );
+}
+
 export class MemoryAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
     readonly #events = new Map<string, SessionEventsV2>();
 
