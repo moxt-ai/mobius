@@ -1,7 +1,7 @@
 import { fetch } from "undici";
 
 import type { DaemonConfig } from "../config.ts";
-import { environmentProxyDispatcher } from "../network/environment-proxy.ts";
+import { relayDispatcher } from "../network/environment-proxy.ts";
 import { relayHttpEndpoint, runtimeAuthorization } from "../relay-connection/runtime-authentication.ts";
 
 const CATALOG_UPDATE_TIMEOUT_MILLISECONDS = 20_000;
@@ -93,7 +93,7 @@ export async function publishAgentCatalog(config: DaemonConfig, signal: AbortSig
                 })),
                 installableAgents: catalog.installableAgents,
             }),
-            dispatcher: environmentProxyDispatcher,
+            dispatcher: relayDispatcher(config.relayProxy),
             headers: { ...runtimeAuthorization(config.relayUrl), "content-type": "application/json" },
             method: "PUT",
             signal: requestSignal,

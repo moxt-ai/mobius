@@ -4,7 +4,7 @@ import { isIdentifier, type PromptImage, type PromptResource } from "@moxt-ai/mo
 import { fetch } from "undici";
 
 import type { DaemonConfig } from "./config.ts";
-import { environmentProxyDispatcher } from "./network/environment-proxy.ts";
+import { relayDispatcher } from "./network/environment-proxy.ts";
 import { relayHttpEndpoint, runtimeAuthorization } from "./relay-connection/runtime-authentication.ts";
 
 const ARTIFACT_SCHEME = "mobius-artifact:";
@@ -162,7 +162,7 @@ async function download(
     let response: Awaited<ReturnType<typeof fetch>>;
     try {
         response = await fetch(downloadUrl(config, command, reference), {
-            dispatcher: environmentProxyDispatcher,
+            dispatcher: relayDispatcher(config.relayProxy),
             headers: {
                 accept: reference.resource.mimeType,
                 "accept-encoding": "identity",

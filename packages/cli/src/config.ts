@@ -5,6 +5,7 @@ import {
     type InstallableAgentDefinition,
     LocalAgentCatalog,
 } from "./agent-catalog/local-agent.ts";
+import type { RelayProxyPolicy } from "./network/environment-proxy.ts";
 import { readStateDirectory } from "./storage/state-directory.ts";
 
 export type { AcpAgentDefinition } from "./agent-catalog/local-agent.ts";
@@ -62,12 +63,14 @@ export interface DaemonConfig {
     readonly installableAgents: readonly InstallableAgentDefinition[];
     readonly localContext: DaemonLocalContext;
     readonly reconnectTarget: DaemonReconnectTarget | null;
+    readonly relayProxy: RelayProxyPolicy;
     readonly relayUrl: URL;
 }
 
 export interface DaemonConnectionConfig {
     readonly defaultWorkspace: string;
     readonly channelId: string;
+    readonly relayProxy?: RelayProxyPolicy;
     readonly relayUrl: URL;
 }
 
@@ -88,6 +91,7 @@ export function createDaemonConfig(
         installableAgents,
         localContext,
         reconnectTarget,
+        relayProxy: connection.relayProxy ?? "direct",
         relayUrl: connection.relayUrl,
     };
 }

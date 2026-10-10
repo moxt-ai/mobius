@@ -149,6 +149,7 @@ describe("Mobius pairing lifecycle", () => {
                 {
                     app_id: "app_test",
                     connection_id: connection.connectionId,
+                    relay_proxy: "direct",
                     runtime_id: "runtime_test",
                     status: "reconnecting",
                     workspace,

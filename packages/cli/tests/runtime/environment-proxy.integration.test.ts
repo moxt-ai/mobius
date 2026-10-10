@@ -34,7 +34,7 @@ async function closeServer(server: Server, sockets: Set<Socket>): Promise<void> 
 }
 
 describe("daemon environment proxy", () => {
-    it("Given proxy environment variables, When pairing and opening the relay, Then both connections use the proxy", async () => {
+    it("Given proxy environment variables, When pairing directly or with proxy opt-in, Then each relay uses the selected route", async () => {
         const pairingSockets = new Set<Socket>();
         const relaySockets = new Set<Socket>();
         const proxySockets = new Set<Socket>();
@@ -43,14 +43,16 @@ describe("daemon environment proxy", () => {
 
         const pairingPaths: string[] = [];
         const pairingServer = createServer((request, response) => {
-            pairingPaths.push(new URL(request.url ?? "/", "http://127.0.0.1").pathname);
+            const path = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+            pairingPaths.push(path);
+            const route = path.includes("direct-pairing") ? "direct" : "proxy";
             response.writeHead(200, { "content-type": "application/json" });
             response.end(
                 JSON.stringify({
                     appId: "app_proxy",
-                    channelId: "proxy-channel",
+                    channelId: `${route}-channel`,
                     runtimeCredential: "a".repeat(32),
-                    runtimeId: "proxy-runtime",
+                    runtimeId: `${route}-runtime`,
                 }),
             );
         });
@@ -159,7 +161,7 @@ describe("daemon environment proxy", () => {
         try {
             const { openRuntimeInstallationStore, pairMobiusRuntime } = await import("../../src/runtime.ts");
             const { connectRelay } = await import("../../src/relay-connection/connect.ts");
-            const { describeEnvironmentProxyRoute, environmentProxyDispatcher } = await import(
+            const { describeRelayRoute, environmentProxyDispatcher } = await import(
                 "../../src/network/environment-proxy.ts"
             );
 
@@ -171,6 +173,26 @@ describe("daemon environment proxy", () => {
                 },
                 AbortSignal.timeout(2_000),
             );
+            const directlyPaired = await pairMobiusRuntime(
+                installation,
+                {
+                    defaultWorkspace: process.cwd(),
+                    pairingCode: "ABCD-EFGH-JKLM-NPQR-STUV",
+                    pairingId: "direct-pairing",
+                    relayOrigin: `http://127.0.0.1:${pairingPort}`,
+                },
+                AbortSignal.timeout(2_000),
+            );
+            expect(directlyPaired.config.relayProxy).toBe("direct");
+            const relayPort = port(relayServer);
+            const directSocket = await connectRelay(
+                new URL(`ws://127.0.0.1:${relayPort}/daemon`),
+                "direct",
+                AbortSignal.timeout(2_000),
+            );
+            directSocket.close();
+            expect(tunnelTargets).toEqual([]);
+
             const paired = await pairMobiusRuntime(
                 installation,
                 {
@@ -178,6 +200,7 @@ describe("daemon environment proxy", () => {
                     pairingCode: "ABCD-EFGH-JKLM-NPQR-STUV",
                     pairingId: "proxy-pairing",
                     relayOrigin: `http://127.0.0.1:${pairingPort}`,
+                    useProxy: true,
                 },
                 AbortSignal.timeout(2_000),
             );
@@ -187,20 +210,23 @@ describe("daemon environment proxy", () => {
                 "app_proxy",
             );
 
-            const relayPort = port(relayServer);
-            expect(describeEnvironmentProxyRoute(new URL(`ws://127.0.0.1:${relayPort}/daemon`))).toEqual({
+            expect(describeRelayRoute(new URL(`ws://127.0.0.1:${relayPort}/daemon`), "environment")).toEqual({
                 proxyOrigin,
                 proxyRoute: "proxy",
             });
             const socket = await connectRelay(
                 new URL(`ws://127.0.0.1:${relayPort}/daemon`),
+                "environment",
                 AbortSignal.timeout(2_000),
             );
             socket.close();
 
             expect(tunnelTargets).toContain(`127.0.0.1:${pairingPort}`);
             expect(tunnelTargets).toContain(`127.0.0.1:${relayPort}`);
-            expect(pairingPaths).toEqual([`${MOBIUS_API_PREFIX}/v1/runtime-pairings/proxy-pairing/redeem`]);
+            expect(pairingPaths).toEqual([
+                `${MOBIUS_API_PREFIX}/v1/runtime-pairings/direct-pairing/redeem`,
+                `${MOBIUS_API_PREFIX}/v1/runtime-pairings/proxy-pairing/redeem`,
+            ]);
             await environmentProxyDispatcher.close();
         } finally {
             if (previousHttpProxy === undefined) {

@@ -4,7 +4,7 @@ import { readFile, unlink, writeFile } from "node:fs/promises";
 import { createConnection, createServer, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
+import type { RelayProxyPolicy } from "./network/environment-proxy.ts";
 import type { PairedDaemon } from "./pairing/pair-local-machine.ts";
 import { pairLocalMachine, resumeLocalMachine } from "./pairing/pair-local-machine.ts";
 import { MobiusRuntimeEngine } from "./runtime.ts";
@@ -21,6 +21,7 @@ export interface ManagedRuntimeSummary {
     readonly appId: string;
     readonly connectionId: string;
     readonly runtimeId: string;
+    readonly relayProxy: RelayProxyPolicy;
     readonly status: ManagedRuntimeStatus;
     readonly workspace: string;
 }
@@ -188,6 +189,7 @@ function isManagedRuntimeSummary(value: unknown): value is ManagedRuntimeSummary
         typeof value["appId"] === "string" &&
         typeof value["connectionId"] === "string" &&
         typeof value["runtimeId"] === "string" &&
+        (value["relayProxy"] === "direct" || value["relayProxy"] === "environment") &&
         typeof value["workspace"] === "string" &&
         ["starting", "online", "reconnecting", "failed", "stopped"].includes(String(value["status"]))
     );
@@ -198,6 +200,7 @@ function summary(connection: VerifiedRuntimeConnection, status: ManagedRuntimeSt
         appId: connection.appId,
         connectionId: connection.connectionId,
         runtimeId: connection.runtimeId,
+        relayProxy: connection.relayProxy,
         status,
         workspace: connection.defaultWorkspace,
     };

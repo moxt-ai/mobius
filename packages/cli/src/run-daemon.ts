@@ -178,6 +178,7 @@ export async function runDaemon(
         audit,
         config.channelId,
         config.relayUrl,
+        config.relayProxy,
         new DaemonDiagnosticLog(stateDirectory),
     );
     const nativeSessions = new NativeSessionService(

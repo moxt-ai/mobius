@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { type FileHandle, mkdir, open, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { isIdentifier } from "@moxt-ai/mobius-protocol";
+import type { RelayProxyPolicy } from "../network/environment-proxy.ts";
 
 const APPLICATION_ID_PATTERN = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+){1,31}$/;
 const CONNECTION_ID_PATTERN = /^mcn_[a-f0-9]{32}$/;
@@ -27,10 +28,12 @@ const VERIFIED_CONNECTION_KEYS: readonly string[] = [
     "kind",
     "pairingId",
     "relayOrigin",
+    "relayProxy",
     "runtimeCredential",
     "runtimeId",
     "version",
 ];
+const LEGACY_VERIFIED_CONNECTION_KEYS = VERIFIED_CONNECTION_KEYS.filter((key) => key !== "relayProxy");
 
 export interface RuntimeInstallationStoreOptions {
     readonly applicationId: string;
@@ -43,6 +46,7 @@ export interface RuntimeConnectionInput {
     readonly defaultWorkspace: string;
     readonly pairingId: string;
     readonly relayOrigin: URL;
+    readonly relayProxy?: RelayProxyPolicy;
     readonly runtimeCredential: string;
     readonly runtimeId: string;
 }
@@ -70,6 +74,7 @@ export class VerifiedRuntimeConnection {
     readonly installationId: string;
     readonly pairingId: string;
     readonly relayOrigin: URL;
+    readonly relayProxy: RelayProxyPolicy;
     readonly runtimeCredential: string;
 
     readonly runtimeId: string;
@@ -84,6 +89,7 @@ export class VerifiedRuntimeConnection {
         defaultWorkspace: string,
         pairingId: string,
         relayOrigin: URL,
+        relayProxy: RelayProxyPolicy,
         runtimeCredential: string,
         runtimeId: string,
     ) {
@@ -96,6 +102,7 @@ export class VerifiedRuntimeConnection {
         this.installationId = installationId;
         this.pairingId = pairingId;
         this.relayOrigin = relayOrigin;
+        this.relayProxy = relayProxy;
         this.runtimeCredential = runtimeCredential;
         this.runtimeId = runtimeId;
     }
@@ -238,7 +245,9 @@ function decodeChannelIndex(value: unknown): ChannelIndex {
 }
 
 function decodeVerifiedConnection(value: Readonly<Record<string, unknown>>): VerifiedRuntimeConnection {
-    if (!hasExactKeys(value, VERIFIED_CONNECTION_KEYS) || value["version"] !== 5 || value["kind"] !== "verified") {
+    const current = value["version"] === 6 && hasExactKeys(value, VERIFIED_CONNECTION_KEYS);
+    const legacy = value["version"] === 5 && hasExactKeys(value, LEGACY_VERIFIED_CONNECTION_KEYS);
+    if ((!current && !legacy) || value["kind"] !== "verified") {
         throw new RuntimeInstallationStoreError("invalid_connection", "The saved Runtime connection is invalid");
     }
     const applicationId = value["applicationId"];
@@ -250,6 +259,7 @@ function decodeVerifiedConnection(value: Readonly<Record<string, unknown>>): Ver
     const storedInstallationId = value["installationId"];
     const pairingId = value["pairingId"];
     const relayOrigin = value["relayOrigin"];
+    const relayProxy = legacy ? "direct" : value["relayProxy"];
     const runtimeCredential = value["runtimeCredential"];
     const runtimeId = value["runtimeId"];
     if (
@@ -262,6 +272,7 @@ function decodeVerifiedConnection(value: Readonly<Record<string, unknown>>): Ver
         typeof storedInstallationId !== "string" ||
         typeof pairingId !== "string" ||
         typeof relayOrigin !== "string" ||
+        (relayProxy !== "direct" && relayProxy !== "environment") ||
         typeof runtimeCredential !== "string" ||
         typeof runtimeId !== "string"
     ) {
@@ -277,6 +288,7 @@ function decodeVerifiedConnection(value: Readonly<Record<string, unknown>>): Ver
         defaultWorkspace,
         pairingId.length === 0 ? "" : validateIdentifier(pairingId, "invalid_connection"),
         parseRelayOrigin(relayOrigin),
+        relayProxy,
         validateRuntimeCredential(runtimeCredential),
         validateIdentifier(runtimeId, "invalid_connection"),
     );
@@ -456,6 +468,7 @@ export class RuntimeInstallationStore {
             input.defaultWorkspace,
             input.pairingId.length === 0 ? "" : validateIdentifier(input.pairingId, "invalid_pairing_id"),
             parseRelayOrigin(input.relayOrigin.toString()),
+            input.relayProxy ?? "direct",
             validateRuntimeCredential(input.runtimeCredential),
             validateIdentifier(input.runtimeId, "invalid_connection"),
         );
@@ -546,6 +559,7 @@ export class RuntimeInstallationStore {
             connection.defaultWorkspace,
             connection.pairingId,
             connection.relayOrigin,
+            connection.relayProxy,
             connection.runtimeCredential,
             connection.runtimeId,
         );
@@ -591,9 +605,10 @@ export class RuntimeInstallationStore {
                 kind: connection.kind,
                 pairingId: connection.pairingId,
                 relayOrigin: connection.relayOrigin.toString(),
+                relayProxy: connection.relayProxy,
                 runtimeCredential: connection.runtimeCredential,
                 runtimeId: connection.runtimeId,
-                version: 5,
+                version: 6,
             },
             signal,
         );

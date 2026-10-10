@@ -20,6 +20,7 @@ interface ParsedPairOptions {
     readonly code?: string;
     readonly pairing?: string;
     readonly url?: string;
+    readonly useProxy?: boolean;
     readonly workspace?: string;
 }
 
@@ -83,6 +84,7 @@ function pairArguments(options: PairOptions): readonly string[] {
         options.code,
         ...(options.pairing === undefined ? [] : ["--pairing", options.pairing]),
         ...(options.workspace === undefined ? [] : ["--workspace", options.workspace]),
+        ...(options.useProxy === true ? ["--use-proxy"] : []),
     ];
 }
 
@@ -106,6 +108,7 @@ async function writePairList(path: string, pairs: readonly ManagedRuntimeSummary
             app_id: pair.appId,
             connection_id: pair.connectionId,
             runtime_id: pair.runtimeId,
+            relay_proxy: pair.relayProxy,
             status: pair.status,
             workspace: pair.workspace,
         }));
@@ -165,6 +168,7 @@ function createProgram(): Command {
         .addOption(valueOption("--code <pairing-code>", "pairing code shown in the browser"))
         .addOption(valueOption("--pairing <runtime-pairing-id>", "Runtime pairing identifier"))
         .addOption(valueOption("--workspace <directory>", "default workspace directory"))
+        .option("--use-proxy", "use the system HTTP proxy for this Runtime relay")
         .action(async (options: ParsedPairOptions) => {
             const requested: PairOptions = {
                 ...options,

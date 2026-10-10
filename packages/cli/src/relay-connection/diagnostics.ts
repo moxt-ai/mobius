@@ -1,6 +1,6 @@
 import type { AuditStore } from "../audit/audit-store.ts";
 import type { DaemonDiagnosticLog } from "../daemon-diagnostic-log.ts";
-import { describeEnvironmentProxyRoute } from "../network/environment-proxy.ts";
+import { describeRelayRoute, type RelayProxyPolicy } from "../network/environment-proxy.ts";
 
 const MAX_DIAGNOSTIC_TEXT_LENGTH = 256;
 
@@ -56,12 +56,18 @@ export class RelayConnectionDiagnostics {
     readonly #relayOrigin: string;
     readonly #route: Readonly<Record<string, string>>;
 
-    constructor(audit: AuditStore, channelId: string, relayUrl: URL, localLog: DaemonDiagnosticLog) {
+    constructor(
+        audit: AuditStore,
+        channelId: string,
+        relayUrl: URL,
+        proxyPolicy: RelayProxyPolicy,
+        localLog: DaemonDiagnosticLog,
+    ) {
         this.#audit = audit;
         this.#channelId = channelId;
         this.#localLog = localLog;
         this.#relayOrigin = relayUrl.origin;
-        this.#route = describeEnvironmentProxyRoute(relayUrl);
+        this.#route = describeRelayRoute(relayUrl, proxyPolicy);
     }
 
     readonly snapshot = () => this.#localLog.snapshot();

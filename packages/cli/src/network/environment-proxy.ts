@@ -1,9 +1,21 @@
-import { EnvHttpProxyAgent } from "undici";
+import { Agent, type Dispatcher, EnvHttpProxyAgent } from "undici";
+
+export type RelayProxyPolicy = "direct" | "environment";
 
 const configuredHttpProxy = process.env["http_proxy"] ?? process.env["HTTP_PROXY"] ?? "";
 const configuredHttpsProxy = process.env["https_proxy"] ?? process.env["HTTPS_PROXY"] ?? configuredHttpProxy;
 
 export const environmentProxyDispatcher = new EnvHttpProxyAgent();
+export const directRelayDispatcher = new Agent();
+
+export function relayDispatcher(policy: RelayProxyPolicy): Dispatcher {
+    switch (policy) {
+        case "direct":
+            return directRelayDispatcher;
+        case "environment":
+            return environmentProxyDispatcher;
+    }
+}
 
 function bypassesProxy(target: URL): boolean {
     const noProxy = process.env["no_proxy"] ?? process.env["NO_PROXY"] ?? "";
@@ -38,7 +50,10 @@ function sanitizedProxyOrigin(proxyUrl: string): string {
     }
 }
 
-export function describeEnvironmentProxyRoute(target: URL): Readonly<Record<string, string>> {
+export function describeRelayRoute(target: URL, policy: RelayProxyPolicy): Readonly<Record<string, string>> {
+    if (policy === "direct") {
+        return { proxyRoute: "direct" };
+    }
     if (bypassesProxy(target)) {
         return { proxyRoute: "direct" };
     }

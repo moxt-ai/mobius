@@ -79,7 +79,7 @@ export async function runRelayConnection({
 }: RelayConnectionOptions): Promise<void> {
     const relayUrl = new URL(config.relayUrl);
     relayUrl.searchParams.set("liveness", "1");
-    const socket = await connectRelay(relayUrl, signal);
+    const socket = await connectRelay(relayUrl, config.relayProxy, signal);
     diagnostics.connectionOpened(connectionEpoch);
     const connectionController = new AbortController();
     const commands = createDaemonCommandHandler({

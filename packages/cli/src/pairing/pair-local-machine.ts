@@ -14,7 +14,7 @@ import {
     loadDefaultWorkspace,
     OpaqueDaemonReconnectTarget,
 } from "../config.ts";
-import { environmentProxyDispatcher } from "../network/environment-proxy.ts";
+import { type RelayProxyPolicy, relayDispatcher } from "../network/environment-proxy.ts";
 import {
     openRuntimeInstallationStore,
     type RuntimeInstallationStore,
@@ -33,6 +33,7 @@ interface PairCommandOptions {
     readonly code: string;
     readonly pairingId: string;
     readonly relayOrigin: URL;
+    readonly relayProxy: RelayProxyPolicy;
     readonly workspace: string;
 }
 
@@ -48,6 +49,7 @@ export interface MobiusRuntimePairingOptions {
     readonly pairingCode: string;
     readonly pairingId: string;
     readonly relayOrigin: string;
+    readonly useProxy?: boolean;
 }
 
 export interface PairedDaemon {
@@ -96,11 +98,18 @@ function readSingleOption(arguments_: readonly string[], option: string): string
 }
 
 function assertKnownArguments(arguments_: readonly string[]): void {
-    for (let index = 0; index < arguments_.length; index += 2) {
+    if (arguments_.filter((argument) => argument === "--use-proxy").length > 1) {
+        throw new PairingClientError("invalid_arguments", "--use-proxy may only be provided once");
+    }
+    for (let index = 0; index < arguments_.length; index += 1) {
         const option = arguments_[index];
+        if (option === "--use-proxy") {
+            continue;
+        }
         if (option !== "--url" && option !== "--code" && option !== "--pairing" && option !== "--workspace") {
             throw new PairingClientError("invalid_arguments", `Unknown pairing option: ${option ?? "missing option"}`);
         }
+        index += 1;
     }
 }
 
@@ -143,6 +152,7 @@ function parsePairCommand(arguments_: readonly string[], defaultWorkspace: strin
         code: parsePairingCode(readSingleOption(arguments_, "--code")),
         pairingId: arguments_.includes("--pairing") ? validatePairingId(readSingleOption(arguments_, "--pairing")) : "",
         relayOrigin: parseRelayOrigin(readSingleOption(arguments_, "--url")),
+        relayProxy: arguments_.includes("--use-proxy") ? "environment" : "direct",
         workspace: arguments_.includes("--workspace") ? readSingleOption(arguments_, "--workspace") : defaultWorkspace,
     };
 }
@@ -271,7 +281,7 @@ async function claimPairing(
                 pairingCode: options.code,
                 workspaceName: basename(defaultWorkspace) || "Local workspace",
             }),
-            dispatcher: environmentProxyDispatcher,
+            dispatcher: relayDispatcher(options.relayProxy),
             headers: { "content-type": "application/json" },
             method: "POST",
             signal: AbortSignal.any([signal, AbortSignal.timeout(PAIRING_TIMEOUT_MILLISECONDS)]),
@@ -314,6 +324,7 @@ function buildPairedDaemon(
             {
                 defaultWorkspace,
                 channelId: connection.channelId,
+                relayProxy: connection.relayProxy,
                 relayUrl,
             },
             inventory.readyAgents(),
@@ -348,6 +359,7 @@ async function pairRuntime(
             defaultWorkspace,
             pairingId: options.pairingId,
             relayOrigin: options.relayOrigin,
+            relayProxy: options.relayProxy,
             runtimeCredential: claim.runtimeCredential,
             runtimeId: claim.runtimeId,
         },
@@ -368,6 +380,7 @@ export async function pairMobiusRuntime(
             code: parsePairingCode(options.pairingCode),
             pairingId: validatePairingId(options.pairingId),
             relayOrigin: parseRelayOrigin(options.relayOrigin),
+            relayProxy: options.useProxy === true ? "environment" : "direct",
             workspace: options.defaultWorkspace,
         },
         signal,
@@ -433,6 +446,7 @@ export async function pairLocalMachine(
             code: requested.code,
             pairingId: requested.pairingId,
             relayOrigin: requested.relayOrigin,
+            relayProxy: requested.relayProxy,
             workspace: arguments_.includes("--workspace")
                 ? requested.workspace
                 : loadDefaultWorkspace(localContext.environment),

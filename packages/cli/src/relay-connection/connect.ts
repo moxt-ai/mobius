@@ -1,6 +1,6 @@
 import { WebSocket } from "undici";
 
-import { environmentProxyDispatcher } from "../network/environment-proxy.ts";
+import { type RelayProxyPolicy, relayDispatcher } from "../network/environment-proxy.ts";
 import { runtimeAuthorization } from "./runtime-authentication.ts";
 import { isRuntimeRelayRevocation, RuntimeRelayRevokedError } from "./runtime-revocation.ts";
 
@@ -27,7 +27,7 @@ class RelayConnectionError extends Error {
     }
 }
 
-export function connectRelay(url: URL, signal: AbortSignal): Promise<WebSocket> {
+export function connectRelay(url: URL, proxyPolicy: RelayProxyPolicy, signal: AbortSignal): Promise<WebSocket> {
     signal.throwIfAborted();
 
     return new Promise((resolve, reject) => {
@@ -35,7 +35,7 @@ export function connectRelay(url: URL, signal: AbortSignal): Promise<WebSocket> 
         const headers = runtimeAuthorization(endpoint);
         endpoint.searchParams.delete("token");
         const socket = new WebSocket(endpoint, {
-            dispatcher: environmentProxyDispatcher,
+            dispatcher: relayDispatcher(proxyPolicy),
             headers,
         });
         let finished = false;
