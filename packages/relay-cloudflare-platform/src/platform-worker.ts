@@ -48,6 +48,7 @@ import {
 } from "./gateway/project-durable-object-routing.ts";
 import { createPlatformControlApplication } from "./http/platform-routes.ts";
 import { createProjectApplication } from "./http/project-routes.ts";
+import { recordingReadRoutes } from "./http/recording-read-routes.ts";
 import { ClerkOrganizationGateway } from "./infra/clerk-organization-gateway.ts";
 import type { OrganizationMembershipGateway } from "./infra/organization-membership-gateway.ts";
 import { PlatformProjectStorageDirectory } from "./infra/platform-project-storage-directory.ts";
@@ -737,6 +738,7 @@ export function createPlatformApplication(
             return new Response(null, { status: 101, webSocket: client });
         });
     const projectRoutes = new Hono<DispatchEnvironment>()
+        .route("/recording", recordingReadRoutes)
         .route("/sessions", sessionRoutes)
         .all("/runtime-pairings/*", projectHandler)
         .all("/runtimes/*", projectHandler)
