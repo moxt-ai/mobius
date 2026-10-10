@@ -426,11 +426,7 @@ test("Given a real daemon persisted a Session, When Platform restores it by iden
 
             restored.socket.send(
                 encodeSessionLiveHistoryV2PageLoad({
-                    additionalDirectoryIds: [],
-                    agentId: "codex",
-                    bindingId: config.bindingId,
                     cursor: null,
-                    directoryId: "default",
                     eventLimit: 200,
                     kind: "session.live-history.v2.page.load",
                     requestId: "history_request",

@@ -167,6 +167,7 @@ export function createDaemonCommandHandler({
                     audit,
                     diagnostics,
                     sessions,
+                    nativeSessions,
                     eventLogV2,
                     signal,
                 );

@@ -175,11 +175,7 @@ test("Given saved Codex image generation, When the real daemon reopens it throug
         };
         peer.send(
             encodeSessionLiveHistoryV2PageLoad({
-                additionalDirectoryIds: [],
-                agentId: "codex",
-                bindingId: peer.bindingId,
                 cursor: null,
-                directoryId: "default",
                 eventLimit: 50,
                 kind: "session.live-history.v2.page.load",
                 requestId: "image-history",

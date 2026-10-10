@@ -5,12 +5,13 @@ import {
     SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND,
 } from "@moxt-ai/mobius-protocol";
 import type { WebSocket } from "undici";
-import type { AgentRuntimeManager } from "./acp/agent-runtime-manager.ts";
+import { AcpExecutionError, type AgentRuntimeManager } from "./acp/agent-runtime-manager.ts";
 import type { AuditStore } from "./audit/audit-store.ts";
 import { resolveSessionDirectories } from "./authorization/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
 import type { DaemonConfig } from "./config.ts";
 import { operationErrorCode, reportOperationFailure, send } from "./daemon-command-results.ts";
+import type { NativeSessionService } from "./native-sessions/service.ts";
 import type { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
 import type { DaemonSessionEventLogV2 } from "./session-event-log-v2.ts";
 export async function executeSessionLiveHistoryV2PageLoad(
@@ -21,20 +22,27 @@ export async function executeSessionLiveHistoryV2PageLoad(
     audit: AuditStore,
     diagnostics: RelayConnectionDiagnostics,
     sessions: AgentRuntimeManager,
+    nativeSessions: NativeSessionService,
     eventLogV2: DaemonSessionEventLogV2,
     signal: AbortSignal,
 ): Promise<void> {
+    let agentId: string | undefined;
     try {
+        const [entry] = await nativeSessions.querySessions([command.sessionId], signal);
+        if (entry === undefined) {
+            throw new AcpExecutionError("The Session was not found", {}, "session_not_found");
+        }
+        agentId = entry.agentId;
         const resolved = await resolveSessionDirectories(
             directories,
             config.bindingId,
-            command.directoryId,
-            command.additionalDirectoryIds,
+            entry.directoryId,
+            entry.additionalDirectories.map((directory) => directory.directoryId),
             signal,
         );
         const loadOptions = {
             additionalDirectories: resolved.additionalDirectories,
-            agent: config.catalog.find(command.agentId),
+            agent: config.catalog.find(entry.agentId),
             cwd: resolved.cwd,
             sessionId: command.sessionId,
             signal,
@@ -79,7 +87,7 @@ export async function executeSessionLiveHistoryV2PageLoad(
                 "session_history_v2_load_failed",
                 command.requestId,
                 {
-                    agentId: command.agentId,
+                    ...(agentId === undefined ? {} : { agentId }),
                     code: operationErrorCode(error),
                     sessionId: command.sessionId,
                 },
@@ -88,7 +96,7 @@ export async function executeSessionLiveHistoryV2PageLoad(
             audit.record({
                 commandId: command.requestId,
                 details: {
-                    agentId: command.agentId,
+                    ...(agentId === undefined ? {} : { agentId }),
                     code: operationErrorCode(error),
                 },
                 event: "session_history_v2_load_failed",

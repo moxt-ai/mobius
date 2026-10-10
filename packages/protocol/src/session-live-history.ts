@@ -10,23 +10,26 @@ export const SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND = "session.preview-history
 
 const directoryIdentifier = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/);
 
-const pageLoadFields = {
-    additionalDirectoryIds: z.array(directoryIdentifier).max(16).readonly(),
-    agentId: identifier,
-    bindingId: identifier,
+const pageRequestFields = {
     cursor: z.string().min(1).max(512).nullable(),
-    directoryId: directoryIdentifier,
     eventLimit: z.number().int().min(1).max(10_000),
     requestId: identifier,
     sessionId: identifier,
 };
 
 const sessionLiveHistoryV2PageLoadSchema = z
-    .object({ ...pageLoadFields, kind: z.literal(SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND) })
+    .object({ ...pageRequestFields, kind: z.literal(SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND) })
     .readonly();
 
 const sessionPreviewHistoryPageLoadSchema = z
-    .object({ ...pageLoadFields, kind: z.literal(SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND) })
+    .object({
+        ...pageRequestFields,
+        additionalDirectoryIds: z.array(directoryIdentifier).max(16).readonly(),
+        agentId: identifier,
+        bindingId: identifier,
+        directoryId: directoryIdentifier,
+        kind: z.literal(SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND),
+    })
     .readonly();
 
 const pageLoadedFields = {
