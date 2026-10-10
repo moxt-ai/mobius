@@ -1,4 +1,5 @@
 import { env } from "cloudflare:workers";
+import { decodeServiceToDaemonMessage, encodeDaemonToServiceMessage } from "@moxt-ai/mobius-protocol";
 import {
     MobiusBrowserCredentialRequest,
     MobiusClient,
@@ -249,5 +250,64 @@ describe("Standalone Relay", () => {
         );
         expect(await response).toMatchObject({ kind: "http.response", requestId: "list-runtimes", status: 200 });
         socket.close();
+        const runtimeId = Reflect.get(runtime, "runtimeId");
+        const runtimeCredential = Reflect.get(runtime, "runtimeCredential");
+        if (typeof runtimeId !== "string" || typeof runtimeCredential !== "string") {
+            throw new Error("Missing Runtime credential");
+        }
+        const daemonResponse = await worker.fetch(
+            new Request(`https://standalone.test/mobius/api/v1/runtimes/connect`, {
+                headers: { Upgrade: "websocket", authorization: `Bearer ${runtimeCredential}` },
+            }),
+            env,
+        );
+        expect(daemonResponse.status).toBe(101);
+        const daemon = daemonResponse.webSocket;
+        if (daemon === null) {
+            throw new Error("Missing daemon socket");
+        }
+        daemon.accept();
+        daemon.addEventListener("message", (event) => {
+            if (typeof event.data !== "string") {
+                return;
+            }
+            const command = decodeServiceToDaemonMessage(event.data);
+            if (command.kind === "runtime.diagnostics.read") {
+                daemon.send(
+                    encodeDaemonToServiceMessage({
+                        kind: "runtime.diagnostics.result",
+                        requestId: command.requestId,
+                        version: "test-daemon",
+                        truncated: false,
+                        entries: [
+                            {
+                                event: "session_prepare_failed",
+                                requestId: "failed-command",
+                                failureCode: "agent_exited",
+                            },
+                        ],
+                    }),
+                );
+            }
+        });
+        try {
+            const diagnosticUrl = `https://standalone.test/mobius/api/v1/projects/${project.projectId}/runtimes/${runtimeId}/diagnostics`;
+            const deniedDiagnostics = await worker.fetch(new Request(diagnosticUrl), env);
+            expect(deniedDiagnostics.status).toBe(401);
+            const diagnostics = await worker.fetch(
+                new Request(diagnosticUrl, { headers: { authorization: `Bearer ${env.MOBIUS_STANDALONE_TOKEN}` } }),
+                env,
+            );
+            expect(diagnostics.status).toBe(200);
+            expect(diagnostics.headers.get("Cache-Control")).toBe("no-store");
+            expect(await diagnostics.json()).toMatchObject({
+                kind: "runtime.diagnostics.result",
+                entries: [
+                    { event: "session_prepare_failed", requestId: "failed-command", failureCode: "agent_exited" },
+                ],
+            });
+        } finally {
+            daemon.close();
+        }
     });
 });

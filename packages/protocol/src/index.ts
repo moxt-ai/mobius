@@ -10,6 +10,7 @@ export * from "./organization-invites.ts";
 export * from "./project-location.ts";
 export * from "./prompt-usage.ts";
 export * from "./resource-model.ts";
+export * from "./runtime-diagnostics.ts";
 export * from "./session-access.ts";
 export * from "./session-event-log-v2.ts";
 export * from "./session-events.ts";

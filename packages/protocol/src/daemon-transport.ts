@@ -141,6 +141,12 @@ import {
     NATIVE_SESSION_RESULT_KIND,
 } from "./native-sessions.ts";
 import {
+    decodeRuntimeDiagnosticsRequest,
+    decodeRuntimeDiagnosticsResult,
+    encodeRuntimeDiagnosticsRequest,
+    encodeRuntimeDiagnosticsResult,
+} from "./runtime-diagnostics.ts";
+import {
     decodeSessionEventEnvelopeV2,
     encodeSessionEventEnvelopeV2,
     SESSION_EVENT_V2_KIND,
@@ -233,6 +239,11 @@ const serviceToDaemonSignatures = {
         RUNTIME_LIVENESS_READY_KIND,
         encodeRuntimeLivenessReadyEvent,
         decodeRuntimeLivenessReadyEvent,
+    ),
+    "runtime.diagnostics.read": defineMessageSignature(
+        "runtime.diagnostics.read",
+        encodeRuntimeDiagnosticsRequest,
+        decodeRuntimeDiagnosticsRequest,
     ),
     [RUNTIME_PING_KIND]: defineMessageSignature(RUNTIME_PING_KIND, encodeRuntimePingCommand, decodeRuntimePingCommand),
     [SESSION_CANCEL_KIND]: defineMessageSignature(
@@ -391,6 +402,11 @@ const daemonToServiceSignatures = {
         RUNTIME_HEARTBEAT_KIND,
         encodeRuntimeHeartbeatEvent,
         decodeRuntimeHeartbeatEvent,
+    ),
+    "runtime.diagnostics.result": defineMessageSignature(
+        "runtime.diagnostics.result",
+        encodeRuntimeDiagnosticsResult,
+        decodeRuntimeDiagnosticsResult,
     ),
     [RUNTIME_PONG_KIND]: defineMessageSignature(RUNTIME_PONG_KIND, encodeRuntimePongEvent, decodeRuntimePongEvent),
     [SESSION_EVENT_V2_KIND]: defineMessageSignature(

@@ -1,4 +1,5 @@
 import type { AgentSettingsDiscoverCommand, FileReadCommand, WorkspaceListCommand } from "@moxt-ai/mobius-protocol";
+import { decodeRuntimeDiagnosticsRequest } from "@moxt-ai/mobius-protocol";
 import { ProjectPermission } from "../../entity/authentication/project-authentication.ts";
 import type { ProjectScope } from "../../entity/do/session.ts";
 import { PairingDirectoryError, VerifiedChannelAccess } from "../../entity/pairing/pairing.ts";
@@ -136,6 +137,41 @@ export class PairingService {
                 "Close Runtime control host",
                 async () => await this.#pairings.closeControlHost(access, AbortSignal.timeout(15000)),
             );
+        }
+    };
+
+    readonly readRuntimeDiagnostics = async (
+        projectId: string,
+        runtimeId: string,
+        token: string,
+        signal: AbortSignal,
+    ) => {
+        const deadline = AbortSignal.any([signal, AbortSignal.timeout(8_000)]);
+        const access = await this.#pairings.openControlHost(
+            projectId,
+            runtimeId,
+            token,
+            ProjectPermission.RuntimeRead,
+            deadline,
+        );
+        try {
+            const response = await this.#channels.acceptHost(
+                access,
+                new Request("https://runtime.internal/host", { headers: { Upgrade: "websocket" } }),
+                deadline,
+            );
+            if (response.webSocket === null) {
+                throw new PairingDirectoryError("runtime_unavailable", "The Runtime connection is unavailable");
+            }
+            return await requestRuntimeControl(
+                response.webSocket,
+                decodeRuntimeDiagnosticsRequest(
+                    JSON.stringify({ kind: "runtime.diagnostics.read", requestId: crypto.randomUUID() }),
+                ),
+                deadline,
+            );
+        } finally {
+            await this.#pairings.closeControlHost(access, AbortSignal.timeout(15_000));
         }
     };
 
