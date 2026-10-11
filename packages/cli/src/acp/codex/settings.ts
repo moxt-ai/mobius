@@ -111,10 +111,7 @@ function effortValues(model: CodexModel | undefined): ConfigValue[] {
 }
 
 function supportedSelection(models: readonly CodexModel[], reportedModel: string, reportedEffort: string) {
-    const model =
-        models.find((candidate) => candidate.id === reportedModel) ??
-        models.find((candidate) => candidate.isDefault === true) ??
-        models[0];
+    const model = models.find((candidate) => candidate.id === reportedModel);
     if (model === undefined) {
         return { model: reportedModel, effort: reportedEffort };
     }
@@ -128,9 +125,14 @@ function supportedSelection(models: readonly CodexModel[], reportedModel: string
 }
 
 function modelSetting(models: readonly CodexModel[], currentValue: string): SessionConfigOption | null {
-    const values = modelValues(models);
-    // A model left in config.toml may be absent from the account's catalog. Offer a catalog model
-    // as the selection so a new Session can start with a model Codex actually supports.
+    const catalogValues = modelValues(models);
+    const values =
+        currentValue.length > 0 && !catalogValues.some((value) => value.value === currentValue)
+            ? [
+                  { description: "Current model configured in Codex", name: currentValue, value: currentValue },
+                  ...catalogValues,
+              ]
+            : catalogValues;
     const current = values.some((value) => value.value === currentValue)
         ? currentValue
         : (models.find((model) => model.isDefault === true)?.id ?? values[0]?.value ?? "");
@@ -266,7 +268,8 @@ export class CodexSettings {
     readonly turnParameters = (): Readonly<Record<string, unknown>> => {
         const selection = this.#selection;
         const mode = AGENT_MODES.find((candidate) => candidate.id === selection.mode) ?? DEFAULT_MODE;
-        const supportsFast = this.#model(selection.model)?.additionalSpeedTiers?.includes(FAST_TIER) === true;
+        const model = this.#model(selection.model);
+        const supportsFast = model?.additionalSpeedTiers?.includes(FAST_TIER) === true;
         return {
             approvalPolicy: mode.approvalPolicy,
             approvalsReviewer: mode.approvalsReviewer,
@@ -281,14 +284,15 @@ export class CodexSettings {
                           mode: selection.collaborationMode,
                           settings: {
                               developer_instructions: null,
-                              model: selection.model,
-                              reasoning_effort: selection.effort.length === 0 ? null : selection.effort,
+                              model: model?.id ?? null,
+                              reasoning_effort:
+                                  model === undefined || selection.effort.length === 0 ? null : selection.effort,
                           },
                       },
                   }
                 : {}),
-            ...(selection.effort.length === 0 ? {} : { effort: selection.effort }),
-            ...(selection.model.length === 0 ? {} : { model: selection.model }),
+            ...(model === undefined || selection.effort.length === 0 ? {} : { effort: selection.effort }),
+            ...(model === undefined ? {} : { model: model.id }),
             ...(selection.fastMode && supportsFast ? { serviceTier: SERVICE_TIER_FAST } : {}),
         };
     };

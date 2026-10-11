@@ -40,7 +40,6 @@ function bearerToken(request: Request): string | null {
 async function readRecording(
     context: Context<PlatformApplicationEnvironment>,
     projectId: string,
-    _runtimeId: string,
     recordingPath: string,
 ): Promise<Response> {
     const credential = bearerToken(context.req.raw);
@@ -62,7 +61,9 @@ async function readRecording(
         if (context.env.RECORDING === undefined) {
             return errorResponse("recording_provider_unavailable", "Recording is unavailable", 503);
         }
-        return await context.env.RECORDING.fetch(new Request(recordingPath, { signal: context.req.raw.signal }));
+        return await context.env.RECORDING.fetch(
+            new Request(`https://recording.internal${recordingPath}`, { signal: context.req.raw.signal }),
+        );
     } catch (cause) {
         if (cause instanceof PlatformControlPlaneError) {
             return errorResponse(cause.code, cause.message, cause.status);
@@ -72,7 +73,7 @@ async function readRecording(
 }
 
 export const recordingReadRoutes = new Hono<PlatformApplicationEnvironment>()
-    .get("/recording/sessions", async (context): Promise<Response> => {
+    .get("/sessions", async (context): Promise<Response> => {
         const query = v.safeParse(recordingQuery, { runtimeId: context.req.query("runtimeId") ?? "" });
         const projectId = decodedIdentifier(context.req.param("projectId"));
         if (!query.success || projectId === null || !isIdentifier(query.output.runtimeId)) {
@@ -81,9 +82,9 @@ export const recordingReadRoutes = new Hono<PlatformApplicationEnvironment>()
         const recordingPath = `/v1/projects/${encodeURIComponent(projectId)}/runtimes/${encodeURIComponent(
             query.output.runtimeId,
         )}/sessions`;
-        return await readRecording(context, projectId, query.output.runtimeId, recordingPath);
+        return await readRecording(context, projectId, recordingPath);
     })
-    .get("/recording/sessions/:sessionId/events", async (context): Promise<Response> => {
+    .get("/sessions/:sessionId/events", async (context): Promise<Response> => {
         const query = v.safeParse(recordingQuery, { runtimeId: context.req.query("runtimeId") ?? "" });
         const projectId = decodedIdentifier(context.req.param("projectId"));
         const sessionId = decodedIdentifier(context.req.param("sessionId"));
@@ -93,5 +94,5 @@ export const recordingReadRoutes = new Hono<PlatformApplicationEnvironment>()
         const recordingPath = `/v1/projects/${encodeURIComponent(projectId)}/runtimes/${encodeURIComponent(
             query.output.runtimeId,
         )}/sessions/${encodeURIComponent(sessionId)}/events`;
-        return await readRecording(context, projectId, query.output.runtimeId, recordingPath);
+        return await readRecording(context, projectId, recordingPath);
     });

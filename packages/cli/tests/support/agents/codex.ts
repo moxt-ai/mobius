@@ -19,7 +19,10 @@ export class CodexFixture implements AsyncDisposable {
 
     static async create(
         provider: FakeOpenAiProvider,
-        options: { readonly approvalPolicy?: "never" | "on-request" } = {},
+        options: {
+            readonly approvalPolicy?: "never" | "on-request";
+            readonly includeModelInCatalog?: boolean;
+        } = {},
     ): Promise<CodexFixture> {
         // Codex is an in-process Agent: there is no ACP adapter to resolve, only the real binary
         // that Mobius drives through `codex app-server`.
@@ -28,6 +31,47 @@ export class CodexFixture implements AsyncDisposable {
         const codexHome = join(directory, "codex");
         const missing = join(directory, "missing-agent");
         await mkdir(codexHome, { recursive: true });
+        const modelCatalog = join(codexHome, "models.json");
+        if (options.includeModelInCatalog === true) {
+            const model = {
+                slug: provider.model,
+                display_name: provider.model,
+                description: "Mobius real-Codex integration model",
+                default_reasoning_level: "low",
+                supported_reasoning_levels: [
+                    { effort: "low", description: "Low reasoning" },
+                    { effort: "high", description: "High reasoning" },
+                ],
+                shell_type: "shell_command",
+                visibility: "list",
+                supported_in_api: true,
+                priority: 0,
+                additional_speed_tiers: ["fast"],
+                service_tiers: [{ id: "priority", name: "Fast", description: "Faster test execution" }],
+                support_verbosity: false,
+                apply_patch_tool_type: "freeform",
+                model_messages: {
+                    instructions_template: "You are a coding agent used by Mobius integration tests.",
+                },
+                truncation_policy: { mode: "bytes", limit: 10_000 },
+                experimental_supported_tools: [],
+            };
+            await writeFile(
+                modelCatalog,
+                JSON.stringify({
+                    models: [
+                        model,
+                        {
+                            ...model,
+                            slug: `${provider.model}-alternate`,
+                            display_name: `${provider.model} alternate`,
+                            priority: 1,
+                        },
+                    ],
+                }),
+                { mode: 0o600 },
+            );
+        }
         await writeFile(
             join(codexHome, "config.toml"),
             [
@@ -35,7 +79,9 @@ export class CodexFixture implements AsyncDisposable {
                 'model_provider = "mobius"',
                 'model_reasoning_effort = "low"',
                 'model_reasoning_summary = "none"',
-                "model_supports_reasoning_summaries = false",
+                ...(options.includeModelInCatalog === true
+                    ? [`model_catalog_json = ${JSON.stringify(modelCatalog)}`]
+                    : []),
                 // The CI host cannot create the sandbox namespaces Codex needs, so the fixture runs
                 // its tool calls without one. This is Codex configuration, not Mobius policy.
                 'sandbox_mode = "danger-full-access"',
@@ -46,6 +92,8 @@ export class CodexFixture implements AsyncDisposable {
                 `base_url = ${JSON.stringify(`${provider.origin}/v1`)}`,
                 'env_key = "CODEX_API_KEY"',
                 'wire_api = "responses"',
+                "request_max_retries = 0",
+                "stream_max_retries = 0",
                 "supports_websockets = false",
                 "",
                 "[features]",
@@ -73,12 +121,14 @@ export class CodexFixture implements AsyncDisposable {
             MOBIUS_PI_PATH: missing,
             MOBIUS_PI_ACP_PATH: missing,
             MOBIUS_WORKBUDDY_PATH: missing,
+            NO_PROXY: "127.0.0.1,localhost",
             NO_BROWSER: "1",
             PATH: process.env["PATH"] ?? "",
             XDG_CACHE_HOME: join(directory, "cache"),
             XDG_CONFIG_HOME: join(directory, "config"),
             XDG_DATA_HOME: join(directory, "data"),
             XDG_STATE_HOME: join(directory, "state"),
+            no_proxy: "127.0.0.1,localhost",
         });
     }
 

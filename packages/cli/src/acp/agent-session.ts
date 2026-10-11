@@ -959,8 +959,12 @@ export class AgentSession implements AcpClientHandler {
                 payload: {
                     commandId: options.commandId,
                     content: lifecycleV2.content,
+                    ...(lifecycleV2.disposition === undefined ? {} : { disposition: lifecycleV2.disposition }),
                     kind: "prompt.requested",
                     ...(lifecycleV2.context === undefined ? {} : { context: lifecycleV2.context }),
+                    ...(lifecycleV2.targetCommandId === undefined
+                        ? {}
+                        : { targetCommandId: lifecycleV2.targetCommandId }),
                 },
                 type: "lifecycle-metadata",
             });
@@ -1074,8 +1078,12 @@ export class AgentSession implements AcpClientHandler {
                 payload: {
                     commandId: options.commandId,
                     content: lifecycleV2.content,
+                    ...(lifecycleV2.disposition === undefined ? {} : { disposition: lifecycleV2.disposition }),
                     kind: "prompt.requested",
                     ...(lifecycleV2.context === undefined ? {} : { context: lifecycleV2.context }),
+                    ...(lifecycleV2.targetCommandId === undefined
+                        ? {}
+                        : { targetCommandId: lifecycleV2.targetCommandId }),
                 },
                 type: "lifecycle-metadata",
             });

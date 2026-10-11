@@ -52,7 +52,10 @@ test("Given Codex defaults to Full access, When a user runs a tool with selected
     await using provider = await FakeOpenAiProvider.start("mobius-test-model", "SETTINGS_REPLY", {
         patch: "*** Begin Patch\n*** Add File: full-access-check.txt\n+full access\n*** End Patch",
     });
-    await using codex = await CodexFixture.create(provider, { approvalPolicy: "on-request" });
+    await using codex = await CodexFixture.create(provider, {
+        approvalPolicy: "on-request",
+        includeModelInCatalog: true,
+    });
     const directory = await mkdtemp(join(tmpdir(), "mobius-codex-settings-"));
     const launcher = join(directory, "codex.mjs");
     const recording = join(directory, "turn-policy.json");
@@ -154,4 +157,29 @@ test("Given Codex defaults to Full access, When a user runs a tool with selected
     } finally {
         await rm(directory, { force: true, recursive: true });
     }
+});
+
+test("Given Codex starts with a configured model outside its catalog, When Agent settings are discovered, Then the configured model remains the default", async () => {
+    await using provider = await FakeOpenAiProvider.start("mobius-custom-model", "CUSTOM_MODEL_REPLY");
+    await using codex = await CodexFixture.create(provider);
+
+    await withRealDaemon(new CodexAgentSpecification(), codex.environment, async (peer) => {
+        const requestId = randomUUID();
+        peer.send(encodeAgentSettingsDiscoverCommand({ kind: "agent.settings.discover", agentId: "codex", requestId }));
+
+        let discovered: ReturnType<typeof decodeAgentSettingsDiscoveredEvent>;
+        for (;;) {
+            const message = await peer.nextMessage();
+            if (decodeMessageKind(message) === "agent.settings.discovered") {
+                discovered = decodeAgentSettingsDiscoveredEvent(message);
+                break;
+            }
+        }
+
+        expect(discovered.requestId).toBe(requestId);
+        expect(discovered.settings.find((setting) => setting.id === "model")).toMatchObject({
+            defaultValue: "mobius-custom-model",
+            values: expect.arrayContaining([expect.objectContaining({ value: "mobius-custom-model" })]),
+        });
+    });
 });

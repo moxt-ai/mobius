@@ -269,6 +269,19 @@ test("Given real Codex advances between repeated prompts, When V2 recovery pagin
                     ),
                 ).toHaveLength(2);
                 expect(
+                    historyEvents.find(
+                        (event) =>
+                            event.type === "lifecycle-metadata" &&
+                            event.payload.kind === "prompt.requested" &&
+                            event.payload.commandId === queued,
+                    ),
+                ).toMatchObject({
+                    payload: {
+                        disposition: SessionPromptDisposition.Queue,
+                        targetCommandId: active,
+                    },
+                });
+                expect(
                     historyEvents.filter(
                         (event) =>
                             event.type === "acp" &&

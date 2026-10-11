@@ -83,7 +83,9 @@ export interface AcpPromptContentOptions {
         readonly context?: PromptExecutionContextV2;
         readonly attemptId: string;
         readonly content: readonly ContentBlockV2[];
+        readonly disposition?: string;
         readonly epoch: string;
+        readonly targetCommandId?: string;
     };
     readonly prompt: string;
     readonly resources: readonly PromptResource[];
