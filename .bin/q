@@ -1,0 +1,44 @@
+#!/bin/bash
+
+set -eu
+
+Q_WRAPPER_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Thin dispatcher for worktree management commands. Unlike the moxt
+# wrapper there is no quack dependency; every command maps directly to a
+# script under scripts/worktree/.
+#
+# Usage:
+#   .bin/q new-worktree [-- <name>]     create or reuse a worktree
+#   .bin/q delete-worktree [<dir>]      delete the current or named worktree
+#   .bin/q reset-worktree               re-init env, keep Git changes
+#   .bin/q wipe-worktree                reset to origin/main and re-init
+
+case "${1:-}" in
+    new-worktree)
+        shift
+        exec "${Q_WRAPPER_ROOT}/scripts/worktree/new.sh" "$@"
+        ;;
+    delete-worktree)
+        shift
+        exec "${Q_WRAPPER_ROOT}/scripts/worktree/delete.sh" "$@"
+        ;;
+    reset-worktree)
+        shift
+        exec "${Q_WRAPPER_ROOT}/scripts/worktree/reset.sh" "$@"
+        ;;
+    wipe-worktree)
+        shift
+        exec "${Q_WRAPPER_ROOT}/scripts/worktree/wipe.sh" "$@"
+        ;;
+    *)
+        echo "Usage: .bin/q <new-worktree|delete-worktree|reset-worktree|wipe-worktree> [args]" >&2
+        echo "" >&2
+        echo "Worktree subcommands:" >&2
+        echo "  new-worktree [-- <name>]   create or reuse a worktree under .worktrees/" >&2
+        echo "  delete-worktree [<dir>]    delete the current worktree, or a named one from the main repository" >&2
+        echo "  reset-worktree             re-initialize the environment, keeping Git changes" >&2
+        echo "  wipe-worktree              reset HEAD to origin/main and re-initialize" >&2
+        exit 2
+        ;;
+esac

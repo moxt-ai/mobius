@@ -1,0 +1,42 @@
+# workmux project configuration
+# For global settings, edit ~/.config/workmux/config.yaml
+# Only project-specific overrides are listed here; see workmux --help for
+# the full set of options.
+
+#-------------------------------------------------------------------------------
+# Git
+#-------------------------------------------------------------------------------
+
+# Default merge strategy for `workmux merge`.
+# Options: merge (default), rebase, squash
+# CLI flags (--rebase, --squash) always override this.
+merge_strategy: rebase
+
+#-------------------------------------------------------------------------------
+# Naming & Paths
+#-------------------------------------------------------------------------------
+
+# Directory where worktrees are created.
+worktree_dir: .worktrees
+
+#-------------------------------------------------------------------------------
+# Tmux
+#-------------------------------------------------------------------------------
+
+# Commands to run in the new worktree's panes when the window opens.
+panes:
+  - command: scripts/worktree/setup.sh
+
+#-------------------------------------------------------------------------------
+# Hooks
+#-------------------------------------------------------------------------------
+
+# Commands to run before worktree removal (during merge or remove).
+# Useful for backing up or cleaning up gitignored files before cleanup.
+# Default: Auto-detects Node.js projects and fast-deletes node_modules.
+# Environment variables available:
+#   - WM_HANDLE: The worktree handle (directory name)
+#   - WM_WORKTREE_PATH: Absolute path of the worktree being deleted
+#   - WM_PROJECT_ROOT: Absolute path of the main project directory
+pre_remove:
+  - scripts/worktree/teardown.sh
