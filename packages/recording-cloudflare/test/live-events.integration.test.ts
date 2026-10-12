@@ -111,11 +111,80 @@ it("Given prompt context and a later Agent title, When the Runtime loads its rec
                 ...context,
                 runtimeId: "runtime-live",
                 sessionId: event.sessionId,
+                status: "running",
                 title: "Agent title",
                 updatedAt: titled.recordedAt,
             },
         ],
     });
+});
+it("Given a prompt that later completes, When the Runtime loads its recorded directory, Then the Session status reflects the latest lifecycle outcome", async () => {
+    const context = { agentId: "codex", directoryId: "default", additionalDirectoryIds: [] };
+    const lifecycle = (kind: string, recordedAt: string, payload: Record<string, unknown>) => ({
+        ...event,
+        eventId: kind,
+        recordedAt,
+        type: "lifecycle-metadata",
+        payload: { commandId: "command", kind, ...payload },
+    });
+    const requested = lifecycle("prompt.requested", "2026-10-09T00:00:00.000Z", {
+        content: [{ type: "text", text: "Run" }],
+        context,
+    });
+    expect(
+        (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: [requested] }), env)).status,
+    ).toBe(201);
+    expect(
+        (
+            await worker.fetch(
+                write("runtime-live", {
+                    kind: "session.event.v2",
+                    events: [
+                        lifecycle("prompt.failed", "2026-10-09T00:30:00.000Z", {
+                            attemptId: "attempt-1",
+                            code: "agent_crashed",
+                            message: "The Agent exited unexpectedly",
+                        }),
+                    ],
+                }),
+                env,
+            )
+        ).status,
+    ).toBe(201);
+    const directory = await worker.fetch(
+        new Request(`https://recording.internal/v1/projects/${projectId}/runtimes/runtime-live/sessions`),
+        env,
+    );
+    expect(decodeSessionRecordingDirectory(await directory.text())).toMatchObject({
+        sessions: [{ sessionId: event.sessionId, status: "failed" }],
+    });
+    expect(
+        (
+            await worker.fetch(
+                write("runtime-live", {
+                    kind: "session.event.v2",
+                    events: [lifecycle("prompt.completed", "2026-10-09T01:00:00.000Z", { stopReason: "end_turn" })],
+                }),
+                env,
+            )
+        ).status,
+    ).toBe(201);
+    const recovered = await worker.fetch(
+        new Request(`https://recording.internal/v1/projects/${projectId}/runtimes/runtime-live/sessions`),
+        env,
+    );
+    expect(decodeSessionRecordingDirectory(await recovered.text())).toMatchObject({
+        sessions: [{ sessionId: event.sessionId, status: "idle" }],
+    });
+});
+it("Given a session that never requested a prompt, When the Runtime loads its recorded directory, Then the session is not listed", async () => {
+    expect((await worker.fetch(write(), env)).status).toBe(201);
+    const response = await worker.fetch(
+        new Request(`https://recording.internal/v1/projects/${projectId}/runtimes/runtime-live/sessions`),
+        env,
+    );
+    expect(response.status).toBe(200);
+    expect(decodeSessionRecordingDirectory(await response.text())).toEqual({ sessions: [] });
 });
 it("Given a duplicate live frame, When Recording receives both broadcasts, Then it keeps both without inventing delivery guarantees", async () => {
     expect((await worker.fetch(write(), env)).status).toBe(201);

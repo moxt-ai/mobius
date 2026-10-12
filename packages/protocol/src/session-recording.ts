@@ -18,6 +18,8 @@ const sessionRecordingHistorySchema = z
     })
     .readonly();
 
+export const sessionRecordingStatusSchema = z.enum(["running", "idle", "failed"]);
+
 const sessionRecordingSummarySchema = z
     .object({
         additionalDirectoryIds: z.array(identifierStringSchema).max(16).readonly(),
@@ -25,6 +27,7 @@ const sessionRecordingSummarySchema = z
         directoryId: z.string().min(1).max(2_048),
         runtimeId: identifierStringSchema,
         sessionId: identifierStringSchema,
+        status: sessionRecordingStatusSchema,
         title: z.string().max(1_000),
         updatedAt: z.iso.datetime({ offset: true }),
     })
@@ -39,6 +42,7 @@ const sessionRecordingDirectorySchema = z
 export type SessionRecordingWrite = z.infer<typeof sessionRecordingWriteSchema>;
 export type SessionRecordingHistory = z.infer<typeof sessionRecordingHistorySchema>;
 export type SessionRecordingSummary = z.infer<typeof sessionRecordingSummarySchema>;
+export type SessionRecordingStatus = z.infer<typeof sessionRecordingStatusSchema>;
 export type SessionRecordingDirectory = z.infer<typeof sessionRecordingDirectorySchema>;
 
 function decode<T>(encoded: string, schema: z.ZodType<T>): T {
