@@ -1,15 +1,17 @@
 import { writeFile } from "node:fs/promises";
+import { executableLaunch } from "../../../src/process/executable.ts";
 import type { CodexFixture } from "./codex.ts";
 
 /** Forward the real process protocol; inject a single transport fault selected by the test. */
 export async function writeCodexFaultLauncher(codex: CodexFixture, path: string, faultPath: string): Promise<void> {
+    const launch = executableLaunch(codex.executable, []);
     await writeFile(
         path,
         `#!${process.execPath}
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { createInterface } from "node:readline";
-const child = spawn(${JSON.stringify(codex.executable)}, process.argv.slice(2), {
+const child = spawn(${JSON.stringify(launch.command)}, [...${JSON.stringify(launch.arguments)}, ...process.argv.slice(2)], {
     stdio: ["pipe", "pipe", "inherit"], env: { ...process.env, ...${JSON.stringify(codex.environment)} },
 });
 let pending;

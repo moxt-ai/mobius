@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { executableLaunch } from "../../../src/process/executable.ts";
 import { FakeOpenAiProvider } from "../llm/openai.ts";
 import { resolveTestExecutable } from "./executable.ts";
 
@@ -91,11 +92,12 @@ export class CodexFixture implements AsyncDisposable {
     }
 
     async writeLauncher(path: string): Promise<void> {
+        const launch = executableLaunch(this.executable, []);
         await writeFile(
             path,
             `#!${process.execPath}
 import { spawn } from "node:child_process";
-const child = spawn(${JSON.stringify(this.executable)}, process.argv.slice(2), { stdio: "inherit", env: { ...process.env, ...${JSON.stringify(this.environment)} } });
+const child = spawn(${JSON.stringify(launch.command)}, [...${JSON.stringify(launch.arguments)}, ...process.argv.slice(2)], { stdio: "inherit", env: { ...process.env, ...${JSON.stringify(this.environment)} } });
 child.once("error", () => process.exit(1));
 child.once("exit", (code) => process.exit(code ?? 1));
 `,

@@ -9,7 +9,9 @@
     "types": "./src/index.ts",
     "exports": {
         ".": "./src/index.ts",
-        "./runtime": "./src/runtime.ts"
+        "./runtime": "./src/runtime.ts",
+        "./process": "./src/process/executable.ts",
+        "./filesystem": "./src/filesystem/private-path.ts"
     },
     "files": [
         "dist"
@@ -28,6 +30,14 @@
             "./runtime": {
                 "types": "./dist/runtime.d.ts",
                 "import": "./dist/runtime.js"
+            },
+            "./process": {
+                "types": "./dist/process/executable.d.ts",
+                "import": "./dist/process/executable.js"
+            },
+            "./filesystem": {
+                "types": "./dist/filesystem/private-path.d.ts",
+                "import": "./dist/filesystem/private-path.js"
             }
         }
     },
@@ -37,7 +47,7 @@
         "directory": "packages/cli"
     },
     "scripts": {
-        "build": "tsc --project tsconfig.build.json && esbuild src/cli.ts src/index.ts src/runtime.ts --bundle --platform=node --format=esm --sourcemap --outdir=dist --external:@agentclientprotocol/* --external:undici",
+        "build": "tsc --project tsconfig.build.json && esbuild src/cli.ts src/index.ts src/runtime.ts src/process/executable.ts src/filesystem/private-path.ts --bundle --platform=node --format=esm --sourcemap --outdir=dist --external:@agentclientprotocol/* --external:undici",
         "dev": "node --watch src/cli.ts",
         "prepack": "pnpm build",
         "start": "node dist/cli.js",

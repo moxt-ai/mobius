@@ -18,7 +18,7 @@ import type { SessionCapabilities } from "@moxt-ai/mobius-protocol";
 import { type AcpClientHandler, createAcpClient } from "../acp/create-client.ts";
 import { acpEndpointTerminationError } from "../acp/in-process/acp-endpoint.ts";
 import { normalizeAcpCapabilities } from "../acp/session-capabilities.ts";
-import { captureProcessTree, stopProcessTree } from "../process/executable.ts";
+import { captureProcessTree, executableLaunch, platformSpawnOptions, stopProcessTree } from "../process/executable.ts";
 import { AgentProbeError } from "./agent-probe-error.ts";
 import type { LocalAgentSpecification } from "./agent-specification.ts";
 import type { AcpAgentDefinition, InProcessAcpAgentDefinition } from "./local-agent.ts";
@@ -211,9 +211,10 @@ export async function probeAcpReadiness(
             signal.removeEventListener("abort", abort);
         }
     }
-    const child = spawn(agent.adapterPath, [...agent.arguments], {
+    const launch = executableLaunch(agent.adapterPath, agent.arguments);
+    const child = spawn(launch.command, [...launch.arguments], {
         cwd: defaultWorkspace,
-        detached: process.platform !== "win32",
+        ...platformSpawnOptions,
         env: { ...environment, ...agent.environment },
         shell: false,
         stdio: ["pipe", "pipe", "pipe"],

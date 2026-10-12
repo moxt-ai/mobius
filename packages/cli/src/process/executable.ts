@@ -1,12 +1,14 @@
 import { spawn } from "node:child_process";
-import { constants } from "node:fs";
-import { access, realpath, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
-import type { ProcessTableEntry, ProcessTreeIdentity } from "../platform/contracts.ts";
+import type { ProcessLaunch, ProcessTableEntry, ProcessTreeIdentity } from "../platform/contracts.ts";
 import { platformSupportFor } from "../platform/index.ts";
 
+import { ProcessExecutionError } from "./process-error.ts";
+
 export type { ProcessTreeIdentity } from "../platform/contracts.ts";
+export { ProcessExecutionError } from "./process-error.ts";
 
 const hostPlatform = platformSupportFor(process.platform);
 
@@ -60,16 +62,6 @@ export class ResolvedExecutable {
     }
 }
 
-export class ProcessExecutionError extends Error {
-    readonly code: string;
-
-    constructor(code: string, message: string, options: ErrorOptions = {}) {
-        super(message, options);
-        this.code = code;
-        this.name = "ProcessExecutionError";
-    }
-}
-
 export class ProcessResult {
     readonly stderr: string;
     readonly stdout: string;
@@ -90,39 +82,16 @@ export interface RunProcessOptions {
     readonly timeoutMilliseconds: number;
 }
 
-function executableExtensions(
-    executableName: string,
-    environment: Readonly<NodeJS.ProcessEnv>,
-    platform: NodeJS.Platform,
-): readonly string[] {
-    if (platform !== "win32") {
-        return [""];
-    }
-    if (/\.[a-zA-Z0-9]+$/.test(executableName)) {
-        return [""];
-    }
-    const configured = environment["PATHEXT"] ?? ".COM;.EXE;.BAT;.CMD";
-    const extensions = configured
-        .split(";")
-        .map((extension) => extension.trim())
-        .filter((extension) => extension.length > 0)
-        .map((extension) => (extension.startsWith(".") ? extension : `.${extension}`));
-    return extensions.length > 0 ? extensions : [".EXE"];
-}
-
 export async function resolveExecutablePath(
     requestedPath: string,
     platform: NodeJS.Platform = process.platform,
 ): Promise<ResolvedExecutable | null> {
     const absoluteRequestedPath = resolve(requestedPath);
     try {
-        const resolvedPath = await realpath(absoluteRequestedPath);
+        const resolvedPath = await platformSupportFor(platform).resolveExecutableTarget(absoluteRequestedPath);
         const metadata = await stat(resolvedPath);
         if (!metadata.isFile()) {
             return null;
-        }
-        if (platform !== "win32") {
-            await access(resolvedPath, constants.X_OK);
         }
         return new ResolvedExecutable(
             new ExecutableIdentity(
@@ -144,9 +113,10 @@ export async function findExecutableOnPath(
     environment: Readonly<NodeJS.ProcessEnv>,
     platform: NodeJS.Platform = process.platform,
 ): Promise<ResolvedExecutable | null> {
-    const encodedPath = environment["PATH"] ?? "";
-    const separator = platform === "win32" ? ";" : ":";
-    const extensions = executableExtensions(executableName, environment, platform);
+    const support = platformSupportFor(platform);
+    const encodedPath = support.environmentValue(environment, "PATH") ?? "";
+    const separator = support.pathDelimiter;
+    const extensions = support.executableExtensions(executableName, environment);
     for (const entry of encodedPath.split(separator)) {
         if (entry.length === 0) {
             continue;
@@ -225,7 +195,7 @@ function mergeProcessTrees(
 }
 
 export async function captureProcessTree(child: ReturnType<typeof spawn>): Promise<readonly ProcessTreeIdentity[]> {
-    if (process.platform === "win32" || child.pid === undefined) {
+    if (child.pid === undefined) {
         return [];
     }
     const entries = hostPlatform.readProcessTableSynchronously();
@@ -233,44 +203,6 @@ export async function captureProcessTree(child: ReturnType<typeof spawn>): Promi
         return selectProcessTree(entries, child.pid);
     }
     return selectProcessTree(await readProcessTable(), child.pid);
-}
-
-function signalCapturedProcessGroups(
-    processes: readonly ProcessTreeIdentity[],
-    rootProcessId: number,
-    signal: number,
-): void {
-    const processIds = new Set(processes.map((identity) => identity.processId));
-    const signalledGroups = new Set<number>();
-    for (const identity of processes) {
-        const isRootProcessGroup = identity.processGroupId === rootProcessId;
-        if (
-            (!isRootProcessGroup && !processIds.has(identity.processGroupId)) ||
-            signalledGroups.has(identity.processGroupId)
-        ) {
-            continue;
-        }
-        try {
-            process.kill(-identity.processGroupId, signal);
-            signalledGroups.add(identity.processGroupId);
-        } catch {
-            // A concurrently exited group no longer needs cleanup.
-        }
-    }
-    for (const identity of processes) {
-        if (
-            identity.processId === rootProcessId ||
-            identity.processGroupId === rootProcessId ||
-            signalledGroups.has(identity.processGroupId)
-        ) {
-            continue;
-        }
-        try {
-            process.kill(identity.processId, signal);
-        } catch {
-            // A concurrently exited process no longer needs cleanup.
-        }
-    }
 }
 
 async function waitForCapturedProcessesExit(
@@ -289,36 +221,6 @@ async function waitForCapturedProcessesExit(
     return processIds.every((processId) => !hostPlatform.processExists(processId));
 }
 
-function terminateProcess(child: ReturnType<typeof spawn>): void {
-    if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) {
-        return;
-    }
-    if (process.platform !== "win32") {
-        try {
-            process.kill(-child.pid, "SIGTERM");
-            return;
-        } catch {
-            // Fall through when the process did not create a process group.
-        }
-    }
-    child.kill("SIGTERM");
-}
-
-function forceTerminateProcess(child: ReturnType<typeof spawn>): void {
-    if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) {
-        return;
-    }
-    if (process.platform !== "win32") {
-        try {
-            process.kill(-child.pid, "SIGKILL");
-            return;
-        } catch {
-            // Fall through when the process did not create a process group.
-        }
-    }
-    child.kill("SIGKILL");
-}
-
 export async function stopProcessTree(
     child: ReturnType<typeof spawn>,
     capturedProcesses: readonly ProcessTreeIdentity[] = [],
@@ -332,8 +234,8 @@ export async function stopProcessTree(
     if (childExited && processes.length === 0) {
         return;
     }
-    signalCapturedProcessGroups(processes, childProcessId, GRACEFUL_STOP_SIGNAL);
-    terminateProcess(child);
+    hostPlatform.signalCapturedProcesses(processes, childProcessId, GRACEFUL_STOP_SIGNAL);
+    hostPlatform.terminateProcess(child, "SIGTERM");
     const [exitedAfterTermination, descendantsExitedAfterTermination] = await Promise.all([
         waitForProcessExit(child, PROCESS_GRACEFUL_STOP_TIMEOUT_MILLISECONDS),
         waitForCapturedProcessesExit(processes, childProcessId),
@@ -341,8 +243,8 @@ export async function stopProcessTree(
     if (exitedAfterTermination && descendantsExitedAfterTermination) {
         return;
     }
-    signalCapturedProcessGroups(processes, childProcessId, FORCED_STOP_SIGNAL);
-    forceTerminateProcess(child);
+    hostPlatform.signalCapturedProcesses(processes, childProcessId, FORCED_STOP_SIGNAL);
+    hostPlatform.terminateProcess(child, "SIGKILL");
     const [exitedAfterForce, descendantsExitedAfterForce] = await Promise.all([
         waitForProcessExit(child, PROCESS_FORCED_STOP_TIMEOUT_MILLISECONDS),
         waitForCapturedProcessesExit(processes, childProcessId),
@@ -379,9 +281,10 @@ function waitForProcessExit(child: ReturnType<typeof spawn>, timeoutMilliseconds
 export async function runBoundedProcess(options: RunProcessOptions): Promise<ProcessResult> {
     options.signal.throwIfAborted();
     const outputLimitBytes = options.outputLimitBytes ?? DEFAULT_OUTPUT_LIMIT_BYTES;
-    const child = spawn(options.command, [...options.arguments], {
+    const launch = executableLaunch(options.command, options.arguments);
+    const child = spawn(launch.command, [...launch.arguments], {
         cwd: options.cwd,
-        detached: process.platform !== "win32",
+        ...hostPlatform.spawnOptions,
         env: { ...options.environment },
         shell: false,
         stdio: ["ignore", "pipe", "pipe"],
@@ -504,3 +407,9 @@ export async function runBoundedProcess(options: RunProcessOptions): Promise<Pro
         }
     }
 }
+
+export function executableLaunch(command: string, args: readonly string[]): ProcessLaunch {
+    return hostPlatform.executableLaunch(command, args);
+}
+
+export const platformSpawnOptions = hostPlatform.spawnOptions;
