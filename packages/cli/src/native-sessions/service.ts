@@ -100,9 +100,13 @@ export class NativeSessionService {
             signal,
         );
         signal.throwIfAborted();
+        const cataloged = this.#config.catalog.find(command.agentId);
         const options: AcpPrepareOptions = {
             additionalDirectories,
-            agent: this.#config.catalog.find(command.agentId),
+            agent:
+                this.#config.resolveAgent === undefined
+                    ? cataloged
+                    : await this.#config.resolveAgent(cataloged, signal),
             cwd,
             sessionId: command.sessionId,
             signal,

@@ -2,7 +2,12 @@ import { mkdir, realpath, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { isIdentifier } from "@moxt-ai/mobius-protocol";
 
-import { discoverLocalAgentInventory } from "./agent-catalog/discover-local-agents.ts";
+import {
+    discoverLocalAgentInventory,
+    supportedLocalAgentSpecifications,
+} from "./agent-catalog/discover-local-agents.ts";
+import { publishAgentCatalog } from "./agent-catalog/publish-agent-catalog.ts";
+import { createCatalogAgentResolver } from "./agent-catalog/resolve-catalog-agent.ts";
 import { AuditStore } from "./audit/audit-store.ts";
 import { createDaemonConfig, type DaemonConfig, DaemonLocalContext, loadDefaultWorkspace } from "./config.ts";
 import { runDaemon } from "./run-daemon.ts";
@@ -113,26 +118,36 @@ export async function createMobiusRuntimeEngine(
     const localContext = new DaemonLocalContext(readStateDirectory(environment), environment);
     const relayUrl = relayUrlFromConnection(connection);
     const defaultWorkspace = await resolveWorkspace(connection.defaultWorkspace);
-    const inventory = await discoverLocalAgentInventory({
-        defaultWorkspace,
-        environment: localContext.environment,
-        signal,
-    });
+    const specifications = supportedLocalAgentSpecifications();
+    const discoveryEnvironment = localContext.environment;
+    const discover = async (refreshSignal: AbortSignal) =>
+        await discoverLocalAgentInventory({
+            defaultWorkspace,
+            environment: discoveryEnvironment,
+            signal: refreshSignal,
+            specifications,
+        });
+    const inventory = await discover(signal);
     if (inventory.available.length + inventory.installable.length === 0) {
         throw new MobiusRuntimeConfigurationError("No supported Agent is available for the local Runtime");
     }
-    return new MobiusRuntimeEngine(
-        createDaemonConfig(
-            {
-                channelId: connection.channelId,
-                defaultWorkspace,
-                relayUrl,
-            },
-            inventory.readyAgents(),
-            inventory.installable,
-            localContext,
+    const config: DaemonConfig = createDaemonConfig(
+        {
+            channelId: connection.channelId,
+            defaultWorkspace,
+            relayUrl,
+        },
+        inventory.readyAgents(),
+        inventory.installable,
+        localContext,
+        null,
+        createCatalogAgentResolver(
+            (refreshSignal) => discover(refreshSignal),
+            () => config,
+            publishAgentCatalog,
         ),
     );
+    return new MobiusRuntimeEngine(config);
 }
 
 export class MobiusRuntimeEngine {

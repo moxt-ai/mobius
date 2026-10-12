@@ -11,6 +11,7 @@ import { resolveSessionDirectories } from "./authorization/resolve-session-direc
 import type { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
 import type { DaemonConfig } from "./config.ts";
 import { operationErrorCode, reportOperationFailure, send } from "./daemon-command-results.ts";
+import { resolveCatalogAgent } from "./daemon-session-commands.ts";
 import type { NativeSessionService } from "./native-sessions/service.ts";
 import type { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
 import type { DaemonSessionEventLogV2 } from "./session-event-log-v2.ts";
@@ -42,7 +43,7 @@ export async function executeSessionLiveHistoryV2PageLoad(
         );
         const loadOptions = {
             additionalDirectories: resolved.additionalDirectories,
-            agent: config.catalog.find(entry.agentId),
+            agent: await resolveCatalogAgent(config, entry.agentId, signal),
             cwd: resolved.cwd,
             sessionId: command.sessionId,
             signal,
@@ -129,7 +130,7 @@ export async function executeSessionPreviewHistoryPageLoad(
         const replay = await sessions.previewNativeSessionEventsV2(
             {
                 additionalDirectories: resolved.additionalDirectories,
-                agent: config.catalog.find(command.agentId),
+                agent: await resolveCatalogAgent(config, command.agentId, signal),
                 cwd: resolved.cwd,
                 sessionId: command.sessionId,
                 signal,

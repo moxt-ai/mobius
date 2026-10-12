@@ -20,6 +20,7 @@ import type { WorkspaceDirectoryService } from "./authorization/workspace-direct
 import type { DaemonConfig } from "./config.ts";
 import type { DaemonTurnCommand } from "./daemon-command-results.ts";
 import { operationErrorCode, operationErrorMessage } from "./daemon-command-results.ts";
+import { resolveCatalogAgent } from "./daemon-session-commands.ts";
 import { resolvePromptArtifacts } from "./prompt-artifact-resolver.ts";
 import type { DaemonOperationState } from "./relay-connection/daemon-operation-state.ts";
 import type { DaemonSessionEventLogV2 } from "./session-event-log-v2.ts";
@@ -95,7 +96,7 @@ export async function executePrompt({
             command.additionalDirectoryIds,
             signal,
         );
-        const agent = config.catalog.find(command.agentId);
+        const agent = await resolveCatalogAgent(config, command.agentId, signal);
         const availability = await waitForSessionAvailability(signal);
         if (availability.kind === "busy") {
             throw new AcpExecutionError("Another prompt is already running in this conversation", {}, "session_busy");

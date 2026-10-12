@@ -6,6 +6,8 @@ import { isIdentifier, mobiusApiUrl } from "@moxt-ai/mobius-protocol";
 import { fetch, type Response } from "undici";
 import { discoverLocalAgentInventory, type LocalAgentInventory } from "../agent-catalog/discover-local-agents.ts";
 import type { InstallableAgentDefinition } from "../agent-catalog/local-agent.ts";
+import { publishAgentCatalog } from "../agent-catalog/publish-agent-catalog.ts";
+import { createCatalogAgentResolver } from "../agent-catalog/resolve-catalog-agent.ts";
 import {
     type AcpAgentDefinition,
     createDaemonConfig,
@@ -307,20 +309,31 @@ function buildPairedDaemon(
     relayUrl.protocol = relayUrl.protocol === "https:" ? "wss:" : "ws:";
     relayUrl.searchParams.set("token", connection.runtimeCredential);
 
+    const config: DaemonConfig = createDaemonConfig(
+        {
+            defaultWorkspace,
+            channelId: connection.channelId,
+            relayUrl,
+        },
+        inventory.readyAgents(),
+        inventory.installable,
+        localContext,
+        new OpaqueDaemonReconnectTarget(connection.connectionId),
+        createCatalogAgentResolver(
+            (refreshSignal) =>
+                discoverLocalAgentInventory({
+                    defaultWorkspace,
+                    environment: localContext.environment,
+                    signal: refreshSignal,
+                }),
+            () => config,
+            publishAgentCatalog,
+        ),
+    );
     return {
         channelUrl: new URL(`/channels/${encodeURIComponent(connection.channelId)}`, connection.relayOrigin).toString(),
         connectionId: connection.connectionId,
-        config: createDaemonConfig(
-            {
-                defaultWorkspace,
-                channelId: connection.channelId,
-                relayUrl,
-            },
-            inventory.readyAgents(),
-            inventory.installable,
-            localContext,
-            new OpaqueDaemonReconnectTarget(connection.connectionId),
-        ),
+        config,
         connectionPath: installation.connectionPath(connection.connectionId),
     };
 }

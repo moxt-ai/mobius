@@ -11,11 +11,20 @@ import type { AcpSessionRecovery, AgentRuntimeManager } from "./acp/agent-runtim
 import type { AuditStore } from "./audit/audit-store.ts";
 import { resolveSessionDirectories } from "./authorization/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
-import type { DaemonConfig } from "./config.ts";
+import type { AcpAgentDefinition, DaemonConfig } from "./config.ts";
 import { operationErrorCode, reportOperationFailure, send } from "./daemon-command-results.ts";
 import { AccumulatingOperationMetrics } from "./infra/operation-metrics.ts";
 import type { NativeSessionService } from "./native-sessions/service.ts";
 import type { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
+
+export async function resolveCatalogAgent(
+    config: DaemonConfig,
+    agentId: string,
+    signal: AbortSignal,
+): Promise<AcpAgentDefinition> {
+    const agent = config.catalog.find(agentId);
+    return config.resolveAgent === undefined ? agent : await config.resolveAgent(agent, signal);
+}
 
 async function prepareSession(
     command: SessionPrepareCommand,
@@ -39,7 +48,7 @@ async function prepareSession(
                     signal,
                 ),
         );
-        const agent = config.catalog.find(command.agentId);
+        const agent = await resolveCatalogAgent(config, command.agentId, signal);
         const preparation = {
             additionalDirectories: resolved.additionalDirectories,
             agent,
@@ -265,7 +274,7 @@ export async function executeSessionConfigure(
         );
         const configOptions = await sessions.configureSession({
             additionalDirectories: resolved.additionalDirectories,
-            agent: config.catalog.find(command.agentId),
+            agent: await resolveCatalogAgent(config, command.agentId, signal),
             booleanValue: command.booleanValue,
             configId: command.configId,
             cwd: resolved.cwd,

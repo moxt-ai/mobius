@@ -63,6 +63,12 @@ export interface DaemonConfig {
     readonly localContext: DaemonLocalContext;
     readonly reconnectTarget: DaemonReconnectTarget | null;
     readonly relayUrl: URL;
+    /**
+     * Serves the definition a command should run against, re-discoving the Agent when its
+     * executable changed since the catalog snapshot was taken. Undefined keeps the boot-time
+     * snapshot: a changed executable fails the command instead of being re-discovered.
+     */
+    readonly resolveAgent?: (agent: AcpAgentDefinition, signal: AbortSignal) => Promise<AcpAgentDefinition>;
 }
 
 export interface DaemonConnectionConfig {
@@ -77,6 +83,7 @@ export function createDaemonConfig(
     installableAgents: readonly InstallableAgentDefinition[] = [],
     localContext: DaemonLocalContext = new DaemonLocalContext(readStateDirectory(), process.env),
     reconnectTarget: DaemonReconnectTarget | null = null,
+    resolveAgent?: DaemonConfig["resolveAgent"],
 ): DaemonConfig {
     const daemonAgents = agents.map((agent) => withDaemonEnvironment(agent, localContext.environment));
     return {
@@ -89,6 +96,7 @@ export function createDaemonConfig(
         localContext,
         reconnectTarget,
         relayUrl: connection.relayUrl,
+        ...(resolveAgent === undefined ? {} : { resolveAgent }),
     };
 }
 
