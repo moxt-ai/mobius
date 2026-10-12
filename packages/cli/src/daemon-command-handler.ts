@@ -56,7 +56,7 @@ import type { NativeSessionService } from "./native-sessions/service.ts";
 import type { DaemonOperationState } from "./relay-connection/daemon-operation-state.ts";
 import type { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
 import type { DaemonTimer } from "./relay-connection/timer.ts";
-import type { DaemonSessionEventLogV2 } from "./session-event-log-v2.ts";
+import type { DaemonSessionEventProjectionV2 } from "./session-event-projection-v2.ts";
 export interface DaemonCommandOptions {
     readonly config: DaemonConfig;
     readonly directories: WorkspaceDirectoryService;
@@ -65,7 +65,7 @@ export interface DaemonCommandOptions {
     readonly installations: AgentInstallationManager;
     readonly nativeSessions: NativeSessionService;
     readonly operations: DaemonOperationState;
-    readonly eventLogV2: DaemonSessionEventLogV2;
+    readonly eventProjectionV2: DaemonSessionEventProjectionV2;
     readonly externalContent: ExternalContentStore;
     readonly activeTurns: DaemonTurnRegistry;
     readonly diagnostics: RelayConnectionDiagnostics;
@@ -83,7 +83,7 @@ export function createDaemonCommandHandler({
     installations,
     nativeSessions,
     operations,
-    eventLogV2,
+    eventProjectionV2,
     externalContent,
     activeTurns,
     diagnostics,
@@ -106,7 +106,7 @@ export function createDaemonCommandHandler({
         timer,
     });
     const queueChanged = (sessionId: string): void => {
-        void eventLogV2.queueChanged(sessionId).catch((error: unknown) => {
+        void eventProjectionV2.queueChanged(sessionId).catch((error: unknown) => {
             console.error("Could not record queue change", error);
         });
     };
@@ -168,7 +168,7 @@ export function createDaemonCommandHandler({
                     diagnostics,
                     sessions,
                     nativeSessions,
-                    eventLogV2,
+                    eventProjectionV2,
                     signal,
                 );
                 return;
@@ -182,7 +182,7 @@ export function createDaemonCommandHandler({
                     audit,
                     diagnostics,
                     sessions,
-                    eventLogV2,
+                    eventProjectionV2,
                     signal,
                 );
                 return;
@@ -225,9 +225,11 @@ export function createDaemonCommandHandler({
                 const cancellation = message;
                 const turn = activeTurns.get(cancellation.commandId);
                 if (turn === undefined || !turn.matches(cancellation)) {
-                    void settleAbandonedTurn(eventLogV2, operations, audit, cancellation).catch((error: unknown) => {
-                        console.error("Could not settle abandoned turn", error);
-                    });
+                    void settleAbandonedTurn(eventProjectionV2, operations, audit, cancellation).catch(
+                        (error: unknown) => {
+                            console.error("Could not settle abandoned turn", error);
+                        },
+                    );
                     return;
                 }
                 const cancellationState = turn.requestCancellation();
@@ -399,10 +401,10 @@ export function createDaemonCommandHandler({
             }
 
             const turn = activeTurns.start(command, receipt.attemptId);
-            eventLogV2.requested(command);
+            eventProjectionV2.requested(command);
             void executePrompt({
                 operations,
-                eventLogV2,
+                eventProjectionV2,
                 command,
                 config,
                 directories,
@@ -429,7 +431,7 @@ export function createDaemonCommandHandler({
                 })
                 .finally(() => {
                     activeTurns.finish(turn);
-                    eventLogV2.publishTerminal(command.sessionId, command.commandId);
+                    eventProjectionV2.publishTerminal(command.sessionId, command.commandId);
                     if (command.disposition === SessionPromptDisposition.Queue) {
                         queueChanged(command.sessionId);
                     }

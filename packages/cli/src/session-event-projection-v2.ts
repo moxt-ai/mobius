@@ -53,7 +53,7 @@ function promptContent(command: SessionPromptCommand): readonly ContentBlockV2[]
     return content;
 }
 
-export function sessionEventV2(
+export function projectSessionEventV2(
     sessionGenerationId: string,
     sessionId: string,
     position: number,
@@ -71,7 +71,7 @@ export function sessionEventV2(
     };
 }
 
-export class DaemonSessionEventLogV2 {
+export class DaemonSessionEventProjectionV2 {
     readonly #publisher: DaemonSessionEventPublisher;
     readonly #terminal = new Map<string, SessionEventV2>();
     readonly #publications = new Map<string, SessionEventV2[]>();
@@ -193,7 +193,7 @@ export class DaemonSessionEventLogV2 {
         position: number,
         event: SessionEventPayloadV2,
         recordedAt: string,
-    ): SessionEventV2 => sessionEventV2(sessionGenerationId, sessionId, position, event, recordedAt);
+    ): SessionEventV2 => projectSessionEventV2(sessionGenerationId, sessionId, position, event, recordedAt);
 
     readonly queueChanged = async (sessionId: string): Promise<void> => {
         await this.#recordLifecycle(sessionId, {

@@ -11,7 +11,7 @@ import { LocalAuthorizationError } from "./authorization/local-authorization-err
 import type { DurationMetric } from "./infra/operation-metrics.ts";
 import { PromptArtifactError } from "./prompt-artifact-resolver.ts";
 import type { DaemonOperationState } from "./relay-connection/daemon-operation-state.ts";
-import type { DaemonSessionEventLogV2 } from "./session-event-log-v2.ts";
+import type { DaemonSessionEventProjectionV2 } from "./session-event-projection-v2.ts";
 
 export interface DaemonTurnCommand {
     readonly commandId: string;
@@ -31,7 +31,7 @@ export function send(socket: WebSocket, message: DaemonToServiceMessage): void {
  * receipt identifies the Attempt that should be reported as failed.
  */
 export async function settleAbandonedTurn(
-    eventLog: DaemonSessionEventLogV2,
+    projection: DaemonSessionEventProjectionV2,
     operations: DaemonOperationState,
     audit: AuditStore,
     cancellation: SessionCancelCommand,
@@ -46,14 +46,14 @@ export async function settleAbandonedTurn(
         event: "session_abandoned_turn_settled",
         sessionId: cancellation.sessionId,
     });
-    await eventLog.failed(
+    await projection.failed(
         cancellation.sessionId,
         cancellation.commandId,
         "agent_execution_abandoned",
         "The local Agent execution was abandoned before it completed",
     );
     operations.transitionExecution(cancellation.commandId, "failed");
-    eventLog.publishTerminal(cancellation.sessionId, cancellation.commandId);
+    projection.publishTerminal(cancellation.sessionId, cancellation.commandId);
 }
 
 export function operationErrorCode(error: unknown): string {

@@ -18,7 +18,7 @@ import { operationErrorCode, reportOperationFailure, send } from "./daemon-comma
 import { resolveCatalogAgent } from "./daemon-session-commands.ts";
 import type { NativeSessionService } from "./native-sessions/service.ts";
 import type { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
-import type { DaemonSessionEventLogV2 } from "./session-event-log-v2.ts";
+import type { DaemonSessionEventProjectionV2 } from "./session-event-projection-v2.ts";
 
 function isAgentReasoning(event: SessionEventV2 | undefined): boolean {
     return event?.type === "acp" && event.payload.sessionUpdate === "agent_thought_chunk";
@@ -53,7 +53,7 @@ async function loadHistoryPage(
     omitReasoning: boolean,
     queuedPromptRequests: readonly QueuedPromptRequestEventLogV2[],
     load: (eventLimit: number, cursor: string | null) => Promise<AcpSessionEventPageV2>,
-    eventLogV2: DaemonSessionEventLogV2,
+    eventProjectionV2: DaemonSessionEventProjectionV2,
 ): Promise<NativeSessionEventsV2> {
     let cursor = initialCursor;
     let loaded: readonly SessionEventV2[] = [];
@@ -66,7 +66,7 @@ async function loadHistoryPage(
         }
         sessionGenerationId = replay.sessionGenerationId;
         const events = replay.events.map((event, index) =>
-            eventLogV2.event(
+            eventProjectionV2.event(
                 sessionId,
                 replay.sessionGenerationId,
                 replay.startPosition + index,
@@ -113,7 +113,7 @@ export async function executeSessionLiveHistoryV2PageLoad(
     diagnostics: RelayConnectionDiagnostics,
     sessions: AgentRuntimeManager,
     nativeSessions: NativeSessionService,
-    eventLogV2: DaemonSessionEventLogV2,
+    eventProjectionV2: DaemonSessionEventProjectionV2,
     signal: AbortSignal,
 ): Promise<void> {
     let agentId: string | undefined;
@@ -137,7 +137,7 @@ export async function executeSessionLiveHistoryV2PageLoad(
             sessionId: command.sessionId,
             signal,
         };
-        const recovery = eventLogV2.promptRequestRecovery(command.sessionId);
+        const recovery = eventProjectionV2.promptRequestRecovery(command.sessionId);
         const events = await loadHistoryPage(
             command.sessionId,
             command.eventLimit,
@@ -145,7 +145,7 @@ export async function executeSessionLiveHistoryV2PageLoad(
             command.omit?.includes("agent-reasoning") === true,
             recovery.queuedPromptRequests,
             async (eventLimit, cursor) => await sessions.loadSessionEventsV2(loadOptions, eventLimit, cursor),
-            eventLogV2,
+            eventProjectionV2,
         );
         signal.throwIfAborted();
         audit.record({
@@ -193,7 +193,7 @@ export async function executeSessionPreviewHistoryPageLoad(
     audit: AuditStore,
     diagnostics: RelayConnectionDiagnostics,
     sessions: AgentRuntimeManager,
-    eventLogV2: DaemonSessionEventLogV2,
+    eventProjectionV2: DaemonSessionEventProjectionV2,
     signal: AbortSignal,
 ): Promise<void> {
     try {
@@ -219,7 +219,7 @@ export async function executeSessionPreviewHistoryPageLoad(
             [],
             async (eventLimit, cursor) =>
                 await sessions.previewNativeSessionEventsV2(loadOptions, command.sessionId, eventLimit, cursor),
-            eventLogV2,
+            eventProjectionV2,
         );
         signal.throwIfAborted();
         audit.record({
