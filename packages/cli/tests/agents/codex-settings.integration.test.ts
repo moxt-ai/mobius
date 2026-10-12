@@ -12,6 +12,7 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { expect, test } from "vitest";
 import { CodexAgentSpecification } from "../../src/agent-catalog/agents/codex-agent.ts";
+import { executableLaunch } from "../../src/process/executable.ts";
 import { CodexFixture } from "../support/agents/codex.ts";
 import { withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
@@ -23,6 +24,7 @@ async function writeTurnPolicyRecorder(
     recording: string,
     launches: string,
 ): Promise<void> {
+    const launch = executableLaunch(codex.executable, []);
     await writeFile(
         launcher,
         `#!${process.execPath}
@@ -30,7 +32,7 @@ import { spawn } from "node:child_process";
 import { appendFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 appendFileSync(${JSON.stringify(launches)}, "started\\n");
-const child = spawn(${JSON.stringify(codex.executable)}, process.argv.slice(2), {
+const child = spawn(${JSON.stringify(launch.command)}, [...${JSON.stringify(launch.arguments)}, ...process.argv.slice(2)], {
     stdio: ["pipe", "pipe", "inherit"], env: { ...process.env, ...${JSON.stringify(codex.environment)} },
 });
 createInterface({input: process.stdin}).on("line", line => {
