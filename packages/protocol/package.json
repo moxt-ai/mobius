@@ -1,6 +1,6 @@
 {
     "name": "@moxt-ai/mobius-protocol",
-    "version": "0.0.62",
+    "version": "0.0.63",
     "description": "Versioned public Mobius protocol resources and codecs.",
     "type": "module",
     "types": "./src/index.ts",
@@ -17,7 +17,8 @@
         "exports": {
             ".": {
                 "types": "./dist/index.d.ts",
-                "import": "./dist/index.js"
+                "import": "./dist/index.js",
+                "default": "./dist/index.js"
             }
         }
     },
