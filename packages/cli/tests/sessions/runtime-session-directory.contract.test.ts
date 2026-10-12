@@ -25,7 +25,7 @@ it("Given a prompted local conversation, When its Runtime Session directory is l
                 agentId: "claude",
                 bindingId: RUNTIME_WORKSPACE_BINDING_ID,
                 directoryId: "default",
-                policy: new MobiusRecordingPolicy("full", 60_000, 10, 1_024),
+                policy: new MobiusRecordingPolicy("full", 10, 1_024),
                 runtimeId: runtime.runtimeId,
                 sessionId,
                 title: "Remembered conversation",

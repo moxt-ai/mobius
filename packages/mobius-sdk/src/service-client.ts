@@ -1874,21 +1874,6 @@ export class MobiusRecordingResources {
             signal,
         );
 
-    readonly writeRetention = async (
-        sessionId: string,
-        retentionMilliseconds: number,
-        signal: AbortSignal,
-    ): Promise<SessionRecordingRetention> =>
-        decodeSessionRecordingRetention(
-            JSON.stringify(
-                await this.#executor.put(
-                    `v1/recording/sessions/${encodeURIComponent(sessionId)}/retention`,
-                    { retentionMilliseconds },
-                    signal,
-                ),
-            ),
-        );
-
     readonly delete = async (sessionId: string, signal: AbortSignal): Promise<void> =>
         await this.#executor.deleteEmpty(`v1/recording/sessions/${encodeURIComponent(sessionId)}`, signal);
 }

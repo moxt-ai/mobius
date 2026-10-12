@@ -420,7 +420,7 @@ async function createSessionCommand(directory: string, flags: ReadonlyMap<string
                 agentId: agent.id,
                 bindingId: RUNTIME_WORKSPACE_BINDING_ID,
                 directoryId: "default",
-                policy: new MobiusRecordingPolicy("full", 30 * 24 * 60 * 60 * 1_000, 1_000, 6_000_000),
+                policy: new MobiusRecordingPolicy("full", 1_000, 6_000_000),
                 runtimeId: state.runtimeId,
                 sessionId,
                 title,
@@ -807,16 +807,7 @@ async function recordingCommand(
                 );
                 break;
             case "retention": {
-                const retentionMilliseconds = flags.get("retention-ms");
-                output(
-                    retentionMilliseconds === undefined
-                        ? await service.recordings.readRetention(sessionId, operationSignal())
-                        : await service.recordings.writeRetention(
-                              sessionId,
-                              parsePositiveInteger(retentionMilliseconds, "retention-ms"),
-                              operationSignal(),
-                          ),
-                );
+                output(await service.recordings.readRetention(sessionId, operationSignal()));
                 break;
             }
             case "delete":
@@ -1065,9 +1056,7 @@ function createProgram(): Command {
         .option("--limit <count>", "Recording directory page size")
         .option("--query <text>", "Recording directory search text")
         .option("--status <status>", "Recording status filter");
-    add("recording-retention", "read or set Recording retention")
-        .option("--session <id>", "Session identifier")
-        .option("--retention-ms <milliseconds>", "set retention duration");
+    add("recording-retention", "read effective Recording retention").option("--session <id>", "Session identifier");
     add("recording-delete", "delete recorded Session data").option("--session <id>", "Session identifier");
     return program;
 }

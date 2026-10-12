@@ -49,7 +49,6 @@ function session(sessionId: string) {
             hotEventLimit: 10_000,
             idempotencyRetentionMilliseconds: 60_000,
             level: "full",
-            retentionMilliseconds: 60_000,
         },
         projectId: "project-1",
         runtimeId: "runtime-1",

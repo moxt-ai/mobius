@@ -40,6 +40,7 @@ const sessionRecordingSummarySchema = z
         additionalDirectoryIds: z.array(identifierStringSchema).max(16).readonly(),
         agentId: identifierStringSchema,
         directoryId: z.string().min(1).max(2_048),
+        projectId: identifierStringSchema,
         runtimeId: identifierStringSchema,
         sessionId: identifierStringSchema,
         status: sessionRecordingStatusSchema,
@@ -91,17 +92,7 @@ const sessionRecordingIntegritySchema = z.discriminatedUnion("kind", [
         .readonly(),
 ]);
 
-const sessionRecordingRetentionSchema = z.discriminatedUnion("kind", [
-    z
-        .object({
-            configuredAt: z.iso.datetime({ offset: true }),
-            expiresAt: z.iso.datetime({ offset: true }),
-            kind: z.literal("managed"),
-            retentionMilliseconds: z.number().int().positive().safe(),
-        })
-        .readonly(),
-    z.object({ kind: z.literal("unmanaged") }).readonly(),
-]);
+const sessionRecordingRetentionSchema = z.object({ kind: z.literal("permanent") }).readonly();
 
 const sessionRecordingDeliverySchema = z.discriminatedUnion("kind", [
     z

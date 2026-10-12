@@ -80,7 +80,6 @@ async function main() {
         await mini("recording-export", ["--session", session]);
         await mini("recording-list", ["--limit=10"]);
         await mini("recording-retention", ["--session", session]);
-        await mini("recording-retention", ["--session", session, "--retention-ms=60000"]);
         await mini("recording-delete", ["--session", session]);
         await mini("stop");
         const failed = commands.filter((entry) => entry.code !== 0);

@@ -241,7 +241,7 @@ describe.sequential("Platform Recording read route", () => {
             recording: {
                 delivery: { kind: "recorded", recordedEventCount: 1 },
                 integrity: { eventCount: 1, expectedEventCount: 1, kind: "complete" },
-                retention: { kind: "unmanaged" },
+                retention: { kind: "permanent" },
             },
         });
 
@@ -291,15 +291,11 @@ describe.sequential("Platform Recording read route", () => {
         expect(decodeSessionRecordingHistory(await unscopedEvents.text())).toMatchObject({ sessionId });
 
         const retention = await worker.fetch(
-            new Request(`${recordingPath}/retention`, {
-                body: JSON.stringify({ retentionMilliseconds: 60_000 }),
-                headers: credentialHeaders(credential),
-                method: "PUT",
-            }),
+            new Request(`${recordingPath}/retention`, { headers: credentialHeaders(credential) }),
             environment,
         );
         expect(retention.status).toBe(200);
-        expect(record(await retention.json())).toMatchObject({ kind: "managed", retentionMilliseconds: 60_000 });
+        expect(record(await retention.json())).toEqual({ kind: "permanent" });
 
         const exported = await worker.fetch(
             new Request(`${recordingPath}/export`, { headers: credentialHeaders(credential) }),

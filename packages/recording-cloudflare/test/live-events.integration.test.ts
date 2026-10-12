@@ -121,6 +121,7 @@ it("Given prompt context and a later Agent title, When the Runtime loads its rec
         sessions: [
             {
                 ...context,
+                projectId,
                 runtimeId: "runtime-live",
                 sessionId: event.sessionId,
                 status: "running",

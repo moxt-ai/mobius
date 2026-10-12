@@ -13,7 +13,7 @@ import { and, asc, eq, gt, isNotNull, max } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/durable-sqlite";
 import { sessionRecordingDurableObjectMigrations } from "../generated/session-recording-do-migrations.ts";
 import * as schema from "../schema/session-recording-do/index.ts";
-import { recordedSessionEvent, recordingMetadata, recordingRetention } from "../schema/session-recording-do/index.ts";
+import { recordedSessionEvent, recordingMetadata } from "../schema/session-recording-do/index.ts";
 import { applyDurableObjectMigrations } from "./durable-object-migrations.ts";
 
 const MAX_REPORTED_MISSING_POSITIONS = 1_000;
@@ -234,86 +234,13 @@ export class SessionRecordingStorage {
         runtimeId: string,
         sessionId: string,
     ): SessionRecordingRetention | null => {
-        if (this.#metadata(projectId, runtimeId, sessionId) === undefined) {
-            return null;
-        }
-        const retention = this.#database
-            .select()
-            .from(recordingRetention)
-            .where(eq(recordingRetention.singleton, 1))
-            .get();
-        if (retention !== undefined && retention.expiresAt <= Date.now()) {
-            this.delete(projectId, runtimeId, sessionId);
-            return null;
-        }
-        return retention === undefined
-            ? { kind: "unmanaged" }
-            : {
-                  configuredAt: new Date(retention.configuredAt).toISOString(),
-                  expiresAt: new Date(retention.expiresAt).toISOString(),
-                  kind: "managed",
-                  retentionMilliseconds: retention.retentionMilliseconds,
-              };
-    };
-    readonly writeRetention = (
-        projectId: string,
-        runtimeId: string,
-        sessionId: string,
-        retentionMilliseconds: number,
-    ): SessionRecordingRetention | null => {
-        const metadata = this.#metadata(projectId, runtimeId, sessionId);
-        if (metadata === undefined) {
-            return null;
-        }
-        const tail = this.#database
-            .select({ value: max(recordedSessionEvent.recordedAt) })
-            .from(recordedSessionEvent)
-            .get();
-        const effectiveAt = tail?.value == null ? metadata.createdAt : tail.value;
-        this.#database
-            .insert(recordingRetention)
-            .values({
-                singleton: 1,
-                retentionMilliseconds,
-                configuredAt: Date.now(),
-                expiresAt: effectiveAt + retentionMilliseconds,
-                state: "managed",
-            })
-            .onConflictDoUpdate({
-                target: recordingRetention.singleton,
-                set: {
-                    retentionMilliseconds,
-                    configuredAt: Date.now(),
-                    expiresAt: effectiveAt + retentionMilliseconds,
-                    state: "managed",
-                },
-            })
-            .run();
-        return {
-            configuredAt: new Date(Date.now()).toISOString(),
-            expiresAt: new Date(effectiveAt + retentionMilliseconds).toISOString(),
-            kind: "managed",
-            retentionMilliseconds,
-        };
-    };
-    readonly readRetentionExpiration = (projectId: string, runtimeId: string, sessionId: string): number | null => {
-        if (this.#metadata(projectId, runtimeId, sessionId) === undefined) {
-            return null;
-        }
-        return (
-            this.#database
-                .select({ expiresAt: recordingRetention.expiresAt })
-                .from(recordingRetention)
-                .where(eq(recordingRetention.singleton, 1))
-                .get()?.expiresAt ?? null
-        );
+        return this.#metadata(projectId, runtimeId, sessionId) === undefined ? null : { kind: "permanent" };
     };
     readonly delete = (projectId: string, runtimeId: string, sessionId: string): boolean => {
         if (this.#metadata(projectId, runtimeId, sessionId) === undefined) {
             return false;
         }
         this.#database.delete(recordedSessionEvent).run();
-        this.#database.delete(recordingRetention).run();
         this.#database.delete(recordingMetadata).where(eq(recordingMetadata.singleton, 1)).run();
         return true;
     };

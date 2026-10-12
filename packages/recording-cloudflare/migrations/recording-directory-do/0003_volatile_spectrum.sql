@@ -1,0 +1,1 @@
+ALTER TABLE `recording_session_summaries` ADD `project_id` text;

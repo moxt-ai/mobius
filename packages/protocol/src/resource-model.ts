@@ -23,7 +23,6 @@ const recordingPolicySchema = z
         hotEventLimit: z.number().int().positive().safe(),
         idempotencyRetentionMilliseconds: z.number().int().positive().safe(),
         level: z.enum(["full", "summary"]),
-        retentionMilliseconds: z.number().int().positive().safe(),
     })
     .readonly();
 

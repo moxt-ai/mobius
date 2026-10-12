@@ -1,18 +1,11 @@
 import { DurableObject } from "cloudflare:workers";
 import {
-    decodeSessionRecordingDelivery,
-    decodeSessionRecordingIntegrity,
-    decodeSessionRecordingRetention,
-    decodeSessionRecordingTarget,
     decodeSessionRecordingWrite,
     encodeMobiusSessionExportV2,
     encodeSessionHistorySources,
-    encodeSessionRecordingDelivery,
     encodeSessionRecordingDirectory,
     encodeSessionRecordingHistory,
     encodeSessionRecordingHistoryPage,
-    encodeSessionRecordingIntegrity,
-    encodeSessionRecordingRetention,
     isIdentifier,
     ProtocolMessageError,
     type SessionRecordingWrite,
@@ -221,59 +214,12 @@ export function createRecordingWorker(): RecordingWorker {
                 if (!indexed.ok) {
                     return errorResponse("storage_unavailable", 503);
                 }
-                const state = await environment.SESSION_RECORDING.getByName(
-                    JSON.stringify([projectId, sessionId]),
-                ).fetch(
-                    new Request(
-                        `https://recording.internal/metadata?projectId=${encodeURIComponent(projectId)}&runtimeId=${encodeURIComponent(runtimeId)}&sessionId=${encodeURIComponent(sessionId)}`,
-                        {
-                            signal: request.signal,
-                        },
-                    ),
-                );
-                const stateValue: unknown = await state.json();
-                if (
-                    !state.ok ||
-                    typeof stateValue !== "object" ||
-                    stateValue === null ||
-                    !("recording" in stateValue)
-                ) {
-                    return errorResponse("storage_unavailable", 503);
-                }
-                const recording = Reflect.get(stateValue, "recording");
-                if (typeof recording !== "object" || recording === null) {
-                    return errorResponse("storage_unavailable", 503);
-                }
-                const indexedState = await environment.RECORDING_DIRECTORY.getByName(
-                    JSON.stringify([projectId, runtimeId]),
-                ).fetch(
-                    new Request("https://directory.internal/index", {
-                        method: "POST",
-                        body: JSON.stringify({
-                            target: { projectId, runtimeId, sessionId },
-                            delivery: Reflect.get(recording, "delivery"),
-                            integrity: Reflect.get(recording, "integrity"),
-                            retention: Reflect.get(recording, "retention"),
-                        }),
-                        headers: { "content-type": "application/json" },
-                        signal: request.signal,
-                    }),
-                );
-                if (!indexedState.ok) {
-                    return errorResponse("storage_unavailable", 503);
-                }
                 const globalIndex = await environment.RECORDING_DIRECTORY.getByName(
                     JSON.stringify(["index", "sessions"]),
                 ).fetch(
-                    new Request("https://directory.internal/index", {
+                    new Request("https://directory.internal/events", {
                         method: "POST",
-                        body: JSON.stringify({
-                            target: { projectId, runtimeId, sessionId },
-                            delivery: Reflect.get(recording, "delivery"),
-                            integrity: Reflect.get(recording, "integrity"),
-                            retention: Reflect.get(recording, "retention"),
-                        }),
-                        headers: { "content-type": "application/json" },
+                        body,
                         signal: request.signal,
                     }),
                 );
@@ -351,15 +297,6 @@ export function createRecordingWorker(): RecordingWorker {
                     sessionTarget,
                     `/retention?${query.toString()}`,
                     request,
-                );
-            }
-            if (request.method === "PUT" && url.pathname.endsWith("/retention")) {
-                return await sessionStorageRequest(
-                    environment,
-                    sessionTarget,
-                    `/retention?${query.toString()}`,
-                    request,
-                    await request.text(),
                 );
             }
             if (request.method === "DELETE") {
@@ -467,38 +404,6 @@ export class SessionRecordingDurableObject extends DurableObject<RecordingWorker
         if (request.method === "GET" && url.pathname === "/retention") {
             return this.#readState(request, "retention");
         }
-        if (request.method === "PUT" && url.pathname === "/retention") {
-            const projectId = url.searchParams.get("projectId");
-            const runtimeId = url.searchParams.get("runtimeId");
-            const sessionId = url.searchParams.get("sessionId");
-            if (!isIdentifier(projectId) || !isIdentifier(runtimeId) || !isIdentifier(sessionId)) {
-                return errorResponse("invalid_target", 400);
-            }
-            let body: unknown;
-            try {
-                body = await request.json();
-            } catch {
-                return errorResponse("invalid_request", 400);
-            }
-            const retentionMilliseconds =
-                typeof body === "object" && body !== null && !Array.isArray(body)
-                    ? Reflect.get(body, "retentionMilliseconds")
-                    : undefined;
-            if (!Number.isSafeInteger(retentionMilliseconds) || (retentionMilliseconds as number) < 60_000) {
-                return errorResponse("invalid_request", 400);
-            }
-            const retention = this.#recordings.writeRetention(
-                projectId,
-                runtimeId,
-                sessionId,
-                retentionMilliseconds as number,
-            );
-            return retention === null
-                ? errorResponse("not_found", 404)
-                : new Response(encodeSessionRecordingRetention(retention), {
-                      headers: { "content-type": "application/json" },
-                  });
-        }
         if (request.method === "GET" && url.pathname === "/export") {
             const projectId = url.searchParams.get("projectId");
             const runtimeId = url.searchParams.get("runtimeId");
@@ -578,13 +483,13 @@ export class SessionRecordingDurableObject extends DurableObject<RecordingWorker
         }
         const headers = { "content-type": "application/json" };
         if (kind === "status") {
-            return Response.json({ integrity: JSON.parse(encodeSessionRecordingIntegrity(integrity)) }, { headers });
+            return Response.json({ integrity }, { headers });
         }
         if (kind === "delivery") {
-            return new Response(encodeSessionRecordingDelivery(delivery), { headers });
+            return Response.json(delivery, { headers });
         }
         if (kind === "retention") {
-            return new Response(encodeSessionRecordingRetention(retention), { headers });
+            return Response.json(retention, { headers });
         }
         if (kind === "history") {
             return new Response(
@@ -634,16 +539,6 @@ export class RecordingDirectoryDurableObject extends DurableObject<RecordingWork
                 }
                 throw cause;
             }
-        }
-        if (request.method === "POST" && url.pathname === "/index") {
-            const body: unknown = await request.json();
-            const value = typeof body === "object" && body !== null && !Array.isArray(body) ? body : {};
-            const target = decodeSessionRecordingTarget(JSON.stringify(Reflect.get(value, "target")));
-            const delivery = decodeSessionRecordingDelivery(JSON.stringify(Reflect.get(value, "delivery")));
-            const integrity = decodeSessionRecordingIntegrity(JSON.stringify(Reflect.get(value, "integrity")));
-            const retention = decodeSessionRecordingRetention(JSON.stringify(Reflect.get(value, "retention")));
-            this.#directory.upsertIndex(target, delivery, integrity, retention);
-            return new Response(null, { status: 204 });
         }
         const runtimeId = url.searchParams.get("runtimeId");
         if (request.method === "GET" && url.pathname === "/target") {

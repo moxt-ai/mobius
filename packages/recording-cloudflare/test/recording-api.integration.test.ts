@@ -98,7 +98,7 @@ it("Given a recorded Session, When a developer reads it by sessionId, Then metad
                 kind: "recorded",
                 recordedEventCount: 1,
             },
-            retention: { kind: "unmanaged" },
+            retention: { kind: "permanent" },
         },
     });
 });
@@ -195,34 +195,13 @@ it("Given a recorded Session, When a developer requests an export, Then it recei
     });
 });
 
-it("Given a recorded Session, When a developer configures retention, Then the policy and expiry are observable", async () => {
+it("Given a recorded Session, When a developer reads retention, Then permanent retention is explicit", async () => {
     const writeResponse = await worker.fetch(write([event("0", "event-0")]), env);
     expect(writeResponse.status).toBe(201);
 
-    const updated = await worker.fetch(
-        request("/v1/sessions/recording-api-session/retention", {
-            method: "PUT",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ retentionMilliseconds: 60_000 }),
-        }),
-        env,
-    );
-    expect(updated.status).toBe(200);
-    expect(await json(updated)).toMatchObject({
-        kind: "managed",
-        retentionMilliseconds: 60_000,
-    });
-
     const read = await worker.fetch(request("/v1/sessions/recording-api-session/retention"), env);
     expect(read.status).toBe(200);
-    expect(await json(read)).toMatchObject({
-        kind: "managed",
-        retentionMilliseconds: 60_000,
-    });
-
-    vi.setSystemTime(new Date("2026-10-12T00:01:00.000Z"));
-    expect((await worker.fetch(request("/v1/sessions/recording-api-session/retention"), env)).status).toBe(404);
-    expect((await worker.fetch(request("/v1/sessions/recording-api-session/events"), env)).status).toBe(404);
+    expect(await json(read)).toEqual({ kind: "permanent" });
 });
 
 it("Given a recorded Session, When a developer reads delivery status, Then successful Recording delivery is explicit", async () => {

@@ -5,6 +5,7 @@ export const recordingSessionSummary = sqliteTable(
     "recording_session_summaries",
     {
         sessionId: text("session_id").primaryKey(),
+        projectId: text("project_id"),
         runtimeId: text("runtime_id").notNull(),
         agentId: text("agent_id").notNull(),
         directoryId: text("directory_id").notNull(),

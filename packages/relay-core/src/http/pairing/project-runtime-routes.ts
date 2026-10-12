@@ -41,7 +41,6 @@ const createSessionSchema = v.strictObject({
         hotEventLimit: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
         idempotencyRetentionMilliseconds: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
         level: v.string(),
-        retentionMilliseconds: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
     }),
     runtimeId: identifier,
     sessionId: identifier,

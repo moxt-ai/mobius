@@ -268,26 +268,21 @@ export class MobiusRecordingPolicy {
     readonly hotEventLimit: number;
     readonly idempotencyRetentionMilliseconds: number;
     readonly level: string;
-    readonly retentionMilliseconds: number;
 
     constructor(
         level: string,
-        retentionMilliseconds: number,
         hotEventLimit: number,
         contentLimitBytes: number,
-        idempotencyRetentionMilliseconds = retentionMilliseconds,
+        idempotencyRetentionMilliseconds = 30 * 24 * 60 * 60 * 1_000,
     ) {
         if (
             (level !== "full" && level !== "summary") ||
-            !Number.isSafeInteger(retentionMilliseconds) ||
-            retentionMilliseconds < 60_000 ||
             !Number.isSafeInteger(hotEventLimit) ||
             hotEventLimit < 10 ||
             !Number.isSafeInteger(contentLimitBytes) ||
             contentLimitBytes < 1_024 ||
             !Number.isSafeInteger(idempotencyRetentionMilliseconds) ||
-            idempotencyRetentionMilliseconds < 60_000 ||
-            idempotencyRetentionMilliseconds > retentionMilliseconds
+            idempotencyRetentionMilliseconds < 60_000
         ) {
             throw new MobiusValidationError("The Session recording policy is invalid");
         }
@@ -295,13 +290,11 @@ export class MobiusRecordingPolicy {
         this.hotEventLimit = hotEventLimit;
         this.idempotencyRetentionMilliseconds = idempotencyRetentionMilliseconds;
         this.level = level;
-        this.retentionMilliseconds = retentionMilliseconds;
     }
 
     readonly toJSON = (): MobiusRecordingPolicyRequestPayload =>
         new MobiusRecordingPolicyRequestPayload(
             this.level,
-            this.retentionMilliseconds,
             this.hotEventLimit,
             this.contentLimitBytes,
             this.idempotencyRetentionMilliseconds,
@@ -313,11 +306,9 @@ class MobiusRecordingPolicyRequestPayload {
     readonly hotEventLimit: number;
     readonly idempotencyRetentionMilliseconds: number;
     readonly level: string;
-    readonly retentionMilliseconds: number;
 
     constructor(
         level: string,
-        retentionMilliseconds: number,
         hotEventLimit: number,
         contentLimitBytes: number,
         idempotencyRetentionMilliseconds: number,
@@ -326,7 +317,6 @@ class MobiusRecordingPolicyRequestPayload {
         this.hotEventLimit = hotEventLimit;
         this.idempotencyRetentionMilliseconds = idempotencyRetentionMilliseconds;
         this.level = level;
-        this.retentionMilliseconds = retentionMilliseconds;
     }
 }
 
@@ -1154,7 +1144,6 @@ function decodeRecordingPolicy(value: unknown): MobiusRecordingPolicy {
     const policy = record(value, "Session recording policy");
     return new MobiusRecordingPolicy(
         stringField(policy, "level", 32),
-        integerField(policy, "retentionMilliseconds"),
         integerField(policy, "hotEventLimit"),
         integerField(policy, "contentLimitBytes"),
         integerField(policy, "idempotencyRetentionMilliseconds"),

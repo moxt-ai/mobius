@@ -43,6 +43,7 @@ export class RecordingDirectory {
                 const context = event.payload.context;
                 summary = {
                     ...context,
+                    projectId: write.projectId,
                     runtimeId: write.runtimeId,
                     sessionId: event.sessionId,
                     status: status ?? existing?.status ?? "idle",
@@ -59,6 +60,7 @@ export class RecordingDirectory {
             } else if (existing !== null) {
                 summary = {
                     ...existing,
+                    projectId: write.projectId,
                     status: status ?? existing.status,
                     title:
                         event.type === "acp" && event.payload.sessionUpdate === "session_info_update"
@@ -67,7 +69,17 @@ export class RecordingDirectory {
                     updatedAt: event.recordedAt,
                 };
             } else {
-                continue;
+                summary = {
+                    additionalDirectoryIds: [],
+                    agentId: "unknown",
+                    directoryId: "unknown",
+                    projectId: write.projectId,
+                    runtimeId: write.runtimeId,
+                    sessionId: event.sessionId,
+                    status: "idle",
+                    title: "",
+                    updatedAt: event.recordedAt,
+                };
             }
             this.#storage.save(
                 {
@@ -77,8 +89,7 @@ export class RecordingDirectory {
                             ? existing.updatedAt
                             : summary.updatedAt,
                 },
-                write.projectId,
-                write.runtimeId,
+                existing !== null || (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.requested"),
             );
         }
     };
