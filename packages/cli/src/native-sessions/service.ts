@@ -288,7 +288,7 @@ export class NativeSessionService {
             },
             action === "fork"
                 ? { kind: "fork", nativeSessionId: target.info.sessionId, title }
-                : { kind: "import", nativeSessionId: target.info.sessionId },
+                : { kind: "import", nativeSessionId: target.info.sessionId, title },
         );
         signal.throwIfAborted();
         const ready: SessionReadyEvent = {
