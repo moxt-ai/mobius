@@ -1,5 +1,9 @@
 import { env } from "cloudflare:workers";
-import { decodeSessionRecordingDirectory, decodeSessionRecordingHistory } from "@moxt-ai/mobius-protocol";
+import {
+    decodeSessionRecordingDirectory,
+    decodeSessionRecordingHistory,
+    decodeSessionRecordingHistoryPage,
+} from "@moxt-ai/mobius-protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRecordingWorker } from "../src/worker.ts";
 
@@ -28,6 +32,14 @@ function write(runtimeId = "runtime-live", envelope: unknown = { kind: "session.
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ projectId, runtimeId, envelope }),
     });
+}
+function numberedEvents(count: number, start = 0) {
+    return Array.from({ length: count }, (_, index) => ({
+        ...event,
+        eventId: `event-${start + index}`,
+        position: String(start + index),
+        payload: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: `Reply ${start + index}` } },
+    }));
 }
 
 describe("Recording live V2 events", () => {
@@ -211,4 +223,98 @@ it("Given an invalid execution context, When submitted at the Recording boundary
     expect(
         (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: [invalid] }), env)).status,
     ).toBe(400);
+});
+
+describe("Recording incremental reads", () => {
+    function read(query = ""): Request {
+        return new Request(
+            `https://recording.internal/v1/projects/${projectId}/runtimes/runtime-live/sessions/live-session/events${query}`,
+        );
+    }
+    it("Given recorded batches, When a caller reads after a mid-history position, Then only later events are returned with page cursors", async () => {
+        for (const batch of [numberedEvents(3, 0), numberedEvents(3, 3)]) {
+            expect(
+                (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: batch }), env)).status,
+            ).toBe(201);
+        }
+        const response = await worker.fetch(read("?after=3"), env);
+        expect(response.status).toBe(200);
+        const page = decodeSessionRecordingHistoryPage(await response.text());
+        expect(page.events.map((candidate) => candidate.position)).toEqual(["4", "5"]);
+        expect(page.nextCursor).toBe("5");
+        expect(page.tailCursor).toBe("5");
+        expect(page.truncated).toBe(false);
+        expect(page.sessionId).toBe("live-session");
+        expect(page.version).toBe(2);
+    });
+    it("Given a limit smaller than the remaining events, When a caller reads a page, Then the page is truncated at the limit", async () => {
+        for (const batch of [numberedEvents(3, 0), numberedEvents(3, 3)]) {
+            expect(
+                (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: batch }), env)).status,
+            ).toBe(201);
+        }
+        const response = await worker.fetch(read("?after=1&limit=2"), env);
+        expect(response.status).toBe(200);
+        const page = decodeSessionRecordingHistoryPage(await response.text());
+        expect(page.events.map((candidate) => candidate.position)).toEqual(["2", "3"]);
+        expect(page.nextCursor).toBe("3");
+        expect(page.tailCursor).toBe("5");
+        expect(page.truncated).toBe(true);
+    });
+    it("Given the caller has caught up, When a caller reads after the tail, Then an empty page closes the poll loop", async () => {
+        expect(
+            (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: numberedEvents(2, 0) }), env))
+                .status,
+        ).toBe(201);
+        const response = await worker.fetch(read("?after=1"), env);
+        expect(response.status).toBe(200);
+        const page = decodeSessionRecordingHistoryPage(await response.text());
+        expect(page.events).toEqual([]);
+        expect(page.nextCursor).toBe(null);
+        expect(page.tailCursor).toBe("1");
+        expect(page.truncated).toBe(false);
+    });
+    it("Given a cursor beyond the recorded tail, When the Runtime later records more events, Then the poll resumes from the held cursor", async () => {
+        expect(
+            (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: numberedEvents(2, 0) }), env))
+                .status,
+        ).toBe(201);
+        expect((await worker.fetch(read("?after=9"), env)).status).toBe(200);
+        expect(
+            (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: numberedEvents(2, 2) }), env))
+                .status,
+        ).toBe(201);
+        const page = decodeSessionRecordingHistoryPage(await (await worker.fetch(read("?after=9"), env)).text());
+        expect(page.events.map((candidate) => candidate.position)).toEqual([]);
+        expect(page.tailCursor).toBe("3");
+    });
+    it("Given a boundary batch that starts before the cursor, When only its later half is new, Then decoding drops the delivered prefix", async () => {
+        const spanning = numberedEvents(4, 0);
+        expect(
+            (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: spanning }), env)).status,
+        ).toBe(201);
+        const page = decodeSessionRecordingHistoryPage(await (await worker.fetch(read("?after=1"), env)).text());
+        expect(page.events.map((candidate) => candidate.position)).toEqual(["2", "3"]);
+    });
+    it("Given duplicate broadcasts of one batch, When a caller reads incrementally, Then the repeated position is skipped without hiding new events", async () => {
+        const batch = { kind: "session.event.v2", events: numberedEvents(2, 0) };
+        expect((await worker.fetch(write("runtime-live", batch), env)).status).toBe(201);
+        expect((await worker.fetch(write("runtime-live", batch), env)).status).toBe(201);
+        const page = decodeSessionRecordingHistoryPage(await (await worker.fetch(read("?after=0"), env)).text());
+        expect(page.events.map((candidate) => candidate.position)).toEqual(["1"]);
+    });
+    it("Given no incremental query, When a caller reads the session, Then the full history contract is unchanged", async () => {
+        expect(
+            (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: numberedEvents(2, 0) }), env))
+                .status,
+        ).toBe(201);
+        const response = await worker.fetch(read(), env);
+        expect(response.status).toBe(200);
+        expect(decodeSessionRecordingHistory(await response.text()).events).toHaveLength(2);
+    });
+    it("Given a malformed cursor or limit, When a caller reads incrementally, Then the request is rejected", async () => {
+        expect((await worker.fetch(read("?after=not-a-position"), env)).status).toBe(400);
+        expect((await worker.fetch(read("?after=0&limit=0"), env)).status).toBe(400);
+        expect((await worker.fetch(read("?after=0&limit=99999"), env)).status).toBe(400);
+    });
 });

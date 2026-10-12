@@ -3,6 +3,7 @@ import {
     decodeSessionRecordingWrite,
     encodeSessionRecordingDirectory,
     encodeSessionRecordingHistory,
+    encodeSessionRecordingHistoryPage,
     isIdentifier,
     ProtocolMessageError,
     type SessionRecordingWrite,
@@ -20,6 +21,32 @@ export interface RecordingWorker {
 }
 function errorResponse(code: string, status: number): Response {
     return Response.json({ error: { code, message: "The Recording request could not be completed" } }, { status });
+}
+const MAXIMUM_PAGE_EVENTS = 10_000;
+
+/**
+ * Validates the incremental-read query. Absent fields mean the caller wants the original
+ * full-history contract, which keeps serving complete unbounded history.
+ */
+function incrementalReadQuery(
+    url: URL,
+): { readonly after: number; readonly limit: number } | { readonly error: string } | null {
+    const after = url.searchParams.get("after");
+    const limit = url.searchParams.get("limit");
+    if (after === null && limit === null) {
+        return null;
+    }
+    if (after !== null && !/^(?:0|[1-9][0-9]*)$/.test(after)) {
+        return { error: "The after cursor must be a position" };
+    }
+    if (limit !== null && !/^[1-9][0-9]{0,4}$/.test(limit)) {
+        return { error: "The limit must be a positive event count" };
+    }
+    const boundedLimit = limit === null ? MAXIMUM_PAGE_EVENTS : Number(limit);
+    if (boundedLimit > MAXIMUM_PAGE_EVENTS) {
+        return { error: "The limit must be a positive event count" };
+    }
+    return { after: after === null ? 0 : Number(after), limit: boundedLimit };
 }
 function targetFromPath(
     pathname: string,
@@ -100,6 +127,17 @@ export function createRecordingWorker(): RecordingWorker {
                 ).fetch(new Request(`https://directory.internal/sessions?${query}`, { signal: request.signal }));
             }
             query.set("sessionId", target.sessionId);
+            const incremental = incrementalReadQuery(url);
+            if (incremental !== null) {
+                if ("error" in incremental) {
+                    return errorResponse("invalid_request", 400);
+                }
+                query.set("after", incremental.after.toString());
+                query.set("limit", incremental.limit.toString());
+                return await environment.SESSION_RECORDING.getByName(
+                    JSON.stringify([target.projectId, target.sessionId]),
+                ).fetch(new Request(`https://recording.internal/page-events?${query}`, { signal: request.signal }));
+            }
             return await environment.SESSION_RECORDING.getByName(
                 JSON.stringify([target.projectId, target.sessionId]),
             ).fetch(new Request(`https://recording.internal/events?${query}`, { signal: request.signal }));
@@ -138,6 +176,30 @@ export class SessionRecordingDurableObject extends DurableObject<RecordingWorker
             return history === null
                 ? errorResponse("not_found", 404)
                 : new Response(encodeSessionRecordingHistory(history), {
+                      headers: { "content-type": "application/json" },
+                  });
+        }
+        if (request.method === "GET" && url.pathname === "/page-events") {
+            const projectId = url.searchParams.get("projectId");
+            const runtimeId = url.searchParams.get("runtimeId");
+            const sessionId = url.searchParams.get("sessionId");
+            const after = url.searchParams.get("after");
+            const limit = url.searchParams.get("limit");
+            if (
+                !isIdentifier(projectId) ||
+                !isIdentifier(runtimeId) ||
+                !isIdentifier(sessionId) ||
+                after === null ||
+                !/^(?:0|[1-9][0-9]*)$/.test(after) ||
+                limit === null ||
+                !/^[1-9][0-9]{0,4}$/.test(limit)
+            ) {
+                return errorResponse("invalid_target", 400);
+            }
+            const page = this.#recordings.readPage(projectId, runtimeId, sessionId, Number(after), Number(limit));
+            return page === null
+                ? errorResponse("not_found", 404)
+                : new Response(encodeSessionRecordingHistoryPage(page), {
                       headers: { "content-type": "application/json" },
                   });
         }
