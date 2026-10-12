@@ -29,7 +29,7 @@ import { runRelayConnection } from "./relay-connection/run-relay-connection.ts";
 import { RuntimeRelayRevokedError } from "./relay-connection/runtime-revocation.ts";
 import { DaemonSessionEventPublisher } from "./relay-connection/session-event-publisher.ts";
 import { type DaemonTimer, systemDaemonTimer } from "./relay-connection/timer.ts";
-import { DaemonSessionEventLogV2 } from "./session-event-log-v2.ts";
+import { DaemonSessionEventProjectionV2 } from "./session-event-projection-v2.ts";
 
 const RELAY_RECONNECT_DELAY_MILLISECONDS = 500;
 
@@ -138,7 +138,7 @@ export async function runDaemon(
     await using externalContent = new LocalExternalContentStore(stateDirectory);
     const operations = new DaemonOperationState();
     const publisher = new DaemonSessionEventPublisher(timer);
-    const eventLogV2 = new DaemonSessionEventLogV2(publisher, (sessionId, event) =>
+    const eventProjectionV2 = new DaemonSessionEventProjectionV2(publisher, (sessionId, event) =>
         agentRuntime.recordLifecycleEventV2(sessionId, event),
     );
     const activeTurns = new DaemonTurnRegistry(operations);
@@ -148,7 +148,7 @@ export async function runDaemon(
             if (event.kind === "session.info.updated") {
                 publisher.publishInfo(event);
             }
-        }, eventLogV2.record),
+        }, eventProjectionV2.record),
         sessionStore,
         {
             access: (options) =>
@@ -281,7 +281,7 @@ export async function runDaemon(
                     nativeSessions,
                     operations,
                     publisher,
-                    eventLogV2,
+                    eventProjectionV2,
                     externalContent,
                     activeTurns,
                     connectionEpoch,
