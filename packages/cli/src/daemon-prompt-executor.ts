@@ -160,7 +160,13 @@ export async function executePrompt({
             }
         }
         const stream = activateAttempt();
-        const lifecycleV2 = eventLogV2.started(command.sessionId, command.commandId, attemptId, stream.epoch);
+        const lifecycleV2 = eventLogV2.started(
+            command.sessionId,
+            command.commandId,
+            attemptId,
+            stream.epoch,
+            availability.disposition,
+        );
         const attachments = await resolvePromptArtifacts(config, command, signal);
         let stopReason: string;
         if (availability.disposition === SessionPromptDisposition.Steer) {

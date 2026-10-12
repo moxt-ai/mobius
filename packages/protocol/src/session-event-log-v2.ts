@@ -426,8 +426,10 @@ export const lifecycleMetadataV2Schema = z.discriminatedUnion("kind", [
         .object({
             ...lifecycleBase,
             content: z.array(contentBlockV2Schema).min(1).max(100).readonly(),
+            disposition: shortString.optional(),
             kind: z.literal("prompt.requested"),
             context: promptExecutionContextV2Schema.optional(),
+            targetCommandId: identifier.optional(),
         })
         .readonly(),
     z
@@ -576,6 +578,8 @@ const queuedPromptRequestEventLogV2Schema = z
     .object({
         commandId: identifier,
         content: z.array(contentBlockV2Schema).min(1).max(100).readonly(),
+        disposition: shortString.optional(),
+        targetCommandId: identifier.optional(),
     })
     .readonly();
 export type QueuedPromptRequestEventLogV2 = z.infer<typeof queuedPromptRequestEventLogV2Schema>;

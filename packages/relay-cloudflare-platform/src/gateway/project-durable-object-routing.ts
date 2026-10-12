@@ -81,6 +81,9 @@ export async function routeProjectDurableObject(
     if (pathname === `${MOBIUS_API_PREFIX}/dashboard` || pathname.startsWith(`${MOBIUS_API_PREFIX}/dashboard/`)) {
         return null;
     }
+    if (pathname.includes("/recording/sessions")) {
+        return null;
+    }
     const projectId = projectIdFromPath(pathname) ?? (await projectIdFromUnscopedRequest(request));
     if (projectId === null) {
         return null;

@@ -19,7 +19,10 @@ export class CodexFixture implements AsyncDisposable {
 
     static async create(
         provider: FakeOpenAiProvider,
-        options: { readonly approvalPolicy?: "never" | "on-request" } = {},
+        options: {
+            readonly approvalPolicy?: "never" | "on-request";
+            readonly configuredModel?: string;
+        } = {},
     ): Promise<CodexFixture> {
         // Codex is an in-process Agent: there is no ACP adapter to resolve, only the real binary
         // that Mobius drives through `codex app-server`.
@@ -31,11 +34,12 @@ export class CodexFixture implements AsyncDisposable {
         await writeFile(
             join(codexHome, "config.toml"),
             [
-                `model = ${JSON.stringify(provider.model)}`,
+                ...(options.configuredModel === undefined
+                    ? []
+                    : [`model = ${JSON.stringify(options.configuredModel)}`]),
                 'model_provider = "mobius"',
                 'model_reasoning_effort = "low"',
                 'model_reasoning_summary = "none"',
-                "model_supports_reasoning_summaries = false",
                 // The CI host cannot create the sandbox namespaces Codex needs, so the fixture runs
                 // its tool calls without one. This is Codex configuration, not Mobius policy.
                 'sandbox_mode = "danger-full-access"',
@@ -46,6 +50,8 @@ export class CodexFixture implements AsyncDisposable {
                 `base_url = ${JSON.stringify(`${provider.origin}/v1`)}`,
                 'env_key = "CODEX_API_KEY"',
                 'wire_api = "responses"',
+                "request_max_retries = 0",
+                "stream_max_retries = 0",
                 "supports_websockets = false",
                 "",
                 "[features]",
@@ -73,12 +79,14 @@ export class CodexFixture implements AsyncDisposable {
             MOBIUS_PI_PATH: missing,
             MOBIUS_PI_ACP_PATH: missing,
             MOBIUS_WORKBUDDY_PATH: missing,
+            NO_PROXY: "127.0.0.1,localhost",
             NO_BROWSER: "1",
             PATH: process.env["PATH"] ?? "",
             XDG_CACHE_HOME: join(directory, "cache"),
             XDG_CONFIG_HOME: join(directory, "config"),
             XDG_DATA_HOME: join(directory, "data"),
             XDG_STATE_HOME: join(directory, "state"),
+            no_proxy: "127.0.0.1,localhost",
         });
     }
 

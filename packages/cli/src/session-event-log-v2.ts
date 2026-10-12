@@ -12,7 +12,9 @@ import type { DaemonSessionEventPublisher } from "./relay-connection/session-eve
 interface QueuedPromptRequestV2 {
     readonly commandId: string;
     readonly content: readonly ContentBlockV2[];
+    readonly disposition?: string;
     readonly sessionId: string;
+    readonly targetCommandId?: string;
     readonly context: {
         readonly agentId: string;
         readonly directoryId: string;
@@ -88,6 +90,7 @@ export class DaemonSessionEventLogV2 {
         this.#queued.set(command.commandId, {
             commandId: command.commandId,
             content: promptContent(command),
+            ...(command.disposition === undefined ? {} : { disposition: command.disposition }),
             context: {
                 agentId: command.agentId,
                 directoryId: command.directoryId,
@@ -95,6 +98,7 @@ export class DaemonSessionEventLogV2 {
             },
             phase: "queued",
             sessionId: command.sessionId,
+            ...(command.targetCommandId.length === 0 ? {} : { targetCommandId: command.targetCommandId }),
         });
     };
 
@@ -103,16 +107,26 @@ export class DaemonSessionEventLogV2 {
         commandId: string,
         attemptId: string,
         epoch: string,
+        disposition: string,
     ): {
         readonly attemptId: string;
         readonly content: readonly ContentBlockV2[];
+        readonly disposition?: string;
         readonly epoch: string;
         readonly context: PromptExecutionContextV2;
+        readonly targetCommandId?: string;
     } => {
         const request = this.#queued.get(commandId);
         if (request?.sessionId === sessionId) {
             this.#queued.set(commandId, { ...request, phase: "running" });
-            return { attemptId, content: request.content, epoch, context: request.context };
+            return {
+                attemptId,
+                content: request.content,
+                disposition,
+                epoch,
+                context: request.context,
+                ...(request.targetCommandId === undefined ? {} : { targetCommandId: request.targetCommandId }),
+            };
         }
         throw new Error("The executing prompt was not registered in the V2 queue");
     };
@@ -224,6 +238,11 @@ export class DaemonSessionEventLogV2 {
     readonly promptRequestRecovery = (sessionId: string): PromptRequestRecoveryV2 => ({
         queuedPromptRequests: [...this.#queued.values()]
             .filter((request) => request.sessionId === sessionId && request.phase === "queued")
-            .map(({ commandId, content }) => ({ commandId, content })),
+            .map(({ commandId, content, disposition, targetCommandId }) => ({
+                commandId,
+                content,
+                ...(disposition === undefined ? {} : { disposition }),
+                ...(targetCommandId === undefined ? {} : { targetCommandId }),
+            })),
     });
 }

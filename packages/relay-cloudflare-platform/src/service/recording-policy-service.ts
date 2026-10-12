@@ -33,6 +33,9 @@ export class RecordingPolicyService {
         return this.resource(await this.requirePolicy(this.#storage.readProject(projectId, signal)));
     };
 
+    readonly readProjectPolicy = async (projectId: string, signal: AbortSignal): Promise<ResolvedRecordingPolicy> =>
+        await this.requirePolicy(this.#storage.readProject(projectId, signal));
+
     readonly writeApp = async (
         identity: VerifiedExternalIdentity,
         appId: string,

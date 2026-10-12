@@ -102,7 +102,7 @@ test("Given an existing real Codex conversation, When the process exits or its t
 
 test("Given a real Codex conversation in Plan mode, When its process recovers before Go, Then the resumed settings still show Plan mode", async () => {
     await using provider = await FakeOpenAiProvider.start("mobius-test-model", "PLAN_RECOVERY_REPLY");
-    await using codex = await CodexFixture.create(provider);
+    await using codex = await CodexFixture.create(provider, { configuredModel: provider.model });
     const directory = await mkdtemp(join(tmpdir(), "mobius-codex-plan-recovery-"));
     const launcher = join(directory, "codex.mjs");
     const faultPath = join(directory, "fault");
