@@ -315,6 +315,14 @@ export function createPlatformApplication(
                         ),
                         kind: "session.preview-history.page.load",
                         eventLimit,
+                        ...(context.req.queries("omit") === undefined
+                            ? {}
+                            : {
+                                  omit: v.parse(
+                                      v.pipe(v.array(v.literal("agent-reasoning")), v.maxLength(1)),
+                                      context.req.queries("omit"),
+                                  ),
+                              }),
                         requestId: crypto.randomUUID(),
                         sessionId,
                     }),
@@ -650,6 +658,14 @@ export function createPlatformApplication(
                                 Number(context.req.query("limit") ?? "50"),
                             ),
                             kind: "session.live-history.v2.page.load",
+                            ...(context.req.queries("omit") === undefined
+                                ? {}
+                                : {
+                                      omit: v.parse(
+                                          v.pipe(v.array(v.literal("agent-reasoning")), v.maxLength(1)),
+                                          context.req.queries("omit"),
+                                      ),
+                                  }),
                             requestId: crypto.randomUUID(),
                             sessionId: context.req.param("sessionId"),
                         }),

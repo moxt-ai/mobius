@@ -58,6 +58,7 @@ const nativeEventsV2Schema = v.strictObject({
     ...sessionIdentitySchema.entries,
     cursor: v.nullable(v.string()),
     eventLimit: v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(10_000)),
+    omit: v.optional(v.pipe(v.array(v.literal("agent-reasoning")), v.maxLength(1))),
 });
 const sessionQuerySchema = v.strictObject({
     sessionIds: v.pipe(v.array(identifier), v.minLength(1), v.maxLength(500)),
@@ -325,6 +326,7 @@ export function createProjectRuntimeRoutes() {
                         ...body,
                         bindingId: "workspace",
                         kind: "session.preview-history.page.load",
+                        ...(body.omit === undefined ? {} : { omit: body.omit }),
                         requestId: crypto.randomUUID(),
                         sessionId: validateIdentifier(context.req.param("sessionId"), "session_id"),
                     }),
