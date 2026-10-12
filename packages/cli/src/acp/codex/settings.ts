@@ -284,9 +284,8 @@ export class CodexSettings {
                           mode: selection.collaborationMode,
                           settings: {
                               developer_instructions: null,
-                              model: model?.id ?? null,
-                              reasoning_effort:
-                                  model === undefined || selection.effort.length === 0 ? null : selection.effort,
+                              model: selection.model,
+                              reasoning_effort: selection.effort.length === 0 ? null : selection.effort,
                           },
                       },
                   }

@@ -54,7 +54,6 @@ test("Given Codex defaults to Full access, When a user runs a tool with selected
     });
     await using codex = await CodexFixture.create(provider, {
         approvalPolicy: "on-request",
-        includeModelInCatalog: true,
     });
     const directory = await mkdtemp(join(tmpdir(), "mobius-codex-settings-"));
     const launcher = join(directory, "codex.mjs");
@@ -161,7 +160,7 @@ test("Given Codex defaults to Full access, When a user runs a tool with selected
 
 test("Given Codex starts with a configured model outside its catalog, When Agent settings are discovered, Then the configured model remains the default", async () => {
     await using provider = await FakeOpenAiProvider.start("mobius-custom-model", "CUSTOM_MODEL_REPLY");
-    await using codex = await CodexFixture.create(provider);
+    await using codex = await CodexFixture.create(provider, { configuredModel: provider.model });
 
     await withRealDaemon(new CodexAgentSpecification(), codex.environment, async (peer) => {
         const requestId = randomUUID();

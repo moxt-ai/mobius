@@ -21,7 +21,7 @@ export class CodexFixture implements AsyncDisposable {
         provider: FakeOpenAiProvider,
         options: {
             readonly approvalPolicy?: "never" | "on-request";
-            readonly includeModelInCatalog?: boolean;
+            readonly configuredModel?: string;
         } = {},
     ): Promise<CodexFixture> {
         // Codex is an in-process Agent: there is no ACP adapter to resolve, only the real binary
@@ -31,57 +31,15 @@ export class CodexFixture implements AsyncDisposable {
         const codexHome = join(directory, "codex");
         const missing = join(directory, "missing-agent");
         await mkdir(codexHome, { recursive: true });
-        const modelCatalog = join(codexHome, "models.json");
-        if (options.includeModelInCatalog === true) {
-            const model = {
-                slug: provider.model,
-                display_name: provider.model,
-                description: "Mobius real-Codex integration model",
-                default_reasoning_level: "low",
-                supported_reasoning_levels: [
-                    { effort: "low", description: "Low reasoning" },
-                    { effort: "high", description: "High reasoning" },
-                ],
-                shell_type: "shell_command",
-                visibility: "list",
-                supported_in_api: true,
-                priority: 0,
-                additional_speed_tiers: ["fast"],
-                service_tiers: [{ id: "priority", name: "Fast", description: "Faster test execution" }],
-                support_verbosity: false,
-                apply_patch_tool_type: "freeform",
-                model_messages: {
-                    instructions_template: "You are a coding agent used by Mobius integration tests.",
-                },
-                truncation_policy: { mode: "bytes", limit: 10_000 },
-                experimental_supported_tools: [],
-            };
-            await writeFile(
-                modelCatalog,
-                JSON.stringify({
-                    models: [
-                        model,
-                        {
-                            ...model,
-                            slug: `${provider.model}-alternate`,
-                            display_name: `${provider.model} alternate`,
-                            priority: 1,
-                        },
-                    ],
-                }),
-                { mode: 0o600 },
-            );
-        }
         await writeFile(
             join(codexHome, "config.toml"),
             [
-                `model = ${JSON.stringify(provider.model)}`,
+                ...(options.configuredModel === undefined
+                    ? []
+                    : [`model = ${JSON.stringify(options.configuredModel)}`]),
                 'model_provider = "mobius"',
                 'model_reasoning_effort = "low"',
                 'model_reasoning_summary = "none"',
-                ...(options.includeModelInCatalog === true
-                    ? [`model_catalog_json = ${JSON.stringify(modelCatalog)}`]
-                    : []),
                 // The CI host cannot create the sandbox namespaces Codex needs, so the fixture runs
                 // its tool calls without one. This is Codex configuration, not Mobius policy.
                 'sandbox_mode = "danger-full-access"',
