@@ -1389,6 +1389,8 @@ export class AgentSession implements AcpClientHandler {
     };
 
     readonly closeProcess = (): Promise<void> => this.#connection.closeProcess();
+
+    readonly agentSettingsModelEffort = () => this.#connection.inProcessAgent?.agentSettingsModelEffort?.() ?? null;
     readonly race = <T>(operation: Promise<T>, exitMessage: string, signal: AbortSignal): Promise<T> =>
         this.#connection.race(operation, exitMessage, signal);
 

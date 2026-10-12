@@ -1,4 +1,5 @@
 import type { SessionConfigOption } from "@agentclientprotocol/sdk";
+import { AGENT_MODEL_EFFORT_RESOLUTION_COMPLETE, type AgentModelEffort } from "@moxt-ai/mobius-protocol";
 import { AcpExecutionError } from "../acp-error.ts";
 import type { CodexAppServerClient } from "./app-server-client.ts";
 import { type CodexModel, modelListResponseSchema } from "./app-server-protocol.ts";
@@ -362,6 +363,19 @@ export class CodexSettings {
         options.push(modeSetting(this.#selection.mode));
         return options;
     };
+
+    readonly agentModelEffort = (): AgentModelEffort => ({
+        effortSettingId: REASONING_EFFORT_SETTING_ID,
+        modelSettingId: MODEL_SETTING_ID,
+        resolution: AGENT_MODEL_EFFORT_RESOLUTION_COMPLETE,
+        unsupportedModelIds: [],
+        valuesByModel: Object.fromEntries(
+            this.#models.map((model) => [
+                model.id,
+                effortValues(model).map((value) => ({ ...value, groupId: "", groupName: "" })),
+            ]),
+        ),
+    });
 
     readonly selectRestoredThread = (thread: {
         readonly collaborationMode?: { readonly mode: "default" | "plan" } | null | undefined;

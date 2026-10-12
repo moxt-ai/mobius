@@ -1,4 +1,5 @@
 import type { AgentApp } from "@agentclientprotocol/sdk";
+import type { AgentModelEffort } from "@moxt-ai/mobius-protocol";
 import { AcpExecutionError } from "../acp-error.ts";
 
 export type AcpEndpointTermination =
@@ -36,6 +37,8 @@ export interface InProcessAcpEndpoint {
     readonly app: () => AgentApp;
     /** Native identity of the current or most recently started turn, when the vendor exposes one. */
     readonly nativeTurnId?: () => string | null;
+    /** Complete model-effort metadata already verified while initializing this endpoint, when available. */
+    readonly agentSettingsModelEffort?: () => AgentModelEffort;
     /** Prepares the backing resources and completes any vendor handshake. */
     readonly initialize: (signal: AbortSignal) => Promise<void>;
     /** Releases the backing resources and every process they started. */

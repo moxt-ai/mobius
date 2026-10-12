@@ -1,5 +1,6 @@
 import type {
     AgentContentEvent,
+    AgentModelEffort,
     AgentPromptResponse,
     ContentBlockV2,
     NativeSessionHistory,
@@ -188,14 +189,25 @@ export class AcpPreparedSession {
     }
 }
 
+export type AcpAgentSettingsModelEffort =
+    | { readonly kind: "complete"; readonly value: AgentModelEffort }
+    | { readonly kind: "unavailable" };
+
 export class AcpAgentSettingsSnapshot {
     readonly agentName: string;
     readonly agentVersion: string;
     readonly configOptions: readonly SessionConfigOption[];
+    readonly modelEffort: AcpAgentSettingsModelEffort;
 
-    constructor(agentName: string, agentVersion: string, configOptions: readonly SessionConfigOption[]) {
+    constructor(
+        agentName: string,
+        agentVersion: string,
+        configOptions: readonly SessionConfigOption[],
+        modelEffort: AcpAgentSettingsModelEffort,
+    ) {
         this.agentName = agentName;
         this.agentVersion = agentVersion;
         this.configOptions = configOptions;
+        this.modelEffort = modelEffort;
     }
 }

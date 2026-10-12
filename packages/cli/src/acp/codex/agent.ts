@@ -395,6 +395,8 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
             });
     }
 
+    readonly agentSettingsModelEffort = () => this.#settings.agentModelEffort();
+
     /** The ACP agent app Mobius connects its own ACP client to, in-process. */
     readonly app = (): AgentApp => this.#app;
     readonly nativeTurnId = (): string | null => this.#nativeTurnId;
