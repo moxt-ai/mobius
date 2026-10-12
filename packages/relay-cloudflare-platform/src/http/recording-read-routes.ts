@@ -16,6 +16,11 @@ type PlatformApplicationEnvironment = {
 };
 
 const recordingQuery = v.object({ runtimeId: v.string() });
+const recordingPosition = v.pipe(v.string(), v.regex(/^(?:0|[1-9][0-9]*)$/u));
+const recordingIncrementalQuery = v.object({
+    after: v.optional(recordingPosition),
+    limit: v.optional(v.pipe(v.string(), v.regex(/^[1-9][0-9]{0,4}$/u))),
+});
 
 function decodedIdentifier(value: string | undefined): string | null {
     if (value === undefined) {
@@ -41,6 +46,7 @@ async function readRecording(
     context: Context<PlatformApplicationEnvironment>,
     projectId: string,
     recordingPath: string,
+    incrementalQuery: URLSearchParams = new URLSearchParams(),
 ): Promise<Response> {
     const credential = bearerToken(context.req.raw);
     if (credential === null) {
@@ -61,8 +67,10 @@ async function readRecording(
         if (context.env.RECORDING === undefined) {
             return errorResponse("recording_provider_unavailable", "Recording is unavailable", 503);
         }
+        const query = incrementalQuery.toString();
+        const target = query.length === 0 ? recordingPath : `${recordingPath}?${query}`;
         return await context.env.RECORDING.fetch(
-            new Request(`https://recording.internal${recordingPath}`, { signal: context.req.raw.signal }),
+            new Request(`https://recording.internal${target}`, { signal: context.req.raw.signal }),
         );
     } catch (cause) {
         if (cause instanceof PlatformControlPlaneError) {
@@ -86,13 +94,27 @@ export const recordingReadRoutes = new Hono<PlatformApplicationEnvironment>()
     })
     .get("/sessions/:sessionId/events", async (context): Promise<Response> => {
         const query = v.safeParse(recordingQuery, { runtimeId: context.req.query("runtimeId") ?? "" });
+        const incremental = v.safeParse(recordingIncrementalQuery, {
+            ...(context.req.query("after") === undefined ? {} : { after: context.req.query("after") }),
+            ...(context.req.query("limit") === undefined ? {} : { limit: context.req.query("limit") }),
+        });
         const projectId = decodedIdentifier(context.req.param("projectId"));
         const sessionId = decodedIdentifier(context.req.param("sessionId"));
         if (!query.success || projectId === null || sessionId === null || !isIdentifier(query.output.runtimeId)) {
             return errorResponse("invalid_request", "The Recording target is invalid", 400);
         }
+        if (!incremental.success) {
+            return errorResponse("invalid_request", "The Recording incremental read is invalid", 400);
+        }
+        const forwarded = new URLSearchParams({ runtimeId: query.output.runtimeId });
+        if (incremental.output.after !== undefined) {
+            forwarded.set("after", incremental.output.after);
+        }
+        if (incremental.output.limit !== undefined) {
+            forwarded.set("limit", incremental.output.limit);
+        }
         const recordingPath = `/v1/projects/${encodeURIComponent(projectId)}/runtimes/${encodeURIComponent(
             query.output.runtimeId,
         )}/sessions/${encodeURIComponent(sessionId)}/events`;
-        return await readRecording(context, projectId, recordingPath);
+        return await readRecording(context, projectId, recordingPath, forwarded);
     });

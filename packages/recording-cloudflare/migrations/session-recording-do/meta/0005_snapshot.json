@@ -1,0 +1,117 @@
+{
+    "version": "6",
+    "dialect": "sqlite",
+    "id": "dac0102f-e6f5-4267-b914-7fb4e1c6cdbc",
+    "prevId": "8e787e87-1943-4fdd-8817-d6dc231c7468",
+    "tables": {
+        "recorded_session_events_v2": {
+            "name": "recorded_session_events_v2",
+            "columns": {
+                "ordinal": {
+                    "name": "ordinal",
+                    "type": "integer",
+                    "primaryKey": true,
+                    "notNull": true,
+                    "autoincrement": true
+                },
+                "envelope_json": {
+                    "name": "envelope_json",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "recorded_at": {
+                    "name": "recorded_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "last_position": {
+                    "name": "last_position",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {
+                "recorded_session_events_v2_last_position": {
+                    "name": "recorded_session_events_v2_last_position",
+                    "columns": ["last_position"],
+                    "isUnique": false
+                }
+            },
+            "foreignKeys": {},
+            "compositePrimaryKeys": {},
+            "uniqueConstraints": {},
+            "checkConstraints": {}
+        },
+        "recording_metadata": {
+            "name": "recording_metadata",
+            "columns": {
+                "singleton": {
+                    "name": "singleton",
+                    "type": "integer",
+                    "primaryKey": true,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "project_id": {
+                    "name": "project_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "runtime_id": {
+                    "name": "runtime_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "session_id": {
+                    "name": "session_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "created_at": {
+                    "name": "created_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {},
+            "foreignKeys": {},
+            "compositePrimaryKeys": {},
+            "uniqueConstraints": {},
+            "checkConstraints": {
+                "recording_metadata_singleton_check": {
+                    "name": "recording_metadata_singleton_check",
+                    "value": "\"recording_metadata\".\"singleton\" = 1"
+                }
+            }
+        }
+    },
+    "views": {},
+    "enums": {},
+    "_meta": {
+        "schemas": {},
+        "tables": {},
+        "columns": {}
+    },
+    "internal": {
+        "indexes": {
+            "recorded_session_events_v2_last_position": {
+                "columns": ["last_position"],
+                "isUnique": false
+            }
+        }
+    }
+}

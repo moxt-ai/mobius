@@ -2,6 +2,7 @@ import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
     decodeSessionRecordingHistory,
+    decodeSessionRecordingHistoryPage,
     encodeSessionEventEnvelopeV2,
     MOBIUS_API_PREFIX,
 } from "@moxt-ai/mobius-protocol";
@@ -225,6 +226,90 @@ describe.sequential("Platform Recording read route", () => {
         expect(decodeSessionRecordingHistory(await recorded.text())).toMatchObject({
             events: [{ payload: { content: { text: "recording route answer" } } }],
             sessionId,
+        });
+    });
+    // @no-uc: Technical regression; incremental cursor reads must traverse Platform routing unchanged.
+    it("Given an enabled Project policy, When a Platform app reads after a cursor, Then only later events arrive as a bounded page", async () => {
+        const worker = createTestMobiusPlatformApp(
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
+            createPlatformGateways,
+        );
+        const environment = bindings();
+
+        const tenants = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/platform/tenants`, {
+                    headers: developerHeaders(),
+                }),
+                environment,
+            ),
+            200,
+        );
+        const tenantValues = tenants["tenants"];
+        if (!Array.isArray(tenantValues) || tenantValues.length === 0) {
+            throw new Error("Expected a Platform tenant");
+        }
+        const app = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps`, {
+                    body: JSON.stringify({
+                        displayName: "Recording route App",
+                        tenantId: text(tenantValues[0], "tenantId"),
+                    }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const appId = text(app, "appId");
+        const credential = text(record(app["defaultCredential"]), "credential");
+        const project = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${appId}/projects`, {
+                    body: JSON.stringify({
+                        displayName: "Recording route Project",
+                        idempotencyKey: `recording-route-${appId}`,
+                        locationHint: "apac",
+                    }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const projectId = text(project, "projectId");
+        await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${appId}/recording-policy`, {
+                    body: JSON.stringify({ mode: "enabled" }),
+                    headers: developerHeaders(),
+                    method: "PUT",
+                }),
+                environment,
+            ),
+            200,
+        );
+
+        const sessionId = "recording-route-session";
+        const runtimeId = projectId;
+        await recordThroughRelay(projectId, sessionId, "recording route answer");
+
+        const readUrl =
+            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}` +
+            `/recording/sessions/${sessionId}/events?runtimeId=${runtimeId}&after=1`;
+        const page = await worker.fetch(new Request(readUrl, { headers: credentialHeaders(credential) }), environment);
+
+        expect(page.status).toBe(200);
+        expect(decodeSessionRecordingHistoryPage(await page.text())).toMatchObject({
+            events: [],
+            nextCursor: null,
+            tailCursor: "1",
+            sessionId,
+            truncated: false,
+            version: 2,
         });
     });
 });
