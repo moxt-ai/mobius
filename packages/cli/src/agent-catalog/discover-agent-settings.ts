@@ -50,7 +50,8 @@ export async function discoverAgentSettings(
     sessions: AgentRuntimeManager,
     signal: AbortSignal,
 ): Promise<AgentSettingsDiscovery> {
-    const agent = config.catalog.find(command.agentId);
+    const cataloged = config.catalog.find(command.agentId);
+    const agent = config.resolveAgent === undefined ? cataloged : await config.resolveAgent(cataloged, signal);
     const cwd = await directories.resolve(config.bindingId, "default", signal);
     const inspectedBaseSnapshot = await sessions.inspectAgentSettings({
         additionalDirectories: [],
