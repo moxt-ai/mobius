@@ -523,7 +523,7 @@ const sessionExportV2Schema = z
     })
     .readonly()
     .superRefine((session, context) => {
-        let previousPosition = 0n;
+        let previousPosition = -1n;
         const eventIds = new Set<string>();
         for (const [index, event] of session.events.entries()) {
             if (event.sessionId !== session.sessionId) {

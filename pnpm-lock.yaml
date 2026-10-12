@@ -307,6 +307,9 @@ importers:
       '@moxt-ai/mobius-protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@moxt-ai/mobius-recording-cloudflare':
+        specifier: workspace:*
+        version: link:../recording-cloudflare
       '@moxt-ai/mobius-relay-cloudflare-platform':
         specifier: workspace:*
         version: link:../relay-cloudflare-platform

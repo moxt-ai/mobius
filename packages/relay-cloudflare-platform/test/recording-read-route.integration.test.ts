@@ -227,6 +227,92 @@ describe.sequential("Platform Recording read route", () => {
             events: [{ payload: { content: { text: "recording route answer" } } }],
             sessionId,
         });
+
+        const recordingPath = `${relayOrigin}${MOBIUS_API_PREFIX}/v1/recording/sessions/${sessionId}`;
+        const metadata = await worker.fetch(
+            new Request(recordingPath, { headers: credentialHeaders(credential) }),
+            environment,
+        );
+        expect(metadata.status).toBe(200);
+        expect(record(await metadata.json())).toMatchObject({
+            projectId,
+            runtimeId,
+            sessionId,
+            recording: {
+                delivery: { kind: "recorded", recordedEventCount: 1 },
+                integrity: { eventCount: 1, expectedEventCount: 1, kind: "complete" },
+                retention: { kind: "unmanaged" },
+            },
+        });
+
+        const target = await worker.fetch(
+            new Request(`${recordingPath}/target`, { headers: credentialHeaders(credential) }),
+            environment,
+        );
+        expect(target.status).toBe(200);
+        expect(record(await target.json())).toEqual({ projectId, runtimeId, sessionId });
+
+        const status = await worker.fetch(
+            new Request(`${recordingPath}/status`, { headers: credentialHeaders(credential) }),
+            environment,
+        );
+        expect(status.status).toBe(200);
+        expect(record(await status.json())).toMatchObject({
+            integrity: { eventCount: 1, expectedEventCount: 1, kind: "complete" },
+        });
+
+        const delivery = await worker.fetch(
+            new Request(`${recordingPath}/delivery`, { headers: credentialHeaders(credential) }),
+            environment,
+        );
+        expect(delivery.status).toBe(200);
+        expect(record(await delivery.json())).toMatchObject({
+            kind: "recorded",
+            recordedEventCount: 1,
+        });
+
+        const history = await worker.fetch(
+            new Request(`${recordingPath}/history`, { headers: credentialHeaders(credential) }),
+            environment,
+        );
+        expect(history.status).toBe(200);
+        expect(record(await history.json())).toMatchObject({
+            projectId,
+            runtimeId,
+            sessionId,
+            recommended: "recording",
+        });
+
+        const unscopedEvents = await worker.fetch(
+            new Request(`${recordingPath}/events`, { headers: credentialHeaders(credential) }),
+            environment,
+        );
+        expect(unscopedEvents.status).toBe(200);
+        expect(decodeSessionRecordingHistory(await unscopedEvents.text())).toMatchObject({ sessionId });
+
+        const retention = await worker.fetch(
+            new Request(`${recordingPath}/retention`, {
+                body: JSON.stringify({ retentionMilliseconds: 60_000 }),
+                headers: credentialHeaders(credential),
+                method: "PUT",
+            }),
+            environment,
+        );
+        expect(retention.status).toBe(200);
+        expect(record(await retention.json())).toMatchObject({ kind: "managed", retentionMilliseconds: 60_000 });
+
+        const exported = await worker.fetch(
+            new Request(`${recordingPath}/export`, { headers: credentialHeaders(credential) }),
+            environment,
+        );
+        expect(exported.status).toBe(200);
+        expect(record(await exported.json())).toMatchObject({ formatVersion: "2", session: { sessionId } });
+
+        const deleted = await worker.fetch(
+            new Request(recordingPath, { headers: credentialHeaders(credential), method: "DELETE" }),
+            environment,
+        );
+        expect(deleted.status).toBe(204);
     });
     // @no-uc: Technical regression; incremental cursor reads must traverse Platform routing unchanged.
     it("Given an enabled Project policy, When a Platform app reads after a cursor, Then only later events arrive as a bounded page", async () => {

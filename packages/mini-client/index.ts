@@ -16,6 +16,7 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { MobiusAppCredentialProvider, MobiusPlatformAppClient } from "@moxt-ai/mobius-sdk/platform";
 import {
+    HttpTransport,
     MobiusClient,
     type MobiusLiveEventSubscriptionV2,
     type MobiusLiveSessionEventObserverV2,
@@ -95,8 +96,11 @@ interface ClientConnection {
     readonly service: MobiusClient;
 }
 
-function client(state: MiniClientState, credential = state.appSecret): ClientConnection {
-    const transport = new WsTransport();
+function client(
+    state: MiniClientState,
+    credential = state.appSecret,
+    transport: HttpTransport | WsTransport = new WsTransport(),
+): ClientConnection {
     const service = new MobiusClient({
         credentialProvider: new StaticMobiusCredentialProvider(credential),
         endpoint: state.endpoint,
@@ -107,7 +111,9 @@ function client(state: MiniClientState, credential = state.appSecret): ClientCon
         service,
         close: () => {
             service.close();
-            transport.close();
+            if (transport instanceof WsTransport) {
+                transport.close();
+            }
         },
     };
 }
@@ -766,6 +772,109 @@ async function getCommand(directory: string, flags: ReadonlyMap<string, string>)
     }
 }
 
+async function recordingCommand(
+    directory: string,
+    flags: ReadonlyMap<string, string>,
+    operation: string,
+): Promise<void> {
+    const state = await readState(directory);
+    const sessionId = requireFlag(flags, "session");
+    const connection = client(state, state.appSecret, operation === "delete" ? new HttpTransport() : new WsTransport());
+    const service = connection.service;
+    try {
+        switch (operation) {
+            case "resolve":
+                output(await service.recordings.resolve(sessionId, operationSignal()));
+                break;
+            case "metadata":
+                output(await service.recordings.read(sessionId, operationSignal()));
+                break;
+            case "integrity":
+                output(await service.recordings.readStatus(sessionId, operationSignal()));
+                break;
+            case "delivery":
+                output(await service.recordings.readDelivery(sessionId, operationSignal()));
+                break;
+            case "history":
+                output(await service.recordings.readHistorySources(sessionId, operationSignal()));
+                break;
+            case "export":
+                output(await service.recordings.exportV2(sessionId, operationSignal()));
+                break;
+            case "events":
+                output(
+                    await service.recordings.readEvents(sessionId, new MobiusPageRequest(100, ""), operationSignal()),
+                );
+                break;
+            case "retention": {
+                const retentionMilliseconds = flags.get("retention-ms");
+                output(
+                    retentionMilliseconds === undefined
+                        ? await service.recordings.readRetention(sessionId, operationSignal())
+                        : await service.recordings.writeRetention(
+                              sessionId,
+                              parsePositiveInteger(retentionMilliseconds, "retention-ms"),
+                              operationSignal(),
+                          ),
+                );
+                break;
+            }
+            case "delete":
+                await service.recordings.delete(sessionId, operationSignal());
+                output({ deleted: true, sessionId });
+                break;
+            default:
+                throw new MiniClientError("invalid_arguments", "Unknown Recording operation");
+        }
+    } finally {
+        connection.close();
+    }
+}
+
+async function recordingListCommand(directory: string, flags: ReadonlyMap<string, string>): Promise<void> {
+    const state = await readState(directory);
+    const connection = client(state);
+    try {
+        const cursor = flags.get("cursor");
+        const limit = flags.get("limit");
+        const query = flags.get("query");
+        const status = flags.get("status");
+        output(
+            await connection.service.recordings.list(
+                state.projectId,
+                state.runtimeId,
+                {
+                    ...(cursor === undefined ? {} : { cursor }),
+                    ...(limit === undefined ? {} : { limit: parsePositiveInteger(limit, "limit") }),
+                    ...(query === undefined ? {} : { query }),
+                    ...(status === undefined ? {} : { status: parseRecordingStatus(status) }),
+                },
+                operationSignal(),
+            ),
+        );
+    } finally {
+        connection.close();
+    }
+}
+
+function parsePositiveInteger(value: string, name: string): number {
+    if (!/^[1-9][0-9]*$/u.test(value)) {
+        throw new MiniClientError("invalid_arguments", `Option --${name} must be a positive integer`);
+    }
+    const parsed = Number(value);
+    if (!Number.isSafeInteger(parsed)) {
+        throw new MiniClientError("invalid_arguments", `Option --${name} is too large`);
+    }
+    return parsed;
+}
+
+function parseRecordingStatus(value: string): "idle" | "running" | "failed" {
+    if (value === "idle" || value === "running" || value === "failed") {
+        return value;
+    }
+    throw new MiniClientError("invalid_arguments", "Option --status must be idle, running, or failed");
+}
+
 type MiniClientCommand =
     | "cancel-turn"
     | "compact"
@@ -773,6 +882,16 @@ type MiniClientCommand =
     | "create-session"
     | "get"
     | "get-agent-configuration"
+    | "recording-delete"
+    | "recording-delivery"
+    | "recording-events"
+    | "recording-export"
+    | "recording-history"
+    | "recording-integrity"
+    | "recording-list"
+    | "recording-metadata"
+    | "recording-resolve"
+    | "recording-retention"
     | "import-event-log"
     | "list-runtimes"
     | "list-sessions"
@@ -852,6 +971,20 @@ async function runCommand(program: Command, command: Command, name: MiniClientCo
         case "get":
             await getCommand(directory, flags);
             break;
+        case "recording-resolve":
+        case "recording-metadata":
+        case "recording-integrity":
+        case "recording-delivery":
+        case "recording-history":
+        case "recording-events":
+        case "recording-export":
+        case "recording-retention":
+        case "recording-delete":
+            await recordingCommand(directory, flags, name.slice("recording-".length));
+            break;
+        case "recording-list":
+            await recordingListCommand(directory, flags);
+            break;
         case "import-event-log":
             await copyEventLogCommand(directory, flags, "import");
             break;
@@ -917,6 +1050,25 @@ function createProgram(): Command {
     add("fork-event-log", "fork and verify a V2 Session event-log prefix")
         .option("--session <id>", "source Session identifier")
         .option("--through-event <id>", "inclusive source event identifier");
+    add("recording-resolve", "resolve Recording ownership by Session identifier").option(
+        "--session <id>",
+        "Session identifier",
+    );
+    add("recording-metadata", "read Recording Session metadata").option("--session <id>", "Session identifier");
+    add("recording-integrity", "read Recording integrity and gaps").option("--session <id>", "Session identifier");
+    add("recording-delivery", "read Recording delivery status").option("--session <id>", "Session identifier");
+    add("recording-history", "read unified Session history sources").option("--session <id>", "Session identifier");
+    add("recording-events", "read recorded V2 events").option("--session <id>", "Session identifier");
+    add("recording-export", "export recorded V2 Session events").option("--session <id>", "Session identifier");
+    add("recording-list", "list recorded Sessions")
+        .option("--cursor <cursor>", "Recording directory cursor")
+        .option("--limit <count>", "Recording directory page size")
+        .option("--query <text>", "Recording directory search text")
+        .option("--status <status>", "Recording status filter");
+    add("recording-retention", "read or set Recording retention")
+        .option("--session <id>", "Session identifier")
+        .option("--retention-ms <milliseconds>", "set retention duration");
+    add("recording-delete", "delete recorded Session data").option("--session <id>", "Session identifier");
     return program;
 }
 

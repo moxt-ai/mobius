@@ -29,20 +29,54 @@ async function createCloudflareRuntime(allowedOrigins: ReadonlySet<string>) {
     if (output === undefined) {
         throw new Error("Expected the Platform Worker bundle");
     }
+    const recordingBundle = await build({
+        entryPoints: [fileURLToPath(new NodeURL("../../recording-cloudflare/src/worker.ts", import.meta.url))],
+        bundle: true,
+        external: ["cloudflare:workers"],
+        format: "esm",
+        platform: "browser",
+        write: false,
+    });
+    const recordingOutput = recordingBundle.outputFiles[0];
+    if (recordingOutput === undefined) {
+        throw new Error("Expected the Recording Worker bundle");
+    }
     const runtime = new Miniflare(
         convertV4MiniflareOptions({
-            modules: true,
-            script: output.text,
             compatibilityDate: "2026-09-03",
-            d1Databases: ["PLATFORM_DIRECTORY_DATABASE"],
-            kvNamespaces: ["APP_CREDENTIAL_CACHE"],
-            r2Buckets: ["R2_BUCKET_APAC", "R2_BUCKET_WNAM"],
-            bindings: {
-                MOBIUS_PLATFORM_ALLOWED_ORIGINS: JSON.stringify([...allowedOrigins]),
-                MOBIUS_PLATFORM_OIDC_PROVIDERS: "[]",
-                MOBIUS_PLATFORM_OPERATOR_SUBJECTS: "[]",
-            },
-            durableObjects: miniflareDurableObjects(new NodeURL("wrangler.jsonc", packageDirectory)),
+            bindings: {},
+            workers: [
+                {
+                    name: "platform",
+                    modules: true,
+                    script: output.text,
+                    compatibilityDate: "2026-09-03",
+                    d1Databases: ["PLATFORM_DIRECTORY_DATABASE"],
+                    kvNamespaces: ["APP_CREDENTIAL_CACHE"],
+                    r2Buckets: ["R2_BUCKET_APAC", "R2_BUCKET_WNAM"],
+                    bindings: {
+                        MOBIUS_PLATFORM_ALLOWED_ORIGINS: JSON.stringify([...allowedOrigins]),
+                        MOBIUS_PLATFORM_OIDC_PROVIDERS: "[]",
+                        MOBIUS_PLATFORM_OPERATOR_SUBJECTS: "[]",
+                        RECORDING_PROVIDER_ID: "recording-test",
+                    },
+                    serviceBindings: {
+                        RECORDING: {
+                            name: "recording",
+                        },
+                    },
+                    durableObjects: miniflareDurableObjects(new NodeURL("wrangler.jsonc", packageDirectory)),
+                },
+                {
+                    name: "recording",
+                    modules: true,
+                    script: recordingOutput.text,
+                    compatibilityDate: "2026-09-03",
+                    durableObjects: miniflareDurableObjects(
+                        new NodeURL("../../recording-cloudflare/wrangler.jsonc", import.meta.url),
+                    ),
+                },
+            ],
         }),
     );
     return runtime;
@@ -58,7 +92,7 @@ export async function createTestMobiusPlatformBindings(allowedOrigins: ReadonlyS
     const runtime = await createCloudflareRuntime(allowedOrigins);
     try {
         const ready = await runtime.ready;
-        const env = await runtime.getBindings<TestPlatformBindings>();
+        const env = await runtime.getBindings<TestPlatformBindings>("platform");
         await migrate(
             env.PLATFORM_DIRECTORY_DATABASE,
             new NodeURL("../../relay-cloudflare-platform/migrations/d1", import.meta.url),

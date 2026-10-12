@@ -745,6 +745,7 @@ export function createPlatformApplication(
         .all("/*", projectHandler);
     const versionedRoutes = new Hono<DispatchEnvironment>()
         .route("/projects/:projectId", projectRoutes)
+        .route("/recording", recordingReadRoutes)
         .all("/runtime-pairings/*", projectHandler)
         .all("/runtimes/connect", projectHandler)
         .all("/*", projectHandler);

@@ -8,7 +8,15 @@ import {
     decodeSessionConfigUpdatedEvent,
     decodeSessionEventBatchV2,
     decodeSessionEventLogPageV2,
+    decodeSessionHistorySources,
     decodeSessionReadyEvent,
+    decodeSessionRecordingDelivery,
+    decodeSessionRecordingDirectory,
+    decodeSessionRecordingHistoryPage,
+    decodeSessionRecordingIntegrity,
+    decodeSessionRecordingMetadata,
+    decodeSessionRecordingRetention,
+    decodeSessionRecordingTarget,
     decodeSessionRestoredEvent,
     decodeSessionsListedEvent,
     decodeSessionsQueriedEvent,
@@ -28,7 +36,15 @@ import {
     type SessionEventBatchV2,
     type SessionEventLogPageV2,
     type SessionEventOmissionV2,
+    type SessionHistorySources,
     SessionPromptDisposition,
+    type SessionRecordingDelivery,
+    type SessionRecordingDirectory,
+    type SessionRecordingHistoryPage,
+    type SessionRecordingIntegrity,
+    type SessionRecordingMetadata,
+    type SessionRecordingRetention,
+    type SessionRecordingTarget,
     type WorkspaceEntriesEvent,
 } from "@moxt-ai/mobius-protocol";
 
@@ -1742,6 +1758,155 @@ export class MobiusEventResources {
     };
 }
 
+export interface MobiusRecordingDirectoryQuery {
+    readonly cursor?: string;
+    readonly limit?: number;
+    readonly query?: string;
+    readonly status?: "idle" | "running" | "failed";
+}
+
+export class MobiusRecordingResources {
+    readonly #executor: MobiusRequestExecutor;
+
+    constructor(executor: MobiusRequestExecutor) {
+        this.#executor = executor;
+    }
+
+    readonly read = async (sessionId: string, signal: AbortSignal): Promise<SessionRecordingMetadata> =>
+        decodeSessionRecordingMetadata(
+            JSON.stringify(await this.#executor.get(`v1/recording/sessions/${encodeURIComponent(sessionId)}`, signal)),
+        );
+
+    readonly resolve = async (sessionId: string, signal: AbortSignal): Promise<SessionRecordingTarget> =>
+        decodeSessionRecordingTarget(
+            JSON.stringify(
+                await this.#executor.get(`v1/recording/sessions/${encodeURIComponent(sessionId)}/target`, signal),
+            ),
+        );
+
+    readonly readStatus = async (sessionId: string, signal: AbortSignal): Promise<SessionRecordingIntegrity> => {
+        const value: unknown = await this.#executor.get(
+            `v1/recording/sessions/${encodeURIComponent(sessionId)}/status`,
+            signal,
+        );
+        const integrity =
+            typeof value === "object" && value !== null && !Array.isArray(value)
+                ? Reflect.get(value, "integrity")
+                : value;
+        return decodeSessionRecordingIntegrity(JSON.stringify(integrity));
+    };
+
+    readonly readDelivery = async (sessionId: string, signal: AbortSignal): Promise<SessionRecordingDelivery> =>
+        readRecordingState<SessionRecordingDelivery>(
+            this.#executor,
+            sessionId,
+            "delivery",
+            decodeSessionRecordingDelivery,
+            signal,
+        );
+
+    readonly readHistorySources = async (sessionId: string, signal: AbortSignal): Promise<SessionHistorySources> =>
+        readRecordingState<SessionHistorySources>(
+            this.#executor,
+            sessionId,
+            "history",
+            decodeSessionHistorySources,
+            signal,
+        );
+
+    readonly exportV2 = async (sessionId: string, signal: AbortSignal): Promise<MobiusSessionExportV2> =>
+        decodeMobiusSessionExportV2(
+            await this.#executor.get(`v1/recording/sessions/${encodeURIComponent(sessionId)}/export`, signal),
+        );
+
+    readonly readEvents = async (
+        sessionId: string,
+        page: MobiusPageRequest,
+        signal: AbortSignal,
+    ): Promise<SessionRecordingHistoryPage> => {
+        const path = new URL(
+            `v1/recording/sessions/${encodeURIComponent(sessionId)}/events`,
+            "https://mobius.invalid/",
+        );
+        if (page.cursor.length > 0) {
+            path.searchParams.set("after", page.cursor);
+        }
+        path.searchParams.set("limit", page.limit.toString());
+        return decodeSessionRecordingHistoryPage(
+            JSON.stringify(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal)),
+        );
+    };
+
+    readonly list = async (
+        projectId: string,
+        runtimeId: string,
+        query: MobiusRecordingDirectoryQuery,
+        signal: AbortSignal,
+    ): Promise<SessionRecordingDirectory> => {
+        const path = new URL(
+            `v1/projects/${encodeURIComponent(projectId)}/recording/sessions`,
+            "https://mobius.invalid/",
+        );
+        path.searchParams.set("runtimeId", runtimeId);
+        if (query.cursor !== undefined) {
+            path.searchParams.set("cursor", query.cursor);
+        }
+        if (query.limit !== undefined) {
+            path.searchParams.set("limit", query.limit.toString());
+        }
+        if (query.query !== undefined) {
+            path.searchParams.set("q", query.query);
+        }
+        if (query.status !== undefined) {
+            path.searchParams.set("status", query.status);
+        }
+        return decodeSessionRecordingDirectory(
+            JSON.stringify(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal)),
+        );
+    };
+
+    readonly readRetention = async (sessionId: string, signal: AbortSignal): Promise<SessionRecordingRetention> =>
+        readRecordingState<SessionRecordingRetention>(
+            this.#executor,
+            sessionId,
+            "retention",
+            decodeSessionRecordingRetention,
+            signal,
+        );
+
+    readonly writeRetention = async (
+        sessionId: string,
+        retentionMilliseconds: number,
+        signal: AbortSignal,
+    ): Promise<SessionRecordingRetention> =>
+        decodeSessionRecordingRetention(
+            JSON.stringify(
+                await this.#executor.put(
+                    `v1/recording/sessions/${encodeURIComponent(sessionId)}/retention`,
+                    { retentionMilliseconds },
+                    signal,
+                ),
+            ),
+        );
+
+    readonly delete = async (sessionId: string, signal: AbortSignal): Promise<void> =>
+        await this.#executor.deleteEmpty(`v1/recording/sessions/${encodeURIComponent(sessionId)}`, signal);
+}
+
+async function readRecordingState<T>(
+    executor: MobiusRequestExecutor,
+    sessionId: string,
+    operation: string,
+    decode: (encoded: string) => T,
+    signal: AbortSignal,
+): Promise<T> {
+    return decode(
+        JSON.stringify(
+            await executor.get(`v1/recording/sessions/${encodeURIComponent(sessionId)}/${operation}`, signal),
+        ),
+    );
+}
+
 export class MobiusClient {
     readonly attempts: MobiusAttemptResources;
     readonly capabilities: MobiusCapabilityResources;
@@ -1750,6 +1915,7 @@ export class MobiusClient {
     readonly events: MobiusEventResources;
     readonly interactions: MobiusInteractionResources;
     readonly runtimePairings: MobiusRuntimePairingResources;
+    readonly recordings: MobiusRecordingResources;
     readonly runtimes: MobiusRuntimeResources;
     readonly sessions: MobiusSessionResources;
     readonly turns: MobiusTurnResources;
@@ -1768,6 +1934,7 @@ export class MobiusClient {
         this.events = new MobiusEventResources(executor, options.projectId, reconnectAttempts);
         this.interactions = new MobiusInteractionResources(executor, options.projectId);
         this.runtimePairings = new MobiusRuntimePairingResources(executor, options.projectId);
+        this.recordings = new MobiusRecordingResources(executor);
         this.runtimes = new MobiusRuntimeResources(executor, options.projectId);
         this.sessions = new MobiusSessionResources(executor, options.projectId);
         this.turns = new MobiusTurnResources(executor, options.projectId);

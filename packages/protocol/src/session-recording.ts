@@ -48,9 +48,111 @@ const sessionRecordingSummarySchema = z
     })
     .readonly();
 
+const sessionRecordingTargetSchema = z
+    .object({
+        projectId: identifierStringSchema,
+        runtimeId: identifierStringSchema,
+        sessionId: identifierStringSchema,
+    })
+    .readonly();
+
 const sessionRecordingDirectorySchema = z
     .object({
+        nextCursor: z.string().min(1).max(512).nullable().optional(),
         sessions: z.array(sessionRecordingSummarySchema).max(100_000).readonly(),
+        truncated: z.boolean().optional(),
+    })
+    .readonly();
+
+const sessionRecordingIntegritySchema = z.discriminatedUnion("kind", [
+    z
+        .object({
+            eventCount: z.number().int().positive().safe(),
+            expectedEventCount: z.number().int().positive().safe(),
+            firstPosition: recordingPositionSchema,
+            kind: z.literal("complete"),
+            lastPosition: recordingPositionSchema,
+            missingPositionCount: z.literal(0),
+            missingPositions: z.array(recordingPositionSchema).readonly(),
+            missingPositionsTruncated: z.literal(false),
+        })
+        .readonly(),
+    z
+        .object({
+            eventCount: z.number().int().positive().safe(),
+            expectedEventCount: z.number().int().positive().safe(),
+            firstPosition: recordingPositionSchema,
+            kind: z.literal("partial"),
+            lastPosition: recordingPositionSchema,
+            missingPositionCount: z.number().int().positive().safe(),
+            missingPositions: z.array(recordingPositionSchema).max(1_000).readonly(),
+            missingPositionsTruncated: z.boolean(),
+        })
+        .readonly(),
+]);
+
+const sessionRecordingRetentionSchema = z.discriminatedUnion("kind", [
+    z
+        .object({
+            configuredAt: z.iso.datetime({ offset: true }),
+            expiresAt: z.iso.datetime({ offset: true }),
+            kind: z.literal("managed"),
+            retentionMilliseconds: z.number().int().positive().safe(),
+        })
+        .readonly(),
+    z.object({ kind: z.literal("unmanaged") }).readonly(),
+]);
+
+const sessionRecordingDeliverySchema = z.discriminatedUnion("kind", [
+    z
+        .object({
+            expectedEventCount: z.number().int().nonnegative().safe(),
+            firstDeliveredAt: z.iso.datetime({ offset: true }),
+            kind: z.literal("recorded"),
+            lastDeliveredAt: z.iso.datetime({ offset: true }),
+            missingEventCount: z.number().int().nonnegative().safe(),
+            recordedEventCount: z.number().int().positive().safe(),
+        })
+        .readonly(),
+    z.object({ kind: z.literal("unobserved") }).readonly(),
+]);
+
+const sessionRecordingStateSchema = z
+    .object({
+        delivery: sessionRecordingDeliverySchema,
+        integrity: sessionRecordingIntegritySchema,
+        retention: sessionRecordingRetentionSchema,
+        state: z.literal("available"),
+    })
+    .readonly();
+
+const sessionRecordingMetadataSchema = z
+    .object({
+        projectId: identifierStringSchema,
+        recording: sessionRecordingStateSchema,
+        runtimeId: identifierStringSchema,
+        sessionId: identifierStringSchema,
+        summary: sessionRecordingSummarySchema.nullable(),
+    })
+    .readonly();
+
+const historySourceStateSchema = z.enum(["available", "disabled", "partial", "unavailable", "unknown"]);
+
+const sessionHistorySourceSchema = z
+    .object({
+        detail: z.string().max(500).nullable().optional(),
+        kind: z.enum(["native", "recording", "runtime-live"]),
+        state: historySourceStateSchema,
+    })
+    .readonly();
+
+const sessionHistorySourcesSchema = z
+    .object({
+        projectId: identifierStringSchema,
+        recommended: z.enum(["native", "recording", "runtime-live", "none"]),
+        runtimeId: identifierStringSchema,
+        sessionId: identifierStringSchema,
+        sources: z.array(sessionHistorySourceSchema).min(3).max(3).readonly(),
     })
     .readonly();
 
@@ -60,6 +162,14 @@ export type SessionRecordingHistoryPage = z.infer<typeof sessionRecordingHistory
 export type SessionRecordingSummary = z.infer<typeof sessionRecordingSummarySchema>;
 export type SessionRecordingStatus = z.infer<typeof sessionRecordingStatusSchema>;
 export type SessionRecordingDirectory = z.infer<typeof sessionRecordingDirectorySchema>;
+export type SessionRecordingTarget = z.infer<typeof sessionRecordingTargetSchema>;
+export type SessionRecordingIntegrity = z.infer<typeof sessionRecordingIntegritySchema>;
+export type SessionRecordingRetention = z.infer<typeof sessionRecordingRetentionSchema>;
+export type SessionRecordingDelivery = z.infer<typeof sessionRecordingDeliverySchema>;
+export type SessionRecordingState = z.infer<typeof sessionRecordingStateSchema>;
+export type SessionRecordingMetadata = z.infer<typeof sessionRecordingMetadataSchema>;
+export type SessionHistorySource = z.infer<typeof sessionHistorySourceSchema>;
+export type SessionHistorySources = z.infer<typeof sessionHistorySourcesSchema>;
 
 function decode<T>(encoded: string, schema: z.ZodType<T>): T {
     try {
@@ -93,3 +203,39 @@ export const decodeSessionRecordingDirectory = (encoded: string): SessionRecordi
 
 export const encodeSessionRecordingDirectory = (value: SessionRecordingDirectory): string =>
     JSON.stringify(sessionRecordingDirectorySchema.parse(value));
+
+export const decodeSessionRecordingTarget = (encoded: string): SessionRecordingTarget =>
+    decode(encoded, sessionRecordingTargetSchema);
+
+export const encodeSessionRecordingTarget = (value: SessionRecordingTarget): string =>
+    JSON.stringify(sessionRecordingTargetSchema.parse(value));
+
+export const decodeSessionRecordingIntegrity = (encoded: string): SessionRecordingIntegrity =>
+    decode(encoded, sessionRecordingIntegritySchema);
+
+export const encodeSessionRecordingIntegrity = (value: SessionRecordingIntegrity): string =>
+    JSON.stringify(sessionRecordingIntegritySchema.parse(value));
+
+export const decodeSessionRecordingRetention = (encoded: string): SessionRecordingRetention =>
+    decode(encoded, sessionRecordingRetentionSchema);
+
+export const encodeSessionRecordingRetention = (value: SessionRecordingRetention): string =>
+    JSON.stringify(sessionRecordingRetentionSchema.parse(value));
+
+export const decodeSessionRecordingDelivery = (encoded: string): SessionRecordingDelivery =>
+    decode(encoded, sessionRecordingDeliverySchema);
+
+export const encodeSessionRecordingDelivery = (value: SessionRecordingDelivery): string =>
+    JSON.stringify(sessionRecordingDeliverySchema.parse(value));
+
+export const decodeSessionRecordingMetadata = (encoded: string): SessionRecordingMetadata =>
+    decode(encoded, sessionRecordingMetadataSchema);
+
+export const encodeSessionRecordingMetadata = (value: SessionRecordingMetadata): string =>
+    JSON.stringify(sessionRecordingMetadataSchema.parse(value));
+
+export const decodeSessionHistorySources = (encoded: string): SessionHistorySources =>
+    decode(encoded, sessionHistorySourcesSchema);
+
+export const encodeSessionHistorySources = (value: SessionHistorySources): string =>
+    JSON.stringify(sessionHistorySourcesSchema.parse(value));

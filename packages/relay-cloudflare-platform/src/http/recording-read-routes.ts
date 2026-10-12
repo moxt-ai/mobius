@@ -90,9 +90,14 @@ export const recordingReadRoutes = new Hono<PlatformApplicationEnvironment>()
         const recordingPath = `/v1/projects/${encodeURIComponent(projectId)}/runtimes/${encodeURIComponent(
             query.output.runtimeId,
         )}/sessions`;
-        return await readRecording(context, projectId, recordingPath);
+        const directoryQuery = new URLSearchParams(new URL(context.req.url).searchParams);
+        directoryQuery.delete("runtimeId");
+        return await readRecording(context, projectId, recordingPath, directoryQuery);
     })
     .get("/sessions/:sessionId/events", async (context): Promise<Response> => {
+        if (context.req.param("projectId") === undefined) {
+            return await readUnscopedRecording(context, decodedIdentifier(context.req.param("sessionId")), "events");
+        }
         const query = v.safeParse(recordingQuery, { runtimeId: context.req.query("runtimeId") ?? "" });
         const incremental = v.safeParse(recordingIncrementalQuery, {
             ...(context.req.query("after") === undefined ? {} : { after: context.req.query("after") }),
@@ -117,4 +122,143 @@ export const recordingReadRoutes = new Hono<PlatformApplicationEnvironment>()
             query.output.runtimeId,
         )}/sessions/${encodeURIComponent(sessionId)}/events`;
         return await readRecording(context, projectId, recordingPath, forwarded);
-    });
+    })
+    .get("/sessions/:sessionId", async (context): Promise<Response> => {
+        const sessionId = decodedIdentifier(context.req.param("sessionId"));
+        if (sessionId === null) {
+            return errorResponse("invalid_request", "The Recording target is invalid", 400);
+        }
+        return await readUnscopedRecording(context, sessionId, "metadata");
+    })
+    .get("/sessions/:sessionId/metadata", (context) =>
+        readUnscopedRecording(context, decodedIdentifier(context.req.param("sessionId")), "metadata"),
+    )
+    .get("/sessions/:sessionId/target", (context) =>
+        readUnscopedRecording(context, decodedIdentifier(context.req.param("sessionId")), "target"),
+    )
+    .get("/sessions/:sessionId/status", (context) =>
+        readUnscopedRecording(context, decodedIdentifier(context.req.param("sessionId")), "status"),
+    )
+    .get("/sessions/:sessionId/delivery", (context) =>
+        readUnscopedRecording(context, decodedIdentifier(context.req.param("sessionId")), "delivery"),
+    )
+    .get("/sessions/:sessionId/history", (context) =>
+        readUnscopedRecording(context, decodedIdentifier(context.req.param("sessionId")), "history"),
+    )
+    .get("/sessions/:sessionId/export", (context) =>
+        readUnscopedRecording(context, decodedIdentifier(context.req.param("sessionId")), "export"),
+    )
+    .get("/sessions/:sessionId/retention", (context) =>
+        readUnscopedRecording(context, decodedIdentifier(context.req.param("sessionId")), "retention"),
+    )
+    .put(
+        "/sessions/:sessionId/retention",
+        async (context) =>
+            await writeUnscopedRecording(context, decodedIdentifier(context.req.param("sessionId")), "retention"),
+    )
+    .delete(
+        "/sessions/:sessionId",
+        async (context) =>
+            await writeUnscopedRecording(context, decodedIdentifier(context.req.param("sessionId")), "delete"),
+    );
+
+async function readUnscopedRecording(
+    context: Context<PlatformApplicationEnvironment>,
+    sessionId: string | null,
+    operation: string,
+): Promise<Response> {
+    if (sessionId === null) {
+        return errorResponse("invalid_request", "The Recording target is invalid", 400);
+    }
+    const target = await authorizeUnscopedTarget(context, sessionId, ProjectPermission.SessionRead);
+    if (target instanceof Response) {
+        return target;
+    }
+    const policy = await context.var.recordingPolicies.readProjectPolicy(target.projectId, context.req.raw.signal);
+    if (policy.effectiveMode !== "enabled") {
+        return errorResponse("recording_disabled", "Recording is disabled", 404);
+    }
+    return (
+        (await context.env.RECORDING?.fetch(
+            new Request(
+                `https://recording.internal/v1/sessions/${encodeURIComponent(sessionId)}${operation === "metadata" ? "" : `/${operation}`}${
+                    operation === "events" ? new URL(context.req.url).search : ""
+                }`,
+                { signal: context.req.raw.signal },
+            ),
+        )) ?? errorResponse("recording_provider_unavailable", "Recording is unavailable", 503)
+    );
+}
+
+async function writeUnscopedRecording(
+    context: Context<PlatformApplicationEnvironment>,
+    sessionId: string | null,
+    operation: string,
+): Promise<Response> {
+    if (sessionId === null) {
+        return errorResponse("invalid_request", "The Recording target is invalid", 400);
+    }
+    const target = await authorizeUnscopedTarget(
+        context,
+        sessionId,
+        operation === "delete" ? ProjectPermission.SessionDelete : ProjectPermission.SessionWrite,
+    );
+    if (target instanceof Response) {
+        return target;
+    }
+    return (
+        (await context.env.RECORDING?.fetch(
+            new Request(
+                `https://recording.internal/v1/sessions/${encodeURIComponent(sessionId)}${operation === "delete" ? "" : `/${operation}`}`,
+                {
+                    method: context.req.method,
+                    ...(operation === "retention" ? { body: await context.req.text() } : {}),
+                    signal: context.req.raw.signal,
+                },
+            ),
+        )) ?? errorResponse("recording_provider_unavailable", "Recording is unavailable", 503)
+    );
+}
+
+async function authorizeUnscopedTarget(
+    context: Context<PlatformApplicationEnvironment>,
+    sessionId: string,
+    permission: ProjectPermission,
+): Promise<Response | { readonly projectId: string }> {
+    const credential = bearerToken(context.req.raw);
+    if (credential === null) {
+        return errorResponse("project_access_denied", "The Project credential is invalid", 401);
+    }
+    const targetResponse = await context.env.RECORDING?.fetch(
+        new Request(`https://recording.internal/v1/sessions/${encodeURIComponent(sessionId)}/target`, {
+            signal: context.req.raw.signal,
+        }),
+    );
+    if (targetResponse === undefined || !targetResponse.ok) {
+        await targetResponse?.body?.cancel();
+        return errorResponse("session_not_found", "The Session is unavailable", 404);
+    }
+    const target: unknown = await targetResponse.json();
+    if (typeof target !== "object" || target === null || !("projectId" in target) || !("runtimeId" in target)) {
+        return errorResponse("session_not_found", "The Session is unavailable", 404);
+    }
+    const projectId = Reflect.get(target, "projectId");
+    if (typeof projectId !== "string" || !isIdentifier(projectId)) {
+        return errorResponse("session_not_found", "The Session is unavailable", 404);
+    }
+    try {
+        await context.var.control.authorizeProject(
+            projectId,
+            credential,
+            permission,
+            context.req.header("user-agent") ?? "moxt-server",
+            context.req.raw.signal,
+        );
+        return { projectId };
+    } catch (cause) {
+        if (cause instanceof PlatformControlPlaneError) {
+            return errorResponse(cause.code, cause.message, cause.status);
+        }
+        throw cause;
+    }
+}

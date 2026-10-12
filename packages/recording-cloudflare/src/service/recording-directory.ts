@@ -69,13 +69,17 @@ export class RecordingDirectory {
             } else {
                 continue;
             }
-            this.#storage.save({
-                ...summary,
-                updatedAt:
-                    existing !== null && Date.parse(existing.updatedAt) > Date.parse(summary.updatedAt)
-                        ? existing.updatedAt
-                        : summary.updatedAt,
-            });
+            this.#storage.save(
+                {
+                    ...summary,
+                    updatedAt:
+                        existing !== null && Date.parse(existing.updatedAt) > Date.parse(summary.updatedAt)
+                            ? existing.updatedAt
+                            : summary.updatedAt,
+                },
+                write.projectId,
+                write.runtimeId,
+            );
         }
     };
 }

@@ -4,6 +4,7 @@
     "private": true,
     "type": "module",
     "scripts": {
+        "test:mini-client-e2e": "tsx miniclient-e2e.ts",
         "typecheck": "tsc --project tsconfig.json"
     },
     "exports": {
@@ -20,6 +21,7 @@
         "@types/ws": "^8.18.1",
         "@moxt-ai/mobius-relay-core": "workspace:*",
         "@moxt-ai/mobius-relay-cloudflare-platform": "workspace:*",
+        "@moxt-ai/mobius-recording-cloudflare": "workspace:*",
         "drizzle-orm": "^0.45.2",
         "esbuild": "0.28.2",
         "hono": "^4.13.8",
