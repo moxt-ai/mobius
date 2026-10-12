@@ -17,13 +17,19 @@ import { withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 import { fakeProviderPrompts } from "../support/llm/scenarios.ts";
 
-async function writeTurnPolicyRecorder(codex: CodexFixture, launcher: string, recording: string): Promise<void> {
+async function writeTurnPolicyRecorder(
+    codex: CodexFixture,
+    launcher: string,
+    recording: string,
+    launches: string,
+): Promise<void> {
     await writeFile(
         launcher,
         `#!${process.execPath}
 import { spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { appendFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
+appendFileSync(${JSON.stringify(launches)}, "started\\n");
 const child = spawn(${JSON.stringify(codex.executable)}, process.argv.slice(2), {
     stdio: ["pipe", "pipe", "inherit"], env: { ...process.env, ...${JSON.stringify(codex.environment)} },
 });
@@ -48,7 +54,18 @@ child.once("exit", code => process.exit(code ?? 1));
     );
 }
 
-test("Given Codex defaults to Full access, When a user runs a tool with selected settings, Then the turn receives Full access policy and completes without approval", async () => {
+async function launchCount(path: string): Promise<number> {
+    try {
+        return (await readFile(path, "utf8")).trim().split("\n").length;
+    } catch (cause) {
+        if (cause instanceof Error && "code" in cause && cause.code === "ENOENT") {
+            return 0;
+        }
+        throw cause;
+    }
+}
+
+test("Given Codex publishes complete model settings and defaults to Full access, When a user discovers settings and runs a tool, Then discovery uses one process and the turn completes without approval", async () => {
     await using provider = await FakeOpenAiProvider.start("mobius-test-model", "SETTINGS_REPLY", {
         patch: "*** Begin Patch\n*** Add File: full-access-check.txt\n+full access\n*** End Patch",
     });
@@ -58,7 +75,8 @@ test("Given Codex defaults to Full access, When a user runs a tool with selected
     const directory = await mkdtemp(join(tmpdir(), "mobius-codex-settings-"));
     const launcher = join(directory, "codex.mjs");
     const recording = join(directory, "turn-policy.json");
-    await writeTurnPolicyRecorder(codex, launcher, recording);
+    const launches = join(directory, "launches.log");
+    await writeTurnPolicyRecorder(codex, launcher, recording, launches);
     const environment = Object.fromEntries(
         Object.entries({ ...codex.environment, MOBIUS_CODEX_PATH: launcher }).filter(
             ([name]) => name !== "INITIAL_AGENT_MODE",
@@ -66,6 +84,7 @@ test("Given Codex defaults to Full access, When a user runs a tool with selected
     );
     try {
         await withRealDaemon(new CodexAgentSpecification(), environment, async (peer) => {
+            const launchesBeforeSettings = await launchCount(launches);
             const requestId = randomUUID();
             peer.send(
                 encodeAgentSettingsDiscoverCommand({ kind: "agent.settings.discover", agentId: "codex", requestId }),
@@ -79,6 +98,7 @@ test("Given Codex defaults to Full access, When a user runs a tool with selected
                 }
             }
             expect(discovered.requestId).toBe(requestId);
+            expect((await launchCount(launches)) - launchesBeforeSettings).toBe(1);
             const model = discovered.settings.find((setting) => setting.id === "model")?.values[0]?.value;
             const effort = discovered.settings
                 .find((setting) => setting.id === "reasoning_effort")

@@ -11,6 +11,7 @@ import {
     type SessionConfigOption,
 } from "@moxt-ai/mobius-protocol";
 import {
+    type AcpAgentSettingsModelEffort,
     AcpConfigurationValueUnavailableError,
     AcpExecutionError,
     type AgentRuntimeManager,
@@ -61,6 +62,7 @@ export async function discoverAgentSettings(
         agentName: inspectedBaseSnapshot.agentName,
         agentVersion: inspectedBaseSnapshot.agentVersion,
         configOptions: await discoverOpenCodeModelOptions(agent, cwd, inspectedBaseSnapshot.configOptions, signal),
+        modelEffort: inspectedBaseSnapshot.modelEffort,
     };
     const baseModel = modelOption(baseSnapshot.configOptions);
     const unsupportedModels: AcpConfigurationValueUnavailableError[] = [];
@@ -104,6 +106,7 @@ export async function discoverAgentSettings(
         baseSnapshot.configOptions,
         selectedSnapshot.configOptions,
         unsupportedModels,
+        baseSnapshot.modelEffort,
         cwd,
         sessions,
         signal,
@@ -217,6 +220,7 @@ async function discoverModelEffort(
     initialOptions: readonly SessionConfigOption[],
     selectedOptions: readonly SessionConfigOption[],
     initiallyUnsupportedModels: AcpConfigurationValueUnavailableError[],
+    discoveredModelEffort: AcpAgentSettingsModelEffort,
     cwd: string,
     sessions: AgentRuntimeManager,
     signal: AbortSignal,
@@ -231,6 +235,13 @@ async function discoverModelEffort(
     }
     if (model === undefined || model.type !== "select" || model.values.length === 0) {
         return { ...unavailableModelEffort(), unsupportedModelIds: unsupportedModelIds(unsupportedModels) };
+    }
+    if (
+        resolution === AGENT_MODEL_EFFORT_RESOLUTION_COMPLETE &&
+        discoveredModelEffort.kind === "complete" &&
+        discoveredModelEffort.value.resolution === AGENT_MODEL_EFFORT_RESOLUTION_COMPLETE
+    ) {
+        return discoveredModelEffort.value;
     }
     const inspectModel = async (modelValue: string): Promise<readonly SessionConfigOption[]> =>
         (

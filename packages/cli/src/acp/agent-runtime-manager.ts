@@ -33,6 +33,7 @@ const SESSION_CONTROL_TIMEOUT_MILLISECONDS = 30_000;
 export { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp-error.ts";
 export {
     type AcpAgentSettingsInspectionOptions,
+    type AcpAgentSettingsModelEffort,
     AcpAgentSettingsSnapshot,
     type AcpConfigureOptions,
     type AcpElicitationResponseOptions,
@@ -366,6 +367,7 @@ export class AgentRuntimeManager {
                     ),
                 async (runtime) => {
                     const prepared = runtime.prepared();
+                    const discoveredModelEffort = runtime.agentSettingsModelEffort();
                     const model = options.model;
                     const configOptions =
                         model === undefined
@@ -382,7 +384,14 @@ export class AgentRuntimeManager {
                                   value: model,
                                   valueType: "select",
                               });
-                    return new AcpAgentSettingsSnapshot(prepared.agentName, prepared.agentVersion, configOptions);
+                    return new AcpAgentSettingsSnapshot(
+                        prepared.agentName,
+                        prepared.agentVersion,
+                        configOptions,
+                        discoveredModelEffort === null
+                            ? { kind: "unavailable" }
+                            : { kind: "complete", value: discoveredModelEffort },
+                    );
                 },
                 async (runtime) => await runtime.close(),
             );
