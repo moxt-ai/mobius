@@ -627,22 +627,21 @@ child.once("exit", (code) => process.exit(code ?? 84));
         }
     });
 
-    it.skipIf(process.platform === "win32")(
-        "Given an ACP Agent has a tool subprocess, When the turn is cancelled, Then Mobius retains the process tree until Runtime shutdown",
-        async () => {
-            const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-cancel-tree-"));
-            const manager = new AgentRuntimeManager();
-            const adapterPath = join(temporaryDirectory, "codex-acp");
-            const childPidPath = join(temporaryDirectory, "tool-child.pid");
-            await writeFile(
-                adapterPath,
-                `#!${process.execPath}
+    it("Given an ACP Agent has a tool subprocess, When the turn is cancelled, Then Mobius retains the process tree until Runtime shutdown", async () => {
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-cancel-tree-"));
+        const manager = new AgentRuntimeManager();
+        const adapterPath = join(temporaryDirectory, "codex-acp.mjs");
+        const childPidPath = join(temporaryDirectory, "tool-child.pid");
+        await writeFile(
+            adapterPath,
+            `#!${process.execPath}
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 const childPidPath = process.env.MOBIUS_TEST_CHILD_PID_FILE;
 if (childPidPath === undefined) process.exit(81);
 const tool = spawn(process.execPath, ["-e", "setInterval(() => undefined, 60000)"], {
   detached: true,
+  windowsHide: true,
   env: process.env,
   stdio: "ignore",
 });
@@ -655,77 +654,76 @@ const agent = spawn(process.execPath, [${JSON.stringify(fakeAgentPath)}, "--agen
 agent.once("error", () => process.exit(83));
 agent.once("exit", (code) => process.exit(code ?? 84));
 `,
-                { mode: 0o700 },
-            );
-            await chmod(adapterPath, 0o700);
-            const agent = new LocalAgentDefinition("codex", "Codex", adapterPath, [], {
-                MOBIUS_FAKE_ACP_STATE_DIRECTORY: temporaryDirectory,
-                MOBIUS_TEST_CHILD_PID_FILE: childPidPath,
+            { mode: 0o700 },
+        );
+        await chmod(adapterPath, 0o700);
+        const agent = new LocalAgentDefinition("codex", "Codex", process.execPath, [adapterPath], {
+            MOBIUS_FAKE_ACP_STATE_DIRECTORY: temporaryDirectory,
+            MOBIUS_TEST_CHILD_PID_FILE: childPidPath,
+        });
+        const activityStarted = Promise.withResolvers<void>();
+        let childPid = 0;
+
+        try {
+            const cancelledTurn = manager.runPrompt({
+                additionalDirectories: [],
+                agent,
+                commandId: "command-cancelled-tree",
+                cwd: temporaryDirectory,
+                images: [],
+                onActivity: () => {
+                    activityStarted.resolve();
+                    return Promise.resolve();
+                },
+                onText: () => Promise.resolve(),
+                prompt: "wait until cancelled",
+                resources: [],
+                sessionId: "cancelled-tree-conversation",
+                signal: new AbortController().signal,
             });
-            const activityStarted = Promise.withResolvers<void>();
-            let childPid = 0;
+            await activityStarted.promise;
+            childPid = Number.parseInt(await readFile(childPidPath, "utf8"), 10);
+            expect(Number.isSafeInteger(childPid)).toBe(true);
 
-            try {
-                const cancelledTurn = manager.runPrompt({
-                    additionalDirectories: [],
-                    agent,
-                    commandId: "command-cancelled-tree",
-                    cwd: temporaryDirectory,
-                    images: [],
-                    onActivity: () => {
-                        activityStarted.resolve();
-                        return Promise.resolve();
-                    },
-                    onText: () => Promise.resolve(),
-                    prompt: "wait until cancelled",
-                    resources: [],
-                    sessionId: "cancelled-tree-conversation",
-                    signal: new AbortController().signal,
-                });
-                await activityStarted.promise;
-                childPid = Number.parseInt(await readFile(childPidPath, "utf8"), 10);
-                expect(Number.isSafeInteger(childPid)).toBe(true);
+            await manager.cancelPrompt("cancelled-tree-conversation");
 
-                await manager.cancelPrompt("cancelled-tree-conversation");
-
-                await expect(cancelledTurn).resolves.toEqual({
-                    stopReason: "cancelled",
-                });
-                expect(processExists(childPid)).toBe(true);
-                const nextChunks: string[] = [];
-                await manager.runPrompt({
-                    additionalDirectories: [],
-                    agent,
-                    commandId: "command-after-tree-cancel",
-                    cwd: temporaryDirectory,
-                    images: [],
-                    onActivity: () => Promise.resolve(),
-                    onText: (text) => {
-                        nextChunks.push(text);
-                        return Promise.resolve();
-                    },
-                    prompt: "continue",
-                    resources: [],
-                    sessionId: "cancelled-tree-conversation",
-                    signal: new AbortController().signal,
-                });
-                expect(nextChunks.join("")).toBe("Codex turn 2: continue");
-                expect(processExists(childPid)).toBe(true);
-                await manager.close();
-                expect(processExists(childPid)).toBe(false);
-            } finally {
-                await manager.close();
-                if (childPid > 0 && processExists(childPid)) {
-                    try {
-                        process.kill(-childPid, "SIGKILL");
-                    } catch {
-                        // A concurrently exited test process no longer needs cleanup.
-                    }
+            await expect(cancelledTurn).resolves.toEqual({
+                stopReason: "cancelled",
+            });
+            expect(processExists(childPid)).toBe(true);
+            const nextChunks: string[] = [];
+            await manager.runPrompt({
+                additionalDirectories: [],
+                agent,
+                commandId: "command-after-tree-cancel",
+                cwd: temporaryDirectory,
+                images: [],
+                onActivity: () => Promise.resolve(),
+                onText: (text) => {
+                    nextChunks.push(text);
+                    return Promise.resolve();
+                },
+                prompt: "continue",
+                resources: [],
+                sessionId: "cancelled-tree-conversation",
+                signal: new AbortController().signal,
+            });
+            expect(nextChunks.join("")).toBe("Codex turn 2: continue");
+            expect(processExists(childPid)).toBe(true);
+            await manager.close();
+            expect(processExists(childPid)).toBe(false);
+        } finally {
+            await manager.close();
+            if (childPid > 0 && processExists(childPid)) {
+                try {
+                    process.kill(process.platform === "win32" ? childPid : -childPid, "SIGKILL");
+                } catch {
+                    // A concurrently exited test process no longer needs cleanup.
                 }
-                await rm(temporaryDirectory, { force: true, recursive: true });
             }
-        },
-    );
+            await rm(temporaryDirectory, { force: true, recursive: true });
+        }
+    });
 
     it("Given an existing Agent conversation, When a caller changes its Agent identity, Then the local boundary rejects the request", async () => {
         const manager = new AgentRuntimeManager();

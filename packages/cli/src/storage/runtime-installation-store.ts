@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { type FileHandle, mkdir, open, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { isIdentifier } from "@moxt-ai/mobius-protocol";
+import { validateLocalPath } from "./private-path.ts";
 
 const APPLICATION_ID_PATTERN = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+){1,31}$/;
 const CONNECTION_ID_PATTERN = /^mcn_[a-f0-9]{32}$/;
@@ -375,6 +376,10 @@ export class RuntimeInstallationStore {
         const rootDirectory = resolve(options.stateDirectory);
         const applicationDirectory = join(rootDirectory, "installations", applicationId);
         try {
+            if (process.platform === "win32") {
+                await mkdir(rootDirectory, { mode: 0o700, recursive: true });
+                await validateLocalPath(rootDirectory, true, true, signal);
+            }
             await mkdir(applicationDirectory, { mode: 0o700, recursive: true });
         } catch (cause) {
             throw new RuntimeInstallationStoreError(

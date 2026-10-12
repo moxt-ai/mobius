@@ -469,6 +469,7 @@ async function sendControlRequest(
 async function spawnManager(): Promise<ChildProcess> {
     const child = spawn(process.execPath, [process.argv[1] ?? "", "__manager"], {
         detached: true,
+        windowsHide: true,
         env: process.env,
         stdio: "ignore",
     });

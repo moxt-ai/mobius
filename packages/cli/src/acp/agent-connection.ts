@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { type ClientConnection, ndJsonStream, RequestError } from "@agentclientprotocol/sdk";
 import type { AcpAgentDefinition } from "../config.ts";
-import { stopProcessTree } from "../process/executable.ts";
+import { executableLaunch, stopProcessTree } from "../process/executable.ts";
 import { AcpExecutionError } from "./acp-error.ts";
 import { type AcpClientHandler, createAcpClient } from "./create-client.ts";
 import {
@@ -127,11 +127,13 @@ export class AgentConnection {
             this.connection = createAcpClient(client).connect(inProcess.app());
             return;
         }
-        const child = spawn(agent.adapterPath, [...agent.arguments], {
+        const launch = executableLaunch(agent.adapterPath, agent.arguments);
+        const child = spawn(launch.command, [...launch.arguments], {
             cwd,
             detached: process.platform !== "win32",
             env: { ...process.env, ...agent.environment },
             shell: false,
+            windowsHide: true,
             stdio: ["pipe", "pipe", "pipe"],
         });
         this.#process = { kind: "child", child };

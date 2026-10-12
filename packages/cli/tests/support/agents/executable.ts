@@ -1,13 +1,18 @@
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import { delimiter, join, resolve } from "node:path";
+import { resolveExecutablePath } from "../../../src/process/executable.ts";
 
 export async function resolveTestExecutable(name: string, overrideVariable: string): Promise<string> {
     const configured = process.env[overrideVariable];
     if (configured !== undefined) {
         const executable = resolve(configured);
         await access(executable, constants.X_OK);
-        return executable;
+        const resolved = await resolveExecutablePath(executable);
+        if (resolved === null) {
+            throw new Error(`Invalid ${name} executable`);
+        }
+        return resolved.path;
     }
     for (const directory of (process.env["PATH"] ?? "").split(delimiter)) {
         if (directory.length === 0) {

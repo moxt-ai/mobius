@@ -350,6 +350,12 @@ export class ManagedNpmPackageInstaller implements ManagedNpmPackageInstallation
                 NPM_CONFIG_REGISTRY: "https://registry.npmjs.org/",
                 PATH: `${dirname(process.execPath)}${delimiter}/usr/bin${delimiter}/bin`,
             };
+            if (process.platform === "win32") {
+                installEnvironment["SystemRoot"] = process.env["SystemRoot"];
+                installEnvironment["TEMP"] = staging;
+                installEnvironment["TMP"] = staging;
+                installEnvironment["USERPROFILE"] = join(staging, "home");
+            }
             if (definition.includeOptionalDependencies) {
                 installEnvironment["NPM_CONFIG_INCLUDE"] = "optional";
             } else {

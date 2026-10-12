@@ -1,7 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { constants, readdirSync, readFileSync } from "node:fs";
 import { access, readdir, readFile, realpath, stat } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, extname, join, resolve } from "node:path";
 
 const DEFAULT_OUTPUT_LIMIT_BYTES = 16 * 1024;
 const PROCESS_GRACEFUL_STOP_TIMEOUT_MILLISECONDS = 1_000;
@@ -94,6 +94,17 @@ export interface RunProcessOptions {
     readonly timeoutMilliseconds: number;
 }
 
+function environmentValue(
+    environment: Readonly<NodeJS.ProcessEnv>,
+    name: string,
+    platform: NodeJS.Platform,
+): string | undefined {
+    if (platform !== "win32") {
+        return environment[name];
+    }
+    return Object.entries(environment).find(([key]) => key.toUpperCase() === name.toUpperCase())?.[1];
+}
+
 function executableExtensions(
     executableName: string,
     environment: Readonly<NodeJS.ProcessEnv>,
@@ -105,7 +116,7 @@ function executableExtensions(
     if (/\.[a-zA-Z0-9]+$/.test(executableName)) {
         return [""];
     }
-    const configured = environment["PATHEXT"] ?? ".COM;.EXE;.BAT;.CMD";
+    const configured = environmentValue(environment, "PATHEXT", platform) ?? ".COM;.EXE;.BAT;.CMD";
     const extensions = configured
         .split(";")
         .map((extension) => extension.trim())
@@ -120,7 +131,22 @@ export async function resolveExecutablePath(
 ): Promise<ResolvedExecutable | null> {
     const absoluteRequestedPath = resolve(requestedPath);
     try {
-        const resolvedPath = await realpath(absoluteRequestedPath);
+        let resolvedPath = await realpath(absoluteRequestedPath);
+        if (platform === "win32" && extname(resolvedPath).toLowerCase() === ".cmd") {
+            // npm cmd-shim entrypoints are Node scripts. Resolve the script instead of
+            // handing untrusted arguments to cmd.exe's command language.
+            const shim = await readFile(resolvedPath, "utf8");
+            const script = /"%_prog%"\s+"%dp0%[\\/]([^"\r\n]+\.(?:js|mjs|cjs))"\s+%\*/iu.exec(shim)?.[1];
+            if (script !== undefined && shim.includes("SET dp0=%~dp0")) {
+                resolvedPath = await realpath(resolve(dirname(resolvedPath), script));
+            } else {
+                const pnpmScript = /^\s*node\s+"%~dp0[\\/]([^"\r\n]+\.(?:js|mjs|cjs))"\s+%\*\s*$/imu.exec(shim)?.[1];
+                if (pnpmScript === undefined || !shim.includes("@SETLOCAL")) {
+                    return null;
+                }
+                resolvedPath = await realpath(resolve(dirname(resolvedPath), pnpmScript));
+            }
+        }
         const metadata = await stat(resolvedPath);
         if (!metadata.isFile()) {
             return null;
@@ -143,12 +169,31 @@ export async function resolveExecutablePath(
     }
 }
 
+export function executableLaunch(
+    command: string,
+    args: readonly string[],
+): {
+    readonly command: string;
+    readonly arguments: readonly string[];
+} {
+    if (process.platform === "win32" && /\.(?:js|mjs|cjs)$/iu.test(command)) {
+        return { command: process.execPath, arguments: [command, ...args] };
+    }
+    if (process.platform === "win32" && /\.(?:cmd|bat)$/iu.test(command)) {
+        throw new ProcessExecutionError(
+            "process_unsupported_script",
+            "Use a native executable or a verified Node entrypoint",
+        );
+    }
+    return { command, arguments: args };
+}
+
 export async function findExecutableOnPath(
     executableName: string,
     environment: Readonly<NodeJS.ProcessEnv>,
     platform: NodeJS.Platform = process.platform,
 ): Promise<ResolvedExecutable | null> {
-    const encodedPath = environment["PATH"] ?? "";
+    const encodedPath = environmentValue(environment, "PATH", platform) ?? "";
     const separator = platform === "win32" ? ";" : ":";
     const extensions = executableExtensions(executableName, environment, platform);
     for (const entry of encodedPath.split(separator)) {
@@ -324,7 +369,30 @@ async function readLinuxProcessTableWithFallback(): Promise<readonly ProcessTabl
 
 function readProcessTable(): Promise<readonly ProcessTableEntry[]> {
     if (process.platform === "win32") {
-        return Promise.resolve([]);
+        const systemRoot = process.env["SystemRoot"];
+        if (systemRoot === undefined) {
+            return Promise.resolve([]);
+        }
+        return new Promise((resolveTable) => {
+            execFile(
+                join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+                [
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "Get-CimInstance Win32_Process | ForEach-Object { '{0} {1} {0}' -f $_.ProcessId, $_.ParentProcessId }",
+                ],
+                {
+                    encoding: "utf8",
+                    windowsHide: true,
+                    timeout: 10000,
+                    signal: AbortSignal.timeout(10000),
+                    maxBuffer: PROCESS_TABLE_OUTPUT_LIMIT_BYTES,
+                },
+                (error, stdout) => resolveTable(error === null ? parseProcessTable(stdout) : []),
+            );
+        });
     }
     if (process.platform === "linux") {
         return readLinuxProcessTableWithFallback();
@@ -374,7 +442,7 @@ function mergeProcessTrees(
 }
 
 export async function captureProcessTree(child: ReturnType<typeof spawn>): Promise<readonly ProcessTreeIdentity[]> {
-    if (process.platform === "win32" || child.pid === undefined) {
+    if (child.pid === undefined) {
         return [];
     }
     if (process.platform === "linux") {
@@ -391,6 +459,16 @@ function signalCapturedProcessGroups(
     rootProcessId: number,
     signal: number,
 ): void {
+    if (process.platform === "win32") {
+        for (const identity of [...processes].reverse()) {
+            try {
+                process.kill(identity.processId, signal);
+            } catch {
+                // A concurrently exited process no longer needs cleanup.
+            }
+        }
+        return;
+    }
     const processIds = new Set(processes.map((identity) => identity.processId));
     const signalledGroups = new Set<number>();
     for (const identity of processes) {
@@ -556,11 +634,13 @@ function waitForProcessExit(child: ReturnType<typeof spawn>, timeoutMilliseconds
 export async function runBoundedProcess(options: RunProcessOptions): Promise<ProcessResult> {
     options.signal.throwIfAborted();
     const outputLimitBytes = options.outputLimitBytes ?? DEFAULT_OUTPUT_LIMIT_BYTES;
-    const child = spawn(options.command, [...options.arguments], {
+    const launch = executableLaunch(options.command, options.arguments);
+    const child = spawn(launch.command, [...launch.arguments], {
         cwd: options.cwd,
         detached: process.platform !== "win32",
         env: { ...options.environment },
         shell: false,
+        windowsHide: true,
         stdio: ["ignore", "pipe", "pipe"],
     });
     const stdout: Buffer[] = [];

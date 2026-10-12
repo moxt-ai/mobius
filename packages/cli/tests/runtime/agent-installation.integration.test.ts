@@ -43,18 +43,16 @@ class LocalArchiveDownloader implements ManagedAgentArchiveDownloadPort {
 }
 
 describe("managed Agent artifacts", () => {
-    it.skipIf(process.platform === "win32")(
-        "Given the pinned DeepSeek Harness package needs platform binaries, When the production npm boundary installs it, Then optional dependencies are included while lifecycle scripts stay disabled",
-        async () => {
-            const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-deepseek-npm-policy-"));
-            const executableDirectory = join(temporaryDirectory, "bin");
-            const npmPath = join(executableDirectory, "npm");
-            const root = join(temporaryDirectory, "managed", DEEPSEEK_HARNESS_PACKAGE.version);
-            try {
-                await mkdir(executableDirectory, { mode: 0o700, recursive: true });
-                await writeFile(
-                    npmPath,
-                    executableSource(`
+    it("Given the pinned DeepSeek Harness package needs platform binaries, When the production npm boundary installs it, Then optional dependencies are included while lifecycle scripts stay disabled", async () => {
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-deepseek-npm-policy-"));
+        const executableDirectory = join(temporaryDirectory, "bin");
+        const npmPath = join(executableDirectory, process.platform === "win32" ? "npm.mjs" : "npm");
+        const root = join(temporaryDirectory, "managed", DEEPSEEK_HARNESS_PACKAGE.version);
+        try {
+            await mkdir(executableDirectory, { mode: 0o700, recursive: true });
+            await writeFile(
+                npmPath,
+                executableSource(`
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 const arguments_ = process.argv.slice(2);
@@ -89,47 +87,51 @@ writeFileSync(join(prefix, "package-lock.json"), JSON.stringify({
   },
 }));
 `),
-                    { mode: 0o700 },
-                );
-                await chmod(npmPath, 0o700);
-
-                const installed = await new ManagedNpmPackageInstaller().install(
-                    root,
-                    DEEPSEEK_HARNESS_PACKAGE,
-                    { PATH: executableDirectory },
-                    new AbortController().signal,
-                );
-
-                expect(installed.path).toBe(
-                    await realpath(join(root, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js")),
-                );
+                { mode: 0o700 },
+            );
+            await chmod(npmPath, 0o700);
+            if (process.platform === "win32") {
                 await writeFile(
-                    join(root, "package-lock.json"),
-                    JSON.stringify({
-                        lockfileVersion: 3,
-                        packages: {
-                            "node_modules/@deepseek-ai/dsh": {
-                                integrity: DEEPSEEK_HARNESS_PACKAGE.integrity,
-                                resolved: DEEPSEEK_HARNESS_PACKAGE.tarballUrl,
-                                version: DEEPSEEK_HARNESS_PACKAGE.version,
-                            },
-                            "node_modules/unlocked-dependency": {
-                                resolved:
-                                    "https://registry.npmjs.org/unlocked-dependency/-/unlocked-dependency-1.0.0.tgz",
-                                version: "1.0.0",
-                            },
-                        },
-                    }),
-                    { mode: 0o600 },
+                    join(executableDirectory, "npm.cmd"),
+                    '@ECHO off\r\nSET dp0=%~dp0\r\nSET "_prog=node"\r\n"%_prog%" "%dp0%\\npm.mjs" %*\r\n',
                 );
-                await expect(validateManagedNpmPackage(root, DEEPSEEK_HARNESS_PACKAGE)).rejects.toMatchObject({
-                    code: "managed_package_verification_failed",
-                });
-            } finally {
-                await rm(temporaryDirectory, { force: true, recursive: true });
             }
-        },
-    );
+
+            const installed = await new ManagedNpmPackageInstaller().install(
+                root,
+                DEEPSEEK_HARNESS_PACKAGE,
+                { PATH: executableDirectory },
+                new AbortController().signal,
+            );
+
+            expect(installed.path).toBe(
+                await realpath(join(root, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js")),
+            );
+            await writeFile(
+                join(root, "package-lock.json"),
+                JSON.stringify({
+                    lockfileVersion: 3,
+                    packages: {
+                        "node_modules/@deepseek-ai/dsh": {
+                            integrity: DEEPSEEK_HARNESS_PACKAGE.integrity,
+                            resolved: DEEPSEEK_HARNESS_PACKAGE.tarballUrl,
+                            version: DEEPSEEK_HARNESS_PACKAGE.version,
+                        },
+                        "node_modules/unlocked-dependency": {
+                            resolved: "https://registry.npmjs.org/unlocked-dependency/-/unlocked-dependency-1.0.0.tgz",
+                            version: "1.0.0",
+                        },
+                    },
+                }),
+                { mode: 0o600 },
+            );
+            await expect(validateManagedNpmPackage(root, DEEPSEEK_HARNESS_PACKAGE)).rejects.toMatchObject({
+                code: "managed_package_verification_failed",
+            });
+        } finally {
+            await rm(temporaryDirectory, { force: true, recursive: true });
+        }
+    });
 
     it.runIf(process.platform === "darwin" || process.platform === "linux")(
         "Given a checksum-pinned Agent archive, When the managed archive boundary installs it, Then only the expected executable is atomically published and later tampering is rejected",
