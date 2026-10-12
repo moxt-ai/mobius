@@ -482,6 +482,10 @@ const provenanceSchema = z.discriminatedUnion("kind", [
 ]);
 const sessionEventFieldsV2 = {
     eventId: identifier,
+    mobiusMetadata: z
+        .object({ omitted: z.literal(true).optional() })
+        .readonly()
+        .optional(),
     position: positionSchema,
     provenance: provenanceSchema,
     recordedAt: z.iso.datetime({ offset: true }),
@@ -570,8 +574,14 @@ export const sessionEventLogPageV2Schema = z
     })
     .readonly();
 export type SessionEventLogPageV2 = z.infer<typeof sessionEventLogPageV2Schema>;
+export const sessionEventOmissionV2Schema = z.literal("agent-reasoning");
+export type SessionEventOmissionV2 = z.infer<typeof sessionEventOmissionV2Schema>;
 export const nativeEventPageRequestV2Schema = z
-    .object({ cursor: z.string().min(1).max(512).nullable(), eventLimit: z.number().int().min(1).max(10_000) })
+    .object({
+        cursor: z.string().min(1).max(512).nullable(),
+        eventLimit: z.number().int().min(1).max(10_000),
+        omit: z.array(sessionEventOmissionV2Schema).max(1).readonly().optional(),
+    })
     .readonly();
 export type NativeEventPageRequestV2 = z.infer<typeof nativeEventPageRequestV2Schema>;
 const queuedPromptRequestEventLogV2Schema = z

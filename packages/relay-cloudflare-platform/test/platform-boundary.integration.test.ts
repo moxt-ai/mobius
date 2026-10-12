@@ -937,7 +937,7 @@ describe.sequential("Platform Session-only boundary", () => {
             expect(JSON.parse(await v2Messages.next())).toEqual([rawEvent, secondRawEvent]);
             const historyResponse = worker.fetch(
                 new Request(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/events-v2?limit=50`,
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/events-v2?limit=50&omit=agent-reasoning`,
                     { headers: { authorization: `Bearer ${text(browserAccess, "credential")}` } },
                 ),
                 environment,
@@ -946,6 +946,7 @@ describe.sequential("Platform Session-only boundary", () => {
             if (historyLoad.kind !== "session.live-history.v2.page.load") {
                 throw new Error("Expected history loading without a preceding Session query");
             }
+            expect(historyLoad.omit).toEqual(["agent-reasoning"]);
             daemon.send(
                 encodeSessionStatusChangedEvent({
                     kind: "session.status.changed",

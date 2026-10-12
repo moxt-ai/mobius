@@ -28,6 +28,7 @@ export class RecordingDirectoryStorage {
             directoryId: summary.directoryId,
             additionalDirectoryIdsJson: JSON.stringify(summary.additionalDirectoryIds),
             title: summary.title,
+            status: summary.status,
             prompted: true,
             updatedAt: Date.parse(summary.updatedAt),
         };
@@ -58,6 +59,7 @@ function decodeSummary(row: typeof recordingSessionSummary.$inferSelect): Sessio
         directoryId: row.directoryId,
         runtimeId: row.runtimeId,
         sessionId: row.sessionId,
+        status: row.status,
         title: row.title,
         updatedAt: new Date(row.updatedAt).toISOString(),
     };

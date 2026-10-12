@@ -316,7 +316,11 @@ async function cancel(fixture: Fixture, command: SessionPromptCommand): Promise<
         }
     }
 }
-async function history(fixture: Fixture, command: SessionPromptCommand) {
+async function history(
+    fixture: Fixture,
+    command: SessionPromptCommand,
+    options: { readonly eventLimit?: number; readonly omit?: readonly "agent-reasoning"[] } = {},
+) {
     sendText(
         fixture.socket,
         encodeSessionLiveHistoryV2PageLoad({
@@ -324,7 +328,8 @@ async function history(fixture: Fixture, command: SessionPromptCommand) {
             requestId: "history",
             sessionId: command.sessionId,
             cursor: null,
-            eventLimit: 200,
+            eventLimit: options.eventLimit ?? 200,
+            ...(options.omit === undefined ? {} : { omit: options.omit }),
         }),
     );
     for (;;) {
@@ -365,6 +370,49 @@ async function activeTurn(fixture: Fixture, command: SessionPromptCommand) {
     }
 }
 describe("daemon V2 live delivery", () => {
+    it("Given reasoning chunks exceed a 200-event page, When history omits reasoning details, Then 200 events remain and each marker retains its chunk's first position", async () => {
+        const fixture = await startControlledDaemon();
+        try {
+            const command = prompt(fixture, "stream paged reasoning");
+            sendText(fixture.socket, encodeSessionPromptCommand(command));
+            for (;;) {
+                const event = await nextLive(fixture);
+                if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
+                    break;
+                }
+            }
+            const complete = await history(fixture, command, { eventLimit: 1_000 });
+            const firstReasoningPositions = new Map<string, string>();
+            for (const event of complete.events) {
+                if (
+                    event.type === "acp" &&
+                    event.payload.sessionUpdate === "agent_thought_chunk" &&
+                    typeof event.payload.messageId === "string" &&
+                    !firstReasoningPositions.has(event.payload.messageId)
+                ) {
+                    firstReasoningPositions.set(event.payload.messageId, event.position);
+                }
+            }
+
+            const omitted = await history(fixture, command, { eventLimit: 200, omit: ["agent-reasoning"] });
+            const retainedReasoning = omitted.events.filter(
+                (event) => event.type === "acp" && event.payload.sessionUpdate === "agent_thought_chunk",
+            );
+
+            expect(omitted.events).toHaveLength(200);
+            expect(retainedReasoning.length).toBeGreaterThan(0);
+            for (const event of retainedReasoning) {
+                if (event.type !== "acp" || event.payload.sessionUpdate !== "agent_thought_chunk") {
+                    throw new Error("Expected retained reasoning");
+                }
+                expect(event.mobiusMetadata).toEqual({ omitted: true });
+                expect(event.payload.content).toEqual({ text: "", type: "text" });
+                expect(event.position).toBe(firstReasoningPositions.get(event.payload.messageId ?? ""));
+            }
+        } finally {
+            await fixture.close();
+        }
+    });
     it("Given text surrounds a tool call, When a viewer reopens live history, Then the streamed and recovered events preserve the same order", async () => {
         const fixture = await startControlledDaemon();
         try {
