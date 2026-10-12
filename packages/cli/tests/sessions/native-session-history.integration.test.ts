@@ -33,7 +33,7 @@ describe("native session history", () => {
                     sessionId: "active-codex-session",
                     signal,
                 },
-                { kind: "import", nativeSessionId },
+                { kind: "import", nativeSessionId, title: "Writer-owned Codex session" },
             );
 
             const preview = await f.sessions.previewNativeSessionEventsV2(
@@ -64,7 +64,7 @@ describe("native session history", () => {
         }
     });
 
-    it("Given Chat imports a Codex conversation, When the imported Chat opens, Then its source history remains visible without requesting another writer", async () => {
+    it("Given Chat imports a titled Codex conversation, When the imported Chat opens, Then its source title and history remain visible without requesting another writer", async () => {
         const f = await fixture("Codex", "exclusive-writer", "assigned", {
             access: () => ({
                 kind: "direct",
@@ -91,6 +91,10 @@ describe("native session history", () => {
             await f.service.execute(
                 { ...f.identity, action: "import", entryId: entry.entryId, targetSessionId: sessionId },
                 signal,
+            );
+
+            expect(f.sessions.listSessions(10).find((session) => session.sessionId === sessionId)?.title).toBe(
+                entry.title,
             );
 
             const replay = await f.sessions.loadSessionEventsV2(

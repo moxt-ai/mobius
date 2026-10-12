@@ -20,7 +20,7 @@ describe("native session preparation", () => {
                 additionalDirectories: [],
                 sessionId: "shared-loading",
                 signal: owner.signal,
-                origin: { kind: "import", nativeSessionId },
+                origin: { kind: "import", nativeSessionId, title: "" },
             } as const;
             const paused = Promise.withResolvers<void>();
             const watcher = watch(f.native, () => {
@@ -66,7 +66,7 @@ describe("native session preparation", () => {
                     additionalDirectories: [],
                     sessionId: "closing-loading",
                     signal: owner.signal,
-                    origin: { kind: "import", nativeSessionId },
+                    origin: { kind: "import", nativeSessionId, title: "" },
                 })
                 .then(
                     () => "completed",

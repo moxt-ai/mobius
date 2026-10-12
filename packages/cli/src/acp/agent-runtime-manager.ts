@@ -175,7 +175,7 @@ export class AgentRuntimeManager {
                             this.#sessionIdentity === "native" &&
                             isNativeChatSessionId(options.agent.id, options.sessionId) &&
                             this.#store.read(options.sessionId) instanceof MissingAcpStoredSession
-                            ? { ...options, origin: { kind: "import", nativeSessionId: options.sessionId } }
+                            ? { ...options, origin: { kind: "import", nativeSessionId: options.sessionId, title: "" } }
                             : options,
                         recovery,
                         () => this.#observer,

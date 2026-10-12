@@ -552,7 +552,7 @@ export class AgentSession implements AcpClientHandler {
         recovery: AcpSessionRecovery,
         origin?: NativeSessionOrigin,
     ): Promise<void> => {
-        if (origin?.kind === "fork") {
+        if (origin !== undefined) {
             this.#sessionTitle = origin.title;
         }
         await this.#initializeAgent(signal);
@@ -566,7 +566,7 @@ export class AgentSession implements AcpClientHandler {
                           this.#cwd,
                           this.#additionalDirectories,
                           true,
-                          "",
+                          origin.title,
                       ),
                   )
                 : this.#store.read(this.#mobiusSessionId),
