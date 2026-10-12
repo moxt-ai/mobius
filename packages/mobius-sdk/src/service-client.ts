@@ -27,6 +27,7 @@ import {
     type SessionConfigureCommand,
     type SessionEventBatchV2,
     type SessionEventLogPageV2,
+    type SessionEventOmissionV2,
     SessionPromptDisposition,
     type WorkspaceEntriesEvent,
 } from "@moxt-ai/mobius-protocol";
@@ -1259,7 +1260,12 @@ export class MobiusSessionResources {
                 this.#projectId,
                 `runtimes/${encodeURIComponent(runtimeId)}/sessions/${encodeURIComponent(sessionId)}/native-events-preview`,
             ),
-            { ...identity, cursor: page.cursor, eventLimit: page.eventLimit },
+            {
+                ...identity,
+                cursor: page.cursor,
+                eventLimit: page.eventLimit,
+                ...(page.omit === undefined ? {} : { omit: page.omit }),
+            },
             signal,
         );
         return decodeNativeSessionEventsV2(result);
@@ -1284,6 +1290,9 @@ export class MobiusSessionResources {
         path.searchParams.set("eventLimit", page.eventLimit.toString());
         if (page.cursor !== null) {
             path.searchParams.set("cursor", page.cursor);
+        }
+        for (const omission of page.omit ?? []) {
+            path.searchParams.append("omit", omission);
         }
         for (const directoryId of identity.additionalDirectoryIds) {
             path.searchParams.append("additionalDirectoryId", directoryId);
@@ -1703,6 +1712,7 @@ export class MobiusEventResources {
         sessionId: string,
         page: MobiusPageRequest,
         signal: AbortSignal,
+        options: { readonly omit?: readonly SessionEventOmissionV2[] } = {},
     ): Promise<SessionEventLogPageV2> => {
         const path = requestUrl(
             new URL("https://mobius.invalid/"),
@@ -1711,6 +1721,15 @@ export class MobiusEventResources {
         path.searchParams.set("limit", page.limit.toString());
         if (page.cursor.length > 0) {
             path.searchParams.set("cursor", page.cursor);
+        }
+        if (
+            options.omit !== undefined &&
+            (options.omit.length > 1 || options.omit.some((value) => value !== "agent-reasoning"))
+        ) {
+            throw new MobiusValidationError("The Session event omission is invalid");
+        }
+        for (const omission of options.omit ?? []) {
+            path.searchParams.append("omit", omission);
         }
         return decodeSessionEventLogPageV2(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal));
     };

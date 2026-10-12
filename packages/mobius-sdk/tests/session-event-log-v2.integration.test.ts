@@ -154,7 +154,11 @@ describe("Session Event Log V2 SDK", () => {
         const binding = new MobiusSessionImportBinding("binding-2", "runtime-1", "agent-1", "workspace-1");
 
         try {
-            expect(await client.events.listV2("source-session", new MobiusPageRequest(500, ""), signal)).toEqual({
+            expect(
+                await client.events.listV2("source-session", new MobiusPageRequest(500, ""), signal, {
+                    omit: ["agent-reasoning"],
+                }),
+            ).toEqual({
                 sessionGenerationId: "session-generation-1",
                 events: [sourceEvent],
                 nextCursor: null,
@@ -186,7 +190,7 @@ describe("Session Event Log V2 SDK", () => {
             {
                 body: null,
                 method: "GET",
-                path: "/mobius/api/v1/projects/project-1/sessions/source-session/events-v2?limit=500",
+                path: "/mobius/api/v1/projects/project-1/sessions/source-session/events-v2?limit=500&omit=agent-reasoning",
             },
             {
                 body: null,

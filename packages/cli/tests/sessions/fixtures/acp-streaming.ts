@@ -72,6 +72,20 @@ export async function runStreamingScenario(
             });
         }
     }
+    if (prompt === "stream paged reasoning") {
+        for (let index = 0; index < 220; index += 1) {
+            for (const text of [`chunk-${index.toString()}`, ` detail-${index.toString()}`]) {
+                await context.client.notify(acp.methods.client.session.update, {
+                    sessionId: context.params.sessionId,
+                    update: {
+                        content: { text, type: "text" },
+                        messageId: `paged-reasoning-${index.toString()}`,
+                        sessionUpdate: "agent_thought_chunk",
+                    },
+                });
+            }
+        }
+    }
     if (prompt === "stream oversized reasoning") {
         for (let index = 0; index < 8; index += 1) {
             await context.client.notify(acp.methods.client.session.update, {

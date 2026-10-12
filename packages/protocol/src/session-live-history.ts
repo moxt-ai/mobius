@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { ProtocolMessageError } from "./codecs/messages.ts";
 import { identifierStringSchema as identifier } from "./identifier.ts";
-import { nativeSessionEventsV2Schema } from "./session-event-log-v2.ts";
+import { nativeSessionEventsV2Schema, sessionEventOmissionV2Schema } from "./session-event-log-v2.ts";
 
 export const SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND = "session.live-history.v2.page.load";
 export const SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND = "session.live-history.v2.page.loaded";
@@ -13,6 +13,7 @@ const directoryIdentifier = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$
 const pageRequestFields = {
     cursor: z.string().min(1).max(512).nullable(),
     eventLimit: z.number().int().min(1).max(10_000),
+    omit: z.array(sessionEventOmissionV2Schema).max(1).readonly().optional(),
     requestId: identifier,
     sessionId: identifier,
 };
