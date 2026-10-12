@@ -1,6 +1,6 @@
 {
     "name": "@moxt-ai/mobius",
-    "version": "0.0.196",
+    "version": "0.0.197",
     "description": "Mobius CLI for pairing and running local AI agent services.",
     "type": "module",
     "bin": {
@@ -25,19 +25,23 @@
         "exports": {
             ".": {
                 "types": "./dist/index.d.ts",
-                "import": "./dist/index.js"
+                "import": "./dist/index.js",
+                "default": "./dist/index.js"
             },
             "./runtime": {
                 "types": "./dist/runtime.d.ts",
-                "import": "./dist/runtime.js"
+                "import": "./dist/runtime.js",
+                "default": "./dist/runtime.js"
             },
             "./process": {
                 "types": "./dist/process/executable.d.ts",
-                "import": "./dist/process/executable.js"
+                "import": "./dist/process/executable.js",
+                "default": "./dist/process/executable.js"
             },
             "./filesystem": {
                 "types": "./dist/filesystem/private-path.d.ts",
-                "import": "./dist/filesystem/private-path.js"
+                "import": "./dist/filesystem/private-path.js",
+                "default": "./dist/filesystem/private-path.js"
             }
         }
     },

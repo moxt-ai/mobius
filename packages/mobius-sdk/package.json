@@ -1,6 +1,6 @@
 {
     "name": "@moxt-ai/mobius-sdk",
-    "version": "0.0.73",
+    "version": "0.0.74",
     "description": "Unified Mobius TypeScript SDK for browsers and Node.js.",
     "type": "module",
     "types": "./src/index.ts",
@@ -23,19 +23,23 @@
         "exports": {
             ".": {
                 "types": "./dist/index.d.ts",
-                "import": "./dist/index.js"
+                "import": "./dist/index.js",
+                "default": "./dist/index.js"
             },
             "./channel": {
                 "types": "./dist/channel.d.ts",
-                "import": "./dist/channel.js"
+                "import": "./dist/channel.js",
+                "default": "./dist/channel.js"
             },
             "./platform": {
                 "types": "./dist/platform.d.ts",
-                "import": "./dist/platform.js"
+                "import": "./dist/platform.js",
+                "default": "./dist/platform.js"
             },
             "./server": {
                 "types": "./dist/server.d.ts",
-                "import": "./dist/server.js"
+                "import": "./dist/server.js",
+                "default": "./dist/server.js"
             }
         }
     },
