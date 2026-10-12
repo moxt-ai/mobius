@@ -17,3 +17,11 @@ packages/relay-core/src/generated/
 packages/relay-cloudflare-platform/src/generated/
 packages/recording-cloudflare/src/generated/
 packages/cli/src/generated/
+
+# Local-only agent instructions and skills; shared workspace skills
+# under .zcode/skills are tracked in the repository.
+.agents/
+.zcode/*
+!.zcode/skills/
+.zcode/skills/*
+!.zcode/skills/worktree-*/
