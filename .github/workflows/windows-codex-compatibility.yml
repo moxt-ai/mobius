@@ -1,0 +1,65 @@
+name: Windows latest Codex compatibility
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  codex:
+    name: Verify latest Codex on Windows
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+      - run: pnpm install --frozen-lockfile
+      - name: Install latest Codex
+        run: |
+          $codexPrefix = Join-Path $env:RUNNER_TEMP 'codex-latest'
+          npm install --global --prefix $codexPrefix @openai/codex@latest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $codexShim = Join-Path $codexPrefix 'codex.cmd'
+          $version = & $codexShim --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $codexPrefix | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "MOBIUS_TEST_CODEX_PATH=$codexShim" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "## Windows latest Codex compatibility" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          "Codex: $version" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          "Mobius commit: $env:GITHUB_SHA" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          New-Item -ItemType Directory -Path test-results -Force | Out-Null
+          $version | Out-File -FilePath test-results/codex-version.txt -Encoding utf8
+      - name: Build Mobius CLI
+        run: pnpm --filter @moxt-ai/mobius build
+      - name: Verify real Codex through Mobius
+        run: >-
+          pnpm --filter @moxt-ai/mobius exec vitest run
+          tests/agents/windows-codex-discovery.integration.test.ts
+          tests/agents/codex-live-turn.integration.test.ts
+          tests/agents/codex-native-recovery.integration.test.ts
+          tests/agents/codex-queue.integration.test.ts
+          tests/agents/codex-settings.integration.test.ts
+          tests/agents/codex-commands.integration.test.ts
+          tests/agents/codex-directory.integration.test.ts
+          tests/agents/codex-process-recovery.integration.test.ts
+          --maxWorkers=1
+          --reporter=default --reporter=junit
+          --outputFile.junit=../../test-results/windows-codex.xml
+      - name: Upload compatibility results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-latest-codex-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/
+          if-no-files-found: warn
