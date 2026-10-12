@@ -151,11 +151,6 @@ export const recordingReadRoutes = new Hono<PlatformApplicationEnvironment>()
     .get("/sessions/:sessionId/retention", (context) =>
         readUnscopedRecording(context, decodedIdentifier(context.req.param("sessionId")), "retention"),
     )
-    .put(
-        "/sessions/:sessionId/retention",
-        async (context) =>
-            await writeUnscopedRecording(context, decodedIdentifier(context.req.param("sessionId")), "retention"),
-    )
     .delete(
         "/sessions/:sessionId",
         async (context) =>
@@ -210,11 +205,7 @@ async function writeUnscopedRecording(
         (await context.env.RECORDING?.fetch(
             new Request(
                 `https://recording.internal/v1/sessions/${encodeURIComponent(sessionId)}${operation === "delete" ? "" : `/${operation}`}`,
-                {
-                    method: context.req.method,
-                    ...(operation === "retention" ? { body: await context.req.text() } : {}),
-                    signal: context.req.raw.signal,
-                },
+                { method: context.req.method, signal: context.req.raw.signal },
             ),
         )) ?? errorResponse("recording_provider_unavailable", "Recording is unavailable", 503)
     );
