@@ -1,3 +1,4 @@
+import { platformSupportFor } from "../platform/index.ts";
 import { SriManagedNpmDependencyDefinition, SriManagedNpmPackageDefinition } from "./managed-npm-package.ts";
 
 export const GROK_BUILD_MANAGED_VERSION = "1.0.21";
@@ -20,49 +21,20 @@ class GrokBuildManagedPackage extends SriManagedNpmPackageDefinition {
     }
 }
 
-const GROK_DARWIN_ARM64_PACKAGE = new SriManagedNpmDependencyDefinition(
-    "@xai-official/grok-darwin-arm64",
-    GROK_BUILD_MANAGED_VERSION,
-    "sha512-I4pKZGnR6Mv4MJOJsB9B/i2o0ODF4eZtp4jHN5feoTqKIeAUVg38OzBtE8aN/wZa7Xg+qhnf6Jd1tcAFvMoFtQ==",
-    "https://registry.npmjs.org/@xai-official/grok-darwin-arm64/-/grok-darwin-arm64-1.0.21.tgz",
-);
-
-const GROK_DARWIN_X64_PACKAGE = new SriManagedNpmDependencyDefinition(
-    "@xai-official/grok-darwin-x64",
-    GROK_BUILD_MANAGED_VERSION,
-    "sha512-h0nFj3NZ9Kz8w6fQ6UDxxeSIhC1WjwwoRE92iNbG//tZy6YGkppR3s7oRVtt4Xl0CJANKUt0EusyIYnnAvKLzw==",
-    "https://registry.npmjs.org/@xai-official/grok-darwin-x64/-/grok-darwin-x64-1.0.21.tgz",
-);
-
-const GROK_LINUX_ARM64_PACKAGE = new SriManagedNpmDependencyDefinition(
-    "@xai-official/grok-linux-arm64",
-    GROK_BUILD_MANAGED_VERSION,
-    "sha512-Jlwz9XtZPNKz/V/ydifC8OVu3hIZz7pmoStt8c4KCqkSWjWiZ/PBIC0iJiq8rvByhx5Z0EdSyq8ZXVwtocceGA==",
-    "https://registry.npmjs.org/@xai-official/grok-linux-arm64/-/grok-linux-arm64-1.0.21.tgz",
-);
-
-const GROK_LINUX_X64_PACKAGE = new SriManagedNpmDependencyDefinition(
-    "@xai-official/grok-linux-x64",
-    GROK_BUILD_MANAGED_VERSION,
-    "sha512-AjDV5ifEz5LFG2Jt5IlhAeEkJati/wOvCchVbR4eIj2ogjvmXoXlzBrYRXuAJpXBy5q0se/Yuez5FxDU9Ju81w==",
-    "https://registry.npmjs.org/@xai-official/grok-linux-x64/-/grok-linux-x64-1.0.21.tgz",
-);
-
 export function grokBuildManagedPackage(
     platform: NodeJS.Platform,
     architecture: NodeJS.Architecture,
 ): SriManagedNpmPackageDefinition {
-    if (platform === "darwin" && architecture === "arm64") {
-        return new GrokBuildManagedPackage(GROK_DARWIN_ARM64_PACKAGE);
+    const release = platformSupportFor(platform).grokDependencies[architecture];
+    if (release === undefined) {
+        throw new Error("Grok Build does not publish a package for this platform");
     }
-    if (platform === "darwin" && architecture === "x64") {
-        return new GrokBuildManagedPackage(GROK_DARWIN_X64_PACKAGE);
-    }
-    if (platform === "linux" && architecture === "arm64") {
-        return new GrokBuildManagedPackage(GROK_LINUX_ARM64_PACKAGE);
-    }
-    if (platform === "linux" && architecture === "x64") {
-        return new GrokBuildManagedPackage(GROK_LINUX_X64_PACKAGE);
-    }
-    throw new Error("Grok Build does not publish a package for this platform");
+    return new GrokBuildManagedPackage(
+        new SriManagedNpmDependencyDefinition(
+            release.name,
+            GROK_BUILD_MANAGED_VERSION,
+            release.integrity,
+            release.tarballUrl,
+        ),
+    );
 }

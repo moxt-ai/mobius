@@ -1,4 +1,4 @@
-import { isAbsolute, join } from "node:path";
+import { join } from "node:path";
 
 import type { AgentCapabilities, ClientConnection, InitializeResponse } from "@agentclientprotocol/sdk";
 import { validateManagedNpmPackage } from "../../agent-installation/managed-npm-package.ts";
@@ -6,21 +6,12 @@ import {
     WORKBUDDY_MANAGED_PACKAGE,
     WORKBUDDY_MANAGED_VERSION,
 } from "../../agent-installation/workbuddy-managed-package.ts";
+import { platformSupportFor } from "../../platform/index.ts";
 import { type ResolvedExecutable, resolveExecutablePath } from "../../process/executable.ts";
 import type { LocalAgentDiscoveryContext } from "../agent-discovery-context.ts";
 import { AgentProbeError } from "../agent-probe-error.ts";
 import { DirectAcpAgentDefinition } from "../agent-specification.ts";
 import { verifySessionCreation } from "./verify-session-creation.ts";
-
-const WORKBUDDY_MACOS_EXECUTABLE_PATH = Object.freeze([
-    "WorkBuddy.app",
-    "Contents",
-    "Resources",
-    "app.asar.unpacked",
-    "cli",
-    "bin",
-    "codebuddy",
-]);
 
 export class WorkBuddyAgentSpecification extends DirectAcpAgentDefinition {
     readonly adapterVersion = WORKBUDDY_MANAGED_VERSION;
@@ -69,17 +60,11 @@ export class WorkBuddyAgentSpecification extends DirectAcpAgentDefinition {
         context: LocalAgentDiscoveryContext,
     ): Promise<readonly ResolvedExecutable[]> => {
         context.signal.throwIfAborted();
-        if ((context.platform ?? process.platform) !== "darwin") {
-            return [];
-        }
-        const requestedPaths = [join("/Applications", ...WORKBUDDY_MACOS_EXECUTABLE_PATH)];
-        const homeDirectory = context.environment["HOME"];
-        if (homeDirectory !== undefined && isAbsolute(homeDirectory)) {
-            requestedPaths.unshift(join(homeDirectory, "Applications", ...WORKBUDDY_MACOS_EXECUTABLE_PATH));
-        }
+        const platform = context.platform ?? process.platform;
+        const requestedPaths = platformSupportFor(platform).workBuddyExecutablePaths(context.environment);
         const executables: ResolvedExecutable[] = [];
         for (const requestedPath of requestedPaths) {
-            const executable = await resolveExecutablePath(requestedPath, "darwin");
+            const executable = await resolveExecutablePath(requestedPath, platform);
             context.signal.throwIfAborted();
             if (executable !== null) {
                 executables.push(executable);
