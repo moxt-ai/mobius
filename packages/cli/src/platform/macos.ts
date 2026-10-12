@@ -1,6 +1,6 @@
 import { isAbsolute, join } from "node:path";
 import type { PlatformSupport } from "./contracts.ts";
-import { processExists, readProcessTableWithPs } from "./posix.ts";
+import { posixOperations, processExists, readProcessTableWithPs } from "./posix.ts";
 
 const WORKBUDDY_MACOS_EXECUTABLE_PATH = Object.freeze([
     "WorkBuddy.app",
@@ -13,6 +13,7 @@ const WORKBUDDY_MACOS_EXECUTABLE_PATH = Object.freeze([
 ]);
 
 export const macosPlatform: PlatformSupport = {
+    ...posixOperations,
     readProcessTable: () => readProcessTableWithPs("/bin/ps"),
     readProcessTableSynchronously: () => [],
     processExists,

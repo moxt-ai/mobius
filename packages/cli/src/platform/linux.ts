@@ -2,7 +2,7 @@ import { constants, readdirSync, readFileSync } from "node:fs";
 import { access, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { PlatformSupport, ProcessTableEntry } from "./contracts.ts";
-import { processExists as posixProcessExists, readProcessTableWithPs } from "./posix.ts";
+import { posixOperations, processExists as posixProcessExists, readProcessTableWithPs } from "./posix.ts";
 
 function appendLinuxProcessTableEntry(entries: ProcessTableEntry[], processId: number, encoded: string): void {
     const closingParenthesis = encoded.lastIndexOf(")");
@@ -125,6 +125,7 @@ function processExists(processId: number): boolean {
 }
 
 export const linuxPlatform: PlatformSupport = {
+    ...posixOperations,
     readProcessTable: readLinuxProcessTableWithFallback,
     readProcessTableSynchronously: readLinuxProcessTableSynchronously,
     processExists,

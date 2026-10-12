@@ -2,11 +2,10 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { readFile, unlink, writeFile } from "node:fs/promises";
 import { createConnection, createServer, type Socket } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-
 import type { PairedDaemon } from "./pairing/pair-local-machine.ts";
 import { pairLocalMachine, resumeLocalMachine } from "./pairing/pair-local-machine.ts";
+import { platformSupportFor } from "./platform/index.ts";
 import { MobiusRuntimeEngine } from "./runtime.ts";
 import type { RuntimeInstallationStore, VerifiedRuntimeConnection } from "./storage/runtime-installation-store.ts";
 
@@ -86,11 +85,11 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+const managerPlatform = platformSupportFor(process.platform);
+
 function controlSocketPath(stateDirectory: string): string {
     const installationHash = createHash("sha256").update(stateDirectory).digest("hex").slice(0, 32);
-    return process.platform === "win32"
-        ? `\\\\.\\pipe\\mobius-${installationHash}`
-        : join(tmpdir(), `mobius-${installationHash}.sock`);
+    return managerPlatform.controlSocketPath(installationHash);
 }
 
 function controlTokenPath(stateDirectory: string): string {
@@ -469,6 +468,7 @@ async function sendControlRequest(
 async function spawnManager(): Promise<ChildProcess> {
     const child = spawn(process.execPath, [process.argv[1] ?? "", "__manager"], {
         detached: true,
+        windowsHide: true,
         env: process.env,
         stdio: "ignore",
     });
@@ -656,21 +656,13 @@ export async function runManager(
             }
         })();
     });
-    if (process.platform !== "win32") {
-        await unlink(socketPath).catch((cause: unknown) => {
-            if (!isNodeError(cause, "ENOENT")) {
-                throw cause;
-            }
-        });
-    }
+    await managerPlatform.prepareControlSocket(socketPath);
     server.listen(socketPath);
     await new Promise<void>((resolve, reject) => {
         server.once("listening", resolve);
         server.once("error", reject);
     });
-    if (process.platform !== "win32") {
-        await import("node:fs/promises").then(async ({ chmod }) => await chmod(socketPath, 0o600));
-    }
+    await managerPlatform.secureControlSocket(socketPath);
     try {
         await new Promise<void>((resolve) => combined.addEventListener("abort", () => resolve(), { once: true }));
         const serverClosed = new Promise<void>((resolve) => server.close(() => resolve()));
@@ -680,9 +672,7 @@ export async function runManager(
         await serverClosed;
         await supervisor.close();
     } finally {
-        if (process.platform !== "win32") {
-            await unlink(socketPath).catch(() => undefined);
-        }
+        await managerPlatform.removeControlSocket(socketPath).catch(() => undefined);
         await releaseLock();
     }
 }

@@ -1,5 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 
+import { executableLaunch, platformSpawnOptions } from "../../process/executable.ts";
+
 import { AcpExecutionError } from "../acp-error.ts";
 import { type AcpEndpointTermination, acpEndpointTerminationError } from "../in-process/acp-endpoint.ts";
 import { decodeAppServerMessage } from "./app-server-protocol.ts";
@@ -57,9 +59,10 @@ export class CodexAppServerClient {
 
     constructor(options: CodexAppServerOptions) {
         this.#handlers = options.handlers;
-        this.#child = spawn(options.command, ["app-server"], {
+        const launch = executableLaunch(options.command, ["app-server"]);
+        this.#child = spawn(launch.command, [...launch.arguments], {
             cwd: options.cwd,
-            detached: process.platform !== "win32",
+            ...platformSpawnOptions,
             env: { ...process.env, ...options.environment },
             shell: false,
             stdio: ["pipe", "pipe", "pipe"],

@@ -12,7 +12,12 @@ import { z } from "zod";
 import { AcpExecutionError } from "../acp/acp-error.ts";
 import { nativeSessionIdSchema } from "../acp/native-session.ts";
 import type { AcpAgentDefinition } from "../agent-catalog/local-agent.ts";
-import { revalidateExecutable, stopProcessTree } from "../process/executable.ts";
+import {
+    executableLaunch,
+    platformSpawnOptions,
+    revalidateExecutable,
+    stopProcessTree,
+} from "../process/executable.ts";
 import { embedLocalHistoryImages } from "./history-images.ts";
 
 const responseSchema = z.union([
@@ -607,10 +612,11 @@ async function readCodexHistoryWithOptions(
         );
     }
     signal.throwIfAborted();
-    const child = spawn(agent.agentIdentity.realPath, ["app-server"], {
+    const launch = executableLaunch(agent.agentIdentity.realPath, ["app-server"]);
+    const child = spawn(launch.command, [...launch.arguments], {
         cwd,
         env: { ...process.env, ...agent.environment },
-        detached: process.platform !== "win32",
+        ...platformSpawnOptions,
         shell: false,
         stdio: ["pipe", "pipe", "ignore"],
     });
