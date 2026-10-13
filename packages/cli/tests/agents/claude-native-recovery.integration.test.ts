@@ -27,7 +27,7 @@ test("Given a real claude native Session, When the active prompt is cancelled wi
             }
         },
     });
-    await using agent = await ClaudeFixture.create(provider);
+    await using agent = await ClaudeFixture.create(provider, { requireAdapter: false });
     try {
         await withRealDaemon(new ClaudeCodeAgentSpecification(), agent.environment, async (peer) => {
             const nativeId = await prepareNewRealSession(peer, "claude");
@@ -118,7 +118,7 @@ test("Given a real claude native Session, When the active prompt is cancelled wi
 
 test("Given a completed real claude Session, When it is forked and immediately prompted, Then the first child Turn completes", async () => {
     await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-6", "CLAUDE_FORK_REPLY");
-    await using agent = await ClaudeFixture.create(provider);
+    await using agent = await ClaudeFixture.create(provider, { requireAdapter: false });
     await withRealDaemon(new ClaudeCodeAgentSpecification(), agent.environment, async (peer) => {
         const sendPrompt = (sessionId: string, commandId: string): void =>
             peer.send(

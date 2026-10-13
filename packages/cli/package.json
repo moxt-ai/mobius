@@ -1,6 +1,6 @@
 {
     "name": "@moxt-ai/mobius",
-    "version": "0.0.200",
+    "version": "0.0.201",
     "description": "Mobius CLI for pairing and running local AI agent services.",
     "type": "module",
     "bin": {
@@ -51,21 +51,27 @@
         "directory": "packages/cli"
     },
     "scripts": {
-        "build": "tsc --project tsconfig.build.json && esbuild src/cli.ts src/index.ts src/runtime.ts src/process/executable.ts src/filesystem/private-path.ts --bundle --platform=node --format=esm --sourcemap --outdir=dist --external:@agentclientprotocol/* --external:undici",
+        "prebuild": "tsc --project src/acp/claude/upstream/tsconfig.json",
+        "build": "tsc --project tsconfig.build.json && esbuild src/cli.ts src/index.ts src/runtime.ts src/process/executable.ts src/filesystem/private-path.ts --bundle --platform=node --format=esm --sourcemap --outdir=dist --external:@agentclientprotocol/sdk --external:undici",
         "dev": "node --watch src/cli.ts",
+        "pretypecheck": "tsc --project src/acp/claude/upstream/tsconfig.json",
         "prepack": "pnpm build",
         "start": "node dist/cli.js",
         "typecheck": "tsc --project tsconfig.json && tsc --project tests/tsconfig.json",
+        "pretest:controlled": "tsc --project src/acp/claude/upstream/tsconfig.json",
         "test:controlled": "vitest run tests/sessions tests/runtime --maxWorkers=4",
+        "pretest:agents": "tsc --project src/acp/claude/upstream/tsconfig.json",
         "test:agents": "vitest run tests/agents --maxWorkers=2"
     },
     "dependencies": {
         "@agentclientprotocol/sdk": "^1.4.0",
+        "@anthropic-ai/claude-agent-sdk": "0.3.257",
         "commander": "15.0.0",
         "undici": "8.10.2",
         "zod": "^4.6.5"
     },
     "devDependencies": {
+        "@anthropic-ai/sdk": "0.122.0",
         "@moxt-ai/mobius-protocol": "workspace:*",
         "@types/node": "^24.13.5",
         "drizzle-kit": "1.0.0-rc.4",

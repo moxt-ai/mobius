@@ -42,7 +42,7 @@ test("Given real Claude reads an image, When its reply streams and native histor
     await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-6", "IMAGE_REPLY", {
         readPath: "picture.png",
     });
-    await using agent = await ClaudeFixture.create(provider);
+    await using agent = await ClaudeFixture.create(provider, { requireAdapter: false });
     await withRealDaemon(new ClaudeCodeAgentSpecification(), agent.environment, async (peer) => {
         const key = createHash("sha256").update(image).digest("hex");
         await writeFile(join(peer.workspace, "picture.png"), image);
