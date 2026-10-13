@@ -27,6 +27,7 @@ import {
     decodeSessionListCommand,
     decodeSessionLiveHistoryV2PageLoad,
     decodeSessionPermissionRespondCommand,
+    decodeSessionPermissionResponseV3,
     decodeSessionPrepareCommand,
     decodeSessionPreviewHistoryPageLoad,
     decodeSessionPreviewHistoryPageLoadV3,
@@ -34,6 +35,9 @@ import {
     decodeSessionPromptDispositionCommand,
     decodeSessionQueryCommand,
     decodeSessionRestoreCommand,
+    decodeSessionSettingChangeV3,
+    decodeSessionSettingsReadV3,
+    decodeSessionUserInputResponseV3,
     decodeWorkspaceListCommand,
     encodeAgentSettingsDiscoveryFailedEvent,
     encodeDaemonToServiceMessage,
@@ -69,6 +73,7 @@ import {
     SESSION_LIVE_V3_KIND,
     SESSION_OPERATION_FAILED_KIND,
     SESSION_PERMISSION_RESPOND_KIND,
+    SESSION_PERMISSION_V3_RESPOND_KIND,
     SESSION_PREPARE_KIND,
     SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND,
     SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND,
@@ -82,7 +87,11 @@ import {
     SESSION_READY_KIND,
     SESSION_RESTORE_KIND,
     SESSION_RESTORED_KIND,
+    SESSION_SETTING_V3_CHANGE_KIND,
+    SESSION_SETTINGS_V3_LOADED_KIND,
+    SESSION_SETTINGS_V3_READ_KIND,
     SESSION_STATUS_CHANGED_KIND,
+    SESSION_USER_INPUT_V3_RESPOND_KIND,
     type ServiceToDaemonMessage,
     type SessionPromptCommand,
     UnsupportedProtocolMessageKindError,
@@ -398,6 +407,8 @@ export class ChannelActor {
                 return;
             case SESSION_OPERATION_FAILED_KIND:
                 return;
+            case SESSION_SETTINGS_V3_LOADED_KIND:
+                return;
             case SESSION_READY_KIND:
                 return;
             case AGENT_INSTALL_STARTED_KIND:
@@ -476,6 +487,22 @@ export class ChannelActor {
                     requestId: command.interactionId,
                     sessionId: command.sessionId,
                 };
+            }
+            case SESSION_SETTINGS_V3_READ_KIND: {
+                const command = decodeSessionSettingsReadV3(message);
+                return { message: command, requestId: command.requestId, sessionId: command.sessionId };
+            }
+            case SESSION_SETTING_V3_CHANGE_KIND: {
+                const command = decodeSessionSettingChangeV3(message);
+                return { message: command, requestId: command.requestId, sessionId: command.sessionId };
+            }
+            case SESSION_PERMISSION_V3_RESPOND_KIND: {
+                const command = decodeSessionPermissionResponseV3(message);
+                return { message: command, requestId: command.requestId, sessionId: command.sessionId };
+            }
+            case SESSION_USER_INPUT_V3_RESPOND_KIND: {
+                const command = decodeSessionUserInputResponseV3(message);
+                return { message: command, requestId: command.requestId, sessionId: command.sessionId };
             }
             case AGENT_INSTALL_REQUEST_KIND: {
                 const command = decodeAgentInstallRequestCommand(message);

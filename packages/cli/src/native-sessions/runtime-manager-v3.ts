@@ -2,7 +2,6 @@ import type { SessionHistoryPageRequestV3, SessionHistoryPageV3 } from "@moxt-ai
 import type {
     ConnectedNativeSessionV3,
     NativeSessionContextV3,
-    NativeSessionPreviewAdapterV3,
     PublishSessionLiveItemV3,
 } from "./adapters/adapter-v3.ts";
 import { NativeSessionOperationErrorV3 } from "./adapters/adapter-v3.ts";
@@ -28,11 +27,12 @@ export interface NativeSessionAdapterDefinitionV3 {
         live: NativeSessionLiveRuntimeV3,
         signal: AbortSignal,
     ) => Promise<ConnectedNativeSessionV3>;
-    readonly openPreview: (
+    readonly preview: (
         agent: NativeAgentLaunchV3,
         session: NativeSessionContextV3,
+        request: SessionHistoryPageRequestV3,
         signal: AbortSignal,
-    ) => Promise<NativeSessionAdapterPreviewLeaseV3>;
+    ) => Promise<SessionHistoryPageV3>;
 }
 
 export interface NativeSessionLiveRuntimeV3 {
@@ -71,11 +71,6 @@ async function waitForOperation<T>(operation: Promise<T>, signal: AbortSignal): 
     } finally {
         signal.removeEventListener("abort", abort);
     }
-}
-
-export interface NativeSessionAdapterPreviewLeaseV3 {
-    readonly adapter: NativeSessionPreviewAdapterV3;
-    readonly close: (signal: AbortSignal) => Promise<void>;
 }
 
 export class NativeSessionRuntimeManagerV3 {
@@ -250,13 +245,7 @@ export class NativeSessionRuntimeManagerV3 {
     ): Promise<SessionHistoryPageV3> => {
         const operationSignal = AbortSignal.any([signal, this.#shutdown.signal]);
         operationSignal.throwIfAborted();
-        const definition = this.#definition(agent.id);
-        const lease = await definition.openPreview(agent, session, operationSignal);
-        try {
-            return await lease.adapter.previewMessages(session, request, operationSignal);
-        } finally {
-            await lease.close(AbortSignal.timeout(30_000));
-        }
+        return await this.#definition(agent.id).preview(agent, session, request, operationSignal);
     };
 
     readonly #definition = (agentId: string): NativeSessionAdapterDefinitionV3 => {

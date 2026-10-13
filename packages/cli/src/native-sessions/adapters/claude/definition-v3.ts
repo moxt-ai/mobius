@@ -6,8 +6,10 @@ export const claudeNativeSessionAdapterDefinitionV3: NativeSessionAdapterDefinit
     agentId: "claude",
     connect: connectClaudeNativeSessionV3,
     create: createClaudeNativeSessionV3,
-    openPreview: async (agent) => ({
-        adapter: new ClaudeNativeSessionPreviewAdapterV3(agent.environment["CLAUDE_CONFIG_DIR"]),
-        close: async () => undefined,
-    }),
+    preview: async (agent, session, request, signal) =>
+        await new ClaudeNativeSessionPreviewAdapterV3(agent.environment["CLAUDE_CONFIG_DIR"]).previewMessages(
+            session,
+            request,
+            signal,
+        ),
 };

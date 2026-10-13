@@ -22,6 +22,11 @@ import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { type WebSocket, WebSocketServer } from "ws";
 import type { LocalAgentSpecification } from "../../../src/agent-catalog/agent-specification.ts";
 import { discoverLocalAgentInventory } from "../../../src/agent-catalog/discover-local-agents.ts";
+import {
+    type AcpAgentDefinition,
+    InProcessAcpAgentDefinition,
+    LocalAgentDefinition,
+} from "../../../src/agent-catalog/local-agent.ts";
 import { AuditStore } from "../../../src/audit/audit-store.ts";
 import { createDaemonConfig, DaemonLocalContext } from "../../../src/config.ts";
 import { runDaemon } from "../../../src/run-daemon.ts";
@@ -38,11 +43,43 @@ export interface RealDaemonPeer {
     readonly nextMessage: () => Promise<string>;
 }
 
+function selectSessionProtocol(agent: AcpAgentDefinition, nativeSessionV3: boolean): AcpAgentDefinition {
+    switch (agent.kind) {
+        case "acp-adapter-process":
+            return new LocalAgentDefinition(
+                agent.id,
+                agent.label,
+                agent.command,
+                agent.arguments,
+                agent.environment,
+                agent.adapterVersion,
+                agent.agentVersion,
+                agent.adapterIdentity,
+                agent.agentIdentity,
+                agent.capabilities,
+                nativeSessionV3,
+            );
+        case "in-process-acp":
+            return new InProcessAcpAgentDefinition(
+                agent.id,
+                agent.label,
+                agent.command,
+                agent.createEndpoint,
+                agent.environment,
+                agent.agentVersion,
+                agent.agentIdentity,
+                agent.capabilities,
+                nativeSessionV3,
+            );
+    }
+}
+
 /** Production daemon and discovery; the peer only sends and observes the public protocol. */
 export async function withRealDaemon(
     specification: LocalAgentSpecification,
     environment: Readonly<Record<string, string>>,
     scenario: (peer: RealDaemonPeer) => Promise<void>,
+    options: { readonly nativeSessionV3?: boolean } = {},
 ): Promise<void> {
     const directory = await mkdtemp(join(tmpdir(), `mobius-real-${specification.id}-`));
     const workspace = join(directory, "workspace");
@@ -64,10 +101,11 @@ export async function withRealDaemon(
             signal,
             specifications: [specification],
         });
-        const agent = inventory.readyAgents().find((entry) => entry.id === specification.id);
-        if (agent === undefined) {
+        const discoveredAgent = inventory.readyAgents().find((entry) => entry.id === specification.id);
+        if (discoveredAgent === undefined) {
             throw new Error(`Real ${specification.label} unavailable: ${JSON.stringify(inventory.unavailable)}`);
         }
+        const agent = selectSessionProtocol(discoveredAgent, options.nativeSessionV3 === true);
         await listen(relay);
         const connected = Promise.withResolvers<void>();
         const abortConnection = (): void => connected.reject(signal.reason);

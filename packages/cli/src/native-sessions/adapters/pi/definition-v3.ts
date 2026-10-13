@@ -7,13 +7,11 @@ export const piNativeSessionAdapterDefinitionV3: NativeSessionAdapterDefinitionV
     agentId: "pi",
     connect: connectPiNativeSessionV3,
     create: createPiNativeSessionV3,
-    openPreview: async (agent) => ({
-        adapter: new PiNativeSessionPreviewAdapterV3(
+    preview: async (agent, session, request, signal) =>
+        await new PiNativeSessionPreviewAdapterV3(
             agent.environment["PI_CODING_AGENT_SESSION_DIR"] ??
                 (agent.environment["PI_CODING_AGENT_DIR"] === undefined
                     ? undefined
                     : join(agent.environment["PI_CODING_AGENT_DIR"], "sessions")),
-        ),
-        close: async () => undefined,
-    }),
+        ).previewMessages(session, request, signal),
 };
