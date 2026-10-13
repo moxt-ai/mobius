@@ -134,6 +134,68 @@ async function recordThroughRelay(projectId: string, sessionId: string, textCont
     });
 }
 
+async function recordSessionEvents(
+    projectId: string,
+    sessionId: string,
+    generationId: string,
+    events: readonly { readonly position: string; readonly text: string }[],
+): Promise<void> {
+    await runInDurableObject(env.RUNTIME_RELAY.getByName(projectId), async (_instance, state) => {
+        const pending: Promise<void>[] = [];
+        const database = new DurableObjectSqlDatabase(state.storage);
+        const context = createPlatformDurableObjectContext(state, bindings(), { database });
+        const relay = new RuntimeRelay(
+            createDurableObjectDependencies({
+                doDatabase: database,
+                storages: context.storages,
+                gateways: context.gateways,
+                utilities: { waitUntil: (operation) => pending.push(operation) },
+            }),
+        );
+        const response = await relay.fetch(
+            new Request(`https://runtime.internal/projects/${projectId}/daemon`, {
+                headers: {
+                    Upgrade: "websocket",
+                    "x-mobius-runtime-id": projectId,
+                    "x-mobius-channel-id": projectId,
+                },
+            }),
+        );
+        expect(response.status).toBe(101);
+        const client = response.webSocket;
+        const daemon = state.getWebSockets("daemon")[0];
+        if (client === null || daemon === undefined) {
+            throw new Error("Expected a connected daemon");
+        }
+        client.accept();
+        try {
+            await relay.webSocketMessage(
+                daemon,
+                encodeSessionEventEnvelopeV2({
+                    kind: "session.event.v2",
+                    events: events.map((event) => ({
+                        eventId: `event-${generationId}-${event.position}`,
+                        position: event.position,
+                        provenance: { kind: "original" },
+                        recordedAt: "2026-09-18T00:00:00.000Z",
+                        sessionGenerationId: generationId,
+                        sessionId,
+                        type: "acp",
+                        payload: {
+                            sessionUpdate: "agent_message_chunk",
+                            content: { type: "text", text: event.text },
+                        },
+                    })),
+                }),
+            );
+            await Promise.all(pending.splice(0));
+        } finally {
+            client.close(1000, "Recording generation test complete");
+            await Promise.allSettled(pending);
+        }
+    });
+}
+
 beforeEach(() => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-09-18T00:00:00.000Z"));
@@ -306,10 +368,128 @@ describe.sequential("Platform Recording read route", () => {
         expect(decodeSessionRecordingHistoryPage(await page.text())).toMatchObject({
             events: [],
             nextCursor: null,
-            tailCursor: "1",
+            tailCursor: "v2:1:1",
             sessionId,
             truncated: false,
+            generationReset: false,
             version: 2,
         });
+    });
+
+    it("Given a daemon reload and Session generation reset, When a Platform app continues from an append cursor, Then reloaded events are retained", async () => {
+        const worker = createTestMobiusPlatformApp(
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
+            createPlatformGateways,
+        );
+        const environment = bindings();
+        const tenants = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/platform/tenants`, {
+                    headers: developerHeaders(),
+                }),
+                environment,
+            ),
+            200,
+        );
+        const tenantValues = tenants["tenants"];
+        if (!Array.isArray(tenantValues) || tenantValues.length === 0) {
+            throw new Error("Expected a Platform tenant");
+        }
+        const app = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps`, {
+                    body: JSON.stringify({
+                        displayName: "Recording restart App",
+                        tenantId: text(tenantValues[0], "tenantId"),
+                    }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const credential = text(record(app["defaultCredential"]), "credential");
+        const project = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${text(app, "appId")}/projects`, {
+                    body: JSON.stringify({
+                        displayName: "Recording restart Project",
+                        idempotencyKey: `recording-restart-${text(app, "appId")}`,
+                        locationHint: "apac",
+                    }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const projectId = text(project, "projectId");
+        await responseJson(
+            await worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${text(app, "appId")}/recording-policy`,
+                    {
+                        body: JSON.stringify({ mode: "enabled" }),
+                        headers: developerHeaders(),
+                        method: "PUT",
+                    },
+                ),
+                environment,
+            ),
+            200,
+        );
+
+        const sessionId = "recording-restart-session";
+        const beforeRestart = [
+            { position: "1", text: "turn 1 before restart" },
+            { position: "2", text: "turn 2 before restart" },
+        ];
+        const afterRestart = [
+            { position: "1", text: "reloaded turn after restart" },
+            { position: "2", text: "new turn after restart" },
+        ];
+        await recordSessionEvents(projectId, sessionId, "generation-before-restart", beforeRestart);
+
+        const baseUrl =
+            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}` +
+            `/recording/sessions/${sessionId}/events?runtimeId=${projectId}`;
+        const firstPage = decodeSessionRecordingHistoryPage(
+            await (
+                await worker.request(
+                    new Request(`${baseUrl}&after=0&limit=1`, { headers: credentialHeaders(credential) }),
+                    undefined,
+                    environment,
+                )
+            ).text(),
+        );
+        expect(firstPage).toMatchObject({
+            events: [expect.objectContaining({ eventId: "event-generation-before-restart-1" })],
+            nextCursor: "v2:1:1",
+            truncated: true,
+        });
+
+        // A daemon restart closes the old socket and reload rebuilds the same Session under a new
+        // generation. The second call below intentionally creates a new Runtime relay connection.
+        await recordSessionEvents(projectId, sessionId, "generation-after-restart", afterRestart);
+        const followUp = new URL(baseUrl);
+        followUp.searchParams.set("after", firstPage.nextCursor ?? "");
+        followUp.searchParams.set("limit", "10");
+        const secondResponse = await worker.request(
+            new Request(followUp, { headers: credentialHeaders(credential) }),
+            undefined,
+            environment,
+        );
+        expect(secondResponse.status, `follow-up ${followUp.href} returned ${secondResponse.status}`).toBe(200);
+        const secondPage = decodeSessionRecordingHistoryPage(await secondResponse.text());
+        expect(secondPage.events.map((event) => event.payload)).toEqual(
+            [...beforeRestart.slice(1), ...afterRestart].map((event) => ({
+                sessionUpdate: "agent_message_chunk",
+                content: { type: "text", text: event.text },
+            })),
+        );
+        expect(secondPage.generationReset).toBe(true);
+        expect(secondPage.truncated).toBe(false);
     });
 });

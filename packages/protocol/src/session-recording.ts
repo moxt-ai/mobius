@@ -20,15 +20,20 @@ const sessionRecordingHistorySchema = z
 
 export const sessionRecordingStatusSchema = z.enum(["running", "idle", "failed"]);
 
-const recordingPositionSchema = z.string().regex(/^(?:0|[1-9][0-9]*)$/);
+// Recording cursors are opaque append-order tokens. The ordinal locates a recorded batch and the
+// position locates an event inside that batch; event positions alone restart after a Session reload.
+const recordingCursorSchema = z.string().regex(/^v2:[1-9][0-9]*:(?:0|[1-9][0-9]*)$/);
 
 const sessionRecordingHistoryPageSchema = z
     .object({
         events: z.array(sessionEventV2Schema).max(10_000).readonly(),
-        // The last event position on this page, or null when the caller has caught up.
-        nextCursor: recordingPositionSchema.nullable(),
-        // The largest recorded position, so a poller can skip decoding entirely while idle.
-        tailCursor: recordingPositionSchema,
+        // The append-order cursor after this page, or null when the caller has caught up.
+        nextCursor: recordingCursorSchema.nullable(),
+        // The append-order cursor at the newest recorded event, so an idle poller can compare one token.
+        tailCursor: recordingCursorSchema,
+        // True when a Session generation changed after the caller's cursor and it must replace its
+        // reconstructed state rather than append this page.
+        generationReset: z.boolean(),
         sessionId: identifierStringSchema,
         truncated: z.boolean(),
         version: z.literal(2),

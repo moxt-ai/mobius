@@ -241,8 +241,9 @@ describe("Recording incremental reads", () => {
         expect(response.status).toBe(200);
         const page = decodeSessionRecordingHistoryPage(await response.text());
         expect(page.events.map((candidate) => candidate.position)).toEqual(["4", "5"]);
-        expect(page.nextCursor).toBe("5");
-        expect(page.tailCursor).toBe("5");
+        expect(page.nextCursor).toBe("v2:2:5");
+        expect(page.tailCursor).toBe("v2:2:5");
+        expect(page.generationReset).toBe(false);
         expect(page.truncated).toBe(false);
         expect(page.sessionId).toBe("live-session");
         expect(page.version).toBe(2);
@@ -257,8 +258,8 @@ describe("Recording incremental reads", () => {
         expect(response.status).toBe(200);
         const page = decodeSessionRecordingHistoryPage(await response.text());
         expect(page.events.map((candidate) => candidate.position)).toEqual(["2", "3"]);
-        expect(page.nextCursor).toBe("3");
-        expect(page.tailCursor).toBe("5");
+        expect(page.nextCursor).toBe("v2:2:3");
+        expect(page.tailCursor).toBe("v2:2:5");
         expect(page.truncated).toBe(true);
     });
     it("Given the caller has caught up, When a caller reads after the tail, Then an empty page closes the poll loop", async () => {
@@ -271,7 +272,7 @@ describe("Recording incremental reads", () => {
         const page = decodeSessionRecordingHistoryPage(await response.text());
         expect(page.events).toEqual([]);
         expect(page.nextCursor).toBe(null);
-        expect(page.tailCursor).toBe("1");
+        expect(page.tailCursor).toBe("v2:1:1");
         expect(page.truncated).toBe(false);
     });
     it("Given a cursor beyond the recorded tail, When the Runtime later records more events, Then the poll resumes from the held cursor", async () => {
@@ -286,7 +287,7 @@ describe("Recording incremental reads", () => {
         ).toBe(201);
         const page = decodeSessionRecordingHistoryPage(await (await worker.fetch(read("?after=9"), env)).text());
         expect(page.events.map((candidate) => candidate.position)).toEqual([]);
-        expect(page.tailCursor).toBe("3");
+        expect(page.tailCursor).toBe("v2:2:3");
     });
     it("Given a boundary batch that starts before the cursor, When only its later half is new, Then decoding drops the delivered prefix", async () => {
         const spanning = numberedEvents(4, 0);
@@ -301,7 +302,65 @@ describe("Recording incremental reads", () => {
         expect((await worker.fetch(write("runtime-live", batch), env)).status).toBe(201);
         expect((await worker.fetch(write("runtime-live", batch), env)).status).toBe(201);
         const page = decodeSessionRecordingHistoryPage(await (await worker.fetch(read("?after=0"), env)).text());
-        expect(page.events.map((candidate) => candidate.position)).toEqual(["1"]);
+        expect(page.events.map((candidate) => candidate.eventId)).toEqual(["event-0", "event-1", "event-0", "event-1"]);
+    });
+    it("Given a daemon reload creates a new Session generation, When a caller continues from an append cursor, Then restarted events are retained", async () => {
+        const first = numberedEvents(3, 1);
+        expect(
+            (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: first }), env)).status,
+        ).toBe(201);
+        const initial = decodeSessionRecordingHistoryPage(
+            await (await worker.fetch(read("?after=0&limit=2"), env)).text(),
+        );
+
+        expect(initial.nextCursor).not.toBeNull();
+        const restarted = numberedEvents(2, 1).map((candidate) => ({
+            ...candidate,
+            eventId: `reloaded-${candidate.eventId}`,
+            sessionGenerationId: "session-generation-reloaded",
+        }));
+        expect(
+            (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: restarted }), env)).status,
+        ).toBe(201);
+        const followUp = new URL(
+            `https://recording.internal/v1/projects/${projectId}/runtimes/runtime-live/sessions/live-session/events`,
+        );
+        followUp.searchParams.set("after", initial.nextCursor ?? "");
+        followUp.searchParams.set("limit", "10");
+        const followUpResponse = await worker.fetch(new Request(followUp), env);
+        const page = decodeSessionRecordingHistoryPage(await followUpResponse.text());
+        expect(page.events.map((candidate) => candidate.eventId)).toEqual([
+            "event-3",
+            "reloaded-event-1",
+            "reloaded-event-2",
+        ]);
+        expect(page.generationReset).toBe(true);
+        expect(page.nextCursor).toBe("v2:2:2");
+    });
+    it("Given a legacy position cursor and a generation reset, When a caller polls incrementally, Then it receives a full replay reset", async () => {
+        expect(
+            (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: numberedEvents(2, 1) }), env))
+                .status,
+        ).toBe(201);
+        const restarted = numberedEvents(2, 1).map((candidate) => ({
+            ...candidate,
+            eventId: `legacy-reloaded-${candidate.eventId}`,
+            sessionGenerationId: "session-generation-legacy-reloaded",
+        }));
+        expect(
+            (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: restarted }), env)).status,
+        ).toBe(201);
+        const page = decodeSessionRecordingHistoryPage(
+            await (await worker.fetch(read("?after=1&limit=3"), env)).text(),
+        );
+        expect(page.events.map((candidate) => candidate.eventId)).toEqual([
+            "event-1",
+            "event-2",
+            "legacy-reloaded-event-1",
+        ]);
+        expect(page.generationReset).toBe(true);
+        expect(page.truncated).toBe(true);
+        expect(page.nextCursor).toBe("v2:2:1");
     });
     it("Given no incremental query, When a caller reads the session, Then the full history contract is unchanged", async () => {
         expect(

@@ -6,12 +6,30 @@ import {
     type SessionRecordingHistoryPage,
     type SessionRecordingWrite,
 } from "@moxt-ai/mobius-protocol";
-import { and, asc, eq, gt, isNotNull, max } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/durable-sqlite";
 import { sessionRecordingDurableObjectMigrations } from "../generated/session-recording-do-migrations.ts";
 import * as schema from "../schema/session-recording-do/index.ts";
 import { recordedSessionEvent, recordingMetadata } from "../schema/session-recording-do/index.ts";
 import { applyDurableObjectMigrations } from "./durable-object-migrations.ts";
+
+interface RecordedBatch {
+    readonly events: readonly SessionEventV2[];
+    readonly generation: string;
+    readonly ordinal: number;
+}
+
+interface SelectedEvent {
+    readonly batch: RecordedBatch;
+    readonly event: SessionEventV2;
+    readonly index: number;
+}
+
+interface ResolvedCursor {
+    readonly index: number;
+    readonly legacy: boolean;
+    readonly ordinal: number;
+}
 
 export class SessionRecordingStorage {
     readonly #database;
@@ -21,6 +39,29 @@ export class SessionRecordingStorage {
         this.#database = drizzle(storage, { schema });
         this.#storage = storage;
     }
+
+    readonly #batches = (): readonly RecordedBatch[] =>
+        this.#database
+            .select({
+                envelopeJson: recordedSessionEvent.envelopeJson,
+                ordinal: recordedSessionEvent.ordinal,
+                sessionGenerationId: recordedSessionEvent.sessionGenerationId,
+            })
+            .from(recordedSessionEvent)
+            .orderBy(asc(recordedSessionEvent.ordinal))
+            .all()
+            .map((row) => {
+                const events = this.#decode(row);
+                return {
+                    events,
+                    generation: row.sessionGenerationId ?? events[0]?.sessionGenerationId ?? "",
+                    ordinal: row.ordinal,
+                };
+            });
+
+    readonly #cursor = (batch: RecordedBatch, index: number): string =>
+        `v2:${batch.ordinal}:${batch.events[index]?.position ?? "0"}`;
+
     readonly append = (write: SessionRecordingWrite): boolean =>
         this.#storage.transactionSync(() => {
             const [event, ...remainingEvents] = write.envelope.events;
@@ -57,8 +98,10 @@ export class SessionRecordingStorage {
                 .insert(recordedSessionEvent)
                 .values({
                     envelopeJson: encodeSessionEventEnvelopeV2(write.envelope),
+                    firstPosition: Number(event.position),
                     lastPosition: finalEvent === undefined ? Number(event.position) : Number(finalEvent.position),
                     recordedAt: Date.parse(event.recordedAt),
+                    sessionGenerationId: event.sessionGenerationId,
                 })
                 .run();
             return true;
@@ -69,69 +112,141 @@ export class SessionRecordingStorage {
             return null;
         }
         return { events: rows.flatMap((row) => this.#decode(row)), sessionId };
-    }; /**
-     * Reads the events after a position cursor in a bounded page. Batches end at their highest
-     * position, so the seek skips every batch that finished at or before the cursor and only the
-     * boundary batch is decoded to drop its already-delivered prefix.
-     */
+    };
+    /** Reads events after an opaque append-order cursor in a bounded page. */
     readonly readPage = (
         projectId: string,
         runtimeId: string,
         sessionId: string,
-        after: number,
+        after: string,
         limit: number,
     ): SessionRecordingHistoryPage | null => {
         const metadata = this.#metadata(projectId, runtimeId, sessionId);
         if (metadata === undefined) {
             return null;
         }
-        const tail = this.#database
-            .select({ value: max(recordedSessionEvent.lastPosition) })
-            .from(recordedSessionEvent)
-            .where(isNotNull(recordedSessionEvent.lastPosition))
-            .get();
-        const tailCursor = tail?.value;
-        const events: SessionEventV2[] = [];
-        const delivered = new Set<string>();
+        const batches = this.#batches();
+        const cursor = this.#resolveCursor(batches, after);
+        if (cursor === null) {
+            throw new Error("The Recording cursor is invalid");
+        }
+        const tail = batches.at(-1);
+        const tailCursor = tail === undefined ? "v2:0:0" : this.#cursor(tail, tail.events.length - 1);
+        let selected: SelectedEvent[] = [];
         let truncated = false;
-        if (tailCursor !== undefined && tailCursor !== null && tailCursor > after) {
-            const rows = this.#database
-                .select({ envelopeJson: recordedSessionEvent.envelopeJson })
-                .from(recordedSessionEvent)
-                .where(and(gt(recordedSessionEvent.lastPosition, after), isNotNull(recordedSessionEvent.lastPosition)))
-                .orderBy(asc(recordedSessionEvent.ordinal))
-                .all();
-            for (const row of rows) {
-                const remaining = limit - events.length;
-                if (remaining <= 0) {
+        let generationReset = false;
+        for (const batch of batches) {
+            if (batch.ordinal < cursor.ordinal) {
+                continue;
+            }
+            if (batch.generation !== this.#cursorGeneration(batches, cursor.ordinal)) {
+                generationReset = true;
+            }
+            for (const [index, event] of batch.events.entries()) {
+                if (batch.ordinal === cursor.ordinal && index <= cursor.index) {
+                    continue;
+                }
+                if (selected.length >= limit) {
                     truncated = true;
                     break;
                 }
-                const batch = this.#decode({ envelopeJson: row.envelopeJson });
-                const fresh = batch.filter((event) => {
-                    if (Number(event.position) <= after || delivered.has(event.eventId)) {
-                        return false;
-                    }
-                    delivered.add(event.eventId);
-                    return true;
-                });
-                if (fresh.length > remaining) {
-                    events.push(...fresh.slice(0, remaining));
-                    truncated = true;
-                    break;
-                }
-                events.push(...fresh);
+                selected.push({ batch, event, index });
+            }
+            if (truncated) {
+                break;
             }
         }
-        const last = events.at(-1);
+        // Position-only legacy cursors have no generation scope. Once a generation switch exists,
+        // replay the full durable history so clients replace reconstructed state instead of dropping it.
+        if (cursor.legacy && this.#hasGenerationReset(batches)) {
+            selected = [];
+            truncated = false;
+            generationReset = true;
+            for (const batch of batches) {
+                for (const [index, event] of batch.events.entries()) {
+                    if (selected.length >= limit) {
+                        truncated = true;
+                        break;
+                    }
+                    selected.push({ batch, event, index });
+                }
+                if (truncated) {
+                    break;
+                }
+            }
+        }
+        const last = selected.at(-1);
         return {
-            events,
-            nextCursor: last === undefined ? null : last.position,
+            events: selected.map(({ event }) => event),
+            nextCursor: last === undefined ? null : this.#cursor(last.batch, last.index),
             sessionId,
-            tailCursor: tailCursor === undefined || tailCursor === null ? String(after) : String(tailCursor),
+            tailCursor,
             truncated,
+            generationReset,
             version: 2,
         };
+    };
+
+    readonly #resolveCursor = (batches: readonly RecordedBatch[], after: string): ResolvedCursor | null => {
+        const [cursorKind, ordinalToken, positionToken] = after.split(":");
+        if (cursorKind === "v2" && ordinalToken !== undefined && positionToken !== undefined) {
+            const ordinal = Number(ordinalToken);
+            const batch = batches.find((candidate) => candidate.ordinal === ordinal);
+            if (batch === undefined) {
+                return null;
+            }
+            const index = batch.events.findIndex((event) => Number(event.position) === Number(positionToken));
+            return index === -1 ? null : { index, legacy: false, ordinal };
+        }
+        if (!/^(?:0|[1-9][0-9]*)$/.test(after)) {
+            return null;
+        }
+        const position = Number(after);
+        let cursor: ResolvedCursor = { index: -1, legacy: true, ordinal: 0 };
+        let generation: string | null = null;
+        let previousPosition = 0;
+        for (const batch of batches) {
+            if (generation !== null && batch.generation !== generation) {
+                return cursor;
+            }
+            generation = batch.generation;
+            for (const [index, event] of batch.events.entries()) {
+                const current = Number(event.position);
+                if (current < previousPosition) {
+                    return cursor;
+                }
+                if (current <= position) {
+                    cursor = { index, legacy: true, ordinal: batch.ordinal };
+                }
+                previousPosition = current;
+            }
+        }
+        return cursor;
+    };
+
+    readonly #cursorGeneration = (batches: readonly RecordedBatch[], ordinal: number): string => {
+        if (ordinal === 0) {
+            return "";
+        }
+        return batches.find((batch) => batch.ordinal === ordinal)?.generation ?? "";
+    };
+
+    readonly #hasGenerationReset = (batches: readonly RecordedBatch[]): boolean => {
+        let previousGeneration: string | null = null;
+        let previousPosition = 0;
+        for (const batch of batches) {
+            const firstPosition = Number(batch.events[0]?.position ?? 0);
+            const lastPosition = Number(batch.events.at(-1)?.position ?? previousPosition);
+            if (
+                previousGeneration !== null &&
+                (batch.generation !== previousGeneration || firstPosition < previousPosition)
+            ) {
+                return true;
+            }
+            previousGeneration = batch.generation;
+            previousPosition = lastPosition;
+        }
+        return false;
     };
     readonly #metadata = (projectId: string, runtimeId: string, sessionId: string) =>
         this.#database

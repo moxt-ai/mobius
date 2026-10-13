@@ -16,9 +16,9 @@ type PlatformApplicationEnvironment = {
 };
 
 const recordingQuery = v.object({ runtimeId: v.string() });
-const recordingPosition = v.pipe(v.string(), v.regex(/^(?:0|[1-9][0-9]*)$/u));
+const recordingCursor = v.pipe(v.string(), v.regex(/^(?:(?:0|[1-9][0-9]*)|v2:[1-9][0-9]*:(?:0|[1-9][0-9]*))$/u));
 const recordingIncrementalQuery = v.object({
-    after: v.optional(recordingPosition),
+    after: v.optional(recordingCursor),
     limit: v.optional(v.pipe(v.string(), v.regex(/^[1-9][0-9]{0,4}$/u))),
 });
 
