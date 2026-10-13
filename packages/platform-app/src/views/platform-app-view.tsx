@@ -5,6 +5,7 @@ import { ConfirmAction } from "../components/confirm-action.tsx";
 import { CreateNameDialog } from "../components/create-name-dialog.tsx";
 import { RecordingPanel } from "../components/recording-panel.tsx";
 import { SecretDialog } from "../components/secret-dialog.tsx";
+import { SessionStatusWebhookPanel } from "../components/session-status-webhook-panel.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.tsx";
 import { platformDataTestId } from "../data-testid.ts";
 import { createPlatformClient } from "../services/platform-client.ts";
@@ -61,6 +62,7 @@ export function PlatformApp({ endpoint, getToken, userControl, organization, org
     const {
         apps,
         appTab,
+        webhook,
         setAppTab,
         setApps,
         appRecording,
@@ -72,6 +74,8 @@ export function PlatformApp({ endpoint, getToken, userControl, organization, org
         projects,
         setProjects,
         failProjects,
+        setWebhook,
+        failWebhook,
         selectedAppId,
         setSelectedAppId,
         rename,
@@ -175,6 +179,27 @@ export function PlatformApp({ endpoint, getToken, userControl, organization, org
         return () => controller.abort();
     }, [client, selectedAppId, setAppRecording, failAppRecording, setError]);
 
+    useEffect(() => {
+        if (selectedAppId.length === 0) {
+            return;
+        }
+        const controller = new AbortController();
+        void client()
+            .webhooks.read(selectedAppId, AbortSignal.any([controller.signal, AbortSignal.timeout(20_000)]))
+            .then((value) => {
+                if (!controller.signal.aborted) {
+                    setWebhook(selectedAppId, value);
+                }
+            })
+            .catch((cause: unknown) => {
+                if (!controller.signal.aborted) {
+                    failWebhook(selectedAppId);
+                    setError(cause instanceof Error ? cause.message : "Could not load webhook settings");
+                }
+            });
+        return () => controller.abort();
+    }, [client, selectedAppId, setWebhook, failWebhook, setError]);
+
     /** Loads this App's Projects together with the Recording policy that resolves for each one. */
     const refreshProjects = useCallback(
         async (appId: string, signal: AbortSignal): Promise<void> => {
@@ -273,6 +298,36 @@ export function PlatformApp({ endpoint, getToken, userControl, organization, org
                 ),
             );
             setNotice(mode === "inherit" ? "Recording inherits the app setting." : `Recording ${mode}.`);
+        });
+    };
+
+    const saveWebhook = (request: { readonly enabled: boolean; readonly endpoint: string }): void => {
+        if (selectedApp === undefined) {
+            return;
+        }
+        void perform("webhook-save", async () => {
+            const saved = await client().webhooks.write(selectedApp.appId, request, AbortSignal.timeout(20_000));
+            setWebhook(selectedApp.appId, saved);
+            if (saved.secret !== undefined) {
+                setSecret({ appId: selectedApp.appId, secret: saved.secret });
+                setSecretVisible(false);
+            }
+            setNotice(`Session status webhook ${saved.enabled ? "enabled" : "saved as disabled"}.`);
+        });
+    };
+
+    const rotateWebhook = (): void => {
+        if (selectedApp === undefined) {
+            return;
+        }
+        void perform("webhook-rotate", async () => {
+            const rotated = await client().webhooks.rotate(selectedApp.appId, AbortSignal.timeout(20_000));
+            setWebhook(selectedApp.appId, rotated);
+            if (rotated.secret !== undefined) {
+                setSecret({ appId: selectedApp.appId, secret: rotated.secret });
+            }
+            setSecretVisible(false);
+            setNotice("Session status webhook secret rotated.");
         });
     };
 
@@ -504,6 +559,14 @@ export function PlatformApp({ endpoint, getToken, userControl, organization, org
                                             onProjectModeChange={writeProjectRecording}
                                             projects={projects}
                                         />
+                                        {webhook.kind === "ready" ? (
+                                            <SessionStatusWebhookPanel
+                                                busy={busy}
+                                                onRotate={rotateWebhook}
+                                                onSave={saveWebhook}
+                                                webhook={webhook.webhook}
+                                            />
+                                        ) : null}
                                     </TabsContent>
                                     <TabsContent value="api-keys">
                                         <div className="mt-6 flex flex-col items-start justify-between gap-4 md:flex-row md:items-center [&_h3]:m-0 [&_h3]:text-xl [&_h3]:font-bold [&_p]:mt-1.5 [&_p]:text-sm [&_p]:text-[#69766f]">

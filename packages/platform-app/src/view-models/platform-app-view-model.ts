@@ -1,6 +1,7 @@
 import type {
     MobiusPlatformApp,
     MobiusPlatformAppCredentialMetadata,
+    MobiusPlatformAppSessionStatusWebhook,
     MobiusPlatformProject,
     MobiusPlatformRecordingPolicy,
 } from "@moxt-ai/mobius-sdk/platform";
@@ -30,6 +31,11 @@ export type ProjectsState =
     | { readonly kind: "failed" }
     | { readonly kind: "ready"; readonly items: readonly ProjectRecording[] };
 
+export type WebhookState =
+    | { readonly kind: "loading" }
+    | { readonly kind: "failed" }
+    | { readonly kind: "ready"; readonly webhook: MobiusPlatformAppSessionStatusWebhook };
+
 interface PlatformStore {
     readonly appRecording: RecordingState;
     readonly appTab: "api-keys" | "recording";
@@ -46,6 +52,7 @@ interface PlatformStore {
     readonly secret: RevealedSecret | null;
     readonly secretVisible: boolean;
     readonly selectedAppId: string;
+    readonly webhook: WebhookState;
     readonly setApps: (value: readonly MobiusPlatformApp[]) => void;
     readonly setAppRecording: (appId: string, value: MobiusPlatformRecordingPolicy) => void;
     readonly failAppRecording: (appId: string) => void;
@@ -61,6 +68,8 @@ interface PlatformStore {
     readonly setSecret: (value: RevealedSecret | null) => void;
     readonly setSecretVisible: (value: boolean) => void;
     readonly setSelectedAppId: (value: string | ((current: string) => string)) => void;
+    readonly setWebhook: (appId: string, value: MobiusPlatformAppSessionStatusWebhook) => void;
+    readonly failWebhook: (appId: string) => void;
 }
 
 export function usePlatformStore() {
@@ -78,6 +87,7 @@ export function usePlatformStore() {
             secret: null,
             secretVisible: false,
             selectedAppId: "",
+            webhook: { kind: "loading" },
             setApps: (apps) => set({ apps }),
             setAppRecording: (appId, policy) =>
                 set((state) => (state.selectedAppId === appId ? { appRecording: { kind: "ready", policy } } : state)),
@@ -109,10 +119,21 @@ export function usePlatformStore() {
                               appTab: "api-keys",
                               credentials: { kind: "loading" },
                               projects: { kind: "loading" },
+                              webhook: { kind: "loading" },
                               rename: { kind: "idle" },
                               error: "",
                           };
                 }),
+            setWebhook: (appId, webhook) =>
+                set((state) =>
+                    state.selectedAppId === appId
+                        ? { webhook: { kind: "ready", webhook } satisfies WebhookState }
+                        : state,
+                ),
+            failWebhook: (appId) =>
+                set((state) =>
+                    state.selectedAppId === appId ? { webhook: { kind: "failed" } satisfies WebhookState } : state,
+                ),
         })),
     );
     return useStore(store);

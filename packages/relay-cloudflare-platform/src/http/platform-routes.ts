@@ -12,6 +12,7 @@ import {
 } from "../middleware/authentication.ts";
 import { bodyParser } from "../middleware/body-parser.ts";
 import { createBrowserCors } from "../middleware/browser-cors.ts";
+import type { AppSessionStatusWebhookService } from "../service/app-session-status-webhook-service.ts";
 import type { OrganizationInviteService } from "../service/organization-invite-service.ts";
 import type { RecordingPolicyService } from "../service/recording-policy-service.ts";
 
@@ -40,12 +41,17 @@ const rotateCredentialBody = v.strictObject({ overlapSeconds: safeInteger });
 const emptyBody = v.strictObject({});
 const inviteBody = v.strictObject({ token: v.pipe(v.string(), v.regex(/^[a-f0-9]{64}$/)) });
 const recordingPolicyBody = v.strictObject({ mode: v.picklist(["inherit", "enabled", "disabled"]) });
+const sessionStatusWebhookBody = v.strictObject({
+    enabled: v.boolean(),
+    endpoint: requiredString,
+});
 
 type PlatformHttpEnvironment = PlatformAuthenticationEnvironment & {
     readonly Bindings: {
         readonly allowedOrigins: ReadonlySet<string>;
         readonly invites: OrganizationInviteService;
         readonly recordingPolicies: RecordingPolicyService;
+        readonly appSessionStatusWebhooks: AppSessionStatusWebhookService;
     };
 };
 
@@ -243,6 +249,39 @@ export function createPlatformControlApplication() {
             const identity = await authenticateDeveloper(context);
             return context.json(
                 await context.env.recordingPolicies.readApp(
+                    identity,
+                    path(context.req.param("appId")),
+                    context.var.signal,
+                ),
+            );
+        })
+        .get("/v1/apps/:appId/session-status-webhook", async (context) => {
+            const identity = await authenticateDeveloper(context);
+            return context.json(
+                await context.env.appSessionStatusWebhooks.read(
+                    identity,
+                    path(context.req.param("appId")),
+                    context.var.signal,
+                ),
+            );
+        })
+        .put("/v1/apps/:appId/session-status-webhook", bodyParser(sessionStatusWebhookBody), async (context) => {
+            const identity = await authenticateDeveloper(context);
+            const value = context.req.valid("json");
+            return context.json(
+                await context.env.appSessionStatusWebhooks.write(
+                    identity,
+                    path(context.req.param("appId")),
+                    value.enabled,
+                    value.endpoint,
+                    context.var.signal,
+                ),
+            );
+        })
+        .post("/v1/apps/:appId/session-status-webhook/rotate", bodyParser(emptyBody), async (context) => {
+            const identity = await authenticateDeveloper(context);
+            return context.json(
+                await context.env.appSessionStatusWebhooks.rotate(
                     identity,
                     path(context.req.param("appId")),
                     context.var.signal,

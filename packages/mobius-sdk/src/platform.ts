@@ -152,6 +152,19 @@ function requestedRecordingPolicyMode(value: MobiusRecordingPolicyMode): MobiusR
     return value;
 }
 
+function requestedWebhookEndpoint(value: string): string {
+    let url: URL;
+    try {
+        url = new URL(value);
+    } catch {
+        throw new MobiusValidationError("The webhook endpoint is invalid");
+    }
+    if (url.protocol !== "https:" || url.username !== "" || url.password !== "" || url.hash !== "") {
+        throw new MobiusValidationError("The webhook endpoint must use HTTPS");
+    }
+    return url.toString();
+}
+
 export class MobiusOidcCredentialProvider extends StaticMobiusCredentialProvider {}
 
 export class MobiusAppCredentialProvider extends StaticMobiusCredentialProvider {
@@ -399,6 +412,25 @@ export class MobiusPlatformRecordingPolicy {
     }
 }
 
+export class MobiusPlatformAppSessionStatusWebhook {
+    readonly appId: string;
+    readonly configured: boolean;
+    readonly enabled: boolean;
+    readonly endpoint: string;
+    readonly secret: string | undefined;
+    readonly secretId: string;
+
+    constructor(value: Readonly<Record<string, unknown>>) {
+        this.appId = identifier(value, "appId");
+        this.configured = boolean(value, "configured");
+        this.enabled = boolean(value, "enabled");
+        this.endpoint = string(value, "endpoint", 2048);
+        this.secretId = string(value, "secretId", 128);
+        const secret = value["secret"];
+        this.secret = typeof secret === "string" ? string({ secret }, "secret", 256) : undefined;
+    }
+}
+
 export interface MobiusCreatePlatformProjectRequest {
     readonly clientReference: string;
     readonly displayName: string;
@@ -416,6 +448,19 @@ export interface MobiusPlatformDeveloperClientOptions extends MobiusEndpointOpti
 }
 
 export class MobiusPlatformDeveloperClient {
+    readonly #options: MobiusPlatformDeveloperClientOptions;
+    readonly #executor: MobiusRequestExecutor;
+    readonly webhooks: MobiusPlatformAppSessionStatusWebhookClient;
+
+    constructor(options: MobiusPlatformDeveloperClientOptions) {
+        if (!isIdentifier(options.authenticationProviderId)) {
+            throw new MobiusValidationError("The OIDC provider identifier is invalid");
+        }
+        this.#options = options;
+        this.#executor = new MobiusRequestExecutor(options);
+        this.webhooks = new MobiusPlatformAppSessionStatusWebhookClient(this.#options);
+    }
+
     readonly createOrganizationInvite = async (organizationId: string, signal: AbortSignal) => {
         const value = await this.#executor.post(
             `dashboard/v1/platform/tenants/${requestedIdentifier(organizationId, "organization")}/invite-links`,
@@ -470,15 +515,6 @@ export class MobiusPlatformDeveloperClient {
         }
         return result.data;
     };
-
-    readonly #executor: MobiusRequestExecutor;
-
-    constructor(options: MobiusPlatformDeveloperClientOptions) {
-        if (!isIdentifier(options.authenticationProviderId)) {
-            throw new MobiusValidationError("The OIDC provider identifier is invalid");
-        }
-        this.#executor = new MobiusRequestExecutor(options);
-    }
 
     readonly listTenants = async (signal: AbortSignal): Promise<readonly MobiusPlatformTenant[]> => {
         const value = record(await this.#executor.get("dashboard/v1/platform/tenants", signal), "Tenant list");
@@ -781,6 +817,56 @@ export class MobiusPlatformDeveloperClient {
                     signal,
                 ),
                 "Recording policy",
+            ),
+        );
+}
+
+export class MobiusPlatformAppSessionStatusWebhookClient {
+    readonly #executor: MobiusRequestExecutor;
+
+    constructor(options: MobiusEndpointOptions) {
+        this.#executor = new MobiusRequestExecutor(options);
+    }
+
+    readonly read = async (appId: string, signal: AbortSignal): Promise<MobiusPlatformAppSessionStatusWebhook> =>
+        new MobiusPlatformAppSessionStatusWebhook(
+            record(
+                await this.#executor.get(
+                    `dashboard/v1/apps/${encodeURIComponent(requestedIdentifier(appId, "App identifier"))}/session-status-webhook`,
+                    signal,
+                ),
+                "App Session status webhook",
+            ),
+        );
+
+    readonly write = async (
+        appId: string,
+        request: { readonly enabled: boolean; readonly endpoint: string },
+        signal: AbortSignal,
+    ): Promise<MobiusPlatformAppSessionStatusWebhook> =>
+        new MobiusPlatformAppSessionStatusWebhook(
+            record(
+                await this.#executor.put(
+                    `dashboard/v1/apps/${encodeURIComponent(requestedIdentifier(appId, "App identifier"))}/session-status-webhook`,
+                    {
+                        enabled: request.enabled,
+                        endpoint: requestedWebhookEndpoint(request.endpoint),
+                    },
+                    signal,
+                ),
+                "App Session status webhook",
+            ),
+        );
+
+    readonly rotate = async (appId: string, signal: AbortSignal): Promise<MobiusPlatformAppSessionStatusWebhook> =>
+        new MobiusPlatformAppSessionStatusWebhook(
+            record(
+                await this.#executor.post(
+                    `dashboard/v1/apps/${encodeURIComponent(requestedIdentifier(appId, "App identifier"))}/session-status-webhook/rotate`,
+                    {},
+                    signal,
+                ),
+                "App Session status webhook",
             ),
         );
 }
