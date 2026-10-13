@@ -62,6 +62,7 @@ export default defineConfig(async (): Promise<ViteUserConfig> => {
                     d1Databases: ["TEST_UNINITIALIZED_SHARD"],
                     r2Buckets: ["R2_BUCKET_WNAM"],
                     bindings: {
+                        MOBIUS_SESSION_WEBHOOK_SECRET_ENCRYPTION_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
                         MOBIUS_PLATFORM_ALLOWED_ORIGINS: '["*"]',
                         MOBIUS_PLATFORM_OIDC_PROVIDERS: "[]",
                         MOBIUS_PLATFORM_OPERATOR_SUBJECTS: "[]",

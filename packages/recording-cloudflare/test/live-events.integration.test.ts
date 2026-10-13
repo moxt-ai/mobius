@@ -189,6 +189,79 @@ it("Given a prompt that later completes, When the Runtime loads its recorded dir
         sessions: [{ sessionId: event.sessionId, status: "idle" }],
     });
 });
+it("Given recorded prompt lifecycles, When a caller reads selected Session status, Then one and many status reads return summaries without loading the full Runtime directory", async () => {
+    const context = { agentId: "codex", directoryId: "default", additionalDirectoryIds: [] };
+    const lifecycle = (sessionId: string, eventId: string, kind: string, recordedAt: string) => ({
+        ...event,
+        eventId,
+        recordedAt,
+        sessionId,
+        type: "lifecycle-metadata",
+        payload:
+            kind === "prompt.requested"
+                ? {
+                      commandId: "command",
+                      content: [{ type: "text", text: "Run" }],
+                      context,
+                      kind,
+                  }
+                : { commandId: "command", kind, stopReason: "end_turn" },
+    });
+    const sessions = ["status-session-1", "status-session-2"];
+    for (const [index, sessionId] of sessions.entries()) {
+        expect(
+            (
+                await worker.fetch(
+                    write("runtime-live", {
+                        kind: "session.event.v2",
+                        events: [
+                            lifecycle(
+                                sessionId,
+                                `${sessionId}-requested`,
+                                "prompt.requested",
+                                `2026-10-09T0${index}:00:00.000Z`,
+                            ),
+                            lifecycle(
+                                sessionId,
+                                `${sessionId}-completed`,
+                                "prompt.completed",
+                                `2026-10-09T0${index}:30:00.000Z`,
+                            ),
+                        ],
+                    }),
+                    env,
+                )
+            ).status,
+        ).toBe(201);
+    }
+
+    const single = await worker.fetch(
+        new Request(
+            `https://recording.internal/v1/projects/${projectId}/runtimes/runtime-live/sessions/${sessions[0]}`,
+        ),
+        env,
+    );
+    expect(single.status).toBe(200);
+    expect(await single.json()).toMatchObject({
+        runtimeId: "runtime-live",
+        sessionId: sessions[0],
+        status: "idle",
+    });
+
+    const batchUrl = new URL(`https://recording.internal/v1/projects/${projectId}/runtimes/runtime-live/sessions`);
+    for (const sessionId of sessions) {
+        batchUrl.searchParams.append("sessionId", sessionId);
+    }
+    const batch = await worker.fetch(new Request(batchUrl), env);
+    expect(batch.status).toBe(200);
+    expect(decodeSessionRecordingDirectory(await batch.text()).sessions).toEqual(
+        expect.arrayContaining(
+            sessions.map((sessionId) =>
+                expect.objectContaining({ sessionId, runtimeId: "runtime-live", status: "idle" }),
+            ),
+        ),
+    );
+});
 it("Given a session that never requested a prompt, When the Runtime loads its recorded directory, Then the session is not listed", async () => {
     expect((await worker.fetch(write(), env)).status).toBe(201);
     const response = await worker.fetch(

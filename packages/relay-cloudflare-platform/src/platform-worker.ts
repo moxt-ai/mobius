@@ -47,7 +47,7 @@ import {
 } from "./gateway/project-durable-object-routing.ts";
 import { createPlatformControlApplication } from "./http/platform-routes.ts";
 import { createProjectApplication } from "./http/project-routes.ts";
-import { recordingReadRoutes } from "./http/recording-read-routes.ts";
+import { recordingReadRoutes, recordingSessionStatusRoutes } from "./http/recording-read-routes.ts";
 import { ClerkOrganizationGateway } from "./infra/clerk-organization-gateway.ts";
 import type { OrganizationMembershipGateway } from "./infra/organization-membership-gateway.ts";
 import { PlatformProjectStorageDirectory } from "./infra/platform-project-storage-directory.ts";
@@ -57,11 +57,13 @@ import {
     sessionAccessTargetMiddleware,
 } from "./middleware/session-access-target.ts";
 import { AppCredentialAuthenticationService } from "./service/app-credential-authentication-service.ts";
+import { AppSessionStatusWebhookService } from "./service/app-session-status-webhook-service.ts";
 import { OrganizationInviteService } from "./service/organization-invite-service.ts";
 import { PlatformControlPlaneService } from "./service/platform-control-plane-service.ts";
 import { RecordingPolicyService } from "./service/recording-policy-service.ts";
 import { SessionAccessService, type SessionAccessTarget } from "./service/session-access-service.ts";
 import { AppCredentialCacheStorage } from "./storage/app-credential-cache-storage.ts";
+import { AppSessionStatusWebhookStorage } from "./storage/app-session-status-webhook-storage.ts";
 import { OrganizationInviteStorage } from "./storage/organization-invite-storage.ts";
 import { PlatformControlPlaneStorage } from "./storage/platform-control-plane-storage.ts";
 import {
@@ -75,6 +77,9 @@ import { RecordingPolicyStorage } from "./storage/recording-policy-storage.ts";
 export interface PlatformRelayBindings extends PlatformStorageBindings, ProjectWorkerRoutingBindings {
     readonly CLERK_SECRET_KEY?: string;
     readonly APP_CREDENTIAL_CACHE: KVNamespace;
+    readonly MOBIUS_SESSION_EVENT_PUSH_SECRET?: string;
+    readonly MOBIUS_SESSION_STATUS_WEBHOOK_URL?: string;
+    readonly MOBIUS_SESSION_WEBHOOK_SECRET_ENCRYPTION_KEY?: string;
     readonly PLATFORM_DIRECTORY_DATABASE: D1Database;
     readonly R2_BUCKET_APAC: R2Bucket;
     readonly RECORDING?: Fetcher;
@@ -140,6 +145,7 @@ type DispatchEnvironment = {
         readonly projectDatabases: import("@moxt-ai/mobius-relay-core/database").SqlDatabase[];
         readonly relay: RelayContext;
         readonly recordingPolicies: RecordingPolicyService;
+        readonly appSessionStatusWebhooks: AppSessionStatusWebhookService;
         readonly sessionAccess: SessionAccessService;
         readonly sessionAccessTarget: SessionAccessTarget;
         readonly signal: AbortSignal;
@@ -193,6 +199,7 @@ export function createPlatformApplication(
                 organizations(context.env),
             ),
             recordingPolicies: context.var.recordingPolicies,
+            appSessionStatusWebhooks: context.var.appSessionStatusWebhooks,
         });
     const projectHandler: Handler<DispatchEnvironment> = (context) =>
         scopedProjectApplication.fetch(context.req.raw, {
@@ -740,6 +747,7 @@ export function createPlatformApplication(
     const projectRoutes = new Hono<DispatchEnvironment>()
         .route("/recording", recordingReadRoutes)
         .route("/sessions", sessionRoutes)
+        .route("/runtimes/:runtimeId", recordingSessionStatusRoutes)
         .all("/runtime-pairings/*", projectHandler)
         .all("/runtimes/*", projectHandler)
         .all("/*", projectHandler);
@@ -802,6 +810,14 @@ export function createPlatformApplication(
                     control,
                     new RecordingPolicyStorage(environment.PLATFORM_DIRECTORY_DATABASE),
                     environment.RECORDING !== undefined && isIdentifier(environment.RECORDING_PROVIDER_ID),
+                ),
+            );
+            context.set(
+                "appSessionStatusWebhooks",
+                new AppSessionStatusWebhookService(
+                    control,
+                    new AppSessionStatusWebhookStorage(environment.PLATFORM_DIRECTORY_DATABASE),
+                    environment.MOBIUS_SESSION_WEBHOOK_SECRET_ENCRYPTION_KEY,
                 ),
             );
             context.set("databases", databases);

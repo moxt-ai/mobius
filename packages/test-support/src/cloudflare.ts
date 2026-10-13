@@ -38,6 +38,7 @@ async function createCloudflareRuntime(allowedOrigins: ReadonlySet<string>) {
             kvNamespaces: ["APP_CREDENTIAL_CACHE"],
             r2Buckets: ["R2_BUCKET_APAC", "R2_BUCKET_WNAM"],
             bindings: {
+                MOBIUS_SESSION_WEBHOOK_SECRET_ENCRYPTION_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
                 MOBIUS_PLATFORM_ALLOWED_ORIGINS: JSON.stringify([...allowedOrigins]),
                 MOBIUS_PLATFORM_OIDC_PROVIDERS: "[]",
                 MOBIUS_PLATFORM_OPERATOR_SUBJECTS: "[]",

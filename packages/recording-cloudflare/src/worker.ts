@@ -105,10 +105,31 @@ function recordingDirectoryRoutes(
         })
         .get("/sessions", (context): Response => {
             const runtimeId = decodedIdentifier(context.req.query("runtimeId"));
-            if (runtimeId === null) {
+            const sessionIds = context.req.queries("sessionId") ?? [];
+            if (runtimeId === null || sessionIds.some((sessionId) => !isIdentifier(sessionId))) {
                 return errorResponse("invalid_target", 400);
             }
-            return context.body(encodeSessionRecordingDirectory(storage.read(runtimeId)), 200, jsonHeaders);
+            const result =
+                sessionIds.length === 0
+                    ? storage.read(runtimeId)
+                    : {
+                          sessions: sessionIds.flatMap((sessionId) => {
+                              const summary = storage.find(sessionId);
+                              return summary?.runtimeId === runtimeId ? [summary] : [];
+                          }),
+                      };
+            return context.body(encodeSessionRecordingDirectory(result), 200, jsonHeaders);
+        })
+        .get("/summary", (context): Response => {
+            const runtimeId = decodedIdentifier(context.req.query("runtimeId"));
+            const sessionId = decodedIdentifier(context.req.query("sessionId"));
+            if (runtimeId === null || sessionId === null) {
+                return errorResponse("invalid_target", 400);
+            }
+            const summary = storage.find(sessionId);
+            return summary === null || summary.runtimeId !== runtimeId
+                ? errorResponse("not_found", 404)
+                : context.json(summary);
         })
         .all("*", (): Response => errorResponse("not_found", 404));
 }
@@ -223,14 +244,37 @@ export function createRecordingWorker(): RecordingWorker {
             if (target.projectId === null || target.runtimeId === null) {
                 return errorResponse("not_found", 404);
             }
+            const sessionIds = context.req.queries("sessionId") ?? [];
+            if (sessionIds.some((sessionId) => !isIdentifier(sessionId))) {
+                return errorResponse("invalid_target", 400);
+            }
             const query = new URLSearchParams({
                 projectId: target.projectId,
                 runtimeId: target.runtimeId,
             });
+            for (const sessionId of sessionIds) {
+                query.append("sessionId", sessionId);
+            }
             return await durableObjectFetch(
                 context.env.RECORDING_DIRECTORY,
                 JSON.stringify([target.projectId, target.runtimeId]),
                 new Request(`https://directory.internal/sessions?${query}`, { signal: context.req.raw.signal }),
+            );
+        })
+        .get("/v1/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId", async (context): Promise<Response> => {
+            const target = readTarget(context);
+            if (target.projectId === null || target.runtimeId === null || target.sessionId === null) {
+                return errorResponse("not_found", 404);
+            }
+            const query = new URLSearchParams({
+                projectId: target.projectId,
+                runtimeId: target.runtimeId,
+                sessionId: target.sessionId,
+            });
+            return await durableObjectFetch(
+                context.env.RECORDING_DIRECTORY,
+                JSON.stringify([target.projectId, target.runtimeId]),
+                new Request(`https://directory.internal/summary?${query}`, { signal: context.req.raw.signal }),
             );
         })
         .get(

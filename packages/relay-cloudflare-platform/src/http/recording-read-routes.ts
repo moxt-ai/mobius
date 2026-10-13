@@ -118,3 +118,42 @@ export const recordingReadRoutes = new Hono<PlatformApplicationEnvironment>()
         )}/sessions/${encodeURIComponent(sessionId)}/events`;
         return await readRecording(context, projectId, recordingPath, forwarded);
     });
+
+export const recordingSessionStatusRoutes = new Hono<PlatformApplicationEnvironment>()
+    .get("/sessions", async (context, next) => {
+        const projectId = decodedIdentifier(context.req.param("projectId"));
+        const runtimeId = decodedIdentifier(context.req.param("runtimeId"));
+        const sessionIds = new URL(context.req.raw.url).searchParams.getAll("sessionId");
+        if (sessionIds.length === 0) {
+            await next();
+            return;
+        }
+        if (
+            projectId === null ||
+            runtimeId === null ||
+            sessionIds.length === 0 ||
+            sessionIds.some((id) => !isIdentifier(id))
+        ) {
+            return errorResponse("invalid_request", "The Recording Session status target is invalid", 400);
+        }
+        const forwarded = new URLSearchParams();
+        for (const sessionId of sessionIds) {
+            forwarded.append("sessionId", sessionId);
+        }
+        const recordingPath = `/v1/projects/${encodeURIComponent(projectId)}/runtimes/${encodeURIComponent(
+            runtimeId,
+        )}/sessions`;
+        return await readRecording(context, projectId, recordingPath, forwarded);
+    })
+    .get("/sessions/:sessionId", async (context): Promise<Response> => {
+        const projectId = decodedIdentifier(context.req.param("projectId"));
+        const runtimeId = decodedIdentifier(context.req.param("runtimeId"));
+        const sessionId = decodedIdentifier(context.req.param("sessionId"));
+        if (projectId === null || runtimeId === null || sessionId === null) {
+            return errorResponse("invalid_request", "The Recording Session status target is invalid", 400);
+        }
+        const recordingPath = `/v1/projects/${encodeURIComponent(projectId)}/runtimes/${encodeURIComponent(
+            runtimeId,
+        )}/sessions/${encodeURIComponent(sessionId)}`;
+        return await readRecording(context, projectId, recordingPath);
+    });
