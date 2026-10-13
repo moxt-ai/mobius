@@ -50,6 +50,72 @@ function processExists(pid: number): boolean {
 }
 
 describe("ACP conversation sessions", () => {
+    it("Given a tool update has flushed to SQLite, When a replacement update arrives, Then its position remains with compacted content", async () => {
+        vi.useFakeTimers({ toFake: ["clearImmediate", "setImmediate"] });
+        vi.setSystemTime(new Date("2026-10-12T00:00:00.000Z"));
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-tool-projection-"));
+        const store = new CachedAcpSessionEventStoreV2(
+            openSessionEventCacheV2Database(join(temporaryDirectory, "events.sqlite")),
+        );
+        try {
+            store.append("session-1", {
+                payload: {
+                    sessionUpdate: "tool_call",
+                    title: "Run command",
+                    toolCallId: "tool-1",
+                },
+                type: "acp",
+            });
+            store.append("session-1", {
+                payload: {
+                    rawOutput: { output: "first snapshot" },
+                    sessionUpdate: "tool_call_update",
+                    status: "in_progress",
+                    toolCallId: "tool-1",
+                },
+                type: "acp",
+            });
+            for (let remaining = 298; remaining > 0; remaining -= 1) {
+                store.append("session-1", {
+                    payload: { kind: "session.queue.changed" },
+                    type: "lifecycle-metadata",
+                });
+            }
+            await vi.runAllTimersAsync();
+
+            store.append("session-1", {
+                payload: {
+                    content: [{ content: { text: "final snapshot", type: "text" }, type: "content" }],
+                    sessionUpdate: "tool_call_update",
+                    status: "completed",
+                    toolCallId: "tool-1",
+                },
+                type: "acp",
+            });
+
+            const page = store.page("session-1", 400, null);
+            expect(page.events[1]).toEqual({
+                payload: { sessionUpdate: "tool_call_update", toolCallId: "tool-1" },
+                type: "acp",
+            });
+            expect(page.events.at(-1)).toEqual({
+                payload: {
+                    content: [{ content: { text: "final snapshot", type: "text" }, type: "content" }],
+                    rawOutput: { output: "first snapshot" },
+                    sessionUpdate: "tool_call_update",
+                    status: "completed",
+                    title: "Run command",
+                    toolCallId: "tool-1",
+                },
+                type: "acp",
+            });
+        } finally {
+            store.close();
+            vi.useRealTimers();
+            await rm(temporaryDirectory, { force: true, recursive: true });
+        }
+    });
+
     it("Given more V2 events than the memory tier retains, When history is paged after background caching, Then one ordered sequence is returned", async () => {
         vi.useFakeTimers({ toFake: ["clearImmediate", "setImmediate"] });
         vi.setSystemTime(new Date("2026-10-09T00:00:00.000Z"));

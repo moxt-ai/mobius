@@ -111,6 +111,25 @@ export async function publishContentScenario(
             toolCallId,
         },
     });
+    if (prompt === "stream cumulative tool output") {
+        await context.client.notify(acp.methods.client.session.update, {
+            sessionId: context.params.sessionId,
+            update: {
+                rawOutput: { output: "first snapshot" },
+                sessionUpdate: "tool_call_update",
+                status: "in_progress",
+                toolCallId,
+            },
+        });
+        await context.client.notify(acp.methods.client.session.update, {
+            sessionId: context.params.sessionId,
+            update: {
+                content: [{ content: { text: "rendered snapshot", type: "text" }, type: "content" }],
+                sessionUpdate: "tool_call_update",
+                toolCallId,
+            },
+        });
+    }
     await context.client.notify(acp.methods.client.session.update, {
         sessionId: context.params.sessionId,
         update: {
@@ -169,7 +188,12 @@ export async function publishContentScenario(
                               },
                           ]
                         : undefined,
-            rawOutput: prompt === "return oversized tool output" ? "x".repeat(500_001) : { name: "mobius-workspace" },
+            rawOutput:
+                prompt === "return oversized tool output"
+                    ? "x".repeat(500_001)
+                    : prompt === "stream cumulative tool output"
+                      ? { output: "final snapshot" }
+                      : { name: "mobius-workspace" },
             sessionUpdate: "tool_call_update",
             status: "completed",
             toolCallId,
