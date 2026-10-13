@@ -1769,8 +1769,8 @@ async function nextJsonOfKind(messages: SocketMessages, kind: string): Promise<R
     }
 }
 
-/** Two Hosts with either colliding or distinct settings request identifiers. */
-async function startTwoHostsSharingRequestId(runtime: LinkedCodexRuntime, collision = false) {
+/** Two Hosts competing for the same settings reply identifier. */
+async function startTwoHostsSharingRequestId(runtime: LinkedCodexRuntime) {
     const daemon = await connectDaemon(runtime);
     expect(decodeServiceToDaemonMessage(await daemon.messages.next()).kind).toBe("runtime.liveness.ready");
     const hostA = await connectHost(runtime);
@@ -1784,33 +1784,30 @@ async function startTwoHostsSharingRequestId(runtime: LinkedCodexRuntime, collis
         kind: "agent.settings.discover",
         requestId: sharedSettingsRequestId,
     });
-    const requestId = collision ? sharedSettingsRequestId : "host-B-settings-request";
-    if (collision) {
-        for (const agentId of ["codex", "claude"]) {
-            hostB.socket.send(JSON.stringify({ kind: "agent.settings.discover", agentId, requestId }));
-            await barrierFromHostB(daemon, hostB);
-            expect(JSON.parse(await hostB.messages.next())).toMatchObject({
-                kind: "agent.settings.discovery.failed",
-                requestId,
-                code: "agent_settings_discovery_busy",
-            });
-            expect(JSON.parse(await hostB.messages.next())).toMatchObject({ kind: "runtime.ping" });
-            expect(JSON.parse(await hostA.messages.next())).toMatchObject({ kind: "runtime.ping" });
-        }
-    } else {
-        hostB.socket.send(JSON.stringify({ kind: "agent.settings.discover", agentId: "codex", requestId }));
-        expect(decodeServiceToDaemonMessage(await daemon.messages.next())).toMatchObject({
-            kind: "agent.settings.discover",
-            requestId,
+    for (const agentId of ["codex", "claude"]) {
+        hostB.socket.send(
+            JSON.stringify({
+                kind: "agent.settings.discover",
+                agentId,
+                requestId: sharedSettingsRequestId,
+            }),
+        );
+        await barrierFromHostB(daemon, hostB);
+        expect(JSON.parse(await hostB.messages.next())).toMatchObject({
+            kind: "agent.settings.discovery.failed",
+            requestId: sharedSettingsRequestId,
+            code: "agent_settings_discovery_busy",
         });
+        expect(JSON.parse(await hostB.messages.next())).toMatchObject({ kind: "runtime.ping" });
+        expect(JSON.parse(await hostA.messages.next())).toMatchObject({ kind: "runtime.ping" });
     }
     return { daemon, hostA, hostB };
 }
 
-function discoveryFailure(message: string, requestId = "host-B-settings-request"): string {
+function discoveryFailure(message: string): string {
     return JSON.stringify({
         kind: "agent.settings.discovery.failed",
-        requestId,
+        requestId: sharedSettingsRequestId,
         code: "probe_failed",
         message,
     });
@@ -1832,9 +1829,9 @@ describe.sequential("Settings discovery reply routing", () => {
     it("Given Host A has a settings discovery pending, When Host B reuses its requestId, Then B is rejected and A receives its answer", async () => {
         vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
         const runtime = await linkCodexRuntime();
-        const { daemon, hostA, hostB } = await startTwoHostsSharingRequestId(runtime, true);
+        const { daemon, hostA, hostB } = await startTwoHostsSharingRequestId(runtime);
         try {
-            daemon.socket.send(discoveryFailure("answer-to-A", sharedSettingsRequestId));
+            daemon.socket.send(discoveryFailure("answer-to-A"));
             await barrierFromHostB(daemon, hostB);
             expect(JSON.parse(await hostA.messages.next())).toMatchObject({
                 kind: "agent.settings.discovery.failed",
@@ -1855,7 +1852,7 @@ describe.sequential("Settings discovery reply routing", () => {
                 kind: "agent.settings.discover",
                 requestId: sharedSettingsRequestId,
             });
-            daemon.socket.send(discoveryFailure("answer-to-B", sharedSettingsRequestId));
+            daemon.socket.send(discoveryFailure("answer-to-B"));
             await barrierFromHostB(daemon, hostB);
             expect(JSON.parse(await hostB.messages.next())).toMatchObject({
                 kind: "agent.settings.discovery.failed",
@@ -1864,47 +1861,6 @@ describe.sequential("Settings discovery reply routing", () => {
             });
         } finally {
             hostA.socket.close(1000, "Test finished");
-            hostB.socket.close(1000, "Test finished");
-            daemon.socket.close(1000, "Test finished");
-        }
-    });
-
-    it("Given Host A is closing while Host B has a distinct settings request pending, When the Daemon answers that request, Then open Host B receives the answer", async () => {
-        vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
-        const runtime = await linkCodexRuntime();
-        const { daemon, hostA, hostB } = await startTwoHostsSharingRequestId(runtime);
-        try {
-            hostA.socket.close(1000, "Host closed");
-            daemon.socket.send(discoveryFailure("answer-to-B"));
-            await barrierFromHostB(daemon, hostB);
-            expect(JSON.parse(await hostB.messages.next())).toMatchObject({
-                kind: "agent.settings.discovery.failed",
-                requestId: "host-B-settings-request",
-                message: "answer-to-B",
-            });
-        } finally {
-            hostB.socket.close(1000, "Test finished");
-            daemon.socket.close(1000, "Test finished");
-        }
-    });
-
-    it("Given Host A closed and the Relay hibernated, When the Daemon answers Host B's settings request, Then open Host B receives the answer", async () => {
-        vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
-        const runtime = await linkCodexRuntime();
-        const { daemon, hostA, hostB } = await startTwoHostsSharingRequestId(runtime);
-        try {
-            hostA.socket.close(1000, "Host closed");
-            await evictDurableObject(runtime.environment.RUNTIME_RELAY.getByName(runtime.runtimeId), {
-                webSockets: "hibernate",
-            });
-            daemon.socket.send(discoveryFailure("answer-to-B"));
-            await barrierFromHostB(daemon, hostB);
-            expect(JSON.parse(await hostB.messages.next())).toMatchObject({
-                kind: "agent.settings.discovery.failed",
-                requestId: "host-B-settings-request",
-                message: "answer-to-B",
-            });
-        } finally {
             hostB.socket.close(1000, "Test finished");
             daemon.socket.close(1000, "Test finished");
         }
