@@ -769,6 +769,54 @@ describe.sequential("Platform Session-only boundary", () => {
         try {
             expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("runtime.liveness.ready");
             expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "runtime.status", online: true });
+            // A Host can multiplex discovery, but routing must remain bounded and reject overload explicitly.
+            const discoveryRequests = Array.from({ length: 4 }, (_, index) => ({
+                kind: "agent.settings.discover",
+                agentId: "a".repeat(128),
+                requestId: `settings-${index}`.padEnd(128, "r"),
+            }));
+            const hostClosed = Promise.withResolvers<{ readonly kind: "host.closed"; readonly code: number }>();
+            host.addEventListener("close", (event) => hostClosed.resolve({ kind: "host.closed", code: event.code }), {
+                once: true,
+            });
+            for (const request of discoveryRequests) {
+                host.send(JSON.stringify(request));
+                expect(decodeServiceToDaemonMessage(await daemonMessages.next())).toMatchObject(request);
+            }
+            host.send(
+                JSON.stringify({
+                    kind: "agent.settings.discover",
+                    agentId: "a".repeat(128),
+                    requestId: "settings-overflow",
+                }),
+            );
+            host.send(JSON.stringify({ kind: "runtime.ping", requestId: "settings-capacity-barrier" }));
+            expect(decodeServiceToDaemonMessage(await daemonMessages.next())).toMatchObject({
+                kind: "runtime.ping",
+                requestId: "settings-capacity-barrier",
+            });
+            expect(
+                await Promise.race([hostMessages.next().then((message) => JSON.parse(message)), hostClosed.promise]),
+            ).toMatchObject({
+                kind: "agent.settings.discovery.failed",
+                requestId: "settings-overflow",
+                code: "agent_settings_discovery_busy",
+            });
+            expect(decodeServiceToDaemonMessage(await hostMessages.next()).kind).toBe("runtime.ping");
+            for (const request of discoveryRequests) {
+                daemon.send(
+                    JSON.stringify({
+                        kind: "agent.settings.discovery.failed",
+                        requestId: request.requestId,
+                        code: "probe_failed",
+                        message: "Controlled discovery failure",
+                    }),
+                );
+                expect(JSON.parse(await hostMessages.next())).toMatchObject({
+                    kind: "agent.settings.discovery.failed",
+                    requestId: request.requestId,
+                });
+            }
             // Native imports and forks share this Runtime transport with configuration and live output.
             const closed = Promise.withResolvers<{ readonly kind: "closed"; readonly code: number }>();
             daemon.addEventListener("close", (event) => closed.resolve({ kind: "closed", code: event.code }), {
@@ -806,6 +854,19 @@ describe.sequential("Platform Session-only boundary", () => {
                 kind: "agent.settings.discover",
                 requestId: "settings-before-wake",
             });
+            host.send(
+                JSON.stringify({
+                    kind: "agent.settings.discover",
+                    agentId: "codex",
+                    requestId: "settings-before-wake",
+                }),
+            );
+            host.send(JSON.stringify({ kind: "runtime.ping", requestId: "settings-duplicate-barrier" }));
+            expect(decodeServiceToDaemonMessage(await daemonMessages.next())).toMatchObject({
+                kind: "runtime.ping",
+                requestId: "settings-duplicate-barrier",
+            });
+            expect(decodeServiceToDaemonMessage(await hostMessages.next()).kind).toBe("runtime.ping");
             await evictDurableObject(environment.RUNTIME_RELAY.getByName(runtimeId), { webSockets: "hibernate" });
             for (const action of ["import", "fork"] as const) {
                 const requestId = `native-${action}-request`;
@@ -858,6 +919,7 @@ describe.sequential("Platform Session-only boundary", () => {
             }
             vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
 
+            vi.setSystemTime(new Date("2030-01-01T00:03:00.000Z"));
             daemon.send(
                 JSON.stringify({
                     kind: "agent.settings.discovery.failed",
@@ -866,11 +928,15 @@ describe.sequential("Platform Session-only boundary", () => {
                     message: "Controlled discovery failure",
                 }),
             );
+            // The next frame is a barrier if discovery routing silently discarded the result.
+            daemon.send(liveEvent(sessionId, "settings response barrier"));
             expect(JSON.parse(await hostMessages.next())).toMatchObject({
                 kind: "agent.settings.discovery.failed",
                 requestId: "settings-before-wake",
                 code: "probe_failed",
             });
+            expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "session.event.v2" });
+            vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
             // A newer Runtime may publish an event this Relay does not understand yet. The event is
             // observational, so skipping it must not disconnect the Runtime or block supported work.
             daemon.send(JSON.stringify({ kind: "session.future.changed", sessionId, value: "future" }));

@@ -86,8 +86,6 @@ import { SessionRuntimeError } from "../../entity/do/session.ts";
 import type { BestEffortRecording } from "./best-effort-recording.ts";
 import { LiveSessionEventRelay } from "./live-session-event-relay.ts";
 
-const AGENT_SETTINGS_DISCOVERY_DEADLINE_MILLISECONDS = 2 * 60 * 1_000;
-
 function sessionErrorCloseCode(error: SessionRuntimeError): 1008 | 1013 {
     if (error.code === "session_busy") {
         return 1013;
@@ -95,28 +93,20 @@ function sessionErrorCloseCode(error: SessionRuntimeError): 1008 | 1013 {
     return 1008;
 }
 
-export interface RelayClock {
-    readonly now: () => number;
-}
-
-export class SystemRelayClock implements RelayClock {
-    readonly now = (): number => Date.now();
-}
-
 export type HistoryRequestKind = "live" | "preview";
 
 export interface ChannelSocket {
     readonly close: (code: number, reason: string) => void;
-    readonly consumeAgentSettingsDiscovery: (requestId: string, agentId: string, now: number) => boolean;
-    readonly consumeAgentSettingsDiscoveryFailure: (requestId: string, now: number) => boolean;
-    readonly takeAgentSettingsDiscoveries: (now: number) => readonly string[];
+    readonly consumeAgentSettingsDiscovery: (requestId: string, agentId: string) => boolean;
+    readonly consumeAgentSettingsDiscoveryFailure: (requestId: string) => boolean;
+    readonly takeAgentSettingsDiscoveries: () => readonly string[];
     readonly bindHistoryRequest: (kind: HistoryRequestKind, requestId: string) => void;
     readonly matchesHistoryRequest: (kind: HistoryRequestKind, requestId: string) => boolean;
     readonly isOpen: () => boolean;
     readonly isSame: (socket: ChannelSocket) => boolean;
     readonly permitsLiveSessionHistory: () => boolean;
     readonly send: (message: string) => void;
-    readonly trackAgentSettingsDiscovery: (requestId: string, agentId: string, expiresAt: number) => void;
+    readonly trackAgentSettingsDiscovery: (requestId: string, agentId: string) => "tracked" | "duplicate" | "busy";
 }
 
 export interface ChannelPeers {
@@ -126,7 +116,6 @@ export interface ChannelPeers {
 }
 
 export class ChannelActor {
-    readonly #clock: RelayClock;
     readonly #peers: ChannelPeers;
     readonly #projectId: string;
     readonly #runtimeId: string;
@@ -137,12 +126,10 @@ export class ChannelActor {
         readonly gateways: {
             readonly peers: ChannelPeers;
             readonly recording: BestEffortRecording;
-            readonly clock?: RelayClock;
         };
     }) {
         const { projectId, runtimeId } = cx.config;
-        const { peers, recording, clock = new SystemRelayClock() } = cx.gateways;
-        this.#clock = clock;
+        const { peers, recording } = cx.gateways;
         this.#peers = peers;
         this.#projectId = projectId;
         this.#runtimeId = runtimeId;
@@ -504,11 +491,23 @@ export class ChannelActor {
         requestId: string,
         agentId: string,
     ): void => {
-        const now = this.#clock.now();
-        const expiresAt = now + AGENT_SETTINGS_DISCOVERY_DEADLINE_MILLISECONDS;
-        socket.trackAgentSettingsDiscovery(requestId, agentId, expiresAt);
+        const route = socket.trackAgentSettingsDiscovery(requestId, agentId);
+        if (route === "duplicate") {
+            return;
+        }
+        if (route === "busy") {
+            socket.send(
+                encodeAgentSettingsDiscoveryFailedEvent({
+                    code: "agent_settings_discovery_busy",
+                    kind: AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
+                    message: "This connection already has pending settings discovery requests",
+                    requestId,
+                }),
+            );
+            return;
+        }
         if (!this.sendToDaemon(message)) {
-            socket.consumeAgentSettingsDiscoveryFailure(requestId, now);
+            socket.consumeAgentSettingsDiscoveryFailure(requestId);
             socket.send(
                 encodeAgentSettingsDiscoveryFailedEvent({
                     code: "runtime_offline",
@@ -526,20 +525,16 @@ export class ChannelActor {
         agentId: string,
         message: string,
     ): void => {
-        const now = this.#clock.now();
         const recipient = this.#peers
             .hosts()
-            .find((socket) => socket.consumeAgentSettingsDiscovery(requestId, agentId, now));
+            .find((socket) => socket.consumeAgentSettingsDiscovery(requestId, agentId));
         if (recipient?.isOpen()) {
             recipient.send(message);
         }
     };
 
     private readonly returnAgentSettingsDiscoveryFailure = (requestId: string, message: string): void => {
-        const now = this.#clock.now();
-        const recipient = this.#peers
-            .hosts()
-            .find((socket) => socket.consumeAgentSettingsDiscoveryFailure(requestId, now));
+        const recipient = this.#peers.hosts().find((socket) => socket.consumeAgentSettingsDiscoveryFailure(requestId));
         if (recipient?.isOpen()) {
             recipient.send(message);
         }
@@ -583,9 +578,8 @@ export class ChannelActor {
     };
 
     private readonly failPendingAgentSettingsDiscoveries = (): void => {
-        const now = this.#clock.now();
         for (const socket of this.#peers.hosts()) {
-            for (const requestId of socket.takeAgentSettingsDiscoveries(now)) {
+            for (const requestId of socket.takeAgentSettingsDiscoveries()) {
                 if (socket.isOpen()) {
                     socket.send(
                         encodeAgentSettingsDiscoveryFailedEvent({
