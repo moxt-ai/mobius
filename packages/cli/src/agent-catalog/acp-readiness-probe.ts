@@ -116,6 +116,7 @@ function writableAcpStream(output: NodeJS.WritableStream): WritableStream<Uint8A
  * There is no adapter executable to spawn, so the probe exercises the code that will serve sessions.
  */
 async function probeInProcessReadiness(
+    specification: LocalAgentSpecification,
     agent: InProcessAcpAgentDefinition,
     environment: Readonly<NodeJS.ProcessEnv>,
     defaultWorkspace: string,
@@ -147,6 +148,7 @@ async function probeInProcessReadiness(
                             "ACP agent selected an unsupported protocol version",
                         );
                     }
+                    await specification.verifyAcp(connection, initialized, defaultWorkspace, controller.signal);
                     return new VerifiedAcpReadiness(
                         normalizeVersionOutput(initialized.agentInfo?.version ?? ""),
                         normalizeAcpCapabilities(initialized),
@@ -197,7 +199,7 @@ export async function probeAcpReadiness(
     }
     if (agent.kind === "in-process-acp") {
         try {
-            return await probeInProcessReadiness(agent, environment, defaultWorkspace, controller);
+            return await probeInProcessReadiness(specification, agent, environment, defaultWorkspace, controller);
         } catch (error) {
             if (signal.aborted) {
                 signal.throwIfAborted();
@@ -205,7 +207,19 @@ export async function probeAcpReadiness(
             if (timedOut) {
                 throw new AgentProbeError("adapter_probe_timeout", "ACP agent probe timed out", { cause: error });
             }
-            throw error;
+            if (error instanceof AgentProbeError) {
+                throw error;
+            }
+            if (
+                error instanceof RequestError &&
+                error.code === -32_000 &&
+                specification.authenticationCommand().length > 0
+            ) {
+                throw new AgentProbeError("authentication_required", "Agent authentication is required", {
+                    cause: error,
+                });
+            }
+            throw new AgentProbeError("acp_incompatible", "ACP agent initialization failed", { cause: error });
         } finally {
             clearTimeout(timeout);
             signal.removeEventListener("abort", abort);

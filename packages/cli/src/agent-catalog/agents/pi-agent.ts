@@ -7,47 +7,38 @@ import {
     methods,
 } from "@agentclientprotocol/sdk";
 
+import { PiAcpEndpoint } from "../../acp/harness/pi/endpoint.ts";
+import type { InProcessAcpEndpointFactory } from "../../acp/in-process/acp-endpoint.ts";
 import { validateManagedNpmPackage } from "../../agent-installation/managed-npm-package.ts";
-import { PI_ACP_PACKAGE, PI_AGENT_PACKAGE } from "../../agent-installation/pi-managed-packages.ts";
+import { PI_AGENT_PACKAGE } from "../../agent-installation/pi-managed-packages.ts";
 import type { ResolvedExecutable } from "../../process/executable.ts";
 import { AgentProbeError } from "../agent-probe-error.ts";
-import { BridgedAcpAgentDefinition } from "../agent-specification.ts";
+import { InProcessAcpAgentDefinition } from "../agent-specification.ts";
 
 const ACP_PROBE_TIMEOUT_MILLISECONDS = 30_000;
 
-export class PiAgentSpecification extends BridgedAcpAgentDefinition {
+export class PiAgentSpecification extends InProcessAcpAgentDefinition {
     override readonly acpProbeTimeoutMilliseconds = ACP_PROBE_TIMEOUT_MILLISECONDS;
-    readonly adapterEnvironmentVariable = "PI_ACP_PI_COMMAND";
-    readonly adapterOverrideVariable = "MOBIUS_PI_ACP_PATH";
-    readonly adapterPackageDefinition = PI_ACP_PACKAGE;
-    override readonly adapterVersionArguments: readonly string[] = [];
-    override readonly authenticationCommand = (): string => "pi-acp --terminal-login";
     readonly agentExecutable = "pi";
-    readonly agentOverrideVariable = "MOBIUS_PI_PATH";
+    readonly createEndpoint: InProcessAcpEndpointFactory = (options) => new PiAcpEndpoint(options);
     readonly id = "pi";
     readonly label = "Pi";
     override readonly minimumSupportedAgentVersion = "0.85.0";
     override readonly maximumTestedAgentVersion = PI_AGENT_PACKAGE.version;
-    readonly managedAdapterExecutablePath = [
-        "adapters",
-        "pi",
-        PI_ACP_PACKAGE.version,
-        "node_modules",
-        "pi-acp",
-        "dist",
-        "index.js",
-    ];
-    readonly managedAgentExecutablePath = [
-        "agents",
-        "pi",
-        PI_AGENT_PACKAGE.version,
-        "node_modules",
-        "@earendil-works",
-        "pi-coding-agent",
-        "dist",
-        "bundle",
-        "cli.js",
-    ];
+    override readonly authenticationCommand = (): string => "pi";
+    constructor() {
+        super("MOBIUS_PI_PATH", [
+            "agents",
+            "pi",
+            PI_AGENT_PACKAGE.version,
+            "node_modules",
+            "@earendil-works",
+            "pi-coding-agent",
+            "dist",
+            "bundle",
+            "cli.js",
+        ]);
+    }
     override readonly resolveManagedAgent = async (
         stateDirectory: string,
         _platform: NodeJS.Platform,

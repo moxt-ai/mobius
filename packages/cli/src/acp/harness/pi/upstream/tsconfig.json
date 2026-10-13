@@ -1,0 +1,19 @@
+{
+    "compilerOptions": {
+        "declaration": true,
+        "declarationMap": true,
+        "esModuleInterop": true,
+        "forceConsistentCasingInFileNames": true,
+        "lib": ["es2024"],
+        "module": "NodeNext",
+        "moduleResolution": "Node16",
+        "outDir": "dist",
+        "rootDir": ".",
+        "skipLibCheck": true,
+        "strict": true,
+        "target": "es2022",
+        "types": ["node"]
+    },
+    "include": ["acp/**/*.ts", "pi-rpc/**/*.ts"],
+    "exclude": ["dist", "node_modules"]
+}
