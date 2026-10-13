@@ -88,18 +88,6 @@ import { LiveSessionEventRelay } from "./live-session-event-relay.ts";
 
 const AGENT_SETTINGS_DISCOVERY_DEADLINE_MILLISECONDS = 2 * 60 * 1_000;
 
-class PendingAgentSettingsDiscovery {
-    readonly agentId: string;
-    readonly expiresAt: number;
-    readonly socket: ChannelSocket;
-
-    constructor(agentId: string, expiresAt: number, socket: ChannelSocket) {
-        this.agentId = agentId;
-        this.expiresAt = expiresAt;
-        this.socket = socket;
-    }
-}
-
 function sessionErrorCloseCode(error: SessionRuntimeError): 1008 | 1013 {
     if (error.code === "session_busy") {
         return 1013;
@@ -115,10 +103,15 @@ export class SystemRelayClock implements RelayClock {
     readonly now = (): number => Date.now();
 }
 
+export type HistoryRequestKind = "live" | "preview";
+
 export interface ChannelSocket {
     readonly close: (code: number, reason: string) => void;
     readonly consumeAgentSettingsDiscovery: (requestId: string, agentId: string, now: number) => boolean;
     readonly consumeAgentSettingsDiscoveryFailure: (requestId: string, now: number) => boolean;
+    readonly takeAgentSettingsDiscoveries: (now: number) => readonly string[];
+    readonly bindHistoryRequest: (kind: HistoryRequestKind, requestId: string) => void;
+    readonly matchesHistoryRequest: (kind: HistoryRequestKind, requestId: string) => boolean;
     readonly isOpen: () => boolean;
     readonly isSame: (socket: ChannelSocket) => boolean;
     readonly permitsLiveSessionHistory: () => boolean;
@@ -129,15 +122,10 @@ export interface ChannelSocket {
 export interface ChannelPeers {
     readonly daemons: () => readonly ChannelSocket[];
     readonly hosts: () => readonly ChannelSocket[];
+    readonly historyRecipients: () => readonly ChannelSocket[];
 }
 
 export class ChannelActor {
-    readonly #pendingAgentSettingsDiscoveries = new Map<string, PendingAgentSettingsDiscovery>();
-    readonly #pendingLiveSessionHistory = new Map<
-        string,
-        { readonly expiresAt: number; readonly socket: ChannelSocket }
-    >();
-    readonly #pendingPreviewHistory = new Map<string, { readonly expiresAt: number; readonly socket: ChannelSocket }>();
     readonly #clock: RelayClock;
     readonly #peers: ChannelPeers;
     readonly #projectId: string;
@@ -164,8 +152,6 @@ export class ChannelActor {
     readonly attachDaemon = async (replacedExistingConnection: boolean, _signal: AbortSignal): Promise<void> => {
         if (replacedExistingConnection) {
             this.failPendingAgentSettingsDiscoveries();
-            this.#pendingLiveSessionHistory.clear();
-            this.#pendingPreviewHistory.clear();
         }
         this.broadcastRuntimeStatus(true);
     };
@@ -189,8 +175,6 @@ export class ChannelActor {
             return;
         }
         this.failPendingAgentSettingsDiscoveries();
-        this.#pendingLiveSessionHistory.clear();
-        this.#pendingPreviewHistory.clear();
         this.broadcastRuntimeStatus(false);
     };
 
@@ -229,11 +213,11 @@ export class ChannelActor {
                 return;
             }
             if (kind === SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND) {
-                this.returnLiveHistoryPage(message);
+                this.returnHistoryPage("live", message);
                 return;
             }
             if (kind === SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND) {
-                this.returnPreviewHistoryPage(message);
+                this.returnHistoryPage("preview", message);
                 return;
             }
             this.validateDaemonControl(message);
@@ -297,14 +281,14 @@ export class ChannelActor {
                 if (!socket.permitsLiveSessionHistory()) {
                     throw new ProtocolMessageError("Live Session history requires an internal connection");
                 }
-                this.forwardLiveHistoryPage(socket, decodeSessionLiveHistoryV2PageLoad(message));
+                this.forwardHistoryPage(socket, "live", decodeSessionLiveHistoryV2PageLoad(message));
                 return;
             }
             if (kind === SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND) {
                 if (!socket.permitsLiveSessionHistory()) {
                     throw new ProtocolMessageError("Session preview history requires an internal connection");
                 }
-                this.forwardPreviewHistoryPage(socket, decodeSessionPreviewHistoryPageLoad(message));
+                this.forwardHistoryPage(socket, "preview", decodeSessionPreviewHistoryPageLoad(message));
                 return;
             }
             if (kind === SESSION_PERMISSION_RESPOND_KIND) {
@@ -522,17 +506,8 @@ export class ChannelActor {
     ): void => {
         const now = this.#clock.now();
         const expiresAt = now + AGENT_SETTINGS_DISCOVERY_DEADLINE_MILLISECONDS;
-        this.expireAgentSettingsDiscoveries(now);
-        if (this.#pendingAgentSettingsDiscoveries.has(requestId)) {
-            throw new ProtocolMessageError("Another Agent settings discovery is pending");
-        }
         socket.trackAgentSettingsDiscovery(requestId, agentId, expiresAt);
-        this.#pendingAgentSettingsDiscoveries.set(
-            requestId,
-            new PendingAgentSettingsDiscovery(agentId, expiresAt, socket),
-        );
         if (!this.sendToDaemon(message)) {
-            this.#pendingAgentSettingsDiscoveries.delete(requestId);
             socket.consumeAgentSettingsDiscoveryFailure(requestId, now);
             socket.send(
                 encodeAgentSettingsDiscoveryFailedEvent({
@@ -552,19 +527,6 @@ export class ChannelActor {
         message: string,
     ): void => {
         const now = this.#clock.now();
-        this.expireAgentSettingsDiscoveries(now);
-        const pending = this.#pendingAgentSettingsDiscoveries.get(requestId);
-        if (pending !== undefined) {
-            this.#pendingAgentSettingsDiscoveries.delete(requestId);
-            if (pending.agentId !== agentId) {
-                throw new ProtocolMessageError(
-                    "The Agent settings discovery result does not match the requested Agent",
-                );
-            }
-            pending.socket.consumeAgentSettingsDiscovery(requestId, agentId, now);
-            this.sendAgentSettingsDiscoveryResult(pending, message);
-            return;
-        }
         const recipient = this.#peers
             .hosts()
             .find((socket) => socket.consumeAgentSettingsDiscovery(requestId, agentId, now));
@@ -575,14 +537,6 @@ export class ChannelActor {
 
     private readonly returnAgentSettingsDiscoveryFailure = (requestId: string, message: string): void => {
         const now = this.#clock.now();
-        this.expireAgentSettingsDiscoveries(now);
-        const pending = this.#pendingAgentSettingsDiscoveries.get(requestId);
-        if (pending !== undefined) {
-            this.#pendingAgentSettingsDiscoveries.delete(requestId);
-            pending.socket.consumeAgentSettingsDiscoveryFailure(requestId, now);
-            this.sendAgentSettingsDiscoveryResult(pending, message);
-            return;
-        }
         const recipient = this.#peers
             .hosts()
             .find((socket) => socket.consumeAgentSettingsDiscoveryFailure(requestId, now));
@@ -591,102 +545,59 @@ export class ChannelActor {
         }
     };
 
-    private readonly sendAgentSettingsDiscoveryResult = (
-        pending: PendingAgentSettingsDiscovery,
-        message: string,
+    private readonly returnHistoryPage = (
+        kind: HistoryRequestKind,
+        message: Extract<
+            DaemonToServiceMessage,
+            {
+                readonly kind:
+                    | typeof SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND
+                    | typeof SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND;
+            }
+        >,
     ): void => {
-        if (pending.socket.isOpen()) {
-            pending.socket.send(message);
-        }
+        const recipient = this.#peers
+            .historyRecipients()
+            .find((socket) => socket.isOpen() && socket.matchesHistoryRequest(kind, message.requestId));
+        // A caller can close or time out independently of the authenticated daemon.
+        recipient?.send(encodeDaemonToServiceMessage(message));
     };
 
-    private readonly returnLiveHistoryPage = (
-        message: Extract<DaemonToServiceMessage, { readonly kind: typeof SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND }>,
-    ): void => {
-        const pending = this.#pendingLiveSessionHistory.get(message.requestId);
-        if (pending === undefined || pending.expiresAt <= this.#clock.now()) {
-            throw new ProtocolMessageError("The live Session history response is not pending");
-        }
-        pending.socket.send(encodeDaemonToServiceMessage(message));
-        this.#pendingLiveSessionHistory.delete(message.requestId);
-    };
-
-    private readonly returnPreviewHistoryPage = (
-        message: Extract<DaemonToServiceMessage, { readonly kind: typeof SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND }>,
-    ): void => {
-        const pending = this.#pendingPreviewHistory.get(message.requestId);
-        if (pending === undefined || pending.expiresAt <= this.#clock.now()) {
-            throw new ProtocolMessageError("The Session preview history response is not pending");
-        }
-        pending.socket.send(encodeDaemonToServiceMessage(message));
-        this.#pendingPreviewHistory.delete(message.requestId);
-    };
-
-    private readonly forwardLiveHistoryPage = (
+    private readonly forwardHistoryPage = (
         socket: ChannelSocket,
-        command: Extract<ServiceToDaemonMessage, { readonly kind: typeof SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND }>,
+        kind: HistoryRequestKind,
+        command: Extract<
+            ServiceToDaemonMessage,
+            {
+                readonly kind:
+                    | typeof SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND
+                    | typeof SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND;
+            }
+        >,
     ): void => {
-        const now = this.#clock.now();
-        for (const [requestId, pending] of this.#pendingLiveSessionHistory) {
-            if (pending.expiresAt <= now) {
-                this.#pendingLiveSessionHistory.delete(requestId);
-            }
-        }
-        if (this.#pendingLiveSessionHistory.has(command.requestId) || this.#pendingLiveSessionHistory.size >= 16) {
-            throw new ProtocolMessageError("Too many live Session history operations are pending");
-        }
-        this.#pendingLiveSessionHistory.set(command.requestId, { expiresAt: now + 30_000, socket });
+        // Internal history connections belong to one operation; only its reply address survives hibernation.
+        socket.bindHistoryRequest(kind, command.requestId);
         if (!this.sendToDaemon(command)) {
-            this.#pendingLiveSessionHistory.delete(command.requestId);
             socket.close(1013, "Runtime offline");
-        }
-    };
-
-    private readonly forwardPreviewHistoryPage = (
-        socket: ChannelSocket,
-        command: Extract<ServiceToDaemonMessage, { readonly kind: typeof SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND }>,
-    ): void => {
-        const now = this.#clock.now();
-        for (const [requestId, pending] of this.#pendingPreviewHistory) {
-            if (pending.expiresAt <= now) {
-                this.#pendingPreviewHistory.delete(requestId);
-            }
-        }
-        if (this.#pendingPreviewHistory.has(command.requestId) || this.#pendingPreviewHistory.size >= 16) {
-            throw new ProtocolMessageError("Too many Session preview history operations are pending");
-        }
-        this.#pendingPreviewHistory.set(command.requestId, { expiresAt: now + 30_000, socket });
-        if (!this.sendToDaemon(command)) {
-            this.#pendingPreviewHistory.delete(command.requestId);
-            socket.close(1013, "Runtime offline");
-        }
-    };
-
-    private readonly expireAgentSettingsDiscoveries = (now: number): void => {
-        for (const [requestId, pending] of this.#pendingAgentSettingsDiscoveries) {
-            if (pending.expiresAt <= now) {
-                this.#pendingAgentSettingsDiscoveries.delete(requestId);
-                pending.socket.consumeAgentSettingsDiscoveryFailure(requestId, now);
-            }
         }
     };
 
     private readonly failPendingAgentSettingsDiscoveries = (): void => {
         const now = this.#clock.now();
-        for (const [requestId, pending] of this.#pendingAgentSettingsDiscoveries) {
-            pending.socket.consumeAgentSettingsDiscoveryFailure(requestId, now);
-            if (pending.socket.isOpen()) {
-                pending.socket.send(
-                    encodeAgentSettingsDiscoveryFailedEvent({
-                        code: "runtime_offline",
-                        kind: AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
-                        message: "The local runtime is offline",
-                        requestId,
-                    }),
-                );
+        for (const socket of this.#peers.hosts()) {
+            for (const requestId of socket.takeAgentSettingsDiscoveries(now)) {
+                if (socket.isOpen()) {
+                    socket.send(
+                        encodeAgentSettingsDiscoveryFailedEvent({
+                            code: "runtime_offline",
+                            kind: AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
+                            message: "The local runtime is offline",
+                            requestId,
+                        }),
+                    );
+                }
             }
         }
-        this.#pendingAgentSettingsDiscoveries.clear();
     };
 
     private readonly sendToDaemon = (message: ServiceToDaemonMessage): boolean => {
