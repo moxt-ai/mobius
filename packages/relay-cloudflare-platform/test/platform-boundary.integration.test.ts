@@ -795,6 +795,17 @@ describe.sequential("Platform Session-only boundary", () => {
                 expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("native.session.request");
                 expect(decodeServiceToDaemonMessage(await hostMessages.next()).kind).toBe("native.session.request");
             }
+            host.send(
+                JSON.stringify({
+                    kind: "agent.settings.discover",
+                    agentId: "codex",
+                    requestId: "settings-before-wake",
+                }),
+            );
+            expect(decodeServiceToDaemonMessage(await daemonMessages.next())).toMatchObject({
+                kind: "agent.settings.discover",
+                requestId: "settings-before-wake",
+            });
             await evictDurableObject(environment.RUNTIME_RELAY.getByName(runtimeId), { webSockets: "hibernate" });
             for (const action of ["import", "fork"] as const) {
                 const requestId = `native-${action}-request`;
@@ -847,6 +858,19 @@ describe.sequential("Platform Session-only boundary", () => {
             }
             vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
 
+            daemon.send(
+                JSON.stringify({
+                    kind: "agent.settings.discovery.failed",
+                    requestId: "settings-before-wake",
+                    code: "probe_failed",
+                    message: "Controlled discovery failure",
+                }),
+            );
+            expect(JSON.parse(await hostMessages.next())).toMatchObject({
+                kind: "agent.settings.discovery.failed",
+                requestId: "settings-before-wake",
+                code: "probe_failed",
+            });
             // A newer Runtime may publish an event this Relay does not understand yet. The event is
             // observational, so skipping it must not disconnect the Runtime or block supported work.
             daemon.send(JSON.stringify({ kind: "session.future.changed", sessionId, value: "future" }));
@@ -1028,6 +1052,7 @@ describe.sequential("Platform Session-only boundary", () => {
                 throw new Error("Expected history loading without a preceding Session query");
             }
             expect(historyLoad.omit).toEqual(["agent-reasoning"]);
+            await evictDurableObject(environment.RUNTIME_RELAY.getByName(runtimeId), { webSockets: "hibernate" });
             daemon.send(
                 encodeSessionStatusChangedEvent({
                     kind: "session.status.changed",
@@ -1092,6 +1117,7 @@ describe.sequential("Platform Session-only boundary", () => {
             if (previewHistoryLoad.kind !== "session.preview-history.page.load") {
                 throw new Error("Expected a native Session preview history request");
             }
+            await evictDurableObject(environment.RUNTIME_RELAY.getByName(runtimeId), { webSockets: "hibernate" });
             daemon.send(
                 encodeSessionPreviewHistoryPageLoaded({
                     events: {
@@ -1191,7 +1217,24 @@ describe.sequential("Platform Session-only boundary", () => {
                 subscriptionId: "subscription-1",
             });
             transport.close(1000, "Browser test complete");
+            host.send(
+                JSON.stringify({
+                    kind: "agent.settings.discover",
+                    agentId: "codex",
+                    requestId: "settings-before-disconnect",
+                }),
+            );
+            expect(decodeServiceToDaemonMessage(await daemonMessages.next())).toMatchObject({
+                kind: "agent.settings.discover",
+                requestId: "settings-before-disconnect",
+            });
+            await evictDurableObject(environment.RUNTIME_RELAY.getByName(runtimeId), { webSockets: "hibernate" });
             daemon.close(1000, "Reconnect Runtime");
+            expect(JSON.parse(await hostMessages.next())).toMatchObject({
+                kind: "agent.settings.discovery.failed",
+                requestId: "settings-before-disconnect",
+                code: "runtime_offline",
+            });
             expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "runtime.status", online: false });
             const reconnectResponse = await worker.fetch(
                 new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect?liveness=1`, {
@@ -1208,7 +1251,44 @@ describe.sequential("Platform Session-only boundary", () => {
             reconnected.accept();
             expect(decodeServiceToDaemonMessage(await reconnectMessages.next()).kind).toBe("runtime.liveness.ready");
             expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "runtime.status", online: true });
-            reconnected.close(1000, "Test complete");
+            host.send(
+                JSON.stringify({
+                    kind: "agent.settings.discover",
+                    agentId: "codex",
+                    requestId: "settings-before-replacement",
+                }),
+            );
+            expect(decodeServiceToDaemonMessage(await reconnectMessages.next())).toMatchObject({
+                kind: "agent.settings.discover",
+                requestId: "settings-before-replacement",
+            });
+            await evictDurableObject(environment.RUNTIME_RELAY.getByName(runtimeId), { webSockets: "hibernate" });
+            const replacementResponse = await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect?liveness=1`, {
+                    headers: { authorization: `Bearer ${text(claimed, "runtimeCredential")}`, Upgrade: "websocket" },
+                }),
+                environment,
+            );
+            expect(replacementResponse.status).toBe(101);
+            if (replacementResponse.webSocket === null) {
+                throw new Error("Expected the replacement Runtime socket");
+            }
+            const replacement = replacementResponse.webSocket;
+            const replacementMessages = new SocketMessages(replacement);
+            replacement.accept();
+            try {
+                expect(decodeServiceToDaemonMessage(await replacementMessages.next()).kind).toBe(
+                    "runtime.liveness.ready",
+                );
+                expect(JSON.parse(await hostMessages.next())).toMatchObject({
+                    kind: "agent.settings.discovery.failed",
+                    requestId: "settings-before-replacement",
+                    code: "runtime_offline",
+                });
+                expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "runtime.status", online: true });
+            } finally {
+                replacement.close(1000, "Test complete");
+            }
             expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "runtime.status", online: false });
             await runInDurableObject(environment.RUNTIME_RELAY.getByName(runtimeId), async (_instance, state) => {
                 const sessionTables = [
@@ -1247,7 +1327,7 @@ describe.sequential("Platform Session-only boundary", () => {
             daemon.close(1000, "Test complete");
             host.close(1000, "Test complete");
         }
-    }, 60_000);
+    }, 180_000);
 });
 
 describe.sequential("Platform Recording policy configuration", () => {
