@@ -5,6 +5,7 @@ export interface MobiusHttpTransport {
 export interface MobiusTransportSessionEvent {
     readonly data: string;
     readonly eventId: string;
+    readonly seqId: number;
 }
 
 export interface MobiusLiveEventTransport {
