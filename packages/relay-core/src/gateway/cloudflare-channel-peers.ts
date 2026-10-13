@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { NativeSessionResult } from "@moxt-ai/mobius-protocol";
 import * as v from "valibot";
 import type { ChannelSocket, PendingNativeSessionImport } from "../service/channel/channel-actor.ts";
@@ -18,10 +17,17 @@ const pendingNativeImportSchema = v.object({
 
 // Keep correlation bounded even when the authorized directory ID is near its wire limit.
 // A WebSocket attachment must remain below Cloudflare's 2 KiB limit.
-function nativeImportFingerprint(action: string, sessionId: string, agentId: string, directoryId: string): string {
-    return createHash("sha256")
-        .update(JSON.stringify([action, sessionId, agentId, directoryId]))
-        .digest("hex");
+async function nativeImportFingerprint(
+    action: string,
+    sessionId: string,
+    agentId: string,
+    directoryId: string,
+): Promise<string> {
+    const digest = await crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(JSON.stringify([action, sessionId, agentId, directoryId])),
+    );
+    return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 const attachmentSchema = v.union([
@@ -127,7 +133,13 @@ export class CloudflareChannelSocket implements RuntimeSocket {
             ],
         });
     };
-    readonly trackNativeSessionImport = (request: PendingNativeSessionImport, now: number): boolean => {
+    readonly trackNativeSessionImport = async (request: PendingNativeSessionImport, now: number): Promise<boolean> => {
+        const fingerprint = await nativeImportFingerprint(
+            request.action,
+            request.sessionId,
+            request.agentId,
+            request.directoryId,
+        );
         const attachment = this.daemonAttachment();
         const pendingNativeImports = attachment.pendingNativeImports.filter((pending) => pending.expiresAt > now);
         if (
@@ -143,34 +155,25 @@ export class CloudflareChannelSocket implements RuntimeSocket {
                 {
                     requestId: request.requestId,
                     expiresAt: request.expiresAt,
-                    fingerprint: nativeImportFingerprint(
-                        request.action,
-                        request.sessionId,
-                        request.agentId,
-                        request.directoryId,
-                    ),
+                    fingerprint,
                 },
             ],
         });
         return true;
     };
-    readonly consumeNativeSessionImport = (
+    readonly consumeNativeSessionImport = async (
         result: Extract<NativeSessionResult, { readonly action: "import" | "fork" }>,
         now: number,
-    ): boolean => {
+    ): Promise<boolean> => {
+        const fingerprint = await nativeImportFingerprint(
+            result.action,
+            result.targetSessionId,
+            result.ready.agentId,
+            result.ready.directoryId,
+        );
         const attachment = this.daemonAttachment();
         const pending = attachment.pendingNativeImports.find((request) => request.requestId === result.requestId);
-        if (
-            pending === undefined ||
-            pending.expiresAt <= now ||
-            pending.fingerprint !==
-                nativeImportFingerprint(
-                    result.action,
-                    result.targetSessionId,
-                    result.ready.agentId,
-                    result.ready.directoryId,
-                )
-        ) {
+        if (pending === undefined || pending.expiresAt <= now || pending.fingerprint !== fingerprint) {
             return false;
         }
         this.removeNativeSessionImport(result.requestId);

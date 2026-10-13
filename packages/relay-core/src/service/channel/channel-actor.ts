@@ -132,9 +132,9 @@ export interface ChannelSocket {
     readonly consumeNativeSessionImport: (
         result: Extract<NativeSessionResult, { readonly action: "import" | "fork" }>,
         now: number,
-    ) => boolean;
+    ) => Promise<boolean>;
     readonly removeNativeSessionImport: (requestId: string) => void;
-    readonly trackNativeSessionImport: (request: PendingNativeSessionImport, now: number) => boolean;
+    readonly trackNativeSessionImport: (request: PendingNativeSessionImport, now: number) => Promise<boolean>;
     readonly close: (code: number, reason: string) => void;
     readonly consumeAgentSettingsDiscovery: (requestId: string, agentId: string, now: number) => boolean;
     readonly consumeAgentSettingsDiscoveryFailure: (requestId: string, now: number) => boolean;
@@ -234,7 +234,7 @@ export class ChannelActor {
             if (kind === NATIVE_SESSION_RESULT_KIND) {
                 const result = message;
                 if (result.action === "import" || result.action === "fork") {
-                    if (!socket.consumeNativeSessionImport(result, this.#clock.now())) {
+                    if (!(await socket.consumeNativeSessionImport(result, this.#clock.now()))) {
                         throw new ProtocolMessageError("The native session result does not match a pending import");
                     }
                 }
@@ -322,7 +322,7 @@ export class ChannelActor {
                     const now = this.#clock.now();
                     for (const daemon of this.#peers.daemons().filter((candidate) => candidate.isOpen())) {
                         if (
-                            !daemon.trackNativeSessionImport(
+                            !(await daemon.trackNativeSessionImport(
                                 {
                                     action: request.action,
                                     sessionId: request.targetSessionId,
@@ -332,7 +332,7 @@ export class ChannelActor {
                                     expiresAt: now + NATIVE_IMPORT_DEADLINE_MILLISECONDS,
                                 },
                                 now,
-                            )
+                            ))
                         ) {
                             throw new ProtocolMessageError("Another native session import is pending");
                         }
