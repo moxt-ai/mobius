@@ -101,6 +101,7 @@ export class AppSessionStatusWebhookService {
 
     readonly resource = (webhook: StoredAppSessionStatusWebhook): object => ({
         appId: webhook.appId,
+        configured: true,
         enabled: webhook.enabled,
         endpoint: webhook.endpoint,
         secretId: webhook.secretId,

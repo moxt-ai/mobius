@@ -422,7 +422,7 @@ export class MobiusPlatformAppSessionStatusWebhook {
 
     constructor(value: Readonly<Record<string, unknown>>) {
         this.appId = identifier(value, "appId");
-        this.configured = boolean(value, "configured");
+        this.configured = value["configured"] === undefined ? false : boolean(value, "configured");
         this.enabled = boolean(value, "enabled");
         this.endpoint = value["endpoint"] === undefined ? "" : string(value, "endpoint", 2048);
         this.secretId = value["secretId"] === undefined ? "" : string(value, "secretId", 128);
