@@ -7,7 +7,7 @@ import {
     acpNativeHistoryReader,
     NullAcpSessionObserver,
 } from "../../../src/acp/agent-runtime-manager.ts";
-import { CodexAcpAgent } from "../../../src/acp/codex/agent.ts";
+import { CodexAcpAgent } from "../../../src/acp/harness/codex/agent.ts";
 import { MemoryAcpSessionStore } from "../../../src/acp/session-store.ts";
 import { InProcessAcpAgentDefinition } from "../../../src/agent-catalog/local-agent.ts";
 import { AuditStore } from "../../../src/audit/audit-store.ts";

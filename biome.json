@@ -34,7 +34,7 @@
     },
     "overrides": [
         {
-            "includes": ["packages/cli/src/acp/claude/upstream/src/**/*.ts"],
+            "includes": ["packages/cli/src/acp/harness/claude/upstream/src/**/*.ts"],
             "linter": {
                 "rules": {
                     "suspicious": {

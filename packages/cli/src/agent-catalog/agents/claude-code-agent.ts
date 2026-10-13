@@ -1,4 +1,4 @@
-import { ClaudeAcpEndpoint } from "../../acp/claude/endpoint.ts";
+import { ClaudeAcpEndpoint } from "../../acp/harness/claude/endpoint.ts";
 import type { InProcessAcpEndpointFactory } from "../../acp/in-process/acp-endpoint.ts";
 import { InProcessAcpAgentDefinition } from "../agent-specification.ts";
 

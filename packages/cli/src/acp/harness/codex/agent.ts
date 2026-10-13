@@ -10,15 +10,15 @@ import {
     type SessionNotification,
 } from "@agentclientprotocol/sdk";
 
-import { captureProcessTree, type ProcessTreeIdentity, stopProcessTree } from "../../process/executable.ts";
-import { AcpExecutionError } from "../acp-error.ts";
+import { captureProcessTree, type ProcessTreeIdentity, stopProcessTree } from "../../../process/executable.ts";
+import { AcpExecutionError } from "../../acp-error.ts";
 import {
     type AcpEndpointTermination,
     acpEndpointTerminationError,
     type InProcessAcpEndpoint,
     type InProcessAcpEndpointOptions,
-} from "../in-process/acp-endpoint.ts";
-import { sessionFailureMeta } from "../session-failure.ts";
+} from "../../in-process/acp-endpoint.ts";
+import { sessionFailureMeta } from "../../session-failure.ts";
 import { CodexAppServerClient, type CodexAppServerServerRequest } from "./app-server-client.ts";
 import {
     CODEX_HISTORY_TURN_PAGE_LIMIT,
