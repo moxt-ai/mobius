@@ -79,18 +79,12 @@ function sessionRecordingRoutes(storage: SessionRecordingRoutes): Hono<Recording
                 target === null ||
                 after === undefined ||
                 limit === undefined ||
-                !/^(?:0|[1-9][0-9]*)$/.test(after) ||
+                !/^(?:(?:0|[1-9][0-9]*)|v2:[1-9][0-9]*:(?:0|[1-9][0-9]*))$/.test(after) ||
                 !/^[1-9][0-9]{0,4}$/.test(limit)
             ) {
                 return errorResponse("invalid_target", 400);
             }
-            const page = storage.readPage(
-                target.projectId,
-                target.runtimeId,
-                target.sessionId,
-                Number(after),
-                Number(limit),
-            );
+            const page = storage.readPage(target.projectId, target.runtimeId, target.sessionId, after, Number(limit));
             return historyResponse(context, page, encodeSessionRecordingHistoryPage);
         })
         .all("*", (): Response => errorResponse("not_found", 404));
@@ -158,7 +152,7 @@ function incrementalReadQuery(query: Record<string, string | undefined>) {
     if (after === undefined && limit === undefined) {
         return null;
     }
-    if (after !== undefined && !/^(?:0|[1-9][0-9]*)$/.test(after)) {
+    if (after !== undefined && !/^(?:(?:0|[1-9][0-9]*)|v2:[1-9][0-9]*:(?:0|[1-9][0-9]*))$/.test(after)) {
         return { error: true };
     }
     if (limit !== undefined && !/^[1-9][0-9]{0,4}$/.test(limit)) {
@@ -168,7 +162,7 @@ function incrementalReadQuery(query: Record<string, string | undefined>) {
     if (boundedLimit > maximumPageEvents) {
         return { error: true };
     }
-    return { after: after === undefined ? 0 : Number(after), limit: boundedLimit };
+    return { after: after === undefined ? "0" : after, limit: boundedLimit };
 }
 
 function readTarget(context: { readonly req: { readonly param: (name: string) => string | undefined } }) {
@@ -258,7 +252,7 @@ export function createRecordingWorker(): RecordingWorker {
                 const path = incremental === null ? "events" : "page-events";
                 const cursor = incremental;
                 if (cursor !== null) {
-                    query.set("after", cursor["after"].toString());
+                    query.set("after", cursor["after"]);
                     query.set("limit", cursor["limit"].toString());
                 }
                 return await durableObjectFetch(
