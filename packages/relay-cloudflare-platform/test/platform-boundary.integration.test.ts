@@ -1368,6 +1368,10 @@ describe.sequential("Platform Session-only boundary", () => {
                     settings: { settings: [{ id: "model", name: "Model", value: "gpt-5.6" }] },
                 }),
             );
+            expect(decodeDaemonToServiceMessage(await hostMessages.next())).toMatchObject({
+                kind: "session.settings.v3.loaded",
+                requestId: settingsRead.requestId,
+            });
             expect(await responseJson(await settingsReadResponse, 200)).toEqual({
                 settings: [{ id: "model", name: "Model", value: "gpt-5.6" }],
             });
@@ -1399,6 +1403,10 @@ describe.sequential("Platform Session-only boundary", () => {
                     settings: { settings: [{ id: "model", name: "Model", value: "gpt-5.6-mini" }] },
                 }),
             );
+            expect(decodeDaemonToServiceMessage(await hostMessages.next())).toMatchObject({
+                kind: "session.settings.v3.loaded",
+                requestId: settingsChange.requestId,
+            });
             expect(await responseJson(await settingsChangeResponse, 200)).toEqual({
                 settings: [{ id: "model", name: "Model", value: "gpt-5.6-mini" }],
             });
@@ -1441,6 +1449,10 @@ describe.sequential("Platform Session-only boundary", () => {
                     kind: "session.live.v3",
                 }),
             );
+            expect(decodeDaemonToServiceMessage(await hostMessages.next())).toMatchObject({
+                events: [{ item: { requestId: "permission-v3-1", sessionUpdate: "permission_resolved" } }],
+                kind: "session.live.v3",
+            });
             expect(await responseJson(await permissionResponse, 200)).toEqual({ accepted: true });
             const userInputResponse = worker.fetch(
                 new Request(
@@ -1480,6 +1492,10 @@ describe.sequential("Platform Session-only boundary", () => {
                     kind: "session.live.v3",
                 }),
             );
+            expect(decodeDaemonToServiceMessage(await hostMessages.next())).toMatchObject({
+                events: [{ item: { requestId: "input-v3-1", sessionUpdate: "user_input_resolved" } }],
+                kind: "session.live.v3",
+            });
             expect(await responseJson(await userInputResponse, 200)).toEqual({ accepted: true });
             const failedPreviewHistoryResponse = worker.fetch(
                 new Request(
