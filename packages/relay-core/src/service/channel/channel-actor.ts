@@ -47,6 +47,7 @@ import {
     NATIVE_SESSION_REQUEST_KIND,
     NATIVE_SESSION_RESULT_KIND,
     type NativeSessionCommand,
+    type NativeSessionResult,
     ProtocolMessageError,
     RUNTIME_PING_KIND,
     RUNTIME_PONG_KIND,
@@ -88,12 +89,7 @@ import { LiveSessionEventRelay } from "./live-session-event-relay.ts";
 
 type NativeImportAction = "import" | "fork";
 
-function isNativeImportAction(action: string): action is NativeImportAction {
-    return action === "import" || action === "fork";
-}
-
 const NATIVE_IMPORT_DEADLINE_MILLISECONDS = 5 * 60 * 1_000;
-const MAX_PENDING_NATIVE_IMPORTS = 4;
 const AGENT_SETTINGS_DISCOVERY_DEADLINE_MILLISECONDS = 2 * 60 * 1_000;
 
 class PendingAgentSettingsDiscovery {
@@ -123,7 +119,22 @@ export class SystemRelayClock implements RelayClock {
     readonly now = (): number => Date.now();
 }
 
+export interface PendingNativeSessionImport {
+    readonly action: NativeImportAction;
+    readonly agentId: string;
+    readonly directoryId: string;
+    readonly expiresAt: number;
+    readonly requestId: string;
+    readonly sessionId: string;
+}
+
 export interface ChannelSocket {
+    readonly consumeNativeSessionImport: (
+        result: Extract<NativeSessionResult, { readonly action: "import" | "fork" }>,
+        now: number,
+    ) => boolean;
+    readonly removeNativeSessionImport: (requestId: string) => void;
+    readonly trackNativeSessionImport: (request: PendingNativeSessionImport, now: number) => boolean;
     readonly close: (code: number, reason: string) => void;
     readonly consumeAgentSettingsDiscovery: (requestId: string, agentId: string, now: number) => boolean;
     readonly consumeAgentSettingsDiscoveryFailure: (requestId: string, now: number) => boolean;
@@ -146,16 +157,6 @@ export class ChannelActor {
         { readonly expiresAt: number; readonly socket: ChannelSocket }
     >();
     readonly #pendingPreviewHistory = new Map<string, { readonly expiresAt: number; readonly socket: ChannelSocket }>();
-    readonly #pendingNativeImports = new Map<
-        string,
-        {
-            readonly action: NativeImportAction;
-            readonly sessionId: string;
-            readonly agentId: string;
-            readonly directoryId: string;
-            readonly expiresAt: number;
-        }
-    >();
     readonly #clock: RelayClock;
     readonly #peers: ChannelPeers;
     readonly #projectId: string;
@@ -183,7 +184,6 @@ export class ChannelActor {
         if (replacedExistingConnection) {
             this.failPendingAgentSettingsDiscoveries();
             this.#pendingLiveSessionHistory.clear();
-            this.#pendingNativeImports.clear();
             this.#pendingPreviewHistory.clear();
         }
         this.broadcastRuntimeStatus(true);
@@ -209,7 +209,6 @@ export class ChannelActor {
         }
         this.failPendingAgentSettingsDiscoveries();
         this.#pendingLiveSessionHistory.clear();
-        this.#pendingNativeImports.clear();
         this.#pendingPreviewHistory.clear();
         this.broadcastRuntimeStatus(false);
     };
@@ -234,23 +233,12 @@ export class ChannelActor {
             }
             if (kind === NATIVE_SESSION_RESULT_KIND) {
                 const result = message;
-                if (isNativeImportAction(result.action)) {
-                    const pending = this.#pendingNativeImports.get(result.requestId);
-                    if (
-                        pending === undefined ||
-                        pending.expiresAt <= this.#clock.now() ||
-                        pending.action !== result.action ||
-                        pending.sessionId !== result.targetSessionId ||
-                        pending.agentId !== result.ready.agentId
-                    ) {
+                if (result.action === "import" || result.action === "fork") {
+                    if (!socket.consumeNativeSessionImport(result, this.#clock.now())) {
                         throw new ProtocolMessageError("The native session result does not match a pending import");
-                    }
-                    if (pending.directoryId !== result.ready.directoryId) {
-                        throw new ProtocolMessageError("The native session result resolved to a different binding");
                     }
                 }
                 this.broadcast(this.#peers.hosts(), encodeDaemonToServiceMessage(message));
-                this.#pendingNativeImports.delete(result.requestId);
                 return;
             }
             if (kind === AGENT_SETTINGS_DISCOVERED_KIND) {
@@ -274,7 +262,7 @@ export class ChannelActor {
                 return;
             }
             if (kind === SESSION_OPERATION_FAILED_KIND) {
-                this.#pendingNativeImports.delete(message.requestId);
+                socket.removeNativeSessionImport(message.requestId);
             }
             this.validateDaemonControl(message);
             this.broadcast(this.#peers.hosts(), encodeDaemonToServiceMessage(message));
@@ -332,21 +320,22 @@ export class ChannelActor {
                 const command: NativeSessionCommand = decodeNativeSessionCommand(message);
                 if (request.action === "import" || request.action === "fork") {
                     const now = this.#clock.now();
-                    this.expireNativeImports(now);
-                    if (
-                        this.#pendingNativeImports.has(command.requestId) ||
-                        this.#pendingNativeImports.size >= MAX_PENDING_NATIVE_IMPORTS
-                    ) {
-                        throw new ProtocolMessageError("Another native session import is pending");
-                    }
-                    if (this.hasOnlineDaemon()) {
-                        this.#pendingNativeImports.set(command.requestId, {
-                            action: request.action,
-                            sessionId: request.targetSessionId,
-                            agentId: request.agentId,
-                            directoryId: request.directoryId,
-                            expiresAt: now + NATIVE_IMPORT_DEADLINE_MILLISECONDS,
-                        });
+                    for (const daemon of this.#peers.daemons().filter((candidate) => candidate.isOpen())) {
+                        if (
+                            !daemon.trackNativeSessionImport(
+                                {
+                                    action: request.action,
+                                    sessionId: request.targetSessionId,
+                                    agentId: request.agentId,
+                                    directoryId: request.directoryId,
+                                    requestId: request.requestId,
+                                    expiresAt: now + NATIVE_IMPORT_DEADLINE_MILLISECONDS,
+                                },
+                                now,
+                            )
+                        ) {
+                            throw new ProtocolMessageError("Another native session import is pending");
+                        }
                     }
                 }
                 this.forwardControl(socket, command, request.requestId, request.sessionId, request);
@@ -534,14 +523,6 @@ export class ChannelActor {
             }
             default:
                 throw new UnsupportedProtocolMessageKindError("service-to-daemon", kind);
-        }
-    };
-
-    private readonly expireNativeImports = (now: number): void => {
-        for (const [requestId, pending] of this.#pendingNativeImports) {
-            if (pending.expiresAt <= now) {
-                this.#pendingNativeImports.delete(requestId);
-            }
         }
     };
 

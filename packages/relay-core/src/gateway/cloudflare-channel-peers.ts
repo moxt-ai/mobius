@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
+import type { NativeSessionResult } from "@moxt-ai/mobius-protocol";
 import * as v from "valibot";
-import type { ChannelSocket } from "../service/channel/channel-actor.ts";
+import type { ChannelSocket, PendingNativeSessionImport } from "../service/channel/channel-actor.ts";
 import type { RuntimePeers, RuntimeSocket, RuntimeSocketIdentity } from "../service/channel/runtime-service.ts";
 
 const pendingAgentSettingsDiscoverySchema = v.object({
@@ -7,6 +9,21 @@ const pendingAgentSettingsDiscoverySchema = v.object({
     expiresAt: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
     requestId: v.pipe(v.string(), v.minLength(1)),
 });
+const MAX_PENDING_NATIVE_IMPORTS = 4;
+const pendingNativeImportSchema = v.object({
+    fingerprint: v.pipe(v.string(), v.regex(/^[a-f0-9]{64}$/u)),
+    expiresAt: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
+    requestId: v.pipe(v.string(), v.minLength(1), v.maxLength(128)),
+});
+
+// Keep correlation bounded even when the authorized directory ID is near its wire limit.
+// A WebSocket attachment must remain below Cloudflare's 2 KiB limit.
+function nativeImportFingerprint(action: string, sessionId: string, agentId: string, directoryId: string): string {
+    return createHash("sha256")
+        .update(JSON.stringify([action, sessionId, agentId, directoryId]))
+        .digest("hex");
+}
+
 const attachmentSchema = v.union([
     v.object({
         role: v.literal("host"),
@@ -24,6 +41,10 @@ const attachmentSchema = v.union([
     }),
     v.object({
         role: v.picklist(["daemon", "replaced-daemon"]),
+        pendingNativeImports: v.optional(
+            v.pipe(v.array(pendingNativeImportSchema), v.maxLength(MAX_PENDING_NATIVE_IMPORTS)),
+            [],
+        ),
         connectionEpoch: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
         connectionId: v.pipe(v.string(), v.minLength(1)),
         runtimeId: v.string(),
@@ -106,6 +127,63 @@ export class CloudflareChannelSocket implements RuntimeSocket {
             ],
         });
     };
+    readonly trackNativeSessionImport = (request: PendingNativeSessionImport, now: number): boolean => {
+        const attachment = this.daemonAttachment();
+        const pendingNativeImports = attachment.pendingNativeImports.filter((pending) => pending.expiresAt > now);
+        if (
+            pendingNativeImports.length >= MAX_PENDING_NATIVE_IMPORTS ||
+            pendingNativeImports.some((pending) => pending.requestId === request.requestId)
+        ) {
+            return false;
+        }
+        this.#socket.serializeAttachment({
+            ...attachment,
+            pendingNativeImports: [
+                ...pendingNativeImports,
+                {
+                    requestId: request.requestId,
+                    expiresAt: request.expiresAt,
+                    fingerprint: nativeImportFingerprint(
+                        request.action,
+                        request.sessionId,
+                        request.agentId,
+                        request.directoryId,
+                    ),
+                },
+            ],
+        });
+        return true;
+    };
+    readonly consumeNativeSessionImport = (
+        result: Extract<NativeSessionResult, { readonly action: "import" | "fork" }>,
+        now: number,
+    ): boolean => {
+        const attachment = this.daemonAttachment();
+        const pending = attachment.pendingNativeImports.find((request) => request.requestId === result.requestId);
+        if (
+            pending === undefined ||
+            pending.expiresAt <= now ||
+            pending.fingerprint !==
+                nativeImportFingerprint(
+                    result.action,
+                    result.targetSessionId,
+                    result.ready.agentId,
+                    result.ready.directoryId,
+                )
+        ) {
+            return false;
+        }
+        this.removeNativeSessionImport(result.requestId);
+        return true;
+    };
+    readonly removeNativeSessionImport = (requestId: string): void => {
+        const attachment = this.daemonAttachment();
+        this.#socket.serializeAttachment({
+            ...attachment,
+            pendingNativeImports: attachment.pendingNativeImports.filter((pending) => pending.requestId !== requestId),
+        });
+    };
+
     readonly replaceDaemon = (): void => {
         const identity = this.identity();
         if (identity.role !== "daemon" && identity.role !== "replaced-daemon") {
@@ -113,6 +191,14 @@ export class CloudflareChannelSocket implements RuntimeSocket {
         }
         this.#socket.serializeAttachment({ ...identity, role: "replaced-daemon" });
         this.#socket.close(1012, "Daemon connection replaced");
+    };
+
+    private readonly daemonAttachment = () => {
+        const attachment = v.parse(attachmentSchema, this.#socket.deserializeAttachment());
+        if (attachment.role !== "daemon" && attachment.role !== "replaced-daemon") {
+            throw new Error("Only a Runtime socket can carry a pending native import");
+        }
+        return attachment;
     };
 
     private readonly hostAttachment = () => {
