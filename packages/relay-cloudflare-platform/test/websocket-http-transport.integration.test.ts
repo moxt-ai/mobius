@@ -41,6 +41,17 @@ class SubscriptionDaemonBoundary {
     };
 }
 
+class MultipleSubscriptionDaemonBoundary {
+    readonly downstreams: WebSocket[] = [];
+
+    readonly fetch = (_request: Request): Promise<Response> => {
+        const pair = new WebSocketPair();
+        pair[1].accept();
+        this.downstreams.push(pair[1]);
+        return Promise.resolve(new Response(null, { status: 101, webSocket: pair[0] }));
+    };
+}
+
 class PendingDaemonBoundary {
     readonly response = Promise.withResolvers<Response>();
     readonly requested = Promise.withResolvers<AbortSignal>();
@@ -180,6 +191,67 @@ it("Given an established event subscription, When the browser transport closes, 
 
     await closed;
     expect(requestSignal.aborted).toBe(false);
+});
+
+it("Given two live subscriptions, When each receives event batches, Then delivery sequence IDs start at one and advance per subscription", async () => {
+    const daemon = new MultipleSubscriptionDaemonBoundary();
+    const response = acceptWebSocketHttpTransport(
+        new Request("https://platform.test/mobius/api/v1/transport", {
+            headers: { Upgrade: "websocket" },
+        }),
+        daemon.fetch,
+    );
+    const socket = response.webSocket;
+    if (socket === null) {
+        throw new Error("Expected a WebSocket transport response");
+    }
+    socket.accept();
+    for (const subscriptionId of ["subscription-1", "subscription-2"]) {
+        const ready = nextMessage(socket);
+        socket.send(
+            JSON.stringify({
+                headers: [],
+                kind: "session.events.subscribe",
+                path: `/mobius/api/v1/projects/project/sessions/${subscriptionId}/events-v2`,
+                subscriptionId,
+            }),
+        );
+        expect(JSON.parse(await ready)).toMatchObject({ kind: "session.events.ready", subscriptionId });
+    }
+    const first = daemon.downstreams[0];
+    const second = daemon.downstreams[1];
+    if (first === undefined || second === undefined) {
+        throw new Error("Expected two downstream subscriptions");
+    }
+
+    let delivered = nextMessage(socket);
+    first.send("first batch");
+    expect(JSON.parse(await delivered)).toEqual({
+        data: "first batch",
+        eventId: "",
+        kind: "session.events.event",
+        seqId: 1,
+        subscriptionId: "subscription-1",
+    });
+    delivered = nextMessage(socket);
+    first.send("second batch");
+    expect(JSON.parse(await delivered)).toEqual({
+        data: "second batch",
+        eventId: "",
+        kind: "session.events.event",
+        seqId: 2,
+        subscriptionId: "subscription-1",
+    });
+    delivered = nextMessage(socket);
+    second.send("independent batch");
+    expect(JSON.parse(await delivered)).toEqual({
+        data: "independent batch",
+        eventId: "",
+        kind: "session.events.event",
+        seqId: 1,
+        subscriptionId: "subscription-2",
+    });
+    socket.close(1000, "Test complete");
 });
 
 it("Given an established event subscription is quiet, When the transport idle deadline passes, Then the browser remains connected", async () => {

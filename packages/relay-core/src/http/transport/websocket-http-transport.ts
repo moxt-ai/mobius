@@ -339,6 +339,7 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                         return;
                     }
                     subscriptions.set(subscriptionId, { kind: "open", socket: subscription });
+                    let nextSequenceId = 1;
                     const finish = (): void => {
                         const current = subscriptions.get(subscriptionId);
                         if (
@@ -362,9 +363,11 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                                     data: subscriptionEvent.data,
                                     eventId: "",
                                     kind: "session.events.event",
+                                    seqId: nextSequenceId,
                                     subscriptionId,
                                 }),
                             );
+                            nextSequenceId += 1;
                             touch();
                         }
                     });

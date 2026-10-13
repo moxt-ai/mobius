@@ -1106,6 +1106,7 @@ describe.sequential("Platform Session-only boundary", () => {
                 data: expect.stringContaining("local answer"),
                 eventId: "",
                 kind: "session.events.event",
+                seqId: 1,
                 subscriptionId: "subscription-1",
             });
             transport.close(1000, "Browser test complete");

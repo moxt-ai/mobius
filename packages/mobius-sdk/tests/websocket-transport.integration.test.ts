@@ -187,6 +187,7 @@ it("Given a replacement WebSocket carries a live subscription, When the old sock
                 data: "event-data",
                 eventId: "event-1",
                 kind: "session.events.event",
+                seqId: 1,
                 subscriptionId,
             }),
         }),
@@ -194,7 +195,7 @@ it("Given a replacement WebSocket carries a live subscription, When the old sock
 
     expect(await events.getReader().read()).toEqual({
         done: false,
-        value: { data: "event-data", eventId: "event-1" },
+        value: { data: "event-data", eventId: "event-1", seqId: 1 },
     });
     expect(connector.sockets).toHaveLength(2);
 

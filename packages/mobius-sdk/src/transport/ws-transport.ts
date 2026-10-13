@@ -75,6 +75,14 @@ function wsString(value: Readonly<Record<string, unknown>>, field: string, maxim
     return candidate;
 }
 
+function wsPositiveInteger(value: Readonly<Record<string, unknown>>, field: string): number {
+    const candidate = value[field];
+    if (typeof candidate !== "number" || !Number.isSafeInteger(candidate) || candidate < 1) {
+        throw new MobiusProtocolError("The WebSocket transport returned an invalid message");
+    }
+    return candidate;
+}
+
 function wsHeaders(value: unknown): Headers {
     if (!Array.isArray(value) || value.length > 128) {
         throw new MobiusProtocolError("The WebSocket transport returned invalid response headers");
@@ -474,6 +482,7 @@ export class WsTransport implements MobiusHttpTransport {
         subscription.controller.enqueue({
             data: wsString(message, "data", 8 * 1024 * 1024),
             eventId: wsString(message, "eventId", 512),
+            seqId: wsPositiveInteger(message, "seqId"),
         });
     };
 
