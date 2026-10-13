@@ -548,5 +548,47 @@ describe.sequential("App Session status webhook", () => {
             endpoint: "",
             secretId: "",
         });
+
+        const saved = await responseJson(
+            await worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${text(app, "appId")}/session-status-webhook`,
+                    {
+                        body: JSON.stringify({ enabled: true, endpoint: "https://consumer.example.test/webhook" }),
+                        headers: developerHeaders(),
+                        method: "PUT",
+                    },
+                ),
+                environment,
+            ),
+            200,
+        );
+
+        expect(saved).toMatchObject({
+            appId: text(app, "appId"),
+            configured: true,
+            enabled: true,
+            endpoint: "https://consumer.example.test/webhook",
+        });
+        expect(typeof text(saved, "secret")).toBe("string");
+
+        const reread = await responseJson(
+            await worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${text(app, "appId")}/session-status-webhook`,
+                    { headers: developerHeaders() },
+                ),
+                environment,
+            ),
+            200,
+        );
+
+        expect(reread).toStrictEqual({
+            appId: text(app, "appId"),
+            configured: true,
+            enabled: true,
+            endpoint: "https://consumer.example.test/webhook",
+            secretId: text(saved, "secretId"),
+        });
     });
 });
