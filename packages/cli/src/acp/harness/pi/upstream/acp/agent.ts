@@ -117,9 +117,8 @@ function mergeCommands(a: AvailableCommand[], b: AvailableCommand[]): AvailableC
     return out;
 }
 
-import { fileURLToPath } from "node:url";
-
-const pkg = readNearestPackageJson(import.meta.url);
+const PI_ACP_NAME = "pi-acp";
+const PI_ACP_VERSION = "0.0.34";
 
 export class PiAcpAgent {
     private readonly conn: PiAcpClient;
@@ -254,9 +253,9 @@ export class PiAcpAgent {
         return {
             protocolVersion: requested === supportedVersion ? requested : supportedVersion,
             agentInfo: {
-                name: pkg.name ?? "pi-acp",
+                name: PI_ACP_NAME,
                 title: "pi ACP adapter",
-                version: pkg.version ?? "0.0.0",
+                version: PI_ACP_VERSION,
             },
             // Zed currently uses ClientCapabilities._meta["terminal-auth"] to decide whether to show
             // the "Authenticate" banner/button. If not supported, we still return the method for the registry.
@@ -1740,26 +1739,4 @@ function buildStartupInfo(opts: {
 
     // Do NOT include themes (per request).
     return `${md.join("\n").trim()}\n`;
-}
-
-function readNearestPackageJson(metaUrl: string): {
-    name?: string;
-    version?: string;
-} {
-    try {
-        let dir = dirname(fileURLToPath(metaUrl));
-
-        // Walk upwards a few levels to find the nearest package.json
-        for (let i = 0; i < 6; i++) {
-            const p = join(dir, "package.json");
-            if (existsSync(p)) {
-                const json = JSON.parse(readFileSync(p, "utf-8")) as any;
-                return { name: json?.name, version: json?.version };
-            }
-            dir = dirname(dir);
-        }
-    } catch {
-        // ignore
-    }
-    return { name: "pi-acp", version: "0.0.0" };
 }
