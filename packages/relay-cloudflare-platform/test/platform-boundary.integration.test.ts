@@ -1359,6 +1359,7 @@ describe.sequential("Platform Session-only boundary", () => {
             if (settingsRead.kind !== "session.settings.v3.read") {
                 throw new Error("Expected a connected Session V3 settings request");
             }
+            expect(decodeServiceToDaemonMessage(await hostMessages.next())).toEqual(settingsRead);
             daemon.send(
                 encodeSessionSettingsLoadedV3({
                     kind: "session.settings.v3.loaded",
@@ -1389,6 +1390,7 @@ describe.sequential("Platform Session-only boundary", () => {
                 throw new Error("Expected a connected Session V3 setting change");
             }
             expect(settingsChange).toMatchObject({ settingId: "model", value: "gpt-5.6-mini" });
+            expect(decodeServiceToDaemonMessage(await hostMessages.next())).toEqual(settingsChange);
             daemon.send(
                 encodeSessionSettingsLoadedV3({
                     kind: "session.settings.v3.loaded",
@@ -1421,6 +1423,7 @@ describe.sequential("Platform Session-only boundary", () => {
                 requestId: "permission-v3-1",
                 sessionId,
             });
+            expect(decodeServiceToDaemonMessage(await hostMessages.next())).toEqual(permission);
             daemon.send(
                 encodeSessionLiveEventEnvelopeV3({
                     events: [
@@ -1460,6 +1463,7 @@ describe.sequential("Platform Session-only boundary", () => {
                 sessionId,
                 values: { choice: "one" },
             });
+            expect(decodeServiceToDaemonMessage(await hostMessages.next())).toEqual(userInput);
             daemon.send(
                 encodeSessionLiveEventEnvelopeV3({
                     events: [
