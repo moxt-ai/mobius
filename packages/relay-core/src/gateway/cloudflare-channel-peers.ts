@@ -1,5 +1,6 @@
+import { ProtocolMessageError } from "@moxt-ai/mobius-protocol";
 import * as v from "valibot";
-import type { ChannelSocket } from "../service/channel/channel-actor.ts";
+import type { ChannelSocket, HistoryRequestKind } from "../service/channel/channel-actor.ts";
 import type { RuntimePeers, RuntimeSocket, RuntimeSocketIdentity } from "../service/channel/runtime-service.ts";
 
 const pendingAgentSettingsDiscoverySchema = v.object({
@@ -7,6 +8,11 @@ const pendingAgentSettingsDiscoverySchema = v.object({
     expiresAt: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
     requestId: v.pipe(v.string(), v.minLength(1)),
 });
+const historyRequestSchema = v.object({
+    kind: v.picklist(["live", "preview"]),
+    requestId: v.pipe(v.string(), v.minLength(1)),
+});
+
 const attachmentSchema = v.union([
     v.object({
         role: v.literal("host"),
@@ -14,10 +20,12 @@ const attachmentSchema = v.union([
         credentialId: v.string(),
         runtimeId: v.string(),
         projectId: v.string(),
+        historyRequest: v.optional(historyRequestSchema),
         pendingAgentSettingsDiscoveries: v.optional(v.array(pendingAgentSettingsDiscoverySchema), []),
     }),
     v.object({
         role: v.literal("relay"),
+        historyRequest: v.optional(historyRequestSchema),
         channelId: v.string(),
         runtimeId: v.string(),
         projectId: v.string(),
@@ -88,6 +96,41 @@ export class CloudflareChannelSocket implements RuntimeSocket {
         }
         return consumed;
     };
+    readonly takeAgentSettingsDiscoveries = (now: number): readonly string[] => {
+        const attachment = this.hostAttachment();
+        const requests = attachment.pendingAgentSettingsDiscoveries
+            .filter((pending) => pending.expiresAt > now)
+            .map((pending) => pending.requestId);
+        if (attachment.pendingAgentSettingsDiscoveries.length > 0) {
+            this.#socket.serializeAttachment({ ...attachment, pendingAgentSettingsDiscoveries: [] });
+        }
+        return requests;
+    };
+    readonly bindHistoryRequest = (kind: HistoryRequestKind, requestId: string): void => {
+        const attachment = v.parse(attachmentSchema, this.#socket.deserializeAttachment());
+        if (!this.permitsLiveSessionHistory()) {
+            throw new ProtocolMessageError("History replies require an internal connection");
+        }
+        if (attachment.role === "host" || attachment.role === "relay") {
+            if (
+                attachment.historyRequest !== undefined &&
+                (attachment.historyRequest.kind !== kind || attachment.historyRequest.requestId !== requestId)
+            ) {
+                throw new ProtocolMessageError("An internal history connection belongs to one request");
+            }
+            this.#socket.serializeAttachment({ ...attachment, historyRequest: { kind, requestId } });
+            return;
+        }
+        throw new ProtocolMessageError("History replies require an internal connection");
+    };
+    readonly matchesHistoryRequest = (kind: HistoryRequestKind, requestId: string): boolean => {
+        const attachment = v.parse(attachmentSchema, this.#socket.deserializeAttachment());
+        return (
+            (attachment.role === "host" || attachment.role === "relay") &&
+            attachment.historyRequest?.kind === kind &&
+            attachment.historyRequest.requestId === requestId
+        );
+    };
     readonly isOpen = (): boolean => this.#socket.readyState === WebSocket.OPEN;
     readonly isSame = (socket: ChannelSocket): boolean =>
         socket instanceof CloudflareChannelSocket && socket.#socket === this.#socket;
@@ -144,6 +187,11 @@ export class CloudflareChannelPeers implements RuntimePeers {
 
     readonly hosts = (): readonly ChannelSocket[] =>
         this.#state.getWebSockets("host").map((socket) => new CloudflareChannelSocket(socket));
+
+    readonly historyRecipients = (): readonly ChannelSocket[] =>
+        this.sockets()
+            .filter(({ socket }) => socket.permitsLiveSessionHistory())
+            .map(({ socket }) => socket);
 
     readonly accept: RuntimePeers["accept"] = (identity) => {
         const pair = new WebSocketPair();

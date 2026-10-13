@@ -167,11 +167,11 @@ export class RuntimeService {
         const accepted = this.#cx.gateways.peers.accept(identity);
         this.#cx.services.connections.connected(prepared.identity, Date.now());
         if (liveness) {
-            this.deferDaemonAttachment(identity, accepted.socket, scope);
+            this.deferDaemonAttachment(identity, accepted.socket, scope, previous.length > 0);
             return { kind: "accepted", response: accepted.response };
         }
         try {
-            await this.attachDaemon(runtimeId, scope, false, signal);
+            await this.attachDaemon(runtimeId, scope, previous.length > 0, signal);
         } catch (error) {
             accepted.socket.close(1011, "Runtime attachment failed");
             throw error;
@@ -188,6 +188,7 @@ export class RuntimeService {
         identity: DaemonSocketIdentity,
         socket: RuntimeSocket,
         scope: ProjectScope,
+        replaced: boolean,
     ): void => {
         const attachment = { controller: new AbortController(), identity };
         this.#attachments.add(attachment);
@@ -197,7 +198,7 @@ export class RuntimeService {
         ]);
         const operation = (async () => {
             try {
-                await this.attachDaemon(identity.runtimeId, scope, false, signal);
+                await this.attachDaemon(identity.runtimeId, scope, replaced, signal);
                 signal.throwIfAborted();
                 if (!this.#cx.services.connections.isCurrent(identity)) {
                     return;

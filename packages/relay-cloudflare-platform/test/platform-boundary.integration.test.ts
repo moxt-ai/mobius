@@ -1080,24 +1080,23 @@ describe.sequential("Platform Session-only boundary", () => {
                 title: "Renamed session",
                 updatedAt: "2026-09-18T00:01:00.000Z",
             });
-            daemon.send(
-                encodeSessionLiveHistoryV2PageLoaded({
+            const historyPage = encodeSessionLiveHistoryV2PageLoaded({
+                events: {
                     events: {
-                        events: {
-                            sessionGenerationId: "session-generation-1",
-                            events: [rawEvent],
-                            nextCursor: null,
-                            tailCursor: rawEvent.eventId,
-                            truncated: false,
-                            version: 2,
-                        },
-                        queuedPromptRequests: [],
+                        sessionGenerationId: "session-generation-1",
+                        events: [rawEvent],
+                        nextCursor: null,
+                        tailCursor: rawEvent.eventId,
+                        truncated: false,
+                        version: 2,
                     },
-                    kind: "session.live-history.v2.page.loaded",
-                    requestId: historyLoad.requestId,
-                    sessionId,
-                }),
-            );
+                    queuedPromptRequests: [],
+                },
+                kind: "session.live-history.v2.page.loaded",
+                requestId: historyLoad.requestId,
+                sessionId,
+            });
+            daemon.send(historyPage);
             expect(await responseJson(await historyResponse, 200)).toEqual({
                 sessionGenerationId: "session-generation-1",
                 events: [rawEvent],
@@ -1106,6 +1105,8 @@ describe.sequential("Platform Session-only boundary", () => {
                 truncated: false,
                 version: 2,
             });
+            // A delayed result after the caller has finished must not disconnect the Runtime.
+            daemon.send(historyPage);
             const previewHistoryResponse = worker.fetch(
                 new Request(
                     `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/native-events-preview?agentId=codex&directoryId=root&eventLimit=50`,
@@ -1118,24 +1119,23 @@ describe.sequential("Platform Session-only boundary", () => {
                 throw new Error("Expected a native Session preview history request");
             }
             await evictDurableObject(environment.RUNTIME_RELAY.getByName(runtimeId), { webSockets: "hibernate" });
-            daemon.send(
-                encodeSessionPreviewHistoryPageLoaded({
+            const previewHistoryPage = encodeSessionPreviewHistoryPageLoaded({
+                events: {
                     events: {
-                        events: {
-                            sessionGenerationId: "native-session-generation-1",
-                            events: [rawEvent],
-                            nextCursor: null,
-                            tailCursor: rawEvent.eventId,
-                            truncated: false,
-                            version: 2,
-                        },
-                        queuedPromptRequests: [],
+                        sessionGenerationId: "native-session-generation-1",
+                        events: [rawEvent],
+                        nextCursor: null,
+                        tailCursor: rawEvent.eventId,
+                        truncated: false,
+                        version: 2,
                     },
-                    kind: "session.preview-history.page.loaded",
-                    requestId: previewHistoryLoad.requestId,
-                    sessionId,
-                }),
-            );
+                    queuedPromptRequests: [],
+                },
+                kind: "session.preview-history.page.loaded",
+                requestId: previewHistoryLoad.requestId,
+                sessionId,
+            });
+            daemon.send(previewHistoryPage);
             expect(await responseJson(await previewHistoryResponse, 200)).toEqual({
                 events: {
                     sessionGenerationId: "native-session-generation-1",
@@ -1147,6 +1147,8 @@ describe.sequential("Platform Session-only boundary", () => {
                 },
                 queuedPromptRequests: [],
             });
+            // A delayed result after the caller has finished must not disconnect the Runtime.
+            daemon.send(previewHistoryPage);
             const failedPreviewHistoryResponse = worker.fetch(
                 new Request(
                     `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/native-events-preview?agentId=codex&directoryId=root&eventLimit=50`,
