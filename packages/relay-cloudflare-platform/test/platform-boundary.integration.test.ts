@@ -645,13 +645,16 @@ describe.sequential("Platform Session-only boundary", () => {
     });
 
     // Graceful eviction drains in-flight Runtime events before hibernating the sockets.
-    it("Given a linked Codex Runtime, When Chat imports, forks, configures and prompts Sessions across Relay hibernation, Then results, answers and connection status arrive without cloud Session storage", async () => {
+    it("Given a linked Codex Runtime and malformed webhook encryption key, When Chat imports, forks, configures and prompts Sessions across Relay hibernation, Then results, answers and connection status arrive without cloud Session storage", async () => {
         vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
             createPlatformGateways,
         );
-        const environment = bindings();
+        const environment = {
+            ...bindings(),
+            MOBIUS_SESSION_WEBHOOK_SECRET_ENCRYPTION_KEY: "not-a-valid-32-byte-base64-key",
+        };
         const tenants = await responseJson(
             await worker.fetch(
                 new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/platform/tenants`, {

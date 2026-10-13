@@ -9,9 +9,13 @@ import {
 } from "./app-session-status-webhook-crypto.ts";
 import type { PlatformControlPlaneService } from "./platform-control-plane-service.ts";
 
+type WebhookEncryptionKeyConfiguration =
+    | { readonly kind: "configured"; readonly value: string }
+    | { readonly kind: "missing" };
+
 export class AppSessionStatusWebhookService {
     readonly #control: PlatformControlPlaneService | null;
-    readonly #encryptionKey: ArrayBuffer;
+    readonly #encryptionKey: WebhookEncryptionKeyConfiguration;
     readonly #storage: AppSessionStatusWebhookStorage;
 
     constructor(
@@ -19,11 +23,9 @@ export class AppSessionStatusWebhookService {
         storage: AppSessionStatusWebhookStorage,
         encryptionKey: string | undefined,
     ) {
-        if (encryptionKey === undefined) {
-            throw new Error("MOBIUS_SESSION_WEBHOOK_SECRET_ENCRYPTION_KEY is required");
-        }
         this.#control = control;
-        this.#encryptionKey = parseWebhookEncryptionKey(encryptionKey);
+        this.#encryptionKey =
+            encryptionKey === undefined ? { kind: "missing" } : { kind: "configured", value: encryptionKey };
         this.#storage = storage;
     }
 
@@ -77,7 +79,7 @@ export class AppSessionStatusWebhookService {
     };
 
     readonly decryptSecret = async (webhook: StoredAppSessionStatusWebhook): Promise<string> =>
-        await decryptWebhookSecret(webhook.secretCiphertext, webhook.secretNonce, this.#encryptionKey);
+        await decryptWebhookSecret(webhook.secretCiphertext, webhook.secretNonce, this.#requireEncryptionKey());
 
     readonly #authorized = async (
         identity: VerifiedExternalIdentity,
@@ -94,7 +96,16 @@ export class AppSessionStatusWebhookService {
     readonly #newSecret = async () => {
         const secretId = createRandomToken(12);
         const plaintext = `mweb_${secretId}_${createRandomToken(32)}`;
-        return { plaintext, secretId, ...(await encryptWebhookSecret(plaintext, this.#encryptionKey)) };
+        return { plaintext, secretId, ...(await encryptWebhookSecret(plaintext, this.#requireEncryptionKey())) };
+    };
+
+    readonly #requireEncryptionKey = (): ArrayBuffer => {
+        switch (this.#encryptionKey.kind) {
+            case "configured":
+                return parseWebhookEncryptionKey(this.#encryptionKey.value);
+            case "missing":
+                throw new Error("MOBIUS_SESSION_WEBHOOK_SECRET_ENCRYPTION_KEY is required");
+        }
     };
 
     readonly resource = (webhook: StoredAppSessionStatusWebhook): object => ({
