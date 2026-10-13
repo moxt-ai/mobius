@@ -81,6 +81,10 @@ function mcpStatus(status: "inProgress" | "completed" | "failed"): ToolCallStatu
     return status === "inProgress" ? "in_progress" : status === "completed" ? "completed" : "failed";
 }
 
+function collaborationStatus(status: "inProgress" | "completed" | "failed" | "interrupted"): ToolCallStatus {
+    return status === "inProgress" ? "in_progress" : status === "completed" ? "completed" : "failed";
+}
+
 /**
  * Translates one app-server `ThreadItem` into the ACP tool-call framing, or returns null for an item
  * Mobius does not present (user messages, reasoning, plans, and item kinds a newer Codex added).
@@ -194,6 +198,39 @@ function presentToolItem(item: ThreadItem): ToolCallPresentation | null {
             title: truncate(label, TITLE_CHARACTER_LIMIT),
         };
     }
+    if (item.type === "collabAgentToolCall") {
+        const spawn = item.tool === "spawnAgent";
+        return {
+            content: [],
+            kind: "other",
+            locations: [],
+            rawInput: spawn
+                ? {
+                      model: item.model,
+                      prompt: item.prompt,
+                      reasoningEffort: item.reasoningEffort,
+                      senderThreadId: item.senderThreadId,
+                  }
+                : { receiverThreadIds: item.receiverThreadIds, senderThreadId: item.senderThreadId },
+            rawOutput: {
+                agentsStates: item.agentsStates,
+                ...(spawn ? { receiverThreadIds: item.receiverThreadIds } : {}),
+            },
+            status: collaborationStatus(item.status),
+            title: spawn ? "Dispatch subagent" : "Wait for subagent",
+        };
+    }
+    if (item.type === "subAgentActivity" && item.kind === "started") {
+        return {
+            content: [],
+            kind: "other",
+            locations: [],
+            rawInput: { agentPath: item.agentPath },
+            rawOutput: { agentThreadId: item.agentThreadId },
+            status: "in_progress",
+            title: truncate(`Dispatch subagent ${item.agentPath}`, TITLE_CHARACTER_LIMIT),
+        };
+    }
     return null;
 }
 
@@ -213,6 +250,11 @@ export function toolCallUpdate(
         locations: [...presentation.locations],
         rawInput: presentation.rawInput,
         rawOutput: presentation.rawOutput,
+        ...(item.type === "collabAgentToolCall"
+            ? { name: item.tool === "spawnAgent" ? "spawn_agent" : "wait_agent" }
+            : item.type === "subAgentActivity"
+              ? { name: "spawn_agent" }
+              : {}),
         status:
             item.type === "imageView" && lifecycle === "started"
                 ? "in_progress"

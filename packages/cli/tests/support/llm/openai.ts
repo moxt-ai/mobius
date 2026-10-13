@@ -5,6 +5,7 @@ import {
     type FakeProviderScenario,
     fakeProviderPrompts,
     fakeProviderResponse,
+    latestUserPrompt,
     responseChunks,
     selectFakeProviderScenario,
 } from "./scenarios.ts";
@@ -14,12 +15,18 @@ type JsonObject = Record<string, unknown>;
 interface AvailableTool {
     readonly kind: "custom" | "function";
     readonly name: string;
+    readonly namespace?: string;
     readonly parameters: JsonObject | undefined;
 }
 
 interface SelectedTool extends AvailableTool {
     readonly callId: string;
     readonly input: string;
+}
+
+interface RequestedTool {
+    readonly input: string;
+    readonly name: string;
 }
 
 interface ProviderRequestDiagnostic {
@@ -55,6 +62,7 @@ function collectTool(value: unknown, namespace = ""): readonly AvailableTool[] {
         {
             kind: value["type"] === "custom" ? "custom" : "function",
             name: qualifiedName,
+            ...(namespace.length === 0 ? {} : { namespace }),
             parameters: isObject(definition["parameters"]) ? definition["parameters"] : undefined,
         },
     ];
@@ -175,6 +183,21 @@ function selectTool(
     return undefined;
 }
 
+function selectRequestedTool(tools: readonly AvailableTool[], requested: RequestedTool): SelectedTool {
+    const tool = tools.find(
+        (candidate) => candidate.name === requested.name || candidate.name.endsWith(`.${requested.name}`),
+    );
+    if (tool === undefined) {
+        throw new Error(`The Agent did not expose the requested ${requested.name} tool`);
+    }
+    return {
+        ...tool,
+        name: requested.name,
+        callId: `call_mobius_${requested.name}`,
+        input: requested.input,
+    };
+}
+
 function responseHeaders(): Readonly<Record<string, string>> {
     return {
         "cache-control": "no-cache",
@@ -281,6 +304,7 @@ function sendResponsesToolCall(response: ServerResponse, model: string, tool: Se
         type,
         call_id: tool.callId,
         name: tool.name,
+        ...(tool.namespace === undefined ? {} : { namespace: tool.namespace }),
         status: "completed",
         ...(tool.kind === "custom" ? { input: tool.input } : { arguments: tool.input }),
     };
@@ -460,6 +484,8 @@ export class FakeOpenAiProvider implements AsyncDisposable {
             readonly patch?: string;
             readonly readPath?: string;
             readonly mcpImage?: boolean;
+            readonly toolPrompt?: string;
+            readonly toolSequence?: readonly RequestedTool[];
         } = {},
     ): Promise<FakeOpenAiProvider> {
         const requests: ProviderRequestDiagnostic[] = [];
@@ -495,6 +521,10 @@ export class FakeOpenAiProvider implements AsyncDisposable {
             }
             const tools = availableTools(payload);
             const completedToolCalls = toolResultCount(payload);
+            const requestedTool =
+                options.toolPrompt === latestUserPrompt(payload)
+                    ? options.toolSequence?.[completedToolCalls]
+                    : undefined;
             const detectedScenario = selectFakeProviderScenario(payload);
             const selectedScenario =
                 detectedScenario.toolCalls === 0 && fallbackScenario !== undefined
@@ -505,9 +535,18 @@ export class FakeOpenAiProvider implements AsyncDisposable {
             }
             const scenario = activeScenario ?? selectedScenario;
             const tool =
-                completedToolCalls < scenario.toolCalls
-                    ? selectTool(tools, scenario, completedToolCalls, options.patch, options.readPath, options.mcpImage)
-                    : undefined;
+                requestedTool !== undefined
+                    ? selectRequestedTool(tools, requestedTool)
+                    : completedToolCalls < scenario.toolCalls
+                      ? selectTool(
+                            tools,
+                            scenario,
+                            completedToolCalls,
+                            options.patch,
+                            options.readPath,
+                            options.mcpImage,
+                        )
+                      : undefined;
             const selectedAnswer = fakeProviderResponse(answer, scenario);
             const selectedChunks = responseChunks(selectedAnswer, scenario);
             requests.push({

@@ -73,6 +73,7 @@ const commandExecutionStatusSchema = z.enum(["inProgress", "completed", "failed"
 const patchApplyStatusSchema = z.enum(["inProgress", "completed", "failed", "declined"]);
 const mcpToolCallStatusSchema = z.enum(["inProgress", "completed", "failed"]);
 const dynamicToolCallStatusSchema = z.enum(["inProgress", "completed", "failed"]);
+const collabAgentToolCallStatusSchema = z.enum(["inProgress", "completed", "failed", "interrupted"]);
 
 export type ThreadItem = z.infer<typeof threadItemSchema>;
 
@@ -154,6 +155,41 @@ export const threadItemSchema = z.discriminatedUnion("type", [
         type: z.literal("reasoning"),
     }),
     z.object({ id: boundedText(256), text: boundedText(1_000_000), type: z.literal("plan") }),
+    z.object({
+        agentPath: boundedText(4_096),
+        agentThreadId: boundedText(256),
+        id: boundedText(256),
+        kind: z.enum(["started", "interacted", "interrupted", "completed"]),
+        type: z.literal("subAgentActivity"),
+    }),
+    z.object({
+        agentsStates: z
+            .record(
+                boundedText(256),
+                z.object({
+                    message: boundedText(32_768).nullish(),
+                    status: z.enum([
+                        "pendingInit",
+                        "running",
+                        "interrupted",
+                        "completed",
+                        "errored",
+                        "shutdown",
+                        "notFound",
+                    ]),
+                }),
+            )
+            .refine((states) => Object.keys(states).length <= 1_000),
+        id: boundedText(256),
+        model: boundedText(256).nullish(),
+        prompt: boundedText(1_000_000).nullish(),
+        reasoningEffort: boundedText(80).nullish(),
+        receiverThreadIds: z.array(boundedText(256)).max(1_000),
+        senderThreadId: boundedText(256),
+        status: collabAgentToolCallStatusSchema,
+        tool: z.enum(["spawnAgent", "wait"]),
+        type: z.literal("collabAgentToolCall"),
+    }),
 ]);
 
 export const turnSchema = z.object({
