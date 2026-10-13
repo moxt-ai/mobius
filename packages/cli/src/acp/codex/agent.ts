@@ -48,8 +48,6 @@ const APPROVAL_TIMEOUT_MILLISECONDS = 3_600_000;
 const CODEX_AGENT_VERSION = "0.154.0";
 // Listing a directory must answer promptly: it is an interactive browser request, not a turn.
 const SESSION_LIST_TIMEOUT_MILLISECONDS = 30_000;
-const CODEX_COMMANDS = Object.freeze([{ description: "Compact the conversation context", name: "compact" }]);
-const COMPACT_COMPLETED_MESSAGE = "Context compacted.";
 
 /** The choices Mobius offers when the app-server asks it to approve a local side effect. */
 const APPROVAL_OPTIONS: readonly PermissionOption[] = Object.freeze([
@@ -91,10 +89,6 @@ function promptInput(prompt: readonly ContentBlock[]): readonly unknown[] {
         }
     }
     return input;
-}
-
-function isCompactPrompt(prompt: readonly ContentBlock[]): boolean {
-    return prompt.length === 1 && prompt[0]?.type === "text" && prompt[0].text.trim() === "/compact";
 }
 
 interface SteeringPromptBlock {
@@ -293,7 +287,6 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 this.#nativeSessionId = created.thread.id;
                 this.#settings.selectNewThread(created);
                 await this.#settings.probeCollaborationMode(this.#nativeSessionId, context.signal);
-                await this.#emitAvailableCommands();
                 // The settings Mobius discovers come from this response. Without them the Run
                 // settings panel has nothing to render and saved selections cannot be re-applied.
                 return { configOptions: this.#settings.configOptions(), sessionId: created.thread.id };
@@ -320,7 +313,6 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 this.#settings.selectRestoredThread(resumed);
                 await this.#settings.probeCollaborationMode(this.#nativeSessionId, context.signal);
                 await this.#replaySavedHistory(context.signal);
-                await this.#emitAvailableCommands();
                 return { configOptions: this.#settings.configOptions() };
             })
             .onRequest(methods.agent.session.fork, async (context) => {
@@ -340,7 +332,6 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 this.#nativeSessionId = forked.thread.id;
                 this.#settings.selectRestoredThread(forked);
                 await this.#settings.probeCollaborationMode(this.#nativeSessionId, context.signal);
-                await this.#emitAvailableCommands();
                 return { configOptions: this.#settings.configOptions(), sessionId: forked.thread.id };
             })
             .onRequest(methods.agent.session.resume, async (context) => {
@@ -354,13 +345,9 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 this.#nativeSessionId = resumed.thread.id;
                 this.#settings.selectRestoredThread(resumed);
                 await this.#settings.probeCollaborationMode(this.#nativeSessionId, context.signal);
-                await this.#emitAvailableCommands();
                 return { configOptions: this.#settings.configOptions() };
             })
             .onRequest(methods.agent.session.prompt, async (context) => {
-                if (isCompactPrompt(context.params.prompt)) {
-                    return await this.#compact(context.signal);
-                }
                 return await this.#runTurn(promptInput(context.params.prompt), context.signal);
             })
             .onRequest(
@@ -516,13 +503,6 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
         await connection.client.notify(methods.client.session.update, {
             sessionId: this.#nativeSessionId,
             update,
-        });
-    };
-
-    readonly #emitAvailableCommands = async (): Promise<void> => {
-        await this.#emit({
-            availableCommands: CODEX_COMMANDS.map((command) => ({ ...command })),
-            sessionUpdate: "available_commands_update",
         });
     };
 
@@ -899,43 +879,6 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
             if (this.#turn === turn) {
                 this.#turn = null;
                 this.#agentMessages.clear();
-                this.#streamedReasoningItemIds.clear();
-            }
-        }
-    };
-
-    readonly #compact = async (signal: AbortSignal): Promise<PromptResponse> => {
-        signal.throwIfAborted();
-        if (this.#turn !== null) {
-            throw new AcpExecutionError("Another prompt is already running in this conversation", {}, "session_busy");
-        }
-        const completion = Promise.withResolvers<PromptResponse>();
-        void completion.promise.catch(() => {});
-        const aborted = (): void => {
-            completion.reject(signal.reason);
-            void this.close().catch((cause: unknown) => {
-                console.error("The cancelled Codex endpoint could not release its process tree", cause);
-            });
-        };
-        signal.addEventListener("abort", aborted, { once: true });
-        const turn: ActiveTurn = { completion, turn: { id: "" } };
-        this.#streamedReasoningItemIds.clear();
-        this.#turn = turn;
-        try {
-            await this.#appServer.request("thread/compact/start", { threadId: this.#nativeSessionId }, signal);
-            const result = await completion.promise;
-            if (result.stopReason !== "cancelled") {
-                await this.#emit({
-                    content: { text: COMPACT_COMPLETED_MESSAGE, type: "text" },
-                    messageId: turn.turn.id.length > 0 ? turn.turn.id : "compact-completed",
-                    sessionUpdate: "agent_message_chunk",
-                });
-            }
-            return result;
-        } finally {
-            signal.removeEventListener("abort", aborted);
-            if (this.#turn === turn) {
-                this.#turn = null;
                 this.#streamedReasoningItemIds.clear();
             }
         }

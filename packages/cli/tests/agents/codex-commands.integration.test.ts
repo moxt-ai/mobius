@@ -6,11 +6,11 @@ import { CodexFixture } from "../support/agents/codex.ts";
 import { withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 
-test("Given a real Codex conversation, When the user compacts it and continues, Then the daemon completes both commands and the same conversation answers", async () => {
-    await using provider = await FakeOpenAiProvider.start("mobius-test-model", "REAL_COMPACT_REPLY");
+test("Given a real Codex conversation, When the user sends slash-prefixed text, Then it follows the ordinary prompt path and the conversation continues", async () => {
+    await using provider = await FakeOpenAiProvider.start("mobius-test-model", "REAL_PROMPT_REPLY");
     await using codex = await CodexFixture.create(provider);
     await withRealDaemon(new CodexAgentSpecification(), codex.environment, async (peer) => {
-        for (const prompt of ["Hello", "/compact", "Continue after compaction"]) {
+        for (const prompt of ["Hello", "/compact", "Continue the conversation"]) {
             const commandId = randomUUID();
             peer.send(
                 encodeSessionPromptCommand({
@@ -53,7 +53,7 @@ test("Given a real Codex conversation, When the user compacts it and continues, 
                     break;
                 }
             }
-            expect(text).toContain(prompt === "/compact" ? "Context compacted." : "REAL_COMPACT_REPLY");
+            expect(text).toContain("REAL_PROMPT_REPLY");
         }
     });
 });
