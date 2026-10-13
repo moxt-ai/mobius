@@ -40,26 +40,52 @@ jobs:
           MOBIUS_PLATFORM_OPERATOR_SUBJECTS: ${{ vars.MOBIUS_PLATFORM_OPERATOR_SUBJECTS }}
           SESSION_ACTIVE_SESSIONS_PER_PROJECT: ${{ vars.SESSION_ACTIVE_SESSIONS_PER_PROJECT }}
 
-  validate:
+  checks:
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Static checks
+            command: pnpm lint && pnpm typecheck && pnpm --filter @moxt-ai/mobius build
+          - name: Client tests
+            command: pnpm test:ci:client
+          - name: Hosting tests
+            command: pnpm test:ci:hosting
+          - name: Web integration tests
+            command: pnpm --filter @moxt-ai/mobius-web test:integration
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
       - uses: pnpm/action-setup@v4
         with:
           run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm lint
-      - run: pnpm typecheck
-      - run: pnpm --filter @moxt-ai/mobius build
-      - run: pnpm test
-      - name: Verify Web Runtime administration
-        run: pnpm --filter @moxt-ai/mobius-web test:integration
+      - run: ${{ matrix.command }}
+
+  real-agents:
+    name: Real Agent compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - name: Install real Agents and production adapters
         run: >-
           npm install --global
@@ -70,6 +96,19 @@ jobs:
           @earendil-works/pi-coding-agent@1.1.0
           pi-acp@0.0.34
       - run: pnpm test:agent-daemon:real
+
+  validate:
+    if: always()
+    needs: [checks, real-agents]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every validation job to succeed
+        env:
+          CHECKS_RESULT: ${{ needs.checks.result }}
+          REAL_AGENTS_RESULT: ${{ needs.real-agents.result }}
+        run: |
+          [[ "$CHECKS_RESULT" == "success" && "$REAL_AGENTS_RESULT" == "success" ]]
 
   deploy-cloudflare-platform:
     name: Deploy Platform (${{ matrix.environment }})
