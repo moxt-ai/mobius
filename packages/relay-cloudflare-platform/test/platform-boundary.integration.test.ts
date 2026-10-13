@@ -1621,3 +1621,292 @@ describe.sequential("Platform Recording policy configuration", () => {
         await recorded.body?.cancel();
     });
 });
+
+const sharedSettingsRequestId = "shared-settings-request";
+
+interface LinkedCodexRuntime {
+    readonly appCredential: string;
+    readonly environment: PlatformRelayBindings;
+    readonly projectId: string;
+    readonly runtimeCredential: string;
+    readonly runtimeId: string;
+    readonly worker: ReturnType<typeof createTestMobiusPlatformApp>;
+}
+
+interface RelayChannel {
+    readonly messages: SocketMessages;
+    readonly socket: WebSocket;
+}
+
+async function linkCodexRuntime(): Promise<LinkedCodexRuntime> {
+    const worker = createTestMobiusPlatformApp(
+        new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
+        createPlatformGateways,
+    );
+    const environment = bindings();
+    const tenants = await responseJson(
+        await worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/platform/tenants`, {
+                headers: developerHeaders(),
+            }),
+            environment,
+        ),
+        200,
+    );
+    const tenantValues = tenants["tenants"];
+    if (!Array.isArray(tenantValues) || tenantValues.length === 0) {
+        throw new Error("Expected a Platform tenant");
+    }
+    const tenantId = text(record(tenantValues[0]), "tenantId");
+    const app = await responseJson(
+        await worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps`, {
+                body: JSON.stringify({ displayName: "Settings routing", tenantId }),
+                headers: developerHeaders(),
+                method: "POST",
+            }),
+            environment,
+        ),
+        201,
+    );
+    const appId = text(app, "appId");
+    const appCredential = text(record(app["defaultCredential"]), "credential");
+    const project = await responseJson(
+        await worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${appId}/projects`, {
+                body: JSON.stringify({
+                    displayName: "Settings routing Project",
+                    idempotencyKey: "settings-routing-project",
+                    locationHint: "apac",
+                }),
+                headers: developerHeaders(),
+                method: "POST",
+            }),
+            environment,
+        ),
+        201,
+    );
+    const projectId = text(project, "projectId");
+    const pairing = await responseJson(
+        await worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtime-pairings`, {
+                body: JSON.stringify({ idempotencyKey: "settings-routing-runtime" }),
+                headers: credentialHeaders(appCredential),
+                method: "POST",
+            }),
+            environment,
+        ),
+        201,
+    );
+    const claimed = await responseJson(
+        await worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtime-pairings/${text(pairing, "pairingId")}/redeem`, {
+                body: JSON.stringify({
+                    agents: readyAgents,
+                    installableAgents: [],
+                    machineName: "Settings routing Runtime",
+                    pairingCode: text(pairing, "pairingCode"),
+                    workspaceName: "settings-routing-workspace",
+                }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+            environment,
+        ),
+        200,
+    );
+    return {
+        appCredential,
+        environment,
+        projectId,
+        runtimeCredential: text(claimed, "runtimeCredential"),
+        runtimeId: text(claimed, "runtimeId"),
+        worker,
+    };
+}
+
+function openChannel(response: Response, failure: string): RelayChannel {
+    if (response.status !== 101 || response.webSocket === null) {
+        throw new Error(failure);
+    }
+    const socket = response.webSocket;
+    const messages = new SocketMessages(socket);
+    socket.accept();
+    return { messages, socket };
+}
+
+async function connectDaemon(runtime: LinkedCodexRuntime): Promise<RelayChannel> {
+    return openChannel(
+        await runtime.worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect?liveness=1`, {
+                headers: { authorization: `Bearer ${runtime.runtimeCredential}`, Upgrade: "websocket" },
+            }),
+            runtime.environment,
+        ),
+        "Expected the Runtime daemon socket",
+    );
+}
+
+async function connectHost(runtime: LinkedCodexRuntime): Promise<RelayChannel> {
+    return openChannel(
+        await runtime.worker.fetch(
+            new Request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${runtime.projectId}/runtimes/${runtime.runtimeId}/host?token=${runtime.appCredential}`,
+                { headers: { Upgrade: "websocket" } },
+            ),
+            runtime.environment,
+        ),
+        "Expected a Host socket",
+    );
+}
+
+async function nextJsonOfKind(messages: SocketMessages, kind: string): Promise<Readonly<Record<string, unknown>>> {
+    for (;;) {
+        const message = record(JSON.parse(await messages.next()));
+        if (message["kind"] === kind) {
+            return message;
+        }
+    }
+}
+
+/** Two Hosts with either colliding or distinct settings request identifiers. */
+async function startTwoHostsSharingRequestId(runtime: LinkedCodexRuntime, collision = false) {
+    const daemon = await connectDaemon(runtime);
+    expect(decodeServiceToDaemonMessage(await daemon.messages.next()).kind).toBe("runtime.liveness.ready");
+    const hostA = await connectHost(runtime);
+    await nextJsonOfKind(hostA.messages, "runtime.status");
+    const hostB = await connectHost(runtime);
+    await nextJsonOfKind(hostB.messages, "runtime.status");
+    hostA.socket.send(
+        JSON.stringify({ kind: "agent.settings.discover", agentId: "codex", requestId: sharedSettingsRequestId }),
+    );
+    expect(decodeServiceToDaemonMessage(await daemon.messages.next())).toMatchObject({
+        kind: "agent.settings.discover",
+        requestId: sharedSettingsRequestId,
+    });
+    const requestId = collision ? sharedSettingsRequestId : "host-B-settings-request";
+    if (collision) {
+        for (const agentId of ["codex", "claude"]) {
+            hostB.socket.send(JSON.stringify({ kind: "agent.settings.discover", agentId, requestId }));
+            await barrierFromHostB(daemon, hostB);
+            expect(JSON.parse(await hostB.messages.next())).toMatchObject({
+                kind: "agent.settings.discovery.failed",
+                requestId,
+                code: "agent_settings_discovery_busy",
+            });
+            expect(JSON.parse(await hostB.messages.next())).toMatchObject({ kind: "runtime.ping" });
+            expect(JSON.parse(await hostA.messages.next())).toMatchObject({ kind: "runtime.ping" });
+        }
+    } else {
+        hostB.socket.send(JSON.stringify({ kind: "agent.settings.discover", agentId: "codex", requestId }));
+        expect(decodeServiceToDaemonMessage(await daemon.messages.next())).toMatchObject({
+            kind: "agent.settings.discover",
+            requestId,
+        });
+    }
+    return { daemon, hostA, hostB };
+}
+
+function discoveryFailure(message: string, requestId = "host-B-settings-request"): string {
+    return JSON.stringify({
+        kind: "agent.settings.discovery.failed",
+        requestId,
+        code: "probe_failed",
+        message,
+    });
+}
+
+/**
+ * Host B sends a barrier after the Daemon's answer. Whatever Host B receives before the barrier echo
+ * is exactly what the Relay delivered to it.
+ */
+async function barrierFromHostB(daemon: RelayChannel, hostB: RelayChannel): Promise<void> {
+    hostB.socket.send(JSON.stringify({ kind: "runtime.ping", requestId: "routing-barrier" }));
+    expect(decodeServiceToDaemonMessage(await daemon.messages.next())).toMatchObject({
+        kind: "runtime.ping",
+        requestId: "routing-barrier",
+    });
+}
+
+describe.sequential("Settings discovery reply routing", () => {
+    it("Given Host A has a settings discovery pending, When Host B reuses its requestId, Then B is rejected and A receives its answer", async () => {
+        vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+        const runtime = await linkCodexRuntime();
+        const { daemon, hostA, hostB } = await startTwoHostsSharingRequestId(runtime, true);
+        try {
+            daemon.socket.send(discoveryFailure("answer-to-A", sharedSettingsRequestId));
+            await barrierFromHostB(daemon, hostB);
+            expect(JSON.parse(await hostA.messages.next())).toMatchObject({
+                kind: "agent.settings.discovery.failed",
+                requestId: sharedSettingsRequestId,
+                message: "answer-to-A",
+            });
+            expect(JSON.parse(await hostA.messages.next())).toMatchObject({ kind: "runtime.ping" });
+            expect(JSON.parse(await hostB.messages.next())).toMatchObject({ kind: "runtime.ping" });
+            // Completed routes release the identifier for another connection.
+            hostB.socket.send(
+                JSON.stringify({
+                    kind: "agent.settings.discover",
+                    agentId: "codex",
+                    requestId: sharedSettingsRequestId,
+                }),
+            );
+            expect(decodeServiceToDaemonMessage(await daemon.messages.next())).toMatchObject({
+                kind: "agent.settings.discover",
+                requestId: sharedSettingsRequestId,
+            });
+            daemon.socket.send(discoveryFailure("answer-to-B", sharedSettingsRequestId));
+            await barrierFromHostB(daemon, hostB);
+            expect(JSON.parse(await hostB.messages.next())).toMatchObject({
+                kind: "agent.settings.discovery.failed",
+                requestId: sharedSettingsRequestId,
+                message: "answer-to-B",
+            });
+        } finally {
+            hostA.socket.close(1000, "Test finished");
+            hostB.socket.close(1000, "Test finished");
+            daemon.socket.close(1000, "Test finished");
+        }
+    });
+
+    it("Given Host A is closing while Host B has a distinct settings request pending, When the Daemon answers that request, Then open Host B receives the answer", async () => {
+        vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+        const runtime = await linkCodexRuntime();
+        const { daemon, hostA, hostB } = await startTwoHostsSharingRequestId(runtime);
+        try {
+            hostA.socket.close(1000, "Host closed");
+            daemon.socket.send(discoveryFailure("answer-to-B"));
+            await barrierFromHostB(daemon, hostB);
+            expect(JSON.parse(await hostB.messages.next())).toMatchObject({
+                kind: "agent.settings.discovery.failed",
+                requestId: "host-B-settings-request",
+                message: "answer-to-B",
+            });
+        } finally {
+            hostB.socket.close(1000, "Test finished");
+            daemon.socket.close(1000, "Test finished");
+        }
+    });
+
+    it("Given Host A closed and the Relay hibernated, When the Daemon answers Host B's settings request, Then open Host B receives the answer", async () => {
+        vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+        const runtime = await linkCodexRuntime();
+        const { daemon, hostA, hostB } = await startTwoHostsSharingRequestId(runtime);
+        try {
+            hostA.socket.close(1000, "Host closed");
+            await evictDurableObject(runtime.environment.RUNTIME_RELAY.getByName(runtime.runtimeId), {
+                webSockets: "hibernate",
+            });
+            daemon.socket.send(discoveryFailure("answer-to-B"));
+            await barrierFromHostB(daemon, hostB);
+            expect(JSON.parse(await hostB.messages.next())).toMatchObject({
+                kind: "agent.settings.discovery.failed",
+                requestId: "host-B-settings-request",
+                message: "answer-to-B",
+            });
+        } finally {
+            hostB.socket.close(1000, "Test finished");
+            daemon.socket.close(1000, "Test finished");
+        }
+    });
+});

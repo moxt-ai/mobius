@@ -97,6 +97,7 @@ export type HistoryRequestKind = "live" | "preview";
 
 export interface ChannelSocket {
     readonly close: (code: number, reason: string) => void;
+    readonly hasAgentSettingsDiscovery: (requestId: string) => boolean;
     readonly consumeAgentSettingsDiscovery: (requestId: string, agentId: string) => boolean;
     readonly consumeAgentSettingsDiscoveryFailure: (requestId: string) => boolean;
     readonly takeAgentSettingsDiscoveries: () => readonly string[];
@@ -491,7 +492,10 @@ export class ChannelActor {
         requestId: string,
         agentId: string,
     ): void => {
-        const route = socket.trackAgentSettingsDiscovery(requestId, agentId);
+        const collision = this.#peers
+            .hosts()
+            .some((recipient) => !recipient.isSame(socket) && recipient.hasAgentSettingsDiscovery(requestId));
+        const route = collision ? "busy" : socket.trackAgentSettingsDiscovery(requestId, agentId);
         if (route === "duplicate") {
             return;
         }
@@ -500,7 +504,7 @@ export class ChannelActor {
                 encodeAgentSettingsDiscoveryFailedEvent({
                     code: "agent_settings_discovery_busy",
                     kind: AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
-                    message: "This connection already has pending settings discovery requests",
+                    message: "The settings discovery reply route is already in use or at capacity",
                     requestId,
                 }),
             );
@@ -527,14 +531,16 @@ export class ChannelActor {
     ): void => {
         const recipient = this.#peers
             .hosts()
-            .find((socket) => socket.consumeAgentSettingsDiscovery(requestId, agentId));
+            .find((socket) => socket.isOpen() && socket.consumeAgentSettingsDiscovery(requestId, agentId));
         if (recipient?.isOpen()) {
             recipient.send(message);
         }
     };
 
     private readonly returnAgentSettingsDiscoveryFailure = (requestId: string, message: string): void => {
-        const recipient = this.#peers.hosts().find((socket) => socket.consumeAgentSettingsDiscoveryFailure(requestId));
+        const recipient = this.#peers
+            .hosts()
+            .find((socket) => socket.isOpen() && socket.consumeAgentSettingsDiscoveryFailure(requestId));
         if (recipient?.isOpen()) {
             recipient.send(message);
         }

@@ -62,6 +62,8 @@ export class CloudflareChannelSocket implements RuntimeSocket {
         return attachment;
     };
     readonly close = (code: number, reason: string): void => this.#socket.close(code, reason);
+    readonly hasAgentSettingsDiscovery = (requestId: string): boolean =>
+        this.hostAttachment().pendingAgentSettingsDiscoveries.some((pending) => pending.requestId === requestId);
     readonly consumeAgentSettingsDiscovery = (requestId: string, agentId: string): boolean => {
         const attachment = this.hostAttachment();
         let consumed = false;
