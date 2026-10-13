@@ -86,7 +86,7 @@ class Messages {
     };
 }
 
-test("Given real Codex emits a tool, commentary, and final text, When the completed Session history is reopened, Then its timeline remains chronological", async () => {
+test("Given real Codex starts a tool, When clients watch and reopen the completed Session, Then the tool opens before its updates and the timeline remains chronological", async () => {
     let providerEntered = Promise.withResolvers<void>();
     let releaseProvider = Promise.withResolvers<void>();
     const provider = await FakeOpenAiProvider.start("mobius-test-model", "Codex live reply", {
@@ -239,10 +239,7 @@ test("Given real Codex emits a tool, commentary, and final text, When the comple
                     const recovered = decodeSessionLiveHistoryV2PageLoaded(message).events;
                     expect(
                         recovered.events.events.some(
-                            (event) =>
-                                event.type === "acp" &&
-                                (event.payload.sessionUpdate === "tool_call" ||
-                                    event.payload.sessionUpdate === "tool_call_update"),
+                            (event) => event.type === "acp" && event.payload.sessionUpdate === "tool_call",
                         ),
                     ).toBe(true);
                     releaseProvider.resolve();
@@ -362,6 +359,9 @@ test("Given real Codex emits a tool, commentary, and final text, When the comple
                 }
                 const page = decodeSessionLiveHistoryV2PageLoaded(message).events.events;
                 const updates = page.events.flatMap((event) => (event.type === "acp" ? [event.payload] : []));
+                const toolUpdates = updates.filter(
+                    (update) => update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update",
+                );
                 const toolIndex = updates.findIndex(
                     (update) => update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update",
                 );
@@ -388,6 +388,8 @@ test("Given real Codex emits a tool, commentary, and final text, When the comple
                             : [],
                     )
                     .join("");
+                expect(toolUpdates[0]?.sessionUpdate).toBe("tool_call");
+                expect(toolUpdates.slice(1).some((update) => update.sessionUpdate === "tool_call_update")).toBe(true);
                 expect(commentary).toBe("Checking the live progress boundary.");
                 expect(toolIndex).toBeGreaterThanOrEqual(0);
                 expect(commentaryIndex).toBeGreaterThan(toolIndex);

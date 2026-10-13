@@ -1,5 +1,12 @@
 import { pathToFileURL } from "node:url";
-import type { ContentBlock, ToolCallContent, ToolCallStatus, ToolCallUpdate, ToolKind } from "@agentclientprotocol/sdk";
+import type {
+    ContentBlock,
+    ToolCall,
+    ToolCallContent,
+    ToolCallStatus,
+    ToolCallUpdate,
+    ToolKind,
+} from "@agentclientprotocol/sdk";
 import { z } from "zod";
 
 import { type ThreadItem, threadItemSchema } from "./app-server-protocol.ts";
@@ -195,7 +202,7 @@ function presentToolItem(item: ThreadItem): ToolCallPresentation | null {
 export function toolCallUpdate(
     item: ThreadItem,
     lifecycle: "snapshot" | "started" | "completed",
-): ToolCallUpdate | null {
+): (ToolCall & ToolCallUpdate) | null {
     const presentation = presentToolItem(item);
     if (presentation === null) {
         return null;

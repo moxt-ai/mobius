@@ -706,7 +706,11 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
         const update = toolCallUpdate(item, method === "item/completed" ? "completed" : "started");
         if (update !== null) {
             await this.#enqueue(async () => {
-                await this.#emit({ ...update, sessionUpdate: "tool_call_update" });
+                if (method === "item/started") {
+                    await this.#emit({ ...update, sessionUpdate: "tool_call" });
+                } else {
+                    await this.#emit({ ...update, sessionUpdate: "tool_call_update" });
+                }
             });
         }
     };
