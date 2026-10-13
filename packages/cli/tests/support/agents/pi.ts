@@ -16,18 +16,11 @@ export class PiFixture implements AsyncDisposable {
         this.environment = environment;
     }
 
-    static async create(
-        provider: FakeOpenAiProvider,
-        options: { readonly requireAdapter?: boolean } = {},
-    ): Promise<PiFixture> {
+    static async create(provider: FakeOpenAiProvider): Promise<PiFixture> {
         const executable = await resolveTestExecutable("pi", "MOBIUS_TEST_PI_PATH");
         const directory = await mkdtemp(join(tmpdir(), "mobius-agent-daemon-pi-"));
         const configDirectory = join(directory, ".pi", "agent");
         const missing = join(directory, "missing-agent");
-        const adapter =
-            options.requireAdapter === false
-                ? missing
-                : await resolveTestExecutable("pi-acp", "MOBIUS_TEST_PI_ACP_PATH");
         await mkdir(configDirectory, { recursive: true });
         await Promise.all([
             writeFile(
@@ -66,7 +59,7 @@ export class PiFixture implements AsyncDisposable {
             MOBIUS_HERMES_PATH: missing,
             MOBIUS_OPENCODE_PATH: missing,
             MOBIUS_PI_PATH: executable,
-            MOBIUS_PI_ACP_PATH: adapter,
+            MOBIUS_PI_ACP_PATH: missing,
             MOBIUS_WORKBUDDY_PATH: missing,
             NO_BROWSER: "1",
             OPENAI_API_KEY: FakeOpenAiProvider.apiKey,

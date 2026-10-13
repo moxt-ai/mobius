@@ -95,7 +95,7 @@ const agents = {
     grok: openAiAgent("grok-build", "Grok Build", GrokFixture.create),
     hermes: openAiAgent("mobius-test-model", "Hermes", HermesFixture.create),
     opencode: openAiAgent("mobius-test-model", "OpenCode", OpenCodeFixture.create),
-    pi: openAiAgent("gpt-5.5", "Pi", async (provider) => await PiFixture.create(provider, { requireAdapter: false })),
+    pi: openAiAgent("gpt-5.5", "Pi", PiFixture.create),
     workbuddy: openAiAgent("mobius-workbuddy", "WorkBuddy", WorkBuddyFixture.create),
 } satisfies Readonly<Record<string, AgentFactory>>;
 
@@ -155,9 +155,6 @@ async function run(): Promise<void> {
             );
             if (requestedAgent === "claude") {
                 delete environment["MOBIUS_CLAUDE_ACP_PATH"];
-            }
-            if (requestedAgent === "pi") {
-                delete environment["MOBIUS_PI_ACP_PATH"];
             }
         }
         const description = target === "daemon" ? "production Mobius daemon" : `real ${requestedAgent}`;

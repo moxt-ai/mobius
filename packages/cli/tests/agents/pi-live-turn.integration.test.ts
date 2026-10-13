@@ -12,7 +12,7 @@ import { withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 import { fakeProviderPrompts } from "../support/llm/scenarios.ts";
 
-test("Given the real pi and its production adapter, When two prompts execute through the daemon, Then a tool result and both streamed replies reach the client", async () => {
+test("Given real Pi without an external ACP adapter, When two prompts execute through the daemon, Then the in-process adapter streams the tool result and both replies", async () => {
     await using provider = await FakeOpenAiProvider.start("gpt-4.1", "REAL_PI_REPLY");
     await using agent = await PiFixture.create(provider);
     await withRealDaemon(new PiAgentSpecification(), agent.environment, async (peer) => {

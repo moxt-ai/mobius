@@ -237,55 +237,10 @@ if (process.argv.includes("--version")) {
             }
         },
     );
-    it("Given a verified Pi executable exists without pi-acp, When discovery runs, Then Pi is detected with its details but its integration is not ready", async () => {
-        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-pi-missing-adapter-"));
-        const piPath = join(temporaryDirectory, "pi");
-        try {
-            await writeFile(
-                piPath,
-                executableSource(`
-if (process.argv.includes("--version")) {
-  process.stdout.write("0.85.0\\n");
-}
-`),
-                { mode: 0o700 },
-            );
-            await chmod(piPath, 0o700);
-
-            const inventory = await discoverLocalAgentInventory({
-                defaultWorkspace: temporaryDirectory,
-                environment: {
-                    MOBIUS_STATE_DIRECTORY: temporaryDirectory,
-                    PATH: temporaryDirectory,
-                },
-                signal: new AbortController().signal,
-                specifications: [new PiAgentSpecification()],
-            });
-
-            expect(inventory.available).toEqual([]);
-            expect(inventory.unavailable).toHaveLength(1);
-            expect(inventory.unavailable[0]).toMatchObject({
-                code: "adapter_not_found",
-                status: "missing_adapter",
-            });
-            expect(inventory.installable).toEqual([
-                expect.objectContaining({
-                    agentPath: piPath,
-                    agentVersion: "0.85.0",
-                    id: "pi",
-                    label: "Pi",
-                    status: "integration_not_installed",
-                }),
-            ]);
-        } finally {
-            await rm(temporaryDirectory, { force: true, recursive: true });
-        }
-    });
-
-    it("Given Pi and pi-acp are verified but Pi needs local authentication, When discovery runs, Then Mobius reports authentication-required with only the terminal login entrypoint", async () => {
+    it("Given Pi needs local authentication, When discovery runs through the in-process adapter, Then Mobius reports only the Pi terminal login entrypoint", async () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-pi-authentication-"));
         const piPath = join(temporaryDirectory, "pi");
-        const adapterPath = join(temporaryDirectory, "pi-acp");
+        const sessionPath = join(temporaryDirectory, "session.jsonl");
         try {
             await writeFile(
                 piPath,
@@ -293,28 +248,19 @@ if (process.argv.includes("--version")) {
 if (process.argv.includes("--version")) {
   process.stdout.write("0.85.0\\n");
 } else {
-  process.argv.push("--agent-name", "Pi", "--authentication-required");
-  await import(${JSON.stringify(new URL(`file://${fakeAgentPath}`).toString())});
+  const { createInterface } = await import("node:readline");
+  createInterface({ input: process.stdin }).on("line", (line) => {
+    const request = JSON.parse(line);
+    const data = request.type === "get_available_models"
+      ? { models: [] }
+      : { sessionId: "pi-authentication", sessionFile: ${JSON.stringify(sessionPath)} };
+    process.stdout.write(JSON.stringify({ type: "response", id: request.id, success: true, data }) + "\\n");
+  });
 }
 `),
                 { mode: 0o700 },
             );
-            await writeFile(
-                adapterPath,
-                executableSource(`
-import { spawn } from "node:child_process";
-const executable = process.env.PI_ACP_PI_COMMAND;
-if (executable === undefined) process.exit(91);
-const child = spawn(executable, ["--mode", "rpc"], {
-  env: process.env,
-  stdio: "inherit",
-});
-child.once("error", () => process.exit(92));
-child.once("exit", (code) => process.exit(code ?? 93));
-`),
-                { mode: 0o700 },
-            );
-            await Promise.all([chmod(piPath, 0o700), chmod(adapterPath, 0o700)]);
+            await chmod(piPath, 0o700);
 
             const inventory = await discoverLocalAgentInventory({
                 defaultWorkspace: temporaryDirectory,
@@ -349,7 +295,7 @@ child.once("exit", (code) => process.exit(code ?? 93));
                         id: "pi",
                         label: "Pi",
                         message: "Agent authentication is required",
-                        recoveryCommand: "pi-acp --terminal-login",
+                        recoveryCommand: "pi",
                         status: "authentication_required",
                     },
                 ],

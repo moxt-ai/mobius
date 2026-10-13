@@ -9,5 +9,5 @@
         "sourceMap": true
     },
     "include": ["src/**/*.ts"],
-    "exclude": ["tests", "src/acp/harness/claude/upstream"]
+    "exclude": ["tests", "src/acp/harness/claude/upstream", "src/acp/harness/pi/upstream"]
 }
