@@ -1,4 +1,4 @@
-import { runInDurableObject } from "cloudflare:test";
+import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
     decodeDaemonToServiceMessage,
@@ -644,7 +644,7 @@ describe.sequential("Platform Session-only boundary", () => {
     });
 
     it.each(["import", "fork"] as const)(
-        "Given a native %s request, When the Relay wakes or receives a repeated result, Then it forwards the result without disconnecting the Runtime",
+        "Given a native %s request, When its Durable Object is evicted and awakened by results, Then it forwards the result without disconnecting the Runtime",
         async (scenario) => {
             const action = scenario === "fork" ? "fork" : "import";
             vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
@@ -820,25 +820,9 @@ describe.sequential("Platform Session-only boundary", () => {
                         sessionId: action === "import" ? "original-native-session" : targetSessionId,
                     },
                 });
-                // A fresh RuntimeRelay models Durable Object wake-up: sockets and attachments survive,
-                // while the previous service instance's in-memory request maps do not.
-                await runInDurableObject(environment.RUNTIME_RELAY.getByName(runtimeId), async (_instance, state) => {
-                    const database = new DurableObjectSqlDatabase(state.storage);
-                    const context = createPlatformDurableObjectContext(state, environment, { database });
-                    const relay = new RuntimeRelay(
-                        createDurableObjectDependencies({
-                            doDatabase: database,
-                            storages: context.storages,
-                            gateways: context.gateways,
-                            utilities: { waitUntil: (operation) => state.waitUntil(operation) },
-                        }),
-                    );
-                    const daemonSocket = state.getWebSockets("daemon")[0];
-                    if (daemonSocket === undefined) {
-                        throw new Error("Expected the surviving Runtime socket");
-                    }
-                    await relay.webSocketMessage(daemonSocket, result);
-                });
+                const relay = environment.RUNTIME_RELAY.getByName(runtimeId);
+                await evictDurableObject(relay, { webSockets: "hibernate" });
+                daemon.send(result);
                 const received = await Promise.race([
                     hostMessages.next().then((message) => decodeDaemonToServiceMessage(message)),
                     closed.promise,
@@ -860,6 +844,8 @@ describe.sequential("Platform Session-only boundary", () => {
                 daemon.close(1000, "Test complete");
             }
         },
+        // Graceful eviction can spend 30 seconds draining in-flight runtime events.
+        60_000,
     );
 
     it("Given a linked Codex Runtime, When Chat configures and prompts a Session, Then the configuration, answer, and connection status arrive without cloud Session storage", async () => {
