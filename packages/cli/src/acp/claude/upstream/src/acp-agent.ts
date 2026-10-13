@@ -72,7 +72,6 @@ import {
     type FastModeDisabledReason,
     type FastModeState,
     getSessionMessages,
-    listSessions,
     type McpServerConfig,
     type McpServerStatus,
     type ModelInfo,
@@ -108,6 +107,7 @@ import {
     refusalFallbackResultFromResponse,
     refusalFallbackToCreateRequest,
 } from "./elicitation.js";
+import { listEnvironmentSessions } from "./environment-session-list.js";
 import {
     acceptedPlanToolResult,
     ExitPlanCoordinator,
@@ -1859,8 +1859,8 @@ export class ClaudeAcpAgent {
         return result;
     }
 
-    async listSessions(params: ListSessionsRequest): Promise<ListSessionsResponse> {
-        const sdk_sessions = await listSessions({ dir: params.cwd ?? undefined });
+    async listSessions(params: ListSessionsRequest, signal: AbortSignal): Promise<ListSessionsResponse> {
+        const sdk_sessions = await listEnvironmentSessions(this.environment, params.cwd ?? undefined, signal);
         const sessions = [];
 
         for (const session of sdk_sessions) {
@@ -8410,7 +8410,7 @@ export function createClaudeAcpApp(options: ClaudeAcpAppOptions = {}): ClaudeAcp
         .onRequest(methods.agent.session.new, (ctx) => requiredAgent(agent).newSession(ctx.params))
         .onRequest(methods.agent.session.load, (ctx) => requiredAgent(agent).loadSession(ctx.params))
         .onRequest(methods.agent.session.fork, (ctx) => requiredAgent(agent).unstable_forkSession(ctx.params))
-        .onRequest(methods.agent.session.list, (ctx) => requiredAgent(agent).listSessions(ctx.params))
+        .onRequest(methods.agent.session.list, (ctx) => requiredAgent(agent).listSessions(ctx.params, ctx.signal))
         .onRequest(methods.agent.session.delete, (ctx) => requiredAgent(agent).deleteSession(ctx.params))
         .onRequest(methods.agent.session.resume, (ctx) => requiredAgent(agent).resumeSession(ctx.params))
         .onRequest(methods.agent.session.close, (ctx) => requiredAgent(agent).closeSession(ctx.params))

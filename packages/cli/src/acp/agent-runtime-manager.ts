@@ -892,16 +892,6 @@ export class AgentRuntimeManager {
                     this.#nativeOperations.add(openedKey);
                     try {
                         const prepared = runtime.prepared();
-                        if (origin.kind === "fork" && options.agent.id === "claude") {
-                            // The Claude ACP adapter persists the forked session, but does not
-                            // register it in the current process. Retire only the process so the
-                            // first child prompt resumes the durable fork in a fresh adapter.
-                            await this.#retireSessionProcess(
-                                options.sessionId,
-                                runtime,
-                                async () => await runtime.closeProcess(),
-                            );
-                        }
                         return {
                             sessionId: options.sessionId,
                             prepared,
