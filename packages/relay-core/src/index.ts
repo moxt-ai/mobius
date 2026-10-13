@@ -83,10 +83,8 @@ export {
 } from "./infra/session-recording.ts";
 export * from "./service/authentication/oidc-authentication.ts";
 export { RuntimeDescriptor, RuntimeStatus } from "./service/channel/channel.ts";
-export {
-    type ChannelPeers,
-    type ChannelSocket,
-    type RelayClock,
-    SystemRelayClock,
+export type {
+    ChannelPeers,
+    ChannelSocket,
 } from "./service/channel/channel-actor.ts";
 export type { RuntimePeers, RuntimeSocket, RuntimeSocketIdentity } from "./service/channel/runtime-service.ts";

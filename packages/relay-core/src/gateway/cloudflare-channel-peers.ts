@@ -3,9 +3,11 @@ import * as v from "valibot";
 import type { ChannelSocket, HistoryRequestKind } from "../service/channel/channel-actor.ts";
 import type { RuntimePeers, RuntimeSocket, RuntimeSocketIdentity } from "../service/channel/runtime-service.ts";
 
+// Four maximum-length routes fit alongside connection identity within the attachment budget.
+const MAX_SETTINGS_DISCOVERY_ROUTES = 4;
+
 const pendingAgentSettingsDiscoverySchema = v.object({
     agentId: v.pipe(v.string(), v.minLength(1)),
-    expiresAt: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
     requestId: v.pipe(v.string(), v.minLength(1)),
 });
 const historyRequestSchema = v.object({
@@ -60,13 +62,10 @@ export class CloudflareChannelSocket implements RuntimeSocket {
         return attachment;
     };
     readonly close = (code: number, reason: string): void => this.#socket.close(code, reason);
-    readonly consumeAgentSettingsDiscovery = (requestId: string, agentId: string, now: number): boolean => {
+    readonly consumeAgentSettingsDiscovery = (requestId: string, agentId: string): boolean => {
         const attachment = this.hostAttachment();
         let consumed = false;
         const pendingAgentSettingsDiscoveries = attachment.pendingAgentSettingsDiscoveries.filter((pending) => {
-            if (pending.expiresAt <= now) {
-                return false;
-            }
             if (pending.requestId === requestId && pending.agentId === agentId) {
                 consumed = true;
                 return false;
@@ -78,13 +77,10 @@ export class CloudflareChannelSocket implements RuntimeSocket {
         }
         return consumed;
     };
-    readonly consumeAgentSettingsDiscoveryFailure = (requestId: string, now: number): boolean => {
+    readonly consumeAgentSettingsDiscoveryFailure = (requestId: string): boolean => {
         const attachment = this.hostAttachment();
         let consumed = false;
         const pendingAgentSettingsDiscoveries = attachment.pendingAgentSettingsDiscoveries.filter((pending) => {
-            if (pending.expiresAt <= now) {
-                return false;
-            }
             if (pending.requestId === requestId) {
                 consumed = true;
                 return false;
@@ -96,11 +92,9 @@ export class CloudflareChannelSocket implements RuntimeSocket {
         }
         return consumed;
     };
-    readonly takeAgentSettingsDiscoveries = (now: number): readonly string[] => {
+    readonly takeAgentSettingsDiscoveries = (): readonly string[] => {
         const attachment = this.hostAttachment();
-        const requests = attachment.pendingAgentSettingsDiscoveries
-            .filter((pending) => pending.expiresAt > now)
-            .map((pending) => pending.requestId);
+        const requests = attachment.pendingAgentSettingsDiscoveries.map((pending) => pending.requestId);
         if (attachment.pendingAgentSettingsDiscoveries.length > 0) {
             this.#socket.serializeAttachment({ ...attachment, pendingAgentSettingsDiscoveries: [] });
         }
@@ -139,15 +133,20 @@ export class CloudflareChannelSocket implements RuntimeSocket {
         return identity.role === "relay" || (identity.role === "host" && identity.credentialId.startsWith("ctl_"));
     };
     readonly send = (message: string): void => this.#socket.send(message);
-    readonly trackAgentSettingsDiscovery = (requestId: string, agentId: string, expiresAt: number): void => {
+    readonly trackAgentSettingsDiscovery = (requestId: string, agentId: string): "tracked" | "duplicate" | "busy" => {
         const attachment = this.hostAttachment();
+        const existing = attachment.pendingAgentSettingsDiscoveries.find((pending) => pending.requestId === requestId);
+        if (existing !== undefined) {
+            return existing.agentId === agentId ? "duplicate" : "busy";
+        }
+        if (attachment.pendingAgentSettingsDiscoveries.length >= MAX_SETTINGS_DISCOVERY_ROUTES) {
+            return "busy";
+        }
         this.#socket.serializeAttachment({
             ...attachment,
-            pendingAgentSettingsDiscoveries: [
-                ...attachment.pendingAgentSettingsDiscoveries.filter((pending) => pending.expiresAt > Date.now()),
-                { agentId, expiresAt, requestId },
-            ],
+            pendingAgentSettingsDiscoveries: [...attachment.pendingAgentSettingsDiscoveries, { agentId, requestId }],
         });
+        return "tracked";
     };
     readonly replaceDaemon = (): void => {
         const identity = this.identity();
