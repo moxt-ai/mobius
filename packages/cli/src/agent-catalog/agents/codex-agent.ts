@@ -1,4 +1,4 @@
-import { CodexAcpAgent } from "../../acp/codex/agent.ts";
+import { CodexAcpAgent } from "../../acp/harness/codex/agent.ts";
 import type { InProcessAcpEndpointFactory } from "../../acp/in-process/acp-endpoint.ts";
 import { InProcessAcpAgentDefinition } from "../agent-specification.ts";
 

@@ -7,5 +7,5 @@
         "types": ["node"]
     },
     "include": ["src/**/*.ts"],
-    "exclude": ["src/acp/claude/upstream"]
+    "exclude": ["src/acp/harness/claude/upstream"]
 }
