@@ -11,7 +11,12 @@ const pendingAgentSettingsDiscoverySchema = v.object({
     requestId: v.pipe(v.string(), v.minLength(1)),
 });
 const historyRequestSchema = v.object({
-    kind: v.picklist(["live", "preview"]),
+    kind: v.picklist([
+        "session.live-history.v2.page.load",
+        "session.preview-history.page.load",
+        "session.history.v3.page.load",
+        "session.preview-history.v3.page.load",
+    ]),
     requestId: v.pipe(v.string(), v.minLength(1)),
 });
 

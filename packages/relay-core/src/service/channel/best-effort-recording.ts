@@ -1,5 +1,9 @@
-import type { SessionEventEnvelopeV2 } from "@moxt-ai/mobius-protocol";
-import type { SessionRecording, SessionRecordingTarget } from "../../infra/session-recording.ts";
+import type { SessionEventEnvelopeV2, SessionRecordingWriteV3 } from "@moxt-ai/mobius-protocol";
+import type {
+    SessionRecording,
+    SessionRecordingDeliveryResult,
+    SessionRecordingTarget,
+} from "../../infra/session-recording.ts";
 import { RuntimeMessageScheduler } from "./runtime-message-scheduler.ts";
 
 const MAX_PENDING_BYTES = 32 * 1024 * 1024;
@@ -18,7 +22,27 @@ export class BestEffortRecording {
     }
 
     readonly publish = (target: SessionRecordingTarget, envelope: SessionEventEnvelopeV2): void => {
-        const bytes = new TextEncoder().encode(JSON.stringify(envelope.events)).byteLength;
+        this.#publish(
+            target,
+            JSON.stringify(envelope.events),
+            async (signal) => await this.#recording.deliver(target, envelope, signal),
+        );
+    };
+
+    readonly publishV3 = (target: SessionRecordingTarget, write: SessionRecordingWriteV3): void => {
+        this.#publish(
+            target,
+            JSON.stringify(write.envelope.events),
+            async (signal) => await this.#recording.deliverV3(target, write, signal),
+        );
+    };
+
+    readonly #publish = (
+        target: SessionRecordingTarget,
+        encodedEvents: string,
+        deliver: (signal: AbortSignal) => Promise<SessionRecordingDeliveryResult>,
+    ): void => {
+        const bytes = new TextEncoder().encode(encodedEvents).byteLength;
         if (this.#pendingBytes + bytes > MAX_PENDING_BYTES) {
             console.warn("Recording event dropped", { code: "recording_capacity_exceeded" });
             return;
@@ -34,7 +58,7 @@ export class BestEffortRecording {
                 JSON.stringify([target.projectId, target.runtimeId, target.sessionId]),
                 controller.signal,
                 async () => {
-                    const result = await this.#recording.deliver(target, envelope, controller.signal);
+                    const result = await deliver(controller.signal);
                     if (result.kind === "failed") {
                         console.warn("Recording event dropped", { code: result.code });
                     }

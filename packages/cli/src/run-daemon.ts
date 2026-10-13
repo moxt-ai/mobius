@@ -20,9 +20,18 @@ import { AuditInstallationEvents, DaemonAcpObserver, DaemonInstallationObserver 
 import { DaemonTurnRegistry } from "./daemon-turn-registry.ts";
 import { AcpContentExternalizer } from "./external-content/acp-content-externalizer.ts";
 import { LocalExternalContentStore } from "./external-content/local-external-content-store.ts";
-import { openAcpSessionDatabase, openSessionEventCacheV2Database } from "./local-databases.ts";
+import {
+    openAcpSessionDatabase,
+    openSessionEventCacheV2Database,
+    openSessionLiveStateV3Database,
+} from "./local-databases.ts";
+import { claudeNativeSessionAdapterDefinitionV3 } from "./native-sessions/adapters/claude/definition-v3.ts";
+import { codexNativeSessionAdapterDefinitionV3 } from "./native-sessions/adapters/codex/definition-v3.ts";
+import { piNativeSessionAdapterDefinitionV3 } from "./native-sessions/adapters/pi/definition-v3.ts";
 import { readCodexFullHistory } from "./native-sessions/codex-history.ts";
+import { NativeSessionRuntimeManagerV3 } from "./native-sessions/runtime-manager-v3.ts";
 import { NativeSessionService } from "./native-sessions/service.ts";
+import { SessionLiveStateV3 } from "./native-sessions/session-live-state-v3.ts";
 import { DaemonOperationState } from "./relay-connection/daemon-operation-state.ts";
 import { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
 import { runRelayConnection } from "./relay-connection/run-relay-connection.ts";
@@ -138,6 +147,10 @@ export async function runDaemon(
     await using externalContent = new LocalExternalContentStore(stateDirectory);
     const operations = new DaemonOperationState();
     const publisher = new DaemonSessionEventPublisher(timer);
+    const liveStateDatabase = openSessionLiveStateV3Database(
+        join(stateDirectory, "sessions", `${channelHash}.live-v3.sqlite`),
+    );
+    const liveStateV3 = new SessionLiveStateV3(liveStateDatabase);
     const eventProjectionV2 = new DaemonSessionEventProjectionV2(publisher, (sessionId, event) =>
         agentRuntime.recordLifecycleEventV2(sessionId, event),
     );
@@ -205,6 +218,14 @@ export async function runDaemon(
                 );
             });
         },
+    );
+    const nativeSessionsV3 = new NativeSessionRuntimeManagerV3(
+        [
+            codexNativeSessionAdapterDefinitionV3,
+            claudeNativeSessionAdapterDefinitionV3,
+            piNativeSessionAdapterDefinitionV3,
+        ],
+        { publish: publisher.publishV3, state: liveStateV3 },
     );
     const installations = new AgentInstallationManager(
         specifications,
@@ -279,6 +300,7 @@ export async function runDaemon(
                     installations,
                     installationObserver,
                     nativeSessions,
+                    nativeSessionsV3,
                     operations,
                     publisher,
                     eventProjectionV2,
@@ -320,15 +342,23 @@ export async function runDaemon(
                     await installations.close();
                 } finally {
                     try {
-                        await agentRuntime.close();
+                        await nativeSessionsV3.close(AbortSignal.timeout(30_000));
                     } finally {
                         try {
-                            sessionStore.close();
+                            await agentRuntime.close();
                         } finally {
                             try {
-                                publisher.close();
+                                liveStateDatabase.close();
                             } finally {
-                                operations.close();
+                                try {
+                                    sessionStore.close();
+                                } finally {
+                                    try {
+                                        publisher.close();
+                                    } finally {
+                                        operations.close();
+                                    }
+                                }
                             }
                         }
                     }

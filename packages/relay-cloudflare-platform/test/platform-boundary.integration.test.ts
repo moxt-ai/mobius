@@ -11,11 +11,15 @@ import {
     encodeSessionConfigUpdatedEvent,
     encodeSessionConfigureCommand,
     encodeSessionEventEnvelopeV2,
+    encodeSessionHistoryPageLoadedV3,
     encodeSessionInfoUpdatedEvent,
+    encodeSessionLiveEventEnvelopeV3,
     encodeSessionLiveHistoryV2PageLoaded,
     encodeSessionOperationFailedEvent,
     encodeSessionPreviewHistoryPageLoaded,
+    encodeSessionPreviewHistoryPageLoadedV3,
     encodeSessionPromptCommand,
+    encodeSessionSettingsLoadedV3,
     encodeSessionStatusChangedEvent,
     MOBIUS_API_PREFIX,
 } from "@moxt-ai/mobius-protocol";
@@ -59,6 +63,11 @@ class ControlledRecording implements SessionRecording {
             return { kind: "failed", code: "write_failed" };
         }
         this.contents.push(...envelope.events.map((event) => JSON.stringify(event)));
+        return { kind: "recorded" };
+    };
+    readonly deliverV3: SessionRecording["deliverV3"] = async (_target, write, signal) => {
+        signal.throwIfAborted();
+        this.contents.push(JSON.stringify(write));
         return { kind: "recorded" };
     };
 }
@@ -1089,6 +1098,25 @@ describe.sequential("Platform Session-only boundary", () => {
             const v2Socket = v2Response.webSocket;
             const v2Messages = new SocketMessages(v2Socket);
             v2Socket.accept();
+            const v3Response = await worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/events-v3`,
+                    {
+                        headers: {
+                            authorization: `Bearer ${text(browserAccess, "credential")}`,
+                            Upgrade: "websocket",
+                        },
+                    },
+                ),
+                environment,
+            );
+            expect(v3Response.status).toBe(101);
+            if (v3Response.webSocket === null) {
+                throw new Error("Expected the V3 Session event socket");
+            }
+            const v3Socket = v3Response.webSocket;
+            const v3Messages = new SocketMessages(v3Socket);
+            v3Socket.accept();
             const rawEvent = {
                 eventId: "event-v2-1",
                 payload: {
@@ -1107,6 +1135,18 @@ describe.sequential("Platform Session-only boundary", () => {
             daemon.send(encodeSessionEventEnvelopeV2({ events: [rawEvent, secondRawEvent], kind: "session.event.v2" }));
             expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "session.event.v2" });
             expect(JSON.parse(await v2Messages.next())).toEqual([rawEvent, secondRawEvent]);
+            const liveV3 = {
+                item: {
+                    content: { text: "V3 answer", type: "text" as const },
+                    messageId: "native-message-v3-1",
+                    sessionUpdate: "agent_message_chunk" as const,
+                },
+                seq: 41,
+                sessionId,
+            };
+            daemon.send(encodeSessionLiveEventEnvelopeV3({ events: [liveV3], kind: "session.live.v3" }));
+            expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "session.live.v3" });
+            expect(JSON.parse(await v3Messages.next())).toEqual([liveV3]);
             const historyResponse = worker.fetch(
                 new Request(
                     `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/events-v2?limit=50&omit=agent-reasoning`,
@@ -1216,6 +1256,227 @@ describe.sequential("Platform Session-only boundary", () => {
             });
             // A delayed result after the caller has finished must not disconnect the Runtime.
             daemon.send(previewHistoryPage);
+            const previewMessagesResponse = worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/native-messages-preview?agentId=codex&directoryId=root&messageLimit=50`,
+                    { headers: { authorization: `Bearer ${text(browserAccess, "credential")}` } },
+                ),
+                environment,
+            );
+            const previewMessagesLoad = decodeServiceToDaemonMessage(await daemonMessages.next());
+            if (previewMessagesLoad.kind !== "session.preview-history.v3.page.load") {
+                throw new Error("Expected a native Session V3 message preview request");
+            }
+            daemon.send(
+                encodeSessionPreviewHistoryPageLoadedV3({
+                    kind: "session.preview-history.v3.page.loaded",
+                    page: {
+                        messages: [
+                            {
+                                item: {
+                                    content: [{ text: "Complete native message", type: "text" }],
+                                    sessionUpdate: "agent_message",
+                                },
+                                messageId: "native-message-1",
+                                sessionId,
+                            },
+                        ],
+                        nextCursor: "native-cursor-1",
+                        throughSeq: 0,
+                    },
+                    requestId: previewMessagesLoad.requestId,
+                    sessionId,
+                }),
+            );
+            expect(await responseJson(await previewMessagesResponse, 200)).toEqual({
+                messages: [
+                    {
+                        item: {
+                            content: [{ text: "Complete native message", type: "text" }],
+                            sessionUpdate: "agent_message",
+                        },
+                        messageId: "native-message-1",
+                        sessionId,
+                    },
+                ],
+                nextCursor: "native-cursor-1",
+                throughSeq: 0,
+            });
+            const connectedMessagesResponse = worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/native-messages?messageLimit=50`,
+                    { headers: { authorization: `Bearer ${text(browserAccess, "credential")}` } },
+                ),
+                environment,
+            );
+            const connectedMessagesLoad = decodeServiceToDaemonMessage(await daemonMessages.next());
+            if (connectedMessagesLoad.kind !== "session.history.v3.page.load") {
+                throw new Error("Expected a connected Session V3 message request");
+            }
+            daemon.send(
+                encodeSessionHistoryPageLoadedV3({
+                    kind: "session.history.v3.page.loaded",
+                    page: {
+                        messages: [
+                            {
+                                item: {
+                                    content: [{ text: "Connected native message", type: "text" }],
+                                    sessionUpdate: "agent_message",
+                                },
+                                messageId: "native-message-2",
+                                sessionId,
+                            },
+                        ],
+                        nextCursor: null,
+                        throughSeq: 41,
+                    },
+                    requestId: connectedMessagesLoad.requestId,
+                    sessionId,
+                }),
+            );
+            expect(await responseJson(await connectedMessagesResponse, 200)).toEqual({
+                messages: [
+                    {
+                        item: {
+                            content: [{ text: "Connected native message", type: "text" }],
+                            sessionUpdate: "agent_message",
+                        },
+                        messageId: "native-message-2",
+                        sessionId,
+                    },
+                ],
+                nextCursor: null,
+                throughSeq: 41,
+            });
+            const settingsReadResponse = worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/settings-v3`,
+                    { headers: { authorization: `Bearer ${text(browserAccess, "credential")}` } },
+                ),
+                environment,
+            );
+            const settingsRead = decodeServiceToDaemonMessage(await daemonMessages.next());
+            if (settingsRead.kind !== "session.settings.v3.read") {
+                throw new Error("Expected a connected Session V3 settings request");
+            }
+            daemon.send(
+                encodeSessionSettingsLoadedV3({
+                    kind: "session.settings.v3.loaded",
+                    requestId: settingsRead.requestId,
+                    sessionId,
+                    settings: { settings: [{ id: "model", name: "Model", value: "gpt-5.6" }] },
+                }),
+            );
+            expect(await responseJson(await settingsReadResponse, 200)).toEqual({
+                settings: [{ id: "model", name: "Model", value: "gpt-5.6" }],
+            });
+            const settingsChangeResponse = worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/settings-v3`,
+                    {
+                        body: JSON.stringify({ settingId: "model", value: "gpt-5.6-mini" }),
+                        headers: {
+                            authorization: `Bearer ${text(browserAccess, "credential")}`,
+                            "content-type": "application/json",
+                        },
+                        method: "POST",
+                    },
+                ),
+                environment,
+            );
+            const settingsChange = decodeServiceToDaemonMessage(await daemonMessages.next());
+            if (settingsChange.kind !== "session.setting.v3.change") {
+                throw new Error("Expected a connected Session V3 setting change");
+            }
+            expect(settingsChange).toMatchObject({ settingId: "model", value: "gpt-5.6-mini" });
+            daemon.send(
+                encodeSessionSettingsLoadedV3({
+                    kind: "session.settings.v3.loaded",
+                    requestId: settingsChange.requestId,
+                    sessionId,
+                    settings: { settings: [{ id: "model", name: "Model", value: "gpt-5.6-mini" }] },
+                }),
+            );
+            expect(await responseJson(await settingsChangeResponse, 200)).toEqual({
+                settings: [{ id: "model", name: "Model", value: "gpt-5.6-mini" }],
+            });
+            const permissionResponse = worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/interactions/permission-v3-1/responses-v3`,
+                    {
+                        body: JSON.stringify({ kind: "permission", optionId: "allow_once" }),
+                        headers: {
+                            authorization: `Bearer ${text(browserAccess, "credential")}`,
+                            "content-type": "application/json",
+                        },
+                        method: "POST",
+                    },
+                ),
+                environment,
+            );
+            const permission = decodeServiceToDaemonMessage(await daemonMessages.next());
+            expect(permission).toMatchObject({
+                kind: "session.permission.v3.respond",
+                optionId: "allow_once",
+                requestId: "permission-v3-1",
+                sessionId,
+            });
+            daemon.send(
+                encodeSessionLiveEventEnvelopeV3({
+                    events: [
+                        {
+                            item: {
+                                outcome: "selected",
+                                requestId: "permission-v3-1",
+                                selectedOptionId: "allow_once",
+                                sessionUpdate: "permission_resolved",
+                            },
+                            seq: 42,
+                            sessionId,
+                        },
+                    ],
+                    kind: "session.live.v3",
+                }),
+            );
+            expect(await responseJson(await permissionResponse, 200)).toEqual({ accepted: true });
+            const userInputResponse = worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/interactions/input-v3-1/responses-v3`,
+                    {
+                        body: JSON.stringify({ kind: "user-input", values: { choice: "one" } }),
+                        headers: {
+                            authorization: `Bearer ${text(browserAccess, "credential")}`,
+                            "content-type": "application/json",
+                        },
+                        method: "POST",
+                    },
+                ),
+                environment,
+            );
+            const userInput = decodeServiceToDaemonMessage(await daemonMessages.next());
+            expect(userInput).toMatchObject({
+                kind: "session.user-input.v3.respond",
+                requestId: "input-v3-1",
+                sessionId,
+                values: { choice: "one" },
+            });
+            daemon.send(
+                encodeSessionLiveEventEnvelopeV3({
+                    events: [
+                        {
+                            item: {
+                                outcome: "submitted",
+                                requestId: "input-v3-1",
+                                sessionUpdate: "user_input_resolved",
+                            },
+                            seq: 43,
+                            sessionId,
+                        },
+                    ],
+                    kind: "session.live.v3",
+                }),
+            );
+            expect(await responseJson(await userInputResponse, 200)).toEqual({ accepted: true });
             const failedPreviewHistoryResponse = worker.fetch(
                 new Request(
                     `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/native-events-preview?agentId=codex&directoryId=root&eventLimit=50`,

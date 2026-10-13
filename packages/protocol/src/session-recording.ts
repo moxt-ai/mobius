@@ -2,6 +2,7 @@ import { z } from "zod";
 import { ProtocolMessageError } from "./codecs/messages.ts";
 import { identifierStringSchema } from "./identifier.ts";
 import { sessionEventEnvelopeV2Schema, sessionEventV2Schema } from "./session-event-log-v2.ts";
+import { sessionLiveEventEnvelopeV3Schema, sessionLiveEventV3Schema } from "./session-v3.ts";
 
 const sessionRecordingWriteSchema = z
     .object({
@@ -59,12 +60,70 @@ const sessionRecordingDirectorySchema = z
     })
     .readonly();
 
+const recordedAtSchema = z.iso.datetime({ offset: true });
+const sessionRecordingWriteV3Schema = z
+    .strictObject({
+        envelope: sessionLiveEventEnvelopeV3Schema,
+        projectId: identifierStringSchema,
+        recordedAt: recordedAtSchema,
+        runtimeId: identifierStringSchema,
+    })
+    .superRefine((write, context) => {
+        const sessionId = write.envelope.events[0]?.sessionId;
+        if (sessionId === undefined) {
+            context.addIssue({ code: "custom", message: "A V3 recording write must contain an event" });
+            return;
+        }
+        if (write.envelope.events.some((event) => event.sessionId !== sessionId)) {
+            context.addIssue({ code: "custom", message: "A V3 recording write must target one Session" });
+        }
+    })
+    .readonly();
+const recordedSessionLiveEventV3Schema = z
+    .strictObject({ event: sessionLiveEventV3Schema, recordedAt: recordedAtSchema })
+    .readonly();
+const sessionRecordingGapV3Schema = z
+    .strictObject({
+        fromSeq: z.number().int().positive().safe(),
+        toSeq: z.number().int().positive().safe(),
+    })
+    .refine((gap) => gap.fromSeq <= gap.toSeq, { message: "A V3 recording gap must be ordered" })
+    .readonly();
+export const sessionRecordingContinuityV3Schema = z.discriminatedUnion("kind", [
+    z.strictObject({ kind: z.literal("complete") }).readonly(),
+    z.strictObject({ firstMissingSeq: z.number().int().positive().safe(), kind: z.literal("incomplete") }).readonly(),
+]);
+const sessionRecordingPageV3Schema = z
+    .strictObject({
+        events: z.array(recordedSessionLiveEventV3Schema).max(10_000).readonly(),
+        gaps: z.array(sessionRecordingGapV3Schema).max(10_000).readonly(),
+        nextCursor: z.number().int().positive().safe().nullable(),
+        sessionId: identifierStringSchema,
+        tailSeq: z.number().int().nonnegative().safe(),
+        version: z.literal(3),
+    })
+    .superRefine((page, context) => {
+        if (page.events.some(({ event }) => event.sessionId !== page.sessionId || event.seq > page.tailSeq)) {
+            context.addIssue({ code: "custom", message: "A V3 recording page contains an invalid Session event" });
+        }
+        const last = page.events.at(-1)?.event.seq ?? null;
+        if (page.nextCursor !== last) {
+            context.addIssue({ code: "custom", message: "A V3 recording cursor must identify the last page event" });
+        }
+    })
+    .readonly();
+
 export type SessionRecordingWrite = z.infer<typeof sessionRecordingWriteSchema>;
 export type SessionRecordingHistory = z.infer<typeof sessionRecordingHistorySchema>;
 export type SessionRecordingHistoryPage = z.infer<typeof sessionRecordingHistoryPageSchema>;
 export type SessionRecordingSummary = z.infer<typeof sessionRecordingSummarySchema>;
 export type SessionRecordingStatus = z.infer<typeof sessionRecordingStatusSchema>;
 export type SessionRecordingDirectory = z.infer<typeof sessionRecordingDirectorySchema>;
+export type SessionRecordingWriteV3 = z.infer<typeof sessionRecordingWriteV3Schema>;
+export type RecordedSessionLiveEventV3 = z.infer<typeof recordedSessionLiveEventV3Schema>;
+export type SessionRecordingGapV3 = z.infer<typeof sessionRecordingGapV3Schema>;
+export type SessionRecordingContinuityV3 = z.infer<typeof sessionRecordingContinuityV3Schema>;
+export type SessionRecordingPageV3 = z.infer<typeof sessionRecordingPageV3Schema>;
 
 function decode<T>(encoded: string, schema: z.ZodType<T>): T {
     try {
@@ -98,3 +157,15 @@ export const decodeSessionRecordingDirectory = (encoded: string): SessionRecordi
 
 export const encodeSessionRecordingDirectory = (value: SessionRecordingDirectory): string =>
     JSON.stringify(sessionRecordingDirectorySchema.parse(value));
+
+export const decodeSessionRecordingWriteV3 = (encoded: string): SessionRecordingWriteV3 =>
+    decode(encoded, sessionRecordingWriteV3Schema);
+
+export const encodeSessionRecordingWriteV3 = (value: SessionRecordingWriteV3): string =>
+    JSON.stringify(sessionRecordingWriteV3Schema.parse(value));
+
+export const decodeSessionRecordingPageV3 = (encoded: string): SessionRecordingPageV3 =>
+    decode(encoded, sessionRecordingPageV3Schema);
+
+export const encodeSessionRecordingPageV3 = (value: SessionRecordingPageV3): string =>
+    JSON.stringify(sessionRecordingPageV3Schema.parse(value));

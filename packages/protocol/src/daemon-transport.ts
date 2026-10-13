@@ -165,6 +165,40 @@ import {
     SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND,
     SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND,
 } from "./session-live-history.ts";
+import {
+    decodeSessionHistoryPageLoadedV3,
+    decodeSessionHistoryPageLoadV3,
+    decodeSessionPreviewHistoryPageLoadedV3,
+    decodeSessionPreviewHistoryPageLoadV3,
+    encodeSessionHistoryPageLoadedV3,
+    encodeSessionHistoryPageLoadV3,
+    encodeSessionPreviewHistoryPageLoadedV3,
+    encodeSessionPreviewHistoryPageLoadV3,
+    SESSION_HISTORY_V3_PAGE_LOAD_KIND,
+    SESSION_HISTORY_V3_PAGE_LOADED_KIND,
+    SESSION_PREVIEW_HISTORY_V3_PAGE_LOAD_KIND,
+    SESSION_PREVIEW_HISTORY_V3_PAGE_LOADED_KIND,
+} from "./session-message-v3.ts";
+import {
+    decodeSessionLiveEventEnvelopeV3,
+    decodeSessionPermissionResponseV3,
+    decodeSessionSettingChangeV3,
+    decodeSessionSettingsLoadedV3,
+    decodeSessionSettingsReadV3,
+    decodeSessionUserInputResponseV3,
+    encodeSessionLiveEventEnvelopeV3,
+    encodeSessionPermissionResponseV3,
+    encodeSessionSettingChangeV3,
+    encodeSessionSettingsLoadedV3,
+    encodeSessionSettingsReadV3,
+    encodeSessionUserInputResponseV3,
+    SESSION_LIVE_V3_KIND,
+    SESSION_PERMISSION_V3_RESPOND_KIND,
+    SESSION_SETTING_V3_CHANGE_KIND,
+    SESSION_SETTINGS_V3_LOADED_KIND,
+    SESSION_SETTINGS_V3_READ_KIND,
+    SESSION_USER_INPUT_V3_RESPOND_KIND,
+} from "./session-v3.ts";
 
 interface MessageSignature<TMessage extends { readonly kind: string }> {
     readonly decoder: (encoded: string) => TMessage;
@@ -188,6 +222,36 @@ function defineMessageSignature<TMessage extends { readonly kind: string }>(
 }
 
 const serviceToDaemonSignatures = {
+    [SESSION_HISTORY_V3_PAGE_LOAD_KIND]: defineMessageSignature(
+        SESSION_HISTORY_V3_PAGE_LOAD_KIND,
+        encodeSessionHistoryPageLoadV3,
+        decodeSessionHistoryPageLoadV3,
+    ),
+    [SESSION_PERMISSION_V3_RESPOND_KIND]: defineMessageSignature(
+        SESSION_PERMISSION_V3_RESPOND_KIND,
+        encodeSessionPermissionResponseV3,
+        decodeSessionPermissionResponseV3,
+    ),
+    [SESSION_PREVIEW_HISTORY_V3_PAGE_LOAD_KIND]: defineMessageSignature(
+        SESSION_PREVIEW_HISTORY_V3_PAGE_LOAD_KIND,
+        encodeSessionPreviewHistoryPageLoadV3,
+        decodeSessionPreviewHistoryPageLoadV3,
+    ),
+    [SESSION_USER_INPUT_V3_RESPOND_KIND]: defineMessageSignature(
+        SESSION_USER_INPUT_V3_RESPOND_KIND,
+        encodeSessionUserInputResponseV3,
+        decodeSessionUserInputResponseV3,
+    ),
+    [SESSION_SETTINGS_V3_READ_KIND]: defineMessageSignature(
+        SESSION_SETTINGS_V3_READ_KIND,
+        encodeSessionSettingsReadV3,
+        decodeSessionSettingsReadV3,
+    ),
+    [SESSION_SETTING_V3_CHANGE_KIND]: defineMessageSignature(
+        SESSION_SETTING_V3_CHANGE_KIND,
+        encodeSessionSettingChangeV3,
+        decodeSessionSettingChangeV3,
+    ),
     [SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND]: defineMessageSignature(
         SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND,
         encodeSessionPreviewHistoryPageLoad,
@@ -314,6 +378,26 @@ export function encodeServiceToDaemonMessage(message: ServiceToDaemonMessage): s
 }
 
 const daemonToServiceSignatures = {
+    [SESSION_HISTORY_V3_PAGE_LOADED_KIND]: defineMessageSignature(
+        SESSION_HISTORY_V3_PAGE_LOADED_KIND,
+        encodeSessionHistoryPageLoadedV3,
+        decodeSessionHistoryPageLoadedV3,
+    ),
+    [SESSION_LIVE_V3_KIND]: defineMessageSignature(
+        SESSION_LIVE_V3_KIND,
+        encodeSessionLiveEventEnvelopeV3,
+        decodeSessionLiveEventEnvelopeV3,
+    ),
+    [SESSION_SETTINGS_V3_LOADED_KIND]: defineMessageSignature(
+        SESSION_SETTINGS_V3_LOADED_KIND,
+        encodeSessionSettingsLoadedV3,
+        decodeSessionSettingsLoadedV3,
+    ),
+    [SESSION_PREVIEW_HISTORY_V3_PAGE_LOADED_KIND]: defineMessageSignature(
+        SESSION_PREVIEW_HISTORY_V3_PAGE_LOADED_KIND,
+        encodeSessionPreviewHistoryPageLoadedV3,
+        decodeSessionPreviewHistoryPageLoadedV3,
+    ),
     [SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND]: defineMessageSignature(
         SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND,
         encodeSessionPreviewHistoryPageLoaded,

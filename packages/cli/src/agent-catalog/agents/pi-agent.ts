@@ -18,6 +18,7 @@ import { InProcessAcpAgentDefinition } from "../agent-specification.ts";
 const ACP_PROBE_TIMEOUT_MILLISECONDS = 30_000;
 
 export class PiAgentSpecification extends InProcessAcpAgentDefinition {
+    override readonly nativeSessionV3 = true;
     override readonly acpProbeTimeoutMilliseconds = ACP_PROBE_TIMEOUT_MILLISECONDS;
     readonly agentExecutable = "pi";
     readonly createEndpoint: InProcessAcpEndpointFactory = (options) => new PiAcpEndpoint(options);

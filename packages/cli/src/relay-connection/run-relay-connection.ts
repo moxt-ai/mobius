@@ -15,6 +15,7 @@ import { send } from "../daemon-command-results.ts";
 import type { DaemonInstallationObserver } from "../daemon-observers.ts";
 import type { DaemonTurnRegistry } from "../daemon-turn-registry.ts";
 import type { ExternalContentStore } from "../external-content/local-external-content-store.ts";
+import type { NativeSessionRuntimeManagerV3 } from "../native-sessions/runtime-manager-v3.ts";
 import type { NativeSessionService } from "../native-sessions/service.ts";
 import type { DaemonSessionEventProjectionV2 } from "../session-event-projection-v2.ts";
 import { connectRelay } from "./connect.ts";
@@ -46,6 +47,7 @@ export interface RelayConnectionOptions {
     readonly installations: AgentInstallationManager;
     readonly installationObserver: DaemonInstallationObserver;
     readonly nativeSessions: NativeSessionService;
+    readonly nativeSessionsV3: NativeSessionRuntimeManagerV3;
     readonly operations: DaemonOperationState;
     readonly publisher: DaemonSessionEventPublisher;
     readonly eventProjectionV2: DaemonSessionEventProjectionV2;
@@ -66,6 +68,7 @@ export async function runRelayConnection({
     installations,
     installationObserver,
     nativeSessions,
+    nativeSessionsV3,
     operations,
     publisher,
     eventProjectionV2,
@@ -89,6 +92,7 @@ export async function runRelayConnection({
         sessions,
         installations,
         nativeSessions,
+        nativeSessionsV3,
         operations,
         eventProjectionV2,
         externalContent,

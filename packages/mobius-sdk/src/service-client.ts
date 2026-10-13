@@ -8,8 +8,11 @@ import {
     decodeSessionConfigUpdatedEvent,
     decodeSessionEventBatchV2,
     decodeSessionEventLogPageV2,
+    decodeSessionHistoryPageV3,
+    decodeSessionLiveEventEnvelopeV3,
     decodeSessionReadyEvent,
     decodeSessionRestoredEvent,
+    decodeSessionSettingsV3,
     decodeSessionsListedEvent,
     decodeSessionsQueriedEvent,
     decodeWorkspaceEntriesEvent,
@@ -28,7 +31,12 @@ import {
     type SessionEventBatchV2,
     type SessionEventLogPageV2,
     type SessionEventOmissionV2,
+    type SessionHistoryPageRequestV3,
+    type SessionHistoryPageV3,
+    type SessionLiveEventV3,
     SessionPromptDisposition,
+    type SessionSettingsV3,
+    type SessionUserInputResponseV3,
     type WorkspaceEntriesEvent,
 } from "@moxt-ai/mobius-protocol";
 
@@ -105,6 +113,14 @@ const DEFAULT_OPERATION_TIMEOUT_MILLISECONDS = 20_000;
 const DEFAULT_STREAM_CONNECTION_TIMEOUT_MILLISECONDS = 15_000;
 const DEFAULT_STREAM_LIVENESS_TIMEOUT_MILLISECONDS = 45_000;
 const DEFAULT_STREAM_RECONNECT_ATTEMPTS = 7;
+
+function decodeSessionHistoryPageV3ForSession(value: unknown, sessionId: string): SessionHistoryPageV3 {
+    const page = decodeSessionHistoryPageV3(value);
+    if (page.messages.some((message) => message.sessionId !== sessionId)) {
+        throw new MobiusProtocolError("The service returned V3 history for another Session");
+    }
+    return page;
+}
 
 function sanitizedConnectionCauseMessage(value: string): string {
     return Array.from(value, (character) => {
@@ -1300,6 +1316,95 @@ export class MobiusSessionResources {
         return decodeNativeSessionEventsV2(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal));
     };
 
+    readonly previewRuntimeNativeMessagesV3 = async (
+        runtimeId: string,
+        sessionId: string,
+        identity: {
+            readonly additionalDirectoryIds: readonly string[];
+            readonly agentId: string;
+            readonly directoryId: string;
+        },
+        page: Omit<SessionHistoryPageRequestV3, "sessionId">,
+        signal: AbortSignal,
+    ): Promise<SessionHistoryPageV3> => {
+        const result = await this.#executor.post(
+            projectPath(
+                this.#projectId,
+                `runtimes/${encodeURIComponent(runtimeId)}/sessions/${encodeURIComponent(sessionId)}/native-messages-preview`,
+            ),
+            { ...identity, cursor: page.cursor, messageLimit: page.messageLimit },
+            signal,
+        );
+        return decodeSessionHistoryPageV3ForSession(result, sessionId);
+    };
+
+    readonly previewSessionNativeMessagesV3 = async (
+        sessionId: string,
+        identity: {
+            readonly additionalDirectoryIds: readonly string[];
+            readonly agentId: string;
+            readonly directoryId: string;
+        },
+        page: Omit<SessionHistoryPageRequestV3, "sessionId">,
+        signal: AbortSignal,
+    ): Promise<SessionHistoryPageV3> => {
+        const path = requestUrl(
+            new URL("https://mobius.invalid/"),
+            sessionPath(this.#projectId, sessionId, "native-messages-preview"),
+        );
+        path.searchParams.set("agentId", identity.agentId);
+        path.searchParams.set("directoryId", identity.directoryId);
+        path.searchParams.set("messageLimit", page.messageLimit.toString());
+        if (page.cursor !== null) {
+            path.searchParams.set("cursor", page.cursor);
+        }
+        for (const directoryId of identity.additionalDirectoryIds) {
+            path.searchParams.append("additionalDirectoryId", directoryId);
+        }
+        return decodeSessionHistoryPageV3ForSession(
+            await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal),
+            sessionId,
+        );
+    };
+
+    readonly loadSessionNativeMessagesV3 = async (
+        sessionId: string,
+        page: Omit<SessionHistoryPageRequestV3, "sessionId">,
+        signal: AbortSignal,
+    ): Promise<SessionHistoryPageV3> => {
+        const path = requestUrl(
+            new URL("https://mobius.invalid/"),
+            sessionPath(this.#projectId, sessionId, "native-messages"),
+        );
+        path.searchParams.set("messageLimit", page.messageLimit.toString());
+        if (page.cursor !== null) {
+            path.searchParams.set("cursor", page.cursor);
+        }
+        return decodeSessionHistoryPageV3ForSession(
+            await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal),
+            sessionId,
+        );
+    };
+
+    readonly readSessionSettingsV3 = async (sessionId: string, signal: AbortSignal): Promise<SessionSettingsV3> =>
+        decodeSessionSettingsV3(
+            await this.#executor.get(sessionPath(this.#projectId, sessionId, "settings-v3"), signal),
+        );
+
+    readonly changeSessionSettingV3 = async (
+        sessionId: string,
+        settingId: string,
+        value: string | boolean | number,
+        signal: AbortSignal,
+    ): Promise<SessionSettingsV3> =>
+        decodeSessionSettingsV3(
+            await this.#executor.post(
+                sessionPath(this.#projectId, sessionId, "settings-v3"),
+                { settingId, value },
+                signal,
+            ),
+        );
+
     readonly readSessionExecution = async (
         sessionId: string,
         identity: {
@@ -1527,6 +1632,48 @@ export class MobiusInteractionResources {
             throw new MobiusProtocolError("The service returned an invalid Interaction response");
         }
     };
+
+    readonly respondPermissionV3 = async (
+        sessionId: string,
+        requestId: string,
+        optionId: string,
+        signal: AbortSignal,
+    ): Promise<void> => {
+        const result = await this.#executor.post(
+            sessionPath(this.#projectId, sessionId, `interactions/${encodeURIComponent(requestId)}/responses-v3`),
+            { kind: "permission", optionId },
+            signal,
+        );
+        if (
+            typeof result !== "object" ||
+            result === null ||
+            !("accepted" in result) ||
+            Reflect.get(result, "accepted") !== true
+        ) {
+            throw new MobiusProtocolError("The service returned an invalid V3 Permission response");
+        }
+    };
+
+    readonly respondUserInputV3 = async (
+        sessionId: string,
+        requestId: string,
+        values: SessionUserInputResponseV3["values"],
+        signal: AbortSignal,
+    ): Promise<void> => {
+        const result = await this.#executor.post(
+            sessionPath(this.#projectId, sessionId, `interactions/${encodeURIComponent(requestId)}/responses-v3`),
+            { kind: "user-input", values },
+            signal,
+        );
+        if (
+            typeof result !== "object" ||
+            result === null ||
+            !("accepted" in result) ||
+            Reflect.get(result, "accepted") !== true
+        ) {
+            throw new MobiusProtocolError("The service returned an invalid V3 User Input response");
+        }
+    };
 }
 
 export type MobiusLiveSessionConnection = { readonly kind: "initial" } | { readonly kind: "reconnected" };
@@ -1536,12 +1683,22 @@ export interface MobiusLiveSessionEventObserverV2 {
     readonly reconcile: (connection: MobiusLiveSessionConnection) => Promise<void>;
 }
 
-export class MobiusLiveEventSubscriptionV2 {
+export interface MobiusLiveSessionEventObserverV3 {
+    readonly receive: (events: readonly SessionLiveEventV3[]) => Promise<boolean>;
+    readonly reconcile: (connection: MobiusLiveSessionConnection) => Promise<void>;
+}
+
+class MobiusLiveEventSubscription<EventBatch> {
     readonly #controller = new AbortController();
     readonly #executor: MobiusRequestExecutor;
     readonly #maximumReconnectAttempts: number;
-    readonly #observer: MobiusLiveSessionEventObserverV2;
+    readonly #decode: (value: unknown) => EventBatch;
+    readonly #observer: {
+        readonly receive: (events: EventBatch) => Promise<boolean>;
+        readonly reconcile: (connection: MobiusLiveSessionConnection) => Promise<void>;
+    };
     readonly #path: string;
+    readonly #version: "V2" | "V3";
     #closed = false;
     readonly connected: Promise<void>;
     readonly completed: Promise<void>;
@@ -1549,14 +1706,21 @@ export class MobiusLiveEventSubscriptionV2 {
     constructor(
         executor: MobiusRequestExecutor,
         path: string,
-        observer: MobiusLiveSessionEventObserverV2,
+        observer: {
+            readonly receive: (events: EventBatch) => Promise<boolean>;
+            readonly reconcile: (connection: MobiusLiveSessionConnection) => Promise<void>;
+        },
         signal: AbortSignal,
         maximumReconnectAttempts: number,
+        decode: (value: unknown) => EventBatch,
+        version: "V2" | "V3",
     ) {
+        this.#decode = decode;
         this.#executor = executor;
         this.#maximumReconnectAttempts = maximumReconnectAttempts;
         this.#observer = observer;
         this.#path = path;
+        this.#version = version;
         const abort = (): void => this.#controller.abort(signal.reason);
         if (signal.aborted) {
             abort();
@@ -1579,7 +1743,7 @@ export class MobiusLiveEventSubscriptionV2 {
             return;
         }
         this.#closed = true;
-        this.#controller.abort(new Error("The live V2 Session event subscription closed"));
+        this.#controller.abort(new Error(`The live ${this.#version} Session event subscription closed`));
     };
 
     private readonly run = async (
@@ -1603,17 +1767,22 @@ export class MobiusLiveEventSubscriptionV2 {
                     while (!this.#closed) {
                         const result = await reader.read();
                         if (result.done) {
-                            throw new MobiusConnectionError("The live V2 Session event stream disconnected");
+                            throw new MobiusConnectionError(
+                                `The live ${this.#version} Session event stream disconnected`,
+                            );
                         }
                         let value: unknown;
                         try {
                             value = JSON.parse(result.value.data);
                         } catch (cause) {
-                            throw new MobiusProtocolError("The live V2 Session event stream contains invalid JSON", {
-                                cause,
-                            });
+                            throw new MobiusProtocolError(
+                                `The live ${this.#version} Session event stream contains invalid JSON`,
+                                {
+                                    cause,
+                                },
+                            );
                         }
-                        const events = decodeSessionEventBatchV2(value);
+                        const events = this.#decode(value);
                         if (!(await this.#observer.receive(events))) {
                             this.close();
                         }
@@ -1644,7 +1813,7 @@ export class MobiusLiveEventSubscriptionV2 {
                 attempts += 1;
                 if (attempts > this.#maximumReconnectAttempts) {
                     const details = connectionCauseMessages(cause);
-                    const message = `The live V2 Session event stream could not recover${
+                    const message = `The live ${this.#version} Session event stream could not recover${
                         details.length > 0 ? `. Cause: ${details.join(". Caused by: ")}` : ""
                     }`;
                     const failure = new MobiusConnectionError(message, { cause });
@@ -1676,11 +1845,44 @@ export class MobiusLiveEventSubscriptionV2 {
     };
 }
 
+export class MobiusLiveEventSubscriptionV2 extends MobiusLiveEventSubscription<SessionEventBatchV2> {
+    constructor(
+        executor: MobiusRequestExecutor,
+        path: string,
+        observer: MobiusLiveSessionEventObserverV2,
+        signal: AbortSignal,
+        maximumReconnectAttempts: number,
+    ) {
+        super(executor, path, observer, signal, maximumReconnectAttempts, decodeSessionEventBatchV2, "V2");
+    }
+}
+
+export class MobiusLiveEventSubscriptionV3 extends MobiusLiveEventSubscription<readonly SessionLiveEventV3[]> {
+    constructor(
+        executor: MobiusRequestExecutor,
+        path: string,
+        observer: MobiusLiveSessionEventObserverV3,
+        signal: AbortSignal,
+        maximumReconnectAttempts: number,
+    ) {
+        super(
+            executor,
+            path,
+            observer,
+            signal,
+            maximumReconnectAttempts,
+            (value) => decodeSessionLiveEventEnvelopeV3({ events: value, kind: "session.live.v3" }).events,
+            "V3",
+        );
+    }
+}
+
 export class MobiusEventResources {
     readonly #executor: MobiusRequestExecutor;
     readonly #maximumReconnectAttempts: number;
     readonly #projectId: string;
     readonly #liveSubscriptionsV2 = new Set<MobiusLiveEventSubscriptionV2>();
+    readonly #liveSubscriptionsV3 = new Set<MobiusLiveEventSubscriptionV3>();
 
     constructor(executor: MobiusRequestExecutor, projectId: string, maximumReconnectAttempts: number) {
         this.#executor = executor;
@@ -1703,6 +1905,26 @@ export class MobiusEventResources {
         this.#liveSubscriptionsV2.add(subscription);
         void subscription.completed
             .finally(() => this.#liveSubscriptionsV2.delete(subscription))
+            .catch(() => undefined);
+        await subscription.connected;
+        return subscription;
+    };
+
+    readonly subscribeLiveV3 = async (
+        sessionId: string,
+        observer: MobiusLiveSessionEventObserverV3,
+        signal: AbortSignal,
+    ): Promise<MobiusLiveEventSubscriptionV3> => {
+        const subscription = new MobiusLiveEventSubscriptionV3(
+            this.#executor,
+            sessionPath(this.#projectId, sessionId, "events-v3"),
+            observer,
+            signal,
+            this.#maximumReconnectAttempts,
+        );
+        this.#liveSubscriptionsV3.add(subscription);
+        void subscription.completed
+            .finally(() => this.#liveSubscriptionsV3.delete(subscription))
             .catch(() => undefined);
         await subscription.connected;
         return subscription;
@@ -1739,6 +1961,10 @@ export class MobiusEventResources {
             subscription.close();
         }
         this.#liveSubscriptionsV2.clear();
+        for (const subscription of this.#liveSubscriptionsV3) {
+            subscription.close();
+        }
+        this.#liveSubscriptionsV3.clear();
     };
 }
 

@@ -9,6 +9,10 @@ import { LocalAgentCatalogError } from "./agent-catalog/local-agent.ts";
 import type { AuditStore } from "./audit/audit-store.ts";
 import { LocalAuthorizationError } from "./authorization/local-authorization-error.ts";
 import type { DurationMetric } from "./infra/operation-metrics.ts";
+import {
+    NativeSessionConnectionErrorV3,
+    NativeSessionOperationErrorV3,
+} from "./native-sessions/adapters/adapter-v3.ts";
 import { PromptArtifactError } from "./prompt-artifact-resolver.ts";
 import type { DaemonOperationState } from "./relay-connection/daemon-operation-state.ts";
 import type { DaemonSessionEventProjectionV2 } from "./session-event-projection-v2.ts";
@@ -61,7 +65,9 @@ export function operationErrorCode(error: unknown): string {
         error instanceof AcpExecutionError ||
         error instanceof LocalAuthorizationError ||
         error instanceof LocalAgentCatalogError ||
-        error instanceof PromptArtifactError
+        error instanceof PromptArtifactError ||
+        error instanceof NativeSessionConnectionErrorV3 ||
+        error instanceof NativeSessionOperationErrorV3
     ) {
         return error.code;
     }
@@ -73,7 +79,9 @@ export function operationErrorMessage(error: unknown): string {
         error instanceof AcpExecutionError ||
         error instanceof LocalAuthorizationError ||
         error instanceof LocalAgentCatalogError ||
-        error instanceof PromptArtifactError
+        error instanceof PromptArtifactError ||
+        error instanceof NativeSessionConnectionErrorV3 ||
+        error instanceof NativeSessionOperationErrorV3
     ) {
         return error.message;
     }

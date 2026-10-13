@@ -16,4 +16,6 @@ export * from "./session-event-log-v2.ts";
 export * from "./session-events.ts";
 export * from "./session-history.ts";
 export * from "./session-live-history.ts";
+export * from "./session-message-v3.ts";
 export * from "./session-recording.ts";
+export * from "./session-v3.ts";

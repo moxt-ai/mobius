@@ -17,6 +17,7 @@ const VERSION_PROBE_TIMEOUT_MILLISECONDS = 30_000;
 const ACP_PROBE_TIMEOUT_MILLISECONDS = 60_000;
 
 export abstract class LocalAgentSpecification {
+    readonly nativeSessionV3: boolean = false;
     abstract readonly adapterOverrideVariable: string;
     abstract readonly adapterVersion: string;
     abstract readonly agentExecutable: string;

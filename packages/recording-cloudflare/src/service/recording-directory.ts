@@ -4,6 +4,7 @@ import {
     type SessionRecordingStatus,
     type SessionRecordingSummary,
     type SessionRecordingWrite,
+    type SessionRecordingWriteV3,
 } from "@moxt-ai/mobius-protocol";
 import type { RecordingDirectoryStorage } from "../storage/recording-directory-storage.ts";
 
@@ -65,6 +66,59 @@ export class RecordingDirectory {
                             ? (event.payload.title ?? existing.title)
                             : existing.title,
                     updatedAt: event.recordedAt,
+                };
+            } else {
+                continue;
+            }
+            this.#storage.save({
+                ...summary,
+                updatedAt:
+                    existing !== null && Date.parse(existing.updatedAt) > Date.parse(summary.updatedAt)
+                        ? existing.updatedAt
+                        : summary.updatedAt,
+            });
+        }
+    };
+
+    readonly recordV3 = (write: SessionRecordingWriteV3): void => {
+        for (const event of write.envelope.events) {
+            const existing = this.#storage.find(event.sessionId);
+            const item = event.item;
+            const lifecycle = item.sessionUpdate === "session_lifecycle_changed" ? item.state : null;
+            const context = lifecycle?.kind === "connected" || lifecycle?.kind === "running" ? lifecycle.context : null;
+            const status: SessionRecordingStatus | null =
+                lifecycle?.kind === "running"
+                    ? "running"
+                    : lifecycle?.kind === "failed" ||
+                        (lifecycle?.kind === "disconnected" && lifecycle.outcome.kind === "failed")
+                      ? "failed"
+                      : lifecycle === null
+                        ? null
+                        : "idle";
+            let summary: SessionRecordingSummary;
+            if (context !== null) {
+                summary = {
+                    ...context,
+                    runtimeId: write.runtimeId,
+                    sessionId: event.sessionId,
+                    status: status ?? existing?.status ?? "idle",
+                    title: existing?.title ?? "",
+                    updatedAt: write.recordedAt,
+                };
+            } else if (existing !== null) {
+                const title =
+                    item.sessionUpdate === "session_info_update"
+                        ? (item.title ?? existing.title)
+                        : existing.title.length === 0 &&
+                            item.sessionUpdate === "user_message_chunk" &&
+                            item.content.type === "text"
+                          ? conversationTitleFromText(item.content.text)
+                          : existing.title;
+                summary = {
+                    ...existing,
+                    status: status ?? existing.status,
+                    title,
+                    updatedAt: write.recordedAt,
                 };
             } else {
                 continue;

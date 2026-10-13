@@ -15,7 +15,9 @@ overrides:
 
 allowBuilds:
   '@clerk/shared': true
+  '@google/genai': false
   better-sqlite3: false
   esbuild: true
+  protobufjs: false
   simple-git-hooks: true
   workerd: true

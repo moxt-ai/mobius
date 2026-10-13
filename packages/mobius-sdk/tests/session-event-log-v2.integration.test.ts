@@ -68,7 +68,7 @@ async function requestBody(request: IncomingMessage): Promise<unknown> {
     return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
-describe("Session Event Log V2 SDK", () => {
+describe("Session history SDK", () => {
     const servers: ReturnType<typeof createServer>[] = [];
 
     afterEach(async () => {
@@ -78,7 +78,7 @@ describe("Session Event Log V2 SDK", () => {
         servers.length = 0;
     });
 
-    it("Given a V2 export and immutable fork boundary, When a consumer uses the explicit SDK APIs, Then raw pages and copy requests cross the production HTTP boundary unchanged", async () => {
+    it("Given V2 recording data and native V3 messages, When a consumer uses the explicit SDK APIs, Then each history representation crosses the production HTTP boundary unchanged", async () => {
         const sourceEvent = event("source-session", "source-event-1", "1");
         const exported: MobiusSessionExportV2 = {
             formatVersion: "2",
@@ -122,6 +122,30 @@ describe("Session Event Log V2 SDK", () => {
                             version: 2,
                         }),
                     );
+                } else if (path.includes("/native-messages")) {
+                    response.setHeader("content-type", "application/json");
+                    response.end(
+                        JSON.stringify({
+                            messages: [
+                                {
+                                    item: {
+                                        content: [{ text: "Complete native message", type: "text" }],
+                                        sessionUpdate: "agent_message",
+                                    },
+                                    messageId: "native-message-1",
+                                    sessionId: "source-session",
+                                },
+                            ],
+                            nextCursor: "native-cursor-1",
+                            throughSeq: 41,
+                        }),
+                    );
+                } else if (path.endsWith("/settings-v3")) {
+                    response.setHeader("content-type", "application/json");
+                    response.end(JSON.stringify({ settings: [{ id: "model", name: "Model", value: "gpt-5.6" }] }));
+                } else if (path.endsWith("/responses-v3")) {
+                    response.setHeader("content-type", "application/json");
+                    response.end(JSON.stringify({ accepted: true }));
                 } else if (path.endsWith("/session-imports-v2")) {
                     response.setHeader("content-type", "application/json");
                     response.end(JSON.stringify(session("imported-session")));
@@ -167,6 +191,34 @@ describe("Session Event Log V2 SDK", () => {
                 version: 2,
             });
             expect(await client.sessions.exportV2("source-session", signal)).toEqual(exported);
+            expect(
+                await client.sessions.loadSessionNativeMessagesV3(
+                    "source-session",
+                    { cursor: null, messageLimit: 50 },
+                    signal,
+                ),
+            ).toEqual({
+                messages: [
+                    {
+                        item: {
+                            content: [{ text: "Complete native message", type: "text" }],
+                            sessionUpdate: "agent_message",
+                        },
+                        messageId: "native-message-1",
+                        sessionId: "source-session",
+                    },
+                ],
+                nextCursor: "native-cursor-1",
+                throughSeq: 41,
+            });
+            expect(await client.sessions.readSessionSettingsV3("source-session", signal)).toEqual({
+                settings: [{ id: "model", name: "Model", value: "gpt-5.6" }],
+            });
+            expect(await client.sessions.changeSessionSettingV3("source-session", "model", "gpt-5.6", signal)).toEqual({
+                settings: [{ id: "model", name: "Model", value: "gpt-5.6" }],
+            });
+            await client.interactions.respondPermissionV3("source-session", "permission-1", "allow_once", signal);
+            await client.interactions.respondUserInputV3("source-session", "input-1", { choice: "one" }, signal);
             expect(await client.sessions.readExternalContent("source-session", externalImage, signal)).toMatchObject({
                 bytes: Uint8Array.of(1, 2, 3),
                 mediaType: "image/png",
@@ -196,6 +248,31 @@ describe("Session Event Log V2 SDK", () => {
                 body: null,
                 method: "GET",
                 path: "/mobius/api/v1/projects/project-1/sessions/source-session/export-v2",
+            },
+            {
+                body: null,
+                method: "GET",
+                path: "/mobius/api/v1/projects/project-1/sessions/source-session/native-messages?messageLimit=50",
+            },
+            {
+                body: null,
+                method: "GET",
+                path: "/mobius/api/v1/projects/project-1/sessions/source-session/settings-v3",
+            },
+            {
+                body: { settingId: "model", value: "gpt-5.6" },
+                method: "POST",
+                path: "/mobius/api/v1/projects/project-1/sessions/source-session/settings-v3",
+            },
+            {
+                body: { kind: "permission", optionId: "allow_once" },
+                method: "POST",
+                path: "/mobius/api/v1/projects/project-1/sessions/source-session/interactions/permission-1/responses-v3",
+            },
+            {
+                body: { kind: "user-input", values: { choice: "one" } },
+                method: "POST",
+                path: "/mobius/api/v1/projects/project-1/sessions/source-session/interactions/input-1/responses-v3",
             },
             {
                 body: null,

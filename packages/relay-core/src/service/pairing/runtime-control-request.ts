@@ -17,13 +17,17 @@ import {
     decodeSessionElicitationResolvedEvent,
     decodeSessionEventEnvelopeV2,
     decodeSessionFailedEvent,
+    decodeSessionHistoryPageLoadedV3,
+    decodeSessionLiveEventEnvelopeV3,
     decodeSessionLiveHistoryV2PageLoaded,
     decodeSessionOperationFailedEvent,
     decodeSessionPermissionResolvedEvent,
     decodeSessionPreviewHistoryPageLoaded,
+    decodeSessionPreviewHistoryPageLoadedV3,
     decodeSessionQueuedEvent,
     decodeSessionReadyEvent,
     decodeSessionRestoredEvent,
+    decodeSessionSettingsLoadedV3,
     decodeSessionStartedEvent,
     decodeSessionsListedEvent,
     decodeSessionsQueriedEvent,
@@ -48,14 +52,20 @@ import {
     type SessionConfigureCommand,
     type SessionElicitationResolvedEvent,
     type SessionElicitationRespondCommand,
+    type SessionHistoryPageLoadedV3,
+    type SessionHistoryPageLoadV3,
     type SessionListCommand,
+    type SessionLiveEventEnvelopeV3,
     type SessionLiveHistoryV2PageLoad,
     type SessionLiveHistoryV2PageLoaded,
     type SessionPermissionResolvedEvent,
     type SessionPermissionRespondCommand,
+    type SessionPermissionResponseV3,
     type SessionPrepareCommand,
     type SessionPreviewHistoryPageLoad,
     type SessionPreviewHistoryPageLoaded,
+    type SessionPreviewHistoryPageLoadedV3,
+    type SessionPreviewHistoryPageLoadV3,
     type SessionPromptCommand,
     type SessionPromptDispositionCommand,
     type SessionQueryCommand,
@@ -63,9 +73,13 @@ import {
     type SessionReadyEvent,
     type SessionRestoreCommand,
     type SessionRestoredEvent,
+    type SessionSettingChangeV3,
+    type SessionSettingsLoadedV3,
+    type SessionSettingsReadV3,
     type SessionStartedEvent,
     type SessionsListedEvent,
     type SessionsQueriedEvent,
+    type SessionUserInputResponseV3,
     type WorkspaceEntriesEvent,
     type WorkspaceListCommand,
 } from "@moxt-ai/mobius-protocol";
@@ -142,9 +156,15 @@ export type RuntimeControlCommand =
     | SessionPromptDispositionCommand
     | SessionPromptCommand
     | SessionPreviewHistoryPageLoad
+    | SessionPreviewHistoryPageLoadV3
+    | SessionHistoryPageLoadV3
     | SessionLiveHistoryV2PageLoad
     | SessionElicitationRespondCommand
     | SessionPermissionRespondCommand
+    | SessionPermissionResponseV3
+    | SessionUserInputResponseV3
+    | SessionSettingsReadV3
+    | SessionSettingChangeV3
     | SessionListCommand
     | SessionQueryCommand
     | SessionRestoreCommand;
@@ -158,9 +178,13 @@ export type RuntimeControlResult =
     | SessionStartedEvent
     | SessionQueuedEvent
     | SessionPreviewHistoryPageLoaded
+    | SessionPreviewHistoryPageLoadedV3
+    | SessionHistoryPageLoadedV3
     | SessionLiveHistoryV2PageLoaded
     | SessionElicitationResolvedEvent
     | SessionPermissionResolvedEvent
+    | SessionLiveEventEnvelopeV3
+    | SessionSettingsLoadedV3
     | SessionsListedEvent
     | SessionsQueriedEvent
     | SessionRestoredEvent;
@@ -469,6 +493,83 @@ export async function requestRuntimeControl(
                         }
                         return;
                     }
+                    if (
+                        kind === "session.live.v3" &&
+                        (command.kind === "session.permission.v3.respond" ||
+                            command.kind === "session.user-input.v3.respond")
+                    ) {
+                        const expectedUpdate =
+                            command.kind === "session.permission.v3.respond"
+                                ? "permission_resolved"
+                                : "user_input_resolved";
+                        const envelope = decodeSessionLiveEventEnvelopeV3(raw);
+                        const resolved = envelope.events.find(
+                            (candidate) =>
+                                candidate.sessionId === command.sessionId &&
+                                candidate.item.sessionUpdate === expectedUpdate &&
+                                candidate.item.requestId === command.requestId,
+                        );
+                        if (resolved !== undefined) {
+                            resolve(envelope);
+                        }
+                        return;
+                    }
+                    if (kind === "session.live.v3" && command.kind === "session.prompt") {
+                        const envelope = decodeSessionLiveEventEnvelopeV3(raw);
+                        const lifecycle = envelope.events.find(
+                            (candidate) =>
+                                candidate.sessionId === command.sessionId &&
+                                candidate.item.sessionUpdate === "session_lifecycle_changed",
+                        );
+                        if (lifecycle?.item.sessionUpdate !== "session_lifecycle_changed") {
+                            return;
+                        }
+                        if (lifecycle.item.state.kind === "failed") {
+                            reject(
+                                new SessionRuntimeError(
+                                    lifecycle.item.state.code,
+                                    "The Runtime could not start the Session prompt",
+                                ),
+                            );
+                        } else if (lifecycle.item.state.kind === "running") {
+                            resolve(
+                                decodeSessionStartedEvent(
+                                    JSON.stringify({
+                                        attemptId: command.commandId,
+                                        commandId: command.commandId,
+                                        epoch: command.commandId,
+                                        kind: "session.started",
+                                        prompt: command.prompt,
+                                        sequence: 0,
+                                        sessionId: command.sessionId,
+                                    }),
+                                ),
+                            );
+                        }
+                        return;
+                    }
+                    if (kind === "session.live.v3" && command.kind === "session.cancel") {
+                        const envelope = decodeSessionLiveEventEnvelopeV3(raw);
+                        const idle = envelope.events.find(
+                            (candidate) =>
+                                candidate.sessionId === command.sessionId &&
+                                candidate.item.sessionUpdate === "session_lifecycle_changed" &&
+                                candidate.item.state.kind === "idle",
+                        );
+                        if (idle !== undefined) {
+                            resolve(
+                                decodeSessionCompletedEvent(
+                                    JSON.stringify({
+                                        commandId: command.commandId,
+                                        kind: "session.completed",
+                                        sessionId: command.sessionId,
+                                        stopReason: "cancelled",
+                                    }),
+                                ),
+                            );
+                        }
+                        return;
+                    }
                     const result =
                         command.kind === "runtime.diagnostics.read" && kind === "runtime.diagnostics.result"
                             ? decodeRuntimeDiagnosticsResult(raw)
@@ -486,30 +587,40 @@ export async function requestRuntimeControl(
                                         ? decodeSessionReadyEvent(raw)
                                         : command.kind === "session.configure" && kind === "session.config.updated"
                                           ? decodeSessionConfigUpdatedEvent(raw)
-                                          : null;
+                                          : (command.kind === "session.settings.v3.read" ||
+                                                  command.kind === "session.setting.v3.change") &&
+                                              kind === "session.settings.v3.loaded"
+                                            ? decodeSessionSettingsLoadedV3(raw)
+                                            : null;
                     const resolved =
                         result ??
                         (command.kind === "session.preview-history.page.load" &&
                         kind === "session.preview-history.page.loaded"
                             ? decodeSessionPreviewHistoryPageLoaded(raw)
-                            : command.kind === "session.live-history.v2.page.load" &&
-                                kind === "session.live-history.v2.page.loaded"
-                              ? decodeSessionLiveHistoryV2PageLoaded(raw)
-                              : command.kind === "session.prompt" && kind === "session.queued"
-                                ? decodeSessionQueuedEvent(raw)
-                                : (command.kind === "session.prompt" ||
-                                        command.kind === "session.prompt.disposition") &&
-                                    kind === "session.started"
-                                  ? decodeSessionStartedEvent(raw)
-                                  : command.kind === "session.cancel" && kind === "session.completed"
-                                    ? decodeSessionCompletedEvent(raw)
-                                    : command.kind === "session.permission.respond" &&
-                                        kind === "session.permission.resolved"
-                                      ? decodeSessionPermissionResolvedEvent(raw)
-                                      : command.kind === "session.elicitation.respond" &&
-                                          kind === "session.elicitation.resolved"
-                                        ? decodeSessionElicitationResolvedEvent(raw)
-                                        : null);
+                            : command.kind === "session.preview-history.v3.page.load" &&
+                                kind === "session.preview-history.v3.page.loaded"
+                              ? decodeSessionPreviewHistoryPageLoadedV3(raw)
+                              : command.kind === "session.history.v3.page.load" &&
+                                  kind === "session.history.v3.page.loaded"
+                                ? decodeSessionHistoryPageLoadedV3(raw)
+                                : command.kind === "session.live-history.v2.page.load" &&
+                                    kind === "session.live-history.v2.page.loaded"
+                                  ? decodeSessionLiveHistoryV2PageLoaded(raw)
+                                  : command.kind === "session.prompt" && kind === "session.queued"
+                                    ? decodeSessionQueuedEvent(raw)
+                                    : (command.kind === "session.prompt" ||
+                                            command.kind === "session.prompt.disposition") &&
+                                        kind === "session.started"
+                                      ? decodeSessionStartedEvent(raw)
+                                      : command.kind === "session.cancel" && kind === "session.completed"
+                                        ? decodeSessionCompletedEvent(raw)
+                                        : command.kind === "session.permission.respond" &&
+                                            kind === "session.permission.resolved"
+                                          ? decodeSessionPermissionResolvedEvent(raw)
+                                          : command.kind === "session.elicitation.respond" &&
+                                              kind === "session.elicitation.resolved"
+                                            ? decodeSessionElicitationResolvedEvent(raw)
+                                            : null);
                     const resolvedRequestId =
                         resolved !== null && "requestId" in resolved
                             ? resolved.requestId

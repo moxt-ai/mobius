@@ -21,6 +21,10 @@ import type { DaemonConfig } from "./config.ts";
 import type { DaemonTurnCommand } from "./daemon-command-results.ts";
 import { operationErrorCode, operationErrorMessage } from "./daemon-command-results.ts";
 import { resolveCatalogAgent } from "./daemon-session-commands.ts";
+import type {
+    NativeSessionLiveRuntimeV3,
+    NativeSessionRuntimeManagerV3,
+} from "./native-sessions/runtime-manager-v3.ts";
 import { resolvePromptArtifacts } from "./prompt-artifact-resolver.ts";
 import type { DaemonOperationState } from "./relay-connection/daemon-operation-state.ts";
 import type { DaemonSessionEventProjectionV2 } from "./session-event-projection-v2.ts";
@@ -53,6 +57,7 @@ export interface ExecutePromptOptions {
     readonly directories: WorkspaceDirectoryService;
     readonly audit: AuditStore;
     readonly sessions: AgentRuntimeManager;
+    readonly nativeSessionsV3: NativeSessionRuntimeManagerV3;
     readonly attemptId: string;
     readonly activateAttempt: () => { readonly epoch: string; readonly sequence: 0 };
     readonly waitForSessionAvailability: (
@@ -80,6 +85,7 @@ export async function executePrompt({
     directories,
     audit,
     sessions,
+    nativeSessionsV3,
     attemptId,
     activateAttempt,
     waitForSessionAvailability,
@@ -88,6 +94,7 @@ export async function executePrompt({
     recordSteeringPrompt,
     cancellationRequested,
 }: ExecutePromptOptions): Promise<void> {
+    let directLive: NativeSessionLiveRuntimeV3 | null = null;
     try {
         const resolved = await resolveSessionDirectories(
             directories,
@@ -107,6 +114,73 @@ export async function executePrompt({
                 {},
                 "prompt_queue_target_unavailable",
             );
+        }
+        if (nativeSessionsV3.isConnected(command.sessionId)) {
+            if (availability.disposition === SessionPromptDisposition.Steer) {
+                throw new AcpExecutionError(
+                    "The direct native Session does not support steering",
+                    {},
+                    "steering_target_unavailable",
+                );
+            }
+            if (command.sessionConfigurations !== undefined && command.sessionConfigurations.length > 0) {
+                throw new AcpExecutionError(
+                    "The direct native Session cannot change settings with a prompt",
+                    {},
+                    "native_session_unsupported",
+                );
+            }
+            const stored = sessions.storedSession(command.sessionId);
+            if (
+                stored.agentId !== agent.id ||
+                stored.cwd !== resolved.cwd ||
+                stored.additionalDirectories.length !== resolved.additionalDirectories.length ||
+                stored.additionalDirectories.some(
+                    (directory, index) => directory !== resolved.additionalDirectories[index],
+                )
+            ) {
+                throw new AcpExecutionError(
+                    "The native Session binding does not match the authorized workspace",
+                    {},
+                    "session_identity_mismatch",
+                );
+            }
+            const connected = nativeSessionsV3.connected(command.sessionId);
+            directLive = nativeSessionsV3.live(command.sessionId);
+            audit.record({
+                commandId: command.commandId,
+                event: "session_authorized",
+                sessionId: command.sessionId,
+            });
+            operations.transitionExecution(command.commandId, "running");
+            activateAttempt();
+            const attachments = await resolvePromptArtifacts(config, command, signal);
+            await directLive.publish({
+                sessionUpdate: "session_lifecycle_changed",
+                state: {
+                    context: {
+                        additionalDirectoryIds: command.additionalDirectoryIds,
+                        agentId: command.agentId,
+                        directoryId: command.directoryId,
+                    },
+                    kind: "running",
+                },
+            });
+            const result = await connected.runPrompt(
+                { images: attachments.images, prompt: command.prompt, resources: attachments.resources },
+                signal,
+            );
+            await directLive.publish({ sessionUpdate: "session_lifecycle_changed", state: { kind: "idle" } });
+            operations.transitionExecution(
+                command.commandId,
+                result.stopReason === "cancelled" ? "cancelled" : "succeeded",
+            );
+            audit.record({
+                commandId: command.commandId,
+                event: result.stopReason === "cancelled" ? "session_cancelled" : "session_completed",
+                sessionId: command.sessionId,
+            });
+            return;
         }
         const appliedSettings =
             command.sessionConfigurations === undefined
@@ -226,7 +300,12 @@ export async function executePrompt({
         });
     } catch (error) {
         if (signal.aborted && cancellationRequested()) {
-            await eventProjectionV2.completed(command.sessionId, command.commandId, "cancelled");
+            if (directLive !== null) {
+                await directLive.publish({ sessionUpdate: "session_lifecycle_changed", state: { kind: "idle" } });
+            }
+            if (directLive === null) {
+                await eventProjectionV2.completed(command.sessionId, command.commandId, "cancelled");
+            }
             operations.transitionExecution(command.commandId, "cancelled");
             audit.record({
                 commandId: command.commandId,
@@ -246,7 +325,15 @@ export async function executePrompt({
             code === "session_operation_failed"
                 ? "The local agent could not complete the request"
                 : operationErrorMessage(error);
-        await eventProjectionV2.failed(command.sessionId, command.commandId, failureCode, failureMessage);
+        if (directLive !== null) {
+            await directLive.publish({
+                sessionUpdate: "session_lifecycle_changed",
+                state: { code: failureCode, kind: "failed" },
+            });
+        }
+        if (directLive === null) {
+            await eventProjectionV2.failed(command.sessionId, command.commandId, failureCode, failureMessage);
+        }
         operations.transitionExecution(command.commandId, "failed");
         console.error("Mobius daemon command failed", error);
     }

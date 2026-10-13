@@ -2,9 +2,11 @@ import {
     decodeAgentSettingsDiscoverCommand,
     decodeNativeSessionRequest,
     decodeSessionConfigureCommand,
+    decodeSessionHistoryPageLoadV3,
     decodeSessionListCommand,
     decodeSessionPrepareCommand,
     decodeSessionPreviewHistoryPageLoad,
+    decodeSessionPreviewHistoryPageLoadV3,
     decodeSessionPromptCommand,
     decodeSessionQueryCommand,
     decodeSessionRestoreCommand,
@@ -59,6 +61,11 @@ const nativeEventsV2Schema = v.strictObject({
     cursor: v.nullable(v.string()),
     eventLimit: v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(10_000)),
     omit: v.optional(v.pipe(v.array(v.literal("agent-reasoning")), v.maxLength(1))),
+});
+const nativeMessagesV3Schema = v.strictObject({
+    ...sessionIdentitySchema.entries,
+    cursor: v.nullable(v.pipe(v.string(), v.minLength(1), v.maxLength(4_096))),
+    messageLimit: v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(1_000)),
 });
 const sessionQuerySchema = v.strictObject({
     sessionIds: v.pipe(v.array(identifier), v.minLength(1), v.maxLength(500)),
@@ -346,6 +353,64 @@ export function createProjectRuntimeRoutes() {
                 }
                 context.header("Cache-Control", "no-store");
                 return context.json(result.events);
+            },
+        )
+        .post(
+            "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/native-messages",
+            bodyParser<RelayHttpEnvironment>(),
+            async (context) => {
+                const body = validated(nativeMessagesV3Schema, context.req.valid("json"));
+                const sessionId = validateIdentifier(context.req.param("sessionId"), "session_id");
+                const result = await context.env.services.runtimePairings.requestControl(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
+                    bearerToken(context.req.raw),
+                    decodeSessionHistoryPageLoadV3({
+                        cursor: body.cursor,
+                        kind: "session.history.v3.page.load",
+                        messageLimit: body.messageLimit,
+                        requestId: crypto.randomUUID(),
+                        sessionId,
+                    }),
+                    context.req.raw.signal,
+                );
+                if (result.kind !== "session.history.v3.page.loaded") {
+                    throw new PairingDirectoryError(
+                        "invalid_request",
+                        "The Runtime returned invalid V3 Session messages",
+                    );
+                }
+                context.header("Cache-Control", "no-store");
+                return context.json(result.page);
+            },
+        )
+        .post(
+            "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/native-messages-preview",
+            bodyParser<RelayHttpEnvironment>(),
+            async (context) => {
+                const body = validated(nativeMessagesV3Schema, context.req.valid("json"));
+                const command = decodeSessionPreviewHistoryPageLoadV3({
+                    ...body,
+                    bindingId: "workspace",
+                    kind: "session.preview-history.v3.page.load",
+                    requestId: crypto.randomUUID(),
+                    sessionId: validateIdentifier(context.req.param("sessionId"), "session_id"),
+                });
+                const result = await context.env.services.runtimePairings.requestControl(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
+                    bearerToken(context.req.raw),
+                    command,
+                    context.req.raw.signal,
+                );
+                if (result.kind !== "session.preview-history.v3.page.loaded") {
+                    throw new PairingDirectoryError(
+                        "invalid_request",
+                        "The Runtime returned invalid V3 Session messages",
+                    );
+                }
+                context.header("Cache-Control", "no-store");
+                return context.json(result.page);
             },
         )
         .post(

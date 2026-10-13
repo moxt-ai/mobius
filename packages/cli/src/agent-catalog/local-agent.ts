@@ -26,6 +26,7 @@ abstract class AgentDefinition {
     readonly environment: Readonly<Record<string, string>>;
     readonly id: string;
     readonly label: string;
+    readonly nativeSessionV3: boolean;
 
     protected constructor(
         id: string,
@@ -35,6 +36,7 @@ abstract class AgentDefinition {
         agentVersion: string,
         agentIdentity: ExecutableIdentity,
         capabilities: SessionCapabilities,
+        nativeSessionV3: boolean,
     ) {
         this.agentIdentity = agentIdentity;
         this.agentVersion = agentVersion;
@@ -43,6 +45,7 @@ abstract class AgentDefinition {
         this.environment = Object.freeze({ ...environment });
         this.id = id;
         this.label = label;
+        this.nativeSessionV3 = nativeSessionV3;
     }
 
     abstract readonly withEnvironment: (environment: Readonly<Record<string, string>>) => AcpAgentDefinition;
@@ -68,8 +71,9 @@ export class LocalAgentDefinition extends AgentDefinition {
         adapterIdentity: ExecutableIdentity = readTrustedIdentity(command),
         agentIdentity: ExecutableIdentity = adapterIdentity,
         capabilities: SessionCapabilities = unsupportedSessionCapabilities(),
+        nativeSessionV3 = false,
     ) {
-        super(id, label, command, environment, agentVersion, agentIdentity, capabilities);
+        super(id, label, command, environment, agentVersion, agentIdentity, capabilities, nativeSessionV3);
         this.adapterIdentity = adapterIdentity;
         this.adapterPath = adapterIdentity.realPath;
         this.adapterVersion = adapterVersion;
@@ -88,6 +92,7 @@ export class LocalAgentDefinition extends AgentDefinition {
             this.adapterIdentity,
             this.agentIdentity,
             this.capabilities,
+            this.nativeSessionV3,
         );
 }
 
@@ -107,8 +112,9 @@ export class InProcessAcpAgentDefinition extends AgentDefinition {
         agentVersion = "",
         agentIdentity: ExecutableIdentity = readTrustedIdentity(command),
         capabilities: SessionCapabilities = unsupportedSessionCapabilities(),
+        nativeSessionV3 = false,
     ) {
-        super(id, label, command, environment, agentVersion, agentIdentity, capabilities);
+        super(id, label, command, environment, agentVersion, agentIdentity, capabilities, nativeSessionV3);
         this.createEndpoint = createEndpoint;
     }
 
@@ -122,6 +128,7 @@ export class InProcessAcpAgentDefinition extends AgentDefinition {
             this.agentVersion,
             this.agentIdentity,
             this.capabilities,
+            this.nativeSessionV3,
         );
 }
 

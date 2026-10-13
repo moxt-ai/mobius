@@ -5,6 +5,7 @@ import { InProcessAcpAgentDefinition } from "../agent-specification.ts";
 // Codex speaks its own app-server protocol rather than ACP, so Mobius hosts the ACP Agent in-process
 // and drives `codex app-server` directly. There is no adapter package to install or version-probe.
 export class CodexAgentSpecification extends InProcessAcpAgentDefinition {
+    override readonly nativeSessionV3 = true;
     override readonly versionProbeTimeoutMilliseconds = 10_000;
     readonly agentExecutable = "codex";
     readonly createEndpoint: InProcessAcpEndpointFactory = (options) => new CodexAcpAgent(options);

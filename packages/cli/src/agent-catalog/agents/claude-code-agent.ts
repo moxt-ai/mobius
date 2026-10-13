@@ -3,6 +3,7 @@ import type { InProcessAcpEndpointFactory } from "../../acp/in-process/acp-endpo
 import { InProcessAcpAgentDefinition } from "../agent-specification.ts";
 
 export class ClaudeCodeAgentSpecification extends InProcessAcpAgentDefinition {
+    override readonly nativeSessionV3 = true;
     readonly agentExecutable = "claude";
     readonly createEndpoint: InProcessAcpEndpointFactory = (options) => new ClaudeAcpEndpoint(options);
     readonly id = "claude";

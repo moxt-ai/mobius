@@ -202,6 +202,7 @@ export async function discoverAgent(
                           agentVersion.length > 0 ? agentVersion : verifiedAdapterVersion,
                           agent.identity,
                           capabilities,
+                          specification.nativeSessionV3,
                       )
                     : new LocalAgentDefinition(
                           specification.id,
@@ -214,6 +215,7 @@ export async function discoverAgent(
                           adapter.identity,
                           agent.identity,
                           capabilities,
+                          specification.nativeSessionV3,
                       );
             try {
                 const readiness = await probeWithRetry(

@@ -5,7 +5,10 @@ import type { Duplex } from "node:stream";
 import {
     decodeAgentInstallCancelCommand,
     decodeAgentInstallRequestCommand,
+    decodeSessionHistoryPageLoadV3,
     encodeRuntimeStatusEvent,
+    encodeSessionHistoryPageLoadedV3,
+    encodeSessionLiveEventEnvelopeV3,
     RUNTIME_STATUS_KIND,
 } from "@moxt-ai/mobius-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -208,6 +211,111 @@ describe("browser relay connection", () => {
                     }
                     reject(error);
                 });
+            });
+        }
+    });
+
+    it("Given a V3 Session channel, When live deltas arrive and history is requested, Then the client exposes validated events and one full-message page", async () => {
+        const relay = createServer();
+        const sockets = new Set<Duplex>();
+        const connections = new ValueFeed<Duplex>();
+        relay.on("connection", (socket) => {
+            sockets.add(socket);
+            socket.once("close", () => sockets.delete(socket));
+            socket.on("error", () => undefined);
+        });
+        relay.on("upgrade", (request, socket) => {
+            const key = request.headers["sec-websocket-key"];
+            if (typeof key !== "string") {
+                socket.destroy();
+                return;
+            }
+            const accept = createHash("sha1").update(`${key}${WEBSOCKET_GUID}`).digest("base64");
+            socket.write(
+                "HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+            );
+            connections.push(socket);
+        });
+        await listen(relay);
+        const live = new ValueFeed<unknown>();
+        let client: MobiusClient | undefined;
+        try {
+            client = await connectMobiusClient({
+                onSessionLiveV3: (events) => live.push(events),
+                relayUrl: `ws://127.0.0.1:${readPort(relay).toString()}`,
+            });
+            const socket = await connections.next();
+            writeServerTextFrame(
+                socket,
+                encodeSessionLiveEventEnvelopeV3({
+                    kind: "session.live.v3",
+                    events: [
+                        {
+                            sessionId: "session-1",
+                            seq: 41,
+                            item: {
+                                sessionUpdate: "agent_message_chunk",
+                                messageId: "native-message-1",
+                                content: { type: "text", text: "Hello" },
+                            },
+                        },
+                    ],
+                }),
+            );
+            expect(await live.next()).toEqual([
+                {
+                    sessionId: "session-1",
+                    seq: 41,
+                    item: {
+                        sessionUpdate: "agent_message_chunk",
+                        messageId: "native-message-1",
+                        content: { type: "text", text: "Hello" },
+                    },
+                },
+            ]);
+
+            const requestFrame = readClientFrame(socket);
+            const loading = client.loadSessionHistoryV3(
+                { cursor: null, messageLimit: 20, sessionId: "session-1" },
+                new AbortController().signal,
+            );
+            const request = decodeSessionHistoryPageLoadV3((await requestFrame).text);
+            writeServerTextFrame(
+                socket,
+                encodeSessionHistoryPageLoadedV3({
+                    kind: "session.history.v3.page.loaded",
+                    requestId: request.requestId,
+                    sessionId: request.sessionId,
+                    page: {
+                        messages: [
+                            {
+                                sessionId: "session-1",
+                                messageId: "native-message-1",
+                                item: {
+                                    sessionUpdate: "agent_message",
+                                    content: [{ type: "text", text: "Hello" }],
+                                },
+                            },
+                        ],
+                        nextCursor: null,
+                        throughSeq: 41,
+                    },
+                }),
+            );
+            expect(await loading).toMatchObject({
+                throughSeq: 41,
+                messages: [{ messageId: "native-message-1" }],
+            });
+        } finally {
+            client?.close();
+            for (const socket of sockets) {
+                socket.destroy();
+            }
+            await new Promise<void>((resolve, reject) => {
+                relay.close((error) => (error === undefined ? resolve() : reject(error)));
             });
         }
     });

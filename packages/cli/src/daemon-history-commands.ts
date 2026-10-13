@@ -1,10 +1,12 @@
 import {
     type decodeSessionLiveHistoryV2PageLoad,
     type decodeSessionPreviewHistoryPageLoad,
+    type decodeSessionPreviewHistoryPageLoadV3,
     type NativeSessionEventsV2,
     type QueuedPromptRequestEventLogV2,
     SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND,
     SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND,
+    SESSION_PREVIEW_HISTORY_V3_PAGE_LOADED_KIND,
     type SessionEventV2,
 } from "@moxt-ai/mobius-protocol";
 import type { WebSocket } from "undici";
@@ -16,6 +18,7 @@ import type { WorkspaceDirectoryService } from "./authorization/workspace-direct
 import type { DaemonConfig } from "./config.ts";
 import { operationErrorCode, reportOperationFailure, send } from "./daemon-command-results.ts";
 import { resolveCatalogAgent } from "./daemon-session-commands.ts";
+import type { NativeSessionRuntimeManagerV3 } from "./native-sessions/runtime-manager-v3.ts";
 import type { NativeSessionService } from "./native-sessions/service.ts";
 import type { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
 import type { DaemonSessionEventProjectionV2 } from "./session-event-projection-v2.ts";
@@ -249,6 +252,78 @@ export async function executeSessionPreviewHistoryPageLoad(
                 commandId: command.requestId,
                 details: { agentId: command.agentId, code: operationErrorCode(error) },
                 event: "session_history_v2_load_failed",
+                sessionId: command.sessionId,
+            });
+            reportOperationFailure(socket, command.requestId, command.sessionId, error);
+        }
+    }
+}
+
+export async function executeSessionPreviewHistoryPageLoadV3(
+    socket: WebSocket,
+    command: ReturnType<typeof decodeSessionPreviewHistoryPageLoadV3>,
+    config: DaemonConfig,
+    directories: WorkspaceDirectoryService,
+    audit: AuditStore,
+    diagnostics: RelayConnectionDiagnostics,
+    nativeSessionsV3: NativeSessionRuntimeManagerV3,
+    signal: AbortSignal,
+): Promise<void> {
+    try {
+        const resolved = await resolveSessionDirectories(
+            directories,
+            config.bindingId,
+            command.directoryId,
+            command.additionalDirectoryIds,
+            signal,
+        );
+        const agent = await resolveCatalogAgent(config, command.agentId, signal);
+        const page = await nativeSessionsV3.previewMessages(
+            {
+                command: agent.command,
+                environment: {
+                    ...Object.fromEntries(
+                        Object.entries(config.localContext.environment).filter(
+                            (entry): entry is [string, string] => entry[1] !== undefined,
+                        ),
+                    ),
+                    ...agent.environment,
+                },
+                id: agent.id,
+            },
+            {
+                additionalDirectories: resolved.additionalDirectories,
+                cwd: resolved.cwd,
+                nativeSessionId: command.sessionId,
+                sessionId: command.sessionId,
+            },
+            { cursor: command.cursor, messageLimit: command.messageLimit, sessionId: command.sessionId },
+            signal,
+        );
+        signal.throwIfAborted();
+        audit.record({
+            commandId: command.requestId,
+            event: "session_history_v3_preview_loaded",
+            sessionId: command.sessionId,
+        });
+        send(socket, {
+            kind: SESSION_PREVIEW_HISTORY_V3_PAGE_LOADED_KIND,
+            page,
+            requestId: command.requestId,
+            sessionId: command.sessionId,
+        });
+    } catch (error) {
+        if (!signal.aborted) {
+            diagnostics.daemonDiagnostic(
+                "session_history_v3_preview_load_failed",
+                command.requestId,
+                { agentId: command.agentId, code: operationErrorCode(error), sessionId: command.sessionId },
+                error,
+            );
+            audit.record({
+                commandId: command.requestId,
+                details: { agentId: command.agentId, code: operationErrorCode(error) },
+                event: "session_history_v3_preview_load_failed",
                 sessionId: command.sessionId,
             });
             reportOperationFailure(socket, command.requestId, command.sessionId, error);

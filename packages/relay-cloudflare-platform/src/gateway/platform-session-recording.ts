@@ -1,5 +1,6 @@
 import {
     encodeSessionRecordingWrite,
+    encodeSessionRecordingWriteV3,
     isIdentifier,
     type SessionEventEnvelopeV2,
     type SessionEventV2,
@@ -76,6 +77,35 @@ export class PlatformSessionRecording implements SessionRecording {
             }
             await this.#publishTerminalStatus(target, envelope, signal);
             return { kind: "recorded" };
+        } catch {
+            signal.throwIfAborted();
+            return { kind: "failed", code: "write_failed" };
+        }
+    };
+
+    readonly deliverV3: SessionRecording["deliverV3"] = async (target, write, signal) => {
+        const policy = await this.#policies.readProject(target.projectId, signal);
+        if (policy === null) {
+            return { kind: "failed", code: "policy_unavailable" };
+        }
+        if (policy.effectiveMode === "disabled") {
+            return { kind: "skipped" };
+        }
+        if (this.#provider.kind === "absent") {
+            return { kind: "failed", code: "provider_unavailable" };
+        }
+        try {
+            const response = await this.#provider.fetcher.fetch(
+                new Request("https://recording.internal/v1/session-events-v3", {
+                    body: encodeSessionRecordingWriteV3(write),
+                    headers: { "content-type": "application/json" },
+                    method: "POST",
+                    signal: AbortSignal.any([signal, AbortSignal.timeout(RECORDING_REQUEST_TIMEOUT_MILLISECONDS)]),
+                }),
+            );
+            signal.throwIfAborted();
+            await response.body?.cancel();
+            return response.ok ? { kind: "recorded" } : { kind: "failed", code: "write_failed" };
         } catch {
             signal.throwIfAborted();
             return { kind: "failed", code: "write_failed" };

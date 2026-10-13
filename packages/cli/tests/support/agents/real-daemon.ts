@@ -7,6 +7,7 @@ import {
     decodeMessageKind,
     decodeRuntimeHeartbeatEvent,
     decodeSessionEventEnvelopeV2,
+    decodeSessionLiveEventEnvelopeV3,
     decodeSessionReadyEvent,
     encodeRuntimeHeartbeatAckEvent,
     encodeRuntimeLivenessReadyEvent,
@@ -15,6 +16,7 @@ import {
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_HEARTBEAT_KIND,
     RUNTIME_LIVENESS_READY_KIND,
+    type SessionLiveEventV3,
 } from "@moxt-ai/mobius-protocol";
 import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { type WebSocket, WebSocketServer } from "ws";
@@ -32,6 +34,7 @@ export interface RealDaemonPeer {
     readonly readDiagnostics: () => Promise<string>;
     readonly signal: AbortSignal;
     readonly nextEvent: () => Promise<string>;
+    readonly nextLiveEventV3: () => Promise<SessionLiveEventV3>;
     readonly nextMessage: () => Promise<string>;
 }
 
@@ -123,6 +126,7 @@ export async function withRealDaemon(
             return await waiter.promise;
         };
         const pendingEvents: string[] = [];
+        const pendingLiveEventsV3: SessionLiveEventV3[] = [];
         const sessionId = `real_${specification.id}_${randomUUID()}`;
         await scenario({
             bindingId: config.bindingId,
@@ -149,6 +153,22 @@ export async function withRealDaemon(
                             ...decodeSessionEventEnvelopeV2(message).events.map((event) => JSON.stringify(event)),
                         );
                         const event = pendingEvents.shift();
+                        if (event !== undefined) {
+                            return event;
+                        }
+                    }
+                }
+            },
+            nextLiveEventV3: async () => {
+                const pending = pendingLiveEventsV3.shift();
+                if (pending !== undefined) {
+                    return pending;
+                }
+                for (;;) {
+                    const message = await nextMessage();
+                    if (decodeMessageKind(message) === "session.live.v3") {
+                        pendingLiveEventsV3.push(...decodeSessionLiveEventEnvelopeV3(message).events);
+                        const event = pendingLiveEventsV3.shift();
                         if (event !== undefined) {
                             return event;
                         }

@@ -23,6 +23,7 @@ import { AgentProcessPool, type AgentProcessRetention } from "./agent-process-po
 import type { NativeSessionOrigin, NativeSessionPage } from "./native-session.ts";
 import {
     type AcpSessionStore,
+    AcpStoredSession,
     FoundAcpStoredSession,
     MemoryAcpSessionStore,
     MissingAcpStoredSession,
@@ -341,6 +342,56 @@ export class AgentRuntimeManager {
         options: AcpPrepareOptions,
         metrics: OperationMetrics = unmeasuredOperationMetrics,
     ): Promise<AcpPreparedSession> => await this.#prepareSession(options, { kind: "history-required" }, metrics);
+
+    readonly storedSession = (sessionId: string): AcpStoredSession => {
+        const stored = this.#store.read(sessionId);
+        if (!(stored instanceof FoundAcpStoredSession)) {
+            throw new AcpExecutionError("The Session was not found", {}, "session_not_found");
+        }
+        return stored.session;
+    };
+
+    readonly storedSessionOrNull = (sessionId: string): AcpStoredSession | null => {
+        const stored = this.#store.read(sessionId);
+        return stored instanceof FoundAcpStoredSession ? stored.session : null;
+    };
+
+    readonly bindNativeSession = (options: {
+        readonly additionalDirectories: readonly string[];
+        readonly agentId: string;
+        readonly cwd: string;
+        readonly nativeSessionId: string;
+        readonly sessionId: string;
+        readonly title: string;
+    }): void => {
+        this.#store.write(
+            new AcpStoredSession(
+                options.sessionId,
+                options.agentId,
+                options.nativeSessionId,
+                options.cwd,
+                options.additionalDirectories,
+                false,
+                options.title,
+            ),
+        );
+    };
+
+    readonly releaseSession = async (sessionId: string, signal: AbortSignal): Promise<void> => {
+        const pending = this.#executionProcesses.pending(sessionId);
+        if (pending !== undefined) {
+            await waitForSharedOperation(pending, signal);
+        }
+        signal.throwIfAborted();
+        const runtime = this.#executionProcesses.get(sessionId);
+        if (runtime === undefined) {
+            return;
+        }
+        if (runtime.hasRunningTurn()) {
+            throw new AcpExecutionError("The Session is running a prompt", {}, "session_busy");
+        }
+        await this.#retireSessionProcess(sessionId, runtime, async () => await runtime.close());
+    };
 
     /**
      * Opens a short-lived native ACP session only to read the local Agent's

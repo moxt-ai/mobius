@@ -23,11 +23,13 @@ import {
     decodeSessionCancelCommand,
     decodeSessionConfigureCommand,
     decodeSessionElicitationRespondCommand,
+    decodeSessionHistoryPageLoadV3,
     decodeSessionListCommand,
     decodeSessionLiveHistoryV2PageLoad,
     decodeSessionPermissionRespondCommand,
     decodeSessionPrepareCommand,
     decodeSessionPreviewHistoryPageLoad,
+    decodeSessionPreviewHistoryPageLoadV3,
     decodeSessionPromptCommand,
     decodeSessionPromptDispositionCommand,
     decodeSessionQueryCommand,
@@ -57,16 +59,21 @@ import {
     SESSION_ELICITATION_RESPOND_KIND,
     SESSION_EVENT_V2_KIND,
     SESSION_FAILED_KIND,
+    SESSION_HISTORY_V3_PAGE_LOAD_KIND,
+    SESSION_HISTORY_V3_PAGE_LOADED_KIND,
     SESSION_INFO_UPDATED_KIND,
     SESSION_LIST_KIND,
     SESSION_LISTED_KIND,
     SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND,
     SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND,
+    SESSION_LIVE_V3_KIND,
     SESSION_OPERATION_FAILED_KIND,
     SESSION_PERMISSION_RESPOND_KIND,
     SESSION_PREPARE_KIND,
     SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND,
     SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND,
+    SESSION_PREVIEW_HISTORY_V3_PAGE_LOAD_KIND,
+    SESSION_PREVIEW_HISTORY_V3_PAGE_LOADED_KIND,
     SESSION_PROMPT_DISPOSITION_KIND,
     SESSION_PROMPT_KIND,
     SESSION_QUERIED_KIND,
@@ -93,7 +100,11 @@ function sessionErrorCloseCode(error: SessionRuntimeError): 1008 | 1013 {
     return 1008;
 }
 
-export type HistoryRequestKind = "live" | "preview";
+export type HistoryRequestKind =
+    | typeof SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND
+    | typeof SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND
+    | typeof SESSION_HISTORY_V3_PAGE_LOAD_KIND
+    | typeof SESSION_PREVIEW_HISTORY_V3_PAGE_LOAD_KIND;
 
 export interface ChannelSocket {
     readonly close: (code: number, reason: string) => void;
@@ -176,6 +187,10 @@ export class ChannelActor {
                 this.#liveEvents.receive(message);
                 return;
             }
+            if (kind === SESSION_LIVE_V3_KIND) {
+                this.#liveEvents.receiveV3(message);
+                return;
+            }
             if (kind === SESSION_INFO_UPDATED_KIND) {
                 this.broadcast(
                     this.#peers.hosts(),
@@ -200,11 +215,19 @@ export class ChannelActor {
                 return;
             }
             if (kind === SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND) {
-                this.returnHistoryPage("live", message);
+                this.returnHistoryPage(SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND, message);
+                return;
+            }
+            if (kind === SESSION_HISTORY_V3_PAGE_LOADED_KIND) {
+                this.returnHistoryPage(SESSION_HISTORY_V3_PAGE_LOAD_KIND, message);
                 return;
             }
             if (kind === SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND) {
-                this.returnHistoryPage("preview", message);
+                this.returnHistoryPage(SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND, message);
+                return;
+            }
+            if (kind === SESSION_PREVIEW_HISTORY_V3_PAGE_LOADED_KIND) {
+                this.returnHistoryPage(SESSION_PREVIEW_HISTORY_V3_PAGE_LOAD_KIND, message);
                 return;
             }
             this.validateDaemonControl(message);
@@ -268,14 +291,44 @@ export class ChannelActor {
                 if (!socket.permitsLiveSessionHistory()) {
                     throw new ProtocolMessageError("Live Session history requires an internal connection");
                 }
-                this.forwardHistoryPage(socket, "live", decodeSessionLiveHistoryV2PageLoad(message));
+                this.forwardHistoryPage(
+                    socket,
+                    SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND,
+                    decodeSessionLiveHistoryV2PageLoad(message),
+                );
+                return;
+            }
+            if (kind === SESSION_HISTORY_V3_PAGE_LOAD_KIND) {
+                if (!socket.permitsLiveSessionHistory()) {
+                    throw new ProtocolMessageError("V3 Session history requires an internal connection");
+                }
+                this.forwardHistoryPage(
+                    socket,
+                    SESSION_HISTORY_V3_PAGE_LOAD_KIND,
+                    decodeSessionHistoryPageLoadV3(message),
+                );
                 return;
             }
             if (kind === SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND) {
                 if (!socket.permitsLiveSessionHistory()) {
                     throw new ProtocolMessageError("Session preview history requires an internal connection");
                 }
-                this.forwardHistoryPage(socket, "preview", decodeSessionPreviewHistoryPageLoad(message));
+                this.forwardHistoryPage(
+                    socket,
+                    SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND,
+                    decodeSessionPreviewHistoryPageLoad(message),
+                );
+                return;
+            }
+            if (kind === SESSION_PREVIEW_HISTORY_V3_PAGE_LOAD_KIND) {
+                if (!socket.permitsLiveSessionHistory()) {
+                    throw new ProtocolMessageError("V3 Session preview history requires an internal connection");
+                }
+                this.forwardHistoryPage(
+                    socket,
+                    SESSION_PREVIEW_HISTORY_V3_PAGE_LOAD_KIND,
+                    decodeSessionPreviewHistoryPageLoadV3(message),
+                );
                 return;
             }
             if (kind === SESSION_PERMISSION_RESPOND_KIND) {
@@ -546,6 +599,8 @@ export class ChannelActor {
             DaemonToServiceMessage,
             {
                 readonly kind:
+                    | typeof SESSION_HISTORY_V3_PAGE_LOADED_KIND
+                    | typeof SESSION_PREVIEW_HISTORY_V3_PAGE_LOADED_KIND
                     | typeof SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND
                     | typeof SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND;
             }
@@ -565,6 +620,8 @@ export class ChannelActor {
             ServiceToDaemonMessage,
             {
                 readonly kind:
+                    | typeof SESSION_HISTORY_V3_PAGE_LOAD_KIND
+                    | typeof SESSION_PREVIEW_HISTORY_V3_PAGE_LOAD_KIND
                     | typeof SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND
                     | typeof SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND;
             }

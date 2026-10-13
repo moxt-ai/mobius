@@ -9,6 +9,7 @@ import {
     RUNTIME_STATUS_KIND,
     type RuntimeLivenessReadyEvent,
     SESSION_EVENT_V2_KIND,
+    SESSION_LIVE_V3_KIND,
     UnsupportedProtocolMessageKindError,
 } from "@moxt-ai/mobius-protocol";
 import { ProjectScope } from "../../entity/do/session.ts";
@@ -394,7 +395,7 @@ export class RuntimeService {
     };
 
     private readonly daemonMessageLane = (message: DaemonToServiceMessage): string => {
-        if (message.kind === SESSION_EVENT_V2_KIND) {
+        if (message.kind === SESSION_EVENT_V2_KIND || message.kind === SESSION_LIVE_V3_KIND) {
             return message.events.every((event) => event.sessionId === message.events[0]?.sessionId)
                 ? `session:${message.events[0]?.sessionId ?? "unknown"}`
                 : "runtime";

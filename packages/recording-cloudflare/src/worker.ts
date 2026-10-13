@@ -1,12 +1,15 @@
 import { DurableObject } from "cloudflare:workers";
 import {
     decodeSessionRecordingWrite,
+    decodeSessionRecordingWriteV3,
     encodeSessionRecordingDirectory,
     encodeSessionRecordingHistory,
     encodeSessionRecordingHistoryPage,
+    encodeSessionRecordingPageV3,
     isIdentifier,
     ProtocolMessageError,
     type SessionRecordingWrite,
+    type SessionRecordingWriteV3,
 } from "@moxt-ai/mobius-protocol";
 import { type Context, Hono } from "hono";
 import { RecordingDirectory } from "./service/recording-directory.ts";
@@ -22,7 +25,7 @@ export interface RecordingWorker {
 }
 
 type RecordingEnvironment = { readonly Bindings: RecordingWorkerBindings };
-type SessionRecordingRoutes = Pick<SessionRecordingStorage, "append" | "read" | "readPage">;
+type SessionRecordingRoutes = Pick<SessionRecordingStorage, "append" | "appendV3" | "read" | "readPage" | "readPageV3">;
 const jsonHeaders = { "content-type": "application/json" } as const;
 
 function errorResponse(code: string, status: number): Response {
@@ -60,6 +63,16 @@ function sessionRecordingRoutes(storage: SessionRecordingRoutes): Hono<Recording
                 return envelopeError(cause);
             }
         })
+        .post("/events-v3", async (context): Promise<Response> => {
+            try {
+                const result = storage.appendV3(await decodeV3(context.req.raw));
+                return result.kind === "recorded"
+                    ? context.json({ recorded: true }, 201)
+                    : errorResponse(result.code, 409);
+            } catch (cause) {
+                return envelopeError(cause);
+            }
+        })
         .get("/events", (context): Response => {
             const target = eventTarget(context.req.raw);
             if (target === null) {
@@ -87,6 +100,29 @@ function sessionRecordingRoutes(storage: SessionRecordingRoutes): Hono<Recording
             const page = storage.readPage(target.projectId, target.runtimeId, target.sessionId, after, Number(limit));
             return historyResponse(context, page, encodeSessionRecordingHistoryPage);
         })
+        .get("/page-events-v3", (context): Response => {
+            const target = eventTarget(context.req.raw);
+            const after = context.req.query("after");
+            const limit = context.req.query("limit");
+            if (
+                target === null ||
+                after === undefined ||
+                limit === undefined ||
+                !/^(?:0|[1-9][0-9]*)$/.test(after) ||
+                !/^[1-9][0-9]{0,4}$/.test(limit) ||
+                !Number.isSafeInteger(Number(after))
+            ) {
+                return errorResponse("invalid_target", 400);
+            }
+            const page = storage.readPageV3(
+                target.projectId,
+                target.runtimeId,
+                target.sessionId,
+                Number(after),
+                Number(limit),
+            );
+            return historyResponse(context, page, encodeSessionRecordingPageV3);
+        })
         .all("*", (): Response => errorResponse("not_found", 404));
 }
 
@@ -98,6 +134,14 @@ function recordingDirectoryRoutes(
         .post("/events", async (context): Promise<Response> => {
             try {
                 directory.record(await decode(context.req.raw));
+                return context.body(null, 204);
+            } catch (cause) {
+                return envelopeError(cause);
+            }
+        })
+        .post("/events-v3", async (context): Promise<Response> => {
+            try {
+                directory.recordV3(await decodeV3(context.req.raw));
                 return context.body(null, 204);
             } catch (cause) {
                 return envelopeError(cause);
@@ -136,6 +180,10 @@ function recordingDirectoryRoutes(
 
 async function decode(request: Request): Promise<SessionRecordingWrite> {
     return decodeSessionRecordingWrite(await request.text());
+}
+
+async function decodeV3(request: Request): Promise<SessionRecordingWriteV3> {
+    return decodeSessionRecordingWriteV3(await request.text());
 }
 
 function envelopeError(cause: unknown): Response {
@@ -239,6 +287,45 @@ export function createRecordingWorker(): RecordingWorker {
             );
             return indexed.ok ? context.json({ recorded: true }, 201) : errorResponse("storage_unavailable", 503);
         })
+        .post("/v1/session-events-v3", async (context): Promise<Response> => {
+            let write: SessionRecordingWriteV3;
+            try {
+                write = await decodeV3(context.req.raw);
+            } catch (cause) {
+                if (cause instanceof ProtocolMessageError) {
+                    return errorResponse("invalid_envelope", 400);
+                }
+                throw cause;
+            }
+            const firstEvent = write.envelope.events[0];
+            if (firstEvent === undefined) {
+                return errorResponse("invalid_envelope", 400);
+            }
+            const body = JSON.stringify(write);
+            const recorded = await durableObjectFetch(
+                context.env.SESSION_RECORDING,
+                JSON.stringify([write.projectId, firstEvent.sessionId]),
+                new Request("https://recording.internal/events-v3", {
+                    body,
+                    method: "POST",
+                    signal: context.req.raw.signal,
+                }),
+            );
+            if (!recorded.ok) {
+                return recorded;
+            }
+            await recorded.body?.cancel();
+            const indexed = await durableObjectFetch(
+                context.env.RECORDING_DIRECTORY,
+                JSON.stringify([write.projectId, write.runtimeId]),
+                new Request("https://directory.internal/events-v3", {
+                    body,
+                    method: "POST",
+                    signal: context.req.raw.signal,
+                }),
+            );
+            return indexed.ok ? context.json({ recorded: true }, 201) : errorResponse("storage_unavailable", 503);
+        })
         .get("/v1/projects/:projectId/runtimes/:runtimeId/sessions", async (context): Promise<Response> => {
             const target = readTarget(context);
             if (target.projectId === null || target.runtimeId === null) {
@@ -277,6 +364,39 @@ export function createRecordingWorker(): RecordingWorker {
                 new Request(`https://directory.internal/summary?${query}`, { signal: context.req.raw.signal }),
             );
         })
+        .get(
+            "/v1/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/events-v3",
+            async (context): Promise<Response> => {
+                const target = readTarget(context);
+                const after = context.req.query("after") ?? "0";
+                const limit = context.req.query("limit") ?? "100";
+                if (
+                    target.projectId === null ||
+                    target.runtimeId === null ||
+                    target.sessionId === null ||
+                    !/^(?:0|[1-9][0-9]*)$/.test(after) ||
+                    !/^[1-9][0-9]{0,4}$/.test(limit) ||
+                    Number(limit) > maximumPageEvents ||
+                    !Number.isSafeInteger(Number(after))
+                ) {
+                    return errorResponse("invalid_request", 400);
+                }
+                const query = new URLSearchParams({
+                    after,
+                    limit,
+                    projectId: target.projectId,
+                    runtimeId: target.runtimeId,
+                    sessionId: target.sessionId,
+                });
+                return await durableObjectFetch(
+                    context.env.SESSION_RECORDING,
+                    JSON.stringify([target.projectId, target.sessionId]),
+                    new Request(`https://recording.internal/page-events-v3?${query}`, {
+                        signal: context.req.raw.signal,
+                    }),
+                );
+            },
+        )
         .get(
             "/v1/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/events",
             async (context): Promise<Response> => {

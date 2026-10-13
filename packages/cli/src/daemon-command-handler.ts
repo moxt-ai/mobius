@@ -13,18 +13,24 @@ import {
     SESSION_CANCEL_KIND,
     SESSION_CONFIGURE_KIND,
     SESSION_ELICITATION_RESPOND_KIND,
+    SESSION_HISTORY_V3_PAGE_LOAD_KIND,
     SESSION_LIST_KIND,
     SESSION_LISTED_KIND,
     SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND,
     SESSION_PERMISSION_RESPOND_KIND,
+    SESSION_PERMISSION_V3_RESPOND_KIND,
     SESSION_PREPARE_KIND,
     SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND,
+    SESSION_PREVIEW_HISTORY_V3_PAGE_LOAD_KIND,
     SESSION_PROMPT_DISPOSITION_KIND,
     SESSION_PROMPT_KIND,
     SESSION_QUERIED_KIND,
     SESSION_QUERY_KIND,
     SESSION_QUEUED_KIND,
     SESSION_RESTORE_KIND,
+    SESSION_SETTING_V3_CHANGE_KIND,
+    SESSION_SETTINGS_V3_READ_KIND,
+    SESSION_USER_INPUT_V3_RESPOND_KIND,
     SessionPromptDisposition,
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-protocol";
@@ -41,7 +47,15 @@ import { reportOperationFailure, send, settleAbandonedTurn } from "./daemon-comm
 import {
     executeSessionLiveHistoryV2PageLoad,
     executeSessionPreviewHistoryPageLoad,
+    executeSessionPreviewHistoryPageLoadV3,
 } from "./daemon-history-commands.ts";
+import {
+    executeSessionHistoryPageLoadV3,
+    executeSessionPermissionResponseV3,
+    executeSessionSettingChangeV3,
+    executeSessionSettingsReadV3,
+    executeSessionUserInputResponseV3,
+} from "./daemon-native-session-v3-commands.ts";
 import { executePrompt } from "./daemon-prompt-executor.ts";
 import {
     executeSessionConfigure,
@@ -52,6 +66,7 @@ import {
 import type { DaemonTurnRegistry } from "./daemon-turn-registry.ts";
 import type { ExternalContentStore } from "./external-content/local-external-content-store.ts";
 import { createNativeSessionRequestHandler } from "./native-sessions/handle-native-requests.ts";
+import type { NativeSessionRuntimeManagerV3 } from "./native-sessions/runtime-manager-v3.ts";
 import type { NativeSessionService } from "./native-sessions/service.ts";
 import type { DaemonOperationState } from "./relay-connection/daemon-operation-state.ts";
 import type { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
@@ -64,6 +79,7 @@ export interface DaemonCommandOptions {
     readonly sessions: AgentRuntimeManager;
     readonly installations: AgentInstallationManager;
     readonly nativeSessions: NativeSessionService;
+    readonly nativeSessionsV3: NativeSessionRuntimeManagerV3;
     readonly operations: DaemonOperationState;
     readonly eventProjectionV2: DaemonSessionEventProjectionV2;
     readonly externalContent: ExternalContentStore;
@@ -82,6 +98,7 @@ export function createDaemonCommandHandler({
     sessions,
     installations,
     nativeSessions,
+    nativeSessionsV3,
     operations,
     eventProjectionV2,
     externalContent,
@@ -187,6 +204,39 @@ export function createDaemonCommandHandler({
                 );
                 return;
             }
+            if (kind === SESSION_PREVIEW_HISTORY_V3_PAGE_LOAD_KIND) {
+                void executeSessionPreviewHistoryPageLoadV3(
+                    socket,
+                    message,
+                    config,
+                    directories,
+                    audit,
+                    diagnostics,
+                    nativeSessionsV3,
+                    signal,
+                );
+                return;
+            }
+            if (kind === SESSION_HISTORY_V3_PAGE_LOAD_KIND) {
+                void executeSessionHistoryPageLoadV3(socket, message, nativeSessionsV3, audit, diagnostics, signal);
+                return;
+            }
+            if (kind === SESSION_SETTINGS_V3_READ_KIND) {
+                void executeSessionSettingsReadV3(socket, message, nativeSessionsV3, audit, diagnostics, signal);
+                return;
+            }
+            if (kind === SESSION_SETTING_V3_CHANGE_KIND) {
+                void executeSessionSettingChangeV3(socket, message, nativeSessionsV3, audit, diagnostics, signal);
+                return;
+            }
+            if (kind === SESSION_PERMISSION_V3_RESPOND_KIND) {
+                void executeSessionPermissionResponseV3(socket, message, nativeSessionsV3, audit, diagnostics, signal);
+                return;
+            }
+            if (kind === SESSION_USER_INPUT_V3_RESPOND_KIND) {
+                void executeSessionUserInputResponseV3(socket, message, nativeSessionsV3, audit, diagnostics, signal);
+                return;
+            }
             if (kind === NATIVE_SESSION_CANCEL_KIND) {
                 nativeRequestHandler.cancel(message);
                 return;
@@ -244,6 +294,15 @@ export function createDaemonCommandHandler({
                 if (cancellationState === "pending") {
                     return;
                 }
+                if (nativeSessionsV3.isConnected(cancellation.sessionId)) {
+                    void nativeSessionsV3
+                        .connected(cancellation.sessionId)
+                        .cancelPrompt(AbortSignal.timeout(30_000))
+                        .catch((error: unknown) => {
+                            console.error("Mobius daemon could not cancel the direct native turn", error);
+                        });
+                    return;
+                }
                 void sessions.cancelPrompt(cancellation.sessionId).catch((error) => {
                     console.error("Mobius daemon could not cancel the agent turn", error);
                 });
@@ -269,7 +328,17 @@ export function createDaemonCommandHandler({
             }
             if (kind === SESSION_PREPARE_KIND) {
                 const command = message;
-                void executeSessionPrepare(socket, command, config, directories, audit, sessions, diagnostics, signal);
+                void executeSessionPrepare(
+                    socket,
+                    command,
+                    config,
+                    directories,
+                    audit,
+                    sessions,
+                    nativeSessionsV3,
+                    diagnostics,
+                    signal,
+                );
                 return;
             }
             if (kind === SESSION_CONFIGURE_KIND) {
@@ -318,6 +387,7 @@ export function createDaemonCommandHandler({
                     directories,
                     audit,
                     sessions,
+                    nativeSessionsV3,
                     nativeSessions,
                     diagnostics,
                     signal,
@@ -410,6 +480,7 @@ export function createDaemonCommandHandler({
                 directories,
                 audit,
                 sessions,
+                nativeSessionsV3,
                 attemptId: receipt.attemptId,
                 activateAttempt: turn.activate,
                 waitForSessionAvailability: (waitSignal) =>

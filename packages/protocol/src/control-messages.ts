@@ -630,6 +630,7 @@ export const sessionReadyEventSchema = z
         requestId: IDENTIFIER,
         restored: z.boolean(),
         runtimeTimings: runtimeTimingsSchema.optional(),
+        sessionProtocolVersion: z.literal(3).optional(),
         sessionId: IDENTIFIER,
     })
     .readonly();

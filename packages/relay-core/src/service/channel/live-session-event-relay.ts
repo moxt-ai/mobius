@@ -1,4 +1,9 @@
-import { encodeSessionEventEnvelopeV2, type SessionEventEnvelopeV2 } from "@moxt-ai/mobius-protocol";
+import {
+    encodeSessionEventEnvelopeV2,
+    encodeSessionLiveEventEnvelopeV3,
+    type SessionEventEnvelopeV2,
+    type SessionLiveEventEnvelopeV3,
+} from "@moxt-ai/mobius-protocol";
 import type { BestEffortRecording } from "./best-effort-recording.ts";
 import type { ChannelPeers } from "./channel-actor.ts";
 
@@ -35,6 +40,35 @@ export class LiveSessionEventRelay {
             this.#recording.publish(
                 { projectId: this.#projectId, runtimeId: this.#runtimeId, sessionId },
                 { events, kind: envelope.kind },
+            );
+        }
+    };
+
+    readonly receiveV3 = (envelope: SessionLiveEventEnvelopeV3): void => {
+        const message = encodeSessionLiveEventEnvelopeV3(envelope);
+        for (const host of this.#peers.hosts()) {
+            try {
+                host.send(message);
+            } catch {
+                host.close(1013, "Runtime channel backpressure");
+            }
+        }
+        const eventsBySession = new Map<string, (typeof envelope.events)[number][]>();
+        for (const event of envelope.events) {
+            const events = eventsBySession.get(event.sessionId) ?? [];
+            events.push(event);
+            eventsBySession.set(event.sessionId, events);
+        }
+        const recordedAt = new Date().toISOString();
+        for (const [sessionId, events] of eventsBySession) {
+            this.#recording.publishV3(
+                { projectId: this.#projectId, runtimeId: this.#runtimeId, sessionId },
+                {
+                    envelope: { events, kind: envelope.kind },
+                    projectId: this.#projectId,
+                    recordedAt,
+                    runtimeId: this.#runtimeId,
+                },
             );
         }
     };

@@ -14,6 +14,7 @@ import type { WorkspaceDirectoryService } from "./authorization/workspace-direct
 import type { AcpAgentDefinition, DaemonConfig } from "./config.ts";
 import { operationErrorCode, reportOperationFailure, send } from "./daemon-command-results.ts";
 import { AccumulatingOperationMetrics } from "./infra/operation-metrics.ts";
+import type { NativeSessionRuntimeManagerV3 } from "./native-sessions/runtime-manager-v3.ts";
 import type { NativeSessionService } from "./native-sessions/service.ts";
 import type { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
 
@@ -33,6 +34,7 @@ async function prepareSession(
     directories: WorkspaceDirectoryService,
     audit: AuditStore,
     sessions: AgentRuntimeManager,
+    nativeSessionsV3: NativeSessionRuntimeManagerV3,
     metrics: AccumulatingOperationMetrics,
     signal: AbortSignal,
 ): Promise<SessionReadyEvent> {
@@ -49,6 +51,113 @@ async function prepareSession(
                 ),
         );
         const agent = await resolveCatalogAgent(config, command.agentId, signal);
+        if (command.transient !== true && agent.nativeSessionV3 && nativeSessionsV3.supports(agent.id)) {
+            const stored = sessions.storedSessionOrNull(command.sessionId);
+            if (
+                stored !== null &&
+                (stored.agentId !== agent.id ||
+                    stored.cwd !== resolved.cwd ||
+                    stored.additionalDirectories.length !== resolved.additionalDirectories.length ||
+                    stored.additionalDirectories.some(
+                        (directory, index) => directory !== resolved.additionalDirectories[index],
+                    ))
+            ) {
+                throw new AcpExecutionError(
+                    "The native Session binding does not match the authorized workspace",
+                    {},
+                    "session_identity_mismatch",
+                );
+            }
+            await sessions.releaseSession(command.sessionId, signal);
+            const live = nativeSessionsV3.live(command.sessionId);
+            try {
+                const launch = {
+                    command: agent.command,
+                    environment: {
+                        ...Object.fromEntries(
+                            Object.entries(config.localContext.environment).filter(
+                                (entry): entry is [string, string] => entry[1] !== undefined,
+                            ),
+                        ),
+                        ...agent.environment,
+                    },
+                    id: agent.id,
+                };
+                const context = {
+                    additionalDirectories: resolved.additionalDirectories,
+                    cwd: resolved.cwd,
+                    sessionId: command.sessionId,
+                };
+                const connected =
+                    stored === null
+                        ? await nativeSessionsV3.create(launch, context, live, signal)
+                        : await nativeSessionsV3.prepare(
+                              launch,
+                              { ...context, nativeSessionId: stored.nativeSessionId },
+                              live,
+                              signal,
+                          );
+                if (stored === null) {
+                    sessions.bindNativeSession({
+                        ...context,
+                        agentId: agent.id,
+                        nativeSessionId: connected.nativeSessionId,
+                        title: "",
+                    });
+                }
+                if (command.configuration !== undefined) {
+                    await connected.applySetting(
+                        {
+                            kind: "session.setting.v3.change",
+                            requestId: command.requestId,
+                            sessionId: command.sessionId,
+                            settingId: command.configuration.configId,
+                            value:
+                                command.configuration.valueType === "boolean"
+                                    ? command.configuration.booleanValue
+                                    : command.configuration.value,
+                        },
+                        signal,
+                    );
+                }
+                await live.publish({
+                    sessionUpdate: "session_lifecycle_changed",
+                    state: {
+                        context: {
+                            additionalDirectoryIds: command.additionalDirectoryIds,
+                            agentId: command.agentId,
+                            directoryId: command.directoryId,
+                        },
+                        kind: "connected",
+                    },
+                });
+                const listing = await directories.list(config.bindingId, command.directoryId, signal);
+                audit.record({
+                    commandId: command.requestId,
+                    event: "session_prepared",
+                    sessionId: command.sessionId,
+                });
+                return {
+                    additionalDirectories: resolved.additionalDirectoryEntries,
+                    agentId: command.agentId,
+                    agentName: agent.label,
+                    agentVersion: agent.agentVersion,
+                    capabilities: agent.capabilities,
+                    commands: [],
+                    configOptions: [],
+                    directoryId: command.directoryId,
+                    directoryLabel: listing.directoryLabel,
+                    kind: "session.ready",
+                    requestId: command.requestId,
+                    restored: stored !== null,
+                    sessionProtocolVersion: 3,
+                    sessionId: command.sessionId,
+                };
+            } catch (error) {
+                await nativeSessionsV3.closeSession(command.sessionId, AbortSignal.timeout(30_000));
+                throw error;
+            }
+        }
         const preparation = {
             additionalDirectories: resolved.additionalDirectories,
             agent,
@@ -147,6 +256,7 @@ export async function executeSessionPrepare(
     directories: WorkspaceDirectoryService,
     audit: AuditStore,
     sessions: AgentRuntimeManager,
+    nativeSessionsV3: NativeSessionRuntimeManagerV3,
     diagnostics: RelayConnectionDiagnostics,
     signal: AbortSignal,
 ): Promise<void> {
@@ -159,6 +269,7 @@ export async function executeSessionPrepare(
             directories,
             audit,
             sessions,
+            nativeSessionsV3,
             metrics,
             signal,
         );
@@ -197,6 +308,7 @@ export async function executeSessionRestore(
     directories: WorkspaceDirectoryService,
     audit: AuditStore,
     sessions: AgentRuntimeManager,
+    nativeSessionsV3: NativeSessionRuntimeManagerV3,
     nativeSessions: NativeSessionService,
     diagnostics: RelayConnectionDiagnostics,
     signal: AbortSignal,
@@ -226,6 +338,7 @@ export async function executeSessionRestore(
             directories,
             audit,
             sessions,
+            nativeSessionsV3,
             metrics,
             signal,
         );

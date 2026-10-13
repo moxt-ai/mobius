@@ -21,6 +21,10 @@ const recordingIncrementalQuery = v.object({
     after: v.optional(recordingCursor),
     limit: v.optional(v.pipe(v.string(), v.regex(/^[1-9][0-9]{0,4}$/u))),
 });
+const recordingV3IncrementalQuery = v.object({
+    after: v.optional(v.pipe(v.string(), v.regex(/^(?:0|[1-9][0-9]*)$/u))),
+    limit: v.optional(v.pipe(v.string(), v.regex(/^[1-9][0-9]{0,4}$/u))),
+});
 
 function decodedIdentifier(value: string | undefined): string | null {
     if (value === undefined) {
@@ -116,6 +120,28 @@ export const recordingReadRoutes = new Hono<PlatformApplicationEnvironment>()
         const recordingPath = `/v1/projects/${encodeURIComponent(projectId)}/runtimes/${encodeURIComponent(
             query.output.runtimeId,
         )}/sessions/${encodeURIComponent(sessionId)}/events`;
+        return await readRecording(context, projectId, recordingPath, forwarded);
+    })
+    .get("/sessions/:sessionId/events-v3", async (context): Promise<Response> => {
+        const query = v.safeParse(recordingQuery, { runtimeId: context.req.query("runtimeId") ?? "" });
+        const incremental = v.safeParse(recordingV3IncrementalQuery, {
+            ...(context.req.query("after") === undefined ? {} : { after: context.req.query("after") }),
+            ...(context.req.query("limit") === undefined ? {} : { limit: context.req.query("limit") }),
+        });
+        const projectId = decodedIdentifier(context.req.param("projectId"));
+        const sessionId = decodedIdentifier(context.req.param("sessionId"));
+        if (!query.success || projectId === null || sessionId === null || !isIdentifier(query.output.runtimeId)) {
+            return errorResponse("invalid_request", "The Recording target is invalid", 400);
+        }
+        if (!incremental.success) {
+            return errorResponse("invalid_request", "The V3 Recording incremental read is invalid", 400);
+        }
+        const forwarded = new URLSearchParams({ runtimeId: query.output.runtimeId });
+        forwarded.set("after", incremental.output.after ?? "0");
+        forwarded.set("limit", incremental.output.limit ?? "100");
+        const recordingPath = `/v1/projects/${encodeURIComponent(projectId)}/runtimes/${encodeURIComponent(
+            query.output.runtimeId,
+        )}/sessions/${encodeURIComponent(sessionId)}/events-v3`;
         return await readRecording(context, projectId, recordingPath, forwarded);
     });
 

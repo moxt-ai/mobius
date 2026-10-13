@@ -6,19 +6,22 @@ import { type FileHandle, mkdir, open, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-    type NativeSessionEventsV2,
     RUNTIME_WORKSPACE_BINDING_ID,
     type SessionCommand,
     type SessionConfigOption,
     type SessionConfigurationSelection,
     type SessionEventV2,
+    type SessionHistoryMessageV3,
+    type SessionLiveEventV3,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { MobiusAppCredentialProvider, MobiusPlatformAppClient } from "@moxt-ai/mobius-sdk/platform";
 import {
     MobiusClient,
     type MobiusLiveEventSubscriptionV2,
+    type MobiusLiveEventSubscriptionV3,
     type MobiusLiveSessionEventObserverV2,
+    type MobiusLiveSessionEventObserverV3,
     MobiusPageRequest,
     MobiusRecordingPolicy,
     MobiusRuntimePairingRequest,
@@ -678,37 +681,35 @@ async function cancelCommand(directory: string, flags: ReadonlyMap<string, strin
     }
 }
 
-async function sessionEventsV2(
+interface SessionMessagesV3 {
+    readonly messages: readonly SessionHistoryMessageV3[];
+    readonly throughSeq: number;
+    readonly truncated: boolean;
+}
+
+async function sessionMessagesV3(
     service: MobiusClient,
     session: MiniClientSession,
     signal: AbortSignal,
-): Promise<NativeSessionEventsV2> {
-    const pages: NativeSessionEventsV2[] = [];
+): Promise<SessionMessagesV3> {
+    const messages: SessionHistoryMessageV3[] = [];
     let cursor: string | null = null;
+    let throughSeq = 0;
+    let pageCount = 0;
     do {
-        const page = await service.events.listV2(session.sessionId, new MobiusPageRequest(50, cursor ?? ""), signal);
-        pages.push({ events: page, queuedPromptRequests: [] });
+        const page = await service.sessions.loadSessionNativeMessagesV3(
+            session.sessionId,
+            { cursor, messageLimit: 50 },
+            signal,
+        );
+        if (pageCount === 0) {
+            throughSeq = page.throughSeq;
+        }
+        messages.push(...page.messages);
         cursor = page.nextCursor;
-    } while (cursor !== null && pages.length < 100);
-    const newest = pages[0];
-    if (newest === undefined) {
-        throw new MiniClientError("event_log_unavailable", "The Runtime returned no V2 event-log page");
-    }
-    const events = pages.toReversed().flatMap((page) => page.events.events);
-    if (pages.some((page) => page.events.sessionGenerationId !== newest.events.sessionGenerationId)) {
-        throw new MiniClientError("event_log_generation_changed", "The Session reloaded while history was loading");
-    }
-    return {
-        events: {
-            events,
-            nextCursor: cursor,
-            sessionGenerationId: newest.events.sessionGenerationId,
-            tailCursor: events.at(-1)?.eventId ?? "",
-            truncated: cursor !== null,
-            version: 2,
-        },
-        queuedPromptRequests: newest.queuedPromptRequests,
-    };
+        pageCount += 1;
+    } while (cursor !== null && pageCount < 100);
+    return { messages, throughSeq, truncated: cursor !== null };
 }
 
 async function getCommand(directory: string, flags: ReadonlyMap<string, string>): Promise<void> {
@@ -719,37 +720,44 @@ async function getCommand(directory: string, flags: ReadonlyMap<string, string>)
     const connection = await sessionClient(state, session);
     const service = connection.service;
     const signal = shutdown.signal;
-    let subscription: MobiusLiveEventSubscriptionV2 | undefined;
+    let subscription: MobiusLiveEventSubscriptionV3 | undefined;
     try {
         if (!follow) {
-            output({ events: await sessionEventsV2(service, session, signal), sessionId: session.sessionId });
+            output({ history: await sessionMessagesV3(service, session, signal), sessionId: session.sessionId });
             return;
         }
-        const seen = new Set<string>();
-        const followedCommandId = targetTurnId(session);
         const terminal = Promise.withResolvers<void>();
-        const isFollowedTerminal = (event: SessionEventV2): boolean =>
-            event.type === "lifecycle-metadata" &&
-            (event.payload.kind === "prompt.completed" || event.payload.kind === "prompt.failed") &&
-            event.payload.commandId === followedCommandId;
-        const observer: MobiusLiveSessionEventObserverV2 = {
+        let lastSeq = 0;
+        let observedRunning = false;
+        const isFollowedTerminal = (event: SessionLiveEventV3): boolean => {
+            if (event.item.sessionUpdate !== "session_lifecycle_changed") {
+                return false;
+            }
+            if (event.item.state.kind === "running") {
+                observedRunning = true;
+                return false;
+            }
+            return observedRunning && (event.item.state.kind === "idle" || event.item.state.kind === "failed");
+        };
+        const reconcile = async (connection: { readonly kind: "initial" | "reconnected" }): Promise<void> => {
+            const history = await sessionMessagesV3(service, session, signal);
+            lastSeq = history.throughSeq;
+            output({ connection: connection.kind, history, sessionId: session.sessionId });
+        };
+        const observer: MobiusLiveSessionEventObserverV3 = {
             reconcile: async (liveConnection) => {
-                const events = await sessionEventsV2(service, session, signal);
-                for (const event of events.events.events) {
-                    seen.add(event.eventId);
-                }
-                output({ connection: liveConnection.kind, events, sessionId: session.sessionId });
-                if (events.events.events.some(isFollowedTerminal)) {
-                    terminal.resolve();
-                }
+                await reconcile(liveConnection);
             },
             receive: async (events) => {
-                const unseen = events.filter((event) => !seen.has(event.eventId));
-                for (const event of unseen) {
-                    seen.add(event.eventId);
+                const relevant = events.filter((event) => event.sessionId === session.sessionId && event.seq > lastSeq);
+                const first = relevant[0];
+                if (first !== undefined && first.seq !== lastSeq + 1) {
+                    await reconcile({ kind: "reconnected" });
                 }
+                const unseen = relevant.filter((event) => event.seq > lastSeq);
                 if (unseen.length > 0) {
                     output({ events: unseen, sessionId: session.sessionId });
+                    lastSeq = unseen[unseen.length - 1]?.seq ?? lastSeq;
                 }
                 if (unseen.some(isFollowedTerminal)) {
                     terminal.resolve();
@@ -758,7 +766,7 @@ async function getCommand(directory: string, flags: ReadonlyMap<string, string>)
                 return true;
             },
         };
-        subscription = await service.events.subscribeLiveV2(session.sessionId, observer, signal);
+        subscription = await service.events.subscribeLiveV3(session.sessionId, observer, signal);
         await Promise.race([subscription.completed, terminal.promise]);
     } finally {
         subscription?.close();

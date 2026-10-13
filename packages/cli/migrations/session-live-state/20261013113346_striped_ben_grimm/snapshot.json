@@ -1,0 +1,40 @@
+{
+    "version": "7",
+    "dialect": "sqlite",
+    "id": "5b07389a-d191-488c-bef6-ff457e3b4046",
+    "prevIds": ["00000000-0000-0000-0000-000000000000"],
+    "ddl": [
+        {
+            "name": "session_live_sequence_v3",
+            "entityType": "tables"
+        },
+        {
+            "type": "text",
+            "notNull": false,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "session_id",
+            "entityType": "columns",
+            "table": "session_live_sequence_v3"
+        },
+        {
+            "type": "integer",
+            "notNull": true,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "max_seq",
+            "entityType": "columns",
+            "table": "session_live_sequence_v3"
+        },
+        {
+            "columns": ["session_id"],
+            "nameExplicit": false,
+            "name": "session_live_sequence_v3_pk",
+            "table": "session_live_sequence_v3",
+            "entityType": "pks"
+        }
+    ],
+    "renames": []
+}

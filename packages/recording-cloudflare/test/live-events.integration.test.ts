@@ -3,6 +3,7 @@ import {
     decodeSessionRecordingDirectory,
     decodeSessionRecordingHistory,
     decodeSessionRecordingHistoryPage,
+    decodeSessionRecordingPageV3,
 } from "@moxt-ai/mobius-protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRecordingWorker } from "../src/worker.ts";
@@ -41,6 +42,137 @@ function numberedEvents(count: number, start = 0) {
         payload: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: `Reply ${start + index}` } },
     }));
 }
+
+function writeV3(sequences: readonly number[], text = "recorded"): Request {
+    return new Request("https://recording.internal/v1/session-events-v3", {
+        body: JSON.stringify({
+            envelope: {
+                events: sequences.map((seq) => ({
+                    item: {
+                        content: { text: `${text}-${seq}`, type: "text" },
+                        messageId: `native-message-${seq}`,
+                        sessionUpdate: "agent_message_chunk",
+                    },
+                    seq,
+                    sessionId: "live-session",
+                })),
+                kind: "session.live.v3",
+            },
+            projectId,
+            recordedAt: "2026-10-09T00:00:00.000Z",
+            runtimeId: "runtime-live",
+        }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+    });
+}
+
+function writeV3Items(events: readonly { readonly item: unknown; readonly seq: number }[]): Request {
+    return new Request("https://recording.internal/v1/session-events-v3", {
+        body: JSON.stringify({
+            envelope: {
+                events: events.map((candidate) => ({ ...candidate, sessionId: "live-session" })),
+                kind: "session.live.v3",
+            },
+            projectId,
+            recordedAt: "2026-10-09T00:00:00.000Z",
+            runtimeId: "runtime-live",
+        }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+    });
+}
+
+describe("Recording live V3 events", () => {
+    it("Given V3 lifecycle and user-message events, When the Runtime loads its recording directory, Then it sees the Session identity, status, and title", async () => {
+        expect(
+            (
+                await worker.fetch(
+                    writeV3Items([
+                        {
+                            item: {
+                                sessionUpdate: "session_lifecycle_changed",
+                                state: {
+                                    context: {
+                                        additionalDirectoryIds: ["docs"],
+                                        agentId: "codex",
+                                        directoryId: "default",
+                                    },
+                                    kind: "running",
+                                },
+                            },
+                            seq: 1,
+                        },
+                        {
+                            item: {
+                                content: { text: "Explain the recording flow", type: "text" },
+                                messageId: "native-user-1",
+                                sessionUpdate: "user_message_chunk",
+                            },
+                            seq: 2,
+                        },
+                    ]),
+                    env,
+                )
+            ).status,
+        ).toBe(201);
+        const response = await worker.fetch(
+            new Request(`https://recording.internal/v1/projects/${projectId}/runtimes/runtime-live/sessions`),
+            env,
+        );
+        expect(decodeSessionRecordingDirectory(await response.text())).toEqual({
+            sessions: [
+                {
+                    additionalDirectoryIds: ["docs"],
+                    agentId: "codex",
+                    directoryId: "default",
+                    runtimeId: "runtime-live",
+                    sessionId: "live-session",
+                    status: "running",
+                    title: "Explain the recording flow",
+                    updatedAt: "2026-10-09T00:00:00.000Z",
+                },
+            ],
+        });
+    });
+
+    it("Given recording receives sequences with a dropped event, When a client pages after 40, Then it sees native identity, the explicit gap, and later events", async () => {
+        expect((await worker.fetch(writeV3([40, 41, 42]), env)).status).toBe(201);
+        expect((await worker.fetch(writeV3([44]), env)).status).toBe(201);
+        const response = await worker.fetch(
+            new Request(
+                `https://recording.internal/v1/projects/${projectId}/runtimes/runtime-live/sessions/live-session/events-v3?after=40&limit=10`,
+            ),
+            env,
+        );
+        expect(response.status).toBe(200);
+        const page = decodeSessionRecordingPageV3(await response.text());
+        expect(
+            page.events.map(({ event: recorded }) => [
+                recorded.seq,
+                "messageId" in recorded.item && recorded.item.messageId,
+            ]),
+        ).toEqual([
+            [41, "native-message-41"],
+            [42, "native-message-42"],
+            [44, "native-message-44"],
+        ]);
+        expect(page).toMatchObject({
+            gaps: [{ fromSeq: 43, toSeq: 43 }],
+            nextCursor: 44,
+            tailSeq: 44,
+            version: 3,
+        });
+    });
+
+    it("Given a recorded sequence, When redelivery changes its content, Then Recording reports a stable conflict", async () => {
+        expect((await worker.fetch(writeV3([1]), env)).status).toBe(201);
+        expect((await worker.fetch(writeV3([1]), env)).status).toBe(201);
+        const conflict = await worker.fetch(writeV3([1], "changed"), env);
+        expect(conflict.status).toBe(409);
+        expect(await conflict.json()).toMatchObject({ error: { code: "recording_sequence_conflict" } });
+    });
+});
 
 describe("Recording live V2 events", () => {
     it("Given an event broadcast to browsers, When Recording receives the same V2 event, Then history retains its identity and payload unchanged", async () => {

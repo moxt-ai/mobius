@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,16 +10,21 @@ import {
     decodeMessageKind,
     decodeNativeSessionResult,
     decodeSessionEventEnvelopeV2,
+    decodeSessionLiveEventEnvelopeV3,
     decodeSessionLiveHistoryV2PageLoaded,
+    decodeSessionReadyEvent,
     encodeNativeSessionRequest,
     encodeSessionCancelCommand,
     encodeSessionLiveHistoryV2PageLoad,
+    encodeSessionPrepareCommand,
     encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
     NATIVE_SESSION_RESULT_KIND,
     SESSION_EVENT_V2_KIND,
     SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND,
+    SESSION_LIVE_V3_KIND,
     type SessionEventV2,
+    type SessionLiveEventV3,
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -164,9 +169,13 @@ class ClientFrames {
             this.#resolvers.push(resolve);
         });
     };
+
+    readonly take = (): string | null => this.#messages.shift() ?? null;
 }
 
-async function startControlledDaemon(): Promise<{
+async function startControlledDaemon(
+    createAgent?: (stateDirectory: string, workspace: string) => Promise<LocalAgentDefinition>,
+): Promise<{
     readonly agent: LocalAgentDefinition;
     readonly close: () => Promise<void>;
     readonly config: ReturnType<typeof createDaemonConfig>;
@@ -209,13 +218,16 @@ async function startControlledDaemon(): Promise<{
     await listen(relay);
     const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
     relayUrl.searchParams.set("token", "d".repeat(43));
-    const agent = new LocalAgentDefinition(
-        "opencode",
-        "OpenCode",
-        process.execPath,
-        [fakeAgentPath, "--agent-name", "OpenCode"],
-        { MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory },
-    );
+    const agent =
+        createAgent === undefined
+            ? new LocalAgentDefinition(
+                  "opencode",
+                  "OpenCode",
+                  process.execPath,
+                  [fakeAgentPath, "--agent-name", "OpenCode"],
+                  { MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory },
+              )
+            : await createAgent(stateDirectory, workspace);
     const config = createDaemonConfig(
         { channelId: "channel_alpha", defaultWorkspace: workspace, relayUrl },
         [agent],
@@ -564,6 +576,169 @@ describe("daemon V2 live delivery", () => {
             expect(recovered).toBe(`Gathering context${text}`);
             await cancel(fixture, command);
             expect(await activeTurn(fixture, command)).toBeNull();
+        } finally {
+            await fixture.close();
+        }
+    });
+});
+
+describe("daemon V3 direct Codex delivery", () => {
+    it("Given a production Codex command, When the daemon prepares, prompts, and cancels it, Then native lifecycle and content use one persistent sequence", async () => {
+        const fixture = await startControlledDaemon(async (stateDirectory) => {
+            const executable = join(stateDirectory, "codex");
+            await writeFile(
+                executable,
+                `#!${process.execPath}
+import { createInterface } from "node:readline";
+if (process.argv.includes("--version")) {
+    process.stdout.write("codex-cli 0.154.0\\n");
+    process.exit(0);
+}
+let turn = 0;
+for await (const line of createInterface({ input: process.stdin })) {
+    const request = JSON.parse(line);
+    if (request.method === "initialized") continue;
+    if (request.method === "initialize") {
+        process.stdout.write(JSON.stringify({ id: request.id, result: {} }) + "\\n");
+        continue;
+    }
+    if (request.method === "thread/start") {
+        process.stdout.write(JSON.stringify({ id: request.id, result: { thread: { id: "native-daemon-thread" } } }) + "\\n");
+        continue;
+    }
+    if (request.method === "turn/start") {
+        turn += 1;
+        const turnId = "turn-" + turn;
+        process.stdout.write(JSON.stringify({ id: request.id, result: { turn: { id: turnId, status: "inProgress" } } }) + "\\n");
+        process.stdout.write(JSON.stringify({ method: "turn/started", params: { threadId: request.params.threadId, turn: { id: turnId, status: "inProgress" } } }) + "\\n");
+        if (turn === 1) {
+            process.stdout.write(JSON.stringify({ method: "item/agentMessage/delta", params: { delta: "native answer", itemId: "message-1", threadId: request.params.threadId, turnId } }) + "\\n");
+            process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: request.params.threadId, turn: { id: turnId, status: "completed" } } }) + "\\n");
+        }
+        continue;
+    }
+    if (request.method === "turn/interrupt") {
+        process.stdout.write(JSON.stringify({ id: request.id, result: {} }) + "\\n");
+        process.stdout.write(JSON.stringify({ method: "turn/completed", params: { threadId: request.params.threadId, turn: { id: request.params.turnId, status: "interrupted" } } }) + "\\n");
+        continue;
+    }
+    process.stdout.write(JSON.stringify({ id: request.id, error: { code: -32601, message: "Unexpected method" } }) + "\\n");
+}
+`,
+                { mode: 0o700 },
+            );
+            await chmod(executable, 0o700);
+            const discovered = new LocalAgentDefinition("codex", "Codex", executable, [], {}, "", "0.154.0");
+            return new LocalAgentDefinition(
+                discovered.id,
+                discovered.label,
+                discovered.command,
+                discovered.arguments,
+                discovered.environment,
+                discovered.adapterVersion,
+                discovered.agentVersion,
+                discovered.adapterIdentity,
+                discovered.agentIdentity,
+                discovered.capabilities,
+                true,
+            );
+        });
+        const nextV3 = async () => {
+            for (;;) {
+                let frame = fixture.frames.take();
+                if (frame === null) {
+                    const task = await fixture.timer.nextBatch();
+                    task.run();
+                    frame = await fixture.frames.next();
+                }
+                for (;;) {
+                    const kind = decodeMessageKind(frame);
+                    if (kind === "session.operation.failed") {
+                        throw new Error(frame);
+                    }
+                    if (kind === SESSION_LIVE_V3_KIND) {
+                        return decodeSessionLiveEventEnvelopeV3(frame).events;
+                    }
+                    if (kind === SESSION_EVENT_V2_KIND) {
+                        break;
+                    }
+                    frame = await fixture.frames.next();
+                }
+            }
+        };
+        try {
+            sendText(
+                fixture.socket,
+                encodeSessionPrepareCommand({
+                    additionalDirectoryIds: [],
+                    agentId: "codex",
+                    bindingId: fixture.config.bindingId,
+                    directoryId: "default",
+                    kind: "session.prepare",
+                    requestId: "prepare-v3-codex",
+                    sessionId: "test-session",
+                }),
+            );
+            for (;;) {
+                const ready = await fixture.frames.next();
+                if (decodeMessageKind(ready) === "session.operation.failed") {
+                    throw new Error(ready);
+                }
+                if (decodeMessageKind(ready) === "session.ready") {
+                    expect(decodeSessionReadyEvent(ready).sessionProtocolVersion).toBe(3);
+                    break;
+                }
+            }
+            const connected = await nextV3();
+            expect(connected).toMatchObject([
+                {
+                    seq: 1,
+                    item: { sessionUpdate: "session_lifecycle_changed", state: { kind: "connected" } },
+                },
+            ]);
+
+            const first = { ...prompt(fixture, "first native prompt"), commandId: "native-turn-1" };
+            sendText(fixture.socket, encodeSessionPromptCommand(first));
+            const completed: SessionLiveEventV3[] = [];
+            while (
+                !completed.some(
+                    (event) =>
+                        event.item.sessionUpdate === "session_lifecycle_changed" && event.item.state.kind === "idle",
+                )
+            ) {
+                completed.push(...(await nextV3()));
+            }
+            expect(completed.map((event) => event.seq)).toEqual([2, 3, 4]);
+            expect(completed.map((event) => event.item)).toMatchObject([
+                { sessionUpdate: "session_lifecycle_changed", state: { kind: "running" } },
+                { content: { text: "native answer", type: "text" }, sessionUpdate: "agent_message_chunk" },
+                { sessionUpdate: "session_lifecycle_changed", state: { kind: "idle" } },
+            ]);
+
+            const second = { ...prompt(fixture, "cancel native prompt"), commandId: "native-turn-2" };
+            sendText(fixture.socket, encodeSessionPromptCommand(second));
+            const running = await nextV3();
+            expect(running).toMatchObject([
+                {
+                    seq: 5,
+                    item: { sessionUpdate: "session_lifecycle_changed", state: { kind: "running" } },
+                },
+            ]);
+            sendText(
+                fixture.socket,
+                encodeSessionCancelCommand({
+                    commandId: second.commandId,
+                    kind: "session.cancel",
+                    sessionId: second.sessionId,
+                }),
+            );
+            const cancelled = await nextV3();
+            expect(cancelled).toMatchObject([
+                {
+                    seq: 6,
+                    item: { sessionUpdate: "session_lifecycle_changed", state: { kind: "idle" } },
+                },
+            ]);
         } finally {
             await fixture.close();
         }

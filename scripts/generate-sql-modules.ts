@@ -58,6 +58,11 @@ await writeMigrationModule(
     "sessionEventCacheMigrations",
     await sqlFiles(join(cli, "migrations/session-event-cache")),
 );
+await writeMigrationModule(
+    join(cli, "src/generated/session-live-state-migrations.ts"),
+    "sessionLiveStateMigrations",
+    await sqlFiles(join(cli, "migrations/session-live-state")),
+);
 
 await writeMigrationModule(
     join(relayCore, "src/generated/runtime-connection-do-migrations.ts"),

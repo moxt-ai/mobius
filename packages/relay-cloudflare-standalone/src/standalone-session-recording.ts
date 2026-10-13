@@ -1,4 +1,4 @@
-import { encodeSessionRecordingWrite } from "@moxt-ai/mobius-protocol";
+import { encodeSessionRecordingWrite, encodeSessionRecordingWriteV3 } from "@moxt-ai/mobius-protocol";
 import type {
     SessionRecording,
     SessionRecordingDeliveryResult,
@@ -50,6 +50,32 @@ export class StandaloneSessionRecording implements SessionRecording {
                         projectId: target.projectId,
                         runtimeId: target.runtimeId,
                     }),
+                    headers: { "content-type": "application/json" },
+                    method: "POST",
+                    signal: AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MILLISECONDS)]),
+                }),
+            );
+            signal.throwIfAborted();
+            await response.body?.cancel();
+            return response.ok ? { kind: "recorded" } : { kind: "failed", code: "write_failed" };
+        } catch {
+            signal.throwIfAborted();
+            return { kind: "failed", code: "write_failed" };
+        }
+    };
+
+    readonly deliverV3: SessionRecording["deliverV3"] = async (target, write, signal) => {
+        const configuration = await this.#configuration.read(target.projectId, signal);
+        if (configuration.state === "unconfigured" || !configuration.enabled) {
+            return { kind: "skipped" };
+        }
+        if (this.#provider.kind === "absent") {
+            return { kind: "failed", code: "provider_unavailable" };
+        }
+        try {
+            const response = await this.#provider.fetcher.fetch(
+                new Request("https://recording.internal/v1/session-events-v3", {
+                    body: encodeSessionRecordingWriteV3(write),
                     headers: { "content-type": "application/json" },
                     method: "POST",
                     signal: AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MILLISECONDS)]),
