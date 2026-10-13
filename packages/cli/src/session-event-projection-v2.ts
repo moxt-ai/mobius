@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
     ContentBlockV2,
     PromptExecutionContextV2,
@@ -61,7 +62,11 @@ export function projectSessionEventV2(
     recordedAt: string,
 ): SessionEventV2 {
     return {
-        eventId: `event-${sessionGenerationId}-${position.toString().padStart(16, "0")}`,
+        eventId: `event-${createHash("sha256")
+            .update(sessionGenerationId)
+            .update("\0")
+            .update(position.toString())
+            .digest("hex")}`,
         ...event,
         position: position.toString(),
         provenance: { kind: "original" },
