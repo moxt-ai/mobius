@@ -494,3 +494,59 @@ describe.sequential("Platform Recording read route", () => {
         expect(secondPage.truncated).toBe(false);
     });
 });
+
+describe.sequential("App Session status webhook", () => {
+    it("Given an App without webhook configuration, When a developer reads it, Then the empty settings are valid", async () => {
+        const worker = createTestMobiusPlatformApp(
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
+            createPlatformGateways,
+        );
+        const environment = bindings();
+        const tenants = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/platform/tenants`, {
+                    headers: developerHeaders(),
+                }),
+                environment,
+            ),
+            200,
+        );
+        const tenantValues = tenants["tenants"];
+        if (!Array.isArray(tenantValues) || tenantValues.length === 0) {
+            throw new Error("Expected a Platform tenant");
+        }
+        const app = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps`, {
+                    body: JSON.stringify({
+                        displayName: "Webhook App",
+                        tenantId: text(tenantValues[0], "tenantId"),
+                    }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+
+        const webhook = await responseJson(
+            await worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${text(app, "appId")}/session-status-webhook`,
+                    { headers: developerHeaders() },
+                ),
+                environment,
+            ),
+            200,
+        );
+
+        expect(webhook).toStrictEqual({
+            appId: text(app, "appId"),
+            configured: false,
+            enabled: false,
+            endpoint: "",
+            secretId: "",
+        });
+    });
+});

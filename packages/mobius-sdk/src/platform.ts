@@ -424,8 +424,8 @@ export class MobiusPlatformAppSessionStatusWebhook {
         this.appId = identifier(value, "appId");
         this.configured = boolean(value, "configured");
         this.enabled = boolean(value, "enabled");
-        this.endpoint = string(value, "endpoint", 2048);
-        this.secretId = string(value, "secretId", 128);
+        this.endpoint = value["endpoint"] === undefined ? "" : string(value, "endpoint", 2048);
+        this.secretId = value["secretId"] === undefined ? "" : string(value, "secretId", 128);
         const secret = value["secret"];
         this.secret = typeof secret === "string" ? string({ secret }, "secret", 256) : undefined;
     }

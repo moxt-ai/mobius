@@ -29,7 +29,9 @@ export class AppSessionStatusWebhookService {
 
     readonly read = async (identity: VerifiedExternalIdentity, appId: string, signal: AbortSignal): Promise<object> => {
         const current = await this.#authorized(identity, appId, signal);
-        return current === null ? { appId, configured: false } : this.resource(current);
+        return current === null
+            ? { appId, configured: false, enabled: false, endpoint: "", secretId: "" }
+            : this.resource(current);
     };
 
     readonly write = async (
