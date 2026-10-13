@@ -36,7 +36,7 @@ function contentText(value: unknown): string {
     return "";
 }
 
-function latestUserPrompt(value: unknown): string {
+export function latestUserPrompt(value: unknown): string {
     if (!isObject(value)) {
         return "";
     }
