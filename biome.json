@@ -34,6 +34,16 @@
     },
     "overrides": [
         {
+            "includes": ["packages/cli/src/acp/claude/upstream/src/**/*.ts"],
+            "linter": {
+                "rules": {
+                    "suspicious": {
+                        "noExplicitAny": "off"
+                    }
+                }
+            }
+        },
+        {
             "includes": ["packages/web/src/components/sidebar-resize-handle.tsx"],
             "linter": {
                 "rules": {

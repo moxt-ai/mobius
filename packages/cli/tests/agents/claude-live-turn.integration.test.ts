@@ -12,9 +12,9 @@ import { withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeAnthropicProvider } from "../support/llm/anthropic.ts";
 import { fakeProviderPrompts } from "../support/llm/scenarios.ts";
 
-test("Given the real claude and its production adapter, When two prompts execute through the daemon, Then a tool result and both streamed replies reach the client", async () => {
+test("Given the real Claude CLI without an external adapter, When two prompts execute through the daemon, Then the repository-owned ACP fork delivers the tool result and both streamed replies", async () => {
     await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-6", "REAL_CLAUDE_REPLY");
-    await using agent = await ClaudeFixture.create(provider);
+    await using agent = await ClaudeFixture.create(provider, { requireAdapter: false });
     await withRealDaemon(new ClaudeCodeAgentSpecification(), agent.environment, async (peer) => {
         for (const turn of [0, 1]) {
             const prompt =
@@ -89,7 +89,7 @@ test.skipIf(process.platform !== "darwin")(
         await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-6", "CLAUDE_RECOVERED", {
             disconnectsBeforeSuccess: 1,
         });
-        await using agent = await ClaudeFixture.create(provider);
+        await using agent = await ClaudeFixture.create(provider, { requireAdapter: false });
         await withRealDaemon(new ClaudeCodeAgentSpecification(), agent.environment, async (peer) => {
             const commandId = randomUUID();
             peer.send(
