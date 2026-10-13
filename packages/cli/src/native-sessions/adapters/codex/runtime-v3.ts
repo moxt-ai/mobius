@@ -1,8 +1,8 @@
 import type { SessionHistoryPageRequestV3, SessionHistoryPageV3 } from "@moxt-ai/mobius-protocol";
+import { CodexAppServerClient } from "../../../acp/harness/codex/app-server-client.ts";
 import { captureProcessTree, type ProcessTreeIdentity, stopProcessTree } from "../../../process/executable.ts";
 import type { NativeAgentLaunchV3 } from "../../runtime-manager-v3.ts";
 import type { NativeSessionContextV3 } from "../adapter-v3.ts";
-import { CodexAppServerClient } from "./app-server-client.ts";
 import { CodexNativeSessionPreviewAdapterV3 } from "./preview-v3.ts";
 
 /** Opens one native Codex transport. Session preview itself never resumes or opens a thread. */

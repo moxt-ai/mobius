@@ -1,5 +1,5 @@
+import type { CodexAppServerClient } from "../../../acp/harness/codex/app-server-client.ts";
 import type { NativeSessionPreviewAdapterV3 } from "../adapter-v3.ts";
-import type { CodexAppServerClient } from "./app-server-client.ts";
 import { CodexHistoryAdapterV3 } from "./history-v3.ts";
 
 /** Queries history through an App Server transport owned by the adapter runtime. */

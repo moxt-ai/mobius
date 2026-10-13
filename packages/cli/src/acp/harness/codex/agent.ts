@@ -19,7 +19,11 @@ import {
     type InProcessAcpEndpointOptions,
 } from "../../in-process/acp-endpoint.ts";
 import { sessionFailureMeta } from "../../session-failure.ts";
-import { CodexAppServerClient, type CodexAppServerServerRequest } from "./app-server-client.ts";
+import {
+    CodexAppServerClient,
+    type CodexAppServerServerRequest,
+    type CodexAppServerTermination,
+} from "./app-server-client.ts";
 import {
     CODEX_HISTORY_TURN_PAGE_LIMIT,
     commandApprovalParamsSchema,
@@ -48,6 +52,22 @@ const APPROVAL_TIMEOUT_MILLISECONDS = 3_600_000;
 const CODEX_AGENT_VERSION = "0.154.0";
 // Listing a directory must answer promptly: it is an interactive browser request, not a turn.
 const SESSION_LIST_TIMEOUT_MILLISECONDS = 30_000;
+
+function acpTermination(termination: CodexAppServerTermination): AcpEndpointTermination {
+    switch (termination.kind) {
+        case "closed":
+            return termination;
+        case "failed":
+            return {
+                error: new AcpExecutionError(
+                    termination.error.message,
+                    { cause: termination.error },
+                    termination.error.code,
+                ),
+                kind: "failed",
+            };
+    }
+}
 
 /** The choices Mobius offers when the app-server asks it to approve a local side effect. */
 const APPROVAL_OPTIONS: readonly PermissionOption[] = Object.freeze([
@@ -248,7 +268,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
             },
         });
         this.#settings = new CodexSettings(this.#appServer, options.environment);
-        this.terminated = this.#appServer.terminated;
+        this.terminated = this.#appServer.terminated.then(acpTermination);
         void this.terminated.then((termination) => {
             this.#turn?.completion.reject(acpEndpointTerminationError(termination));
             if (termination.kind === "failed") {

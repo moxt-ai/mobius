@@ -1,19 +1,32 @@
 import { type ChildProcess, spawn } from "node:child_process";
 
 import { executableLaunch, platformSpawnOptions } from "../../../process/executable.ts";
-
-import { AcpExecutionError } from "../../acp-error.ts";
-import { type AcpEndpointTermination, acpEndpointTerminationError } from "../../in-process/acp-endpoint.ts";
 import { decodeAppServerMessage } from "./app-server-protocol.ts";
 
 const INITIALIZE_TIMEOUT_MILLISECONDS = 30_000;
 const MESSAGE_OUTPUT_LIMIT_BYTES = 32 * 1_024 * 1_024;
 
 /** A failure in the Codex app-server boundary, reported with a stable code. */
-export class CodexAppServerError extends AcpExecutionError {
+export class CodexAppServerError extends Error {
+    readonly code: string;
+
     constructor(code: string, message: string, options: ErrorOptions = {}) {
-        super(message, options, code);
+        super(message, options);
+        this.code = code;
         this.name = "CodexAppServerError";
+    }
+}
+
+export type CodexAppServerTermination =
+    | { readonly kind: "closed" }
+    | { readonly error: CodexAppServerError; readonly kind: "failed" };
+
+export function codexAppServerTerminationError(termination: CodexAppServerTermination): CodexAppServerError {
+    switch (termination.kind) {
+        case "failed":
+            return termination.error;
+        case "closed":
+            return new CodexAppServerError("codex_app_server_closed", "The Codex app-server is closed");
     }
 }
 
@@ -48,11 +61,11 @@ export class CodexAppServerClient {
     readonly #child: ChildProcess;
     readonly #handlers: CodexAppServerHandlers;
     readonly #pending = new Map<number | string, PendingRequest>();
-    readonly #termination = Promise.withResolvers<AcpEndpointTermination>();
+    readonly #termination = Promise.withResolvers<CodexAppServerTermination>();
     readonly terminated = this.#termination.promise;
-    #lifecycle: { readonly kind: "open" } | { readonly kind: "terminated"; readonly result: AcpEndpointTermination } = {
-        kind: "open",
-    };
+    #lifecycle:
+        | { readonly kind: "open" }
+        | { readonly kind: "terminated"; readonly result: CodexAppServerTermination } = { kind: "open" };
     #nextRequestId = 1;
     #pendingBytes = 0;
     #pendingFragments: string[] = [];
@@ -114,13 +127,13 @@ export class CodexAppServerClient {
         this.#terminate({ kind: "failed", error });
     };
 
-    readonly #terminate = (result: AcpEndpointTermination): void => {
+    readonly #terminate = (result: CodexAppServerTermination): void => {
         if (this.#lifecycle.kind === "terminated") {
             return;
         }
         this.#lifecycle = { kind: "terminated", result };
         this.#termination.resolve(result);
-        const error = acpEndpointTerminationError(result);
+        const error = codexAppServerTerminationError(result);
         for (const [id, pending] of this.#pending) {
             this.#pending.delete(id);
             pending.completion.reject(error);
@@ -129,7 +142,7 @@ export class CodexAppServerClient {
 
     readonly #requireOpen = (): void => {
         if (this.#lifecycle.kind === "terminated") {
-            throw acpEndpointTerminationError(this.#lifecycle.result);
+            throw codexAppServerTerminationError(this.#lifecycle.result);
         }
     };
 
@@ -185,8 +198,8 @@ export class CodexAppServerClient {
         }
     };
 
-    // Handler failures are recorded as the app-server's terminal failure: an ACP client that cannot
-    // accept an update or answer an approval has no way to resume the conversation.
+    // Handler failures are recorded as the app-server's terminal failure: a client that cannot accept
+    // an update or answer an approval has no way to resume the conversation.
     readonly #runHandler = (operation: Promise<void>): void => {
         void operation.catch((error: unknown) => {
             this.#fail(

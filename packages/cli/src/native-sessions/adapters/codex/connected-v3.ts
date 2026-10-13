@@ -10,17 +10,11 @@ import type {
     SessionUserInputResponseV3,
 } from "@moxt-ai/mobius-protocol";
 import { z } from "zod";
-import { captureProcessTree, type ProcessTreeIdentity, stopProcessTree } from "../../../process/executable.ts";
-import type { NativeAgentLaunchV3, NativeSessionLiveRuntimeV3 } from "../../runtime-manager-v3.ts";
 import {
-    type ConnectedNativeSessionV3,
-    type NativeSessionContextV3,
-    NativeSessionOperationErrorV3,
-    type NativeSessionPromptResultV3,
-    type NativeSessionPromptV3,
-    type NativeSessionTerminationV3,
-} from "../adapter-v3.ts";
-import { CodexAppServerClient, type CodexAppServerServerRequest } from "./app-server-client.ts";
+    CodexAppServerClient,
+    type CodexAppServerServerRequest,
+    type CodexAppServerTermination,
+} from "../../../acp/harness/codex/app-server-client.ts";
 import {
     commandApprovalParamsSchema,
     fileChangeApprovalParamsSchema,
@@ -31,7 +25,18 @@ import {
     threadStartResponseSchema,
     turnNotificationSchema,
     turnSchema,
-} from "./app-server-protocol.ts";
+} from "../../../acp/harness/codex/app-server-protocol.ts";
+import { captureProcessTree, type ProcessTreeIdentity, stopProcessTree } from "../../../process/executable.ts";
+import type { NativeAgentLaunchV3, NativeSessionLiveRuntimeV3 } from "../../runtime-manager-v3.ts";
+import {
+    type ConnectedNativeSessionV3,
+    NativeSessionConnectionErrorV3,
+    type NativeSessionContextV3,
+    NativeSessionOperationErrorV3,
+    type NativeSessionPromptResultV3,
+    type NativeSessionPromptV3,
+    type NativeSessionTerminationV3,
+} from "../adapter-v3.ts";
 import { CodexHistoryAdapterV3, projectCodexHistoryMessageV3 } from "./history-v3.ts";
 
 const itemNotificationSchema = z.object({
@@ -63,6 +68,29 @@ type CodexTurnV3 =
           readonly cancellationRequested: boolean;
           readonly turnId: string;
       };
+
+function nativeTermination(termination: CodexAppServerTermination): NativeSessionTerminationV3 {
+    switch (termination.kind) {
+        case "closed":
+            return termination;
+        case "failed": {
+            const code =
+                termination.error.code === "codex_app_server_exited" ||
+                termination.error.code === "codex_app_server_unavailable"
+                    ? "native_process_exited"
+                    : termination.error.code === "codex_app_server_protocol_error" ||
+                        termination.error.code === "codex_app_server_output_limit"
+                      ? "native_protocol_error"
+                      : "native_stream_closed";
+            return {
+                error: new NativeSessionConnectionErrorV3(code, termination.error.message, {
+                    cause: termination.error,
+                }),
+                kind: "failed",
+            };
+        }
+    }
+}
 
 function promptInput(prompt: NativeSessionPromptV3): readonly unknown[] {
     return [
@@ -553,7 +581,7 @@ export class ConnectedCodexSessionV3 implements ConnectedNativeSessionV3 {
         const abort = (): void => cancelled.reject(signal.reason);
         signal.addEventListener("abort", abort, { once: true });
         try {
-            return await Promise.race([this.#appServer.terminated, cancelled.promise]);
+            return await Promise.race([this.#appServer.terminated.then(nativeTermination), cancelled.promise]);
         } finally {
             signal.removeEventListener("abort", abort);
         }

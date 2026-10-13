@@ -4,14 +4,14 @@ import {
     sessionHistoryPageV3Schema,
 } from "@moxt-ai/mobius-protocol";
 import { z } from "zod";
-import { NativeSessionOperationErrorV3 } from "../adapter-v3.ts";
-import type { CodexAppServerClient } from "./app-server-client.ts";
+import type { CodexAppServerClient } from "../../../acp/harness/codex/app-server-client.ts";
 import {
     CODEX_HISTORY_TURN_PAGE_LIMIT,
     type ThreadItem,
     threadItemSchema,
     threadTurnsPageSchema,
-} from "./app-server-protocol.ts";
+} from "../../../acp/harness/codex/app-server-protocol.ts";
+import { NativeSessionOperationErrorV3 } from "../adapter-v3.ts";
 
 const MAX_PROJECTED_MESSAGES = 1_000;
 const BUFFERED_CURSOR_PREFIX = "mobius-codex-v3:";
