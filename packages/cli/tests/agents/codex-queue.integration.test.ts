@@ -287,7 +287,7 @@ test("Given real Codex advances between repeated prompts, When V2 recovery pagin
                         .toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
                 );
                 expect(new Set(historyEvents.map((event) => event.eventId)).size).toBe(historyEvents.length);
-                expect(historyEvents.every((event) => /^event-[0-9a-f]{64}$/u.test(event.eventId))).toBe(true);
+                expect(historyEvents.every((event) => /^event-[0-9a-f]{16}$/u.test(event.eventId))).toBe(true);
                 break;
             }
             releaseQueued.resolve();

@@ -66,7 +66,8 @@ export function projectSessionEventV2(
             .update(sessionGenerationId)
             .update("\0")
             .update(position.toString())
-            .digest("hex")}`,
+            .digest("hex")
+            .slice(0, 16)}`,
         ...event,
         position: position.toString(),
         provenance: { kind: "original" },

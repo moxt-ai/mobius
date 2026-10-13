@@ -525,7 +525,7 @@ describe("daemon V2 live delivery", () => {
             expect(fixture.timer.batchWindowMilliseconds).toContain(100);
             expect(fixture.liveBatchSizes.some((size) => size > 1)).toBe(true);
             expect(new Set(live.map((event) => event.eventId)).size).toBe(live.length);
-            expect(live.every((event) => /^event-[0-9a-f]{64}$/u.test(event.eventId))).toBe(true);
+            expect(live.every((event) => /^event-[0-9a-f]{16}$/u.test(event.eventId))).toBe(true);
             const page = await history(fixture, command);
             expect(page.events.map(deliveryIdentity)).toEqual(live.map(deliveryIdentity));
         } finally {
