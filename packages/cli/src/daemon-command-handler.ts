@@ -30,6 +30,7 @@ import {
     SESSION_RESTORE_KIND,
     SESSION_SETTING_V3_CHANGE_KIND,
     SESSION_SETTINGS_V3_READ_KIND,
+    SESSION_STARTED_KIND,
     SESSION_USER_INPUT_V3_RESPOND_KIND,
     SessionPromptDisposition,
     WORKSPACE_LIST_KIND,
@@ -483,6 +484,16 @@ export function createDaemonCommandHandler({
                 nativeSessionsV3,
                 attemptId: receipt.attemptId,
                 activateAttempt: turn.activate,
+                acknowledgeDirectAttempt: (attempt) =>
+                    send(socket, {
+                        attemptId: receipt.attemptId,
+                        commandId: command.commandId,
+                        epoch: attempt.epoch,
+                        kind: SESSION_STARTED_KIND,
+                        prompt: command.prompt,
+                        sequence: attempt.sequence,
+                        sessionId: command.sessionId,
+                    }),
                 waitForSessionAvailability: (waitSignal) =>
                     activeTurns.admitAndWait(turn, waitSignal, () => {
                         queueChanged(command.sessionId);

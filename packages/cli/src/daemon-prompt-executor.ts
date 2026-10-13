@@ -60,6 +60,7 @@ export interface ExecutePromptOptions {
     readonly nativeSessionsV3: NativeSessionRuntimeManagerV3;
     readonly attemptId: string;
     readonly activateAttempt: () => { readonly epoch: string; readonly sequence: 0 };
+    readonly acknowledgeDirectAttempt: (attempt: { readonly epoch: string; readonly sequence: 0 }) => void;
     readonly waitForSessionAvailability: (
         signal: AbortSignal,
     ) => Promise<
@@ -88,6 +89,7 @@ export async function executePrompt({
     nativeSessionsV3,
     attemptId,
     activateAttempt,
+    acknowledgeDirectAttempt,
     waitForSessionAvailability,
     signal,
     recordTurnEvent,
@@ -153,7 +155,8 @@ export async function executePrompt({
                 sessionId: command.sessionId,
             });
             operations.transitionExecution(command.commandId, "running");
-            activateAttempt();
+            const attempt = activateAttempt();
+            acknowledgeDirectAttempt(attempt);
             const attachments = await resolvePromptArtifacts(config, command, signal);
             await directLive.publish({
                 sessionUpdate: "session_lifecycle_changed",

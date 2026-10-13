@@ -13,6 +13,20 @@ import {
 } from "../src/index.ts";
 
 describe("Session V3 transport contract", () => {
+    it("Given a direct V3 prompt is accepted, When Runtime acknowledges it, Then the started event crosses daemon transport", () => {
+        const started = {
+            attemptId: "attempt-1",
+            commandId: "command-1",
+            epoch: "epoch-1",
+            kind: "session.started" as const,
+            prompt: "Hello",
+            sequence: 0 as const,
+            sessionId: "session-1",
+        };
+
+        expect(decodeDaemonToServiceMessage(encodeDaemonToServiceMessage(started))).toEqual(started);
+    });
+
     it("Given V3 content, When it crosses the protocol boundary, Then external content is accepted and embedded binary content is rejected", () => {
         expect(
             contentBlockV3Schema.parse({

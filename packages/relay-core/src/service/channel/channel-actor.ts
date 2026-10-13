@@ -90,6 +90,7 @@ import {
     SESSION_SETTING_V3_CHANGE_KIND,
     SESSION_SETTINGS_V3_LOADED_KIND,
     SESSION_SETTINGS_V3_READ_KIND,
+    SESSION_STARTED_KIND,
     SESSION_STATUS_CHANGED_KIND,
     SESSION_USER_INPUT_V3_RESPOND_KIND,
     type ServiceToDaemonMessage,
@@ -397,6 +398,7 @@ export class ChannelActor {
             case SESSION_STATUS_CHANGED_KIND:
                 return;
             case SESSION_QUEUED_KIND:
+            case SESSION_STARTED_KIND:
                 return;
             case NATIVE_SESSION_RESULT_KIND:
                 return;

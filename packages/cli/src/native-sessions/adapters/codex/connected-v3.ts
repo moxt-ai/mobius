@@ -69,6 +69,8 @@ type CodexTurnV3 =
           readonly turnId: string;
       };
 
+type CodexThreadHistoryV3 = { readonly kind: "materialized" } | { readonly kind: "unmaterialized" };
+
 function nativeTermination(termination: CodexAppServerTermination): NativeSessionTerminationV3 {
     switch (termination.kind) {
         case "closed":
@@ -196,6 +198,7 @@ export class ConnectedCodexSessionV3 implements ConnectedNativeSessionV3 {
     readonly #sessionId: string;
     readonly #settings: SessionSettingsV3;
     #closed = false;
+    #historyState: CodexThreadHistoryV3;
     #turn: CodexTurnV3 = { kind: "idle" };
     readonly nativeSessionId: string;
 
@@ -204,14 +207,26 @@ export class ConnectedCodexSessionV3 implements ConnectedNativeSessionV3 {
         session: NativeSessionContextV3,
         live: NativeSessionLiveRuntimeV3,
         settings: SessionSettingsV3,
+        historyState: CodexThreadHistoryV3,
     ) {
         this.#appServer = appServer;
         this.#history = new CodexHistoryAdapterV3(appServer);
         this.#live = live;
         this.#sessionId = session.sessionId;
         this.#settings = settings;
+        this.#historyState = historyState;
         this.nativeSessionId = session.nativeSessionId;
     }
+
+    readonly #markHistoryMaterialized = (): void => {
+        switch (this.#historyState.kind) {
+            case "materialized":
+                return;
+            case "unmaterialized":
+                this.#historyState = { kind: "materialized" };
+                return;
+        }
+    };
 
     readonly #publish = async (item: SessionLiveEventItemV3): Promise<void> => {
         await this.#live.publish(item);
@@ -425,6 +440,20 @@ export class ConnectedCodexSessionV3 implements ConnectedNativeSessionV3 {
         request: SessionHistoryPageRequestV3,
         signal: AbortSignal,
     ): Promise<SessionHistoryPageV3> => {
+        if (this.#historyState.kind === "unmaterialized") {
+            signal.throwIfAborted();
+            if (request.cursor !== null) {
+                throw new NativeSessionOperationErrorV3(
+                    "invalid_history_cursor",
+                    "The Codex history cursor is invalid",
+                );
+            }
+            return await this.#lane.run(async () => ({
+                messages: [...this.#liveMessages.values()].slice(0, request.messageLimit),
+                nextCursor: null,
+                throughSeq: this.#live.readThroughSeq(),
+            }));
+        }
         const nativePage = await this.#history.page(this.nativeSessionId, request, signal);
         signal.throwIfAborted();
         return await this.#lane.run(async () => {
@@ -495,6 +524,7 @@ export class ConnectedCodexSessionV3 implements ConnectedNativeSessionV3 {
                         signal,
                     ),
                 ).turn;
+            this.#markHistoryMaterialized();
             const active = this.#turn;
             if (active.kind === "starting" && active.completion === completion) {
                 this.#turn = {
@@ -668,7 +698,9 @@ export async function connectCodexNativeSessionV3(
                 "Codex opened a different native Session",
             );
         }
-        connected = new ConnectedCodexSessionV3(appServer, session, live, settingsFromResume(resume));
+        connected = new ConnectedCodexSessionV3(appServer, session, live, settingsFromResume(resume), {
+            kind: "materialized",
+        });
         return connected;
     } catch (error) {
         appServer.detach();
@@ -707,7 +739,9 @@ export async function createCodexNativeSessionV3(
             await appServer.request("thread/start", { cwd: session.cwd }, signal),
         );
         const context = { ...session, nativeSessionId: created.thread.id };
-        connected = new ConnectedCodexSessionV3(appServer, context, live, settingsFromResume(created));
+        connected = new ConnectedCodexSessionV3(appServer, context, live, settingsFromResume(created), {
+            kind: "unmaterialized",
+        });
         return connected;
     } catch (error) {
         appServer.detach();

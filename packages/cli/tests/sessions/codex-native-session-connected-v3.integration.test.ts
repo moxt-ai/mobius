@@ -17,7 +17,7 @@ afterEach(async () => {
     );
 });
 
-test("Given a connected Codex Session, When a prompt streams and history is reconciled across reconnect, Then sequence increases and native identity is stable", async () => {
+test("Given a new Codex Session without materialized history, When it is reconciled and prompted, Then empty history works before native history becomes available", async () => {
     const directory = await mkdtemp(join(tmpdir(), "mobius-codex-connected-v3-"));
     temporaryDirectories.push(directory);
     const executable = join(directory, "codex");
@@ -25,6 +25,7 @@ test("Given a connected Codex Session, When a prompt streams and history is reco
         executable,
         `#!${process.execPath}
 import { createInterface } from "node:readline";
+let materialized = false;
 for await (const line of createInterface({ input: process.stdin })) {
     const request = JSON.parse(line);
     if (request.method === "initialized") continue;
@@ -33,6 +34,7 @@ for await (const line of createInterface({ input: process.stdin })) {
         continue;
     }
     if (request.method === "thread/resume") {
+        materialized = true;
         process.stdout.write(JSON.stringify({
             id: request.id,
             result: { thread: { id: request.params.threadId, turns: [] } }
@@ -47,6 +49,13 @@ for await (const line of createInterface({ input: process.stdin })) {
         continue;
     }
     if (request.method === "thread/turns/list") {
+        if (!materialized) {
+            process.stdout.write(JSON.stringify({
+                id: request.id,
+                error: { code: -32000, message: "Thread is not materialized" }
+            }) + "\\n");
+            continue;
+        }
         process.stdout.write(JSON.stringify({
             method: "item/agentMessage/delta",
             params: { delta: "streamed", itemId: "codex-item-1", threadId: request.params.threadId, turnId: "turn-1" }
@@ -61,6 +70,7 @@ for await (const line of createInterface({ input: process.stdin })) {
         continue;
     }
     if (request.method === "turn/start") {
+        materialized = true;
         process.stdout.write(JSON.stringify({ id: request.id, result: { turn: { id: "turn-1", status: "inProgress" } } }) + "\\n");
         process.stdout.write(JSON.stringify({
             method: "turn/started",
@@ -115,6 +125,9 @@ for await (const line of createInterface({ input: process.stdin })) {
             signal,
         );
         expect(first.nativeSessionId).toBe("native-thread-1");
+        await expect(
+            first.pageMessages({ cursor: null, messageLimit: 10, sessionId: "session-1" }, signal),
+        ).resolves.toEqual({ messages: [], nextCursor: null, throughSeq: 0 });
         expect(await first.runPrompt({ images: [], prompt: "hello", resources: [] }, signal)).toEqual({
             stopReason: "end_turn",
         });

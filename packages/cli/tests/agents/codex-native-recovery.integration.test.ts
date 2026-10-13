@@ -4,6 +4,7 @@ import {
     decodeSessionEventV2,
     decodeSessionLiveHistoryV2PageLoaded,
     decodeSessionQueuedEvent,
+    decodeSessionStartedEvent,
     encodeSessionCancelCommand,
     encodeSessionLiveHistoryV2PageLoad,
     encodeSessionPromptCommand,
@@ -14,6 +15,39 @@ import { CodexAgentSpecification } from "../../src/agent-catalog/agents/codex-ag
 import { CodexFixture } from "../support/agents/codex.ts";
 import { prepareNewRealSession, withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
+
+test("Given a direct Codex V3 Session, When the first prompt is accepted, Then Runtime acknowledges it before live execution", async () => {
+    await using provider = await FakeOpenAiProvider.start("mobius-test-model", "DIRECT_V3_REPLY");
+    await using agent = await CodexFixture.create(provider);
+    await withRealDaemon(
+        new CodexAgentSpecification(),
+        agent.environment,
+        async (peer) => {
+            const sessionId = await prepareNewRealSession(peer, "codex");
+            const commandId = randomUUID();
+            peer.send(
+                encodeSessionPromptCommand({
+                    kind: "session.prompt",
+                    commandId,
+                    sessionId,
+                    agentId: "codex",
+                    bindingId: peer.bindingId,
+                    directoryId: "default",
+                    additionalDirectoryIds: [],
+                    images: [],
+                    resources: [],
+                    prompt: "Reply with a short greeting, without using tools",
+                    disposition: SessionPromptDisposition.Reject,
+                    targetCommandId: "",
+                }),
+            );
+            const accepted = await peer.nextMessage();
+            expect(decodeMessageKind(accepted)).toBe("session.started");
+            expect(decodeSessionStartedEvent(accepted)).toMatchObject({ commandId, sessionId });
+        },
+        { nativeSessionV3: true },
+    );
+});
 
 test("Given a newly created real Codex Session, When Chat requests its V2 history before the first prompt, Then Runtime returns an empty replay without resuming the active Codex thread", async () => {
     await using provider = await FakeOpenAiProvider.start("mobius-test-model", "UNUSED_REPLY");
