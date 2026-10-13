@@ -643,212 +643,8 @@ describe.sequential("Platform Session-only boundary", () => {
         expect(sessionPolicyResponse.status).toBe(404);
     });
 
-    it.each(["import", "fork"] as const)(
-        "Given a native %s request, When its Durable Object is evicted and awakened by results, Then it forwards the result without disconnecting the Runtime",
-        async (scenario) => {
-            const action = scenario === "fork" ? "fork" : "import";
-            vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
-            const worker = createTestMobiusPlatformApp(
-                new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
-                createPlatformGateways,
-            );
-            const environment = bindings();
-            const tenants = await responseJson(
-                await worker.fetch(
-                    new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/platform/tenants`, {
-                        headers: developerHeaders(),
-                    }),
-                    environment,
-                ),
-                200,
-            );
-            const tenantValues = tenants["tenants"];
-            if (!Array.isArray(tenantValues) || tenantValues.length === 0) {
-                throw new Error("Expected a Platform tenant");
-            }
-            const tenantId = text(record(tenantValues[0]), "tenantId");
-            const app = await responseJson(
-                await worker.fetch(
-                    new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps`, {
-                        body: JSON.stringify({ displayName: "Private reconnect", tenantId }),
-                        headers: developerHeaders(),
-                        method: "POST",
-                    }),
-                    environment,
-                ),
-                201,
-            );
-            const appId = text(app, "appId");
-            const appCredential = text(record(app["defaultCredential"]), "credential");
-            const project = await responseJson(
-                await worker.fetch(
-                    new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${appId}/projects`, {
-                        body: JSON.stringify({
-                            displayName: "Private reconnect Project",
-                            idempotencyKey: "private-reconnect-project",
-                            locationHint: "apac",
-                        }),
-                        headers: developerHeaders(),
-                        method: "POST",
-                    }),
-                    environment,
-                ),
-                201,
-            );
-            const projectId = text(project, "projectId");
-            const pairing = await responseJson(
-                await worker.fetch(
-                    new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtime-pairings`, {
-                        body: JSON.stringify({ idempotencyKey: "private-reconnect-runtime" }),
-                        headers: credentialHeaders(appCredential),
-                        method: "POST",
-                    }),
-                    environment,
-                ),
-                201,
-            );
-            const claimed = await responseJson(
-                await worker.fetch(
-                    new Request(
-                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtime-pairings/${text(pairing, "pairingId")}/redeem`,
-                        {
-                            body: JSON.stringify({
-                                agents: readyAgents,
-                                installableAgents: [],
-                                machineName: "Private reconnect Runtime",
-                                pairingCode: text(pairing, "pairingCode"),
-                                workspaceName: "private-reconnect-workspace",
-                            }),
-                            headers: { "content-type": "application/json" },
-                            method: "POST",
-                        },
-                    ),
-                    environment,
-                ),
-                200,
-            );
-            expect(claimed["appId"]).toBe(appId);
-            const runtimeId = text(claimed, "runtimeId");
-            expect(
-                await responseJson(
-                    await worker.fetch(
-                        new Request(
-                            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtimes/${runtimeId}/agents`,
-                            { headers: credentialHeaders(appCredential) },
-                        ),
-                        environment,
-                    ),
-                    200,
-                ),
-            ).toMatchObject({ agents: [{ id: "codex", label: "Codex" }], runtimeId });
-            const daemonResponse = await worker.fetch(
-                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect?liveness=1`, {
-                    headers: { authorization: `Bearer ${text(claimed, "runtimeCredential")}`, Upgrade: "websocket" },
-                }),
-                environment,
-            );
-            const hostResponse = await worker.fetch(
-                new Request(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtimes/${runtimeId}/host?token=${appCredential}`,
-                    {
-                        headers: { Upgrade: "websocket" },
-                    },
-                ),
-                environment,
-            );
-            expect(daemonResponse.status).toBe(101);
-            expect(hostResponse.status).toBe(101);
-            if (daemonResponse.webSocket === null || hostResponse.webSocket === null) {
-                throw new Error("Expected both channel sockets");
-            }
-            const daemon = daemonResponse.webSocket;
-            const host = hostResponse.webSocket;
-            const daemonMessages = new SocketMessages(daemon);
-            const hostMessages = new SocketMessages(host);
-            daemon.accept();
-            host.accept();
-            const closed = Promise.withResolvers<{ readonly kind: "closed"; readonly code: number }>();
-            daemon.addEventListener("close", (event) => closed.resolve({ kind: "closed", code: event.code }), {
-                once: true,
-            });
-            try {
-                expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("runtime.liveness.ready");
-                expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "runtime.status", online: true });
-                const requestId = "native-import-request";
-                const directoryId = action === "fork" ? `root-${"d".repeat(2000)}` : "root";
-                const targetSessionId = "requested-session";
-                host.send(
-                    encodeNativeSessionRequest({
-                        action,
-                        additionalDirectoryIds: [],
-                        agentId: "codex",
-                        bindingId: "workspace",
-                        directoryId,
-                        entryId: "native-entry",
-                        kind: "native.session.request",
-                        requestId,
-                        sessionId: "discovery-session",
-                        targetSessionId,
-                    }),
-                );
-                expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("native.session.request");
-                expect(decodeServiceToDaemonMessage(await hostMessages.next()).kind).toBe("native.session.request");
-                const capabilities = readyAgents[0]?.capabilities;
-                if (capabilities === undefined) {
-                    throw new Error("Expected the connected Agent capabilities");
-                }
-                const result = encodeNativeSessionResult({
-                    action,
-                    kind: "native.session.result",
-                    requestId,
-                    sessionId: "discovery-session",
-                    targetSessionId: targetSessionId,
-                    title: "Imported native session",
-                    ready: {
-                        additionalDirectories: [],
-                        agentId: "codex",
-                        agentName: "Codex",
-                        agentVersion: "1.0.0",
-                        capabilities,
-                        commands: [],
-                        configOptions: [],
-                        directoryId: directoryId,
-                        directoryLabel: "Workspace",
-                        kind: "session.ready",
-                        requestId,
-                        restored: true,
-                        sessionId: action === "import" ? "original-native-session" : targetSessionId,
-                    },
-                });
-                const relay = environment.RUNTIME_RELAY.getByName(runtimeId);
-                await evictDurableObject(relay, { webSockets: "hibernate" });
-                daemon.send(result);
-                const received = await Promise.race([
-                    hostMessages.next().then((message) => decodeDaemonToServiceMessage(message)),
-                    closed.promise,
-                ]);
-                expect(received).toMatchObject({ kind: "native.session.result", action, requestId, targetSessionId });
-                expect(daemon.readyState).toBe(WebSocket.OPEN);
-                // Relay forwarding does not own the caller's operation lifetime or replay handling.
-                vi.setSystemTime(new Date("2030-01-01T00:06:00.000Z"));
-                daemon.send(result);
-                expect(decodeDaemonToServiceMessage(await hostMessages.next())).toMatchObject({
-                    kind: "native.session.result",
-                    action,
-                    requestId,
-                    targetSessionId,
-                });
-                expect(daemon.readyState).toBe(WebSocket.OPEN);
-            } finally {
-                host.close(1000, "Test complete");
-                daemon.close(1000, "Test complete");
-            }
-        },
-        // Graceful eviction can spend 30 seconds draining in-flight runtime events.
-        60_000,
-    );
-
-    it("Given a linked Codex Runtime, When Chat configures and prompts a Session, Then the configuration, answer, and connection status arrive without cloud Session storage", async () => {
+    // Graceful eviction drains in-flight Runtime events before hibernating the sockets.
+    it("Given a linked Codex Runtime, When Chat imports, forks, configures and prompts Sessions across Relay hibernation, Then results, answers and connection status arrive without cloud Session storage", async () => {
         vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
@@ -973,6 +769,84 @@ describe.sequential("Platform Session-only boundary", () => {
         try {
             expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("runtime.liveness.ready");
             expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "runtime.status", online: true });
+            // Native imports and forks share this Runtime transport with configuration and live output.
+            const closed = Promise.withResolvers<{ readonly kind: "closed"; readonly code: number }>();
+            daemon.addEventListener("close", (event) => closed.resolve({ kind: "closed", code: event.code }), {
+                once: true,
+            });
+            for (const action of ["import", "fork"] as const) {
+                const requestId = `native-${action}-request`;
+                const directoryId = action === "fork" ? `root-${"d".repeat(2000)}` : "root";
+                const targetSessionId = `native-${action}-session`;
+                host.send(
+                    encodeNativeSessionRequest({
+                        action,
+                        additionalDirectoryIds: [],
+                        agentId: "codex",
+                        bindingId: "workspace",
+                        directoryId,
+                        entryId: "native-entry",
+                        kind: "native.session.request",
+                        requestId,
+                        sessionId: "discovery-session",
+                        targetSessionId,
+                    }),
+                );
+                expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("native.session.request");
+                expect(decodeServiceToDaemonMessage(await hostMessages.next()).kind).toBe("native.session.request");
+            }
+            await evictDurableObject(environment.RUNTIME_RELAY.getByName(runtimeId), { webSockets: "hibernate" });
+            for (const action of ["import", "fork"] as const) {
+                const requestId = `native-${action}-request`;
+                const directoryId = action === "fork" ? `root-${"d".repeat(2000)}` : "root";
+                const targetSessionId = `native-${action}-session`;
+                const capabilities = readyAgents[0]?.capabilities;
+                if (capabilities === undefined) {
+                    throw new Error("Expected the connected Agent capabilities");
+                }
+                const result = encodeNativeSessionResult({
+                    action,
+                    kind: "native.session.result",
+                    requestId,
+                    sessionId: "discovery-session",
+                    targetSessionId: targetSessionId,
+                    title: "Imported native session",
+                    ready: {
+                        additionalDirectories: [],
+                        agentId: "codex",
+                        agentName: "Codex",
+                        agentVersion: "1.0.0",
+                        capabilities,
+                        commands: [],
+                        configOptions: [],
+                        directoryId: directoryId,
+                        directoryLabel: "Workspace",
+                        kind: "session.ready",
+                        requestId,
+                        restored: true,
+                        sessionId: action === "import" ? "original-native-session" : targetSessionId,
+                    },
+                });
+                daemon.send(result);
+                const received = await Promise.race([
+                    hostMessages.next().then((message) => decodeDaemonToServiceMessage(message)),
+                    closed.promise,
+                ]);
+                expect(received).toMatchObject({ kind: "native.session.result", action, requestId, targetSessionId });
+                expect(daemon.readyState).toBe(WebSocket.OPEN);
+                // The caller owns operation expiry and duplicate handling.
+                vi.setSystemTime(new Date("2030-01-01T00:06:00.000Z"));
+                daemon.send(result);
+                expect(decodeDaemonToServiceMessage(await hostMessages.next())).toMatchObject({
+                    kind: "native.session.result",
+                    action,
+                    requestId,
+                    targetSessionId,
+                });
+                expect(daemon.readyState).toBe(WebSocket.OPEN);
+            }
+            vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+
             // A newer Runtime may publish an event this Relay does not understand yet. The event is
             // observational, so skipping it must not disconnect the Runtime or block supported work.
             daemon.send(JSON.stringify({ kind: "session.future.changed", sessionId, value: "future" }));
@@ -1373,7 +1247,7 @@ describe.sequential("Platform Session-only boundary", () => {
             daemon.close(1000, "Test complete");
             host.close(1000, "Test complete");
         }
-    });
+    }, 60_000);
 });
 
 describe.sequential("Platform Recording policy configuration", () => {
