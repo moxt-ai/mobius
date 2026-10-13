@@ -1,4 +1,4 @@
-import { runInDurableObject } from "cloudflare:test";
+import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
     decodeDaemonToServiceMessage,
@@ -6,6 +6,8 @@ import {
     decodeSessionEventEnvelopeV2,
     decodeSessionPromptCommand,
     decodeSessionRecordingHistory,
+    encodeNativeSessionRequest,
+    encodeNativeSessionResult,
     encodeSessionConfigUpdatedEvent,
     encodeSessionConfigureCommand,
     encodeSessionEventEnvelopeV2,
@@ -641,7 +643,8 @@ describe.sequential("Platform Session-only boundary", () => {
         expect(sessionPolicyResponse.status).toBe(404);
     });
 
-    it("Given a linked Codex Runtime, When Chat configures and prompts a Session, Then the configuration, answer, and connection status arrive without cloud Session storage", async () => {
+    // Graceful eviction drains in-flight Runtime events before hibernating the sockets.
+    it("Given a linked Codex Runtime, When Chat imports, forks, configures and prompts Sessions across Relay hibernation, Then results, answers and connection status arrive without cloud Session storage", async () => {
         vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
@@ -766,6 +769,84 @@ describe.sequential("Platform Session-only boundary", () => {
         try {
             expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("runtime.liveness.ready");
             expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "runtime.status", online: true });
+            // Native imports and forks share this Runtime transport with configuration and live output.
+            const closed = Promise.withResolvers<{ readonly kind: "closed"; readonly code: number }>();
+            daemon.addEventListener("close", (event) => closed.resolve({ kind: "closed", code: event.code }), {
+                once: true,
+            });
+            for (const action of ["import", "fork"] as const) {
+                const requestId = `native-${action}-request`;
+                const directoryId = action === "fork" ? `root-${"d".repeat(2000)}` : "root";
+                const targetSessionId = `native-${action}-session`;
+                host.send(
+                    encodeNativeSessionRequest({
+                        action,
+                        additionalDirectoryIds: [],
+                        agentId: "codex",
+                        bindingId: "workspace",
+                        directoryId,
+                        entryId: "native-entry",
+                        kind: "native.session.request",
+                        requestId,
+                        sessionId: "discovery-session",
+                        targetSessionId,
+                    }),
+                );
+                expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("native.session.request");
+                expect(decodeServiceToDaemonMessage(await hostMessages.next()).kind).toBe("native.session.request");
+            }
+            await evictDurableObject(environment.RUNTIME_RELAY.getByName(runtimeId), { webSockets: "hibernate" });
+            for (const action of ["import", "fork"] as const) {
+                const requestId = `native-${action}-request`;
+                const directoryId = action === "fork" ? `root-${"d".repeat(2000)}` : "root";
+                const targetSessionId = `native-${action}-session`;
+                const capabilities = readyAgents[0]?.capabilities;
+                if (capabilities === undefined) {
+                    throw new Error("Expected the connected Agent capabilities");
+                }
+                const result = encodeNativeSessionResult({
+                    action,
+                    kind: "native.session.result",
+                    requestId,
+                    sessionId: "discovery-session",
+                    targetSessionId: targetSessionId,
+                    title: "Imported native session",
+                    ready: {
+                        additionalDirectories: [],
+                        agentId: "codex",
+                        agentName: "Codex",
+                        agentVersion: "1.0.0",
+                        capabilities,
+                        commands: [],
+                        configOptions: [],
+                        directoryId: directoryId,
+                        directoryLabel: "Workspace",
+                        kind: "session.ready",
+                        requestId,
+                        restored: true,
+                        sessionId: action === "import" ? "original-native-session" : targetSessionId,
+                    },
+                });
+                daemon.send(result);
+                const received = await Promise.race([
+                    hostMessages.next().then((message) => decodeDaemonToServiceMessage(message)),
+                    closed.promise,
+                ]);
+                expect(received).toMatchObject({ kind: "native.session.result", action, requestId, targetSessionId });
+                expect(daemon.readyState).toBe(WebSocket.OPEN);
+                // The caller owns operation expiry and duplicate handling.
+                vi.setSystemTime(new Date("2030-01-01T00:06:00.000Z"));
+                daemon.send(result);
+                expect(decodeDaemonToServiceMessage(await hostMessages.next())).toMatchObject({
+                    kind: "native.session.result",
+                    action,
+                    requestId,
+                    targetSessionId,
+                });
+                expect(daemon.readyState).toBe(WebSocket.OPEN);
+            }
+            vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+
             // A newer Runtime may publish an event this Relay does not understand yet. The event is
             // observational, so skipping it must not disconnect the Runtime or block supported work.
             daemon.send(JSON.stringify({ kind: "session.future.changed", sessionId, value: "future" }));
@@ -1166,7 +1247,7 @@ describe.sequential("Platform Session-only boundary", () => {
             daemon.close(1000, "Test complete");
             host.close(1000, "Test complete");
         }
-    });
+    }, 60_000);
 });
 
 describe.sequential("Platform Recording policy configuration", () => {
