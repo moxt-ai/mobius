@@ -18,11 +18,7 @@ import { FoundAcpStoredSession, MemoryAcpSessionStore, SqliteAcpSessionStore } f
 import { LocalAgentDefinition } from "../../src/config.ts";
 import { acpSessionStoreMigrations } from "../../src/generated/acp-session-store-migrations.ts";
 import { AccumulatingOperationMetrics } from "../../src/infra/operation-metrics.ts";
-import {
-    openAcpSessionDatabase,
-    openSessionEventCacheV2Database,
-    openSessionLiveEventPositionDatabase,
-} from "../../src/local-databases.ts";
+import { openAcpSessionDatabase, openSessionEventCacheV2Database } from "../../src/local-databases.ts";
 import { SqliteSessionLiveEventPosition } from "../../src/session-live-event-position.ts";
 
 const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
@@ -134,12 +130,13 @@ describe("ACP conversation sessions", () => {
         }
     });
 
-    it("Given a database-backed live position allocation, When the event store reopens, Then allocation continues from ten million", async () => {
+    it("Given a database-backed live position allocation, When the event store reopens, Then allocation continues from one hundred thousand", async () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-live-event-position-"));
-        const positionDatabasePath = join(temporaryDirectory, "live-positions.sqlite");
+        const sessionDatabasePath = join(temporaryDirectory, "sessions.sqlite");
+        const firstSessionDatabase = openAcpSessionDatabase(sessionDatabasePath);
         const first = new CachedAcpSessionEventStoreV2(
             openSessionEventCacheV2Database(join(temporaryDirectory, "first-events.sqlite")),
-            new SqliteSessionLiveEventPosition(openSessionLiveEventPositionDatabase(positionDatabasePath)),
+            new SqliteSessionLiveEventPosition(firstSessionDatabase),
         );
         try {
             expect(
@@ -157,14 +154,16 @@ describe("ACP conversation sessions", () => {
                         type: "lifecycle-metadata",
                     }),
                 ].map((event) => event.position),
-            ).toEqual(["10000000", "10000001", "10000000"]);
+            ).toEqual(["100000", "100001", "100000"]);
         } finally {
             first.close();
+            firstSessionDatabase.close();
         }
 
+        const secondSessionDatabase = openAcpSessionDatabase(sessionDatabasePath);
         const second = new CachedAcpSessionEventStoreV2(
             openSessionEventCacheV2Database(join(temporaryDirectory, "second-events.sqlite")),
-            new SqliteSessionLiveEventPosition(openSessionLiveEventPositionDatabase(positionDatabasePath)),
+            new SqliteSessionLiveEventPosition(secondSessionDatabase),
         );
         try {
             expect(
@@ -172,9 +171,10 @@ describe("ACP conversation sessions", () => {
                     payload: { kind: "session.queue.changed" },
                     type: "lifecycle-metadata",
                 }).position,
-            ).toBe("10000002");
+            ).toBe("100002");
         } finally {
             second.close();
+            secondSessionDatabase.close();
             await rm(temporaryDirectory, { force: true, recursive: true });
         }
     });

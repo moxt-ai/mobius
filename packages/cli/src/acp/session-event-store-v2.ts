@@ -173,7 +173,6 @@ export class MemoryAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
 
     readonly close = (): void => {
         this.#events.clear();
-        this.#liveEventPositions.close();
     };
 
     readonly materialize = (
@@ -491,15 +490,11 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
         if (this.#flushSchedule.kind === "scheduled") {
             clearImmediate(this.#flushSchedule.handle);
         }
-        try {
-            this.#flushSchedule = { kind: "idle" };
-            this.#flush(true);
-            this.#flushSchedule = { kind: "closed" };
-            this.#localDatabase.close();
-            this.#sessions.clear();
-            this.#databaseOrdinalsBySession.clear();
-        } finally {
-            this.#liveEventPositions.close();
-        }
+        this.#flushSchedule = { kind: "idle" };
+        this.#flush(true);
+        this.#flushSchedule = { kind: "closed" };
+        this.#localDatabase.close();
+        this.#sessions.clear();
+        this.#databaseOrdinalsBySession.clear();
     };
 }

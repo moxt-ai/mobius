@@ -1,14 +1,13 @@
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import type { LocalSqliteDatabase } from "./infra/local-sqlite-database.ts";
-import { sessionLiveEventPositionAllocation } from "./schema/session-live-event-position/index.ts";
+import { sessionLiveEventPositionAllocation } from "./schema/acp-session-store/index.ts";
 
-const INITIAL_POSITION = 10 ** 7;
+const INITIAL_POSITION = 10 ** 5;
 const allocationRowSchema = z.object({ allocatedPosition: z.number().int().safe().nonnegative() });
 
 export interface SessionLiveEventPosition {
     readonly allocate: (sessionId: string) => number;
-    readonly close: () => void;
 }
 
 export class MemorySessionLiveEventPosition implements SessionLiveEventPosition {
@@ -23,8 +22,6 @@ export class MemorySessionLiveEventPosition implements SessionLiveEventPosition 
         this.#allocatedBySession.set(sessionId, nextPosition);
         return nextPosition;
     };
-
-    readonly close = (): void => this.#allocatedBySession.clear();
 }
 
 export class SqliteSessionLiveEventPosition implements SessionLiveEventPosition {
@@ -57,6 +54,4 @@ export class SqliteSessionLiveEventPosition implements SessionLiveEventPosition 
                 .run();
             return nextPosition;
         });
-
-    readonly close = (): void => this.#localDatabase.close();
 }

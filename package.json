@@ -13,7 +13,6 @@
         "db:generate:platform-d1": "drizzle-kit generate --config drizzle/drizzle.platform-d1.config.ts",
         "db:generate:cli-acp-session-store": "drizzle-kit generate --config drizzle/drizzle.cli-acp-session-store.config.ts && pnpm db:codegen",
         "db:generate:cli-session-event-cache": "pnpm --filter @moxt-ai/mobius exec drizzle-kit generate --config ../../drizzle/drizzle.cli-session-event-cache.config.ts && pnpm db:codegen",
-        "db:generate:cli-session-live-event-position": "pnpm --filter @moxt-ai/mobius exec drizzle-kit generate --config ../../drizzle/drizzle.cli-session-live-event-position.config.ts && pnpm db:codegen",
         "db:generate:project-do": "drizzle-kit generate --config drizzle/drizzle.project-do.config.ts && pnpm db:codegen",
         "db:generate:runtime-connection-do": "drizzle-kit generate --config drizzle/drizzle.runtime-connection-do.config.ts && pnpm db:codegen",
         "db:generate:session-recording-do": "drizzle-kit generate --config drizzle/drizzle.session-recording-do.config.ts && pnpm db:codegen",

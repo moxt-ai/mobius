@@ -20,11 +20,7 @@ import { AuditInstallationEvents, DaemonAcpObserver, DaemonInstallationObserver 
 import { DaemonTurnRegistry } from "./daemon-turn-registry.ts";
 import { AcpContentExternalizer } from "./external-content/acp-content-externalizer.ts";
 import { LocalExternalContentStore } from "./external-content/local-external-content-store.ts";
-import {
-    openAcpSessionDatabase,
-    openSessionEventCacheV2Database,
-    openSessionLiveEventPositionDatabase,
-} from "./local-databases.ts";
+import { openAcpSessionDatabase, openSessionEventCacheV2Database } from "./local-databases.ts";
 import { readCodexFullHistory } from "./native-sessions/codex-history.ts";
 import { NativeSessionService } from "./native-sessions/service.ts";
 import { DaemonOperationState } from "./relay-connection/daemon-operation-state.ts";
@@ -132,20 +128,10 @@ export async function runDaemon(
     const sessionDatabase = openAcpSessionDatabase(join(stateDirectory, "sessions", `${channelHash}.sqlite`));
     let eventsV2: CachedAcpSessionEventStoreV2;
     try {
-        const liveEventPositions = new SqliteSessionLiveEventPosition(
-            openSessionLiveEventPositionDatabase(
-                join(stateDirectory, "sessions", `${channelHash}.live-positions.sqlite`),
-            ),
+        eventsV2 = new CachedAcpSessionEventStoreV2(
+            openSessionEventCacheV2Database(join(stateDirectory, "sessions", `${channelHash}.events.sqlite`)),
+            new SqliteSessionLiveEventPosition(sessionDatabase),
         );
-        try {
-            eventsV2 = new CachedAcpSessionEventStoreV2(
-                openSessionEventCacheV2Database(join(stateDirectory, "sessions", `${channelHash}.events.sqlite`)),
-                liveEventPositions,
-            );
-        } catch (error) {
-            liveEventPositions.close();
-            throw error;
-        }
     } catch (error) {
         sessionDatabase.close();
         throw error;
