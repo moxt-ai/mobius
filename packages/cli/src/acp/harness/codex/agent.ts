@@ -489,7 +489,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 }
                 const update = toolCallUpdate(item, "snapshot");
                 if (update !== null) {
-                    await this.#emit({ ...update, sessionUpdate: "tool_call_update" });
+                    await this.#emit({ ...update, sessionUpdate: "tool_call" });
                 }
             }
         }
