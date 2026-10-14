@@ -459,4 +459,17 @@ describe("Recording incremental reads", () => {
         expect((await worker.fetch(read("?after=0&limit=0"), env)).status).toBe(400);
         expect((await worker.fetch(read("?after=0&limit=99999"), env)).status).toBe(400);
     });
+    it("Given a well-formed cursor that no longer resolves, When a caller reads incrementally, Then the failure is reported as a structured error rather than opaque text", async () => {
+        expect(
+            (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: numberedEvents(1, 0) }), env))
+                .status,
+        ).toBe(201);
+        // A cursor of valid shape whose batch is absent resolves to nothing inside the Durable Object.
+        const response = await worker.fetch(read("?after=v2:999:1&limit=10"), env);
+        expect(response.status).toBe(500);
+        expect(response.headers.get("content-type")).toContain("application/json");
+        expect(await response.json()).toEqual({
+            error: { code: "internal_error", message: "The Recording request could not be completed" },
+        });
+    });
 });
