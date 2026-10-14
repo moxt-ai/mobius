@@ -6,8 +6,8 @@ import {
     decodeNativeSessionEventsV2,
     decodeNativeSessionResult,
     decodeSessionConfigUpdatedEvent,
-    decodeSessionEventBatchV2,
     decodeSessionEventLogPageV2,
+    decodeSessionLiveEventBatchV2,
     decodeSessionReadyEvent,
     decodeSessionRestoredEvent,
     decodeSessionsListedEvent,
@@ -25,9 +25,9 @@ import {
     type NativeSessionRequest,
     type NativeSessionResult,
     type SessionConfigureCommand,
-    type SessionEventBatchV2,
     type SessionEventLogPageV2,
     type SessionEventOmissionV2,
+    type SessionLiveEventBatchV2,
     SessionPromptDisposition,
     type WorkspaceEntriesEvent,
 } from "@moxt-ai/mobius-protocol";
@@ -1532,7 +1532,7 @@ export class MobiusInteractionResources {
 export type MobiusLiveSessionConnection = { readonly kind: "initial" } | { readonly kind: "reconnected" };
 
 export interface MobiusLiveSessionEventObserverV2 {
-    readonly receive: (events: SessionEventBatchV2) => Promise<boolean>;
+    readonly receive: (events: SessionLiveEventBatchV2) => Promise<boolean>;
     readonly reconcile: (connection: MobiusLiveSessionConnection) => Promise<void>;
 }
 
@@ -1613,7 +1613,7 @@ export class MobiusLiveEventSubscriptionV2 {
                                 cause,
                             });
                         }
-                        const events = decodeSessionEventBatchV2(value);
+                        const events = decodeSessionLiveEventBatchV2(value);
                         if (!(await this.#observer.receive(events))) {
                             this.close();
                         }

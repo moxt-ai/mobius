@@ -20,6 +20,7 @@ import {
     SESSION_EVENT_V2_KIND,
     SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND,
     type SessionEventV2,
+    type SessionLiveEventV2,
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -248,7 +249,7 @@ async function startControlledDaemon(): Promise<{
 }
 
 type Fixture = Awaited<ReturnType<typeof startControlledDaemon>>;
-const pendingLiveEvents = new WeakMap<Fixture, SessionEventV2[]>();
+const pendingLiveEvents = new WeakMap<Fixture, SessionLiveEventV2[]>();
 function prompt(fixture: Fixture, text: string): SessionPromptCommand {
     return {
         additionalDirectoryIds: [],
@@ -265,7 +266,7 @@ function prompt(fixture: Fixture, text: string): SessionPromptCommand {
         targetCommandId: "",
     };
 }
-async function nextLive(fixture: Fixture): Promise<SessionEventV2> {
+async function nextLive(fixture: Fixture): Promise<SessionLiveEventV2> {
     const pending = pendingLiveEvents.get(fixture) ?? [];
     const buffered = pending.shift();
     if (buffered !== undefined) {
@@ -380,7 +381,7 @@ async function activeTurn(fixture: Fixture, command: SessionPromptCommand) {
     }
 }
 describe("daemon V2 live delivery", () => {
-    it("Given reasoning chunks exceed a 200-event page, When history omits reasoning details, Then 200 events remain and each marker retains its chunk's first position", async () => {
+    it("Given reasoning chunks exceed a 200-event page, When history omits reasoning details, Then 200 events remain and each marker retains its chunk's first identity", async () => {
         const fixture = await startControlledDaemon();
         try {
             const command = prompt(fixture, "stream paged reasoning");
@@ -392,15 +393,15 @@ describe("daemon V2 live delivery", () => {
                 }
             }
             const complete = await history(fixture, command, { eventLimit: 1_000 });
-            const firstReasoningPositions = new Map<string, string>();
+            const firstReasoningEventIds = new Map<string, string>();
             for (const event of complete.events) {
                 if (
                     event.type === "acp" &&
                     event.payload.sessionUpdate === "agent_thought_chunk" &&
                     typeof event.payload.messageId === "string" &&
-                    !firstReasoningPositions.has(event.payload.messageId)
+                    !firstReasoningEventIds.has(event.payload.messageId)
                 ) {
-                    firstReasoningPositions.set(event.payload.messageId, event.position);
+                    firstReasoningEventIds.set(event.payload.messageId, event.eventId);
                 }
             }
 
@@ -417,7 +418,7 @@ describe("daemon V2 live delivery", () => {
                 }
                 expect(event.mobiusMetadata).toEqual({ omitted: true });
                 expect(event.payload.content).toEqual({ text: "", type: "text" });
-                expect(event.position).toBe(firstReasoningPositions.get(event.payload.messageId ?? ""));
+                expect(event.eventId).toBe(firstReasoningEventIds.get(event.payload.messageId ?? ""));
             }
         } finally {
             await fixture.close();
@@ -490,9 +491,6 @@ describe("daemon V2 live delivery", () => {
                     toolCallId: "tool-1",
                 }),
             ]);
-            expect(updates.map((event) => event.position)).toEqual(
-                updates.map((event) => event.position).toSorted((left, right) => Number(left) - Number(right)),
-            );
         } finally {
             await fixture.close();
         }

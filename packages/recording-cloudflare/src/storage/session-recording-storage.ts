@@ -1,7 +1,7 @@
 import {
     decodeSessionEventEnvelopeV2,
     encodeSessionEventEnvelopeV2,
-    type SessionEventV2,
+    type SessionLiveEventV2,
     type SessionRecordingHistory,
     type SessionRecordingHistoryPage,
     type SessionRecordingWrite,
@@ -14,14 +14,14 @@ import { recordedSessionEvent, recordingMetadata } from "../schema/session-recor
 import { applyDurableObjectMigrations } from "./durable-object-migrations.ts";
 
 interface RecordedBatch {
-    readonly events: readonly SessionEventV2[];
+    readonly events: readonly SessionLiveEventV2[];
     readonly generation: string;
     readonly ordinal: number;
 }
 
 interface SelectedEvent {
     readonly batch: RecordedBatch;
-    readonly event: SessionEventV2;
+    readonly event: SessionLiveEventV2;
     readonly index: number;
 }
 
@@ -273,6 +273,6 @@ export class SessionRecordingStorage {
             .orderBy(asc(recordedSessionEvent.ordinal))
             .all();
     };
-    readonly #decode = (row: { readonly envelopeJson: string }): readonly SessionEventV2[] =>
+    readonly #decode = (row: { readonly envelopeJson: string }): readonly SessionLiveEventV2[] =>
         decodeSessionEventEnvelopeV2(JSON.parse(row.envelopeJson)).events;
 }

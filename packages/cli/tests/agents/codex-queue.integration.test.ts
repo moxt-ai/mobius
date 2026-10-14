@@ -281,11 +281,6 @@ test("Given real Codex advances between repeated prompts, When V2 recovery pagin
                 expect(
                     historyEvents.flatMap((event) => (event.type === "lifecycle-metadata" ? [event.payload.kind] : [])),
                 ).toEqual(expect.arrayContaining(["prompt.requested", "prompt.started", "prompt.completed"]));
-                expect(historyEvents.map((event) => BigInt(event.position))).toEqual(
-                    historyEvents
-                        .map((event) => BigInt(event.position))
-                        .toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
-                );
                 expect(historyEvents.map((event) => event.eventId)).toEqual(
                     historyEvents.map((event) => event.eventId).toSorted(),
                 );

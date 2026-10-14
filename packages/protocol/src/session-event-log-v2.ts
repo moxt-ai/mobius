@@ -480,18 +480,19 @@ const provenanceSchema = z.discriminatedUnion("kind", [
         })
         .readonly(),
 ]);
-const sessionEventFieldsV2 = {
+const sharedSessionEventFieldsV2 = {
     eventId: identifier,
     mobiusMetadata: z
         .object({ omitted: z.literal(true).optional() })
         .readonly()
         .optional(),
-    position: positionSchema,
     provenance: provenanceSchema,
     recordedAt: z.iso.datetime({ offset: true }),
     sessionGenerationId: identifier,
     sessionId: identifier,
 };
+const sessionEventFieldsV2 = { ...sharedSessionEventFieldsV2, position: positionSchema.optional() };
+const sessionLiveEventFieldsV2 = { ...sharedSessionEventFieldsV2, position: positionSchema };
 export const sessionEventV2Schema = z.discriminatedUnion("type", [
     z.object({ ...sessionEventFieldsV2, payload: acpSessionUpdateV2Schema, type: z.literal("acp") }).readonly(),
     z
@@ -503,12 +504,29 @@ export const sessionEventV2Schema = z.discriminatedUnion("type", [
         .readonly(),
 ]);
 export type SessionEventV2 = z.infer<typeof sessionEventV2Schema>;
+export const sessionLiveEventV2Schema = z.discriminatedUnion("type", [
+    z.object({ ...sessionLiveEventFieldsV2, payload: acpSessionUpdateV2Schema, type: z.literal("acp") }).readonly(),
+    z
+        .object({
+            ...sessionLiveEventFieldsV2,
+            payload: lifecycleMetadataV2Schema,
+            type: z.literal("lifecycle-metadata"),
+        })
+        .readonly(),
+]);
+export type SessionLiveEventV2 = z.infer<typeof sessionLiveEventV2Schema>;
 export const sessionEventBatchV2Schema = z
     .array(sessionEventV2Schema)
     .min(1)
     .max(SESSION_EVENT_V2_BATCH_MAX_SIZE)
     .readonly();
 export type SessionEventBatchV2 = z.infer<typeof sessionEventBatchV2Schema>;
+export const sessionLiveEventBatchV2Schema = z
+    .array(sessionLiveEventV2Schema)
+    .min(1)
+    .max(SESSION_EVENT_V2_BATCH_MAX_SIZE)
+    .readonly();
+export type SessionLiveEventBatchV2 = z.infer<typeof sessionLiveEventBatchV2Schema>;
 const sessionExportV2Schema = z
     .object({
         binding: z
@@ -523,7 +541,6 @@ const sessionExportV2Schema = z
     })
     .readonly()
     .superRefine((session, context) => {
-        let previousPosition = 0n;
         const eventIds = new Set<string>();
         for (const [index, event] of session.events.entries()) {
             if (event.sessionId !== session.sessionId) {
@@ -533,14 +550,6 @@ const sessionExportV2Schema = z
                     path: ["events", index, "sessionId"],
                 });
             }
-            const position = BigInt(event.position);
-            if (position <= previousPosition) {
-                context.addIssue({
-                    code: "custom",
-                    message: "Exported events are not in increasing position order",
-                    path: ["events", index, "position"],
-                });
-            }
             if (eventIds.has(event.eventId)) {
                 context.addIssue({
                     code: "custom",
@@ -548,7 +557,6 @@ const sessionExportV2Schema = z
                     path: ["events", index, "eventId"],
                 });
             }
-            previousPosition = position;
             eventIds.add(event.eventId);
         }
     });
@@ -560,7 +568,7 @@ export const mobiusSessionExportV2Schema = z
     .readonly();
 export type MobiusSessionExportV2 = z.infer<typeof mobiusSessionExportV2Schema>;
 export const sessionEventEnvelopeV2Schema = z
-    .object({ events: sessionEventBatchV2Schema, kind: z.literal(SESSION_EVENT_V2_KIND) })
+    .object({ events: sessionLiveEventBatchV2Schema, kind: z.literal(SESSION_EVENT_V2_KIND) })
     .readonly();
 export type SessionEventEnvelopeV2 = z.infer<typeof sessionEventEnvelopeV2Schema>;
 export const sessionEventLogPageV2Schema = z
@@ -625,10 +633,16 @@ function encode<T>(value: T, schema: z.ZodType<T>): string {
 }
 export const decodeSessionEventV2 = (value: unknown): SessionEventV2 => decode(value, sessionEventV2Schema);
 export const encodeSessionEventV2 = (value: SessionEventV2): string => encode(value, sessionEventV2Schema);
+export const decodeSessionLiveEventV2 = (value: unknown): SessionLiveEventV2 => decode(value, sessionLiveEventV2Schema);
+export const encodeSessionLiveEventV2 = (value: SessionLiveEventV2): string => encode(value, sessionLiveEventV2Schema);
 export const decodeSessionEventBatchV2 = (value: unknown): SessionEventBatchV2 =>
     decode(value, sessionEventBatchV2Schema);
 export const encodeSessionEventBatchV2 = (value: SessionEventBatchV2): string =>
     encode(value, sessionEventBatchV2Schema);
+export const decodeSessionLiveEventBatchV2 = (value: unknown): SessionLiveEventBatchV2 =>
+    decode(value, sessionLiveEventBatchV2Schema);
+export const encodeSessionLiveEventBatchV2 = (value: SessionLiveEventBatchV2): string =>
+    encode(value, sessionLiveEventBatchV2Schema);
 export const decodeMobiusSessionExportV2 = (value: unknown): MobiusSessionExportV2 =>
     decode(value, mobiusSessionExportV2Schema);
 export const encodeMobiusSessionExportV2 = (value: MobiusSessionExportV2): string =>
