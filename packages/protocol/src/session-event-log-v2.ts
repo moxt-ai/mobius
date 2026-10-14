@@ -491,13 +491,12 @@ const sharedSessionEventFieldsV2 = {
     sessionGenerationId: identifier,
     sessionId: identifier,
 };
-const sessionEventFieldsV2 = { ...sharedSessionEventFieldsV2, position: positionSchema.optional() };
 const sessionLiveEventFieldsV2 = { ...sharedSessionEventFieldsV2, position: positionSchema };
 export const sessionEventV2Schema = z.discriminatedUnion("type", [
-    z.object({ ...sessionEventFieldsV2, payload: acpSessionUpdateV2Schema, type: z.literal("acp") }).readonly(),
+    z.object({ ...sharedSessionEventFieldsV2, payload: acpSessionUpdateV2Schema, type: z.literal("acp") }).readonly(),
     z
         .object({
-            ...sessionEventFieldsV2,
+            ...sharedSessionEventFieldsV2,
             payload: lifecycleMetadataV2Schema,
             type: z.literal("lifecycle-metadata"),
         })

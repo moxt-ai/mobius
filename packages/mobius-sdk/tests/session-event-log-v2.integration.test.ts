@@ -11,7 +11,7 @@ import {
 
 const recordedAt = "2026-10-07T00:00:00.000Z";
 
-function event(sessionId: string, eventId: string, position: string): SessionEventV2 {
+function event(sessionId: string, eventId: string): SessionEventV2 {
     return {
         eventId,
         payload: {
@@ -19,7 +19,6 @@ function event(sessionId: string, eventId: string, position: string): SessionEve
             messageId: "message-1",
             sessionUpdate: "agent_message_chunk",
         },
-        position,
         provenance: { kind: "original" },
         recordedAt,
         sessionGenerationId: "session-generation-1",
@@ -79,7 +78,7 @@ describe("Session Event Log V2 SDK", () => {
     });
 
     it("Given a V2 export and immutable fork boundary, When a consumer uses the explicit SDK APIs, Then raw pages and copy requests cross the production HTTP boundary unchanged", async () => {
-        const sourceEvent = event("source-session", "source-event-1", "1");
+        const sourceEvent = event("source-session", "source-event-1");
         const exported: MobiusSessionExportV2 = {
             formatVersion: "2",
             session: {
