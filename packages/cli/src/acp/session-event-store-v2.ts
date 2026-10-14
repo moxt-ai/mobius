@@ -1,21 +1,13 @@
 import { randomUUID } from "node:crypto";
-import {
-    decodeSessionEventV2,
-    type SessionEventPayloadV2,
-    type SessionEventV2,
-    type SessionLiveEventV2,
-} from "@moxt-ai/mobius-protocol";
-import { and, asc, eq, gte, lte } from "drizzle-orm";
-import type { NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
-import { z } from "zod";
+import type { SessionEventPayloadV2, SessionEventV2, SessionLiveEventV2 } from "@moxt-ai/mobius-protocol";
 import type { LocalSqliteDatabase } from "../infra/local-sqlite-database.ts";
-import { sessionEventV2 } from "../schema/session-event-cache/index.ts";
 import { SessionEventHistoryProjectionV2 } from "../session-event-history-projection-v2.ts";
 import {
     InMemorySessionEventIdAllocator,
     type SessionEventIdAllocator,
 } from "../session-event-id/session-event-id-allocator.ts";
 import type { SessionLiveEventPosition } from "../session-live-event-position.ts";
+import { SessionEventCacheV2Database } from "./session-event-cache-v2-database.ts";
 
 const HOT_EVENT_HIGH_WATER_MARK = 256;
 const HOT_EVENT_RETENTION = 128;
@@ -218,37 +210,21 @@ export class MemoryAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
     };
 }
 
-const cachedEventRowSchema = z.object({ eventJson: z.string(), ordinal: z.number().int().positive() });
-function decodeCachedEvent(value: unknown): SessionEventV2 {
-    return decodeSessionEventV2(value);
-}
-
 export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
-    readonly #database: NodeSQLiteDatabase;
+    readonly #cacheDatabase: SessionEventCacheV2Database;
     readonly #eventIds: SessionEventIdAllocator;
-    readonly #ignoredPersistedSessions = new Set<string>();
     readonly #liveEventPositions: SessionLiveEventPosition;
-    readonly #localDatabase: LocalSqliteDatabase;
-    readonly #databaseOrdinalsBySession = new Map<string, Map<string, number>>();
     readonly #sessions = new Map<string, SessionEventsV2>();
     #flushSchedule: FlushSchedule = { kind: "idle" };
-    #isLocalDBAvailable = true;
 
     constructor(
         localDatabase: LocalSqliteDatabase,
         liveEventPositions: SessionLiveEventPosition,
         eventIds: SessionEventIdAllocator = new InMemorySessionEventIdAllocator(),
     ) {
-        this.#localDatabase = localDatabase;
         this.#eventIds = eventIds;
         this.#liveEventPositions = liveEventPositions;
-        this.#database = localDatabase.orm;
-        try {
-            this.#localDatabase.transaction(() => this.#database.delete(sessionEventV2).run());
-        } catch (error) {
-            this.#localDatabase.close();
-            throw error;
-        }
+        this.#cacheDatabase = new SessionEventCacheV2Database(localDatabase);
     }
 
     readonly #session = (sessionId: string): SessionEventsV2 => {
@@ -289,33 +265,11 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
         session: SessionEventsV2,
         item: ProjectedSessionEventV2,
     ): void => {
-        if (!this.#isLocalDBAvailable) {
-            return;
-        }
-        const ordinal = this.#databaseOrdinalsBySession.get(sessionId)?.get(item.event.eventId);
-        if (ordinal === undefined) {
-            return;
-        }
-        try {
-            this.#database
-                .update(sessionEventV2)
-                .set({ eventJson: JSON.stringify(item.event) })
-                .where(
-                    and(
-                        eq(sessionEventV2.generationId, session.sessionGenerationId),
-                        eq(sessionEventV2.sessionId, sessionId),
-                        eq(sessionEventV2.ordinal, ordinal),
-                    ),
-                )
-                .run();
-        } catch (cause) {
-            this.#isLocalDBAvailable = false;
-            console.warn("Mobius V2 Session event cache writes are unavailable; retaining events in memory", cause);
-        }
+        this.#cacheDatabase.replace(sessionId, session.sessionGenerationId, item.event);
     };
 
     readonly #scheduleFlush = (): void => {
-        if (!this.#isLocalDBAvailable || this.#flushSchedule.kind !== "idle") {
+        if (!this.#cacheDatabase.isAvailable || this.#flushSchedule.kind !== "idle") {
             return;
         }
         const handle = setImmediate(() => {
@@ -337,7 +291,6 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
             return;
         }
         this.#deletePersisted(sessionId);
-        this.#databaseOrdinalsBySession.delete(sessionId);
         this.#sessions.set(
             sessionId,
             new SessionEventsV2(sessionGenerationId, () => this.#eventIds.allocate(sessionId, sessionGenerationId)),
@@ -348,7 +301,7 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
     };
 
     readonly #flush = (includeHotTail: boolean): void => {
-        if (!this.#isLocalDBAvailable || this.#flushSchedule.kind === "closed") {
+        if (!this.#cacheDatabase.isAvailable || this.#flushSchedule.kind === "closed") {
             return;
         }
         const batches = [...this.#sessions.entries()].flatMap(([sessionId, session]) => {
@@ -358,47 +311,23 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
                 : [
                       {
                           count,
-                          events: session.hot.slice(0, count),
+                          events: session.hot.slice(0, count).map(({ event }) => event),
                           firstOrdinal: session.projectedEventCount - session.hot.length + 1,
                           sessionGenerationId: session.sessionGenerationId,
                           sessionId,
                       },
                   ];
         });
-        const values = batches.flatMap((batch) =>
-            batch.events.map(({ event }, index) => ({
-                eventJson: JSON.stringify(event),
-                generationId: batch.sessionGenerationId,
-                ordinal: batch.firstOrdinal + index,
-                sessionId: batch.sessionId,
-            })),
-        );
-        if (values.length === 0) {
+        if (batches.length === 0) {
             return;
         }
-        try {
-            this.#localDatabase.transaction(() => {
-                for (let offset = 0; offset < values.length; offset += 200) {
-                    this.#database
-                        .insert(sessionEventV2)
-                        .values(values.slice(offset, offset + 200))
-                        .run();
-                }
-            });
+        if (this.#cacheDatabase.insert(batches)) {
             for (const batch of batches) {
-                const ordinals = this.#databaseOrdinalsBySession.get(batch.sessionId) ?? new Map<string, number>();
-                for (const [index, item] of batch.events.entries()) {
-                    ordinals.set(item.event.eventId, batch.firstOrdinal + index);
-                }
-                this.#databaseOrdinalsBySession.set(batch.sessionId, ordinals);
                 const session = this.#sessions.get(batch.sessionId);
                 if (session !== undefined) {
                     session.removeHotHead(batch.count);
                 }
             }
-        } catch (cause) {
-            this.#isLocalDBAvailable = false;
-            console.warn("Mobius V2 Session event cache writes are unavailable; retaining events in memory", cause);
         }
     };
 
@@ -412,26 +341,12 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
         return eventPage(current.sessionGenerationId, endIndex, eventLimit, (startIndex, endIndex) => {
             const startOrdinal = startIndex + 1;
             const endOrdinal = endIndex;
-            const persisted = this.#ignoredPersistedSessions.has(sessionId)
-                ? []
-                : this.#database
-                      .select({ eventJson: sessionEventV2.eventJson, ordinal: sessionEventV2.ordinal })
-                      .from(sessionEventV2)
-                      .where(
-                          and(
-                              eq(sessionEventV2.generationId, current.sessionGenerationId),
-                              eq(sessionEventV2.sessionId, sessionId),
-                              gte(sessionEventV2.ordinal, startOrdinal),
-                              lte(sessionEventV2.ordinal, endOrdinal),
-                          ),
-                      )
-                      .orderBy(asc(sessionEventV2.ordinal))
-                      .all()
-                      .map((value): { readonly event: SessionEventV2; readonly ordinal: number } => {
-                          const row = cachedEventRowSchema.parse(value);
-                          const cached = decodeCachedEvent(JSON.parse(row.eventJson));
-                          return { event: cached, ordinal: row.ordinal };
-                      });
+            const persisted = this.#cacheDatabase.read(
+                sessionId,
+                current.sessionGenerationId,
+                startOrdinal,
+                endOrdinal,
+            );
             const firstHotOrdinal = current.projectedEventCount - current.hot.length + 1;
             const hot = current.hot.flatMap((item, index) => {
                 const ordinal = firstHotOrdinal + index;
@@ -444,40 +359,17 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
     };
 
     readonly #deletePersisted = (sessionId: string, sessionGenerationId?: string): void => {
-        if (!this.#isLocalDBAvailable) {
-            this.#ignoredPersistedSessions.add(sessionId);
-            return;
-        }
-        try {
-            this.#database
-                .delete(sessionEventV2)
-                .where(
-                    sessionGenerationId === undefined
-                        ? eq(sessionEventV2.sessionId, sessionId)
-                        : and(
-                              eq(sessionEventV2.generationId, sessionGenerationId),
-                              eq(sessionEventV2.sessionId, sessionId),
-                          ),
-                )
-                .run();
-            this.#ignoredPersistedSessions.delete(sessionId);
-        } catch (cause) {
-            this.#isLocalDBAvailable = false;
-            this.#ignoredPersistedSessions.add(sessionId);
-            console.warn("Mobius V2 Session event cache writes are unavailable; retaining events in memory", cause);
-        }
+        this.#cacheDatabase.delete(sessionId, sessionGenerationId);
     };
 
     readonly remove = (sessionId: string): void => {
         this.#deletePersisted(sessionId);
         this.#sessions.delete(sessionId);
-        this.#databaseOrdinalsBySession.delete(sessionId);
     };
 
     readonly reset = (sessionId: string): void => {
         const previous = this.#sessions.get(sessionId);
         this.#deletePersisted(sessionId, previous?.sessionGenerationId);
-        this.#databaseOrdinalsBySession.delete(sessionId);
         const sessionGenerationId = randomUUID();
         this.#sessions.set(
             sessionId,
@@ -495,8 +387,7 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
         this.#flushSchedule = { kind: "idle" };
         this.#flush(true);
         this.#flushSchedule = { kind: "closed" };
-        this.#localDatabase.close();
+        this.#cacheDatabase.close();
         this.#sessions.clear();
-        this.#databaseOrdinalsBySession.clear();
     };
 }
