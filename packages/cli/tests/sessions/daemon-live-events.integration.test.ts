@@ -167,7 +167,7 @@ class ClientFrames {
     };
 }
 
-async function startControlledDaemon(options: { readonly stateDirectory?: string } = {}): Promise<{
+async function startControlledDaemon(): Promise<{
     readonly agent: LocalAgentDefinition;
     readonly close: () => Promise<void>;
     readonly config: ReturnType<typeof createDaemonConfig>;
@@ -176,11 +176,10 @@ async function startControlledDaemon(options: { readonly stateDirectory?: string
     readonly socket: Duplex;
     readonly timer: ControllableDaemonTimer;
 }> {
-    const ownsStateDirectory = options.stateDirectory === undefined;
-    const stateDirectory = options.stateDirectory ?? (await mkdtemp(join(tmpdir(), "mobius-daemon-timeline-")));
+    const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-timeline-"));
     const workspace = join(stateDirectory, "workspace");
     const nativeStateDirectory = join(stateDirectory, "native");
-    await Promise.all([mkdir(workspace, { recursive: true }), mkdir(nativeStateDirectory, { recursive: true })]);
+    await Promise.all([mkdir(workspace), mkdir(nativeStateDirectory)]);
     const socketReady = Promise.withResolvers<Duplex>();
     const relaySockets = new Set<Duplex>();
     const relay = createServer((_request, response) => {
@@ -244,9 +243,7 @@ async function startControlledDaemon(options: { readonly stateDirectory?: string
                 relaySocket.destroy();
             }
             await new Promise<void>((resolve) => relay.close(() => resolve()));
-            if (ownsStateDirectory) {
-                await rm(stateDirectory, { force: true, recursive: true });
-            }
+            await rm(stateDirectory, { force: true, recursive: true });
         },
     };
 }
@@ -384,54 +381,6 @@ async function activeTurn(fixture: Fixture, command: SessionPromptCommand) {
     }
 }
 describe("daemon V2 live delivery", () => {
-    it("Given a Session emits events before a daemon restart, When Sessions emit after restart, Then event ID counters restart per Session generation", async () => {
-        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-event-id-"));
-        let firstGenerationId = "";
-        const first = await startControlledDaemon({ stateDirectory });
-        try {
-            const command = { ...prompt(first, "first allocation"), commandId: "first-allocation" };
-            sendText(first.socket, encodeSessionPromptCommand(command));
-            let firstEvent = true;
-            for (;;) {
-                const event = await nextLive(first);
-                if (firstEvent) {
-                    firstEvent = false;
-                    firstGenerationId = event.sessionGenerationId;
-                    expect(event.eventId.endsWith("-0000000000000001")).toBe(true);
-                }
-                if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
-                    break;
-                }
-            }
-        } finally {
-            await first.close();
-        }
-
-        const restarted = await startControlledDaemon({ stateDirectory });
-        try {
-            const command = { ...prompt(restarted, "second allocation"), commandId: "second-allocation" };
-            sendText(restarted.socket, encodeSessionPromptCommand(command));
-            let event = await nextLive(restarted);
-            expect(event.sessionGenerationId).not.toBe(firstGenerationId);
-            expect(event.eventId.startsWith(`event-${event.sessionGenerationId}-`)).toBe(true);
-            while (event.type !== "lifecycle-metadata" || event.payload.kind !== "prompt.completed") {
-                event = await nextLive(restarted);
-            }
-
-            const otherSessionCommand = {
-                ...prompt(restarted, "separate Session allocation"),
-                commandId: "separate-session-allocation",
-                sessionId: "other-session",
-            };
-            sendText(restarted.socket, encodeSessionPromptCommand(otherSessionCommand));
-            const otherSessionEvent = await nextLive(restarted);
-            expect(otherSessionEvent.eventId.endsWith("-0000000000000001")).toBe(true);
-        } finally {
-            await restarted.close();
-            await rm(stateDirectory, { force: true, recursive: true });
-        }
-    });
-
     it("Given reasoning chunks exceed a 200-event page, When history omits reasoning details, Then 200 events remain and each marker retains its chunk's first identity", async () => {
         const fixture = await startControlledDaemon();
         try {

@@ -54,17 +54,12 @@ export const acpNativeHistoryReader: AcpNativeHistoryReader = {
     access: () => ({ kind: "acp" }),
 };
 
-export interface AcpNativeEventV2 {
-    readonly payload: SessionEventPayloadV2;
-    readonly eventId: string;
-}
-
 export interface AcpNativeEventReplayV2 {
     readonly nextCursor: string | null;
     readonly sessionGenerationId: string;
     readonly startPosition: number;
     readonly truncated: boolean;
-    readonly events: readonly AcpNativeEventV2[];
+    readonly events: readonly SessionEventPayloadV2[];
 }
 
 export interface AcpAgentSettingsInspectionOptions {

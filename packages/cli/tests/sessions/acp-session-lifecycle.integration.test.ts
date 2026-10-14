@@ -94,11 +94,11 @@ describe("ACP conversation sessions", () => {
             });
 
             const page = store.page("session-1", 400, null);
-            expect(page.events[1]?.payload).toEqual({
+            expect(page.events[1]).toEqual({
                 payload: { sessionUpdate: "tool_call_update", toolCallId: "tool-1" },
                 type: "acp",
             });
-            expect(page.events.at(-1)?.payload).toEqual({
+            expect(page.events.at(-1)).toEqual({
                 payload: {
                     content: [{ content: { text: "final snapshot", type: "text" }, type: "content" }],
                     rawOutput: { output: "first snapshot" },
@@ -138,8 +138,8 @@ describe("ACP conversation sessions", () => {
 
             const page = store.page("session-1", 200, null);
             expect(page.events).toHaveLength(200);
-            expect(page.events[0]?.payload).toMatchObject({ payload: { commandId: "command-101" } });
-            expect(page.events.at(-1)?.payload).toMatchObject({ payload: { commandId: "command-300" } });
+            expect(page.events[0]).toMatchObject({ payload: { commandId: "command-101" } });
+            expect(page.events.at(-1)).toMatchObject({ payload: { commandId: "command-300" } });
         } finally {
             store.close();
             vi.useRealTimers();
@@ -171,7 +171,7 @@ describe("ACP conversation sessions", () => {
             });
             const page = first.page("session-1", 10, null);
             firstGeneration = page.sessionGenerationId;
-            expect(page.events.map(({ payload }) => payload)).toEqual([
+            expect(page.events).toEqual([
                 {
                     payload: {
                         commandId: "command-1",

@@ -36,7 +36,7 @@ it("Given saved Codex threads, When its directory is listed through the in-proce
             50,
             null,
         );
-        const updates = replay.events.flatMap(({ payload }) => (payload.type === "acp" ? [payload.payload] : []));
+        const updates = replay.events.flatMap((event) => (event.type === "acp" ? [event.payload] : []));
         expect(updates.filter((update) => update.sessionUpdate === "user_message_chunk")).toEqual([]);
         expect(updates).toContainEqual(
             expect.objectContaining({
