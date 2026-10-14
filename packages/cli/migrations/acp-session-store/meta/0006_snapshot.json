@@ -1,7 +1,7 @@
 {
     "version": "6",
     "dialect": "sqlite",
-    "id": "4149a5f1-8e5b-4358-8d78-dfb036e6deff",
+    "id": "b856cb80-c22e-463d-b450-c6c2b90e64c7",
     "prevId": "509b6df8-9cb9-4c4e-8207-0c93c7094828",
     "tables": {
         "acp_session": {
@@ -87,7 +87,7 @@
                     "primaryKey": false,
                     "notNull": true,
                     "autoincrement": false,
-                    "default": 100000
+                    "default": 10000
                 },
                 "session_id": {
                     "name": "session_id",
