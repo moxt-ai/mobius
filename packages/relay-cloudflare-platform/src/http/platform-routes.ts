@@ -1,5 +1,10 @@
 import { isIdentifier, MOBIUS_API_PREFIX, PROJECT_LOCATION_HINTS } from "@moxt-ai/mobius-protocol";
-import { errorMiddleware, requestTimeoutMiddleware, rethrowHonoError } from "@moxt-ai/mobius-relay-core";
+import {
+    errorMiddleware,
+    notFoundResponse,
+    requestTimeoutMiddleware,
+    rethrowHonoError,
+} from "@moxt-ai/mobius-relay-core";
 import { Hono } from "hono";
 import * as v from "valibot";
 import { PlatformControlPlaneError } from "../entity/platform-control-plane.ts";
@@ -88,6 +93,7 @@ export function createPlatformControlApplication() {
     return new Hono<PlatformHttpEnvironment>({ strict: false })
         .basePath(`${MOBIUS_API_PREFIX}/dashboard`)
         .onError(rethrowHonoError)
+        .notFound(notFoundResponse)
         .use("*", errorMiddleware)
         .use(
             "*",
