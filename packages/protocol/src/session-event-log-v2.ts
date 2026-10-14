@@ -461,7 +461,7 @@ const sharedSessionEventFieldsV2 = {
         .object({ omitted: z.literal(true).optional() })
         .readonly()
         .optional(),
-    provenance: provenanceSchema,
+    provenance: provenanceSchema.optional(),
     recordedAt: z.iso.datetime({ offset: true }),
     sessionGenerationId: identifier,
     sessionId: identifier,
