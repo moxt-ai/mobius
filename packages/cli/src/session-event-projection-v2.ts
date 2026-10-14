@@ -4,6 +4,7 @@ import type {
     QueuedPromptRequestEventLogV2,
     SessionEventPayloadV2,
     SessionEventV2,
+    SessionLiveEventV2,
     SessionPromptCommand,
 } from "@moxt-ai/mobius-protocol";
 import type { AcpSessionEventPositionV2 } from "./acp/session-event-store-v2.ts";
@@ -71,10 +72,23 @@ export function projectSessionEventV2(
     };
 }
 
+function projectSessionLiveEventV2(
+    sessionGenerationId: string,
+    sessionId: string,
+    position: number,
+    event: SessionEventPayloadV2,
+    recordedAt: string,
+): SessionLiveEventV2 {
+    return {
+        ...projectSessionEventV2(sessionGenerationId, sessionId, position, event, recordedAt),
+        position: position.toString(),
+    };
+}
+
 export class DaemonSessionEventProjectionV2 {
     readonly #publisher: DaemonSessionEventPublisher;
-    readonly #terminal = new Map<string, SessionEventV2>();
-    readonly #publications = new Map<string, SessionEventV2[]>();
+    readonly #terminal = new Map<string, SessionLiveEventV2>();
+    readonly #publications = new Map<string, SessionLiveEventV2[]>();
     readonly #queued = new Map<string, QueuedPromptRequestV2>();
 
     readonly #recordLifecycle: (sessionId: string, event: SessionEventPayloadV2) => Promise<boolean>;
@@ -132,9 +146,9 @@ export class DaemonSessionEventProjectionV2 {
     };
 
     readonly record = (sessionId: string, event: SessionEventPayloadV2, position: AcpSessionEventPositionV2): void => {
-        const recorded = this.event(
-            sessionId,
+        const recorded = projectSessionLiveEventV2(
             position.sessionGenerationId,
+            sessionId,
             position.position,
             event,
             new Date().toISOString(),

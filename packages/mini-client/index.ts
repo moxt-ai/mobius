@@ -368,8 +368,7 @@ async function copyEventLogCommand(
                     event.eventId !== expected[index]?.eventId &&
                     event.provenance.kind === provenanceKind &&
                     event.provenance.sourceSessionId === source.sessionId &&
-                    event.provenance.sourceEventId === expected[index]?.eventId &&
-                    event.provenance.sourcePosition === expected[index]?.position,
+                    event.provenance.sourceEventId === expected[index]?.eventId,
             );
         if (!matches) {
             throw new MiniClientError("event_log_mismatch", "The copied V2 event log does not match its source");

@@ -35,6 +35,8 @@ export type {
     SessionEventLogPageV2,
     SessionEventV2,
     SessionInfoUpdatedEvent,
+    SessionLiveEventBatchV2,
+    SessionLiveEventV2,
     SessionMetadata,
     SessionPermissionRequestedEvent,
     SessionPermissionResolvedEvent,

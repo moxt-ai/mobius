@@ -3,8 +3,8 @@ import {
     encodeDaemonToServiceMessage,
     SESSION_EVENT_V2_BATCH_MAX_SIZE,
     SESSION_EVENT_V2_KIND,
-    type SessionEventV2,
     type SessionInfoUpdatedEvent,
+    type SessionLiveEventV2,
     type SessionStatusChangedEvent,
 } from "@moxt-ai/mobius-protocol";
 import { WebSocket } from "undici";
@@ -15,7 +15,7 @@ export const SESSION_EVENT_V2_BATCH_WINDOW_MILLISECONDS = 100;
 
 /** Live delivery is best-effort. Recovery snapshots are owned by the daemon's local Session cache. */
 export class DaemonSessionEventPublisher {
-    #pendingV2Events: SessionEventV2[] = [];
+    #pendingV2Events: SessionLiveEventV2[] = [];
     #pendingV2Task: DaemonScheduledTask | null = null;
     #socket: WebSocket | null = null;
     readonly #timer: DaemonTimer;
@@ -64,7 +64,7 @@ export class DaemonSessionEventPublisher {
         }
     };
 
-    readonly publishV2 = (event: SessionEventV2): void => {
+    readonly publishV2 = (event: SessionLiveEventV2): void => {
         const socket = this.#socket;
         if (socket === null || socket.readyState !== WebSocket.OPEN) {
             return;

@@ -24,21 +24,30 @@ function isAgentReasoning(event: SessionEventV2 | undefined): boolean {
     return event?.type === "acp" && event.payload.sessionUpdate === "agent_thought_chunk";
 }
 
-function omitAgentReasoning(events: readonly SessionEventV2[]): readonly SessionEventV2[] {
-    const retained: SessionEventV2[] = [];
+interface PositionedHistoryEventV2 {
+    readonly event: SessionEventV2;
+    readonly position: number;
+}
+
+function omitAgentReasoning(events: readonly PositionedHistoryEventV2[]): readonly PositionedHistoryEventV2[] {
+    const retained: PositionedHistoryEventV2[] = [];
     let previousReasoningMessageId: string | null | undefined;
-    for (const event of events) {
+    for (const positioned of events) {
+        const { event } = positioned;
         if (event.type !== "acp" || event.payload.sessionUpdate !== "agent_thought_chunk") {
             previousReasoningMessageId = undefined;
-            retained.push(event);
+            retained.push(positioned);
             continue;
         }
         const messageId = event.payload.messageId ?? null;
         if (previousReasoningMessageId === undefined || previousReasoningMessageId !== messageId) {
             retained.push({
-                ...event,
-                mobiusMetadata: { omitted: true },
-                payload: { ...event.payload, content: { text: "", type: "text" } },
+                ...positioned,
+                event: {
+                    ...event,
+                    mobiusMetadata: { omitted: true },
+                    payload: { ...event.payload, content: { text: "", type: "text" } },
+                },
             });
         }
         previousReasoningMessageId = messageId;
@@ -56,7 +65,7 @@ async function loadHistoryPage(
     eventProjectionV2: DaemonSessionEventProjectionV2,
 ): Promise<NativeSessionEventsV2> {
     let cursor = initialCursor;
-    let loaded: readonly SessionEventV2[] = [];
+    let loaded: readonly PositionedHistoryEventV2[] = [];
     let sessionGenerationId: string | null = null;
     let sourceNextCursor: string | null = null;
     do {
@@ -65,19 +74,23 @@ async function loadHistoryPage(
             throw new AcpExecutionError("The Session reloaded while history was loading", {}, "session_reloaded");
         }
         sessionGenerationId = replay.sessionGenerationId;
-        const events = replay.events.map((event, index) =>
-            eventProjectionV2.event(
-                sessionId,
-                replay.sessionGenerationId,
-                replay.startPosition + index,
-                event,
-                "1970-01-01T00:00:00.000Z",
-            ),
-        );
+        const events = replay.events.map((event, index) => {
+            const position = replay.startPosition + index;
+            return {
+                event: eventProjectionV2.event(
+                    sessionId,
+                    replay.sessionGenerationId,
+                    position,
+                    event,
+                    "1970-01-01T00:00:00.000Z",
+                ),
+                position,
+            };
+        });
         loaded = [...events, ...loaded];
         sourceNextCursor = replay.nextCursor;
         const visible = omitReasoning ? omitAgentReasoning(loaded) : loaded;
-        const reasoningContinuesBeforePage = sourceNextCursor !== null && isAgentReasoning(loaded[0]);
+        const reasoningContinuesBeforePage = sourceNextCursor !== null && isAgentReasoning(loaded[0]?.event);
         if (visible.length >= eventLimit && !reasoningContinuesBeforePage) {
             break;
         }
@@ -88,15 +101,15 @@ async function loadHistoryPage(
         throw new AcpExecutionError("The Session history is unavailable", {}, "session_history_unavailable");
     }
     const visible = omitReasoning ? omitAgentReasoning(loaded) : loaded;
-    const events = visible.slice(-eventLimit);
-    const firstPosition = events[0] === undefined ? 0 : Number(events[0].position);
+    const positionedEvents = visible.slice(-eventLimit);
+    const firstPosition = positionedEvents[0]?.position ?? 0;
     const nextCursor = firstPosition <= 1 ? null : (firstPosition - 1).toString();
     return {
         events: {
-            events,
+            events: positionedEvents.map(({ event }) => event),
             nextCursor,
             sessionGenerationId,
-            tailCursor: events.at(-1)?.eventId ?? "",
+            tailCursor: positionedEvents.at(-1)?.event.eventId ?? "",
             truncated: nextCursor !== null,
             version: 2,
         },
