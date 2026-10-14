@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { ProtocolMessageError } from "./codecs/messages.ts";
 import { identifierStringSchema } from "./identifier.ts";
-import { sessionEventEnvelopeV2Schema, sessionEventV2Schema } from "./session-event-log-v2.ts";
+import { sessionEventEnvelopeV2Schema, sessionLiveEventV2Schema } from "./session-event-log-v2.ts";
 
 const sessionRecordingWriteSchema = z
     .object({
@@ -13,7 +13,7 @@ const sessionRecordingWriteSchema = z
 
 const sessionRecordingHistorySchema = z
     .object({
-        events: z.array(sessionEventV2Schema).max(100_000).readonly(),
+        events: z.array(sessionLiveEventV2Schema).max(100_000).readonly(),
         sessionId: identifierStringSchema,
     })
     .readonly();
@@ -26,7 +26,7 @@ const recordingCursorSchema = z.string().regex(/^v2:[1-9][0-9]*:(?:0|[1-9][0-9]*
 
 const sessionRecordingHistoryPageSchema = z
     .object({
-        events: z.array(sessionEventV2Schema).max(10_000).readonly(),
+        events: z.array(sessionLiveEventV2Schema).max(10_000).readonly(),
         // The append-order cursor after this page, or null when the caller has caught up.
         nextCursor: recordingCursorSchema.nullable(),
         // The append-order cursor at the newest recorded event, so an idle poller can compare one token.

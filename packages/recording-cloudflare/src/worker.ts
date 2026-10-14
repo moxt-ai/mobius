@@ -2,13 +2,11 @@ import { DurableObject } from "cloudflare:workers";
 import {
     decodeSessionRecordingWrite,
     encodeSessionRecordingDirectory,
-    encodeSessionRecordingHistory,
-    encodeSessionRecordingHistoryPage,
     isIdentifier,
     ProtocolMessageError,
     type SessionRecordingWrite,
 } from "@moxt-ai/mobius-protocol";
-import { type Context, Hono } from "hono";
+import { Hono } from "hono";
 import { RecordingDirectory } from "./service/recording-directory.ts";
 import { RecordingDirectoryStorage } from "./storage/recording-directory-storage.ts";
 import { SessionRecordingStorage } from "./storage/session-recording-storage.ts";
@@ -65,11 +63,7 @@ function sessionRecordingRoutes(storage: SessionRecordingRoutes): Hono<Recording
             if (target === null) {
                 return errorResponse("invalid_target", 400);
             }
-            return historyResponse(
-                context,
-                storage.read(target.projectId, target.runtimeId, target.sessionId),
-                encodeSessionRecordingHistory,
-            );
+            return historyResponse(storage.read(target.projectId, target.runtimeId, target.sessionId));
         })
         .get("/page-events", (context): Response => {
             const target = eventTarget(context.req.raw);
@@ -85,7 +79,7 @@ function sessionRecordingRoutes(storage: SessionRecordingRoutes): Hono<Recording
                 return errorResponse("invalid_target", 400);
             }
             const page = storage.readPage(target.projectId, target.runtimeId, target.sessionId, after, Number(limit));
-            return historyResponse(context, page, encodeSessionRecordingHistoryPage);
+            return historyResponse(page);
         })
         .all("*", (): Response => errorResponse("not_found", 404));
 }
@@ -157,12 +151,8 @@ function eventTarget(request: Request): {
     return projectId === null || runtimeId === null || sessionId === null ? null : { projectId, runtimeId, sessionId };
 }
 
-function historyResponse<T>(
-    context: Context<RecordingEnvironment>,
-    value: T | null,
-    encode: (value: T) => string,
-): Response {
-    return value === null ? errorResponse("not_found", 404) : context.body(encode(value), 200, jsonHeaders);
+function historyResponse<T>(value: T | null): Response {
+    return value === null ? errorResponse("not_found", 404) : Response.json(value);
 }
 
 const maximumPageEvents = 10_000;

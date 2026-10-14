@@ -2,8 +2,6 @@ import {
     decodeSessionEventEnvelopeV2,
     encodeSessionEventEnvelopeV2,
     type SessionLiveEventV2,
-    type SessionRecordingHistory,
-    type SessionRecordingHistoryPage,
     type SessionRecordingWrite,
 } from "@moxt-ai/mobius-protocol";
 import { and, asc, eq } from "drizzle-orm";
@@ -29,6 +27,19 @@ interface ResolvedCursor {
     readonly index: number;
     readonly legacy: boolean;
     readonly ordinal: number;
+}
+
+interface RecordedSessionLiveHistory {
+    readonly events: readonly SessionLiveEventV2[];
+    readonly sessionId: string;
+}
+
+interface RecordedSessionLiveHistoryPage extends RecordedSessionLiveHistory {
+    readonly generationReset: boolean;
+    readonly nextCursor: string | null;
+    readonly tailCursor: string;
+    readonly truncated: boolean;
+    readonly version: 2;
 }
 
 export class SessionRecordingStorage {
@@ -106,7 +117,7 @@ export class SessionRecordingStorage {
                 .run();
             return true;
         });
-    readonly read = (projectId: string, runtimeId: string, sessionId: string): SessionRecordingHistory | null => {
+    readonly read = (projectId: string, runtimeId: string, sessionId: string): RecordedSessionLiveHistory | null => {
         const rows = this.#requireMetadata(projectId, runtimeId, sessionId);
         if (rows === null) {
             return null;
@@ -120,7 +131,7 @@ export class SessionRecordingStorage {
         sessionId: string,
         after: string,
         limit: number,
-    ): SessionRecordingHistoryPage | null => {
+    ): RecordedSessionLiveHistoryPage | null => {
         const metadata = this.#metadata(projectId, runtimeId, sessionId);
         if (metadata === undefined) {
             return null;
