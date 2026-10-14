@@ -50,7 +50,7 @@ describe("native session history", () => {
             );
 
             expect(
-                preview.events.flatMap(({ payload: event }) =>
+                preview.events.flatMap((event) =>
                     event.type === "acp" &&
                     (event.payload.sessionUpdate === "user_message_chunk" ||
                         event.payload.sessionUpdate === "agent_message_chunk") &&
@@ -110,7 +110,7 @@ describe("native session history", () => {
             );
 
             expect(
-                replay.events.flatMap(({ payload: event }) =>
+                replay.events.flatMap((event) =>
                     event.type === "acp" &&
                     (event.payload.sessionUpdate === "user_message_chunk" ||
                         event.payload.sessionUpdate === "agent_message_chunk") &&
@@ -152,7 +152,7 @@ describe("native session history", () => {
             );
 
             expect(
-                replay.events.flatMap(({ payload: event }) =>
+                replay.events.flatMap((event) =>
                     event.type === "acp" &&
                     event.payload.sessionUpdate === "user_message_chunk" &&
                     event.payload.content.type === "text"
@@ -193,7 +193,7 @@ describe("native session history", () => {
             );
 
             expect(
-                replay.events.flatMap(({ payload: event }) =>
+                replay.events.flatMap((event) =>
                     event.type === "acp" &&
                     event.payload.sessionUpdate === "user_message_chunk" &&
                     event.payload.content.type === "text"
@@ -223,7 +223,7 @@ describe("native session history", () => {
                 null,
             );
 
-            const updates = replay.events.flatMap(({ payload }) => (payload.type === "acp" ? [payload.payload] : []));
+            const updates = replay.events.flatMap((event) => (event.type === "acp" ? [event.payload] : []));
             expect(updates).toMatchObject([
                 {
                     content: { text: "Preserve this update", type: "text" },
@@ -272,9 +272,7 @@ describe("native session history", () => {
             );
             expect(newestMessage.nextCursor).not.toBeNull();
             expect(
-                newestMessage.events.flatMap(({ payload: event }) =>
-                    event.type === "acp" ? [event.payload.sessionUpdate] : [],
-                ),
+                newestMessage.events.flatMap((event) => (event.type === "acp" ? [event.payload.sessionUpdate] : [])),
             ).toEqual([
                 "agent_thought_chunk",
                 "tool_call",
@@ -296,9 +294,7 @@ describe("native session history", () => {
                 newestMessage.nextCursor,
             );
             expect(olderMessage.nextCursor).toBeNull();
-            expect([...olderMessage.events, ...newestMessage.events].map(({ payload }) => payload)).toEqual(
-                replay.events.map(({ payload }) => payload),
-            );
+            expect([...olderMessage.events, ...newestMessage.events]).toEqual(replay.events);
         } finally {
             await f.close();
         }

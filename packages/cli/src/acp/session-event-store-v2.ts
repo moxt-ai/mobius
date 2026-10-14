@@ -5,23 +5,16 @@ import type { NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
 import { z } from "zod";
 import type { LocalSqliteDatabase } from "../infra/local-sqlite-database.ts";
 import { sessionEventV2 } from "../schema/session-event-cache/index.ts";
-import {
-    InMemorySessionEventIdAllocator,
-    type SessionEventIdAllocator,
-} from "../session-event-id/session-event-id-allocator.ts";
-import type { AcpNativeEventV2 } from "./session-contracts.ts";
 
 const HOT_EVENT_HIGH_WATER_MARK = 256;
 const HOT_EVENT_RETENTION = 128;
 
 class PositionedSessionEventV2 {
     #event: SessionEventPayloadV2;
-    readonly eventId: string;
     readonly position: number;
 
-    constructor(event: SessionEventPayloadV2, eventId: string, position: number) {
+    constructor(event: SessionEventPayloadV2, position: number) {
         this.#event = event;
-        this.eventId = eventId;
         this.position = position;
     }
 
@@ -40,8 +33,8 @@ class SessionEventsV2 {
     readonly sessionGenerationId: string;
     nextPosition = 1;
 
-    constructor(sessionGenerationId: string) {
-        this.sessionGenerationId = sessionGenerationId;
+    constructor() {
+        this.sessionGenerationId = randomUUID();
     }
 
     readonly getToolCallUpdate = (toolCallId: string): PositionedSessionEventV2 | undefined =>
@@ -89,7 +82,7 @@ type FlushSchedule =
     | { readonly handle: NodeJS.Immediate; readonly kind: "scheduled" };
 
 export interface AcpSessionEventPageV2 {
-    readonly events: readonly AcpNativeEventV2[];
+    readonly events: readonly SessionEventPayloadV2[];
     readonly nextCursor: string | null;
     readonly sessionGenerationId: string;
     readonly startPosition: number;
@@ -97,7 +90,6 @@ export interface AcpSessionEventPageV2 {
 }
 
 export interface AcpSessionEventPositionV2 {
-    readonly eventId: string;
     readonly position: number;
     readonly sessionGenerationId: string;
 }
@@ -105,24 +97,14 @@ export interface AcpSessionEventPositionV2 {
 export interface AcpSessionEventStoreV2 {
     readonly append: (sessionId: string, event: SessionEventPayloadV2) => AcpSessionEventPositionV2;
     readonly close: () => void;
-    readonly materialize: (
-        sessionId: string,
-        sessionGenerationId: string,
-        events: readonly SessionEventPayloadV2[],
-    ) => void;
     readonly page: (sessionId: string, eventLimit: number, cursor: string | null) => AcpSessionEventPageV2;
     readonly remove: (sessionId: string) => void;
     readonly reset: (sessionId: string) => void;
 }
 
-function projectAppend(
-    session: SessionEventsV2,
-    event: SessionEventPayloadV2,
-    eventId: string,
-    position: number,
-): ProjectedAppendV2 {
+function projectAppend(session: SessionEventsV2, event: SessionEventPayloadV2, position: number): ProjectedAppendV2 {
     if (event.type !== "acp" || event.payload.sessionUpdate !== "tool_call_update") {
-        return { item: new PositionedSessionEventV2(event, eventId, position), kind: "append" };
+        return { item: new PositionedSessionEventV2(event, position), kind: "append" };
     }
     const update = event.payload;
     const previous = session.getToolCallUpdate(update.toolCallId);
@@ -137,17 +119,13 @@ function projectAppend(
         sessionUpdate: "tool_call_update",
         toolCallId: update.toolCallId,
     };
-    const item = new PositionedSessionEventV2({ payload: merged, type: "acp" }, eventId, position);
+    const item = new PositionedSessionEventV2({ payload: merged, type: "acp" }, position);
     return previousPayload?.sessionUpdate !== "tool_call_update" || previous === undefined
         ? { item, kind: "append" }
         : {
               item,
               kind: "compact-and-append",
-              previous: new PositionedSessionEventV2(
-                  compactedToolCallUpdate(update.toolCallId),
-                  previous.eventId,
-                  previous.position,
-              ),
+              previous: new PositionedSessionEventV2(compactedToolCallUpdate(update.toolCallId), previous.position),
               toolCallId: update.toolCallId,
           };
 }
@@ -162,7 +140,7 @@ function eventPage(
     eventCount: number,
     eventLimit: number,
     cursor: string | null,
-    read: (startPosition: number, endPosition: number) => readonly AcpNativeEventV2[],
+    read: (startPosition: number, endPosition: number) => readonly SessionEventPayloadV2[],
 ): AcpSessionEventPageV2 {
     const parsedCursor = cursor === null ? eventCount : Number(cursor);
     if (!Number.isSafeInteger(parsedCursor) || parsedCursor < 0 || parsedCursor > eventCount) {
@@ -179,16 +157,22 @@ function eventPage(
     };
 }
 
+export function pageAcpSessionEventsV2(
+    sessionGenerationId: string,
+    events: readonly SessionEventPayloadV2[],
+    eventLimit: number,
+    cursor: string | null,
+): AcpSessionEventPageV2 {
+    return eventPage(sessionGenerationId, events.length, eventLimit, cursor, (startPosition, endPosition) =>
+        events.slice(startPosition - 1, endPosition),
+    );
+}
+
 export class MemoryAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
     readonly #events = new Map<string, SessionEventsV2>();
-    readonly #eventIds: SessionEventIdAllocator;
-
-    constructor(eventIds: SessionEventIdAllocator = new InMemorySessionEventIdAllocator()) {
-        this.#eventIds = eventIds;
-    }
 
     readonly #session = (sessionId: string): SessionEventsV2 => {
-        const session = this.#events.get(sessionId) ?? new SessionEventsV2(randomUUID());
+        const session = this.#events.get(sessionId) ?? new SessionEventsV2();
         this.#events.set(sessionId, session);
         return session;
     };
@@ -196,36 +180,21 @@ export class MemoryAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
     readonly append = (sessionId: string, event: SessionEventPayloadV2): AcpSessionEventPositionV2 => {
         const session = this.#session(sessionId);
         const position = session.nextPosition;
-        const eventId = this.#eventIds.allocate(sessionId, session.sessionGenerationId);
-        const projected = projectAppend(session, event, eventId, position);
+        const projected = projectAppend(session, event, position);
         if (projected.kind === "compact-and-append") {
             session.updateToolCallUpdate(projected.toolCallId, projected.previous);
         }
         session.append(projected.item);
         session.nextPosition += 1;
-        return { eventId, position, sessionGenerationId: session.sessionGenerationId };
+        return { position, sessionGenerationId: session.sessionGenerationId };
     };
 
     readonly close = (): void => this.#events.clear();
 
-    readonly materialize = (
-        sessionId: string,
-        sessionGenerationId: string,
-        events: readonly SessionEventPayloadV2[],
-    ): void => {
-        if (this.#events.get(sessionId)?.sessionGenerationId === sessionGenerationId) {
-            return;
-        }
-        this.#events.set(sessionId, new SessionEventsV2(sessionGenerationId));
-        for (const event of events) {
-            this.append(sessionId, event);
-        }
-    };
-
     readonly page = (sessionId: string, eventLimit: number, cursor: string | null): AcpSessionEventPageV2 => {
         const session = this.#session(sessionId);
         return eventPage(session.sessionGenerationId, session.nextPosition - 1, eventLimit, cursor, (start, end) =>
-            session.hot.slice(start - 1, end).map(({ event, eventId }) => ({ eventId, payload: event })),
+            session.hot.slice(start - 1, end).map(({ event }) => event),
         );
     };
 
@@ -234,17 +203,16 @@ export class MemoryAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
     };
 
     readonly reset = (sessionId: string): void => {
-        this.#events.set(sessionId, new SessionEventsV2(randomUUID()));
+        this.#events.set(sessionId, new SessionEventsV2());
     };
 }
 
 const cachedEventRowSchema = z.object({ eventJson: z.string(), position: z.number().int().positive() });
-const cachedEventSchema = z.object({ eventId: z.string().min(1), payload: z.record(z.string(), z.unknown()) });
 
-function decodeCachedEvent(value: unknown): AcpNativeEventV2 {
-    const cached = cachedEventSchema.parse(value);
+function decodeCachedEvent(value: unknown): SessionEventPayloadV2 {
+    const payload = z.record(z.string(), z.unknown()).parse(value);
     const event = decodeSessionEventV2({
-        ...cached.payload,
+        ...payload,
         eventId: "cached-event",
         position: "1",
         provenance: { kind: "original" },
@@ -252,30 +220,21 @@ function decodeCachedEvent(value: unknown): AcpNativeEventV2 {
         sessionGenerationId: "cached-generation",
         sessionId: "cached-session",
     });
-    return {
-        payload:
-            event.type === "acp"
-                ? { payload: event.payload, type: event.type }
-                : { payload: event.payload, type: event.type },
-        eventId: cached.eventId,
-    };
+    return event.type === "acp"
+        ? { payload: event.payload, type: event.type }
+        : { payload: event.payload, type: event.type };
 }
 
 export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
     readonly #database: NodeSQLiteDatabase;
-    readonly #eventIds: SessionEventIdAllocator;
     readonly #ignoredPersistedSessions = new Set<string>();
     readonly #localDatabase: LocalSqliteDatabase;
     readonly #sessions = new Map<string, SessionEventsV2>();
     #flushSchedule: FlushSchedule = { kind: "idle" };
     #isLocalDBAvailable = true;
 
-    constructor(
-        localDatabase: LocalSqliteDatabase,
-        eventIds: SessionEventIdAllocator = new InMemorySessionEventIdAllocator(),
-    ) {
+    constructor(localDatabase: LocalSqliteDatabase) {
         this.#localDatabase = localDatabase;
-        this.#eventIds = eventIds;
         this.#database = localDatabase.orm;
         try {
             this.#localDatabase.transaction(() => this.#database.delete(sessionEventV2).run());
@@ -286,7 +245,7 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
     }
 
     readonly #session = (sessionId: string): SessionEventsV2 => {
-        const session = this.#sessions.get(sessionId) ?? new SessionEventsV2(randomUUID());
+        const session = this.#sessions.get(sessionId) ?? new SessionEventsV2();
         this.#sessions.set(sessionId, session);
         return session;
     };
@@ -297,8 +256,7 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
         }
         const session = this.#session(sessionId);
         const position = session.nextPosition;
-        const eventId = this.#eventIds.allocate(sessionId, session.sessionGenerationId);
-        const projected = projectAppend(session, event, eventId, position);
+        const projected = projectAppend(session, event, position);
         if (projected.kind === "compact-and-append") {
             this.#updateToolCallUpdate(sessionId, session, projected.toolCallId, projected.previous);
         }
@@ -308,7 +266,7 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
         if (session.hot.length > HOT_EVENT_HIGH_WATER_MARK) {
             this.#scheduleFlush();
         }
-        return { eventId, position, sessionGenerationId: session.sessionGenerationId };
+        return { position, sessionGenerationId: session.sessionGenerationId };
     };
 
     readonly #updateToolCallUpdate = (
@@ -323,7 +281,7 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
         try {
             this.#database
                 .update(sessionEventV2)
-                .set({ eventJson: JSON.stringify({ eventId: item.eventId, payload: item.event }) })
+                .set({ eventJson: JSON.stringify(item.event) })
                 .where(
                     and(
                         eq(sessionEventV2.generationId, session.sessionGenerationId),
@@ -352,21 +310,6 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
         this.#flushSchedule = { handle, kind: "scheduled" };
     };
 
-    readonly materialize = (
-        sessionId: string,
-        sessionGenerationId: string,
-        events: readonly SessionEventPayloadV2[],
-    ): void => {
-        if (this.#sessions.get(sessionId)?.sessionGenerationId === sessionGenerationId) {
-            return;
-        }
-        this.#deletePersisted(sessionId);
-        this.#sessions.set(sessionId, new SessionEventsV2(sessionGenerationId));
-        for (const event of events) {
-            this.append(sessionId, event);
-        }
-    };
-
     readonly #flush = (includeHotTail: boolean): void => {
         if (!this.#isLocalDBAvailable || this.#flushSchedule.kind === "closed") {
             return;
@@ -385,8 +328,8 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
                   ];
         });
         const values = batches.flatMap((batch) =>
-            batch.events.map(({ event, eventId, position }) => ({
-                eventJson: JSON.stringify({ eventId, payload: event }),
+            batch.events.map(({ event, position }) => ({
+                eventJson: JSON.stringify(event),
                 generationId: batch.sessionGenerationId,
                 position,
                 sessionId: batch.sessionId,
@@ -438,15 +381,17 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
                       .all()
                       .map((value): PositionedSessionEventV2 => {
                           const row = cachedEventRowSchema.parse(value);
-                          const cached = decodeCachedEvent(JSON.parse(row.eventJson));
-                          return new PositionedSessionEventV2(cached.payload, cached.eventId, row.position);
+                          return new PositionedSessionEventV2(
+                              decodeCachedEvent(JSON.parse(row.eventJson)),
+                              row.position,
+                          );
                       });
             const hot = (session?.hot ?? []).filter(
                 ({ position }) => position >= startPosition && position <= endPosition,
             );
             return [...persisted, ...hot]
                 .toSorted((left, right) => left.position - right.position)
-                .map(({ event, eventId }) => ({ eventId, payload: event }));
+                .map(({ event }) => event);
         });
     };
 
@@ -483,7 +428,7 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
     readonly reset = (sessionId: string): void => {
         const previous = this.#sessions.get(sessionId);
         this.#deletePersisted(sessionId, previous?.sessionGenerationId);
-        this.#sessions.set(sessionId, new SessionEventsV2(randomUUID()));
+        this.#sessions.set(sessionId, new SessionEventsV2());
     };
 
     readonly close = (): void => {

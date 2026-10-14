@@ -56,13 +56,14 @@ function promptContent(command: SessionPromptCommand): readonly ContentBlockV2[]
 export function projectSessionEventV2(
     sessionGenerationId: string,
     sessionId: string,
-    eventId: string,
+    position: number,
     event: SessionEventPayloadV2,
     recordedAt: string,
 ): SessionEventV2 {
     return {
-        eventId,
+        eventId: `event-${sessionGenerationId}-${position.toString().padStart(16, "0")}`,
         ...event,
+        position: position.toString(),
         provenance: { kind: "original" },
         recordedAt,
         sessionGenerationId,
@@ -73,13 +74,12 @@ export function projectSessionEventV2(
 function projectSessionLiveEventV2(
     sessionGenerationId: string,
     sessionId: string,
-    eventId: string,
     position: number,
     event: SessionEventPayloadV2,
     recordedAt: string,
 ): SessionLiveEventV2 {
     return {
-        ...projectSessionEventV2(sessionGenerationId, sessionId, eventId, event, recordedAt),
+        ...projectSessionEventV2(sessionGenerationId, sessionId, position, event, recordedAt),
         position: position.toString(),
     };
 }
@@ -148,7 +148,6 @@ export class DaemonSessionEventProjectionV2 {
         const recorded = projectSessionLiveEventV2(
             position.sessionGenerationId,
             sessionId,
-            position.eventId,
             position.position,
             event,
             new Date().toISOString(),
@@ -204,10 +203,10 @@ export class DaemonSessionEventProjectionV2 {
     readonly event = (
         sessionId: string,
         sessionGenerationId: string,
-        eventId: string,
+        position: number,
         event: SessionEventPayloadV2,
         recordedAt: string,
-    ): SessionEventV2 => projectSessionEventV2(sessionGenerationId, sessionId, eventId, event, recordedAt);
+    ): SessionEventV2 => projectSessionEventV2(sessionGenerationId, sessionId, position, event, recordedAt);
 
     readonly queueChanged = async (sessionId: string): Promise<void> => {
         await this.#recordLifecycle(sessionId, {
