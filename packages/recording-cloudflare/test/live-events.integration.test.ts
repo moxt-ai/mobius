@@ -459,6 +459,71 @@ describe("Recording incremental reads", () => {
         expect((await worker.fetch(read("?after=0&limit=0"), env)).status).toBe(400);
         expect((await worker.fetch(read("?after=0&limit=99999"), env)).status).toBe(400);
     });
+    it("Given a history spread across many batches, When a caller pages with a small limit, Then every event after the legacy start position is delivered exactly once in order", async () => {
+        for (const batch of [0, 3, 6, 9, 12]) {
+            expect(
+                (
+                    await worker.fetch(
+                        write("runtime-live", { kind: "session.event.v2", events: numberedEvents(3, batch) }),
+                        env,
+                    )
+                ).status,
+            ).toBe(201);
+        }
+        const collected: string[] = [];
+        let cursor = "0";
+        let pages = 0;
+        for (;;) {
+            const response = await worker.fetch(read(`?after=${encodeURIComponent(cursor)}&limit=2`), env);
+            expect(response.status).toBe(200);
+            const page = decodeSessionRecordingHistoryPage(await response.text());
+            collected.push(...page.events.map((candidate) => candidate.eventId));
+            // A legacy position cursor means "after this position", so position 0 is not replayed.
+            expect(page.truncated).toBe(collected.length < 14);
+            expect(page.generationReset).toBe(false);
+            // The tail must not move while no new events are recorded.
+            expect(page.tailCursor).toBe("v2:5:14");
+            if (page.nextCursor === null) {
+                break;
+            }
+            cursor = page.nextCursor;
+            pages += 1;
+            expect(pages).toBeLessThan(20);
+        }
+        expect(collected).toEqual(Array.from({ length: 14 }, (_, index) => `event-${index + 1}`));
+    });
+    it("Given a history spread across many batches, When a caller resumes from a mid-history v2 cursor, Then it receives only the later events", async () => {
+        for (const batch of [0, 3, 6, 9, 12]) {
+            expect(
+                (
+                    await worker.fetch(
+                        write("runtime-live", { kind: "session.event.v2", events: numberedEvents(3, batch) }),
+                        env,
+                    )
+                ).status,
+            ).toBe(201);
+        }
+        // v2 cursor at position 4, which lives in the second recorded batch.
+        const response = await worker.fetch(read(`?after=${encodeURIComponent("v2:2:4")}&limit=10`), env);
+        expect(response.status).toBe(200);
+        const page = decodeSessionRecordingHistoryPage(await response.text());
+        expect(page.events.map((candidate) => candidate.eventId)).toEqual([
+            "event-5",
+            "event-6",
+            "event-7",
+            "event-8",
+            "event-9",
+            "event-10",
+            "event-11",
+            "event-12",
+            "event-13",
+            "event-14",
+        ]);
+        expect(page.generationReset).toBe(false);
+        expect(page.truncated).toBe(false);
+        expect(page.nextCursor).toBe("v2:5:14");
+        expect(page.tailCursor).toBe("v2:5:14");
+    });
     it("Given a well-formed cursor that no longer resolves, When a caller reads incrementally, Then the failure is reported as a structured error rather than opaque text", async () => {
         expect(
             (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: numberedEvents(1, 0) }), env))
