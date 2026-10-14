@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AcpSessionUpdateV2, NativeSessionCommand, SessionEventPayloadV2 } from "@moxt-ai/mobius-protocol";
+import type { AcpSessionUpdateV2, NativeSessionCommand, SessionLiveEventV2 } from "@moxt-ai/mobius-protocol";
 import {
     type AcpNativeHistoryReader,
     AgentRuntimeManager,
@@ -21,7 +21,7 @@ const acpUrl = new URL("./fixtures/acp-peer.ts", import.meta.url).toString();
 class NativeSessionObserver extends NullAcpSessionObserver {
     readonly updates: AcpSessionUpdateV2[] = [];
     readonly loading = Promise.withResolvers<void>();
-    override readonly onSessionEventV2 = (_sessionId: string, event: SessionEventPayloadV2): Promise<void> => {
+    override readonly onSessionEventV2 = (event: SessionLiveEventV2): Promise<void> => {
         if (event.type === "acp") {
             this.updates.push(event.payload);
         }

@@ -213,12 +213,12 @@ class ControlledAgentState {
     async #publish(active: ActiveReply, output: HarnessOutput): Promise<void> {
         active.outputSequence += 1;
         const id = `${active.sessionId}-${active.turnNumber.toString()}-${active.outputSequence.toString()}`;
-        if (output.kind === "text") {
+        if (output.kind === "text" || output.kind === "message") {
             const notification: acp.SessionNotification = {
                 sessionId: active.sessionId,
                 update: {
                     content: { text: output.text, type: "text" },
-                    messageId: id,
+                    messageId: output.kind === "message" ? id : `assistant-${active.turnNumber.toString()}`,
                     sessionUpdate: "agent_message_chunk",
                 },
             };
@@ -260,7 +260,7 @@ class ControlledAgentState {
                 sessionId: active.sessionId,
                 update: {
                     content: { text: output.output, type: "text" },
-                    messageId: id,
+                    messageId: `reasoning-${active.turnNumber.toString()}`,
                     sessionUpdate: "agent_thought_chunk",
                 },
             };

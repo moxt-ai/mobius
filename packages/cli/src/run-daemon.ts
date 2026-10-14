@@ -30,6 +30,7 @@ import { RuntimeRelayRevokedError } from "./relay-connection/runtime-revocation.
 import { DaemonSessionEventPublisher } from "./relay-connection/session-event-publisher.ts";
 import { type DaemonTimer, systemDaemonTimer } from "./relay-connection/timer.ts";
 import { DaemonSessionEventProjectionV2 } from "./session-event-projection-v2.ts";
+import { SqliteSessionLiveEventPosition } from "./session-live-event-position.ts";
 
 const RELAY_RECONNECT_DELAY_MILLISECONDS = 500;
 
@@ -129,6 +130,7 @@ export async function runDaemon(
     try {
         eventsV2 = new CachedAcpSessionEventStoreV2(
             openSessionEventCacheV2Database(join(stateDirectory, "sessions", `${channelHash}.events.sqlite`)),
+            new SqliteSessionLiveEventPosition(sessionDatabase),
         );
     } catch (error) {
         sessionDatabase.close();

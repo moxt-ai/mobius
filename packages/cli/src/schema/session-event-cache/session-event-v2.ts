@@ -5,15 +5,15 @@ export const sessionEventV2 = sqliteTable(
     {
         eventJson: text("event_json").notNull(),
         generationId: text("generation_id").notNull(),
-        position: integer("position").notNull(),
+        ordinal: integer("position").notNull(),
         sessionId: text("session_id").notNull(),
     },
     (table) => [
-        primaryKey({ columns: [table.generationId, table.sessionId, table.position] }),
+        primaryKey({ columns: [table.generationId, table.sessionId, table.ordinal] }),
         index("session_event_v2_generation_session_position_index").on(
             table.generationId,
             table.sessionId,
-            table.position,
+            table.ordinal,
         ),
     ],
 );

@@ -8,12 +8,12 @@ import type {
     SessionElicitationResolvedEvent,
     SessionEventPayloadV2,
     SessionInfoUpdatedEvent,
+    SessionLiveEventV2,
     SessionPermissionRequestedEvent,
     SessionPermissionResolvedEvent,
     SessionUsageUpdatedEvent,
 } from "@moxt-ai/mobius-protocol";
 import type { AcpSessionObserver } from "../../src/acp/agent-runtime-manager.ts";
-import type { AcpSessionEventPositionV2 } from "../../src/acp/session-event-store-v2.ts";
 import { LocalAgentDefinition } from "../../src/config.ts";
 
 export const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
@@ -79,12 +79,15 @@ export class RecordingObserver implements AcpSessionObserver {
         return Promise.resolve();
     };
 
-    readonly onSessionEventV2 = (
-        _sessionId: string,
-        event: SessionEventPayloadV2,
-        position: AcpSessionEventPositionV2,
-    ): Promise<void> => {
-        this.eventsV2.push({ event, position: position.position });
+    readonly onSessionEventV2 = (liveEvent: SessionLiveEventV2): Promise<void> => {
+        const event: SessionEventPayloadV2 =
+            liveEvent.type === "acp"
+                ? { payload: liveEvent.payload, type: "acp" }
+                : { payload: liveEvent.payload, type: "lifecycle-metadata" };
+        this.eventsV2.push({
+            event,
+            position: Number(liveEvent.position),
+        });
         return Promise.resolve();
     };
 }

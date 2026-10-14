@@ -3,11 +3,9 @@ import type {
     PromptExecutionContextV2,
     QueuedPromptRequestEventLogV2,
     SessionEventPayloadV2,
-    SessionEventV2,
     SessionLiveEventV2,
     SessionPromptCommand,
 } from "@moxt-ai/mobius-protocol";
-import type { AcpSessionEventPositionV2 } from "./acp/session-event-store-v2.ts";
 import type { DaemonSessionEventPublisher } from "./relay-connection/session-event-publisher.ts";
 
 interface QueuedPromptRequestV2 {
@@ -51,37 +49,6 @@ function promptContent(command: SessionPromptCommand): readonly ContentBlockV2[]
         );
     }
     return content;
-}
-
-export function projectSessionEventV2(
-    sessionGenerationId: string,
-    sessionId: string,
-    eventId: string,
-    event: SessionEventPayloadV2,
-    recordedAt: string,
-): SessionEventV2 {
-    return {
-        eventId,
-        ...event,
-        provenance: { kind: "original" },
-        recordedAt,
-        sessionGenerationId,
-        sessionId,
-    };
-}
-
-function projectSessionLiveEventV2(
-    sessionGenerationId: string,
-    sessionId: string,
-    eventId: string,
-    position: number,
-    event: SessionEventPayloadV2,
-    recordedAt: string,
-): SessionLiveEventV2 {
-    return {
-        ...projectSessionEventV2(sessionGenerationId, sessionId, eventId, event, recordedAt),
-        position: position.toString(),
-    };
 }
 
 export class DaemonSessionEventProjectionV2 {
@@ -144,23 +111,16 @@ export class DaemonSessionEventProjectionV2 {
         throw new Error("The executing prompt was not registered in the V2 queue");
     };
 
-    readonly record = (sessionId: string, event: SessionEventPayloadV2, position: AcpSessionEventPositionV2): void => {
-        const recorded = projectSessionLiveEventV2(
-            position.sessionGenerationId,
-            sessionId,
-            position.eventId,
-            position.position,
-            event,
-            new Date().toISOString(),
-        );
+    readonly record = (recorded: SessionLiveEventV2): void => {
+        const sessionId = recorded.sessionId;
         if (
-            event.type === "lifecycle-metadata" &&
-            (event.payload.kind === "prompt.completed" ||
-                event.payload.kind === "prompt.failed" ||
-                event.payload.kind === "prompt.failed-before-start")
+            recorded.type === "lifecycle-metadata" &&
+            (recorded.payload.kind === "prompt.completed" ||
+                recorded.payload.kind === "prompt.failed" ||
+                recorded.payload.kind === "prompt.failed-before-start")
         ) {
             // Publish termination after prompt admission and execution state are settled.
-            this.#terminal.set(event.payload.commandId, recorded);
+            this.#terminal.set(recorded.payload.commandId, recorded);
             const pending = this.#publications.get(sessionId) ?? [];
             pending.push(recorded);
             this.#publications.set(sessionId, pending);
@@ -200,14 +160,6 @@ export class DaemonSessionEventProjectionV2 {
         }
         this.#queued.delete(commandId);
     };
-
-    readonly event = (
-        sessionId: string,
-        sessionGenerationId: string,
-        eventId: string,
-        event: SessionEventPayloadV2,
-        recordedAt: string,
-    ): SessionEventV2 => projectSessionEventV2(sessionGenerationId, sessionId, eventId, event, recordedAt);
 
     readonly queueChanged = async (sessionId: string): Promise<void> => {
         await this.#recordLifecycle(sessionId, {

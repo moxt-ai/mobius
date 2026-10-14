@@ -1200,11 +1200,11 @@ export class AgentSession implements AcpClientHandler {
         if (event.type !== "lifecycle-metadata" || this.#sessionLoad.kind !== "loaded") {
             return;
         }
-        const position =
+        const liveEvent =
             this.#turnHistory === null
                 ? this.#sessionLoad.history.recordLifecycle(event)
                 : this.#turnHistory.recordLifecycle(event);
-        await this.#getObserver().onSessionEventV2?.(this.#mobiusSessionId, event, position);
+        await this.#getObserver().onSessionEventV2?.(liveEvent);
     };
 
     readonly selectNativeSession = (sessionId: string): void => {
@@ -1226,12 +1226,12 @@ export class AgentSession implements AcpClientHandler {
         } else {
             const onSessionEventV2 = this.#getObserver().onSessionEventV2;
             if (this.#turnHistory !== null) {
-                await this.#turnHistory.record(update, rawUpdate, async (position) => {
-                    await onSessionEventV2?.(this.#mobiusSessionId, { payload: rawUpdate, type: "acp" }, position);
+                await this.#turnHistory.record(update, rawUpdate, async (liveEvent) => {
+                    await onSessionEventV2?.(liveEvent);
                 });
             } else if (this.#sessionLoad.kind === "loaded") {
-                await this.#sessionLoad.history.record(update, rawUpdate, async (position) => {
-                    await onSessionEventV2?.(this.#mobiusSessionId, { payload: rawUpdate, type: "acp" }, position);
+                await this.#sessionLoad.history.record(update, rawUpdate, async (liveEvent) => {
+                    await onSessionEventV2?.(liveEvent);
                 });
             }
         }

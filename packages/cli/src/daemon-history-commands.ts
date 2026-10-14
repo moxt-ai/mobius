@@ -24,13 +24,13 @@ function isAgentReasoning(event: SessionEventV2 | undefined): boolean {
     return event?.type === "acp" && event.payload.sessionUpdate === "agent_thought_chunk";
 }
 
-interface PositionedHistoryEventV2 {
+interface OrderedHistoryEventV2 {
+    readonly cursor: string | null;
     readonly event: SessionEventV2;
-    readonly position: number;
 }
 
-function omitAgentReasoning(events: readonly PositionedHistoryEventV2[]): readonly PositionedHistoryEventV2[] {
-    const retained: PositionedHistoryEventV2[] = [];
+function omitAgentReasoning(events: readonly OrderedHistoryEventV2[]): readonly OrderedHistoryEventV2[] {
+    const retained: OrderedHistoryEventV2[] = [];
     let previousReasoningMessageId: string | null | undefined;
     for (const positioned of events) {
         const { event } = positioned;
@@ -62,10 +62,9 @@ async function loadHistoryPage(
     omitReasoning: boolean,
     queuedPromptRequests: readonly QueuedPromptRequestEventLogV2[],
     load: (eventLimit: number, cursor: string | null) => Promise<AcpSessionEventPageV2>,
-    eventProjectionV2: DaemonSessionEventProjectionV2,
 ): Promise<NativeSessionEventsV2> {
     let cursor = initialCursor;
-    let loaded: readonly PositionedHistoryEventV2[] = [];
+    let loaded: readonly OrderedHistoryEventV2[] = [];
     let sessionGenerationId: string | null = null;
     let sourceNextCursor: string | null = null;
     do {
@@ -73,19 +72,21 @@ async function loadHistoryPage(
         if (sessionGenerationId !== null && replay.sessionGenerationId !== sessionGenerationId) {
             throw new AcpExecutionError("The Session reloaded while history was loading", {}, "session_reloaded");
         }
+        if (
+            replay.events.some(
+                (event) => event.sessionId !== sessionId || event.sessionGenerationId !== replay.sessionGenerationId,
+            )
+        ) {
+            throw new AcpExecutionError(
+                "The Session history contains events from another Session",
+                {},
+                "session_history_unavailable",
+            );
+        }
         sessionGenerationId = replay.sessionGenerationId;
-        const events = replay.events.map(({ eventId, payload }, index) => {
-            const position = replay.startPosition + index;
-            return {
-                event: eventProjectionV2.event(
-                    sessionId,
-                    replay.sessionGenerationId,
-                    eventId,
-                    payload,
-                    "1970-01-01T00:00:00.000Z",
-                ),
-                position,
-            };
+        const events = replay.events.map((event, index) => {
+            const eventCursor = replay.nextCursor === null && index === 0 ? null : event.eventId;
+            return { cursor: eventCursor, event };
         });
         loaded = [...events, ...loaded];
         sourceNextCursor = replay.nextCursor;
@@ -101,15 +102,14 @@ async function loadHistoryPage(
         throw new AcpExecutionError("The Session history is unavailable", {}, "session_history_unavailable");
     }
     const visible = omitReasoning ? omitAgentReasoning(loaded) : loaded;
-    const positionedEvents = visible.slice(-eventLimit);
-    const firstPosition = positionedEvents[0]?.position ?? 0;
-    const nextCursor = firstPosition <= 1 ? null : (firstPosition - 1).toString();
+    const orderedEvents = visible.slice(-eventLimit);
+    const nextCursor = orderedEvents[0]?.cursor ?? null;
     return {
         events: {
-            events: positionedEvents.map(({ event }) => event),
+            events: orderedEvents.map(({ event }) => event),
             nextCursor,
             sessionGenerationId,
-            tailCursor: positionedEvents.at(-1)?.event.eventId ?? "",
+            tailCursor: orderedEvents.at(-1)?.event.eventId ?? "",
             truncated: nextCursor !== null,
             version: 2,
         },
@@ -158,7 +158,6 @@ export async function executeSessionLiveHistoryV2PageLoad(
             command.omit?.includes("agent-reasoning") === true,
             recovery.queuedPromptRequests,
             async (eventLimit, cursor) => await sessions.loadSessionEventsV2(loadOptions, eventLimit, cursor),
-            eventProjectionV2,
         );
         signal.throwIfAborted();
         audit.record({
@@ -206,7 +205,6 @@ export async function executeSessionPreviewHistoryPageLoad(
     audit: AuditStore,
     diagnostics: RelayConnectionDiagnostics,
     sessions: AgentRuntimeManager,
-    eventProjectionV2: DaemonSessionEventProjectionV2,
     signal: AbortSignal,
 ): Promise<void> {
     try {
@@ -232,7 +230,6 @@ export async function executeSessionPreviewHistoryPageLoad(
             [],
             async (eventLimit, cursor) =>
                 await sessions.previewNativeSessionEventsV2(loadOptions, command.sessionId, eventLimit, cursor),
-            eventProjectionV2,
         );
         signal.throwIfAborted();
         audit.record({

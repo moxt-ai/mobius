@@ -19,6 +19,7 @@ import { LocalAgentDefinition } from "../../src/config.ts";
 import { acpSessionStoreMigrations } from "../../src/generated/acp-session-store-migrations.ts";
 import { AccumulatingOperationMetrics } from "../../src/infra/operation-metrics.ts";
 import { openAcpSessionDatabase, openSessionEventCacheV2Database } from "../../src/local-databases.ts";
+import { SqliteSessionLiveEventPosition } from "../../src/session-live-event-position.ts";
 
 const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
 
@@ -129,31 +130,86 @@ describe("ACP conversation sessions", () => {
         }
     });
 
-    it("Given a tool update has flushed to SQLite, When a replacement update arrives, Then its position remains with compacted content", async () => {
+    it("Given a database-backed live position allocation, When the event store reopens, Then allocation continues from ten thousand", async () => {
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-live-event-position-"));
+        const sessionDatabasePath = join(temporaryDirectory, "sessions.sqlite");
+        const firstSessionDatabase = openAcpSessionDatabase(sessionDatabasePath);
+        const first = new CachedAcpSessionEventStoreV2(
+            openSessionEventCacheV2Database(join(temporaryDirectory, "first-events.sqlite")),
+            new SqliteSessionLiveEventPosition(firstSessionDatabase),
+        );
+        try {
+            expect(
+                [
+                    first.append("session-1", {
+                        payload: { kind: "session.queue.changed" },
+                        type: "lifecycle-metadata",
+                    }),
+                    first.append("session-1", {
+                        payload: { kind: "session.queue.changed" },
+                        type: "lifecycle-metadata",
+                    }),
+                    first.append("session-2", {
+                        payload: { kind: "session.queue.changed" },
+                        type: "lifecycle-metadata",
+                    }),
+                ].map((event) => event.position),
+            ).toEqual(["10000", "10001", "10000"]);
+        } finally {
+            first.close();
+            firstSessionDatabase.close();
+        }
+
+        const secondSessionDatabase = openAcpSessionDatabase(sessionDatabasePath);
+        const second = new CachedAcpSessionEventStoreV2(
+            openSessionEventCacheV2Database(join(temporaryDirectory, "second-events.sqlite")),
+            new SqliteSessionLiveEventPosition(secondSessionDatabase),
+        );
+        try {
+            expect(
+                second.append("session-1", {
+                    payload: { kind: "session.queue.changed" },
+                    type: "lifecycle-metadata",
+                }).position,
+            ).toBe("10002");
+        } finally {
+            second.close();
+            secondSessionDatabase.close();
+            await rm(temporaryDirectory, { force: true, recursive: true });
+        }
+    });
+
+    it("Given a projected tool has flushed to SQLite, When more live updates arrive, Then history replaces that Session event without retaining live identities", async () => {
         vi.useFakeTimers({ toFake: ["clearImmediate", "setImmediate"] });
         vi.setSystemTime(new Date("2026-10-12T00:00:00.000Z"));
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-tool-projection-"));
+        const sessionDatabase = openAcpSessionDatabase(join(temporaryDirectory, "sessions.sqlite"));
         const store = new CachedAcpSessionEventStoreV2(
             openSessionEventCacheV2Database(join(temporaryDirectory, "events.sqlite")),
+            new SqliteSessionLiveEventPosition(sessionDatabase),
         );
         try {
-            store.append("session-1", {
-                payload: {
-                    sessionUpdate: "tool_call",
-                    title: "Run command",
-                    toolCallId: "tool-1",
-                },
-                type: "acp",
-            });
-            store.append("session-1", {
-                payload: {
-                    rawOutput: { output: "first snapshot" },
-                    sessionUpdate: "tool_call_update",
-                    status: "in_progress",
-                    toolCallId: "tool-1",
-                },
-                type: "acp",
-            });
+            const liveEvents = [
+                store.append("session-1", {
+                    payload: {
+                        sessionUpdate: "tool_call",
+                        title: "Run command",
+                        toolCallId: "tool-1",
+                    },
+                    type: "acp",
+                }),
+            ];
+            liveEvents.push(
+                store.append("session-1", {
+                    payload: {
+                        rawOutput: { output: "first snapshot" },
+                        sessionUpdate: "tool_call_update",
+                        status: "in_progress",
+                        toolCallId: "tool-1",
+                    },
+                    type: "acp",
+                }),
+            );
             for (let remaining = 298; remaining > 0; remaining -= 1) {
                 store.append("session-1", {
                     payload: { kind: "session.queue.changed" },
@@ -162,34 +218,40 @@ describe("ACP conversation sessions", () => {
             }
             await vi.runAllTimersAsync();
 
-            store.append("session-1", {
-                payload: {
-                    content: [{ content: { text: "final snapshot", type: "text" }, type: "content" }],
-                    sessionUpdate: "tool_call_update",
-                    status: "completed",
-                    toolCallId: "tool-1",
-                },
-                type: "acp",
-            });
+            liveEvents.push(
+                store.append("session-1", {
+                    payload: {
+                        content: [{ content: { text: "final snapshot", type: "text" }, type: "content" }],
+                        sessionUpdate: "tool_call_update",
+                        status: "completed",
+                        toolCallId: "tool-1",
+                    },
+                    type: "acp",
+                }),
+            );
 
             const page = store.page("session-1", 400, null);
-            expect(page.events[1]?.payload).toEqual({
-                payload: { sessionUpdate: "tool_call_update", toolCallId: "tool-1" },
-                type: "acp",
-            });
-            expect(page.events.at(-1)?.payload).toEqual({
+            const toolEvents = page.events.filter(
+                (event) =>
+                    event.type === "acp" &&
+                    (event.payload.sessionUpdate === "tool_call" || event.payload.sessionUpdate === "tool_call_update"),
+            );
+            expect(toolEvents).toHaveLength(1);
+            expect(toolEvents[0]).toMatchObject({
                 payload: {
                     content: [{ content: { text: "final snapshot", type: "text" }, type: "content" }],
                     rawOutput: { output: "first snapshot" },
-                    sessionUpdate: "tool_call_update",
+                    sessionUpdate: "tool_call",
                     status: "completed",
                     title: "Run command",
                     toolCallId: "tool-1",
                 },
                 type: "acp",
             });
+            expect(liveEvents.map((event) => event.eventId)).not.toContain(toolEvents[0]?.eventId);
         } finally {
             store.close();
+            sessionDatabase.close();
             vi.useRealTimers();
             await rm(temporaryDirectory, { force: true, recursive: true });
         }
@@ -199,8 +261,10 @@ describe("ACP conversation sessions", () => {
         vi.useFakeTimers({ toFake: ["clearImmediate", "setImmediate"] });
         vi.setSystemTime(new Date("2026-10-09T00:00:00.000Z"));
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-tiering-"));
+        const sessionDatabase = openAcpSessionDatabase(join(temporaryDirectory, "sessions.sqlite"));
         const store = new CachedAcpSessionEventStoreV2(
             openSessionEventCacheV2Database(join(temporaryDirectory, "events.sqlite")),
+            new SqliteSessionLiveEventPosition(sessionDatabase),
         );
         try {
             for (let position = 1; position <= 300; position += 1) {
@@ -217,10 +281,59 @@ describe("ACP conversation sessions", () => {
 
             const page = store.page("session-1", 200, null);
             expect(page.events).toHaveLength(200);
-            expect(page.events[0]?.payload).toMatchObject({ payload: { commandId: "command-101" } });
-            expect(page.events.at(-1)?.payload).toMatchObject({ payload: { commandId: "command-300" } });
+            expect(page.events[0]).toMatchObject({ payload: { commandId: "command-101" } });
+            expect(page.events.at(-1)).toMatchObject({ payload: { commandId: "command-300" } });
         } finally {
             store.close();
+            sessionDatabase.close();
+            vi.useRealTimers();
+            await rm(temporaryDirectory, { force: true, recursive: true });
+        }
+    });
+
+    it("Given projected history spanning cache tiers, When newer events arrive between pages, Then the event-ID cursor resumes before the same event", async () => {
+        vi.useFakeTimers({ toFake: ["clearImmediate", "setImmediate"] });
+        vi.setSystemTime(new Date("2026-10-14T00:00:00.000Z"));
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-cursor-"));
+        const sessionDatabase = openAcpSessionDatabase(join(temporaryDirectory, "sessions.sqlite"));
+        const store = new CachedAcpSessionEventStoreV2(
+            openSessionEventCacheV2Database(join(temporaryDirectory, "events.sqlite")),
+            new SqliteSessionLiveEventPosition(sessionDatabase),
+        );
+        try {
+            for (let eventNumber = 1; eventNumber <= 300; eventNumber += 1) {
+                store.append("session-1", {
+                    payload: {
+                        commandId: `command-${eventNumber.toString()}`,
+                        content: [{ text: `prompt ${eventNumber.toString()}`, type: "text" }],
+                        kind: "prompt.requested",
+                    },
+                    type: "lifecycle-metadata",
+                });
+            }
+            await vi.runAllTimersAsync();
+
+            const newest = store.page("session-1", 150, null);
+            expect(newest.events[0]).toMatchObject({ payload: { commandId: "command-151" } });
+            expect(newest.nextCursor).toBe(newest.events[0]?.eventId);
+
+            store.append("session-1", {
+                payload: {
+                    commandId: "command-301",
+                    content: [{ text: "newer prompt", type: "text" }],
+                    kind: "prompt.requested",
+                },
+                type: "lifecycle-metadata",
+            });
+
+            const older = store.page("session-1", 150, newest.nextCursor);
+            expect(older.events).toHaveLength(150);
+            expect(older.events[0]).toMatchObject({ payload: { commandId: "command-1" } });
+            expect(older.events.at(-1)).toMatchObject({ payload: { commandId: "command-150" } });
+            expect(older.nextCursor).toBeNull();
+        } finally {
+            store.close();
+            sessionDatabase.close();
             vi.useRealTimers();
             await rm(temporaryDirectory, { force: true, recursive: true });
         }
@@ -229,7 +342,12 @@ describe("ACP conversation sessions", () => {
     it("Given V2 Session events cached by one process, When a new process opens the cache, Then stale V2 events are unavailable under a new Session generation", async () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-cache-"));
         const databasePath = join(temporaryDirectory, "events.sqlite");
-        const first = new CachedAcpSessionEventStoreV2(openSessionEventCacheV2Database(databasePath));
+        const sessionDatabasePath = join(temporaryDirectory, "sessions.sqlite");
+        const firstSessionDatabase = openAcpSessionDatabase(sessionDatabasePath);
+        const first = new CachedAcpSessionEventStoreV2(
+            openSessionEventCacheV2Database(databasePath),
+            new SqliteSessionLiveEventPosition(firstSessionDatabase),
+        );
         let firstGeneration = "";
         try {
             first.append("session-1", {
@@ -250,7 +368,18 @@ describe("ACP conversation sessions", () => {
             });
             const page = first.page("session-1", 10, null);
             firstGeneration = page.sessionGenerationId;
-            expect(page.events.map(({ payload }) => payload)).toEqual([
+            expect(
+                page.events.map(
+                    ({
+                        eventId: _eventId,
+                        provenance: _provenance,
+                        recordedAt: _recordedAt,
+                        sessionGenerationId: _generation,
+                        sessionId: _sessionId,
+                        ...event
+                    }) => event,
+                ),
+            ).toEqual([
                 {
                     payload: {
                         commandId: "command-1",
@@ -270,15 +399,21 @@ describe("ACP conversation sessions", () => {
             ]);
         } finally {
             first.close();
+            firstSessionDatabase.close();
         }
 
-        const second = new CachedAcpSessionEventStoreV2(openSessionEventCacheV2Database(databasePath));
+        const secondSessionDatabase = openAcpSessionDatabase(sessionDatabasePath);
+        const second = new CachedAcpSessionEventStoreV2(
+            openSessionEventCacheV2Database(databasePath),
+            new SqliteSessionLiveEventPosition(secondSessionDatabase),
+        );
         try {
             const page = second.page("session-1", 10, null);
             expect(page.sessionGenerationId).not.toBe(firstGeneration);
             expect(page.events).toEqual([]);
         } finally {
             second.close();
+            secondSessionDatabase.close();
             await rm(temporaryDirectory, { force: true, recursive: true });
         }
     });

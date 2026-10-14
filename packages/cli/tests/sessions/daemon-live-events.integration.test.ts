@@ -346,16 +346,6 @@ async function history(
         }
     }
 }
-function deliveryIdentity(event: SessionEventV2): unknown {
-    return {
-        eventId: event.eventId,
-        payload:
-            event.type === "acp" && event.payload.sessionUpdate === "tool_call_update"
-                ? { sessionUpdate: event.payload.sessionUpdate, toolCallId: event.payload.toolCallId }
-                : event.payload,
-        type: event.type,
-    };
-}
 async function activeTurn(fixture: Fixture, command: SessionPromptCommand) {
     sendText(
         fixture.socket,
@@ -506,7 +496,17 @@ describe("daemon V2 live delivery", () => {
             }
             expect(order).toEqual(["first-message", "tool", "final-message"]);
             const page = await history(fixture, command);
-            expect(page.events.map(deliveryIdentity)).toEqual(expect.arrayContaining(live.map(deliveryIdentity)));
+            const liveEventIds = new Set(live.map((event) => event.eventId));
+            expect(page.events.every((event) => !liveEventIds.has(event.eventId))).toBe(true);
+            expect(page.events.length).toBeLessThan(live.length);
+            expect(
+                page.events.filter(
+                    (event) =>
+                        event.type === "acp" &&
+                        (event.payload.sessionUpdate === "tool_call" ||
+                            event.payload.sessionUpdate === "tool_call_update"),
+                ),
+            ).toHaveLength(1);
             const active = await activeTurn(fixture, command);
             expect(active?.messages.some((message) => message.text.includes("OpenCode turn 1:"))).toBe(true);
             await cancel(fixture, command);
@@ -529,15 +529,16 @@ describe("daemon V2 live delivery", () => {
 
             const page = await history(fixture, command);
             const updates = page.events.flatMap((event) =>
-                event.type === "acp" && event.payload.sessionUpdate === "tool_call_update" ? [event] : [],
+                event.type === "acp" &&
+                (event.payload.sessionUpdate === "tool_call" || event.payload.sessionUpdate === "tool_call_update")
+                    ? [event]
+                    : [],
             );
             expect(updates.map((event) => event.payload)).toEqual([
-                { sessionUpdate: "tool_call_update", toolCallId: "tool-1" },
-                { sessionUpdate: "tool_call_update", toolCallId: "tool-1" },
                 expect.objectContaining({
                     content: [{ content: { text: "rendered snapshot", type: "text" }, type: "content" }],
                     rawOutput: { output: "final snapshot" },
-                    sessionUpdate: "tool_call_update",
+                    sessionUpdate: "tool_call",
                     status: "completed",
                     toolCallId: "tool-1",
                 }),
@@ -574,7 +575,22 @@ describe("daemon V2 live delivery", () => {
             expect(fixture.timer.batchWindowMilliseconds).toContain(100);
             expect(fixture.liveBatchSizes.some((size) => size > 1)).toBe(true);
             const page = await history(fixture, command);
-            expect(page.events.map(deliveryIdentity)).toEqual(live.map(deliveryIdentity));
+            const liveEventIds = new Set(live.map((event) => event.eventId));
+            expect(page.events.every((event) => !liveEventIds.has(event.eventId))).toBe(true);
+            expect(page.events.length).toBeLessThan(live.length);
+            expect(
+                page.events
+                    .flatMap((event) =>
+                        event.type === "acp" &&
+                        event.payload.sessionUpdate === "agent_message_chunk" &&
+                        event.payload.content.type === "text"
+                            ? [event.payload.content.text]
+                            : [],
+                    )
+                    .join(""),
+            ).toBe(
+                `Gathering contextOpenCode turn 1: ${Array.from({ length: 64 }, (_, index) => `token-${index} `).join("")}`,
+            );
         } finally {
             await fixture.close();
         }

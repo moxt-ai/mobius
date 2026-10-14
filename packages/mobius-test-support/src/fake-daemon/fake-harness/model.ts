@@ -1,6 +1,7 @@
 import type { ToolCallContent } from "@agentclientprotocol/sdk";
 
 export type HarnessOutput =
+    | { readonly kind: "message"; readonly text: string }
     | { readonly kind: "text"; readonly text: string }
     | { readonly kind: "file"; readonly name: string }
     | { readonly kind: "session-title"; readonly title: string }
