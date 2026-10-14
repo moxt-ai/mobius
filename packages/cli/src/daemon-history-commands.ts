@@ -84,13 +84,9 @@ async function loadHistoryPage(
             );
         }
         sessionGenerationId = replay.sessionGenerationId;
-        const pageStartIndex = replay.nextCursor === null ? 0 : Number(replay.nextCursor);
-        if (!Number.isSafeInteger(pageStartIndex) || pageStartIndex < 0) {
-            throw new AcpExecutionError("The Session history cursor is invalid", {}, "session_history_unavailable");
-        }
         const events = replay.events.map((event, index) => {
-            const eventIndex = pageStartIndex + index;
-            return { cursor: eventIndex === 0 ? null : eventIndex.toString(), event };
+            const eventCursor = replay.nextCursor === null && index === 0 ? null : event.eventId;
+            return { cursor: eventCursor, event };
         });
         loaded = [...events, ...loaded];
         sourceNextCursor = replay.nextCursor;
