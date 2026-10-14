@@ -1,5 +1,8 @@
 import { ClaudeAcpEndpoint } from "../../acp/harness/claude/endpoint.ts";
 import type { InProcessAcpEndpointFactory } from "../../acp/in-process/acp-endpoint.ts";
+import { platformSupportFor } from "../../platform/index.ts";
+import { type ResolvedExecutable, resolveExecutablePath } from "../../process/executable.ts";
+import type { LocalAgentDiscoveryContext } from "../agent-discovery-context.ts";
 import { InProcessAcpAgentDefinition } from "../agent-specification.ts";
 
 export class ClaudeCodeAgentSpecification extends InProcessAcpAgentDefinition {
@@ -13,4 +16,21 @@ export class ClaudeCodeAgentSpecification extends InProcessAcpAgentDefinition {
     constructor() {
         super("MOBIUS_CLAUDE_PATH", ["agents", "claude", "home", ".local", "bin", "claude"]);
     }
+
+    override readonly resolveInstalledAgentExecutables = async (
+        context: LocalAgentDiscoveryContext,
+    ): Promise<readonly ResolvedExecutable[]> => {
+        context.signal.throwIfAborted();
+        const platform = context.platform ?? process.platform;
+        const paths = platformSupportFor(platform).claudeCodeExecutablePaths(context.environment);
+        const executables: ResolvedExecutable[] = [];
+        for (const path of paths) {
+            const executable = await resolveExecutablePath(path, platform);
+            context.signal.throwIfAborted();
+            if (executable !== null) {
+                executables.push(executable);
+            }
+        }
+        return executables;
+    };
 }

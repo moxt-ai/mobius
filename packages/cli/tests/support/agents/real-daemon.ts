@@ -167,7 +167,7 @@ export async function withRealDaemon(
         if (relay.listening) {
             await new Promise<void>((resolve) => relay.close(() => resolve()));
         }
-        await rm(directory, { recursive: true, force: true });
+        await rm(directory, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 });
     }
 }
 

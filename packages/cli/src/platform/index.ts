@@ -10,6 +10,7 @@ const fallbackPlatform: PlatformSupport = {
     readProcessTable: () => readProcessTableWithPs("/usr/bin/ps"),
     readProcessTableSynchronously: () => [],
     processExists,
+    claudeCodeExecutablePaths: () => [],
     workBuddyExecutablePaths: () => [],
     openCodeArchives: {},
     grokDependencies: {},

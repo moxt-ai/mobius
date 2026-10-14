@@ -1,6 +1,6 @@
 import { type ChildProcess, execFile } from "node:child_process";
 import { readFile, realpath } from "node:fs/promises";
-import { dirname, extname, join, resolve } from "node:path";
+import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { LocalPathError } from "../filesystem/path-error.ts";
 import { ProcessExecutionError } from "../process/process-error.ts";
@@ -200,6 +200,18 @@ export const windowsPlatform: PlatformSupport = {
     readProcessTable,
     readProcessTableSynchronously: () => [],
     processExists,
+    claudeCodeExecutablePaths: (environment) => {
+        const paths: string[] = [];
+        const userProfile = environmentValue(environment, "USERPROFILE");
+        if (userProfile !== undefined && isAbsolute(userProfile)) {
+            paths.push(join(userProfile, ".local", "bin", "claude.exe"));
+        }
+        const localAppData = environmentValue(environment, "LOCALAPPDATA");
+        if (localAppData !== undefined && isAbsolute(localAppData)) {
+            paths.push(join(localAppData, "Microsoft", "WinGet", "Links", "claude.exe"));
+        }
+        return paths;
+    },
     workBuddyExecutablePaths: () => [],
     openCodeArchives: {},
     grokDependencies: {},

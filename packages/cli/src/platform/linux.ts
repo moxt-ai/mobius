@@ -1,6 +1,6 @@
 import { constants, readdirSync, readFileSync } from "node:fs";
 import { access, readdir, readFile, realpath, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import type { PlatformSupport, ProcessTableEntry } from "./contracts.ts";
 import { posixOperations, processExists as posixProcessExists, readProcessTableWithPs } from "./posix.ts";
 
@@ -129,6 +129,12 @@ export const linuxPlatform: PlatformSupport = {
     readProcessTable: readLinuxProcessTableWithFallback,
     readProcessTableSynchronously: readLinuxProcessTableSynchronously,
     processExists,
+    claudeCodeExecutablePaths: (environment) => {
+        const homeDirectory = environment["HOME"];
+        return homeDirectory !== undefined && isAbsolute(homeDirectory)
+            ? [join(homeDirectory, ".local", "bin", "claude")]
+            : [];
+    },
     workBuddyExecutablePaths: () => [],
     openCodeArchives: {
         arm64: {
