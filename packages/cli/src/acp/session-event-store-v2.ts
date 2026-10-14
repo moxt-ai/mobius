@@ -40,7 +40,7 @@ class SessionEventsV2 {
     readonly #itemsByEventId = new Map<string, ProjectedSessionEventV2>();
     readonly #projection: SessionEventHistoryProjectionV2;
     readonly sessionGenerationId: string;
-    historyLength = 0;
+    projectedEventCount = 0;
     nextLivePosition = 1;
 
     constructor(sessionGenerationId: string, allocateEventId: () => string) {
@@ -63,7 +63,7 @@ class SessionEventsV2 {
         const item = new ProjectedSessionEventV2(projected.event);
         this.hot.push(item);
         this.#itemsByEventId.set(projected.event.eventId, item);
-        this.historyLength += 1;
+        this.projectedEventCount += 1;
         return { item, kind: "append" };
     };
 
@@ -188,8 +188,8 @@ export class MemoryAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
 
     readonly page = (sessionId: string, eventLimit: number, cursor: string | null): AcpSessionEventPageV2 => {
         const session = this.#session(sessionId);
-        const endIndex = cursor === null ? session.historyLength : Number(cursor);
-        if (!Number.isSafeInteger(endIndex) || endIndex < 0 || endIndex > session.historyLength) {
+        const endIndex = cursor === null ? session.projectedEventCount : Number(cursor);
+        if (!Number.isSafeInteger(endIndex) || endIndex < 0 || endIndex > session.projectedEventCount) {
             throw new Error("The native event cursor is invalid");
         }
         return eventPage(session.sessionGenerationId, endIndex, eventLimit, (start, end) =>
@@ -349,7 +349,7 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
                       {
                           count,
                           events: session.hot.slice(0, count),
-                          firstOrdinal: session.historyLength - session.hot.length + 1,
+                          firstOrdinal: session.projectedEventCount - session.hot.length + 1,
                           sessionGenerationId: session.sessionGenerationId,
                           sessionId,
                       },
@@ -395,8 +395,8 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
     readonly page = (sessionId: string, eventLimit: number, cursor: string | null): AcpSessionEventPageV2 => {
         const session = this.#sessions.get(sessionId);
         const current = session ?? this.#session(sessionId);
-        const endIndex = cursor === null ? current.historyLength : Number(cursor);
-        if (!Number.isSafeInteger(endIndex) || endIndex < 0 || endIndex > current.historyLength) {
+        const endIndex = cursor === null ? current.projectedEventCount : Number(cursor);
+        if (!Number.isSafeInteger(endIndex) || endIndex < 0 || endIndex > current.projectedEventCount) {
             throw new Error("The native event cursor is invalid");
         }
         return eventPage(current.sessionGenerationId, endIndex, eventLimit, (startIndex, endIndex) => {
@@ -422,7 +422,7 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
                           const cached = decodeCachedEvent(JSON.parse(row.eventJson));
                           return { event: cached, ordinal: row.ordinal };
                       });
-            const firstHotOrdinal = current.historyLength - current.hot.length + 1;
+            const firstHotOrdinal = current.projectedEventCount - current.hot.length + 1;
             const hot = current.hot.flatMap((item, index) => {
                 const ordinal = firstHotOrdinal + index;
                 return ordinal >= startOrdinal && ordinal <= endOrdinal ? [{ event: item.event, ordinal }] : [];
