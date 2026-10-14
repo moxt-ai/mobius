@@ -50,7 +50,7 @@ describe("native session history", () => {
             );
 
             expect(
-                preview.events.flatMap(({ payload: event }) =>
+                preview.events.flatMap((event) =>
                     event.type === "acp" &&
                     (event.payload.sessionUpdate === "user_message_chunk" ||
                         event.payload.sessionUpdate === "agent_message_chunk") &&
@@ -110,7 +110,7 @@ describe("native session history", () => {
             );
 
             expect(
-                replay.events.flatMap(({ payload: event }) =>
+                replay.events.flatMap((event) =>
                     event.type === "acp" &&
                     (event.payload.sessionUpdate === "user_message_chunk" ||
                         event.payload.sessionUpdate === "agent_message_chunk") &&
@@ -152,7 +152,7 @@ describe("native session history", () => {
             );
 
             expect(
-                replay.events.flatMap(({ payload: event }) =>
+                replay.events.flatMap((event) =>
                     event.type === "acp" &&
                     event.payload.sessionUpdate === "user_message_chunk" &&
                     event.payload.content.type === "text"
@@ -193,7 +193,7 @@ describe("native session history", () => {
             );
 
             expect(
-                replay.events.flatMap(({ payload: event }) =>
+                replay.events.flatMap((event) =>
                     event.type === "acp" &&
                     event.payload.sessionUpdate === "user_message_chunk" &&
                     event.payload.content.type === "text"
@@ -223,7 +223,7 @@ describe("native session history", () => {
                 null,
             );
 
-            const updates = replay.events.flatMap(({ payload }) => (payload.type === "acp" ? [payload.payload] : []));
+            const updates = replay.events.flatMap((event) => (event.type === "acp" ? [event.payload] : []));
             expect(updates).toMatchObject([
                 {
                     content: { text: "Preserve this update", type: "text" },
@@ -240,15 +240,7 @@ describe("native session history", () => {
                     toolCallId: "tool-assistant-1",
                 },
                 {
-                    sessionUpdate: "tool_call_update",
-                    toolCallId: "tool-assistant-1",
-                },
-                {
                     sessionUpdate: "tool_call",
-                    toolCallId: "error-assistant-1",
-                },
-                {
-                    sessionUpdate: "tool_call_update",
                     toolCallId: "error-assistant-1",
                 },
                 {
@@ -267,22 +259,13 @@ describe("native session history", () => {
                     signal: new AbortController().signal,
                 },
                 nativeSessionId,
-                6,
+                4,
                 null,
             );
             expect(newestMessage.nextCursor).not.toBeNull();
             expect(
-                newestMessage.events.flatMap(({ payload: event }) =>
-                    event.type === "acp" ? [event.payload.sessionUpdate] : [],
-                ),
-            ).toEqual([
-                "agent_thought_chunk",
-                "tool_call",
-                "tool_call_update",
-                "tool_call",
-                "tool_call_update",
-                "agent_message_chunk",
-            ]);
+                newestMessage.events.flatMap((event) => (event.type === "acp" ? [event.payload.sessionUpdate] : [])),
+            ).toEqual(["agent_thought_chunk", "tool_call", "tool_call", "agent_message_chunk"]);
             const olderMessage = await f.sessions.previewNativeSessionEventsV2(
                 {
                     additionalDirectories: [],
@@ -292,7 +275,7 @@ describe("native session history", () => {
                     signal: new AbortController().signal,
                 },
                 nativeSessionId,
-                6,
+                4,
                 newestMessage.nextCursor,
             );
             expect(olderMessage.nextCursor).toBeNull();

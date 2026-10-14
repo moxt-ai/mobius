@@ -182,7 +182,6 @@ export function createDaemonCommandHandler({
                     audit,
                     diagnostics,
                     sessions,
-                    eventProjectionV2,
                     signal,
                 );
                 return;

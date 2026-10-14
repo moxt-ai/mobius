@@ -14,8 +14,9 @@ import type {
     SessionConfigUpdatedEvent,
     SessionElicitationRequestedEvent,
     SessionElicitationResolvedEvent,
-    SessionEventPayloadV2,
+    SessionEventV2,
     SessionInfoUpdatedEvent,
+    SessionLiveEventV2,
     SessionPermissionRequestedEvent,
     SessionPermissionResolvedEvent,
     SessionUsageUpdatedEvent,
@@ -23,7 +24,6 @@ import type {
 import type { AcpAgentDefinition } from "../config.ts";
 import type { AcpActivity, AcpActivityNarration } from "./activity.ts";
 import type { NativeSessionOrigin } from "./native-session.ts";
-import type { AcpSessionEventPositionV2 } from "./session-event-store-v2.ts";
 
 export interface AcpPrepareOptions {
     readonly additionalDirectories: readonly string[];
@@ -54,17 +54,11 @@ export const acpNativeHistoryReader: AcpNativeHistoryReader = {
     access: () => ({ kind: "acp" }),
 };
 
-export interface AcpNativeEventV2 {
-    readonly payload: SessionEventPayloadV2;
-    readonly eventId: string;
-}
-
 export interface AcpNativeEventReplayV2 {
     readonly nextCursor: string | null;
     readonly sessionGenerationId: string;
-    readonly startPosition: number;
     readonly truncated: boolean;
-    readonly events: readonly AcpNativeEventV2[];
+    readonly events: readonly SessionEventV2[];
 }
 
 export interface AcpAgentSettingsInspectionOptions {
@@ -133,11 +127,7 @@ export interface AcpElicitationResponseOptions {
 export type AcpPromptResult = AgentPromptResponse;
 
 export interface AcpSessionObserver {
-    readonly onSessionEventV2?: (
-        sessionId: string,
-        event: SessionEventPayloadV2,
-        position: AcpSessionEventPositionV2,
-    ) => Promise<void>;
+    readonly onSessionEventV2?: (event: SessionLiveEventV2) => Promise<void>;
     readonly onCommands: (event: SessionCommandsUpdatedEvent) => Promise<void>;
     readonly onConfig: (event: SessionConfigUpdatedEvent) => Promise<void>;
     readonly onContent: (event: AgentContentEvent) => Promise<void>;
@@ -150,11 +140,7 @@ export interface AcpSessionObserver {
 }
 
 export class NullAcpSessionObserver implements AcpSessionObserver {
-    readonly onSessionEventV2 = (
-        _sessionId: string,
-        _event: SessionEventPayloadV2,
-        _position: AcpSessionEventPositionV2,
-    ): Promise<void> => Promise.resolve();
+    readonly onSessionEventV2 = (_event: SessionLiveEventV2): Promise<void> => Promise.resolve();
     readonly onCommands = (): Promise<void> => Promise.resolve();
     readonly onConfig = (): Promise<void> => Promise.resolve();
     readonly onContent = (): Promise<void> => Promise.resolve();

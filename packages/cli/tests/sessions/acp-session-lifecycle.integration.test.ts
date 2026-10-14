@@ -129,7 +129,7 @@ describe("ACP conversation sessions", () => {
         }
     });
 
-    it("Given a tool update has flushed to SQLite, When a replacement update arrives, Then its position remains with compacted content", async () => {
+    it("Given a projected tool has flushed to SQLite, When more live updates arrive, Then history replaces that Session event without retaining live identities", async () => {
         vi.useFakeTimers({ toFake: ["clearImmediate", "setImmediate"] });
         vi.setSystemTime(new Date("2026-10-12T00:00:00.000Z"));
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-tool-projection-"));
@@ -137,23 +137,27 @@ describe("ACP conversation sessions", () => {
             openSessionEventCacheV2Database(join(temporaryDirectory, "events.sqlite")),
         );
         try {
-            store.append("session-1", {
-                payload: {
-                    sessionUpdate: "tool_call",
-                    title: "Run command",
-                    toolCallId: "tool-1",
-                },
-                type: "acp",
-            });
-            store.append("session-1", {
-                payload: {
-                    rawOutput: { output: "first snapshot" },
-                    sessionUpdate: "tool_call_update",
-                    status: "in_progress",
-                    toolCallId: "tool-1",
-                },
-                type: "acp",
-            });
+            const liveEvents = [
+                store.append("session-1", {
+                    payload: {
+                        sessionUpdate: "tool_call",
+                        title: "Run command",
+                        toolCallId: "tool-1",
+                    },
+                    type: "acp",
+                }),
+            ];
+            liveEvents.push(
+                store.append("session-1", {
+                    payload: {
+                        rawOutput: { output: "first snapshot" },
+                        sessionUpdate: "tool_call_update",
+                        status: "in_progress",
+                        toolCallId: "tool-1",
+                    },
+                    type: "acp",
+                }),
+            );
             for (let remaining = 298; remaining > 0; remaining -= 1) {
                 store.append("session-1", {
                     payload: { kind: "session.queue.changed" },
@@ -162,32 +166,37 @@ describe("ACP conversation sessions", () => {
             }
             await vi.runAllTimersAsync();
 
-            store.append("session-1", {
-                payload: {
-                    content: [{ content: { text: "final snapshot", type: "text" }, type: "content" }],
-                    sessionUpdate: "tool_call_update",
-                    status: "completed",
-                    toolCallId: "tool-1",
-                },
-                type: "acp",
-            });
+            liveEvents.push(
+                store.append("session-1", {
+                    payload: {
+                        content: [{ content: { text: "final snapshot", type: "text" }, type: "content" }],
+                        sessionUpdate: "tool_call_update",
+                        status: "completed",
+                        toolCallId: "tool-1",
+                    },
+                    type: "acp",
+                }),
+            );
 
             const page = store.page("session-1", 400, null);
-            expect(page.events[1]?.payload).toEqual({
-                payload: { sessionUpdate: "tool_call_update", toolCallId: "tool-1" },
-                type: "acp",
-            });
-            expect(page.events.at(-1)?.payload).toEqual({
+            const toolEvents = page.events.filter(
+                (event) =>
+                    event.type === "acp" &&
+                    (event.payload.sessionUpdate === "tool_call" || event.payload.sessionUpdate === "tool_call_update"),
+            );
+            expect(toolEvents).toHaveLength(1);
+            expect(toolEvents[0]).toMatchObject({
                 payload: {
                     content: [{ content: { text: "final snapshot", type: "text" }, type: "content" }],
                     rawOutput: { output: "first snapshot" },
-                    sessionUpdate: "tool_call_update",
+                    sessionUpdate: "tool_call",
                     status: "completed",
                     title: "Run command",
                     toolCallId: "tool-1",
                 },
                 type: "acp",
             });
+            expect(liveEvents.map((event) => event.eventId)).not.toContain(toolEvents[0]?.eventId);
         } finally {
             store.close();
             vi.useRealTimers();
@@ -217,8 +226,8 @@ describe("ACP conversation sessions", () => {
 
             const page = store.page("session-1", 200, null);
             expect(page.events).toHaveLength(200);
-            expect(page.events[0]?.payload).toMatchObject({ payload: { commandId: "command-101" } });
-            expect(page.events.at(-1)?.payload).toMatchObject({ payload: { commandId: "command-300" } });
+            expect(page.events[0]).toMatchObject({ payload: { commandId: "command-101" } });
+            expect(page.events.at(-1)).toMatchObject({ payload: { commandId: "command-300" } });
         } finally {
             store.close();
             vi.useRealTimers();
@@ -250,7 +259,18 @@ describe("ACP conversation sessions", () => {
             });
             const page = first.page("session-1", 10, null);
             firstGeneration = page.sessionGenerationId;
-            expect(page.events.map(({ payload }) => payload)).toEqual([
+            expect(
+                page.events.map(
+                    ({
+                        eventId: _eventId,
+                        provenance: _provenance,
+                        recordedAt: _recordedAt,
+                        sessionGenerationId: _generation,
+                        sessionId: _sessionId,
+                        ...event
+                    }) => event,
+                ),
+            ).toEqual([
                 {
                     payload: {
                         commandId: "command-1",
