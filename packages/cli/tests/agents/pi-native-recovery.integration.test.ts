@@ -3,11 +3,13 @@ import {
     decodeMessageKind,
     decodeNativeSessionResult,
     decodeSessionEventV2,
+    decodeSessionLiveHistoryV2PageLoaded,
     decodeSessionOperationFailedEvent,
     decodeSessionPreviewHistoryPageLoaded,
     decodeSessionQueuedEvent,
     encodeNativeSessionCommand,
     encodeSessionCancelCommand,
+    encodeSessionLiveHistoryV2PageLoad,
     encodeSessionPreviewHistoryPageLoad,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
@@ -250,7 +252,7 @@ test("Given a real Pi native Session was previewed, When the user imports it, Th
     });
 });
 
-test("Given a saved real Pi native Session, When the user forks it, Then an independent Mobius Session opens and continues", async () => {
+test("Given a saved real Pi native Session, When the user forks it, Then its history is visible before the independent Session continues", async () => {
     await using provider = await FakeOpenAiProvider.start("gpt-4.1", "PI_FORK_REPLY");
     await using agent = await PiFixture.create(provider);
     await withRealDaemon(new PiAgentSpecification(), agent.environment, async (peer) => {
@@ -352,6 +354,41 @@ test("Given a saved real Pi native Session, When the user forks it, Then an inde
             expect(result.targetSessionId).toBe(forkedSessionId);
             expect(result.ready.sessionId).toBe(forkedSessionId);
             expect(result.ready.restored).toBe(true);
+            break;
+        }
+
+        const historyRequestId = randomUUID();
+        peer.send(
+            encodeSessionLiveHistoryV2PageLoad({
+                cursor: null,
+                eventLimit: 50,
+                kind: "session.live-history.v2.page.load",
+                requestId: historyRequestId,
+                sessionId: forkedSessionId,
+            }),
+        );
+        for (;;) {
+            const message = await peer.nextMessage();
+            const kind = decodeMessageKind(message);
+            if (kind === "session.operation.failed") {
+                throw new Error(JSON.stringify(decodeSessionOperationFailedEvent(message)));
+            }
+            if (kind !== "session.live-history.v2.page.loaded") {
+                continue;
+            }
+            const loaded = decodeSessionLiveHistoryV2PageLoaded(message);
+            if (loaded.requestId !== historyRequestId) {
+                continue;
+            }
+            expect(
+                loaded.events.events.events.flatMap((event) =>
+                    event.type === "acp" &&
+                    event.payload.sessionUpdate === "user_message_chunk" &&
+                    event.payload.content.type === "text"
+                        ? [event.payload.content.text]
+                        : [],
+                ),
+            ).toContain("Save this conversation so it can be forked");
             break;
         }
 
