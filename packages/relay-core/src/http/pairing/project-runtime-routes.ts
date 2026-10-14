@@ -11,7 +11,9 @@ import {
     decodeWorkspaceListCommand,
     type Identifier,
     isIdentifier,
+    ProtocolMessageError,
     RUNTIME_WORKSPACE_BINDING_ID,
+    type SessionPromptCommand,
 } from "@moxt-ai/mobius-protocol";
 import { Hono } from "hono";
 import * as v from "valibot";
@@ -383,23 +385,34 @@ export function createProjectRuntimeRoutes() {
             bodyParser<RelayHttpEnvironment>(),
             async (context) => {
                 const body = validated(submitTurnSchema, context.req.valid("json"));
-                const command = decodeSessionPromptCommand(
-                    JSON.stringify({
-                        additionalDirectoryIds: body.additionalDirectoryIds,
-                        agentId: body.agentId,
-                        bindingId: "workspace",
-                        commandId: body.idempotencyKey,
-                        directoryId: body.directoryId,
-                        disposition: body.disposition,
-                        images: body.images,
-                        kind: "session.prompt",
-                        prompt: body.content,
-                        resources: body.resources,
-                        sessionConfigurations: body.sessionConfigurations,
-                        sessionId: validateIdentifier(context.req.param("sessionId"), "session_id"),
-                        targetCommandId: body.targetCommandId,
-                    }),
-                );
+                let command: SessionPromptCommand;
+                try {
+                    command = decodeSessionPromptCommand(
+                        JSON.stringify({
+                            additionalDirectoryIds: body.additionalDirectoryIds,
+                            agentId: body.agentId,
+                            bindingId: "workspace",
+                            commandId: body.idempotencyKey,
+                            directoryId: body.directoryId,
+                            disposition: body.disposition,
+                            images: body.images,
+                            kind: "session.prompt",
+                            prompt: body.content,
+                            resources: body.resources,
+                            sessionConfigurations: body.sessionConfigurations,
+                            sessionId: validateIdentifier(context.req.param("sessionId"), "session_id"),
+                            targetCommandId: body.targetCommandId,
+                        }),
+                    );
+                } catch (error) {
+                    // The caller supplied this prompt, so protocol rejection is a client error, not a retryable outage.
+                    if (error instanceof ProtocolMessageError) {
+                        throw new PairingDirectoryError("invalid_request", "The Turn request is invalid", {
+                            cause: error,
+                        });
+                    }
+                    throw error;
+                }
                 const result = await context.env.services.runtimePairings.requestControl(
                     validateIdentifier(context.req.param("projectId"), "project_id"),
                     validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
