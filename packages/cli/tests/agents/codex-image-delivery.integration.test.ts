@@ -40,7 +40,18 @@ function imageKeys(events: readonly SessionEventV2[]): readonly string[] {
     });
 }
 
-test("Given saved Codex image generation, When the real daemon reopens it through Codex, Then clients retrieve the image without base64 in history and can continue chatting", async () => {
+function openedImageKeys(events: readonly SessionEventV2[]): readonly string[] {
+    return events.flatMap((event) => {
+        if (event.type !== "acp" || event.payload.sessionUpdate !== "tool_call") {
+            return [];
+        }
+        return (event.payload.content ?? []).flatMap((item) =>
+            item.type === "content" && item.content.type === "external_image" ? [item.content.imageKey] : [],
+        );
+    });
+}
+
+test("Given saved Codex image generation, When the real daemon reopens it through Codex, Then history opens the tool, retrieves its image without base64 and can continue chatting", async () => {
     await using provider = await FakeOpenAiProvider.start("mobius-test-model", "IMAGE_REPLY");
     await using agent = await CodexFixture.create(provider);
     await withRealDaemon(new CodexAgentSpecification(), agent.environment, async (peer) => {
@@ -243,7 +254,9 @@ test("Given saved Codex image generation, When the real daemon reopens it throug
             if (kind === "session.live-history.v2.page.loaded") {
                 expect(message).not.toContain(image.toString("base64"));
                 expect(message.length).toBeLessThan(50_000);
-                expect(imageKeys(decodeSessionLiveHistoryV2PageLoaded(message).events.events.events)).toContain(key);
+                const events = decodeSessionLiveHistoryV2PageLoaded(message).events.events.events;
+                expect(imageKeys(events)).toContain(key);
+                expect(openedImageKeys(events)).toContain(key);
                 break;
             }
         }
