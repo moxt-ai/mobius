@@ -11,9 +11,12 @@ const sessionRecordingWriteSchema = z
     })
     .readonly();
 
+// Full history is serialized straight from storage rather than through encodeSessionRecordingHistory,
+// so an event cap here never bounded what a Durable Object emitted. It only rejected the reader after
+// the payload was already parsed, turning a long Session into a hard failure. Bounded reads use pages.
 const sessionRecordingHistorySchema = z
     .object({
-        events: z.array(sessionLiveEventV2Schema).max(100_000).readonly(),
+        events: z.array(sessionLiveEventV2Schema).readonly(),
         sessionId: identifierStringSchema,
     })
     .readonly();
