@@ -10,10 +10,10 @@ import { createStore, useStore } from "zustand";
 
 type RenameState = { readonly kind: "idle" } | { readonly kind: "app"; readonly name: string };
 
-export interface RevealedSecret {
-    readonly appId: string;
-    readonly secret: string;
-}
+export type RevealedSecret =
+    | { readonly kind: "app-credential"; readonly appId: string; readonly secret: string }
+    | { readonly kind: "webhook-created"; readonly appId: string; readonly secret: string }
+    | { readonly kind: "webhook-rotated"; readonly appId: string; readonly secret: string };
 
 /** A Project together with the Recording policy that currently applies to it. */
 export interface ProjectRecording {

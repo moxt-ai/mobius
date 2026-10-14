@@ -32,6 +32,60 @@ function SecretField({
     );
 }
 
+const copy: {
+    readonly [K in RevealedSecret["kind"]]: {
+        readonly eyebrow: string;
+        readonly title: string;
+        readonly description: string;
+        readonly secretLabel: string;
+        readonly secretNote: React.ReactNode;
+        readonly copyLabel: string;
+    };
+} = {
+    "app-credential": {
+        eyebrow: "Created successfully",
+        title: "Save your app secret",
+        description:
+            "Copy the full app secret below for server authentication. This is the only time Mobius will show it. Store it in your server’s secret manager.",
+        secretLabel: "App secret",
+        secretNote: (
+            <>
+                This is your full <code>mapp_…</code> AppCredential. Use it as <code>MOBIUS_APP_SECRET</code>, with the
+                App ID above as <code>MOBIUS_APP_ID</code>.
+            </>
+        ),
+        copyLabel: "App secret",
+    },
+    "webhook-created": {
+        eyebrow: "Created successfully",
+        title: "Save your webhook signing secret",
+        description:
+            "Copy the signing secret below to verify Session status webhook signatures. This is the only time Mobius will show it. Store it in your server’s secret manager.",
+        secretLabel: "Webhook signing secret",
+        secretNote: (
+            <>
+                This is your full <code>mweb_…</code> webhook signing secret, not the App secret. Use it to verify the{" "}
+                <code>x-mobius-signature</code> header on each Session status notification.
+            </>
+        ),
+        copyLabel: "Webhook secret",
+    },
+    "webhook-rotated": {
+        eyebrow: "Rotated successfully",
+        title: "Save your webhook signing secret",
+        description:
+            "The previous signing secret stopped working immediately. Copy the new signing secret below to verify Session status webhook signatures. This is the only time Mobius will show it.",
+        secretLabel: "Webhook signing secret",
+        secretNote: (
+            <>
+                This is your full <code>mweb_…</code> webhook signing secret, not the App secret. Use it to verify the{" "}
+                <code>x-mobius-signature</code> header on each Session status notification.
+            </>
+        ),
+        copyLabel: "Webhook secret",
+    },
+};
+
 export function SecretDialog({ onClose, onCopy, onVisibleChange, secret, visible }: SecretDialogProps) {
     return (
         <Dialog.Root
@@ -50,23 +104,21 @@ export function SecretDialog({ onClose, onCopy, onVisibleChange, secret, visible
                                 <ShieldCheck size={24} />
                             </div>
                             <p className="mb-2 text-[10px] font-extrabold uppercase tracking-[.13em] text-[#168247]">
-                                Created successfully
+                                {copy[secret.kind].eyebrow}
                             </p>
-                            <Dialog.Title className="mb-2 text-3xl font-bold">Save your app secret</Dialog.Title>
+                            <Dialog.Title className="mb-2 text-3xl font-bold">{copy[secret.kind].title}</Dialog.Title>
                             <Dialog.Description className="mb-6 text-sm leading-6 text-[#69766f]">
-                                Copy the full app secret below for server authentication. This is the only time Mobius
-                                will show it. Store it in your server’s secret manager.
+                                {copy[secret.kind].description}
                             </Dialog.Description>
                             <SecretField
                                 label="App ID"
                                 value={secret.appId}
                                 onCopy={() => onCopy(secret.appId, "App ID")}
                             />
-                            <div className="mt-3 mb-1.5 text-[11px] font-bold text-[#6d7b73]">App secret</div>
-                            <p className="mb-2 text-xs leading-5 text-[#69766f]">
-                                This is your full <code>mapp_…</code> AppCredential. Use it as{" "}
-                                <code>MOBIUS_APP_SECRET</code>, with the App ID above as <code>MOBIUS_APP_ID</code>.
-                            </p>
+                            <div className="mt-3 mb-1.5 text-[11px] font-bold text-[#6d7b73]">
+                                {copy[secret.kind].secretLabel}
+                            </div>
+                            <p className="mb-2 text-xs leading-5 text-[#69766f]">{copy[secret.kind].secretNote}</p>
                             <div className="flex min-h-[43px] items-center rounded-lg border border-[#d3dad5] bg-[#f8faf8] pl-3 [&>code]:min-w-0 [&>code]:flex-1 [&>code]:overflow-hidden [&>code]:text-ellipsis [&>code]:whitespace-nowrap [&>code]:text-[11px] [&>button]:grid [&>button]:w-[38px] [&>button]:self-stretch [&>button]:place-items-center [&>button]:border-0 [&>button]:border-l [&>button]:border-[#dce2de] [&>button]:bg-transparent">
                                 <code>{visible ? secret.secret : "•".repeat(32)}</code>
                                 <button
@@ -80,11 +132,11 @@ export function SecretDialog({ onClose, onCopy, onVisibleChange, secret, visible
                             <button
                                 type="button"
                                 className="mt-3 inline-flex min-h-[39px] items-center justify-center gap-2 rounded-lg border border-[#168247] bg-[#e7f3eb] px-3.5 text-sm font-bold text-[#168247] hover:bg-[#d8ebdf]"
-                                onClick={() => onCopy(secret.secret, "App secret")}
-                                aria-label="Copy App secret"
+                                onClick={() => onCopy(secret.secret, copy[secret.kind].copyLabel)}
+                                aria-label={`Copy ${copy[secret.kind].copyLabel}`}
                             >
                                 <Clipboard size={15} />
-                                Copy App secret
+                                Copy {copy[secret.kind].copyLabel}
                             </button>
                             <Dialog.Close asChild>
                                 <button

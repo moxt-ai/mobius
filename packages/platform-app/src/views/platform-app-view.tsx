@@ -243,6 +243,7 @@ export function PlatformApp({ endpoint, getToken, userControl, organization, org
             setApps(listed);
             setSelectedAppId(created.appId);
             setSecret({
+                kind: "app-credential",
                 appId: created.appId,
                 secret: created.defaultCredential.credential,
             });
@@ -265,6 +266,7 @@ export function PlatformApp({ endpoint, getToken, userControl, organization, org
                 await client().listAppCredentials(selectedApp.appId, AbortSignal.timeout(20_000)),
             );
             setSecret({
+                kind: "app-credential",
                 appId: created.appId,
                 secret: created.credential,
             });
@@ -309,7 +311,7 @@ export function PlatformApp({ endpoint, getToken, userControl, organization, org
             const saved = await client().webhooks.write(selectedApp.appId, request, AbortSignal.timeout(20_000));
             setWebhook(selectedApp.appId, saved);
             if (saved.secret !== undefined) {
-                setSecret({ appId: selectedApp.appId, secret: saved.secret });
+                setSecret({ kind: "webhook-created", appId: selectedApp.appId, secret: saved.secret });
                 setSecretVisible(false);
             }
             setNotice(`Session status webhook ${saved.enabled ? "enabled" : "saved as disabled"}.`);
@@ -324,7 +326,7 @@ export function PlatformApp({ endpoint, getToken, userControl, organization, org
             const rotated = await client().webhooks.rotate(selectedApp.appId, AbortSignal.timeout(20_000));
             setWebhook(selectedApp.appId, rotated);
             if (rotated.secret !== undefined) {
-                setSecret({ appId: selectedApp.appId, secret: rotated.secret });
+                setSecret({ kind: "webhook-rotated", appId: selectedApp.appId, secret: rotated.secret });
             }
             setSecretVisible(false);
             setNotice("Session status webhook secret rotated.");
