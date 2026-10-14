@@ -40,7 +40,7 @@ class SessionEventsV2 {
     readonly sessionGenerationId: string;
     nextPosition = 1;
 
-    constructor(sessionGenerationId: string = randomUUID()) {
+    constructor(sessionGenerationId: string) {
         this.sessionGenerationId = sessionGenerationId;
     }
 
@@ -188,7 +188,7 @@ export class MemoryAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
     }
 
     readonly #session = (sessionId: string): SessionEventsV2 => {
-        const session = this.#events.get(sessionId) ?? new SessionEventsV2();
+        const session = this.#events.get(sessionId) ?? new SessionEventsV2(randomUUID());
         this.#events.set(sessionId, session);
         return session;
     };
@@ -234,7 +234,7 @@ export class MemoryAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
     };
 
     readonly reset = (sessionId: string): void => {
-        this.#events.set(sessionId, new SessionEventsV2());
+        this.#events.set(sessionId, new SessionEventsV2(randomUUID()));
     };
 }
 
@@ -286,7 +286,7 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
     }
 
     readonly #session = (sessionId: string): SessionEventsV2 => {
-        const session = this.#sessions.get(sessionId) ?? new SessionEventsV2();
+        const session = this.#sessions.get(sessionId) ?? new SessionEventsV2(randomUUID());
         this.#sessions.set(sessionId, session);
         return session;
     };
@@ -483,7 +483,7 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
     readonly reset = (sessionId: string): void => {
         const previous = this.#sessions.get(sessionId);
         this.#deletePersisted(sessionId, previous?.sessionGenerationId);
-        this.#sessions.set(sessionId, new SessionEventsV2());
+        this.#sessions.set(sessionId, new SessionEventsV2(randomUUID()));
     };
 
     readonly close = (): void => {
