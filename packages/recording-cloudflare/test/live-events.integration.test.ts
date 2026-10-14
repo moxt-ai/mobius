@@ -1,6 +1,5 @@
 import { env } from "cloudflare:workers";
 import {
-    decodeSessionEventV2,
     decodeSessionRecordingDirectory,
     decodeSessionRecordingHistory,
     decodeSessionRecordingHistoryPage,
@@ -27,7 +26,7 @@ const event = {
     type: "acp",
     payload: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Live reply" } },
 };
-const historicalEvent = decodeSessionEventV2(event);
+const { position: _historicalPosition, ...historicalEvent } = event;
 function write(runtimeId = "runtime-live", envelope: unknown = { kind: "session.event.v2", events: [event] }): Request {
     return new Request("https://recording.internal/v1/session-events", {
         method: "POST",
@@ -45,7 +44,7 @@ function numberedEvents(count: number, start = 0) {
 }
 
 describe("Recording live V2 events", () => {
-    it("Given an event broadcast to browsers, When Recording receives the live event, Then history retains its identity and payload without its position", async () => {
+    it("Given an event broadcast to browsers, When Recording receives the live event, Then its positioned representation is retained", async () => {
         expect((await worker.fetch(write(), env)).status).toBe(201);
         const response = await worker.fetch(
             new Request(
@@ -54,10 +53,17 @@ describe("Recording live V2 events", () => {
             env,
         );
         expect(response.status).toBe(200);
-        expect(decodeSessionRecordingHistory(await response.text())).toEqual({
+        expect(await response.json()).toEqual({
             sessionId: event.sessionId,
-            events: [historicalEvent],
+            events: [event],
         });
+    });
+    it("Given a historical event without a live position, When it is submitted to Recording, Then Recording rejects it", async () => {
+        const response = await worker.fetch(
+            write("runtime-live", { kind: "session.event.v2", events: [historicalEvent] }),
+            env,
+        );
+        expect(response.status).toBe(400);
     });
     it("Given a legacy event envelope, When a caller submits it, Then Recording rejects the retired contract", async () => {
         const response = await worker.fetch(
@@ -282,7 +288,7 @@ it("Given a duplicate live frame, When Recording receives both broadcasts, Then 
         ),
         env,
     );
-    expect(decodeSessionRecordingHistory(await response.text()).events).toEqual([historicalEvent, historicalEvent]);
+    expect(decodeSessionRecordingHistory(await response.text()).events).toEqual([event, event]);
 });
 it("Given an invalid execution context, When submitted at the Recording boundary, Then it is rejected", async () => {
     const invalid = {
@@ -314,6 +320,8 @@ describe("Recording incremental reads", () => {
         }
         const response = await worker.fetch(read("?after=3"), env);
         expect(response.status).toBe(200);
+        const livePage: unknown = await response.clone().json();
+        expect(livePage).toMatchObject({ events: [{ position: "4" }, { position: "5" }] });
         const page = decodeSessionRecordingHistoryPage(await response.text());
         expect(page.events.map((candidate) => candidate.eventId)).toEqual(["event-4", "event-5"]);
         expect(page.nextCursor).toBe("v2:2:5");
