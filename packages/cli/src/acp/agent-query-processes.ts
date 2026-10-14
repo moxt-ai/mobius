@@ -15,6 +15,10 @@ import { MemoryAcpSessionStore } from "./session-store.ts";
 
 /** Owns query processes; execution processes remain separately retained. */
 export class AgentQueryProcesses {
+    readonly #eventPreviewsBySession = new Map<
+        string,
+        { readonly nativeSessionId: string; readonly store: MemoryAcpSessionStore }
+    >();
     readonly #processesByQuery: RetainedAgentProcesses;
     readonly #processes: AgentProcessPool;
     readonly #observer = new NullAcpSessionObserver();
@@ -150,26 +154,49 @@ export class AgentQueryProcesses {
         eventLimit: number,
         cursor: string | null,
     ): Promise<AcpNativeEventReplayV2> => {
-        return await this.#processes.runTransient(
-            options.signal,
-            async () =>
-                await AgentSession.startNativeSessionBrowser(
-                    options,
-                    () => this.#observer,
-                    new MemoryAcpSessionStore(),
-                    this.#contentExternalizer,
-                ),
-            async (runtime) => {
-                runtime.selectNativeSession(nativeSessionId);
-                return await runtime.loadHistoryEventsV2(eventLimit, cursor, options.signal);
-            },
-            async (runtime) => await runtime.closeProcess(),
-        );
+        if (cursor !== null) {
+            const preview = this.#eventPreviewsBySession.get(options.sessionId);
+            if (preview === undefined || preview.nativeSessionId !== nativeSessionId) {
+                throw new Error("The native event cursor is invalid");
+            }
+            return preview.store.eventsV2.page(options.sessionId, eventLimit, cursor);
+        }
+        const store = new MemoryAcpSessionStore();
+        const previous = this.#eventPreviewsBySession.get(options.sessionId);
+        previous?.store.close();
+        this.#eventPreviewsBySession.set(options.sessionId, { nativeSessionId, store });
+        try {
+            return await this.#processes.runTransient(
+                options.signal,
+                async () =>
+                    await AgentSession.startNativeSessionBrowser(
+                        options,
+                        () => this.#observer,
+                        store,
+                        this.#contentExternalizer,
+                    ),
+                async (runtime) => {
+                    runtime.selectNativeSession(nativeSessionId);
+                    return await runtime.loadHistoryEventsV2(eventLimit, null, options.signal);
+                },
+                async (runtime) => await runtime.closeProcess(),
+            );
+        } catch (error) {
+            if (this.#eventPreviewsBySession.get(options.sessionId)?.store === store) {
+                this.#eventPreviewsBySession.delete(options.sessionId);
+            }
+            store.close();
+            throw error;
+        }
     };
 
     readonly close = async (): Promise<void> => {
         await Promise.all(
             this.#processesByQuery.entries().map(async ([id, runtime]) => await this.retire(id, runtime)),
         );
+        for (const preview of this.#eventPreviewsBySession.values()) {
+            preview.store.close();
+        }
+        this.#eventPreviewsBySession.clear();
     };
 }
