@@ -247,9 +247,13 @@ describe.sequential("Mini-client Recording integration", () => {
         expect(decodeSessionRecordingHistory(JSON.stringify(history))).toMatchObject({
             sessionId,
             events: [
-                { eventId: `${sessionId}-requested` },
-                { eventId: `${sessionId}-reply`, payload: { content: { text: "Durable mini-client reply" } } },
-                { eventId: `${sessionId}-completed` },
+                { eventId: `${sessionId}-requested`, position: "0" },
+                {
+                    eventId: `${sessionId}-reply`,
+                    payload: { content: { text: "Durable mini-client reply" } },
+                    position: "1",
+                },
+                { eventId: `${sessionId}-completed`, position: "2" },
             ],
         });
         const directory = await json(
