@@ -1,6 +1,5 @@
 import {
     type AgentSettingsDiscoveredEvent,
-    type Attempt,
     decodeAgentSettingsDiscoveredEvent,
     decodeMobiusSessionExportV2,
     decodeNativeSessionEventsV2,
@@ -16,7 +15,6 @@ import {
     type ExternalAudioContentBlockV2,
     type ExternalImageContentBlockV2,
     type ExternalResourceContentBlockV2,
-    type Interaction,
     isIdentifier,
     MOBIUS_API_PREFIX,
     type MobiusSessionExportV2,
@@ -44,26 +42,16 @@ import {
 import { MobiusPublicRequestExecutor } from "./public-request.ts";
 import {
     type CancelMobiusTurnRequest,
-    type ConfigureMobiusSessionRequest,
     type CreateMobiusSessionRequest,
-    decodeMobiusAttempt,
     decodeMobiusBrowserCredential,
     decodeMobiusChannelAccessGrant,
     decodeMobiusChannelDescriptor,
-    decodeMobiusInteraction,
-    decodeMobiusInteractionList,
     decodeMobiusLinkedChannelDeviceList,
-    decodeMobiusMessagePage,
     decodeMobiusRedeemedChannelCredential,
     decodeMobiusRuntimeList,
     decodeMobiusRuntimePairing,
     decodeMobiusRuntimePairingStatus,
-    decodeMobiusServiceCapabilities,
     decodeMobiusSession,
-    decodeMobiusSessionExport,
-    decodeMobiusSessionPage,
-    decodeMobiusSessionState,
-    decodeMobiusToolCallDetail,
     decodeMobiusTurn,
     decodeRuntimeDescriptor,
     type MobiusBrowserCredential,
@@ -72,7 +60,6 @@ import {
     type MobiusChannelDescriptor,
     type MobiusInteractionResponseRequest,
     type MobiusLinkedChannelDevice,
-    type MobiusMessagePage,
     type MobiusPageRequest,
     MobiusPairedRuntimePairingStatus,
     type MobiusRedeemedChannelCredential,
@@ -82,14 +69,9 @@ import {
     type MobiusRuntimePairingRequest,
     type MobiusRuntimePairingStatus,
     type MobiusRuntimePairingWaitOptions,
-    type MobiusServiceCapabilities,
     type MobiusSession,
     MobiusSessionAccess,
-    type MobiusSessionExport,
     type MobiusSessionImportBinding,
-    type MobiusSessionPage,
-    type MobiusSessionState,
-    type MobiusToolCallDetail,
     type MobiusTurn,
     type SubmitMobiusTurnRequest,
 } from "./resources.ts";
@@ -666,17 +648,6 @@ export async function readExactResponseBytes(
     return bytes;
 }
 
-export class MobiusCapabilityResources {
-    readonly #executor: MobiusRequestExecutor;
-
-    constructor(executor: MobiusRequestExecutor) {
-        this.#executor = executor;
-    }
-
-    readonly read = async (signal: AbortSignal): Promise<MobiusServiceCapabilities> =>
-        decodeMobiusServiceCapabilities(await this.#executor.get("capabilities", signal));
-}
-
 export class MobiusCredentialResources {
     readonly #executor: MobiusRequestExecutor;
     readonly #projectId: string;
@@ -1117,43 +1088,9 @@ export class MobiusSessionResources {
         return decodeSessionConfigUpdatedEvent(JSON.stringify(result));
     };
 
-    readonly configure = async (
-        sessionId: string,
-        request: ConfigureMobiusSessionRequest,
-        signal: AbortSignal,
-    ): Promise<MobiusSession> =>
-        decodeMobiusSession(
-            await this.#executor.put(sessionPath(this.#projectId, sessionId, "binding"), request, signal),
-        );
-
-    readonly delete = async (sessionId: string, signal: AbortSignal): Promise<MobiusSessionState> =>
-        decodeMobiusSessionState(
-            await this.#executor.delete(sessionPath(this.#projectId, sessionId, "").slice(0, -1), signal),
-        );
-
-    readonly export = async (sessionId: string, signal: AbortSignal): Promise<MobiusSessionExport> =>
-        decodeMobiusSessionExport(await this.#executor.get(sessionPath(this.#projectId, sessionId, "export"), signal));
-
     readonly exportV2 = async (sessionId: string, signal: AbortSignal): Promise<MobiusSessionExportV2> =>
         decodeMobiusSessionExportV2(
             await this.#executor.get(sessionPath(this.#projectId, sessionId, "export-v2"), signal),
-        );
-
-    readonly import = async (
-        exported: MobiusSessionExport,
-        targetBinding: MobiusSessionImportBinding,
-        signal: AbortSignal,
-    ): Promise<MobiusSession> =>
-        decodeMobiusSession(
-            await this.#executor.post(
-                projectPath(this.#projectId, "session-imports"),
-                {
-                    formatVersion: exported.formatVersion,
-                    session: exported.session,
-                    targetBinding,
-                },
-                signal,
-            ),
         );
 
     readonly importV2 = async (
@@ -1182,9 +1119,6 @@ export class MobiusSessionResources {
         decodeMobiusSession(
             await this.#executor.post(sessionPath(this.#projectId, sessionId, "forks-v2"), request, signal),
         );
-
-    readonly read = async (sessionId: string, signal: AbortSignal): Promise<MobiusSession> =>
-        decodeMobiusSession(await this.#executor.get(sessionPath(this.#projectId, sessionId, "").slice(0, -1), signal));
 
     readonly readFile = async (
         sessionId: string,
@@ -1218,31 +1152,6 @@ export class MobiusSessionResources {
         maximumBytes = content.byteLength,
     ): ReturnType<MobiusSessionResources["readFile"]> =>
         await this.readFile(sessionId, externalContentPath(content), signal, maximumBytes);
-
-    readonly list = async (page: MobiusPageRequest, signal: AbortSignal): Promise<MobiusSessionPage> => {
-        const path = requestUrl(new URL("https://mobius.invalid/"), projectPath(this.#projectId, "sessions"));
-        path.searchParams.set("limit", page.limit.toString());
-        if (page.cursor.length > 0) {
-            path.searchParams.set("cursor", page.cursor);
-        }
-        return decodeMobiusSessionPage(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal));
-    };
-
-    readonly readMessages = async (
-        sessionId: string,
-        page: MobiusPageRequest,
-        signal: AbortSignal,
-    ): Promise<MobiusMessagePage> => {
-        const path = requestUrl(
-            new URL("https://mobius.invalid/"),
-            sessionPath(this.#projectId, sessionId, "messages"),
-        );
-        path.searchParams.set("limit", page.limit.toString());
-        if (page.cursor.length > 0) {
-            path.searchParams.set("cursor", page.cursor);
-        }
-        return decodeMobiusMessagePage(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal));
-    };
 
     readonly previewRuntimeNativeEventsV2 = async (
         runtimeId: string,
@@ -1401,14 +1310,6 @@ export class MobiusTurnResources {
         return { turnId };
     };
 
-    readonly read = async (sessionId: string, turnId: string, signal: AbortSignal): Promise<MobiusTurn> =>
-        decodeMobiusTurn(
-            await this.#executor.get(
-                sessionPath(this.#projectId, sessionId, `turns/${encodeURIComponent(turnId)}`),
-                signal,
-            ),
-        );
-
     readonly cancel = async (
         sessionId: string,
         turnId: string,
@@ -1440,51 +1341,6 @@ export class MobiusTurnResources {
     };
 }
 
-export class MobiusAttemptResources {
-    readonly #executor: MobiusRequestExecutor;
-    readonly #projectId: string;
-
-    constructor(executor: MobiusRequestExecutor, projectId: string) {
-        this.#executor = executor;
-        this.#projectId = projectId;
-    }
-
-    readonly read = async (sessionId: string, attemptId: string, signal: AbortSignal): Promise<Attempt> =>
-        decodeMobiusAttempt(
-            await this.#executor.get(
-                sessionPath(this.#projectId, sessionId, `attempts/${encodeURIComponent(attemptId)}`),
-                signal,
-            ),
-        );
-}
-
-export class MobiusToolCallResources {
-    readonly #executor: MobiusRequestExecutor;
-    readonly #projectId: string;
-
-    constructor(executor: MobiusRequestExecutor, projectId: string) {
-        this.#executor = executor;
-        this.#projectId = projectId;
-    }
-
-    readonly readDetail = async (
-        sessionId: string,
-        attemptId: string,
-        toolCallId: string,
-        signal: AbortSignal,
-    ): Promise<MobiusToolCallDetail> =>
-        decodeMobiusToolCallDetail(
-            await this.#executor.get(
-                sessionPath(
-                    this.#projectId,
-                    sessionId,
-                    `attempts/${encodeURIComponent(attemptId)}/tool-calls/${encodeURIComponent(toolCallId)}`,
-                ),
-                signal,
-            ),
-        );
-}
-
 export class MobiusInteractionResources {
     readonly #executor: MobiusRequestExecutor;
     readonly #projectId: string;
@@ -1494,19 +1350,8 @@ export class MobiusInteractionResources {
         this.#projectId = projectId;
     }
 
-    readonly listPending = async (sessionId: string, signal: AbortSignal): Promise<readonly Interaction[]> =>
-        decodeMobiusInteractionList(
-            await this.#executor.get(sessionPath(this.#projectId, sessionId, "interactions"), signal),
-        );
-
-    readonly read = async (sessionId: string, interactionId: string, signal: AbortSignal): Promise<Interaction> =>
-        decodeMobiusInteraction(
-            await this.#executor.get(
-                sessionPath(this.#projectId, sessionId, `interactions/${encodeURIComponent(interactionId)}`),
-                signal,
-            ),
-        );
-
+    // The Platform serves no interaction read routes: pending interactions are derived from the
+    // Session Recording lifecycle events. Only the response submission crosses the Platform API.
     readonly respond = async (
         sessionId: string,
         interactionId: string,
@@ -1743,8 +1588,6 @@ export class MobiusEventResources {
 }
 
 export class MobiusClient {
-    readonly attempts: MobiusAttemptResources;
-    readonly capabilities: MobiusCapabilityResources;
     readonly channels: MobiusChannelResources;
     readonly credentials: MobiusCredentialResources;
     readonly events: MobiusEventResources;
@@ -1753,7 +1596,6 @@ export class MobiusClient {
     readonly runtimes: MobiusRuntimeResources;
     readonly sessions: MobiusSessionResources;
     readonly turns: MobiusTurnResources;
-    readonly toolCalls: MobiusToolCallResources;
 
     constructor(options: MobiusClientOptions) {
         const executor = new MobiusRequestExecutor(options);
@@ -1761,8 +1603,6 @@ export class MobiusClient {
             options.maxStreamReconnectAttempts ?? DEFAULT_STREAM_RECONNECT_ATTEMPTS,
             "stream reconnect attempt limit",
         );
-        this.attempts = new MobiusAttemptResources(executor, options.projectId);
-        this.capabilities = new MobiusCapabilityResources(executor);
         this.channels = new MobiusChannelResources(executor);
         this.credentials = new MobiusCredentialResources(executor, options.projectId);
         this.events = new MobiusEventResources(executor, options.projectId, reconnectAttempts);
@@ -1771,7 +1611,6 @@ export class MobiusClient {
         this.runtimes = new MobiusRuntimeResources(executor, options.projectId);
         this.sessions = new MobiusSessionResources(executor, options.projectId);
         this.turns = new MobiusTurnResources(executor, options.projectId);
-        this.toolCalls = new MobiusToolCallResources(executor, options.projectId);
     }
 
     readonly close = (): void => {
