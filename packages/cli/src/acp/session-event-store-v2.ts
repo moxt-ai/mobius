@@ -15,7 +15,7 @@ import {
     InMemorySessionEventIdAllocator,
     type SessionEventIdAllocator,
 } from "../session-event-id/session-event-id-allocator.ts";
-import { MemorySessionLiveEventPosition, type SessionLiveEventPosition } from "../session-live-event-position.ts";
+import type { SessionLiveEventPosition } from "../session-live-event-position.ts";
 
 const HOT_EVENT_HIGH_WATER_MARK = 256;
 const HOT_EVENT_RETENTION = 128;
@@ -136,16 +136,12 @@ function eventPage(
 }
 
 export class MemoryAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
+    readonly #allocatedPositionBySession = new Map<string, number>();
     readonly #events = new Map<string, SessionEventsV2>();
     readonly #eventIds: SessionEventIdAllocator;
-    readonly #liveEventPositions: SessionLiveEventPosition;
 
-    constructor(
-        eventIds: SessionEventIdAllocator = new InMemorySessionEventIdAllocator(),
-        liveEventPositions: SessionLiveEventPosition = new MemorySessionLiveEventPosition(),
-    ) {
+    constructor(eventIds: SessionEventIdAllocator = new InMemorySessionEventIdAllocator()) {
         this.#eventIds = eventIds;
-        this.#liveEventPositions = liveEventPositions;
     }
 
     readonly #session = (sessionId: string): SessionEventsV2 => {
@@ -159,7 +155,12 @@ export class MemoryAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
 
     readonly append = (sessionId: string, event: SessionEventPayloadV2): SessionLiveEventV2 => {
         const session = this.#session(sessionId);
-        const position = this.#liveEventPositions.allocate(sessionId);
+        const allocatedPosition = this.#allocatedPositionBySession.get(sessionId) ?? 9_999;
+        if (allocatedPosition === Number.MAX_SAFE_INTEGER) {
+            throw new Error("The live Session event position allocation is exhausted");
+        }
+        const position = allocatedPosition + 1;
+        this.#allocatedPositionBySession.set(sessionId, position);
         const recorded = liveEvent(
             sessionId,
             session.sessionGenerationId,
@@ -172,6 +173,7 @@ export class MemoryAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
     };
 
     readonly close = (): void => {
+        this.#allocatedPositionBySession.clear();
         this.#events.clear();
     };
 
@@ -234,7 +236,7 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
 
     constructor(
         localDatabase: LocalSqliteDatabase,
-        liveEventPositions: SessionLiveEventPosition = new MemorySessionLiveEventPosition(),
+        liveEventPositions: SessionLiveEventPosition,
         eventIds: SessionEventIdAllocator = new InMemorySessionEventIdAllocator(),
     ) {
         this.#localDatabase = localDatabase;

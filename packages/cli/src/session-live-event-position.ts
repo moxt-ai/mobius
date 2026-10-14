@@ -10,20 +10,6 @@ export interface SessionLiveEventPosition {
     readonly allocate: (sessionId: string) => number;
 }
 
-export class MemorySessionLiveEventPosition implements SessionLiveEventPosition {
-    readonly #allocatedBySession = new Map<string, number>();
-
-    readonly allocate = (sessionId: string): number => {
-        const allocatedPosition = this.#allocatedBySession.get(sessionId) ?? INITIAL_POSITION - 1;
-        if (allocatedPosition === Number.MAX_SAFE_INTEGER) {
-            throw new Error("The live Session event position allocation is exhausted");
-        }
-        const nextPosition = allocatedPosition + 1;
-        this.#allocatedBySession.set(sessionId, nextPosition);
-        return nextPosition;
-    };
-}
-
 export class SqliteSessionLiveEventPosition implements SessionLiveEventPosition {
     readonly #localDatabase: LocalSqliteDatabase;
 
