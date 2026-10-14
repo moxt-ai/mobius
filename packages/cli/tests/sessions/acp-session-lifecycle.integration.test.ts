@@ -291,6 +291,54 @@ describe("ACP conversation sessions", () => {
         }
     });
 
+    it("Given projected history spanning cache tiers, When newer events arrive between pages, Then the event-ID cursor resumes before the same event", async () => {
+        vi.useFakeTimers({ toFake: ["clearImmediate", "setImmediate"] });
+        vi.setSystemTime(new Date("2026-10-14T00:00:00.000Z"));
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-cursor-"));
+        const sessionDatabase = openAcpSessionDatabase(join(temporaryDirectory, "sessions.sqlite"));
+        const store = new CachedAcpSessionEventStoreV2(
+            openSessionEventCacheV2Database(join(temporaryDirectory, "events.sqlite")),
+            new SqliteSessionLiveEventPosition(sessionDatabase),
+        );
+        try {
+            for (let eventNumber = 1; eventNumber <= 300; eventNumber += 1) {
+                store.append("session-1", {
+                    payload: {
+                        commandId: `command-${eventNumber.toString()}`,
+                        content: [{ text: `prompt ${eventNumber.toString()}`, type: "text" }],
+                        kind: "prompt.requested",
+                    },
+                    type: "lifecycle-metadata",
+                });
+            }
+            await vi.runAllTimersAsync();
+
+            const newest = store.page("session-1", 150, null);
+            expect(newest.events[0]).toMatchObject({ payload: { commandId: "command-151" } });
+            expect(newest.nextCursor).toBe(newest.events[0]?.eventId);
+
+            store.append("session-1", {
+                payload: {
+                    commandId: "command-301",
+                    content: [{ text: "newer prompt", type: "text" }],
+                    kind: "prompt.requested",
+                },
+                type: "lifecycle-metadata",
+            });
+
+            const older = store.page("session-1", 150, newest.nextCursor);
+            expect(older.events).toHaveLength(150);
+            expect(older.events[0]).toMatchObject({ payload: { commandId: "command-1" } });
+            expect(older.events.at(-1)).toMatchObject({ payload: { commandId: "command-150" } });
+            expect(older.nextCursor).toBeNull();
+        } finally {
+            store.close();
+            sessionDatabase.close();
+            vi.useRealTimers();
+            await rm(temporaryDirectory, { force: true, recursive: true });
+        }
+    });
+
     it("Given V2 Session events cached by one process, When a new process opens the cache, Then stale V2 events are unavailable under a new Session generation", async () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-cache-"));
         const databasePath = join(temporaryDirectory, "events.sqlite");

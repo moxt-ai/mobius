@@ -30,10 +30,11 @@ class ProjectedSessionEventV2 {
 
 class SessionEventsV2 {
     readonly hot: ProjectedSessionEventV2[] = [];
+    readonly #eventIndexById = new Map<string, number>();
     readonly #itemsByEventId = new Map<string, ProjectedSessionEventV2>();
+    readonly #projectedEventIds: string[] = [];
     readonly #projection: SessionEventHistoryProjectionV2;
     readonly sessionGenerationId: string;
-    projectedEventCount = 0;
 
     constructor(sessionGenerationId: string, allocateEventId: () => string) {
         this.sessionGenerationId = sessionGenerationId;
@@ -54,9 +55,33 @@ class SessionEventsV2 {
         }
         const item = new ProjectedSessionEventV2(projected.event);
         this.hot.push(item);
+        this.#eventIndexById.set(projected.event.eventId, this.#projectedEventIds.length);
         this.#itemsByEventId.set(projected.event.eventId, item);
-        this.projectedEventCount += 1;
+        this.#projectedEventIds.push(projected.event.eventId);
         return { item, kind: "append" };
+    };
+
+    get projectedEventCount(): number {
+        return this.#projectedEventIds.length;
+    }
+
+    readonly endIndex = (cursor: string | null): number => {
+        if (cursor === null) {
+            return this.projectedEventCount;
+        }
+        const index = this.#eventIndexById.get(cursor);
+        if (index === undefined) {
+            throw new Error("The native event cursor is invalid");
+        }
+        return index;
+    };
+
+    readonly cursorAt = (index: number): string => {
+        const cursor = this.#projectedEventIds[index];
+        if (cursor === undefined) {
+            throw new Error("The native event cursor is unavailable");
+        }
+        return cursor;
     };
 
     readonly removeHotHead = (count: number): void => {
@@ -113,6 +138,7 @@ function liveEvent(
 }
 
 function eventPage(
+    session: SessionEventsV2,
     sessionGenerationId: string,
     endIndex: number,
     eventLimit: number,
@@ -121,7 +147,7 @@ function eventPage(
     const startIndex = Math.max(0, endIndex - eventLimit);
     return {
         events: read(startIndex, endIndex),
-        nextCursor: startIndex === 0 ? null : startIndex.toString(),
+        nextCursor: startIndex === 0 ? null : session.cursorAt(startIndex),
         sessionGenerationId,
         truncated: startIndex > 0,
     };
@@ -188,11 +214,8 @@ export class MemoryAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
 
     readonly page = (sessionId: string, eventLimit: number, cursor: string | null): AcpSessionEventPageV2 => {
         const session = this.#session(sessionId);
-        const endIndex = cursor === null ? session.projectedEventCount : Number(cursor);
-        if (!Number.isSafeInteger(endIndex) || endIndex < 0 || endIndex > session.projectedEventCount) {
-            throw new Error("The native event cursor is invalid");
-        }
-        return eventPage(session.sessionGenerationId, endIndex, eventLimit, (start, end) =>
+        const endIndex = session.endIndex(cursor);
+        return eventPage(session, session.sessionGenerationId, endIndex, eventLimit, (start, end) =>
             session.hot.slice(start, end).map(({ event }) => event),
         );
     };
@@ -334,11 +357,8 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
     readonly page = (sessionId: string, eventLimit: number, cursor: string | null): AcpSessionEventPageV2 => {
         const session = this.#sessions.get(sessionId);
         const current = session ?? this.#session(sessionId);
-        const endIndex = cursor === null ? current.projectedEventCount : Number(cursor);
-        if (!Number.isSafeInteger(endIndex) || endIndex < 0 || endIndex > current.projectedEventCount) {
-            throw new Error("The native event cursor is invalid");
-        }
-        return eventPage(current.sessionGenerationId, endIndex, eventLimit, (startIndex, endIndex) => {
+        const endIndex = current.endIndex(cursor);
+        return eventPage(current, current.sessionGenerationId, endIndex, eventLimit, (startIndex, endIndex) => {
             const startOrdinal = startIndex + 1;
             const endOrdinal = endIndex;
             const persisted = this.#cacheDatabase.read(
