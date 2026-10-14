@@ -27,6 +27,23 @@ function errorResponse(code: string, status: number): Response {
     return Response.json({ error: { code, message: "The Recording request could not be completed" } }, { status });
 }
 
+/**
+ * Reports an unexpected failure through the same envelope callers already parse, so an unhandled
+ * read never degrades to Hono's plain-text "Internal Server Error". The cause stays in Workers
+ * logs because the sanitized body deliberately omits it.
+ */
+function internalErrorResponse(cause: unknown, request: Request): Response {
+    // Cancellation belongs to the caller and must not be translated into a Worker failure.
+    if (request.signal.aborted) {
+        throw cause;
+    }
+    // The Durable Object pathname alone cannot identify a Session, so the target query is logged
+    // with the cause. Observability needs the identifier; the client response does not get it.
+    const url = new URL(request.url);
+    console.error(`Recording ${request.method} ${url.pathname}${url.search} failed`, cause);
+    return errorResponse("internal_error", 500);
+}
+
 function decodedIdentifier(value: string | undefined): string | null {
     if (value === undefined) {
         return null;
@@ -49,6 +66,7 @@ function requireSingleSession(write: SessionRecordingWrite): SessionRecordingWri
 
 function sessionRecordingRoutes(storage: SessionRecordingRoutes): Hono<RecordingEnvironment> {
     return new Hono<RecordingEnvironment>()
+        .onError((cause, context): Response => internalErrorResponse(cause, context.req.raw))
         .post("/events", async (context): Promise<Response> => {
             try {
                 return storage.append(requireSingleSession(await decode(context.req.raw)))
@@ -89,6 +107,7 @@ function recordingDirectoryRoutes(
     directory: RecordingDirectory,
 ): Hono<RecordingEnvironment> {
     return new Hono<RecordingEnvironment>()
+        .onError((cause, context): Response => internalErrorResponse(cause, context.req.raw))
         .post("/events", async (context): Promise<Response> => {
             try {
                 directory.record(await decode(context.req.raw));
@@ -189,6 +208,9 @@ function durableObjectFetch(namespace: DurableObjectNamespace, name: string, req
 
 export function createRecordingWorker(): RecordingWorker {
     const application = new Hono<RecordingEnvironment>()
+        // Durable Object fetches reject rather than returning an error Response, and every route
+        // passes a Durable Object response straight through, so the envelope has to be added here.
+        .onError((cause, context): Response => internalErrorResponse(cause, context.req.raw))
         .post("/v1/session-events", async (context): Promise<Response> => {
             let write: SessionRecordingWrite;
             try {
