@@ -15,6 +15,7 @@ import {
     InMemorySessionEventIdAllocator,
     type SessionEventIdAllocator,
 } from "../session-event-id/session-event-id-allocator.ts";
+import { MemorySessionLiveEventPosition, type SessionLiveEventPosition } from "../session-live-event-position.ts";
 
 const HOT_EVENT_HIGH_WATER_MARK = 256;
 const HOT_EVENT_RETENTION = 128;
@@ -41,7 +42,6 @@ class SessionEventsV2 {
     readonly #projection: SessionEventHistoryProjectionV2;
     readonly sessionGenerationId: string;
     projectedEventCount = 0;
-    nextLivePosition = 1;
 
     constructor(sessionGenerationId: string, allocateEventId: () => string) {
         this.sessionGenerationId = sessionGenerationId;
@@ -138,9 +138,14 @@ function eventPage(
 export class MemoryAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
     readonly #events = new Map<string, SessionEventsV2>();
     readonly #eventIds: SessionEventIdAllocator;
+    readonly #liveEventPositions: SessionLiveEventPosition;
 
-    constructor(eventIds: SessionEventIdAllocator = new InMemorySessionEventIdAllocator()) {
+    constructor(
+        eventIds: SessionEventIdAllocator = new InMemorySessionEventIdAllocator(),
+        liveEventPositions: SessionLiveEventPosition = new MemorySessionLiveEventPosition(),
+    ) {
         this.#eventIds = eventIds;
+        this.#liveEventPositions = liveEventPositions;
     }
 
     readonly #session = (sessionId: string): SessionEventsV2 => {
@@ -154,7 +159,7 @@ export class MemoryAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
 
     readonly append = (sessionId: string, event: SessionEventPayloadV2): SessionLiveEventV2 => {
         const session = this.#session(sessionId);
-        const position = session.nextLivePosition;
+        const position = this.#liveEventPositions.allocate(sessionId);
         const recorded = liveEvent(
             sessionId,
             session.sessionGenerationId,
@@ -163,11 +168,13 @@ export class MemoryAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
             event,
         );
         session.apply(recorded);
-        session.nextLivePosition += 1;
         return recorded;
     };
 
-    readonly close = (): void => this.#events.clear();
+    readonly close = (): void => {
+        this.#events.clear();
+        this.#liveEventPositions.close();
+    };
 
     readonly materialize = (
         sessionId: string,
@@ -219,6 +226,7 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
     readonly #database: NodeSQLiteDatabase;
     readonly #eventIds: SessionEventIdAllocator;
     readonly #ignoredPersistedSessions = new Set<string>();
+    readonly #liveEventPositions: SessionLiveEventPosition;
     readonly #localDatabase: LocalSqliteDatabase;
     readonly #databaseOrdinalsBySession = new Map<string, Map<string, number>>();
     readonly #sessions = new Map<string, SessionEventsV2>();
@@ -227,10 +235,12 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
 
     constructor(
         localDatabase: LocalSqliteDatabase,
+        liveEventPositions: SessionLiveEventPosition = new MemorySessionLiveEventPosition(),
         eventIds: SessionEventIdAllocator = new InMemorySessionEventIdAllocator(),
     ) {
         this.#localDatabase = localDatabase;
         this.#eventIds = eventIds;
+        this.#liveEventPositions = liveEventPositions;
         this.#database = localDatabase.orm;
         try {
             this.#localDatabase.transaction(() => this.#database.delete(sessionEventV2).run());
@@ -254,7 +264,7 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
             throw new Error("The V2 Session event store is closed");
         }
         const session = this.#session(sessionId);
-        const position = session.nextLivePosition;
+        const position = this.#liveEventPositions.allocate(sessionId);
         const recorded = liveEvent(
             sessionId,
             session.sessionGenerationId,
@@ -266,7 +276,6 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
         if (projected.kind === "replace") {
             this.#updateProjectedEvent(sessionId, session, projected.item);
         }
-        session.nextLivePosition += 1;
         this.#sessions.set(sessionId, session);
         if (session.hot.length > HOT_EVENT_HIGH_WATER_MARK) {
             this.#scheduleFlush();
@@ -482,11 +491,15 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
         if (this.#flushSchedule.kind === "scheduled") {
             clearImmediate(this.#flushSchedule.handle);
         }
-        this.#flushSchedule = { kind: "idle" };
-        this.#flush(true);
-        this.#flushSchedule = { kind: "closed" };
-        this.#localDatabase.close();
-        this.#sessions.clear();
-        this.#databaseOrdinalsBySession.clear();
+        try {
+            this.#flushSchedule = { kind: "idle" };
+            this.#flush(true);
+            this.#flushSchedule = { kind: "closed" };
+            this.#localDatabase.close();
+            this.#sessions.clear();
+            this.#databaseOrdinalsBySession.clear();
+        } finally {
+            this.#liveEventPositions.close();
+        }
     };
 }
