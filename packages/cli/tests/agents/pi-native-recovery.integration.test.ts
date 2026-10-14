@@ -1,9 +1,13 @@
 import { randomUUID } from "node:crypto";
 import {
     decodeMessageKind,
+    decodeNativeSessionResult,
     decodeSessionEventV2,
+    decodeSessionPreviewHistoryPageLoaded,
     decodeSessionQueuedEvent,
+    encodeNativeSessionCommand,
     encodeSessionCancelCommand,
+    encodeSessionPreviewHistoryPageLoad,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -112,4 +116,135 @@ test("Given a real pi native Session, When the active prompt is cancelled with a
     } finally {
         release.resolve();
     }
+});
+
+test("Given a real Pi native Session was previewed, When the user imports it, Then the daemon stays online and opens the Session", async () => {
+    await using provider = await FakeOpenAiProvider.start("gpt-4.1", "PI_PREVIEW_IMPORT_REPLY");
+    await using agent = await PiFixture.create(provider);
+    await withRealDaemon(new PiAgentSpecification(), agent.environment, async (peer) => {
+        const sourceSessionId = await prepareNewRealSession(peer, "pi");
+        const commandId = randomUUID();
+        peer.send(
+            encodeSessionPromptCommand({
+                kind: "session.prompt",
+                commandId,
+                sessionId: sourceSessionId,
+                agentId: "pi",
+                bindingId: peer.bindingId,
+                directoryId: "default",
+                additionalDirectoryIds: [],
+                images: [],
+                resources: [],
+                prompt: "Reply with a short greeting, without using tools",
+                disposition: SessionPromptDisposition.Reject,
+                targetCommandId: "",
+            }),
+        );
+        for (;;) {
+            const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+            if (
+                event.type === "lifecycle-metadata" &&
+                event.payload.kind === "prompt.failed" &&
+                event.payload.commandId === commandId
+            ) {
+                throw new Error(JSON.stringify(event));
+            }
+            if (
+                event.type === "lifecycle-metadata" &&
+                event.payload.kind === "prompt.completed" &&
+                event.payload.commandId === commandId
+            ) {
+                break;
+            }
+        }
+
+        const discoveryId = randomUUID();
+        const listRequestId = randomUUID();
+        const identity = {
+            additionalDirectoryIds: [],
+            agentId: "pi",
+            bindingId: peer.bindingId,
+            directoryId: "default",
+        } as const;
+        peer.send(
+            encodeNativeSessionCommand({
+                ...identity,
+                action: "list",
+                cursor: null,
+                kind: "native.session.request",
+                requestId: listRequestId,
+                sessionId: discoveryId,
+            }),
+        );
+        let entry: Extract<
+            ReturnType<typeof decodeNativeSessionResult>,
+            { readonly action: "list" }
+        >["entries"][number];
+        for (;;) {
+            const message = await peer.nextMessage();
+            if (decodeMessageKind(message) !== "native.session.result") {
+                continue;
+            }
+            const result = decodeNativeSessionResult(message);
+            if (result.requestId !== listRequestId || result.action !== "list") {
+                continue;
+            }
+            const source = result.entries.find((candidate) => candidate.mobiusSessionIds.includes(sourceSessionId));
+            if (source === undefined) {
+                throw new Error("Missing source native Session");
+            }
+            entry = source;
+            break;
+        }
+
+        const previewRequestId = randomUUID();
+        peer.send(
+            encodeSessionPreviewHistoryPageLoad({
+                ...identity,
+                cursor: null,
+                eventLimit: 200,
+                kind: "session.preview-history.page.load",
+                requestId: previewRequestId,
+                sessionId: entry.nativeSessionId,
+            }),
+        );
+        for (;;) {
+            const message = await peer.nextMessage();
+            if (decodeMessageKind(message) !== "session.preview-history.page.loaded") {
+                continue;
+            }
+            const preview = decodeSessionPreviewHistoryPageLoaded(message);
+            if (preview.requestId === previewRequestId) {
+                expect(preview.events.events.events.length).toBeGreaterThan(0);
+                break;
+            }
+        }
+
+        const importedSessionId = randomUUID();
+        const importRequestId = randomUUID();
+        peer.send(
+            encodeNativeSessionCommand({
+                ...identity,
+                action: "import",
+                entryId: entry.entryId,
+                kind: "native.session.request",
+                requestId: importRequestId,
+                sessionId: discoveryId,
+                targetSessionId: importedSessionId,
+            }),
+        );
+        for (;;) {
+            const message = await peer.nextMessage();
+            if (decodeMessageKind(message) !== "native.session.result") {
+                continue;
+            }
+            const result = decodeNativeSessionResult(message);
+            if (result.requestId !== importRequestId || result.action !== "import") {
+                continue;
+            }
+            expect(result.targetSessionId).toBe(importedSessionId);
+            expect(result.ready.restored).toBe(true);
+            break;
+        }
+    });
 });
