@@ -218,7 +218,7 @@ class ControlledAgentState {
                 sessionId: active.sessionId,
                 update: {
                     content: { text: output.text, type: "text" },
-                    messageId: id,
+                    messageId: output.messageId ?? id,
                     sessionUpdate: "agent_message_chunk",
                 },
             };
@@ -260,7 +260,7 @@ class ControlledAgentState {
                 sessionId: active.sessionId,
                 update: {
                     content: { text: output.output, type: "text" },
-                    messageId: id,
+                    messageId: output.messageId ?? id,
                     sessionUpdate: "agent_thought_chunk",
                 },
             };
