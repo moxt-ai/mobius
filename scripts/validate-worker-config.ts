@@ -25,6 +25,30 @@ if (
     process.exit(1);
 }
 
+const webhookSecretEncryptionKey = process.env["MOBIUS_SESSION_WEBHOOK_SECRET_ENCRYPTION_KEY"];
+if (webhookSecretEncryptionKey !== undefined && webhookSecretEncryptionKey !== "") {
+    try {
+        if (
+            !webhookSecretEncryptionKey.trim() ||
+            webhookSecretEncryptionKey.includes("\0") ||
+            atob(webhookSecretEncryptionKey).length !== 32
+        ) {
+            throw new Error("invalid key");
+        }
+    } catch {
+        console.error("Invalid MOBIUS_SESSION_WEBHOOK_SECRET_ENCRYPTION_KEY GitHub secret");
+        process.exit(1);
+    }
+}
+
+const secrets: Record<string, string> = {};
+if (clerkSecretKey) {
+    secrets["CLERK_SECRET_KEY"] = clerkSecretKey;
+}
+if (webhookSecretEncryptionKey) {
+    secrets["MOBIUS_SESSION_WEBHOOK_SECRET_ENCRYPTION_KEY"] = webhookSecretEncryptionKey;
+}
+
 switch (process.argv[2] ?? "validate") {
     case "validate":
         console.log("Validated GitHub runtime variables for Platform");
@@ -33,7 +57,7 @@ switch (process.argv[2] ?? "validate") {
         process.stdout.write(JSON.stringify(variables));
         break;
     case "secrets":
-        process.stdout.write(JSON.stringify(clerkSecretKey ? { CLERK_SECRET_KEY: clerkSecretKey } : {}));
+        process.stdout.write(JSON.stringify(secrets));
         break;
     default:
         console.error("Expected validate, vars, or secrets");
