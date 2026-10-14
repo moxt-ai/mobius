@@ -71,7 +71,6 @@ import {
     type EffortLevel,
     type FastModeDisabledReason,
     type FastModeState,
-    getSessionMessages,
     type McpServerConfig,
     type McpServerStatus,
     type ModelInfo,
@@ -107,7 +106,9 @@ import {
     refusalFallbackResultFromResponse,
     refusalFallbackToCreateRequest,
 } from "./elicitation.js";
+import { forkEnvironmentSession } from "./environment-session-fork.js";
 import { listEnvironmentSessions } from "./environment-session-list.js";
+import { getEnvironmentSessionMessages } from "./environment-session-messages.js";
 import {
     acceptedPlanToolResult,
     ExitPlanCoordinator,
@@ -1805,22 +1806,18 @@ export class ClaudeAcpAgent {
         return response;
     }
 
-    async unstable_forkSession(params: ForkSessionRequest): Promise<ForkSessionResponse> {
+    async unstable_forkSession(params: ForkSessionRequest, signal: AbortSignal): Promise<ForkSessionResponse> {
         if (this.providerUpdate !== null) {
             await this.providerUpdate;
         }
-        const response = await this.createSession(
-            {
-                cwd: params.cwd,
-                mcpServers: params.mcpServers ?? [],
-                additionalDirectories: params.additionalDirectories,
-                _meta: params._meta,
-            },
-            {
-                resume: params.sessionId,
-                forkSession: true,
-            },
-        );
+        const forkedSessionId = await forkEnvironmentSession(this.environment, params.sessionId, params.cwd, signal);
+        const response = await this.getOrCreateSession({
+            additionalDirectories: params.additionalDirectories,
+            cwd: params.cwd,
+            mcpServers: params.mcpServers,
+            sessionId: forkedSessionId,
+            _meta: params._meta,
+        });
         // Needs to happen after we return the session
         setTimeout(() => {
             void this.sendAvailableCommandsUpdate(response.sessionId);
@@ -1842,13 +1839,13 @@ export class ClaudeAcpAgent {
         return result;
     }
 
-    async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
+    async loadSession(params: LoadSessionRequest, signal: AbortSignal): Promise<LoadSessionResponse> {
         if (this.providerUpdate !== null) {
             await this.providerUpdate;
         }
         const result = await this.getOrCreateSession(params);
 
-        await this.replaySessionHistory(params.sessionId);
+        await this.replaySessionHistory(params.sessionId, signal);
 
         // Send available commands after replay so it doesn't interleave with history
         setTimeout(() => {
@@ -4977,9 +4974,9 @@ export class ClaudeAcpAgent {
         return { configOptions: session.configOptions };
     }
 
-    private async replaySessionHistory(sessionId: string): Promise<void> {
+    private async replaySessionHistory(sessionId: string, signal: AbortSignal): Promise<void> {
         const toolUseCache: ToolUseCache = {};
-        const messages = await getSessionMessages(sessionId);
+        const messages = await getEnvironmentSessionMessages(this.environment, sessionId, signal);
         const forwardSubagentText =
             this.sessions[sessionId]?.forwardSubagentText ?? supportsSubagentTranscript(this.clientCapabilities);
 
@@ -5819,7 +5816,6 @@ export class ClaudeAcpAgent {
         params: NewSessionRequest,
         creationOpts: {
             resume?: string;
-            forkSession?: boolean;
             publicSessionId?: string;
             permissionMode?: PermissionMode;
         } = {},
@@ -5831,13 +5827,10 @@ export class ClaudeAcpAgent {
         // launch" error from the SDK (see issue #749).
         await this.validateCwd(params.cwd);
 
-        // We want to create a new session id unless it is resume,
-        // but not resume + forkSession.
+        // We want to create a new session id unless it is resume.
         let sessionId: string;
         if (creationOpts.publicSessionId) {
             sessionId = creationOpts.publicSessionId;
-        } else if (creationOpts.forkSession) {
-            sessionId = randomUUID();
         } else if (creationOpts.resume) {
             sessionId = creationOpts.resume;
         } else {
@@ -6113,7 +6106,6 @@ export class ClaudeAcpAgent {
                 ],
             },
             ...(creationOpts.resume !== undefined && { resume: creationOpts.resume }),
-            ...(creationOpts.forkSession !== undefined && { forkSession: creationOpts.forkSession }),
             abortController,
         };
 
@@ -6127,7 +6119,7 @@ export class ClaudeAcpAgent {
             ...acpAdditionalDirectories,
         ];
 
-        if (creationOpts?.resume === undefined || creationOpts?.forkSession) {
+        if (creationOpts?.resume === undefined) {
             // Set our own session id if not resuming an existing session.
             options.sessionId = creationOpts.publicSessionId ? randomUUID() : sessionId;
         }
@@ -8408,8 +8400,10 @@ export function createClaudeAcpApp(options: ClaudeAcpAppOptions = {}): ClaudeAcp
         })
         .onRequest(methods.agent.initialize, (ctx) => requiredAgent(agent).initialize(ctx.params))
         .onRequest(methods.agent.session.new, (ctx) => requiredAgent(agent).newSession(ctx.params))
-        .onRequest(methods.agent.session.load, (ctx) => requiredAgent(agent).loadSession(ctx.params))
-        .onRequest(methods.agent.session.fork, (ctx) => requiredAgent(agent).unstable_forkSession(ctx.params))
+        .onRequest(methods.agent.session.load, (ctx) => requiredAgent(agent).loadSession(ctx.params, ctx.signal))
+        .onRequest(methods.agent.session.fork, (ctx) =>
+            requiredAgent(agent).unstable_forkSession(ctx.params, ctx.signal),
+        )
         .onRequest(methods.agent.session.list, (ctx) => requiredAgent(agent).listSessions(ctx.params, ctx.signal))
         .onRequest(methods.agent.session.delete, (ctx) => requiredAgent(agent).deleteSession(ctx.params))
         .onRequest(methods.agent.session.resume, (ctx) => requiredAgent(agent).resumeSession(ctx.params))
