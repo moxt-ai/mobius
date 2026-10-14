@@ -74,14 +74,14 @@ async function loadHistoryPage(
             throw new AcpExecutionError("The Session reloaded while history was loading", {}, "session_reloaded");
         }
         sessionGenerationId = replay.sessionGenerationId;
-        const events = replay.events.map((event, index) => {
+        const events = replay.events.map(({ eventId, payload }, index) => {
             const position = replay.startPosition + index;
             return {
                 event: eventProjectionV2.event(
                     sessionId,
                     replay.sessionGenerationId,
-                    position,
-                    event,
+                    eventId,
+                    payload,
                     "1970-01-01T00:00:00.000Z",
                 ),
                 position,

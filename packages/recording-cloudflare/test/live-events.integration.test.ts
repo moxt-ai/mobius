@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import {
+    decodeSessionEventV2,
     decodeSessionRecordingDirectory,
     decodeSessionRecordingHistory,
     decodeSessionRecordingHistoryPage,
@@ -26,6 +27,7 @@ const event = {
     type: "acp",
     payload: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Live reply" } },
 };
+const historicalEvent = decodeSessionEventV2(event);
 function write(runtimeId = "runtime-live", envelope: unknown = { kind: "session.event.v2", events: [event] }): Request {
     return new Request("https://recording.internal/v1/session-events", {
         method: "POST",
@@ -43,7 +45,7 @@ function numberedEvents(count: number, start = 0) {
 }
 
 describe("Recording live V2 events", () => {
-    it("Given an event broadcast to browsers, When Recording receives the same V2 event, Then history retains its identity and payload unchanged", async () => {
+    it("Given an event broadcast to browsers, When Recording receives the live event, Then history retains its identity and payload without its position", async () => {
         expect((await worker.fetch(write(), env)).status).toBe(201);
         const response = await worker.fetch(
             new Request(
@@ -54,7 +56,7 @@ describe("Recording live V2 events", () => {
         expect(response.status).toBe(200);
         expect(decodeSessionRecordingHistory(await response.text())).toEqual({
             sessionId: event.sessionId,
-            events: [event],
+            events: [historicalEvent],
         });
     });
     it("Given a legacy event envelope, When a caller submits it, Then Recording rejects the retired contract", async () => {
@@ -280,7 +282,7 @@ it("Given a duplicate live frame, When Recording receives both broadcasts, Then 
         ),
         env,
     );
-    expect(decodeSessionRecordingHistory(await response.text()).events).toEqual([event, event]);
+    expect(decodeSessionRecordingHistory(await response.text()).events).toEqual([historicalEvent, historicalEvent]);
 });
 it("Given an invalid execution context, When submitted at the Recording boundary, Then it is rejected", async () => {
     const invalid = {
@@ -313,7 +315,7 @@ describe("Recording incremental reads", () => {
         const response = await worker.fetch(read("?after=3"), env);
         expect(response.status).toBe(200);
         const page = decodeSessionRecordingHistoryPage(await response.text());
-        expect(page.events.map((candidate) => candidate.position)).toEqual(["4", "5"]);
+        expect(page.events.map((candidate) => candidate.eventId)).toEqual(["event-4", "event-5"]);
         expect(page.nextCursor).toBe("v2:2:5");
         expect(page.tailCursor).toBe("v2:2:5");
         expect(page.generationReset).toBe(false);
@@ -330,7 +332,7 @@ describe("Recording incremental reads", () => {
         const response = await worker.fetch(read("?after=1&limit=2"), env);
         expect(response.status).toBe(200);
         const page = decodeSessionRecordingHistoryPage(await response.text());
-        expect(page.events.map((candidate) => candidate.position)).toEqual(["2", "3"]);
+        expect(page.events.map((candidate) => candidate.eventId)).toEqual(["event-2", "event-3"]);
         expect(page.nextCursor).toBe("v2:2:3");
         expect(page.tailCursor).toBe("v2:2:5");
         expect(page.truncated).toBe(true);
@@ -359,7 +361,7 @@ describe("Recording incremental reads", () => {
                 .status,
         ).toBe(201);
         const page = decodeSessionRecordingHistoryPage(await (await worker.fetch(read("?after=9"), env)).text());
-        expect(page.events.map((candidate) => candidate.position)).toEqual([]);
+        expect(page.events).toEqual([]);
         expect(page.tailCursor).toBe("v2:2:3");
     });
     it("Given a boundary batch that starts before the cursor, When only its later half is new, Then decoding drops the delivered prefix", async () => {
@@ -368,7 +370,7 @@ describe("Recording incremental reads", () => {
             (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: spanning }), env)).status,
         ).toBe(201);
         const page = decodeSessionRecordingHistoryPage(await (await worker.fetch(read("?after=1"), env)).text());
-        expect(page.events.map((candidate) => candidate.position)).toEqual(["2", "3"]);
+        expect(page.events.map((candidate) => candidate.eventId)).toEqual(["event-2", "event-3"]);
     });
     it("Given duplicate broadcasts of one batch, When a caller reads incrementally, Then the repeated position is skipped without hiding new events", async () => {
         const batch = { kind: "session.event.v2", events: numberedEvents(2, 0) };
