@@ -6,21 +6,25 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it } from "vitest";
 
-const sharedEvent = {
+const eventWithoutProvenance = {
     eventId: "event-generation-1-0000000000000001",
     payload: {
         content: { text: "Hello", type: "text" } as const,
         messageId: "message-1",
         sessionUpdate: "agent_message_chunk" as const,
     },
-    provenance: { kind: "original" } as const,
     recordedAt: "2026-10-14T00:00:00.000Z",
     sessionGenerationId: "generation-1",
     sessionId: "session-1",
     type: "acp" as const,
 };
+const sharedEvent = { ...eventWithoutProvenance, provenance: { kind: "original" } as const };
 
 describe("Session Event V2 contracts", () => {
+    it("Given a session event without provenance, When it crosses the protocol boundary, Then it is accepted", () => {
+        expect(decodeSessionEventV2(eventWithoutProvenance)).toEqual(eventWithoutProvenance);
+    });
+
     it("Given a historical event without a position, When it crosses the protocol boundary, Then it is accepted", () => {
         const event: SessionEventV2 = sharedEvent;
 

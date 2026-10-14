@@ -358,17 +358,13 @@ async function copyEventLogCommand(
         }
         const expected = operation === "import" ? sourceEvents : sourceEvents.slice(0, boundary + 1);
         const copied = await allEventsV2(service, target.sessionId);
-        const provenanceKind = operation === "import" ? "imported" : "forked";
         const matches =
             copied.length === expected.length &&
             copied.every(
                 (event, index) =>
                     JSON.stringify(event.payload) === JSON.stringify(expected[index]?.payload) &&
                     event.sessionId === target.sessionId &&
-                    event.eventId !== expected[index]?.eventId &&
-                    event.provenance.kind === provenanceKind &&
-                    event.provenance.sourceSessionId === source.sessionId &&
-                    event.provenance.sourceEventId === expected[index]?.eventId,
+                    event.eventId !== expected[index]?.eventId,
             );
         if (!matches) {
             throw new MiniClientError("event_log_mismatch", "The copied V2 event log does not match its source");
