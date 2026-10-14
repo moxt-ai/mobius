@@ -54,6 +54,7 @@ export interface PlatformSupport {
     readonly readProcessTable: () => Promise<readonly ProcessTableEntry[]>;
     readonly readProcessTableSynchronously: () => readonly ProcessTableEntry[];
     readonly processExists: (processId: number) => boolean;
+    readonly claudeCodeExecutablePaths: (environment: Readonly<NodeJS.ProcessEnv>) => readonly string[];
     readonly workBuddyExecutablePaths: (environment: Readonly<NodeJS.ProcessEnv>) => readonly string[];
     readonly openCodeArchives: Readonly<Partial<Record<NodeJS.Architecture, ArchiveRelease>>>;
     readonly grokDependencies: Readonly<Partial<Record<NodeJS.Architecture, NpmDependencyRelease>>>;

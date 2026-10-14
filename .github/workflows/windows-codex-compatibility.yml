@@ -1,4 +1,4 @@
-name: Windows latest Codex compatibility
+name: Windows latest Agent compatibility
 
 on:
   workflow_dispatch:
@@ -7,8 +7,8 @@ permissions:
   contents: read
 
 jobs:
-  codex:
-    name: Verify latest Codex on Windows
+  agents:
+    name: Verify latest Codex and Claude on Windows
     runs-on: windows-latest
     timeout-minutes: 30
     defaults:
@@ -40,11 +40,23 @@ jobs:
           "Mobius commit: $env:GITHUB_SHA" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
           New-Item -ItemType Directory -Path test-results -Force | Out-Null
           $version | Out-File -FilePath test-results/codex-version.txt -Encoding utf8
+      - name: Install latest native Claude Code
+        run: |
+          & ([scriptblock]::Create((Invoke-RestMethod https://claude.ai/install.ps1)))
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $claudePath = Join-Path $env:USERPROFILE '.local\bin\claude.exe'
+          $version = & $claudePath --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "MOBIUS_TEST_CLAUDE_PATH=$claudePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "Claude Code: $version" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          $version | Out-File -FilePath test-results/claude-version.txt -Encoding utf8
       - name: Build Mobius CLI
         run: pnpm --filter @moxt-ai/mobius build
-      - name: Verify real Codex through Mobius
+      - name: Verify real Agents through Mobius
         run: >-
           pnpm --filter @moxt-ai/mobius exec vitest run
+          tests/agents/windows-claude-discovery.integration.test.ts
+          tests/agents/claude-live-turn.integration.test.ts
           tests/agents/windows-codex-discovery.integration.test.ts
           tests/agents/codex-live-turn.integration.test.ts
           tests/agents/codex-native-recovery.integration.test.ts
@@ -60,6 +72,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: windows-latest-codex-${{ github.run_id }}-${{ github.run_attempt }}
+          name: windows-latest-agents-${{ github.run_id }}-${{ github.run_attempt }}
           path: test-results/
           if-no-files-found: warn

@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { mkdir, symlink } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import {
     decodeSessionEventV2,
     encodeSessionPermissionRespondCommand,
@@ -12,10 +14,21 @@ import { withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeAnthropicProvider } from "../support/llm/anthropic.ts";
 import { fakeProviderPrompts } from "../support/llm/scenarios.ts";
 
-test("Given the real Claude CLI without an external adapter, When two prompts execute through the daemon, Then the repository-owned ACP fork delivers the tool result and both streamed replies", async () => {
+test("Given native Claude is installed outside PATH, When two prompts execute through the daemon, Then discovery finds it and both streamed replies arrive", async () => {
     await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-6", "REAL_CLAUDE_REPLY");
     await using agent = await ClaudeFixture.create(provider, { requireAdapter: false });
-    await withRealDaemon(new ClaudeCodeAgentSpecification(), agent.environment, async (peer) => {
+    const home = agent.environment["HOME"];
+    if (home === undefined) {
+        throw new Error("The Claude fixture home is unavailable");
+    }
+    const nativeDirectory = join(home, ".local", "bin");
+    await mkdir(nativeDirectory, { recursive: true });
+    await symlink(agent.executable, join(nativeDirectory, "claude"));
+    const environment = Object.fromEntries(
+        Object.entries(agent.environment).filter(([name]) => name !== "MOBIUS_CLAUDE_PATH"),
+    );
+    environment["PATH"] = "/usr/bin:/bin";
+    await withRealDaemon(new ClaudeCodeAgentSpecification(), environment, async (peer) => {
         for (const turn of [0, 1]) {
             const prompt =
                 turn === 0 ? fakeProviderPrompts.successfulTool : "Continue the conversation with another reply";
@@ -65,7 +78,8 @@ test("Given the real Claude CLI without an external adapter, When two prompts ex
                     event.payload.sessionUpdate === "tool_call_update" &&
                     event.payload.status === "completed"
                 ) {
-                    expect(JSON.stringify(event.payload.content)).toContain(peer.workspace);
+                    const workspaceTail = `${basename(dirname(peer.workspace))}/${basename(peer.workspace)}`;
+                    expect(JSON.stringify(event.payload.content).replaceAll("\\", "/")).toContain(workspaceTail);
                     toolSucceeded = true;
                 } else if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.failed") {
                     throw new Error(JSON.stringify(event));

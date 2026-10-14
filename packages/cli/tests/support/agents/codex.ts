@@ -122,7 +122,7 @@ child.once("exit", (code) => process.exit(code ?? 1));
     }
 
     async [Symbol.asyncDispose](): Promise<void> {
-        await rm(this.#directory, { force: true, recursive: true });
+        await rm(this.#directory, { force: true, maxRetries: 5, recursive: true, retryDelay: 100 });
     }
 }
 

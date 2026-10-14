@@ -17,6 +17,14 @@ export const macosPlatform: PlatformSupport = {
     readProcessTable: () => readProcessTableWithPs("/bin/ps"),
     readProcessTableSynchronously: () => [],
     processExists,
+    claudeCodeExecutablePaths: (environment) => {
+        const paths = ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"];
+        const homeDirectory = environment["HOME"];
+        if (homeDirectory !== undefined && isAbsolute(homeDirectory)) {
+            paths.unshift(join(homeDirectory, ".local", "bin", "claude"));
+        }
+        return paths;
+    },
     workBuddyExecutablePaths: (environment) => {
         const paths = [join("/Applications", ...WORKBUDDY_MACOS_EXECUTABLE_PATH)];
         const homeDirectory = environment["HOME"];
