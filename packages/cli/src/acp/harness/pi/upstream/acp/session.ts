@@ -14,6 +14,7 @@ import {
     type PiRpcEvent,
     PiRpcProcess,
     PiRpcSpawnError,
+    type PiSessionOrigin,
     type PiSessionStats,
     SESSION_STATS_TIMEOUT_MS,
 } from "../pi-rpc/process.js";
@@ -35,12 +36,13 @@ import {
 import { toolResultToText } from "./translate/pi-tools.js";
 
 type SessionCreateParams = {
-    cwd: string;
-    environment: Readonly<NodeJS.ProcessEnv>;
-    mcpServers: McpServer[];
-    conn: PiAcpClient;
-    fileCommands?: import("./slash-commands.js").FileSlashCommand[];
-    piCommand?: string;
+    readonly cwd: string;
+    readonly environment: Readonly<NodeJS.ProcessEnv>;
+    readonly mcpServers: McpServer[];
+    readonly conn: PiAcpClient;
+    readonly fileCommands?: import("./slash-commands.js").FileSlashCommand[];
+    readonly piCommand?: string;
+    readonly origin: Extract<PiSessionOrigin, { readonly kind: "new" | "fork" }>;
 };
 
 export type StopReason = "end_turn" | "cancelled" | "error";
@@ -242,6 +244,7 @@ export class SessionManager {
             proc = await PiRpcProcess.spawn({
                 cwd: params.cwd,
                 environment: params.environment,
+                origin: params.origin,
                 piCommand: params.piCommand,
             });
         } catch (e) {
@@ -292,7 +295,7 @@ export class SessionManager {
      */
     getOrCreate(
         sessionId: string,
-        params: Omit<SessionCreateParams, "environment" | "piCommand"> & { proc: PiRpcProcess },
+        params: Omit<SessionCreateParams, "environment" | "piCommand" | "origin"> & { proc: PiRpcProcess },
     ): PiAcpSession {
         const existing = this.sessions.get(sessionId);
         if (existing) {
