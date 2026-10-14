@@ -35,7 +35,6 @@ function promptContent(command: SessionPromptCommand): readonly ContentBlockV2[]
     }
     for (const image of command.images) {
         content.push({
-            _meta: { mobius: { name: image.name } },
             data: image.data,
             mimeType: image.mimeType,
             type: "image",
