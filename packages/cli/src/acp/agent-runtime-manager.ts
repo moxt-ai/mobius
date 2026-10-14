@@ -788,7 +788,14 @@ export class AgentRuntimeManager {
                     if (history.status === "unavailable") {
                         throw new AcpExecutionError(history.cause.message, {}, history.cause.code);
                     }
-                    return nativeHistoryEventsV2(nativeSessionId, history, eventLimit, cursor);
+                    return nativeHistoryEventsV2(
+                        options.sessionId,
+                        nativeSessionId,
+                        history,
+                        eventLimit,
+                        cursor,
+                        this.#store.eventsV2,
+                    );
                 }
                 return await this.#queryProcesses.previewEventsV2(options, nativeSessionId, eventLimit, cursor);
             } finally {

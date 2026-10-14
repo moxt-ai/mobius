@@ -27,6 +27,10 @@ describe("Session Event V2 contracts", () => {
         expect(decodeSessionEventV2(event)).toEqual(event);
     });
 
+    it("Given a historical event with a legacy position, When it crosses the protocol boundary, Then the position is omitted", () => {
+        expect(decodeSessionEventV2({ ...sharedEvent, position: "1" })).toEqual(sharedEvent);
+    });
+
     it("Given a tool call with opaque metadata, When it crosses the recorded event boundary, Then the metadata is omitted", () => {
         const event = {
             ...sharedEvent,

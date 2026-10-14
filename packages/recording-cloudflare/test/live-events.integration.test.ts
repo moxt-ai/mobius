@@ -340,7 +340,7 @@ describe("Recording incremental reads", () => {
         const response = await worker.fetch(read("?after=1&limit=2"), env);
         expect(response.status).toBe(200);
         const page = decodeSessionRecordingHistoryPage(await response.text());
-        expect(page.events.map((candidate) => candidate.position)).toEqual(["2", "3"]);
+        expect(page.events.map((candidate) => candidate.eventId)).toEqual(["event-2", "event-3"]);
         expect(page.nextCursor).toBe("v2:2:3");
         expect(page.tailCursor).toBe("v2:2:5");
         expect(page.truncated).toBe(true);
@@ -369,7 +369,7 @@ describe("Recording incremental reads", () => {
                 .status,
         ).toBe(201);
         const page = decodeSessionRecordingHistoryPage(await (await worker.fetch(read("?after=9"), env)).text());
-        expect(page.events.map((candidate) => candidate.position)).toEqual([]);
+        expect(page.events).toEqual([]);
         expect(page.tailCursor).toBe("v2:2:3");
     });
     it("Given a boundary batch that starts before the cursor, When only its later half is new, Then decoding drops the delivered prefix", async () => {
@@ -378,7 +378,7 @@ describe("Recording incremental reads", () => {
             (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: spanning }), env)).status,
         ).toBe(201);
         const page = decodeSessionRecordingHistoryPage(await (await worker.fetch(read("?after=1"), env)).text());
-        expect(page.events.map((candidate) => candidate.position)).toEqual(["2", "3"]);
+        expect(page.events.map((candidate) => candidate.eventId)).toEqual(["event-2", "event-3"]);
     });
     it("Given duplicate broadcasts of one batch, When a caller reads incrementally, Then the repeated position is skipped without hiding new events", async () => {
         const batch = { kind: "session.event.v2", events: numberedEvents(2, 0) };
