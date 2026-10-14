@@ -1103,6 +1103,15 @@ describe.sequential("Platform Session-only boundary", () => {
                 sessionId,
                 type: "acp" as const,
             };
+            const historicalEvent = {
+                eventId: rawEvent.eventId,
+                payload: rawEvent.payload,
+                provenance: rawEvent.provenance,
+                recordedAt: rawEvent.recordedAt,
+                sessionGenerationId: rawEvent.sessionGenerationId,
+                sessionId: rawEvent.sessionId,
+                type: rawEvent.type,
+            };
             const secondRawEvent = { ...rawEvent, eventId: "event-v2-2", position: "2" };
             daemon.send(encodeSessionEventEnvelopeV2({ events: [rawEvent, secondRawEvent], kind: "session.event.v2" }));
             expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "session.event.v2" });
@@ -1166,7 +1175,7 @@ describe.sequential("Platform Session-only boundary", () => {
             daemon.send(historyPage);
             expect(await responseJson(await historyResponse, 200)).toEqual({
                 sessionGenerationId: "session-generation-1",
-                events: [rawEvent],
+                events: [historicalEvent],
                 nextCursor: null,
                 tailCursor: rawEvent.eventId,
                 truncated: false,
@@ -1206,7 +1215,7 @@ describe.sequential("Platform Session-only boundary", () => {
             expect(await responseJson(await previewHistoryResponse, 200)).toEqual({
                 events: {
                     sessionGenerationId: "native-session-generation-1",
-                    events: [rawEvent],
+                    events: [historicalEvent],
                     nextCursor: null,
                     tailCursor: rawEvent.eventId,
                     truncated: false,
