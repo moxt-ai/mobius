@@ -218,7 +218,7 @@ class ControlledAgentState {
                 sessionId: active.sessionId,
                 update: {
                     content: { text: output.text, type: "text" },
-                    messageId: output.messageId ?? id,
+                    messageId: `assistant-${active.turnNumber.toString()}`,
                     sessionUpdate: "agent_message_chunk",
                 },
             };
@@ -260,7 +260,7 @@ class ControlledAgentState {
                 sessionId: active.sessionId,
                 update: {
                     content: { text: output.output, type: "text" },
-                    messageId: output.messageId ?? id,
+                    messageId: `reasoning-${active.turnNumber.toString()}`,
                     sessionUpdate: "agent_thought_chunk",
                 },
             };
