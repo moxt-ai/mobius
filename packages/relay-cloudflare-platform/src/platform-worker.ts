@@ -16,6 +16,8 @@ import {
     type Identifier,
     isIdentifier,
     MOBIUS_API_PREFIX,
+    ProtocolMessageError,
+    type SessionPromptCommand,
 } from "@moxt-ai/mobius-protocol";
 import {
     acceptWebSocketHttpTransport,
@@ -404,7 +406,13 @@ export function createPlatformApplication(
                 context.req.raw.signal,
             );
             const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
-            const body = v.parse(sessionPromptBody, await context.req.json());
+            const parsed = v.safeParse(sessionPromptBody, await context.req.json());
+            if (!parsed.success) {
+                throw new PairingDirectoryError("invalid_request", "The Turn request is invalid", {
+                    cause: new v.ValiError(parsed.issues),
+                });
+            }
+            const body = parsed.output;
             const identity =
                 body.agentId === undefined || body.directoryId === undefined
                     ? await runtimeSessionIdentity(
@@ -413,10 +421,9 @@ export function createPlatformApplication(
                           context.req.raw.signal,
                       )
                     : { agentId: body.agentId, directoryId: body.directoryId };
-            const accepted = await context.var.relay.services.runtimePairings.requestProjectScopeControl(
-                new ProjectScope(access.projectId),
-                access.runtimeId,
-                decodeSessionPromptCommand(
+            let command: SessionPromptCommand;
+            try {
+                command = decodeSessionPromptCommand(
                     JSON.stringify({
                         additionalDirectoryIds: body.additionalDirectoryIds,
                         agentId: identity.agentId,
@@ -432,7 +439,18 @@ export function createPlatformApplication(
                         sessionId,
                         targetCommandId: body.targetCommandId,
                     }),
-                ),
+                );
+            } catch (error) {
+                // The caller supplied this prompt, so protocol rejection is a client error, not a retryable outage.
+                if (error instanceof ProtocolMessageError) {
+                    throw new PairingDirectoryError("invalid_request", "The Turn request is invalid", { cause: error });
+                }
+                throw error;
+            }
+            const accepted = await context.var.relay.services.runtimePairings.requestProjectScopeControl(
+                new ProjectScope(access.projectId),
+                access.runtimeId,
+                command,
                 context.req.raw.signal,
             );
             if (accepted.kind !== "session.started" && accepted.kind !== "session.queued") {

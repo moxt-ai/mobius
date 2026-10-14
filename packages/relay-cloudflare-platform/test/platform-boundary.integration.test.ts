@@ -1631,3 +1631,211 @@ describe.sequential("Platform Recording policy configuration", () => {
         await recorded.body?.cancel();
     });
 });
+
+describe.sequential("Platform Turn submission", () => {
+    it("Given a linked Runtime, When Chat submits a first Turn longer than 10,000 characters or an invalid Turn, Then the long Turn reaches the Runtime and the invalid Turn is rejected as a client error", async () => {
+        const worker = createTestMobiusPlatformApp(
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
+            createPlatformGateways,
+        );
+        const environment = bindings();
+        const tenants = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/platform/tenants`, {
+                    headers: developerHeaders(),
+                }),
+                environment,
+            ),
+            200,
+        );
+        const tenantValues = tenants["tenants"];
+        if (!Array.isArray(tenantValues) || tenantValues.length === 0) {
+            throw new Error("Expected a Platform tenant");
+        }
+        const app = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps`, {
+                    body: JSON.stringify({
+                        displayName: "Long prompt App",
+                        tenantId: text(record(tenantValues[0]), "tenantId"),
+                    }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const appCredential = text(record(app["defaultCredential"]), "credential");
+        const project = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${text(app, "appId")}/projects`, {
+                    body: JSON.stringify({
+                        displayName: "Long prompt Project",
+                        idempotencyKey: "long-prompt-project",
+                        locationHint: "apac",
+                    }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const projectId = text(project, "projectId");
+        const pairing = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtime-pairings`, {
+                    body: JSON.stringify({ idempotencyKey: "long-prompt-runtime" }),
+                    headers: credentialHeaders(appCredential),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const claimed = await responseJson(
+            await worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtime-pairings/${text(pairing, "pairingId")}/redeem`,
+                    {
+                        body: JSON.stringify({
+                            agents: readyAgents,
+                            installableAgents: [],
+                            machineName: "Long prompt Runtime",
+                            pairingCode: text(pairing, "pairingCode"),
+                            workspaceName: "long-prompt-workspace",
+                        }),
+                        headers: { "content-type": "application/json" },
+                        method: "POST",
+                    },
+                ),
+                environment,
+            ),
+            200,
+        );
+        const runtimeId = text(claimed, "runtimeId");
+        const sessionId = "long-prompt-session";
+        const daemonResponse = await worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect?liveness=1`, {
+                headers: { authorization: `Bearer ${text(claimed, "runtimeCredential")}`, Upgrade: "websocket" },
+            }),
+            environment,
+        );
+        if (daemonResponse.webSocket === null) {
+            throw new Error("Expected the Runtime socket");
+        }
+        const daemon = daemonResponse.webSocket;
+        const daemonMessages = new SocketMessages(daemon);
+        daemon.accept();
+        try {
+            expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("runtime.liveness.ready");
+            const sessionAccess = await responseJson(
+                await worker.fetch(
+                    new Request(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/access-credentials`,
+                        {
+                            body: JSON.stringify({ expiresInSeconds: 900, runtimeId }),
+                            headers: credentialHeaders(appCredential),
+                            method: "POST",
+                        },
+                    ),
+                    environment,
+                ),
+                201,
+            );
+            const submitTurn = (idempotencyKey: string, content: string, images: readonly unknown[]) =>
+                worker.fetch(
+                    new Request(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/turns`,
+                        {
+                            body: JSON.stringify({
+                                additionalDirectoryIds: [],
+                                agentId: "codex",
+                                content,
+                                directoryId: "root",
+                                idempotencyKey,
+                                images,
+                                resources: [],
+                            }),
+                            headers: credentialHeaders(text(sessionAccess, "credential")),
+                            method: "POST",
+                        },
+                    ),
+                    environment,
+                );
+
+            // First Turns carry the teammate's instructions ahead of the user's message.
+            const longPrompt = `${"instruction ".repeat(2_000)}\n\nsummarize the workspace`;
+            expect(longPrompt.length).toBeGreaterThan(20_000);
+            const longTurn = submitTurn("long-first-turn", longPrompt, []);
+            const delivered = decodeServiceToDaemonMessage(await daemonMessages.next());
+            if (delivered.kind !== "session.prompt") {
+                throw new Error("Expected the long Turn to reach the Runtime");
+            }
+            expect(delivered.prompt).toBe(longPrompt);
+            daemon.send(
+                encodeSessionEventEnvelopeV2({
+                    kind: "session.event.v2",
+                    events: [
+                        {
+                            eventId: "long-first-started",
+                            position: "1",
+                            provenance: { kind: "original" },
+                            recordedAt: "2026-09-18T00:00:00.000Z",
+                            sessionGenerationId: "session-generation-1",
+                            sessionId,
+                            type: "lifecycle-metadata",
+                            payload: {
+                                attemptId: "long-first-attempt",
+                                commandId: delivered.commandId,
+                                epoch: "long-prompt-epoch",
+                                kind: "prompt.started",
+                            },
+                        },
+                    ],
+                }),
+            );
+            expect(await responseJson(await longTurn, 200)).toMatchObject({
+                state: { kind: "running" },
+                turnId: "long-first-turn",
+            });
+
+            expect(
+                await responseJson(await submitTurn("invalid-image-turn", "describe this", [{ type: "image" }]), 400),
+            ).toMatchObject({ error: { code: "invalid_request" } });
+            expect(await responseJson(await submitTurn("oversized-turn", "x".repeat(100_001), []), 400)).toMatchObject({
+                error: { code: "invalid_request" },
+            });
+            expect(
+                await responseJson(
+                    await worker.fetch(
+                        new Request(
+                            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtimes/${runtimeId}/sessions/${sessionId}/turns`,
+                            {
+                                body: JSON.stringify({
+                                    additionalDirectoryIds: [],
+                                    agentId: "codex",
+                                    content: "describe this",
+                                    directoryId: "root",
+                                    disposition: "reject",
+                                    idempotencyKey: "invalid-runtime-turn",
+                                    images: [{ type: "image" }],
+                                    resources: [],
+                                    sessionConfigurations: [],
+                                    targetCommandId: "",
+                                }),
+                                headers: credentialHeaders(appCredential),
+                                method: "POST",
+                            },
+                        ),
+                        environment,
+                    ),
+                    400,
+                ),
+            ).toMatchObject({ error: { code: "invalid_request" } });
+        } finally {
+            daemon.close();
+        }
+    });
+});
