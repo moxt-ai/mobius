@@ -70,11 +70,8 @@ const boundedJsonSchema = z.unknown().superRefine((value, context) => {
         context.addIssue({ code: "custom", message: issue });
     }
 });
-const metadataSchema = z.record(z.string().max(255), boundedJsonSchema).readonly();
-const optionalMetadata = metadataSchema.nullable().optional();
 const annotationsSchema = z
     .object({
-        _meta: optionalMetadata,
         audience: z
             .array(z.enum(["assistant", "user"]))
             .max(2)
@@ -85,7 +82,7 @@ const annotationsSchema = z
         priority: z.number().finite().nullable().optional(),
     })
     .readonly();
-const contentFields = { _meta: optionalMetadata, annotations: annotationsSchema.nullable().optional() };
+const contentFields = { annotations: annotationsSchema.nullable().optional() };
 const textContentSchema = z.object({ ...contentFields, text: boundedString, type: z.literal("text") }).readonly();
 const imageContentSchema = z
     .object({
@@ -143,7 +140,6 @@ const resourceLinkSchema = z
     .readonly();
 const textResourceSchema = z
     .object({
-        _meta: optionalMetadata,
         mimeType: shortString.nullable().optional(),
         text: boundedString,
         uri: boundedString,
@@ -151,7 +147,6 @@ const textResourceSchema = z
     .readonly();
 const blobResourceSchema = z
     .object({
-        _meta: optionalMetadata,
         blob: boundedString,
         mimeType: shortString.nullable().optional(),
         uri: boundedString,
@@ -181,21 +176,19 @@ export type ExternalAudioContentBlockV2 = z.infer<typeof externalAudioContentSch
 export type ExternalResourceContentBlockV2 = z.infer<typeof externalResourceContentSchema>;
 
 const toolCallContentSchema = z.discriminatedUnion("type", [
-    z.object({ _meta: optionalMetadata, content: contentBlockV2Schema, type: z.literal("content") }).readonly(),
+    z.object({ content: contentBlockV2Schema, type: z.literal("content") }).readonly(),
     z
         .object({
-            _meta: optionalMetadata,
             newText: boundedString,
             oldText: boundedString.nullable().optional(),
             path: boundedString,
             type: z.literal("diff"),
         })
         .readonly(),
-    z.object({ _meta: optionalMetadata, terminalId: shortString, type: z.literal("terminal") }).readonly(),
+    z.object({ terminalId: shortString, type: z.literal("terminal") }).readonly(),
 ]);
 const toolCallLocationSchema = z
     .object({
-        _meta: optionalMetadata,
         line: z.number().int().nonnegative().safe().nullable().optional(),
         path: boundedString,
     })
@@ -214,7 +207,6 @@ const toolKindSchema = z.enum([
 ]);
 const toolStatusSchema = z.enum(["pending", "in_progress", "completed", "failed"]);
 const toolPatchFields = {
-    _meta: optionalMetadata,
     content: z.array(toolCallContentSchema).max(MAX_COLLECTION_SIZE).readonly().nullable().optional(),
     kind: toolKindSchema.nullable().optional(),
     locations: z.array(toolCallLocationSchema).max(MAX_COLLECTION_SIZE).readonly().nullable().optional(),
@@ -226,7 +218,6 @@ const toolPatchFields = {
 };
 const planEntrySchema = z
     .object({
-        _meta: optionalMetadata,
         content: boundedString,
         priority: z.enum(["high", "medium", "low"]),
         status: z.enum(["pending", "in_progress", "completed"]),
@@ -235,16 +226,14 @@ const planEntrySchema = z
 const planContentSchema = z.discriminatedUnion("type", [
     z
         .object({
-            _meta: optionalMetadata,
             entries: z.array(planEntrySchema).max(MAX_COLLECTION_SIZE).readonly(),
             planId: shortString,
             type: z.literal("items"),
         })
         .readonly(),
-    z.object({ _meta: optionalMetadata, planId: shortString, type: z.literal("file"), uri: boundedString }).readonly(),
+    z.object({ planId: shortString, type: z.literal("file"), uri: boundedString }).readonly(),
     z
         .object({
-            _meta: optionalMetadata,
             content: boundedString,
             planId: shortString,
             type: z.literal("markdown"),
@@ -253,15 +242,13 @@ const planContentSchema = z.discriminatedUnion("type", [
 ]);
 const commandSchema = z
     .object({
-        _meta: optionalMetadata,
         description: boundedString,
-        input: z.object({ _meta: optionalMetadata, hint: boundedString }).readonly().nullable().optional(),
+        input: z.object({ hint: boundedString }).readonly().nullable().optional(),
         name: shortString,
     })
     .readonly();
 const configSelectOptionSchema = z
     .object({
-        _meta: optionalMetadata,
         description: boundedString.nullable().optional(),
         name: shortString,
         value: shortString,
@@ -269,14 +256,12 @@ const configSelectOptionSchema = z
     .readonly();
 const configSelectGroupSchema = z
     .object({
-        _meta: optionalMetadata,
         group: shortString,
         name: shortString,
         options: z.array(configSelectOptionSchema).max(MAX_COLLECTION_SIZE).readonly(),
     })
     .readonly();
 const configBaseFields = {
-    _meta: optionalMetadata,
     category: shortString.nullable().optional(),
     description: boundedString.nullable().optional(),
     id: shortString,
@@ -297,7 +282,6 @@ const sessionConfigOptionSchema = z.discriminatedUnion("type", [
     z.object({ ...configBaseFields, currentValue: z.boolean(), type: z.literal("boolean") }).readonly(),
 ]);
 const contentChunkFields = {
-    _meta: optionalMetadata,
     content: contentBlockV2Schema,
     messageId: shortString.nullable().optional(),
 };
@@ -308,7 +292,6 @@ export const acpSessionUpdateV2Schema = z.discriminatedUnion("sessionUpdate", [
     z.object({ ...contentChunkFields, sessionUpdate: z.literal("agent_thought_chunk") }).readonly(),
     z
         .object({
-            _meta: optionalMetadata,
             content: z.array(toolCallContentSchema).max(MAX_COLLECTION_SIZE).readonly().optional(),
             kind: toolKindSchema.optional(),
             locations: z.array(toolCallLocationSchema).max(MAX_COLLECTION_SIZE).readonly().optional(),
@@ -324,37 +307,32 @@ export const acpSessionUpdateV2Schema = z.discriminatedUnion("sessionUpdate", [
     z.object({ ...toolPatchFields, sessionUpdate: z.literal("tool_call_update"), toolCallId: shortString }).readonly(),
     z
         .object({
-            _meta: optionalMetadata,
             entries: z.array(planEntrySchema).max(MAX_COLLECTION_SIZE).readonly(),
             sessionUpdate: z.literal("plan"),
         })
         .readonly(),
-    z.object({ _meta: optionalMetadata, plan: planContentSchema, sessionUpdate: z.literal("plan_update") }).readonly(),
-    z.object({ _meta: optionalMetadata, planId: shortString, sessionUpdate: z.literal("plan_removed") }).readonly(),
+    z.object({ plan: planContentSchema, sessionUpdate: z.literal("plan_update") }).readonly(),
+    z.object({ planId: shortString, sessionUpdate: z.literal("plan_removed") }).readonly(),
     z
         .object({
-            _meta: optionalMetadata,
             availableCommands: z.array(commandSchema).max(MAX_COLLECTION_SIZE).readonly(),
             sessionUpdate: z.literal("available_commands_update"),
         })
         .readonly(),
     z
         .object({
-            _meta: optionalMetadata,
             currentModeId: shortString,
             sessionUpdate: z.literal("current_mode_update"),
         })
         .readonly(),
     z
         .object({
-            _meta: optionalMetadata,
             configOptions: z.array(sessionConfigOptionSchema).max(MAX_COLLECTION_SIZE).readonly(),
             sessionUpdate: z.literal("config_option_update"),
         })
         .readonly(),
     z
         .object({
-            _meta: optionalMetadata,
             sessionUpdate: z.literal("session_info_update"),
             title: boundedString.nullable().optional(),
             updatedAt: shortString.nullable().optional(),
@@ -362,9 +340,8 @@ export const acpSessionUpdateV2Schema = z.discriminatedUnion("sessionUpdate", [
         .readonly(),
     z
         .object({
-            _meta: optionalMetadata,
             cost: z
-                .object({ _meta: optionalMetadata, amount: z.number().finite(), currency: z.string().max(16) })
+                .object({ amount: z.number().finite(), currency: z.string().max(16) })
                 .readonly()
                 .nullable()
                 .optional(),
@@ -375,7 +352,6 @@ export const acpSessionUpdateV2Schema = z.discriminatedUnion("sessionUpdate", [
         .readonly(),
     z
         .object({
-            _meta: optionalMetadata,
             compactionId: shortString,
             error: boundedString.nullable().optional(),
             sessionUpdate: z.literal("compaction_update"),
@@ -385,7 +361,6 @@ export const acpSessionUpdateV2Schema = z.discriminatedUnion("sessionUpdate", [
         .readonly(),
     z
         .object({
-            _meta: optionalMetadata,
             compactionId: shortString,
             content: contentBlockV2Schema,
             sessionUpdate: z.literal("compaction_summary_chunk"),
@@ -491,12 +466,13 @@ const sharedSessionEventFieldsV2 = {
     sessionGenerationId: identifier,
     sessionId: identifier,
 };
+const sessionEventFieldsV2 = { ...sharedSessionEventFieldsV2, position: positionSchema.optional() };
 const sessionLiveEventFieldsV2 = { ...sharedSessionEventFieldsV2, position: positionSchema };
 export const sessionEventV2Schema = z.discriminatedUnion("type", [
-    z.object({ ...sharedSessionEventFieldsV2, payload: acpSessionUpdateV2Schema, type: z.literal("acp") }).readonly(),
+    z.object({ ...sessionEventFieldsV2, payload: acpSessionUpdateV2Schema, type: z.literal("acp") }).readonly(),
     z
         .object({
-            ...sharedSessionEventFieldsV2,
+            ...sessionEventFieldsV2,
             payload: lifecycleMetadataV2Schema,
             type: z.literal("lifecycle-metadata"),
         })
