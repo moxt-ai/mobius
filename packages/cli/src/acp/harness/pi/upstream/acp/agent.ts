@@ -7,6 +7,8 @@ import {
     type CancelNotification,
     type DeleteSessionRequest,
     type DeleteSessionResponse,
+    type ForkSessionRequest,
+    type ForkSessionResponse,
     type InitializeRequest,
     type InitializeResponse,
     type ListSessionsRequest,
@@ -210,7 +212,7 @@ export class PiAcpAgent {
             try {
                 proc = await PiRpcProcess.spawn({
                     cwd,
-                    sessionPath: stored.sessionFile,
+                    origin: { kind: "load", sessionPath: stored.sessionFile },
                     piCommand: this.environment.PI_ACP_PI_COMMAND,
                     environment: this.environment,
                 });
@@ -276,6 +278,7 @@ export class PiAcpAgent {
                     // Enables a native session picker in clients that support it.
                     list: {},
                     delete: {},
+                    fork: {},
                 },
             },
         };
@@ -294,11 +297,12 @@ export class PiAcpAgent {
         // Pi doesn't support mcpServers, but we accept and store.
         const session = await this.sessions.create({
             cwd: params.cwd,
-            mcpServers: params.mcpServers,
+            mcpServers: params.mcpServers ?? [],
             conn: this.conn,
             fileCommands,
             piCommand: this.environment.PI_ACP_PI_COMMAND,
             environment: this.environment,
+            origin: { kind: "new" },
         });
 
         // Fetch state + models once (parallel) to reduce startup latency.
@@ -986,6 +990,80 @@ export class PiAcpAgent {
         const nextCursor = start + PAGE_SIZE < filtered.length ? String(start + PAGE_SIZE) : null;
 
         return { sessions, nextCursor, _meta: {} };
+    }
+
+    async forkSession(params: ForkSessionRequest): Promise<ForkSessionResponse> {
+        if (!isAbsolute(params.cwd)) {
+            throw RequestError.invalidParams(`cwd must be an absolute path: ${params.cwd}`);
+        }
+
+        const source = this.findStoredSession(params.sessionId);
+        if (!source) {
+            throw RequestError.invalidParams(`Unknown sessionId: ${params.sessionId}`);
+        }
+
+        this.lastSessionCwd = params.cwd;
+        const fileCommands = loadSlashCommands(params.cwd, this.environment);
+        const enableSkillCommands = getEnableSkillCommands(params.cwd, this.environment);
+        const session = await this.sessions.create({
+            cwd: params.cwd,
+            mcpServers: params.mcpServers ?? [],
+            conn: this.conn,
+            fileCommands,
+            piCommand: this.environment.PI_ACP_PI_COMMAND,
+            environment: this.environment,
+            origin: { kind: "fork", sessionPath: source.sessionFile },
+        });
+        const proc = session.proc;
+        let configuration: Awaited<ReturnType<typeof getSessionConfiguration>>;
+        try {
+            configuration = await getSessionConfiguration(proc);
+        } catch (cause) {
+            let state: unknown = null;
+            try {
+                state = await proc.getState();
+            } catch {
+                // The configuration failure remains the primary error.
+            }
+            this.cleanupFailedNewSession(session.sessionId, state);
+            throw cause;
+        }
+        const { configOptions, modes } = configuration;
+
+        this.sessions.closeAllExcept(session.sessionId);
+        setTimeout(() => {
+            void (async () => {
+                await session.publishContextUsage();
+                try {
+                    const pi = await proc.getCommands();
+                    const { commands } = toAvailableCommandsFromPiGetCommands(pi, {
+                        enableSkillCommands,
+                        includeExtensionCommands: false,
+                    });
+                    await this.conn.sessionUpdate({
+                        sessionId: session.sessionId,
+                        update: {
+                            sessionUpdate: "available_commands_update",
+                            availableCommands: mergeCommands(commands, builtinAvailableCommands()),
+                        },
+                    });
+                    return;
+                } catch {
+                    // Fall back to file-based prompt templates.
+                }
+                await this.conn.sessionUpdate({
+                    sessionId: session.sessionId,
+                    update: {
+                        sessionUpdate: "available_commands_update",
+                        availableCommands: mergeCommands(toAvailableCommands(fileCommands), builtinAvailableCommands()),
+                    },
+                });
+            })().catch(() => {
+                // Session setup notifications are best-effort; the client or Pi process may close first.
+            });
+        }, 0);
+
+        return { sessionId: session.sessionId, configOptions, modes };
     }
 
     async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {

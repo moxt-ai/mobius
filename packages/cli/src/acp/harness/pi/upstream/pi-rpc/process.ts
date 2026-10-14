@@ -96,13 +96,17 @@ export type PiSessionStats = {
     contextUsage?: PiContextUsage | null;
 };
 
+export type PiSessionOrigin =
+    | { readonly kind: "new" }
+    | { readonly kind: "load"; readonly sessionPath: string }
+    | { readonly kind: "fork"; readonly sessionPath: string };
+
 type SpawnParams = {
-    cwd: string;
-    environment: Readonly<NodeJS.ProcessEnv>;
+    readonly cwd: string;
+    readonly environment: Readonly<NodeJS.ProcessEnv>;
     /** Optional override for `pi` executable name/path */
-    piCommand?: string;
-    /** If set, pi will persist the session to this exact file (via `--session <path>`). */
-    sessionPath?: string;
+    readonly piCommand?: string;
+    readonly origin: PiSessionOrigin;
 };
 
 export class PiRpcProcess {
@@ -176,8 +180,15 @@ export class PiRpcProcess {
         // Keep extensions + prompt templates enabled because ACP users may rely on them
         // (e.g. MCP extensions, prompt templates for workflows).
         const args = ["--mode", "rpc", "--no-themes"];
-        if (params.sessionPath) {
-            args.push("--session", params.sessionPath);
+        switch (params.origin.kind) {
+            case "new":
+                break;
+            case "load":
+                args.push("--session", params.origin.sessionPath);
+                break;
+            case "fork":
+                args.push("--fork", params.origin.sessionPath);
+                break;
         }
 
         // Windows cmd launchers need shell escaping; direct executables use native argv.
