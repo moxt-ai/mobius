@@ -11,10 +11,19 @@ export function createMobiusApplication(apiPrefix: string = MOBIUS_API_PREFIX) {
     return new Hono<RelayHttpEnvironment>()
         .basePath(parseMobiusApiPrefix(apiPrefix))
         .onError(rethrowHonoError)
+        .notFound(notFoundResponse)
         .route("/pairings", createPairingClaimRoutes())
         .route("/", createProjectRuntimePairingRoutes())
         .route("/v1", createProjectRuntimePairingRoutes())
         .route("/", createProjectRuntimeRoutes())
         .route("/v1", createProjectRuntimeRoutes())
         .route("/channels", createChannelRoutes());
+}
+
+/** Unmatched routes must carry a stable machine-readable code so SDK callers can branch on it. */
+export function notFoundResponse(): Response {
+    return Response.json(
+        { error: { code: "not_found", message: "The requested Mobius resource does not exist" } },
+        { status: 404 },
+    );
 }

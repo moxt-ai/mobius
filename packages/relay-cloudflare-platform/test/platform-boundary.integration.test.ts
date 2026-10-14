@@ -312,6 +312,26 @@ describe.sequential("Platform Session-only boundary", () => {
         expect(response.headers.get("access-control-allow-headers")).toContain("authorization");
     });
 
+    it("Given a Session route the Platform no longer serves, When an app requests pending interactions, Then the Platform answers with a typed JSON not_found error", async () => {
+        const worker = createTestMobiusPlatformApp(
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
+            createPlatformGateways,
+        );
+        const projectId = "prj_ap_01_abcdefghijklmnopqrstuvwx";
+
+        const response = await worker.fetch(
+            new Request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/local-session/interactions`,
+                { headers: { authorization: "Bearer app_credential" } },
+            ),
+            bindings(),
+        );
+
+        expect(response.status).toBe(404);
+        expect(response.headers.get("content-type")).toContain("application/json");
+        expect(await response.json()).toMatchObject({ error: { code: "not_found" } });
+    });
+
     it("Given a Platform developer, When it issues an AppCredential, Then Session permissions are accepted and retired Conversation permissions are rejected", async () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),

@@ -1,4 +1,4 @@
-export { createMobiusApplication } from "./app.ts";
+export { createMobiusApplication, notFoundResponse } from "./app.ts";
 export { createDurableObjectContext } from "./di/create-durable-object-context.ts";
 export type { RelayContext } from "./di/create-relay-dependencies.ts";
 export { createWorkerContext, type WorkerRuntimeGateways } from "./di/create-worker-context.ts";
