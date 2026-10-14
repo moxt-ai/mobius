@@ -4,12 +4,29 @@ import {
     type SessionLiveEventV2,
     type SessionRecordingWrite,
 } from "@moxt-ai/mobius-protocol";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, gt } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/durable-sqlite";
 import { sessionRecordingDurableObjectMigrations } from "../generated/session-recording-do-migrations.ts";
 import * as schema from "../schema/session-recording-do/index.ts";
 import { recordedSessionEvent, recordingMetadata } from "../schema/session-recording-do/index.ts";
 import { applyDurableObjectMigrations } from "./durable-object-migrations.ts";
+
+// Batches are fetched in growing rounds so a page costs a few queries without reading the whole
+// Session. Decoding stays lazy per row, so filling a small page never decodes a later round.
+const initialBatchFetchSize = 4;
+const maximumBatchFetchSize = 64;
+
+const batchColumns = {
+    envelopeJson: recordedSessionEvent.envelopeJson,
+    ordinal: recordedSessionEvent.ordinal,
+    sessionGenerationId: recordedSessionEvent.sessionGenerationId,
+} as const;
+
+interface BatchRow {
+    readonly envelopeJson: string;
+    readonly ordinal: number;
+    readonly sessionGenerationId: string | null;
+}
 
 interface RecordedBatch {
     readonly events: readonly SessionLiveEventV2[];
@@ -23,10 +40,38 @@ interface SelectedEvent {
     readonly index: number;
 }
 
+/** A caller-supplied cursor, before it is resolved against recorded batches. */
+type RequestedCursor =
+    | { readonly kind: "v2"; readonly ordinal: number; readonly position: number }
+    | { readonly kind: "legacy"; readonly position: number };
+
+/**
+ * Where a page starts reading. A v2 cursor names its batch, so reading is windowed forward from
+ * there; a legacy position cursor has no generation scope and still needs the whole Session.
+ */
+type CursorScope =
+    | { readonly kind: "v2"; readonly cursor: ResolvedCursor; readonly batches: Generator<RecordedBatch> }
+    | { readonly kind: "legacy"; readonly cursor: ResolvedCursor; readonly history: readonly RecordedBatch[] };
+
 interface ResolvedCursor {
+    /** The generation the cursor points into, so pages need not rescan for it per batch. */
+    readonly generation: string;
     readonly index: number;
-    readonly legacy: boolean;
     readonly ordinal: number;
+}
+
+const legacyPositionCursorPattern = /^(?:0|[1-9][0-9]*)$/;
+
+/**
+ * Splits a caller cursor into the two supported kinds. A v2 cursor names the batch that holds its
+ * position, which is what lets a page start reading there; a legacy cursor carries only a position.
+ */
+function parseRequestedCursor(after: string): RequestedCursor | null {
+    const [cursorKind, ordinalToken, positionToken] = after.split(":");
+    if (cursorKind === "v2" && ordinalToken !== undefined && positionToken !== undefined) {
+        return { kind: "v2", ordinal: Number(ordinalToken), position: Number(positionToken) };
+    }
+    return legacyPositionCursorPattern.test(after) ? { kind: "legacy", position: Number(after) } : null;
 }
 
 interface RecordedSessionLiveHistory {
@@ -51,24 +96,71 @@ export class SessionRecordingStorage {
         this.#storage = storage;
     }
 
-    readonly #batches = (): readonly RecordedBatch[] =>
-        this.#database
-            .select({
-                envelopeJson: recordedSessionEvent.envelopeJson,
-                ordinal: recordedSessionEvent.ordinal,
-                sessionGenerationId: recordedSessionEvent.sessionGenerationId,
-            })
+    readonly #batches = (): readonly RecordedBatch[] => this.#batchRows(0, null).map(this.#toBatch);
+
+    /** The newest recorded batch, so a page can report the tail without reading the whole Session. */
+    readonly #tailBatch = (): RecordedBatch | undefined => {
+        const row = this.#database
+            .select(batchColumns)
             .from(recordedSessionEvent)
-            .orderBy(asc(recordedSessionEvent.ordinal))
-            .all()
-            .map((row) => {
-                const events = this.#decode(row);
-                return {
-                    events,
-                    generation: row.sessionGenerationId ?? events[0]?.sessionGenerationId ?? "",
-                    ordinal: row.ordinal,
-                };
-            });
+            .orderBy(desc(recordedSessionEvent.ordinal))
+            .limit(1)
+            .get();
+        return row === undefined ? undefined : this.#toBatch(row);
+    };
+
+    /**
+     * Yields decoded batches in append order from `first` onwards, fetching in growing windows.
+     * A page that fills early stops pulling, so later batches are neither read nor decoded.
+     */
+    *#batchesFrom(first: RecordedBatch): Generator<RecordedBatch> {
+        yield first;
+        let window = initialBatchFetchSize;
+        let afterOrdinal = first.ordinal;
+        for (;;) {
+            const rows = this.#batchRows(afterOrdinal, window);
+            let lastOrdinal = afterOrdinal;
+            for (const row of rows) {
+                lastOrdinal = row.ordinal;
+                yield this.#toBatch(row);
+            }
+            if (rows.length < window) {
+                return;
+            }
+            afterOrdinal = lastOrdinal;
+            window = Math.min(window * 2, maximumBatchFetchSize);
+        }
+    }
+
+    readonly #batchRows = (afterOrdinal: number, size: number | null) => {
+        const query = this.#database
+            .select(batchColumns)
+            .from(recordedSessionEvent)
+            // Ordinals are 1-based autoincrement keys, so 0 selects the whole Session.
+            .where(gt(recordedSessionEvent.ordinal, afterOrdinal))
+            .orderBy(asc(recordedSessionEvent.ordinal));
+        return (size === null ? query : query.limit(size)).all();
+    };
+
+    /** The single batch a v2 cursor names, or undefined when that ordinal was never recorded. */
+    readonly #batchAt = (ordinal: number): RecordedBatch | undefined => {
+        const row = this.#database
+            .select(batchColumns)
+            .from(recordedSessionEvent)
+            .where(eq(recordedSessionEvent.ordinal, ordinal))
+            .limit(1)
+            .get();
+        return row === undefined ? undefined : this.#toBatch(row);
+    };
+
+    readonly #toBatch = (row: BatchRow): RecordedBatch => {
+        const events = this.#decode(row);
+        return {
+            events,
+            generation: row.sessionGenerationId ?? events[0]?.sessionGenerationId ?? "",
+            ordinal: row.ordinal,
+        };
+    };
 
     readonly #cursor = (batch: RecordedBatch, index: number): string =>
         `v2:${batch.ordinal}:${batch.events[index]?.position ?? "0"}`;
@@ -136,21 +228,85 @@ export class SessionRecordingStorage {
         if (metadata === undefined) {
             return null;
         }
-        const batches = this.#batches();
-        const cursor = this.#resolveCursor(batches, after);
-        if (cursor === null) {
+        const requested = parseRequestedCursor(after);
+        if (requested === null) {
             throw new Error("The Recording cursor is invalid");
         }
-        const tail = batches.at(-1);
+        const tail = this.#tailBatch();
         const tailCursor = tail === undefined ? "v2:0:0" : this.#cursor(tail, tail.events.length - 1);
-        let selected: SelectedEvent[] = [];
+        const scope = requested.kind === "v2" ? this.#v2Scope(requested, tail) : this.#legacyScope(requested.position);
+        if (scope === null) {
+            throw new Error("The Recording cursor is invalid");
+        }
+        const page =
+            scope.kind === "v2"
+                ? this.#selectFrom(scope.batches, scope.cursor, scope.cursor.generation, limit)
+                : this.#selectLegacy(scope.history, scope.cursor, limit);
+        const last = page.selected.at(-1);
+        return {
+            events: page.selected.map(({ event }) => event),
+            nextCursor: last === undefined ? null : this.#cursor(last.batch, last.index),
+            sessionId,
+            tailCursor,
+            truncated: page.truncated,
+            generationReset: page.generationReset,
+            version: 2,
+        };
+    };
+
+    /**
+     * Resolves a v2 cursor to the batch it names and a read window starting there. The cursor's
+     * generation comes from that batch, so no earlier history is read to scope the page.
+     */
+    readonly #v2Scope = (
+        requested: { readonly ordinal: number; readonly position: number },
+        tail: RecordedBatch | undefined,
+    ): CursorScope | null => {
+        // Reuse the tail when the cursor already points at it, which is the common caught-up poll.
+        const anchor =
+            tail !== undefined && tail.ordinal === requested.ordinal ? tail : this.#batchAt(requested.ordinal);
+        if (anchor === undefined) {
+            return null;
+        }
+        const index = anchor.events.findIndex((event) => Number(event.position) === requested.position);
+        if (index === -1) {
+            return null;
+        }
+        return {
+            batches: this.#batchesFrom(anchor),
+            cursor: { generation: anchor.generation, index, ordinal: anchor.ordinal },
+            kind: "v2",
+        };
+    };
+
+    /**
+     * Resolves a position-only legacy cursor. It has no generation scope, so locating it and
+     * detecting a generation switch both need the full recorded history.
+     */
+    readonly #legacyScope = (position: number): CursorScope | null => {
+        const history = this.#batches();
+        return { cursor: this.#resolveLegacyCursor(history, position), history, kind: "legacy" };
+    };
+
+    /**
+     * Collects up to `limit` events at or after the cursor. Batches are pulled on demand, so a page
+     * that fills early never reads the rest of the Session; the one batch past the fill point is
+     * still reached, which is what makes `truncated` and a late generation switch observable.
+     */
+    readonly #selectFrom = (
+        batches: Iterable<RecordedBatch>,
+        cursor: ResolvedCursor,
+        cursorGeneration: string,
+        limit: number,
+    ): { readonly generationReset: boolean; readonly selected: SelectedEvent[]; readonly truncated: boolean } => {
+        const selected: SelectedEvent[] = [];
         let truncated = false;
         let generationReset = false;
         for (const batch of batches) {
             if (batch.ordinal < cursor.ordinal) {
                 continue;
             }
-            if (batch.generation !== this.#cursorGeneration(batches, cursor.ordinal)) {
+            if (batch.generation !== cursorGeneration) {
                 generationReset = true;
             }
             for (const [index, event] of batch.events.entries()) {
@@ -167,53 +323,26 @@ export class SessionRecordingStorage {
                 break;
             }
         }
-        // Position-only legacy cursors have no generation scope. Once a generation switch exists,
-        // replay the full durable history so clients replace reconstructed state instead of dropping it.
-        if (cursor.legacy && this.#hasGenerationReset(batches)) {
-            selected = [];
-            truncated = false;
-            generationReset = true;
-            for (const batch of batches) {
-                for (const [index, event] of batch.events.entries()) {
-                    if (selected.length >= limit) {
-                        truncated = true;
-                        break;
-                    }
-                    selected.push({ batch, event, index });
-                }
-                if (truncated) {
-                    break;
-                }
-            }
-        }
-        const last = selected.at(-1);
-        return {
-            events: selected.map(({ event }) => event),
-            nextCursor: last === undefined ? null : this.#cursor(last.batch, last.index),
-            sessionId,
-            tailCursor,
-            truncated,
-            generationReset,
-            version: 2,
-        };
+        return { generationReset, selected, truncated };
     };
 
-    readonly #resolveCursor = (batches: readonly RecordedBatch[], after: string): ResolvedCursor | null => {
-        const [cursorKind, ordinalToken, positionToken] = after.split(":");
-        if (cursorKind === "v2" && ordinalToken !== undefined && positionToken !== undefined) {
-            const ordinal = Number(ordinalToken);
-            const batch = batches.find((candidate) => candidate.ordinal === ordinal);
-            if (batch === undefined) {
-                return null;
-            }
-            const index = batch.events.findIndex((event) => Number(event.position) === Number(positionToken));
-            return index === -1 ? null : { index, legacy: false, ordinal };
+    readonly #selectLegacy = (
+        history: readonly RecordedBatch[],
+        cursor: ResolvedCursor,
+        limit: number,
+    ): { readonly generationReset: boolean; readonly selected: SelectedEvent[]; readonly truncated: boolean } => {
+        const page = this.#selectFrom(history, cursor, cursor.generation, limit);
+        // Position-only legacy cursors have no generation scope. Once a generation switch exists,
+        // replay the full durable history so clients replace reconstructed state instead of dropping it.
+        if (!this.#hasGenerationReset(history)) {
+            return page;
         }
-        if (!/^(?:0|[1-9][0-9]*)$/.test(after)) {
-            return null;
-        }
-        const position = Number(after);
-        let cursor: ResolvedCursor = { index: -1, legacy: true, ordinal: 0 };
+        const replayed = this.#selectFrom(history, { generation: "", index: -1, ordinal: 0 }, "", limit);
+        return { ...replayed, generationReset: true };
+    };
+
+    readonly #resolveLegacyCursor = (batches: readonly RecordedBatch[], position: number): ResolvedCursor => {
+        let cursor: ResolvedCursor = { generation: "", index: -1, ordinal: 0 };
         let generation: string | null = null;
         let previousPosition = 0;
         for (const batch of batches) {
@@ -227,19 +356,12 @@ export class SessionRecordingStorage {
                     return cursor;
                 }
                 if (current <= position) {
-                    cursor = { index, legacy: true, ordinal: batch.ordinal };
+                    cursor = { generation: batch.generation, index, ordinal: batch.ordinal };
                 }
                 previousPosition = current;
             }
         }
         return cursor;
-    };
-
-    readonly #cursorGeneration = (batches: readonly RecordedBatch[], ordinal: number): string => {
-        if (ordinal === 0) {
-            return "";
-        }
-        return batches.find((batch) => batch.ordinal === ordinal)?.generation ?? "";
     };
 
     readonly #hasGenerationReset = (batches: readonly RecordedBatch[]): boolean => {

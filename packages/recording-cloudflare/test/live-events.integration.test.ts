@@ -492,6 +492,50 @@ describe("Recording incremental reads", () => {
         }
         expect(collected).toEqual(Array.from({ length: 14 }, (_, index) => `event-${index + 1}`));
     });
+    it("Given a history wider than one read window, When a caller pages it in one request, Then every event is delivered in order across window boundaries", async () => {
+        // 30 batches forces several growing fetch rounds, so a dropped or repeated window shows up.
+        for (const batch of Array.from({ length: 30 }, (_, index) => index * 3)) {
+            expect(
+                (
+                    await worker.fetch(
+                        write("runtime-live", { kind: "session.event.v2", events: numberedEvents(3, batch) }),
+                        env,
+                    )
+                ).status,
+            ).toBe(201);
+        }
+        const response = await worker.fetch(read(`?after=${encodeURIComponent("v2:1:0")}&limit=1000`), env);
+        expect(response.status).toBe(200);
+        const page = decodeSessionRecordingHistoryPage(await response.text());
+        expect(page.events.map((candidate) => candidate.eventId)).toEqual(
+            Array.from({ length: 89 }, (_, index) => `event-${index + 1}`),
+        );
+        expect(page.truncated).toBe(false);
+        expect(page.tailCursor).toBe("v2:30:89");
+    });
+    it("Given a page that fills exactly at a read window boundary, When a caller reads it, Then truncation is still reported from the following batch", async () => {
+        for (const batch of [0, 3, 6, 9, 12, 15, 18]) {
+            expect(
+                (
+                    await worker.fetch(
+                        write("runtime-live", { kind: "session.event.v2", events: numberedEvents(3, batch) }),
+                        env,
+                    )
+                ).status,
+            ).toBe(201);
+        }
+        // 12 events fill exactly at the end of the fifth batch, so `truncated` can only be decided
+        // by reaching the sixth batch, which lives in a later fetch round.
+        const response = await worker.fetch(read(`?after=${encodeURIComponent("v2:1:2")}&limit=12`), env);
+        expect(response.status).toBe(200);
+        const page = decodeSessionRecordingHistoryPage(await response.text());
+        expect(page.events.map((candidate) => candidate.eventId)).toEqual(
+            Array.from({ length: 12 }, (_, index) => `event-${index + 3}`),
+        );
+        expect(page.truncated).toBe(true);
+        expect(page.nextCursor).toBe("v2:5:14");
+        expect(page.generationReset).toBe(false);
+    });
     it("Given a history spread across many batches, When a caller resumes from a mid-history v2 cursor, Then it receives only the later events", async () => {
         for (const batch of [0, 3, 6, 9, 12]) {
             expect(
