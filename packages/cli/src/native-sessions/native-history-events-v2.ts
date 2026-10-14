@@ -8,7 +8,7 @@ import type {
     SessionEventPayloadV2,
 } from "@moxt-ai/mobius-protocol";
 import type { AcpNativeEventReplayV2 } from "../acp/session-contracts.ts";
-import { pageAcpSessionEventsV2 } from "../acp/session-event-store-v2.ts";
+import type { AcpSessionEventStoreV2 } from "../acp/session-event-store-v2.ts";
 
 type ToolCallContent = NonNullable<
     Extract<AcpSessionUpdateV2, { readonly sessionUpdate: "tool_call" }>["content"]
@@ -167,10 +167,12 @@ function historyEvents(history: AvailableNativeSessionHistory): readonly Session
 }
 
 export function nativeHistoryEventsV2(
+    sessionId: string,
     nativeSessionId: string,
     history: AvailableNativeSessionHistory,
     eventLimit: number,
     cursor: string | null,
+    eventStore: AcpSessionEventStoreV2,
 ): AcpNativeEventReplayV2 {
     const events = historyEvents(history);
     const generationId = createHash("sha256")
@@ -178,5 +180,6 @@ export function nativeHistoryEventsV2(
         .update("\0")
         .update(JSON.stringify(events))
         .digest("hex");
-    return pageAcpSessionEventsV2(generationId, events, eventLimit, cursor);
+    eventStore.materialize(sessionId, generationId, events);
+    return eventStore.page(sessionId, eventLimit, cursor);
 }
