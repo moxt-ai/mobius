@@ -1176,7 +1176,9 @@ export class PiAcpAgent {
                         availableCommands: mergeCommands(toAvailableCommands(fileCommands), builtinAvailableCommands()),
                     },
                 });
-            })();
+            })().catch(() => {
+                // Session setup notifications are best-effort; the client or Pi process may close first.
+            });
         }, 0);
 
         return response;
