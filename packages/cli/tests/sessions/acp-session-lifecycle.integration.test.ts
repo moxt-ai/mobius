@@ -50,6 +50,85 @@ function processExists(pid: number): boolean {
 }
 
 describe("ACP conversation sessions", () => {
+    it("Given an inactive existing conversation, When it is reopened, Then its directory activity time stays unchanged", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        const store = new MemoryAcpSessionStore();
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-activity-time-"));
+        const agent = new LocalAgentDefinition(
+            "codex",
+            "Codex",
+            process.execPath,
+            [fakeAgentPath, "--agent-name", "Codex"],
+            { MOBIUS_FAKE_ACP_STATE_DIRECTORY: temporaryDirectory },
+        );
+        const firstManager = new AgentRuntimeManager(undefined, store);
+        const signal = new AbortController().signal;
+
+        try {
+            vi.setSystemTime(new Date("2026-10-01T12:00:00.000Z"));
+            await firstManager.runPrompt({
+                additionalDirectories: [],
+                agent,
+                commandId: "initial-command",
+                cwd: process.cwd(),
+                images: [],
+                onActivity: () => Promise.resolve(),
+                onText: () => Promise.resolve(),
+                prompt: "initial activity",
+                resources: [],
+                sessionId: "existing-conversation",
+                signal,
+            });
+            const initial = store.read("existing-conversation");
+            if (!(initial instanceof FoundAcpStoredSession)) {
+                throw new Error("Expected the conversation to be stored");
+            }
+            await firstManager.close();
+
+            vi.setSystemTime(new Date("2026-10-14T12:00:00.000Z"));
+            const reopenedManager = new AgentRuntimeManager(undefined, store);
+            try {
+                await reopenedManager.prepareSession({
+                    additionalDirectories: [],
+                    agent,
+                    cwd: process.cwd(),
+                    sessionId: "existing-conversation",
+                    signal,
+                });
+                const reopened = store.read("existing-conversation");
+                if (!(reopened instanceof FoundAcpStoredSession)) {
+                    throw new Error("Expected the reopened conversation to remain stored");
+                }
+                expect(reopened.session.updatedAt).toBe(initial.session.updatedAt);
+
+                await reopenedManager.runPrompt({
+                    additionalDirectories: [],
+                    agent,
+                    commandId: "new-command",
+                    cwd: process.cwd(),
+                    images: [],
+                    onActivity: () => Promise.resolve(),
+                    onText: () => Promise.resolve(),
+                    prompt: "new activity",
+                    resources: [],
+                    sessionId: "existing-conversation",
+                    signal,
+                });
+                const active = store.read("existing-conversation");
+                if (!(active instanceof FoundAcpStoredSession)) {
+                    throw new Error("Expected the active conversation to remain stored");
+                }
+                expect(active.session.updatedAt).toBe("2026-10-14T12:00:00.000Z");
+            } finally {
+                await reopenedManager.close();
+            }
+        } finally {
+            vi.useRealTimers();
+            await firstManager.close();
+            await rm(temporaryDirectory, { force: true, recursive: true });
+        }
+    });
+
     it("Given a tool update has flushed to SQLite, When a replacement update arrives, Then its position remains with compacted content", async () => {
         vi.useFakeTimers({ toFake: ["clearImmediate", "setImmediate"] });
         vi.setSystemTime(new Date("2026-10-12T00:00:00.000Z"));

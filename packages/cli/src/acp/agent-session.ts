@@ -282,7 +282,7 @@ export class AgentSession implements AcpClientHandler {
 
     readonly hasRunningTurn = (): boolean => this.#turn.running;
 
-    readonly #writeStoredSession = (): void => {
+    readonly #writeStoredSession = (updatedAt: string): void => {
         this.#store.write(
             new AcpStoredSession(
                 this.#mobiusSessionId,
@@ -292,7 +292,7 @@ export class AgentSession implements AcpClientHandler {
                 this.#additionalDirectories,
                 this.#prompted,
                 this.#sessionTitle ?? "",
-                new Date().toISOString(),
+                updatedAt,
                 this.#sessionConfigurations.stored(),
             ),
         );
@@ -301,7 +301,7 @@ export class AgentSession implements AcpClientHandler {
     readonly #captureSelectedConfigurationValues = (): void => {
         this.#sessionConfigurations.capture(this.#configOptions);
         if (this.#updates.sessionId().length > 0) {
-            this.#writeStoredSession();
+            this.#writeStoredSession(new Date().toISOString());
         }
     };
 
@@ -715,7 +715,11 @@ export class AgentSession implements AcpClientHandler {
         }
         await this.#updates.drained();
         signal.throwIfAborted();
-        this.#writeStoredSession();
+        this.#writeStoredSession(
+            stored instanceof FoundAcpStoredSession && this.#restored
+                ? stored.session.updatedAt
+                : new Date().toISOString(),
+        );
     };
 
     readonly listNativeSessions = async (cursor: string | null, signal: AbortSignal): Promise<NativeSessionPage> => {
@@ -854,7 +858,7 @@ export class AgentSession implements AcpClientHandler {
             throw new AcpExecutionError("The requested ACP configuration option is unavailable");
         }
         this.#sessionConfigurations.select(applied);
-        this.#writeStoredSession();
+        this.#writeStoredSession(new Date().toISOString());
         return this.#configOptions;
     };
 
@@ -942,7 +946,7 @@ export class AgentSession implements AcpClientHandler {
             this.#sessionTitle = truncate(options.prompt, 500);
         }
         this.#prompted = true;
-        this.#writeStoredSession();
+        this.#writeStoredSession(new Date().toISOString());
         const running = new RunningAcpTurn(
             options.commandId,
             options.onActivity,
@@ -1018,7 +1022,7 @@ export class AgentSession implements AcpClientHandler {
                     usage: result.usage ?? null,
                 });
             }
-            this.#writeStoredSession();
+            this.#writeStoredSession(new Date().toISOString());
             if (lifecycleV2 !== undefined) {
                 await this.recordLifecycleEventV2({
                     payload: { commandId: options.commandId, kind: "prompt.completed", stopReason: result.stopReason },
@@ -1343,7 +1347,7 @@ export class AgentSession implements AcpClientHandler {
                 this.#sessionUpdatedAt = truncate(update.updatedAt ?? "", 128);
             }
             if (this.#updates.sessionId().length > 0) {
-                this.#writeStoredSession();
+                this.#writeStoredSession(new Date().toISOString());
             }
             await this.#getObserver().onInfo({
                 kind: SESSION_INFO_UPDATED_KIND,
