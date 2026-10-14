@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { LocalSqliteDatabase } from "./infra/local-sqlite-database.ts";
 import { sessionLiveEventPositionAllocation } from "./schema/acp-session-store/index.ts";
 
-const INITIAL_POSITION = 10 ** 5;
+const INITIAL_POSITION = 10 ** 4;
 const allocationRowSchema = z.object({ allocatedPosition: z.number().int().safe().nonnegative() });
 
 export interface SessionLiveEventPosition {

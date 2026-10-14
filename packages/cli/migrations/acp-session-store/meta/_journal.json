@@ -50,6 +50,13 @@
             "when": 1791967814719,
             "tag": "0006_live_event_position_allocation",
             "breakpoints": true
+        },
+        {
+            "idx": 7,
+            "version": "6",
+            "when": 1791968521165,
+            "tag": "0007_lower_live_event_initial_position",
+            "breakpoints": true
         }
     ]
 }

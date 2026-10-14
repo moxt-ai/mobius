@@ -130,7 +130,7 @@ describe("ACP conversation sessions", () => {
         }
     });
 
-    it("Given a database-backed live position allocation, When the event store reopens, Then allocation continues from one hundred thousand", async () => {
+    it("Given a database-backed live position allocation, When the event store reopens, Then allocation continues from ten thousand", async () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-live-event-position-"));
         const sessionDatabasePath = join(temporaryDirectory, "sessions.sqlite");
         const firstSessionDatabase = openAcpSessionDatabase(sessionDatabasePath);
@@ -154,7 +154,7 @@ describe("ACP conversation sessions", () => {
                         type: "lifecycle-metadata",
                     }),
                 ].map((event) => event.position),
-            ).toEqual(["100000", "100001", "100000"]);
+            ).toEqual(["10000", "10001", "10000"]);
         } finally {
             first.close();
             firstSessionDatabase.close();
@@ -171,7 +171,7 @@ describe("ACP conversation sessions", () => {
                     payload: { kind: "session.queue.changed" },
                     type: "lifecycle-metadata",
                 }).position,
-            ).toBe("100002");
+            ).toBe("10002");
         } finally {
             second.close();
             secondSessionDatabase.close();
