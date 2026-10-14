@@ -3,9 +3,11 @@ import {
     decodeMessageKind,
     decodeNativeSessionResult,
     decodeSessionEventV2,
+    decodeSessionLiveHistoryV2PageLoaded,
     decodeSessionQueuedEvent,
     encodeNativeSessionCommand,
     encodeSessionCancelCommand,
+    encodeSessionLiveHistoryV2PageLoad,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -116,7 +118,7 @@ test("Given a real claude native Session, When the active prompt is cancelled wi
     }
 });
 
-test("Given a completed real claude Session, When it is forked and immediately prompted, Then the first child Turn completes", async () => {
+test("Given a completed real Claude Session, When it is forked, Then its history is visible before the first child Turn completes", async () => {
     await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-6", "CLAUDE_FORK_REPLY");
     await using agent = await ClaudeFixture.create(provider, { requireAdapter: false });
     await withRealDaemon(new ClaudeCodeAgentSpecification(), agent.environment, async (peer) => {
@@ -233,6 +235,41 @@ test("Given a completed real claude Session, When it is forked and immediately p
                 expect(result.targetSessionId).toBe(childSessionId);
                 break;
             }
+        }
+
+        const historyRequestId = randomUUID();
+        peer.send(
+            encodeSessionLiveHistoryV2PageLoad({
+                cursor: null,
+                eventLimit: 50,
+                kind: "session.live-history.v2.page.load",
+                requestId: historyRequestId,
+                sessionId: childSessionId,
+            }),
+        );
+        for (;;) {
+            const message = await peer.nextMessage();
+            const kind = decodeMessageKind(message);
+            if (kind === "session.operation.failed") {
+                throw new Error(message);
+            }
+            if (kind !== "session.live-history.v2.page.loaded") {
+                continue;
+            }
+            const loaded = decodeSessionLiveHistoryV2PageLoaded(message);
+            if (loaded.requestId !== historyRequestId) {
+                continue;
+            }
+            expect(
+                loaded.events.events.events.flatMap((event) =>
+                    event.type === "acp" &&
+                    event.payload.sessionUpdate === "user_message_chunk" &&
+                    event.payload.content.type === "text"
+                        ? [event.payload.content.text]
+                        : [],
+                ),
+            ).toContain("Reply with a short greeting, without using tools");
+            break;
         }
 
         const childCommandId = randomUUID();

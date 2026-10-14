@@ -62,7 +62,7 @@ function decodeWorkerResult(value: unknown): WorkerResult {
     return { kind: "succeeded", sessions };
 }
 
-function workerEnvironment(environment: Readonly<NodeJS.ProcessEnv>): NodeJS.Dict<string> {
+export function claudeWorkerEnvironment(environment: Readonly<NodeJS.ProcessEnv>): NodeJS.Dict<string> {
     return Object.fromEntries(
         Object.entries(environment).filter((entry): entry is [string, string] => entry[1] !== undefined),
     );
@@ -76,7 +76,7 @@ export function listEnvironmentSessions(
     const operationSignal = AbortSignal.any([signal, AbortSignal.timeout(SESSION_LIST_TIMEOUT_MILLISECONDS)]);
     operationSignal.throwIfAborted();
     const worker = new Worker(workerSource, {
-        env: workerEnvironment(environment),
+        env: claudeWorkerEnvironment(environment),
         eval: true,
         workerData: {
             options: { ...(cwd === undefined ? {} : { dir: cwd }) },
