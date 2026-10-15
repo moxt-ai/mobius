@@ -89,15 +89,11 @@ export async function runRelayConnection({
         timer,
     });
     onConnected();
-    void reportDaemonUpgrade(
-        config.relayUrl,
-        (result) => {
-            if (socket.readyState === WebSocket.OPEN) {
-                send(socket, result);
-            }
-        },
-        signal,
-    ).catch((cause: unknown) => {
+    void reportDaemonUpgrade((result) => {
+        if (socket.readyState === WebSocket.OPEN) {
+            send(socket, result);
+        }
+    }, signal).catch((cause: unknown) => {
         if (!signal.aborted) {
             console.error("Could not report daemon upgrade", cause);
         }

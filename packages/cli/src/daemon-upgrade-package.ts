@@ -1,6 +1,7 @@
 import { mkdir, readFile, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative } from "node:path";
 import { runtimeUpgradeVersionSchema } from "@moxt-ai/mobius-protocol";
+import { gt } from "semver";
 import { z } from "zod";
 import type { WorkerLaunch } from "./daemon-lifecycle-protocol.ts";
 import { decodeWorkerLaunch } from "./daemon-worker-process.ts";
@@ -67,5 +68,30 @@ export async function installDaemonRelease(version: string, signal: AbortSignal)
             "npm could not install and verify the requested Mobius version",
             { cause },
         );
+    }
+}
+
+export async function findNewDaemonRelease(currentVersion: string, signal: AbortSignal): Promise<string | null> {
+    const npm = await findExecutableOnPath("npm", process.env);
+    if (npm === null) {
+        throw new DaemonUpgradeError("npm_unavailable", "npm is required to check for a new daemon");
+    }
+    try {
+        const result = await runBoundedProcess({
+            command: npm.path,
+            arguments: ["view", "@moxt-ai/mobius", "dist-tags.latest", "--json", "--prefer-online"],
+            cwd: process.cwd(),
+            environment: process.env,
+            signal,
+            timeoutMilliseconds: 30_000,
+            outputLimitBytes: 4096,
+        });
+        const version = runtimeUpgradeVersionSchema.parse(JSON.parse(result.stdout));
+        return gt(version, currentVersion) ? version : null;
+    } catch (cause) {
+        signal.throwIfAborted();
+        throw new DaemonUpgradeError("npm_check_failed", "npm could not return a valid latest Mobius version", {
+            cause,
+        });
     }
 }

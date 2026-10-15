@@ -131,12 +131,7 @@ import {
     encodeRuntimeDiagnosticsRequest,
     encodeRuntimeDiagnosticsResult,
 } from "./runtime-diagnostics.ts";
-import {
-    decodeRuntimeUpgradeRequest,
-    decodeRuntimeUpgradeResult,
-    encodeRuntimeUpgradeRequest,
-    encodeRuntimeUpgradeResult,
-} from "./runtime-upgrade.ts";
+import { decodeRuntimeUpgradeResult, encodeRuntimeUpgradeResult } from "./runtime-upgrade.ts";
 import {
     decodeSessionEventEnvelopeV2,
     encodeSessionEventEnvelopeV2,
@@ -225,11 +220,6 @@ const serviceToDaemonSignatures = {
         RUNTIME_LIVENESS_READY_KIND,
         encodeRuntimeLivenessReadyEvent,
         decodeRuntimeLivenessReadyEvent,
-    ),
-    "runtime.upgrade.request": defineMessageSignature(
-        "runtime.upgrade.request",
-        encodeRuntimeUpgradeRequest,
-        decodeRuntimeUpgradeRequest,
     ),
     "runtime.diagnostics.read": defineMessageSignature(
         "runtime.diagnostics.read",

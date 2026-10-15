@@ -11,7 +11,6 @@ import {
     decodeNativeSessionRequest,
     decodeRuntimeDiagnosticsRequest,
     decodeRuntimePingCommand,
-    decodeRuntimeUpgradeRequest,
     decodeSessionCancelCommand,
     decodeSessionCloseCommand,
     decodeSessionConfigureCommand,
@@ -419,10 +418,6 @@ export class ChannelActor {
             case FILE_READ_KIND: {
                 const command = decodeFileReadCommand(message);
                 return { message: command, requestId: command.requestId, sessionId: command.sessionId };
-            }
-            case "runtime.upgrade.request": {
-                const command = decodeRuntimeUpgradeRequest(message);
-                return { message: command, requestId: command.requestId, sessionId: "" };
             }
             case "runtime.diagnostics.read": {
                 const command = decodeRuntimeDiagnosticsRequest(message);

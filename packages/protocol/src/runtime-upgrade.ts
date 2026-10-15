@@ -1,18 +1,11 @@
 import { z } from "zod";
 import { type Identifier, isIdentifier } from "./identifier.ts";
 
-// Remote requests select only an exact release of the fixed Mobius npm package.
+// Only exact releases of the fixed Mobius npm package are supported.
 export const runtimeUpgradeVersionSchema = z
     .string()
     .max(128)
     .regex(/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*)?$/);
-export const runtimeUpgradeRequestSchema = z
-    .strictObject({
-        kind: z.literal("runtime.upgrade.request"),
-        requestId: z.custom<Identifier>(isIdentifier),
-        version: runtimeUpgradeVersionSchema,
-    })
-    .readonly();
 export const runtimeUpgradeResultSchema = z
     .strictObject({
         kind: z.literal("runtime.upgrade.result"),
@@ -41,13 +34,8 @@ export const runtimeUpgradeResultSchema = z
             .readonly(),
     })
     .readonly();
-export type RuntimeUpgradeRequest = z.infer<typeof runtimeUpgradeRequestSchema>;
 export type RuntimeUpgradeResult = z.infer<typeof runtimeUpgradeResultSchema>;
-export const decodeRuntimeUpgradeRequest = (raw: string): RuntimeUpgradeRequest =>
-    runtimeUpgradeRequestSchema.parse(JSON.parse(raw));
 export const decodeRuntimeUpgradeResult = (raw: string): RuntimeUpgradeResult =>
     runtimeUpgradeResultSchema.parse(JSON.parse(raw));
-export const encodeRuntimeUpgradeRequest = (value: RuntimeUpgradeRequest): string =>
-    JSON.stringify(runtimeUpgradeRequestSchema.parse(value));
 export const encodeRuntimeUpgradeResult = (value: RuntimeUpgradeResult): string =>
     JSON.stringify(runtimeUpgradeResultSchema.parse(value));

@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 import { decodeDaemonToServiceMessage, type RuntimeUpgradeResult } from "@moxt-ai/mobius-protocol";
 import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { describe, expect, it } from "vitest";
-import { WebSocket, WebSocketServer } from "ws";
+import { WebSocketServer } from "ws";
 import cliPackage from "../../package.json" with { type: "json" };
 import { sendLocalRequest } from "../../src/daemon-local-control.ts";
 import { openMobiusCliInstallation, openMobiusControlInstallation } from "../../src/pairing/pair-local-machine.ts";
@@ -64,14 +64,16 @@ async function packedRelease(
     return await readFile(join(root, `moxt-ai-mobius-${version}.tgz`));
 }
 
-describe("Daemon server-requested upgrade", () => {
-    it("Given a paired managed daemon, When npm installs a release and then a broken release, Then it switches, rolls back, reports the error and blocks subsequent upgrades", async () => {
+describe("Daemon hourly npm upgrade", () => {
+    it("Given a paired managed daemon, When hourly checks discover a release and then a broken release, Then it switches, rolls back, reports the error and blocks subsequent upgrades", async () => {
         const directory = await mkdtemp(join(tmpdir(), "mobius-upgrade-journey-"));
         const signal = AbortSignal.timeout(240_000);
         const stateRoot = join(directory, "state");
         const environment = {
             ...process.env,
             MOBIUS_STATE_DIRECTORY: stateRoot,
+            MOBIUS_TEST_CLOCK_DIRECTORY: directory,
+            NODE_OPTIONS: `${process.env["NODE_OPTIONS"] ?? ""} --import=${pathToFileURL(resolve(import.meta.dirname, "../support/daemon-upgrade-clock.ts")).href}`,
             NPM_CONFIG_CACHE: join(directory, "npm-cache"),
         };
         const cli = async (
@@ -98,14 +100,19 @@ describe("Daemon server-requested upgrade", () => {
                 child.once("close", (code) => (code === 0 ? resolve_() : reject(new Error(`CLI failed: ${output}`))));
             });
         };
-        const good = `${cliPackage.version}-good`;
-        const bad = `${cliPackage.version}-broken`;
+        const good = "99.0.1";
+        const bad = "99.0.3";
+        let latest = good;
+        let queries = 0;
+        let downloads = 0;
+        let queryWaiter: PromiseWithResolvers<void> | undefined;
         const packages = new Map<string, Buffer>();
         const catalogs = new Map<string, string>();
         let registryUrl = "";
         const server = createServer((request, response) => {
             const path = decodeURIComponent(request.url ?? "");
             if (path.startsWith("/@moxt-ai/mobius") && !path.endsWith(".tgz")) {
+                queries++;
                 const versions = Object.fromEntries(
                     [...packages].map(([version, bytes]) => [
                         version,
@@ -122,8 +129,11 @@ describe("Daemon server-requested upgrade", () => {
                 );
                 response
                     .writeHead(200, { "content-type": "application/json" })
-                    .end(JSON.stringify({ name: cliPackage.name, versions, "dist-tags": { latest: good } }));
+                    .end(JSON.stringify({ name: cliPackage.name, versions, "dist-tags": { latest } }));
+                queryWaiter?.resolve();
+                queryWaiter = undefined;
             } else if (path.endsWith(".tgz")) {
+                downloads++;
                 const bytes = packages.get(path.slice(1, -4));
                 response.writeHead(bytes === undefined ? 404 : 200).end(bytes);
             } else if (request.method === "PUT" && path.endsWith("/catalog")) {
@@ -143,17 +153,16 @@ describe("Daemon server-requested upgrade", () => {
             }
         });
         const sockets = new WebSocketServer({ server });
-        let current: WebSocket | undefined;
         const connected = Promise.withResolvers<void>();
         const results: RuntimeUpgradeResult[] = [];
         let waiter: PromiseWithResolvers<RuntimeUpgradeResult> | undefined;
         const aborted = (): void => {
             connected.reject(signal.reason);
             waiter?.reject(signal.reason);
+            queryWaiter?.reject(signal.reason);
         };
         signal.addEventListener("abort", aborted, { once: true });
         sockets.on("connection", (socket) => {
-            current = socket;
             socket.on("message", (data) => {
                 const message = decodeDaemonToServiceMessage(data.toString());
                 if (message.kind === "runtime.heartbeat") {
@@ -180,13 +189,13 @@ describe("Daemon server-requested upgrade", () => {
             waiter = Promise.withResolvers<RuntimeUpgradeResult>();
             return await waiter.promise;
         };
-        const request = (requestId: string, version: string): void => {
-            if (current?.readyState !== WebSocket.OPEN) {
-                throw new Error("No working daemon");
-            }
-            current.send(JSON.stringify({ kind: "runtime.upgrade.request", requestId, version }));
+        const tick = async (pid: string, milliseconds: number): Promise<void> => {
+            const clockPort = await readFile(join(directory, `${pid.trim()}.clock`), "utf8");
+            const response = await fetch(`http://127.0.0.1:${clockPort}/${milliseconds}`, { signal });
+            await response.text();
         };
         try {
+            packages.set(cliPackage.version, Buffer.from("not downloaded"));
             packages.set(good, await packedRelease(directory, good, false, signal));
             packages.set(bad, await packedRelease(directory, bad, true, signal));
             await listen(server);
@@ -213,47 +222,44 @@ describe("Daemon server-requested upgrade", () => {
             const originalWorker = await readFile(join(control.stateDirectory, "worker.lock"), "utf8");
             // A leftover file, even with a live PID, must not block this process.
             await writeFile(join(control.stateDirectory, "upgrade.lock"), String(process.pid));
-            request("upgrade_missing", "99.99.99");
-            expect((await next()).outcome.status).toBe("accepted");
-            request("upgrade_concurrent", good);
-            expect(await next()).toMatchObject({
-                requestId: "upgrade_concurrent",
-                outcome: { status: "rejected", code: "upgrade_busy" },
-            });
-            expect(await next()).toMatchObject({
-                requestId: "upgrade_missing",
-                outcome: { status: "failed", code: "npm_install_failed" },
-            });
-            expect(await readFile(join(control.stateDirectory, "worker.lock"), "utf8")).toBe(originalWorker);
-            request("upgrade_good", good);
-            expect((await next()).outcome.status).toBe("accepted");
-            expect(await next()).toMatchObject({
-                requestId: "upgrade_good",
-                version: good,
-                outcome: { status: "succeeded" },
-            });
+            expect(queries).toBe(0);
+            await tick(originalWorker, 3_599_999);
+            expect(queries).toBe(0);
+            await tick(originalWorker, 1);
+            expect(await next()).toMatchObject({ version: good, outcome: { status: "succeeded" } });
             expect(await readFile(join(control.stateDirectory, "manager.lock"), "utf8")).toBe(manager);
             expect(await readFile(join(stateRoot, "versions", good, "retained-data"), "utf8")).toBe("original-data");
             await writeFile(join(stateRoot, "versions", good, "retained-data"), "upgraded-data");
-            const reuse = `${cliPackage.version}-reuse`;
+            // Equal, older and invalid latest values must leave the worker running.
+            // Each subsequent query also proves the previous attempt completed.
+            const goodWorker = await readFile(join(control.stateDirectory, "worker.lock"), "utf8");
+            const downloadsAfterUpgrade = downloads;
+            for (const target of [good, cliPackage.version, "invalid-version"]) {
+                latest = target;
+                queryWaiter = Promise.withResolvers<void>();
+                const observed = queryWaiter.promise;
+                await tick(goodWorker, 3_600_000);
+                await observed;
+            }
+            const reuse = "99.0.2";
             packages.set(reuse, await packedRelease(directory, reuse, false, signal));
             await cp(join(stateRoot, "versions", good), join(stateRoot, "versions", reuse), { recursive: true });
             await writeFile(join(stateRoot, "versions", reuse, "retained-data"), "existing-target-data");
-            request("upgrade_reuse", reuse);
-            expect((await next()).outcome.status).toBe("accepted");
+            latest = reuse;
+            await tick(await readFile(join(control.stateDirectory, "worker.lock"), "utf8"), 3_600_000);
             expect(await next()).toMatchObject({
-                requestId: "upgrade_reuse",
                 version: reuse,
                 outcome: { status: "succeeded" },
             });
+            expect(downloads).toBe(downloadsAfterUpgrade + 1);
             expect(await readFile(join(stateRoot, "versions", reuse, "retained-data"), "utf8")).toBe(
                 "existing-target-data",
             );
-            request("upgrade_broken", bad);
-            expect((await next()).outcome.status).toBe("accepted");
+            latest = bad;
+            await tick(manager, 2_000);
+            await tick(await readFile(join(control.stateDirectory, "worker.lock"), "utf8"), 3_600_000);
             const failed = await next();
             expect(failed).toMatchObject({
-                requestId: "upgrade_broken",
                 version: reuse,
                 targetVersion: bad,
                 outcome: { status: "failed", code: "worker_exited" },
@@ -261,16 +267,15 @@ describe("Daemon server-requested upgrade", () => {
             if (failed.outcome.status !== "failed") {
                 throw new Error("Expected rollback feedback");
             }
-            expect(failed.outcome.retryAfter).toBeGreaterThan(0);
+            expect(failed.outcome.retryAfter).toBe(Date.parse("2030-01-01T00:00:00Z") + 2_000 + 8 * 3_600_000);
             expect(await sendLocalRequest(control.stateDirectory, "manager", { kind: "status" }, signal)).toMatchObject(
                 { worker: { version: reuse } },
             );
             const worker = await readFile(join(control.stateDirectory, "worker.lock"), "utf8");
-            request("upgrade_retry", cliPackage.version);
-            expect(await next()).toMatchObject({
-                requestId: "upgrade_retry",
-                outcome: { status: "rejected", code: "upgrade_cooldown", retryAfter: failed.outcome.retryAfter },
-            });
+            const queriesBeforeCooldown = queries;
+            await tick(worker, 7 * 3_600_000);
+            await sendLocalRequest(control.stateDirectory, "manager", { kind: "status" }, signal);
+            expect(queries).toBe(queriesBeforeCooldown);
             expect(await readFile(join(control.stateDirectory, "worker.lock"), "utf8")).toBe(worker);
             expect(await readFile(join(control.stateDirectory, "manager.lock"), "utf8")).toBe(manager);
             expect(await readFile(join(stateRoot, "versions", good, "retained-data"), "utf8")).toBe("upgraded-data");
