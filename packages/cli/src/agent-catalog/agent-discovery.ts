@@ -1,10 +1,5 @@
 import type { LocalAgentSpecification } from "./agent-specification.ts";
-import {
-    type AcpAgentDefinition,
-    type AgentIntegrationDefinition,
-    type InstallableAgentDefinition,
-    MissingAgentDefinition,
-} from "./local-agent.ts";
+import type { AcpAgentDefinition } from "./local-agent.ts";
 
 export abstract class AgentDiscovery {
     readonly specification: LocalAgentSpecification;
@@ -30,22 +25,13 @@ export abstract class UnavailableAgent extends AgentDiscovery {
     abstract readonly message: string;
 }
 
-export abstract class UnavailableInstalledAgent extends UnavailableAgent {
-    readonly agent: AgentIntegrationDefinition;
-
-    protected constructor(specification: LocalAgentSpecification, agent: AgentIntegrationDefinition) {
-        super(specification);
-        this.agent = agent;
-    }
-}
-
-export class MissingAdapter extends UnavailableInstalledAgent {
+export class MissingAdapter extends UnavailableAgent {
     readonly code = "adapter_not_found";
     readonly message = "ACP adapter not found";
     readonly status = "missing_adapter";
 
-    constructor(specification: LocalAgentSpecification, agent: AgentIntegrationDefinition) {
-        super(specification, agent);
+    constructor(specification: LocalAgentSpecification) {
+        super(specification);
     }
 }
 
@@ -71,58 +57,51 @@ export class AgentProbeFailed extends UnavailableAgent {
     }
 }
 
-export class UnsupportedAgentVersion extends UnavailableInstalledAgent {
+export class UnsupportedAgentVersion extends UnavailableAgent {
+    readonly agentVersion: string;
     readonly code = "agent_version_unsupported";
     readonly message: string;
     readonly minimumSupportedVersion: string;
     readonly status = "unsupported_version";
 
-    constructor(
-        specification: LocalAgentSpecification,
-        agent: AgentIntegrationDefinition,
-        minimumSupportedVersion: string,
-    ) {
-        super(specification, agent);
+    constructor(specification: LocalAgentSpecification, agentVersion: string, minimumSupportedVersion: string) {
+        super(specification);
+        this.agentVersion = agentVersion;
         this.minimumSupportedVersion = minimumSupportedVersion;
-        this.message = `Agent version ${agent.agentVersion} is below the minimum supported version ${minimumSupportedVersion}`;
+        this.message = `Agent version ${agentVersion} is below the minimum supported version ${minimumSupportedVersion}`;
     }
 }
 
-export class IntegrationProbeFailed extends UnavailableInstalledAgent {
+export class IntegrationProbeFailed extends UnavailableAgent {
     readonly code: string;
     readonly message: string;
     readonly status = "probe_failed";
 
-    constructor(
-        specification: LocalAgentSpecification,
-        agent: AgentIntegrationDefinition,
-        code: string,
-        message: string,
-    ) {
-        super(specification, agent);
+    constructor(specification: LocalAgentSpecification, code: string, message: string) {
+        super(specification);
         this.code = code;
         this.message = message;
     }
 }
 
-export class IncompatibleAdapter extends UnavailableInstalledAgent {
+export class IncompatibleAdapter extends UnavailableAgent {
     readonly code = "acp_incompatible";
     readonly message: string;
     readonly status = "incompatible_adapter";
 
-    constructor(specification: LocalAgentSpecification, agent: AgentIntegrationDefinition, message: string) {
-        super(specification, agent);
+    constructor(specification: LocalAgentSpecification, message: string) {
+        super(specification);
         this.message = message;
     }
 }
 
-export class AuthenticationRequiredAgent extends UnavailableInstalledAgent {
+export class AuthenticationRequiredAgent extends UnavailableAgent {
     readonly code = "authentication_required";
     readonly message = "Agent authentication is required";
     readonly status = "authentication_required";
 
-    constructor(specification: LocalAgentSpecification, agent: AgentIntegrationDefinition) {
-        super(specification, agent);
+    constructor(specification: LocalAgentSpecification) {
+        super(specification);
     }
 }
 
@@ -142,7 +121,6 @@ export class AgentDiscoveryResult {
 export class LocalAgentInventory {
     readonly available: readonly AvailableAgent[];
     readonly discoveries: readonly AgentDiscovery[];
-    readonly installable: readonly InstallableAgentDefinition[];
     readonly results: readonly AgentDiscoveryResult[];
     readonly unavailable: readonly UnavailableAgent[];
 
@@ -161,13 +139,6 @@ export class LocalAgentInventory {
         }
         this.available = Object.freeze(available);
         this.discoveries = Object.freeze([...discoveries]);
-        this.installable = Object.freeze(
-            unavailable.map((discovery) =>
-                discovery instanceof UnavailableInstalledAgent
-                    ? discovery.agent
-                    : new MissingAgentDefinition(discovery.specification.id, discovery.specification.label),
-            ),
-        );
         this.results = Object.freeze([...results]);
         this.unavailable = Object.freeze(unavailable);
     }

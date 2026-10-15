@@ -4,7 +4,6 @@ import {
     validateAgents,
     validateDisplayName,
     validateIdentifier,
-    validateInstallableAgents,
     validatePairingCode,
 } from "../../entity/pairing/pairing.ts";
 import { bearerToken, readString } from "../../infra/relay-http.ts";
@@ -26,25 +25,17 @@ export function createProjectRuntimePairingRoutes() {
         .use("/projects/:projectId/runtimes/:runtimeId", pairingTimeoutMiddleware("Runtime revocation timed out"))
         .post(
             "/runtime-pairings/:pairingId/redeem",
-            bodyParser<RelayHttpEnvironment>([
-                "agents",
-                "installableAgents",
-                "machineName",
-                "pairingCode",
-                "workspaceName",
-            ]),
+            bodyParser<RelayHttpEnvironment>(["agents", "machineName", "pairingCode", "workspaceName"]),
             async (context) => {
                 const body = context.req.valid("json");
                 const agents = validateAgents(body["agents"]);
-                const installableAgents = validateInstallableAgents(body["installableAgents"]);
-                validateAgentCatalog(agents, installableAgents);
+                validateAgentCatalog(agents);
                 const redeemed = await context.env.services.runtimePairings.redeemRuntimePairing(
                     validateIdentifier(context.req.param("pairingId"), "pairing_id"),
                     validatePairingCode(body["pairingCode"]),
                     validateDisplayName(body["machineName"], "machine_name"),
                     validateDisplayName(body["workspaceName"], "workspace_name"),
                     agents,
-                    installableAgents,
                     context.var.signal,
                 );
                 return context.json({

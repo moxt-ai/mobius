@@ -30,13 +30,6 @@ export const SESSION_ELICITATION_RESPOND_KIND = "session.elicitation.respond";
 export const SESSION_ELICITATION_RESOLVED_KIND = "session.elicitation.resolved";
 export const SESSION_OPERATION_FAILED_KIND = "session.operation.failed";
 export const AGENT_CONTENT_KIND = "agent.content";
-export const AGENT_INSTALL_REQUEST_KIND = "agent.integration.install.request";
-export const AGENT_INSTALL_CANCEL_KIND = "agent.integration.install.cancel";
-export const AGENT_INSTALL_STARTED_KIND = "agent.integration.install.started";
-export const AGENT_INSTALL_PROGRESS_KIND = "agent.integration.install.progress";
-export const AGENT_INSTALL_COMPLETED_KIND = "agent.integration.install.completed";
-export const AGENT_INSTALL_FAILED_KIND = "agent.integration.install.failed";
-export const AGENT_INSTALL_CANCELLED_KIND = "agent.integration.install.cancelled";
 export const AGENT_SETTINGS_DISCOVER_KIND = "agent.settings.discover";
 export const AGENT_SETTINGS_DISCOVERED_KIND = "agent.settings.discovered";
 export const AGENT_SETTINGS_DISCOVERY_FAILED_KIND = "agent.settings.discovery.failed";
@@ -858,88 +851,6 @@ const agentContentEventSchema = z
 
 export type AgentContentEvent = z.infer<typeof agentContentEventSchema>;
 
-const agentInstallIdentityFields = {
-    agentId: IDENTIFIER,
-    requestId: IDENTIFIER,
-};
-
-const agentInstallRequestCommandSchema = z
-    .object({
-        ...agentInstallIdentityFields,
-        kind: z.literal(AGENT_INSTALL_REQUEST_KIND),
-    })
-    .readonly();
-
-export type AgentInstallRequestCommand = z.infer<typeof agentInstallRequestCommandSchema>;
-
-const agentInstallCancelCommandSchema = z
-    .object({
-        kind: z.literal(AGENT_INSTALL_CANCEL_KIND),
-        requestId: IDENTIFIER,
-    })
-    .readonly();
-
-export type AgentInstallCancelCommand = z.infer<typeof agentInstallCancelCommandSchema>;
-
-const agentInstallStartedEventSchema = z
-    .object({
-        ...agentInstallIdentityFields,
-        kind: z.literal(AGENT_INSTALL_STARTED_KIND),
-    })
-    .readonly();
-
-export type AgentInstallStartedEvent = z.infer<typeof agentInstallStartedEventSchema>;
-
-const installationStageSchema = z.enum([
-    "downloading",
-    "verifying",
-    "installing_agent",
-    "installing_adapter",
-    "checking_acp",
-]);
-
-export type AgentInstallationStage = z.infer<typeof installationStageSchema>;
-
-const agentInstallProgressEventSchema = z
-    .object({
-        ...agentInstallIdentityFields,
-        kind: z.literal(AGENT_INSTALL_PROGRESS_KIND),
-        stage: installationStageSchema,
-    })
-    .readonly();
-
-export type AgentInstallProgressEvent = z.infer<typeof agentInstallProgressEventSchema>;
-
-const agentInstallCompletedEventSchema = z
-    .object({
-        ...agentInstallIdentityFields,
-        authenticationMayBeRequired: z.boolean(),
-        kind: z.literal(AGENT_INSTALL_COMPLETED_KIND),
-    })
-    .readonly();
-
-export type AgentInstallCompletedEvent = z.infer<typeof agentInstallCompletedEventSchema>;
-
-const agentInstallFailedEventSchema = z
-    .object({
-        ...agentInstallIdentityFields,
-        code: IDENTIFIER,
-        kind: z.literal(AGENT_INSTALL_FAILED_KIND),
-        message: z.string().min(1).max(500),
-    })
-    .readonly();
-
-export type AgentInstallFailedEvent = z.infer<typeof agentInstallFailedEventSchema>;
-
-const agentInstallCancelledEventSchema = z
-    .object({
-        ...agentInstallIdentityFields,
-        kind: z.literal(AGENT_INSTALL_CANCELLED_KIND),
-    })
-    .readonly();
-
-export type AgentInstallCancelledEvent = z.infer<typeof agentInstallCancelledEventSchema>;
-
 function parseJson(encoded: string): unknown {
     try {
         return JSON.parse(encoded);
@@ -1116,31 +1027,3 @@ export const encodeSessionOperationFailedEvent = (message: SessionOperationFaile
     encode(message, sessionOperationFailedEventSchema);
 export const decodeAgentContentEvent = (encoded: string): AgentContentEvent => decode(encoded, agentContentEventSchema);
 export const encodeAgentContentEvent = (message: AgentContentEvent): string => encode(message, agentContentEventSchema);
-export const decodeAgentInstallRequestCommand = (encoded: string): AgentInstallRequestCommand =>
-    decode(encoded, agentInstallRequestCommandSchema);
-export const encodeAgentInstallRequestCommand = (message: AgentInstallRequestCommand): string =>
-    encode(message, agentInstallRequestCommandSchema);
-export const decodeAgentInstallCancelCommand = (encoded: string): AgentInstallCancelCommand =>
-    decode(encoded, agentInstallCancelCommandSchema);
-export const encodeAgentInstallCancelCommand = (message: AgentInstallCancelCommand): string =>
-    encode(message, agentInstallCancelCommandSchema);
-export const decodeAgentInstallStartedEvent = (encoded: string): AgentInstallStartedEvent =>
-    decode(encoded, agentInstallStartedEventSchema);
-export const encodeAgentInstallStartedEvent = (message: AgentInstallStartedEvent): string =>
-    encode(message, agentInstallStartedEventSchema);
-export const decodeAgentInstallProgressEvent = (encoded: string): AgentInstallProgressEvent =>
-    decode(encoded, agentInstallProgressEventSchema);
-export const encodeAgentInstallProgressEvent = (message: AgentInstallProgressEvent): string =>
-    encode(message, agentInstallProgressEventSchema);
-export const decodeAgentInstallCompletedEvent = (encoded: string): AgentInstallCompletedEvent =>
-    decode(encoded, agentInstallCompletedEventSchema);
-export const encodeAgentInstallCompletedEvent = (message: AgentInstallCompletedEvent): string =>
-    encode(message, agentInstallCompletedEventSchema);
-export const decodeAgentInstallFailedEvent = (encoded: string): AgentInstallFailedEvent =>
-    decode(encoded, agentInstallFailedEventSchema);
-export const encodeAgentInstallFailedEvent = (message: AgentInstallFailedEvent): string =>
-    encode(message, agentInstallFailedEventSchema);
-export const decodeAgentInstallCancelledEvent = (encoded: string): AgentInstallCancelledEvent =>
-    decode(encoded, agentInstallCancelledEventSchema);
-export const encodeAgentInstallCancelledEvent = (message: AgentInstallCancelledEvent): string =>
-    encode(message, agentInstallCancelledEventSchema);

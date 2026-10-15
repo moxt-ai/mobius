@@ -14,7 +14,7 @@ export class ClaudeCodeAgentSpecification extends InProcessAcpAgentDefinition {
     override readonly maximumTestedAgentVersion = "2.1.273";
 
     constructor() {
-        super("MOBIUS_CLAUDE_PATH", ["agents", "claude", "home", ".local", "bin", "claude"]);
+        super("MOBIUS_CLAUDE_PATH");
     }
 
     override readonly resolveInstalledAgentExecutables = async (

@@ -1,5 +1,4 @@
 import { isAbsolute } from "node:path";
-import { readStateDirectory } from "../storage/state-directory.ts";
 import {
     findExecutableOnPath,
     ProcessExecutionError,
@@ -15,27 +14,10 @@ import {
 } from "./agent-specification.ts";
 import { normalizeVersionOutput } from "./version-output.ts";
 
-async function resolveManagedExecutable(
-    specification: LocalAgentSpecification,
-    context: LocalAgentDiscoveryContext,
-): Promise<ResolvedExecutable | null> {
-    try {
-        return await specification.resolveManagedAgent(
-            readStateDirectory(context.environment),
-            context.platform ?? process.platform,
-            context.signal,
-        );
-    } catch {
-        context.signal.throwIfAborted();
-        return null;
-    }
-}
-
 async function resolveSpecificationExecutables(
     executableName: string,
     overrideVariable: string,
     resolveInstalled: () => Promise<readonly ResolvedExecutable[]>,
-    resolveManaged: () => Promise<ResolvedExecutable | null>,
     context: LocalAgentDiscoveryContext,
 ): Promise<readonly ResolvedExecutable[]> {
     const override = context.environment[overrideVariable];
@@ -48,7 +30,6 @@ async function resolveSpecificationExecutables(
     }
     const external = await findExecutableOnPath(executableName, context.environment, context.platform);
     const installed = await resolveInstalled();
-    const managed = await resolveManaged();
     const executables: ResolvedExecutable[] = [];
     const paths = new Set<string>();
     if (external !== null) {
@@ -61,9 +42,6 @@ async function resolveSpecificationExecutables(
             paths.add(executable.path);
         }
     }
-    if (managed !== null && !paths.has(managed.path)) {
-        executables.push(managed);
-    }
     return executables;
 }
 
@@ -75,7 +53,6 @@ export async function resolveAgentExecutables(
         specification.agentExecutable,
         specification.agentOverrideVariable,
         async () => await specification.resolveInstalledAgentExecutables(context),
-        async () => await resolveManagedExecutable(specification, context),
         context,
     );
 }

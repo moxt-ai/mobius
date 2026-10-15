@@ -89,7 +89,7 @@ class ControlledCloseAgentSpecification extends InProcessAcpAgentDefinition {
     };
 
     constructor() {
-        super("MOBIUS_TEST_CONTROLLED_CLOSE_PATH", ["controlled-close"]);
+        super("MOBIUS_TEST_CONTROLLED_CLOSE_PATH");
     }
 
     readonly releaseClose = (): void => this.#closeGate.resolve();

@@ -12,7 +12,6 @@ import type {
     CreatedBrowserCredential,
     CreatedChannelAccessGrant,
     CreatedRuntimePairing,
-    InstallableAgentDescriptor,
     LinkedChannelDevice,
     PairingStatus,
     RedeemedChannelAccessGrant,
@@ -65,7 +64,6 @@ export interface PairingOperations {
         machineName: string,
         workspaceName: string,
         agents: readonly AgentDescriptor[],
-        installableAgents: readonly InstallableAgentDescriptor[],
         signal: AbortSignal,
     ) => Promise<ClaimedPairing>;
     readonly createChannelAccessGrant: (
@@ -108,7 +106,6 @@ export interface PairingOperations {
         machineName: string,
         workspaceName: string,
         agents: readonly AgentDescriptor[],
-        installableAgents: readonly InstallableAgentDescriptor[],
         signal: AbortSignal,
     ) => Promise<ClaimedPairing>;
     readonly redeemChannelAccessGrant: (
@@ -139,7 +136,6 @@ export interface PairingOperations {
         channelId: string,
         token: string,
         agents: readonly AgentDescriptor[],
-        installableAgents: readonly InstallableAgentDescriptor[],
         signal: AbortSignal,
     ) => Promise<void>;
 }

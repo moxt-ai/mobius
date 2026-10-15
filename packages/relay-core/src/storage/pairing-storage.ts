@@ -23,7 +23,6 @@ export interface AuthorizedChannelRow extends ChannelScopeRow {
 }
 interface PublicChannelRow extends ChannelScopeRow {
     readonly agents_json: string;
-    readonly installable_agents_json: string;
     readonly machine_name: string;
     readonly workspace_name: string;
 }
@@ -124,7 +123,6 @@ export class PairingStorage {
         machineName: string,
         workspaceName: string,
         agents: string,
-        installableAgents: string,
         auditId: string,
         signal: AbortSignal,
     ) =>
@@ -133,9 +131,9 @@ export class PairingStorage {
                 this.#database
                     .prepare(`
         UPDATE pairing_channels SET status = 'paired', daemon_token_hash = ?, claimed_at = ?, machine_name = ?,
-            workspace_name = ?, agents_json = ?, installable_agents_json = ?
+            workspace_name = ?, agents_json = ?
         WHERE pairing_code_hash = ? AND status = 'pending' AND expires_at > ?`)
-                    .bind(daemonHash, now, machineName, workspaceName, agents, installableAgents, codeHash, now),
+                    .bind(daemonHash, now, machineName, workspaceName, agents, codeHash, now),
                 this.#database
                     .prepare(`INSERT OR IGNORE INTO runtime_pairing_audit_events
                 (audit_id, project_id, pairing_id, runtime_id, actor_kind, actor_id, action, details_json, recorded_at)
@@ -204,7 +202,7 @@ export class PairingStorage {
     readonly readPairingCode = (codeHash: string, signal: AbortSignal) =>
         this.#database
             .prepare(`SELECT pairing_id, status, revoked_at, channel_id, runtime_id, expires_at,
-            machine_name, workspace_name, agents_json, installable_agents_json, project_id
+            machine_name, workspace_name, agents_json, project_id
             FROM pairing_channels WHERE pairing_code_hash = ?`)
             .bind(codeHash)
             .first<PairingChannelRow>(signal);
@@ -212,7 +210,7 @@ export class PairingStorage {
     readonly readProjectPairing = (projectId: string, pairingId: string, signal: AbortSignal) =>
         this.#database
             .prepare(`SELECT pairing_id, status, revoked_at, channel_id, runtime_id, expires_at,
-            machine_name, workspace_name, agents_json, installable_agents_json, project_id
+            machine_name, workspace_name, agents_json, project_id
             FROM pairing_channels WHERE project_id = ? AND pairing_id = ?`)
             .bind(projectId, pairingId)
             .first<PairingChannelRow>(signal);
@@ -377,7 +375,7 @@ export class PairingStorage {
     readonly listRuntimes = (projectId: string, signal: AbortSignal) =>
         this.#database
             .prepare(`
-        SELECT channel_id, runtime_id, machine_name, workspace_name, agents_json, installable_agents_json, project_id
+        SELECT channel_id, runtime_id, machine_name, workspace_name, agents_json, project_id
         FROM pairing_channels WHERE project_id = ? AND status = 'paired' ORDER BY created_at, channel_id LIMIT 100`)
             .bind(projectId)
             .all<PublicChannelRow>(signal);
@@ -385,7 +383,7 @@ export class PairingStorage {
     readonly readChannel = (channelId: string, signal: AbortSignal) =>
         this.#database
             .prepare(`
-        SELECT channel_id, runtime_id, machine_name, workspace_name, agents_json, installable_agents_json, project_id
+        SELECT channel_id, runtime_id, machine_name, workspace_name, agents_json, project_id
         FROM pairing_channels WHERE channel_id = ? AND status = 'paired'`)
             .bind(channelId)
             .first<PublicChannelRow>(signal);
@@ -485,17 +483,11 @@ export class PairingStorage {
             .bind(now, credentialId, projectId)
             .run(signal);
 
-    readonly updateAgents = (
-        channelId: string,
-        tokenHash: string,
-        agents: string,
-        installableAgents: string,
-        signal: AbortSignal,
-    ) =>
+    readonly updateAgents = (channelId: string, tokenHash: string, agents: string, signal: AbortSignal) =>
         this.#database
             .prepare(`
-        UPDATE pairing_channels SET agents_json = ?, installable_agents_json = ?
+        UPDATE pairing_channels SET agents_json = ?
         WHERE channel_id = ? AND daemon_token_hash = ? AND status = 'paired'`)
-            .bind(agents, installableAgents, channelId, tokenHash)
+            .bind(agents, channelId, tokenHash)
             .run(signal);
 }

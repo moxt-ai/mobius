@@ -14,6 +14,6 @@ export class CodexAgentSpecification extends InProcessAcpAgentDefinition {
     override readonly maximumTestedAgentVersion = "0.154.0";
 
     constructor() {
-        super("MOBIUS_CODEX_PATH", ["agents", "codex", "bin", "codex"]);
+        super("MOBIUS_CODEX_PATH");
     }
 }

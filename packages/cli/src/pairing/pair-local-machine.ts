@@ -5,7 +5,6 @@ import { isIdentifier, mobiusApiUrl } from "@moxt-ai/mobius-protocol";
 import { fetch, type Response } from "undici";
 import packageMetadata from "../../package.json" with { type: "json" };
 import { discoverLocalAgentInventory, type LocalAgentInventory } from "../agent-catalog/discover-local-agents.ts";
-import type { InstallableAgentDefinition } from "../agent-catalog/local-agent.ts";
 import { publishAgentCatalog } from "../agent-catalog/publish-agent-catalog.ts";
 import { createCatalogAgentResolver } from "../agent-catalog/resolve-catalog-agent.ts";
 import {
@@ -247,7 +246,6 @@ async function claimPairing(
     options: PairCommandOptions,
     defaultWorkspace: string,
     localAgents: readonly AcpAgentDefinition[],
-    installableAgents: readonly InstallableAgentDefinition[],
     signal: AbortSignal,
 ): Promise<ClaimPairingResponse> {
     const agents = localAgents.map((agent) => ({
@@ -268,7 +266,6 @@ async function claimPairing(
         response = await fetch(endpoint, {
             body: JSON.stringify({
                 agents,
-                installableAgents,
                 machineName: hostname(),
                 pairingCode: options.code,
                 workspaceName: basename(defaultWorkspace) || "Local workspace",
@@ -292,7 +289,7 @@ async function claimPairing(
 }
 
 function assertInventoryUsable(inventory: LocalAgentInventory): void {
-    if (inventory.available.length + inventory.installable.length === 0) {
+    if (inventory.available.length === 0) {
         throw new PairingClientError("no_supported_agent", "No supported Agent is available for local discovery");
     }
 }
@@ -316,7 +313,6 @@ function buildPairedDaemon(
             relayUrl,
         },
         inventory.readyAgents(),
-        inventory.installable,
         localContext,
         new OpaqueDaemonReconnectTarget(connection.connectionId),
         createCatalogAgentResolver(
@@ -353,7 +349,7 @@ async function pairRuntime(
     });
     assertInventoryUsable(inventory);
     const agents = inventory.readyAgents();
-    const claim = await claimPairing(options, defaultWorkspace, agents, inventory.installable, signal);
+    const claim = await claimPairing(options, defaultWorkspace, agents, signal);
     const connection = await installation.saveConnection(
         {
             appId: claim.appId,

@@ -6,12 +6,10 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { type MessageEvent, WebSocket } from "undici";
 import type { AgentRuntimeManager } from "../acp/agent-runtime-manager.ts";
-import type { AgentInstallationManager } from "../agent-installation/agent-installation-manager.ts";
 import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
 import type { DaemonConfig } from "../config.ts";
 import { createDaemonCommandHandler } from "../daemon-command-handler.ts";
 import { send } from "../daemon-command-results.ts";
-import type { DaemonInstallationObserver } from "../daemon-observers.ts";
 import type { DaemonTurnRegistry } from "../daemon-turn-registry.ts";
 import { reportDaemonUpgrade } from "../daemon-upgrade.ts";
 import type { ExternalContentStore } from "../external-content/local-external-content-store.ts";
@@ -42,8 +40,6 @@ export interface RelayConnectionOptions {
     readonly config: DaemonConfig;
     readonly directories: WorkspaceDirectoryService;
     readonly sessions: AgentRuntimeManager;
-    readonly installations: AgentInstallationManager;
-    readonly installationObserver: DaemonInstallationObserver;
     readonly nativeSessions: NativeSessionService;
     readonly operations: DaemonOperationState;
     readonly publisher: DaemonSessionEventPublisher;
@@ -61,8 +57,6 @@ export async function runRelayConnection({
     config,
     directories,
     sessions,
-    installations,
-    installationObserver,
     nativeSessions,
     operations,
     publisher,
@@ -84,7 +78,6 @@ export async function runRelayConnection({
         config,
         directories,
         sessions,
-        installations,
         nativeSessions,
         operations,
         eventProjectionV2,
@@ -93,10 +86,8 @@ export async function runRelayConnection({
         diagnostics,
         socket,
         signal: connectionController.signal,
-        runtimeSignal: signal,
         timer,
     });
-    installationObserver.connect(socket);
     onConnected();
     void reportDaemonUpgrade(
         config.relayUrl,
@@ -122,7 +113,6 @@ export async function runRelayConnection({
                 socket.removeEventListener("close", handleClose);
                 socket.removeEventListener("error", handleError);
                 socket.removeEventListener("message", handleMessage);
-                installationObserver.disconnect(socket);
                 publisher.disconnect(socket);
                 connectionController.abort();
             };

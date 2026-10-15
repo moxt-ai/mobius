@@ -44,23 +44,17 @@ export function createCatalogAgentResolver(
             if (previousAgent === undefined) {
                 throw new Error(`The local Agent ${agent.id} left the catalog before its refresh completed`);
             }
-            config.catalog.transition(
-                [
-                    ...previous.agents.filter((entry) => entry.id !== agent.id),
-                    ...inventory
-                        .readyAgents()
-                        .filter((ready) => ready.id === agent.id)
-                        .map((ready) => withDaemonEnvironment(ready, config.localContext.environment)),
-                ],
-                [
-                    ...previous.installableAgents.filter((entry) => entry.id !== agent.id),
-                    ...inventory.installable.filter((installable) => installable.id === agent.id),
-                ],
-            );
+            config.catalog.transition([
+                ...previous.agents.filter((entry) => entry.id !== agent.id),
+                ...inventory
+                    .readyAgents()
+                    .filter((ready) => ready.id === agent.id)
+                    .map((ready) => withDaemonEnvironment(ready, config.localContext.environment)),
+            ]);
             try {
                 await publish(config, signal);
             } catch (error) {
-                config.catalog.transition(previous.agents, previous.installableAgents);
+                config.catalog.transition(previous.agents);
                 throw error;
             }
             return config.catalog.find(agent.id);

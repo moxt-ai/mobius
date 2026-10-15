@@ -86,7 +86,6 @@ describe("acp commands environment", () => {
                 relayUrl: new URL("ws://127.0.0.1:8787/v1/runtimes/connect?token=test"),
             },
             [fakeAgent()],
-            [],
             localContext,
         );
         try {

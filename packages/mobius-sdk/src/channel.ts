@@ -1,6 +1,4 @@
 export {
-    type AgentInstallCancelRequest,
-    type AgentInstallRequest,
     type ConnectMobiusClientOptions as ConnectMobiusChannelClientOptions,
     connectMobiusClient as connectMobiusChannelClient,
     type ElicitationResponseRequest,

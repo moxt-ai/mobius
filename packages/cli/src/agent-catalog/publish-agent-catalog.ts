@@ -91,7 +91,6 @@ export async function publishAgentCatalog(config: DaemonConfig, signal: AbortSig
                     label: agent.label,
                     sessionTurnConfiguration: true,
                 })),
-                installableAgents: catalog.installableAgents,
             }),
             dispatcher: environmentProxyDispatcher,
             headers: { ...runtimeAuthorization(config.relayUrl), "content-type": "application/json" },

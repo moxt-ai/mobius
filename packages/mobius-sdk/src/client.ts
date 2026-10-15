@@ -1,29 +1,8 @@
 import {
-    AGENT_INSTALL_CANCEL_KIND,
-    AGENT_INSTALL_CANCELLED_KIND,
-    AGENT_INSTALL_COMPLETED_KIND,
-    AGENT_INSTALL_FAILED_KIND,
-    AGENT_INSTALL_PROGRESS_KIND,
-    AGENT_INSTALL_REQUEST_KIND,
-    AGENT_INSTALL_STARTED_KIND,
-    type AgentInstallCancelledEvent,
-    type AgentInstallCompletedEvent,
-    type AgentInstallFailedEvent,
-    type AgentInstallProgressEvent,
-    type AgentInstallStartedEvent,
-    decodeAgentInstallCancelledEvent,
-    decodeAgentInstallCompletedEvent,
-    decodeAgentInstallFailedEvent,
-    decodeAgentInstallProgressEvent,
-    decodeAgentInstallStartedEvent,
     decodeDaemonToServiceMessage,
     decodeMessageKind,
     decodeRuntimeStatusEvent,
-    decodeSessionOperationFailedEvent,
-    encodeAgentInstallCancelCommand,
-    encodeAgentInstallRequestCommand,
     RUNTIME_STATUS_KIND,
-    SESSION_OPERATION_FAILED_KIND,
     type SessionElicitationRespondCommand,
     type SessionPermissionResolvedEvent,
 } from "@moxt-ai/mobius-protocol";
@@ -32,31 +11,16 @@ import ReconnectingWebSocket, { type CloseEvent as ReconnectingCloseEvent } from
 const CONNECTION_TIMEOUT_MILLISECONDS = 15_000;
 const MAX_RECONNECTION_DELAY_MILLISECONDS = 10_000;
 const MIN_RECONNECTION_DELAY_MILLISECONDS = 500;
-const INSTALLATION_TIMEOUT_MILLISECONDS = 11 * 60 * 1_000;
 const TERMINAL_RELAY_CLOSE_CODES: ReadonlySet<number> = new Set([1002, 1003, 1007, 1008, 4003, 4008]);
 export type MobiusRelayUrlProvider = (signal: AbortSignal) => Promise<string>;
 
 export interface ConnectMobiusClientOptions {
     readonly protocols?: readonly string[];
-    readonly onInstallCancelled?: (event: AgentInstallCancelledEvent) => void;
-    readonly onInstallCompleted?: (event: AgentInstallCompletedEvent) => void;
-    readonly onInstallFailed?: (event: AgentInstallFailedEvent) => void;
-    readonly onInstallProgress?: (event: AgentInstallProgressEvent) => void;
-    readonly onInstallStarted?: (event: AgentInstallStartedEvent) => void;
     readonly onProtocolError?: (error: MobiusClientError) => void;
     readonly onReconnecting?: () => void;
     readonly onStatus?: (online: boolean) => void;
     readonly onUnavailable?: () => void;
     readonly relayUrl: string | MobiusRelayUrlProvider;
-}
-
-export interface AgentInstallRequest {
-    readonly agentId: string;
-    readonly requestId?: string;
-}
-
-export interface AgentInstallCancelRequest {
-    readonly requestId: string;
 }
 
 export interface PermissionResponseRequest {
@@ -89,22 +53,6 @@ function readMessageText(event: MessageEvent<unknown>): string {
     }
 
     return event.data;
-}
-
-function encodeOutboundMessage(encode: () => string): string {
-    try {
-        return encode();
-    } catch (error) {
-        throw new MobiusClientError("invalid_request", "The requested operation contains invalid data", {
-            cause: error,
-        });
-    }
-}
-
-function sendImmediately(socket: ReconnectingWebSocket, message: string): void {
-    if (!socket.send(message)) {
-        throw new MobiusClientError("connection_closed", "Relay connection closed before the message was sent");
-    }
 }
 
 function shouldReconnectAfterClose(event: ReconnectingCloseEvent): boolean {
@@ -171,136 +119,6 @@ export class MobiusClient {
         await waitForOpen(this.#socket);
     };
 
-    readonly cancelAgentInstallation = (request: AgentInstallCancelRequest): void => {
-        if (this.#socket.readyState !== WebSocket.OPEN) {
-            throw new MobiusClientError("runtime_offline", "The relay connection is not open");
-        }
-        try {
-            sendImmediately(
-                this.#socket,
-                encodeOutboundMessage(() =>
-                    encodeAgentInstallCancelCommand({
-                        kind: AGENT_INSTALL_CANCEL_KIND,
-                        requestId: request.requestId,
-                    }),
-                ),
-            );
-        } catch (error) {
-            throw new MobiusClientError(
-                "connection_closed",
-                "Could not send Agent installation cancellation to the relay",
-                { cause: error },
-            );
-        }
-    };
-
-    readonly installAgent = async (request: AgentInstallRequest): Promise<AgentInstallCompletedEvent> => {
-        if (this.#socket.readyState !== WebSocket.OPEN) {
-            throw new MobiusClientError("runtime_offline", "The relay connection is not open");
-        }
-        const requestId = request.requestId ?? crypto.randomUUID();
-        let cleanupInstallation = (): void => undefined;
-        const result = new Promise<AgentInstallCompletedEvent>((resolveInstallation, rejectInstallation) => {
-            const timeout = window.setTimeout(() => {
-                cleanup();
-                rejectInstallation(
-                    new MobiusClientError(
-                        "installation_timeout",
-                        "Timed out while waiting for the local Agent installation",
-                    ),
-                );
-            }, INSTALLATION_TIMEOUT_MILLISECONDS);
-            const cleanup = (): void => {
-                window.clearTimeout(timeout);
-                this.#socket.removeEventListener("message", handleMessage);
-                this.#socket.removeEventListener("close", handleClose);
-            };
-            cleanupInstallation = cleanup;
-            const handleClose = (): void => {
-                cleanup();
-                rejectInstallation(
-                    new MobiusClientError(
-                        "connection_closed",
-                        "Relay connection closed while Agent installation was running",
-                    ),
-                );
-            };
-            const handleMessage = (message: MessageEvent<unknown>): void => {
-                try {
-                    const encoded = readMessageText(message);
-                    const kind = decodeMessageKind(encoded);
-                    if (kind === AGENT_INSTALL_COMPLETED_KIND) {
-                        const completed = decodeAgentInstallCompletedEvent(encoded);
-                        if (completed.requestId === requestId) {
-                            cleanup();
-                            resolveInstallation(completed);
-                        }
-                        return;
-                    }
-                    if (kind === AGENT_INSTALL_FAILED_KIND) {
-                        const failed = decodeAgentInstallFailedEvent(encoded);
-                        if (failed.requestId === requestId) {
-                            cleanup();
-                            rejectInstallation(new MobiusClientError(failed.code, failed.message));
-                        }
-                        return;
-                    }
-                    if (kind === AGENT_INSTALL_CANCELLED_KIND) {
-                        const cancelled = decodeAgentInstallCancelledEvent(encoded);
-                        if (cancelled.requestId === requestId) {
-                            cleanup();
-                            rejectInstallation(
-                                new MobiusClientError(
-                                    "installation_cancelled",
-                                    "The local Agent installation was cancelled",
-                                ),
-                            );
-                        }
-                        return;
-                    }
-                    if (kind === SESSION_OPERATION_FAILED_KIND) {
-                        const failed = decodeSessionOperationFailedEvent(encoded);
-                        if (failed.requestId === requestId) {
-                            cleanup();
-                            rejectInstallation(new MobiusClientError(failed.code, failed.message));
-                        }
-                    }
-                } catch (error) {
-                    cleanup();
-                    rejectInstallation(
-                        new MobiusClientError(
-                            "invalid_protocol_message",
-                            "Received an invalid Agent installation message",
-                            { cause: error },
-                        ),
-                    );
-                }
-            };
-            this.#socket.addEventListener("message", handleMessage);
-            this.#socket.addEventListener("close", handleClose, { once: true });
-        });
-        try {
-            sendImmediately(
-                this.#socket,
-                encodeOutboundMessage(() =>
-                    encodeAgentInstallRequestCommand({
-                        agentId: request.agentId,
-                        kind: AGENT_INSTALL_REQUEST_KIND,
-                        requestId,
-                    }),
-                ),
-            );
-        } catch (error) {
-            cleanupInstallation();
-            throw new MobiusClientError(
-                "connection_closed",
-                "Could not send the Agent installation request to the relay",
-                { cause: error },
-            );
-        }
-        return await result;
-    };
-
     readonly close = (): void => {
         this.#connectionController?.abort(
             new MobiusClientError("connection_closed", "The browser relay connection was closed"),
@@ -326,19 +144,7 @@ export class MobiusClient {
                 this.#onStatus(decodeRuntimeStatusEvent(encoded).online);
                 return;
             }
-            if (kind === AGENT_INSTALL_STARTED_KIND) {
-                this.#options.onInstallStarted?.(decodeAgentInstallStartedEvent(encoded));
-            } else if (kind === AGENT_INSTALL_PROGRESS_KIND) {
-                this.#options.onInstallProgress?.(decodeAgentInstallProgressEvent(encoded));
-            } else if (kind === AGENT_INSTALL_COMPLETED_KIND) {
-                this.#options.onInstallCompleted?.(decodeAgentInstallCompletedEvent(encoded));
-            } else if (kind === AGENT_INSTALL_FAILED_KIND) {
-                this.#options.onInstallFailed?.(decodeAgentInstallFailedEvent(encoded));
-            } else if (kind === AGENT_INSTALL_CANCELLED_KIND) {
-                this.#options.onInstallCancelled?.(decodeAgentInstallCancelledEvent(encoded));
-            } else {
-                decodeDaemonToServiceMessage(encoded);
-            }
+            decodeDaemonToServiceMessage(encoded);
         } catch (error) {
             this.#onProtocolError(
                 new MobiusClientError("invalid_protocol_message", "Received an invalid message from the relay", {

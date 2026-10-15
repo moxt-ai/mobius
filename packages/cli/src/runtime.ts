@@ -127,7 +127,7 @@ export async function createMobiusRuntimeEngine(
             specifications,
         });
     const inventory = await discover(signal);
-    if (inventory.available.length + inventory.installable.length === 0) {
+    if (inventory.available.length === 0) {
         throw new MobiusRuntimeConfigurationError("No supported Agent is available for the local Runtime");
     }
     const config: DaemonConfig = createDaemonConfig(
@@ -137,7 +137,6 @@ export async function createMobiusRuntimeEngine(
             relayUrl,
         },
         inventory.readyAgents(),
-        inventory.installable,
         localContext,
         null,
         createCatalogAgentResolver(

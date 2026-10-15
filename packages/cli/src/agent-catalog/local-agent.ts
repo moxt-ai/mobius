@@ -129,44 +129,11 @@ export class InProcessAcpAgentDefinition extends AgentDefinition {
 // established: an adapter child process, or an in-process agent over the vendor's own protocol.
 export type AcpAgentDefinition = LocalAgentDefinition | InProcessAcpAgentDefinition;
 
-export abstract class InstallableAgentDefinition {
-    readonly id: string;
-    readonly label: string;
-    abstract readonly status: string;
-
-    protected constructor(id: string, label: string) {
-        this.id = id;
-        this.label = label;
-    }
-}
-
-export class MissingAgentDefinition extends InstallableAgentDefinition {
-    readonly status = "agent_not_installed";
-
-    constructor(id: string, label: string) {
-        super(id, label);
-    }
-}
-
-export class AgentIntegrationDefinition extends InstallableAgentDefinition {
-    readonly agentPath: string;
-    readonly agentVersion: string;
-    readonly status = "integration_not_installed";
-
-    constructor(id: string, label: string, agentPath: string, agentVersion: string) {
-        super(id, label);
-        this.agentPath = agentPath;
-        this.agentVersion = agentVersion;
-    }
-}
-
 export class LocalAgentCatalogSnapshot {
     readonly agents: readonly AcpAgentDefinition[];
-    readonly installableAgents: readonly InstallableAgentDefinition[];
 
-    constructor(agents: readonly AcpAgentDefinition[], installableAgents: readonly InstallableAgentDefinition[]) {
+    constructor(agents: readonly AcpAgentDefinition[]) {
         this.agents = Object.freeze([...agents]);
-        this.installableAgents = Object.freeze([...installableAgents]);
     }
 }
 
@@ -182,8 +149,8 @@ export class LocalAgentCatalogError extends Error {
 export class LocalAgentCatalog {
     #snapshot: LocalAgentCatalogSnapshot;
 
-    constructor(agents: readonly AcpAgentDefinition[], installableAgents: readonly InstallableAgentDefinition[]) {
-        this.#snapshot = this.validate(agents, installableAgents);
+    constructor(agents: readonly AcpAgentDefinition[]) {
+        this.#snapshot = this.validate(agents);
     }
 
     readonly find = (agentId: string): AcpAgentDefinition => {
@@ -197,19 +164,13 @@ export class LocalAgentCatalog {
 
     readonly read = (): LocalAgentCatalogSnapshot => this.#snapshot;
 
-    readonly transition = (
-        agents: readonly AcpAgentDefinition[],
-        installableAgents: readonly InstallableAgentDefinition[],
-    ): LocalAgentCatalogSnapshot => {
-        const next = this.validate(agents, installableAgents);
+    readonly transition = (agents: readonly AcpAgentDefinition[]): LocalAgentCatalogSnapshot => {
+        const next = this.validate(agents);
         this.#snapshot = next;
         return next;
     };
 
-    private readonly validate = (
-        agents: readonly AcpAgentDefinition[],
-        installableAgents: readonly InstallableAgentDefinition[],
-    ): LocalAgentCatalogSnapshot => {
+    private readonly validate = (agents: readonly AcpAgentDefinition[]): LocalAgentCatalogSnapshot => {
         const identifiers = new Set<string>();
         for (const agent of agents) {
             if (identifiers.has(agent.id)) {
@@ -217,12 +178,6 @@ export class LocalAgentCatalog {
             }
             identifiers.add(agent.id);
         }
-        for (const agent of installableAgents) {
-            if (identifiers.has(agent.id)) {
-                throw new Error("A local Agent cannot be ready and installable");
-            }
-            identifiers.add(agent.id);
-        }
-        return new LocalAgentCatalogSnapshot(agents, installableAgents);
+        return new LocalAgentCatalogSnapshot(agents);
     };
 }

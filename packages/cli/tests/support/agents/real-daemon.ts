@@ -148,7 +148,6 @@ export async function withRealDaemon(
         const config = createDaemonConfig(
             { channelId: "real-agent", defaultWorkspace: workspace, relayUrl },
             [agent],
-            [],
             new DaemonLocalContext(directory, { ...process.env, ...environment }),
         );
         if (launch === "managed") {

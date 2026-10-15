@@ -20,7 +20,6 @@ export interface RevocableRuntimeRow extends RuntimeScopeRow {
 export interface PairingChannelRow extends RevocableRuntimeRow {
     readonly expires_at: number;
     readonly agents_json: string;
-    readonly installable_agents_json: string;
     readonly machine_name: string;
     readonly workspace_name: string;
 }

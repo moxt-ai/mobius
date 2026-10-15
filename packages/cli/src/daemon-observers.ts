@@ -1,34 +1,17 @@
-import {
-    AGENT_INSTALL_CANCELLED_KIND,
-    AGENT_INSTALL_COMPLETED_KIND,
-    AGENT_INSTALL_FAILED_KIND,
-    AGENT_INSTALL_PROGRESS_KIND,
-    AGENT_INSTALL_STARTED_KIND,
-    type AgentContentEvent,
-    type DaemonToServiceMessage,
-    type RecordedSessionEvent,
-    type SessionCommandsUpdatedEvent,
-    type SessionConfigUpdatedEvent,
-    type SessionElicitationRequestedEvent,
-    type SessionElicitationResolvedEvent,
-    type SessionInfoUpdatedEvent,
-    type SessionLiveEventV2,
-    type SessionPermissionRequestedEvent,
-    type SessionPermissionResolvedEvent,
-    type SessionUsageUpdatedEvent,
+import type {
+    AgentContentEvent,
+    RecordedSessionEvent,
+    SessionCommandsUpdatedEvent,
+    SessionConfigUpdatedEvent,
+    SessionElicitationRequestedEvent,
+    SessionElicitationResolvedEvent,
+    SessionInfoUpdatedEvent,
+    SessionLiveEventV2,
+    SessionPermissionRequestedEvent,
+    SessionPermissionResolvedEvent,
+    SessionUsageUpdatedEvent,
 } from "@moxt-ai/mobius-protocol";
-import { WebSocket } from "undici";
 import type { AcpSessionObserver } from "./acp/agent-runtime-manager.ts";
-import {
-    type AgentInstallation,
-    CancelledInstallation,
-    FailedInstallation,
-    type InstallationObserver,
-    RequestedInstallation,
-    RunningInstallation,
-    SucceededInstallation,
-} from "./agent-installation/agent-installation-manager.ts";
-import { send } from "./daemon-command-results.ts";
 
 export class DaemonAcpObserver implements AcpSessionObserver {
     readonly #record: (sessionId: string, event: RecordedSessionEvent) => void;
@@ -90,85 +73,5 @@ export class DaemonAcpObserver implements AcpSessionObserver {
     readonly onUsage = (event: SessionUsageUpdatedEvent): Promise<void> => {
         this.#record(event.sessionId, event);
         return Promise.resolve();
-    };
-}
-
-export class DaemonInstallationObserver implements InstallationObserver {
-    readonly #started = new Set<string>();
-    #socket: WebSocket | null = null;
-
-    readonly connect = (socket: WebSocket): void => {
-        this.#socket = socket;
-    };
-
-    readonly disconnect = (socket: WebSocket): void => {
-        if (this.#socket === socket) {
-            this.#socket = null;
-        }
-    };
-
-    readonly #send = (socket: WebSocket, message: DaemonToServiceMessage): void => {
-        try {
-            send(socket, message);
-        } catch {
-            if (this.#socket === socket) {
-                this.#socket = null;
-            }
-        }
-    };
-
-    readonly onState = (state: AgentInstallation): Promise<void> => {
-        const socket = this.#socket;
-        if (socket === null || socket.readyState !== WebSocket.OPEN) {
-            return Promise.resolve();
-        }
-        if (state instanceof RequestedInstallation) {
-            return Promise.resolve();
-        }
-        if (state instanceof RunningInstallation) {
-            if (!this.#started.has(state.requestId)) {
-                this.#started.add(state.requestId);
-                this.#send(socket, {
-                    agentId: state.agentId,
-                    kind: AGENT_INSTALL_STARTED_KIND,
-                    requestId: state.requestId,
-                });
-            }
-            this.#send(socket, {
-                agentId: state.agentId,
-                kind: AGENT_INSTALL_PROGRESS_KIND,
-                requestId: state.requestId,
-                stage: state.stage,
-            });
-            return Promise.resolve();
-        }
-        if (state instanceof SucceededInstallation) {
-            this.#send(socket, {
-                agentId: state.agentId,
-                authenticationMayBeRequired: state.authenticationMayBeRequired,
-                kind: AGENT_INSTALL_COMPLETED_KIND,
-                requestId: state.requestId,
-            });
-            return Promise.resolve();
-        }
-        if (state instanceof FailedInstallation) {
-            this.#send(socket, {
-                agentId: state.agentId,
-                code: state.code,
-                kind: AGENT_INSTALL_FAILED_KIND,
-                message: state.message,
-                requestId: state.requestId,
-            });
-            return Promise.resolve();
-        }
-        if (state instanceof CancelledInstallation) {
-            this.#send(socket, {
-                agentId: state.agentId,
-                kind: AGENT_INSTALL_CANCELLED_KIND,
-                requestId: state.requestId,
-            });
-            return Promise.resolve();
-        }
-        throw new Error("Unsupported Agent integration installation state");
     };
 }

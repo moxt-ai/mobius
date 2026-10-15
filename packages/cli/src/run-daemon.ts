@@ -1,21 +1,15 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { styleText } from "node:util";
-
-import { AGENT_INSTALL_REQUEST_KIND } from "@moxt-ai/mobius-protocol";
 
 import { AgentRuntimeManager } from "./acp/agent-runtime-manager.ts";
 import { CachedAcpSessionEventStoreV2 } from "./acp/session-event-store-v2.ts";
 import { SqliteAcpSessionStore } from "./acp/session-store.ts";
-import { supportedLocalAgentSpecifications } from "./agent-catalog/discover-local-agents.ts";
-import { AgentIntegrationDefinition } from "./agent-catalog/local-agent.ts";
 import { publishAgentCatalog } from "./agent-catalog/publish-agent-catalog.ts";
-import { AgentInstallationManager } from "./agent-installation/agent-installation-manager.ts";
-import { FixedInstallationExecutor } from "./agent-installation/fixed-installation-executor.ts";
 import { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
 import type { DaemonConfig } from "./config.ts";
 import { DaemonDiagnosticLog } from "./daemon-diagnostic-log.ts";
-import { DaemonAcpObserver, DaemonInstallationObserver } from "./daemon-observers.ts";
+import { DaemonAcpObserver } from "./daemon-observers.ts";
 import { DaemonTurnRegistry } from "./daemon-turn-registry.ts";
 import { AcpContentExternalizer } from "./external-content/acp-content-externalizer.ts";
 import { LocalExternalContentStore } from "./external-content/local-external-content-store.ts";
@@ -80,27 +74,6 @@ async function publishAgentCatalogUntilAvailable(
     }
 }
 
-async function installDetectedAgentIntegrations(
-    config: DaemonConfig,
-    installations: AgentInstallationManager,
-    signal: AbortSignal,
-): Promise<void> {
-    for (const agent of config.catalog.read().installableAgents) {
-        if (!(agent instanceof AgentIntegrationDefinition)) {
-            continue;
-        }
-        signal.throwIfAborted();
-        await installations.request(
-            {
-                agentId: agent.id,
-                kind: AGENT_INSTALL_REQUEST_KIND,
-                requestId: `automatic-integration-${randomUUID()}`,
-            },
-            signal,
-        );
-    }
-}
-
 export interface RunDaemonOptions {
     readonly onConnectionStatus?: (status: "online" | "reconnecting") => void;
 }
@@ -112,13 +85,6 @@ export async function runDaemon(
     options: RunDaemonOptions = {},
 ): Promise<void> {
     const stateDirectory = config.localContext.stateDirectory;
-    const specifications = supportedLocalAgentSpecifications();
-    const installationExecutor = new FixedInstallationExecutor({
-        defaultWorkspace: config.defaultWorkspace,
-        catalog: config.catalog,
-        environment: config.localContext.environment,
-        publishCatalog: async (installationSignal) => await publishAgentCatalog(config, installationSignal),
-    });
     const channelHash = createHash("sha256").update(config.channelId).digest("hex");
     const sessionDatabase = openAcpSessionDatabase(join(stateDirectory, "sessions", `${channelHash}.sqlite`));
     let eventsV2: CachedAcpSessionEventStoreV2;
@@ -171,7 +137,6 @@ export async function runDaemon(
         timer,
     );
     const directories = new WorkspaceDirectoryService(config.bindingId, config.defaultWorkspace);
-    const installationObserver = new DaemonInstallationObserver();
     const diagnostics = new RelayConnectionDiagnostics(
         config.channelId,
         config.relayUrl,
@@ -195,26 +160,10 @@ export async function runDaemon(
             );
         });
     });
-    const installations = new AgentInstallationManager(specifications, installationExecutor, installationObserver);
     let connectionEpoch = 0;
-    let automaticIntegrationProvisioningStarted = false;
-    let automaticIntegrationProvisioning = Promise.resolve();
     let connectionAnnounced = false;
     let catalogPublished = false;
     let readinessAnnounced = false;
-    const startAutomaticIntegrationProvisioning = (): void => {
-        if (!connectionAnnounced || !catalogPublished || automaticIntegrationProvisioningStarted) {
-            return;
-        }
-        automaticIntegrationProvisioningStarted = true;
-        automaticIntegrationProvisioning = installDetectedAgentIntegrations(config, installations, signal).catch(
-            (error: unknown) => {
-                if (!signal.aborted) {
-                    console.error("Mobius daemon could not automatically install detected Agent integrations", error);
-                }
-            },
-        );
-    };
     const announceReadiness = (): void => {
         if (!connectionAnnounced || !catalogPublished) {
             return;
@@ -239,7 +188,6 @@ export async function runDaemon(
             );
         }
         announceReadiness();
-        startAutomaticIntegrationProvisioning();
     };
     const catalogPublication = publishAgentCatalogUntilAvailable(config, diagnostics, signal, timer);
     void catalogPublication.then(() => {
@@ -248,7 +196,6 @@ export async function runDaemon(
         }
         catalogPublished = true;
         announceReadiness();
-        startAutomaticIntegrationProvisioning();
     });
 
     try {
@@ -259,8 +206,6 @@ export async function runDaemon(
                     config,
                     directories,
                     sessions: agentRuntime,
-                    installations,
-                    installationObserver,
                     nativeSessions,
                     operations,
                     publisher,
@@ -297,23 +242,15 @@ export async function runDaemon(
             await catalogPublication;
         } finally {
             try {
-                await automaticIntegrationProvisioning;
+                await agentRuntime.close();
             } finally {
                 try {
-                    await installations.close();
+                    sessionStore.close();
                 } finally {
                     try {
-                        await agentRuntime.close();
+                        publisher.close();
                     } finally {
-                        try {
-                            sessionStore.close();
-                        } finally {
-                            try {
-                                publisher.close();
-                            } finally {
-                                operations.close();
-                            }
-                        }
+                        operations.close();
                     }
                 }
             }

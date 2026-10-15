@@ -60,15 +60,6 @@ if (process.argv.includes("--version")) {
             });
 
             expect(inventory.available).toEqual([]);
-            expect(inventory.installable).toEqual([
-                expect.objectContaining({
-                    agentPath: piPath,
-                    agentVersion: "0.85.0",
-                    id: "pi",
-                    label: "Pi",
-                    status: "integration_not_installed",
-                }),
-            ]);
             expect(inventory.unavailable).toHaveLength(1);
             expect(inventory.unavailable[0]).toMatchObject({
                 code: "authentication_required",

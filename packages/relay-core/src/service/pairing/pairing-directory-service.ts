@@ -4,7 +4,7 @@ import {
     RuntimeAccessContext,
 } from "../../entity/authentication/project-authentication.ts";
 import { ProjectScope } from "../../entity/do/session.ts";
-import type { AgentDescriptor, ClaimedPairing, InstallableAgentDescriptor } from "../../entity/pairing/pairing.ts";
+import type { AgentDescriptor, ClaimedPairing } from "../../entity/pairing/pairing.ts";
 import {
     ACCESS_GRANT_LIFETIME_MILLISECONDS,
     ChannelDescriptor,
@@ -24,7 +24,6 @@ import {
     PairingDirectoryError,
     PendingPairingStatus,
     parseAgents,
-    parseInstallableAgents,
     RevokedPairingStatus,
     RevokedProjectRuntime,
     VerifiedChannelAccess,
@@ -440,7 +439,6 @@ export class PairingDirectoryService implements PairingOperations {
         machineName: string,
         workspaceName: string,
         agents: readonly AgentDescriptor[],
-        installableAgents: readonly InstallableAgentDescriptor[],
         signal: AbortSignal,
     ): Promise<ClaimedPairing> => {
         signal.throwIfAborted();
@@ -461,7 +459,6 @@ export class PairingDirectoryService implements PairingOperations {
                 machineName,
                 workspaceName,
                 JSON.stringify(agents),
-                JSON.stringify(installableAgents),
                 `rpa_${crypto.randomUUID()}`,
                 signal,
             );
@@ -495,9 +492,8 @@ export class PairingDirectoryService implements PairingOperations {
         machineName,
         workspaceName,
         agents,
-        installableAgents,
         signal,
-    ) => await this.redeemPairing("", pairingCode, machineName, workspaceName, agents, installableAgents, signal);
+    ) => await this.redeemPairing("", pairingCode, machineName, workspaceName, agents, signal);
 
     readonly redeemRuntimePairing: PairingOperations["redeemRuntimePairing"] = async (
         pairingId,
@@ -505,7 +501,6 @@ export class PairingDirectoryService implements PairingOperations {
         machineName,
         workspaceName,
         agents,
-        installableAgents,
         signal,
     ) =>
         await this.redeemPairing(
@@ -514,7 +509,6 @@ export class PairingDirectoryService implements PairingOperations {
             machineName,
             workspaceName,
             agents,
-            installableAgents,
             signal,
         );
 
@@ -614,7 +608,6 @@ export class PairingDirectoryService implements PairingOperations {
                     row.workspace_name,
                     row.project_id,
                     row.runtime_id,
-                    parseInstallableAgents(row.installable_agents_json),
                 ),
         );
     };
@@ -636,7 +629,6 @@ export class PairingDirectoryService implements PairingOperations {
             row.workspace_name,
             row.project_id,
             row.runtime_id,
-            parseInstallableAgents(row.installable_agents_json),
         );
     };
 
@@ -653,7 +645,6 @@ export class PairingDirectoryService implements PairingOperations {
                 row.workspace_name,
                 row.project_id,
                 row.runtime_id,
-                parseInstallableAgents(row.installable_agents_json),
             );
         }
         if (row.status === "revoked") {
@@ -758,27 +749,11 @@ export class PairingDirectoryService implements PairingOperations {
         }
     };
 
-    readonly updateAgentCatalog: PairingOperations["updateAgentCatalog"] = async (
-        channelId,
-        token,
-        agents,
-        installableAgents,
-        signal,
-    ) => {
+    readonly updateAgentCatalog: PairingOperations["updateAgentCatalog"] = async (channelId, token, agents, signal) => {
         signal.throwIfAborted();
         const tokenHash = await hashSecret(validateToken(token));
         const storage = await this.identityStorage({ kind: "daemon", channelId, tokenHash }, signal);
-        if (
-            (
-                await storage.updateAgents(
-                    channelId,
-                    tokenHash,
-                    JSON.stringify(agents),
-                    JSON.stringify(installableAgents),
-                    signal,
-                )
-            ).meta.changes !== 1
-        ) {
+        if ((await storage.updateAgents(channelId, tokenHash, JSON.stringify(agents), signal)).meta.changes !== 1) {
             throw new PairingDirectoryError("unauthorized", "A valid channel token is required");
         }
     };

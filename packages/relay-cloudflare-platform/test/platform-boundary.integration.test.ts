@@ -666,7 +666,7 @@ describe.sequential("Platform Session-only boundary", () => {
     });
 
     // Graceful eviction drains in-flight Runtime events before hibernating the sockets.
-    it("Given a linked Codex Runtime, When Chat imports, forks, configures and prompts Sessions across Relay hibernation, Then results, answers and connection status arrive without cloud Session storage", async () => {
+    it("Given a linked Codex Runtime without installation metadata, When Chat imports, forks, configures and prompts Sessions across Relay hibernation, Then results, answers and connection status arrive without cloud Session storage", async () => {
         vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
@@ -734,7 +734,6 @@ describe.sequential("Platform Session-only boundary", () => {
                     {
                         body: JSON.stringify({
                             agents: readyAgents,
-                            installableAgents: [],
                             machineName: "Private reconnect Runtime",
                             pairingCode: text(pairing, "pairingCode"),
                             workspaceName: "private-reconnect-workspace",
@@ -1777,7 +1776,6 @@ describe.sequential("Platform Turn submission", () => {
                     {
                         body: JSON.stringify({
                             agents: readyAgents,
-                            installableAgents: [],
                             machineName: "Long prompt Runtime",
                             pairingCode: text(pairing, "pairingCode"),
                             workspaceName: "long-prompt-workspace",

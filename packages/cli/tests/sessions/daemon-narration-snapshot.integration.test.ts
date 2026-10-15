@@ -155,7 +155,6 @@ describe("daemon narration delivery", () => {
                 relayUrl,
             },
             [agent],
-            [],
             new DaemonLocalContext(stateDirectory),
         );
         const cancellation = new AbortController();

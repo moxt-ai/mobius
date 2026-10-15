@@ -12,7 +12,6 @@ import {
     MissingAdapter,
     MissingAgent,
     type UnavailableAgent,
-    type UnavailableInstalledAgent,
     UnsupportedAgentVersion,
 } from "./agent-discovery.ts";
 import type { LocalAgentDiscoveryContext } from "./agent-discovery-context.ts";
@@ -27,7 +26,6 @@ import { probeVersion, resolveAdapterExecutables, resolveAgentExecutables } from
 
 import {
     type AcpAgentDefinition,
-    AgentIntegrationDefinition,
     InProcessAcpAgentDefinition as InProcessAgentDefinition,
     LocalAgentDefinition,
 } from "./local-agent.ts";
@@ -68,24 +66,20 @@ async function probeWithRetry<Value>(signal: AbortSignal, probe: () => Promise<V
     }
 }
 
-function integrationProbeFailure(
-    specification: LocalAgentSpecification,
-    agent: AgentIntegrationDefinition,
-    error: unknown,
-): UnavailableInstalledAgent {
+function integrationProbeFailure(specification: LocalAgentSpecification, error: unknown): UnavailableAgent {
     if (error instanceof AgentProbeError) {
         if (error.code === "authentication_required") {
-            return new AuthenticationRequiredAgent(specification, agent);
+            return new AuthenticationRequiredAgent(specification);
         }
         return error.code === "acp_incompatible"
-            ? new IncompatibleAdapter(specification, agent, error.message)
-            : new IntegrationProbeFailed(specification, agent, error.code, error.message);
+            ? new IncompatibleAdapter(specification, error.message)
+            : new IntegrationProbeFailed(specification, error.code, error.message);
     }
     if (error instanceof ProcessExecutionError) {
         const code = error.code === "process_timeout" ? "adapter_probe_timeout" : "adapter_probe_failed";
-        return new IntegrationProbeFailed(specification, agent, code, "Adapter version probe failed");
+        return new IntegrationProbeFailed(specification, code, "Adapter version probe failed");
     }
-    return new IntegrationProbeFailed(specification, agent, "adapter_probe_failed", "Adapter probe failed");
+    return new IntegrationProbeFailed(specification, "adapter_probe_failed", "Adapter probe failed");
 }
 
 export async function discoverAgent(
@@ -134,16 +128,10 @@ export async function discoverAgent(
             );
             continue;
         }
-        const installedAgent = new AgentIntegrationDefinition(
-            specification.id,
-            specification.label,
-            agent.identity.requestedPath,
-            agentVersion,
-        );
         if (!supportedVersion) {
             lastFailure = new UnsupportedAgentVersion(
                 specification,
-                installedAgent,
+                agentVersion,
                 specification.minimumSupportedAgentVersion,
             );
             continue;
@@ -151,7 +139,7 @@ export async function discoverAgent(
         // An in-process Agent is its own adapter: `resolveAdapterExecutables` already returned the
         // Agent executable, so an empty adapter list never means "install an adapter" here.
         if (adapters.length === 0 && !(specification instanceof InProcessAcpAgentDefinition)) {
-            return new MissingAdapter(specification, installedAgent);
+            return new MissingAdapter(specification);
         }
 
         for (const adapter of adapters) {
@@ -184,7 +172,7 @@ export async function discoverAgent(
                 if (context.signal.aborted) {
                     context.signal.throwIfAborted();
                 }
-                lastFailure = integrationProbeFailure(specification, installedAgent, error);
+                lastFailure = integrationProbeFailure(specification, error);
                 continue;
             }
 
@@ -239,7 +227,7 @@ export async function discoverAgent(
                 if (context.signal.aborted) {
                     context.signal.throwIfAborted();
                 }
-                const failure = integrationProbeFailure(specification, installedAgent, error);
+                const failure = integrationProbeFailure(specification, error);
                 if (failure instanceof AuthenticationRequiredAgent) {
                     return failure;
                 }
