@@ -437,9 +437,16 @@ function decodeAgentDescriptor(value: unknown): MobiusAgentDescriptor {
     );
 }
 
+const EMPTY_INSTALLABLE_AGENTS: readonly never[] = Object.freeze([]);
+
+function validateInstallableAgentsCompatibility(resource: Readonly<Record<string, unknown>>): void {
+    arrayField(resource, "installableAgents", 100);
+}
+
 export class MobiusRuntimeDescriptor {
     readonly agents: readonly MobiusAgentDescriptor[];
     readonly channelId: string;
+    readonly installableAgents = EMPTY_INSTALLABLE_AGENTS;
     readonly machineName: string;
     readonly online: boolean;
     readonly projectId: string;
@@ -468,6 +475,7 @@ export class MobiusRuntimeDescriptor {
 export class MobiusChannelDescriptor {
     readonly agents: readonly MobiusAgentDescriptor[];
     readonly channelId: string;
+    readonly installableAgents = EMPTY_INSTALLABLE_AGENTS;
     readonly machineName: string;
     readonly projectId: string;
     readonly runtimeId: string;
@@ -492,6 +500,7 @@ export class MobiusChannelDescriptor {
 
 export function decodeMobiusChannelDescriptor(value: unknown): MobiusChannelDescriptor {
     const channel = record(value, "channel descriptor");
+    validateInstallableAgentsCompatibility(channel);
     return new MobiusChannelDescriptor(
         arrayField(channel, "agents", 100).map(decodeAgentDescriptor),
         identifierField(channel, "channelId"),
@@ -504,6 +513,7 @@ export function decodeMobiusChannelDescriptor(value: unknown): MobiusChannelDesc
 
 export function decodeRuntimeDescriptor(value: unknown): MobiusRuntimeDescriptor {
     const runtime = record(value, "Runtime descriptor");
+    validateInstallableAgentsCompatibility(runtime);
     return new MobiusRuntimeDescriptor(
         arrayField(runtime, "agents", 100).map(decodeAgentDescriptor),
         identifierField(runtime, "channelId"),
@@ -617,6 +627,7 @@ export class MobiusExpiredRuntimePairingStatus extends MobiusRuntimePairingStatu
 export class MobiusPairedRuntimePairingStatus extends MobiusRuntimePairingStatus {
     readonly agents: readonly MobiusAgentDescriptor[];
     readonly channelId: string;
+    readonly installableAgents = EMPTY_INSTALLABLE_AGENTS;
     readonly machineName: string;
     readonly projectId: string;
     readonly runtimeId: string;
@@ -668,6 +679,7 @@ export function decodeMobiusRuntimePairingStatus(value: unknown): MobiusRuntimeP
         );
     }
     if (lifecycle === MobiusRuntimePairingLifecycle.Paired) {
+        validateInstallableAgentsCompatibility(status);
         return new MobiusPairedRuntimePairingStatus(
             arrayField(status, "agents", 100).map(decodeAgentDescriptor),
             identifierField(status, "channelId"),

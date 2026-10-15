@@ -11,6 +11,7 @@ export class RuntimeStatus {
 export class RuntimeDescriptor {
     readonly agents: ChannelDescriptor["agents"];
     readonly channelId: string;
+    readonly installableAgents: ChannelDescriptor["installableAgents"];
     readonly machineName: string;
     readonly online: boolean;
     readonly projectId: string;
@@ -20,6 +21,7 @@ export class RuntimeDescriptor {
     constructor(channel: ChannelDescriptor, status: RuntimeStatus) {
         this.agents = channel.agents;
         this.channelId = channel.channelId;
+        this.installableAgents = channel.installableAgents;
         this.machineName = channel.machineName;
         this.online = status.online;
         this.projectId = channel.projectId;

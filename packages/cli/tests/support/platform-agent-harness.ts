@@ -95,6 +95,7 @@ export async function createFakeAgentHarnessRuntime(options: {
                     new Request(`${options.origin}/mobius/api/v1/runtime-pairings/${pairing.pairingId}/redeem`, {
                         body: JSON.stringify({
                             agents: fakeAgentHarnessCatalog(harnesses),
+                            installableAgents: [],
                             machineName: "Controlled Agent harness",
                             pairingCode: pairing.pairingCode,
                             workspaceName: "Controlled workspace",
