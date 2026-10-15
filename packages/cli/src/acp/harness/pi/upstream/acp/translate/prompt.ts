@@ -6,7 +6,7 @@ export type PiImage = {
     data: string;
 };
 
-export function promptToPiMessage(blocks: ContentBlock[]): {
+export function promptToPiMessage(blocks: readonly ContentBlock[]): {
     message: string;
     images: PiImage[];
 } {
