@@ -1,11 +1,14 @@
 import { randomUUID } from "node:crypto";
 import {
     decodeMessageKind,
+    decodeSessionEventEnvelopeV2,
     decodeSessionEventV2,
+    decodeSessionQueuedEvent,
     decodeSessionReadyEvent,
     encodeSessionPermissionRespondCommand,
     encodeSessionPrepareCommand,
     encodeSessionPromptCommand,
+    encodeSessionPromptDispositionCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { expect, test } from "vitest";
@@ -14,6 +17,140 @@ import { PiFixture } from "../support/agents/pi.ts";
 import { withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 import { fakeProviderPrompts } from "../support/llm/scenarios.ts";
+
+test("Given real Pi has an active SDK turn, When the user steers it, Then Pi continues the same turn with the steering prompt", async () => {
+    const activeEntered = Promise.withResolvers<void>();
+    const releaseActive = Promise.withResolvers<void>();
+    let responseNumber = 0;
+    await using provider = await FakeOpenAiProvider.start("gpt-4.1", "REAL_PI_STEERING_REPLY", {
+        beforeFirstText: async () => {
+            responseNumber += 1;
+            if (responseNumber === 1) {
+                activeEntered.resolve();
+                await releaseActive.promise;
+            }
+        },
+    });
+    await using agent = await PiFixture.create(provider);
+    try {
+        await withRealDaemon(new PiAgentSpecification(), agent.environment, async (peer) => {
+            const activeCommandId = randomUUID();
+            const steeringCommandId = randomUUID();
+            const sendPrompt = (
+                commandId: string,
+                prompt: string,
+                disposition: "queue" | "reject",
+                targetCommandId: string,
+            ): void =>
+                peer.send(
+                    encodeSessionPromptCommand({
+                        additionalDirectoryIds: [],
+                        agentId: "pi",
+                        bindingId: peer.bindingId,
+                        commandId,
+                        directoryId: "default",
+                        disposition,
+                        images: [],
+                        kind: "session.prompt",
+                        prompt,
+                        resources: [],
+                        sessionId: peer.sessionId,
+                        targetCommandId,
+                    }),
+                );
+
+            sendPrompt(
+                activeCommandId,
+                "Start the task and wait for updated instructions",
+                SessionPromptDisposition.Reject,
+                "",
+            );
+            await activeEntered.promise;
+            sendPrompt(
+                steeringCommandId,
+                "Use the steering requirement in the same turn",
+                SessionPromptDisposition.Queue,
+                activeCommandId,
+            );
+            let steeringCompleted = false;
+            for (;;) {
+                const message = await peer.nextMessage();
+                if (
+                    decodeMessageKind(message) === "session.queued" &&
+                    decodeSessionQueuedEvent(message).commandId === steeringCommandId
+                ) {
+                    break;
+                }
+            }
+            peer.send(
+                encodeSessionPromptDispositionCommand({
+                    commandId: steeringCommandId,
+                    disposition: SessionPromptDisposition.Steer,
+                    kind: "session.prompt.disposition",
+                    sessionId: peer.sessionId,
+                }),
+            );
+
+            for (;;) {
+                const message = await peer.nextMessage();
+                if (decodeMessageKind(message) !== "session.event.v2") {
+                    continue;
+                }
+                for (const event of decodeSessionEventEnvelopeV2(message).events) {
+                    if (
+                        event.type === "lifecycle-metadata" &&
+                        event.payload.kind === "prompt.failed" &&
+                        event.payload.commandId === steeringCommandId
+                    ) {
+                        throw new Error(JSON.stringify(event));
+                    }
+                    if (
+                        event.type === "lifecycle-metadata" &&
+                        event.payload.kind === "prompt.completed" &&
+                        event.payload.commandId === steeringCommandId
+                    ) {
+                        expect(event.payload.stopReason).toBe("steered");
+                        steeringCompleted = true;
+                        releaseActive.resolve();
+                    }
+                }
+                if (steeringCompleted) {
+                    break;
+                }
+            }
+            let text = "";
+            for (;;) {
+                const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+                if (
+                    event.type === "acp" &&
+                    event.payload.sessionUpdate === "agent_message_chunk" &&
+                    event.payload.content.type === "text"
+                ) {
+                    text += event.payload.content.text;
+                }
+                if (
+                    event.type === "lifecycle-metadata" &&
+                    event.payload.kind === "prompt.failed" &&
+                    event.payload.commandId === activeCommandId
+                ) {
+                    throw new Error(JSON.stringify(event));
+                }
+                if (
+                    event.type === "lifecycle-metadata" &&
+                    event.payload.kind === "prompt.completed" &&
+                    event.payload.commandId === activeCommandId
+                ) {
+                    expect(event.payload.stopReason).toBe("end_turn");
+                    break;
+                }
+            }
+            expect(text.match(/REAL_PI_STEERING_REPLY/gu)).toHaveLength(2);
+            expect(provider.diagnostics()).toHaveLength(2);
+        });
+    } finally {
+        releaseActive.resolve();
+    }
+});
 
 test("Given real Pi only supports disabled thinking, When a session is prepared, Then the daemon omits the non-configurable Thinking control", async () => {
     await using provider = await FakeOpenAiProvider.start("gpt-4.1", "REAL_PI_REPLY");

@@ -79,6 +79,11 @@ export class PiAcpEndpoint implements InProcessAcpEndpoint {
                     context.signal.removeEventListener("abort", cancel);
                 }
             })
+            .onRequest(
+                "_session/steering",
+                (params: unknown) => params,
+                async (context) => await piAgentOrThrow(piAgent).steer(context.params, context.signal),
+            )
             .onNotification(methods.agent.session.cancel, async (context) => {
                 await piAgentOrThrow(piAgent).cancel(context.params);
             });

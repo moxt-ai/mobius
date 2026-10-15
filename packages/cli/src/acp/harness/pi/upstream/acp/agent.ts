@@ -1,10 +1,11 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync, unlinkSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
-import type { AvailableCommand } from "@agentclientprotocol/sdk";
 import {
     type AuthenticateRequest,
+    type AvailableCommand,
     type CancelNotification,
+    type ContentBlock,
     type DeleteSessionRequest,
     type DeleteSessionResponse,
     type ForkSessionRequest,
@@ -27,6 +28,7 @@ import {
     type SetSessionModeResponse,
     type StopReason,
 } from "@agentclientprotocol/sdk";
+import { z } from "zod";
 import { PiRpcProcess } from "../pi-rpc/process.js";
 import { getAuthMethods } from "./auth.js";
 import { maybeAuthRequiredError } from "./auth-required.js";
@@ -51,6 +53,30 @@ type AdvertisedModel = {
 
 const MODEL_CONFIG_ID = "model";
 const THOUGHT_LEVEL_CONFIG_ID = "thought_level";
+
+const contentBlockSchema: z.ZodType<ContentBlock> = z.discriminatedUnion("type", [
+    z.object({ type: z.literal("text"), text: z.string() }),
+    z.object({ type: z.literal("image"), data: z.string(), mimeType: z.string() }),
+    z.object({ type: z.literal("audio"), data: z.string(), mimeType: z.string() }),
+    z.object({ type: z.literal("resource_link"), name: z.string(), uri: z.string() }),
+    z.object({
+        type: z.literal("resource"),
+        resource: z.union([
+            z.object({ mimeType: z.string().nullish(), text: z.string(), uri: z.string() }),
+            z.object({ blob: z.string(), mimeType: z.string().nullish(), uri: z.string() }),
+        ]),
+    }),
+]);
+
+const steerRequestSchema = z.object({
+    _meta: z
+        .object({
+            steering: z.object({ idleBehavior: z.literal("promptRequired").optional() }).optional(),
+        })
+        .nullish(),
+    prompt: z.array(contentBlockSchema).min(1),
+    sessionId: z.string().min(1),
+});
 
 function thinkingLevelName(id: string): string {
     return id
@@ -251,6 +277,7 @@ export class PiAcpAgent {
         const requested = params.protocolVersion;
 
         return {
+            _meta: { steering: { supported: true } },
             protocolVersion: requested === supportedVersion ? requested : supportedVersion,
             agentInfo: {
                 name: PI_ACP_NAME,
@@ -951,6 +978,29 @@ export class PiAcpAgent {
             result === "error" ? (session.wasCancelRequested() ? "cancelled" : "end_turn") : result;
 
         return { stopReason };
+    }
+
+    async steer(
+        params: unknown,
+        signal: AbortSignal,
+    ): Promise<{ readonly outcome: "injected" | "promptRequired"; readonly reason?: string }> {
+        signal.throwIfAborted();
+        const parsed = steerRequestSchema.safeParse(params);
+        if (!parsed.success) {
+            throw RequestError.invalidParams("Invalid steering request");
+        }
+        const session = this.sessions.maybeGet(parsed.data.sessionId);
+        if (session === undefined) {
+            return { outcome: "promptRequired", reason: "noRunningTurn" };
+        }
+        const { message, images } = promptToPiMessage(parsed.data.prompt);
+        const steering = await session.steer(message, images, signal);
+        switch (steering.kind) {
+            case "idle":
+                return { outcome: "promptRequired", reason: "noRunningTurn" };
+            case "injected":
+                return { outcome: "injected" };
+        }
     }
 
     async cancel(params: CancelNotification): Promise<void> {
