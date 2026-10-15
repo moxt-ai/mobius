@@ -38,16 +38,7 @@ import { getAgentDir, getEnableSkillCommands, getQuietStartup } from "./pi-setti
 import { type PiAcpSession, SessionManager } from "./session.js";
 import { SessionStore } from "./session-store.js";
 import { loadSlashCommands, parseCommandArgs, toAvailableCommands } from "./slash-commands.js";
-import {
-    bashCommand,
-    bashExitCode,
-    bashResultText,
-    bashTerminalContent,
-    bashTerminalExitMeta,
-    bashTerminalInfoMeta,
-    bashTerminalOutputMeta,
-    isBashTool,
-} from "./translate/bash.js";
+import { bashCommand, bashResultText, isBashTool } from "./translate/bash.js";
 import { normalizePiAssistantText, normalizePiMessageText } from "./translate/pi-messages.js";
 import { toolResultToText } from "./translate/pi-tools.js";
 import { promptToPiMessage } from "./translate/prompt.js";
@@ -1159,8 +1150,7 @@ export class PiAcpAgent {
                             title: bashCommand(m) ?? toolName,
                             kind: "execute",
                             status: "completed",
-                            content: bashTerminalContent(toolCallId),
-                            _meta: bashTerminalInfoMeta(toolCallId, params.cwd),
+                            rawInput: null,
                         },
                     });
 
@@ -1170,10 +1160,8 @@ export class PiAcpAgent {
                             sessionUpdate: "tool_call_update",
                             toolCallId,
                             status: isError ? "failed" : "completed",
-                            _meta: {
-                                ...(text ? bashTerminalOutputMeta(toolCallId, text) : {}),
-                                ...bashTerminalExitMeta(toolCallId, bashExitCode(m, isError)),
-                            },
+                            content: text ? [{ type: "content", content: { type: "text", text } }] : null,
+                            rawOutput: m,
                         },
                     });
                     continue;
