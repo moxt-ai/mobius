@@ -46,7 +46,7 @@ export class RuntimeUpgradeService implements RuntimeManagement {
         }
         this.storage.touch(runtimeId, projectId, Date.now());
         if (message.kind === "runtime.diagnostics.result" && message.requestId.startsWith("updiag_")) {
-            this.storage.version(message.version);
+            this.storage.version(runtimeId, message.version);
             await this.check(runtimeId, projectId, signal, true);
             return true;
         } else if (message.kind === "runtime.upgrade.result") {
@@ -77,7 +77,7 @@ export class RuntimeUpgradeService implements RuntimeManagement {
                           },
                       }
                     : message;
-            if (this.storage.result(clean, Date.now())) {
+            if (this.storage.result(runtimeId, clean, Date.now())) {
                 const appId = await this.tasks.projectApp(projectId, signal);
                 if (appId !== null) {
                     this.waitUntil(
@@ -149,7 +149,12 @@ export class RuntimeUpgradeService implements RuntimeManagement {
             return;
         }
         const requestId = decodeIdentifier(`upg_${crypto.randomUUID()}`);
-        this.storage.attempt({ requestId, revision: task.revision, version: task.version, sentAt: Date.now() });
+        this.storage.attempt(runtimeId, {
+            requestId,
+            revision: task.revision,
+            version: task.version,
+            sentAt: Date.now(),
+        });
         this.send({ kind: "runtime.upgrade.request", requestId, version: task.version });
     };
     private readonly online = (runtimeId: string, projectId: string): boolean =>
