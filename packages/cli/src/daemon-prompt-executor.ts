@@ -14,7 +14,6 @@ import {
     applyCompleteSessionConfiguration,
     assertAppliedSessionConfiguration,
 } from "./acp/session-config/apply-session-configuration.ts";
-import type { AuditStore } from "./audit/audit-store.ts";
 import { resolveSessionDirectories } from "./authorization/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
 import type { DaemonConfig } from "./config.ts";
@@ -51,7 +50,6 @@ export interface ExecutePromptOptions {
     readonly command: SessionPromptCommand;
     readonly config: DaemonConfig;
     readonly directories: WorkspaceDirectoryService;
-    readonly audit: AuditStore;
     readonly sessions: AgentRuntimeManager;
     readonly attemptId: string;
     readonly activateAttempt: () => { readonly epoch: string; readonly sequence: 0 };
@@ -78,7 +76,6 @@ export async function executePrompt({
     command,
     config,
     directories,
-    audit,
     sessions,
     attemptId,
     activateAttempt,
@@ -132,7 +129,6 @@ export async function executePrompt({
             } else {
                 await applyCompleteSessionConfiguration(
                     sessions,
-                    audit,
                     prepared.configOptions,
                     sessionConfigurations ?? [],
                     executionAgent,
@@ -145,11 +141,6 @@ export async function executePrompt({
                 prepared = await sessions.prepareExecutionSession(preparation);
             }
         }
-        audit.record({
-            commandId: command.commandId,
-            event: "session_authorized",
-            sessionId: command.sessionId,
-        });
         operations.transitionExecution(command.commandId, "running");
         if (availability.disposition === SessionPromptDisposition.Steer) {
             if (!recordSteeringPrompt()) {
@@ -219,27 +210,12 @@ export async function executePrompt({
 
         await eventProjectionV2.completed(command.sessionId, command.commandId, stopReason);
         operations.transitionExecution(command.commandId, stopReason === "cancelled" ? "cancelled" : "succeeded");
-        audit.record({
-            commandId: command.commandId,
-            event: stopReason === "cancelled" ? "session_cancelled" : "session_completed",
-            sessionId: command.sessionId,
-        });
     } catch (error) {
         if (signal.aborted && cancellationRequested()) {
             await eventProjectionV2.completed(command.sessionId, command.commandId, "cancelled");
             operations.transitionExecution(command.commandId, "cancelled");
-            audit.record({
-                commandId: command.commandId,
-                event: "session_cancelled",
-                sessionId: command.sessionId,
-            });
             return;
         }
-        audit.record({
-            commandId: command.commandId,
-            event: "session_failed",
-            sessionId: command.sessionId,
-        });
         const code = operationErrorCode(error);
         const failureCode = code === "session_operation_failed" ? "agent_execution_failed" : code;
         const failureMessage =

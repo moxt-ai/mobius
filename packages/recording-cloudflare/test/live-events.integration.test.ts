@@ -445,6 +445,44 @@ describe("Recording incremental reads", () => {
         expect(page.truncated).toBe(true);
         expect(page.nextCursor).toBe("v2:2:1");
     });
+    it("Given a long Session with many recorded batches, When a caller follows page cursors from the start, Then every event is returned once in order", async () => {
+        const batchCount = 70;
+        for (let batchIndex = 0; batchIndex < batchCount; batchIndex += 1) {
+            expect(
+                (
+                    await worker.fetch(
+                        write("runtime-live", {
+                            kind: "session.event.v2",
+                            events: numberedEvents(3, 1 + batchIndex * 3),
+                        }),
+                        env,
+                    )
+                ).status,
+            ).toBe(201);
+        }
+        const received: string[] = [];
+        let cursor = "0";
+        let tailCursor = "";
+        for (;;) {
+            const page = decodeSessionRecordingHistoryPage(
+                await (await worker.fetch(read(`?after=${encodeURIComponent(cursor)}&limit=50`), env)).text(),
+            );
+            received.push(...page.events.map((candidate) => candidate.position));
+            tailCursor = page.tailCursor;
+            if (!page.truncated || page.nextCursor === null) {
+                break;
+            }
+            cursor = page.nextCursor;
+        }
+        expect(received).toEqual(Array.from({ length: batchCount * 3 }, (_, index) => String(index + 1)));
+        expect(tailCursor).toBe(`v2:${batchCount}:${batchCount * 3}`);
+        const resumed = decodeSessionRecordingHistoryPage(
+            await (await worker.fetch(read("?after=100&limit=4"), env)).text(),
+        );
+        expect(resumed.events.map((candidate) => candidate.position)).toEqual(["101", "102", "103", "104"]);
+        expect(resumed.nextCursor).toBe("v2:35:104");
+        expect(resumed.generationReset).toBe(false);
+    });
     it("Given no incremental query, When a caller reads the session, Then the full history contract is unchanged", async () => {
         expect(
             (await worker.fetch(write("runtime-live", { kind: "session.event.v2", events: numberedEvents(2, 0) }), env))

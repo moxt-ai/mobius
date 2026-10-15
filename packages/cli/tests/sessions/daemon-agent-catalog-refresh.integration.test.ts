@@ -24,7 +24,6 @@ import { DirectAcpAgentDefinition } from "../../src/agent-catalog/agent-specific
 import { discoverLocalAgentInventory } from "../../src/agent-catalog/discover-local-agents.ts";
 import { publishAgentCatalog } from "../../src/agent-catalog/publish-agent-catalog.ts";
 import { createCatalogAgentResolver } from "../../src/agent-catalog/resolve-catalog-agent.ts";
-import { AuditStore } from "../../src/audit/audit-store.ts";
 import { createDaemonConfig, DaemonLocalContext } from "../../src/config.ts";
 import { runDaemon } from "../../src/run-daemon.ts";
 
@@ -272,8 +271,7 @@ test("Given the local Agent executable is upgraded after the daemon started, Whe
         ),
     );
     const cancellation = new AbortController();
-    const audit = new AuditStore();
-    const daemon = runDaemon(config, audit, cancellation.signal);
+    const daemon = runDaemon(config, cancellation.signal);
 
     try {
         const frames = new ClientFrames(await socketReady.promise);
@@ -332,7 +330,6 @@ test("Given the local Agent executable is upgraded after the daemon started, Whe
             socket.destroy();
         }
         relay.close();
-        audit.close();
         await daemon.catch(() => {});
         await rm(stateDirectory, { force: true, recursive: true });
     }

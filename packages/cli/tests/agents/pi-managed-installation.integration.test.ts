@@ -5,7 +5,7 @@ import { expect, test } from "vitest";
 import { PiAgentSpecification } from "../../src/agent-catalog/agents/pi-agent.ts";
 import { ManagedNpmPackageInstaller } from "../../src/agent-installation/managed-npm-package.ts";
 import { PI_AGENT_PACKAGE } from "../../src/agent-installation/pi-managed-packages.ts";
-import { runBoundedProcess } from "../../src/process/executable.ts";
+import { runBoundedProcess } from "../../src/util/process/executable.ts";
 
 test("Given a user installs managed Pi, When its verified executable starts, Then Pi 1.1.0 is available", async () => {
     const directory = await mkdtemp(join(tmpdir(), "mobius-managed-pi-"));

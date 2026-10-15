@@ -21,7 +21,6 @@ import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { type WebSocket, WebSocketServer } from "ws";
 import type { LocalAgentSpecification } from "../../../src/agent-catalog/agent-specification.ts";
 import { discoverLocalAgentInventory } from "../../../src/agent-catalog/discover-local-agents.ts";
-import { AuditStore } from "../../../src/audit/audit-store.ts";
 import { createDaemonConfig, DaemonLocalContext } from "../../../src/config.ts";
 import { openMobiusCliInstallation } from "../../../src/pairing/pair-local-machine.ts";
 import { runDaemon } from "../../../src/run-daemon.ts";
@@ -172,7 +171,7 @@ export async function withRealDaemon(
                 await cli(["start"]);
             } else {
                 execution = new AbortController();
-                daemon = runDaemon(config, new AuditStore(), AbortSignal.any([signal, execution.signal]));
+                daemon = runDaemon(config, AbortSignal.any([signal, execution.signal]));
                 void daemon.catch((error: unknown) => {
                     connected.reject(error);
                     waiter?.reject(error);

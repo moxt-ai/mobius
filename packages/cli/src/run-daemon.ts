@@ -12,11 +12,10 @@ import { AgentIntegrationDefinition } from "./agent-catalog/local-agent.ts";
 import { publishAgentCatalog } from "./agent-catalog/publish-agent-catalog.ts";
 import { AgentInstallationManager } from "./agent-installation/agent-installation-manager.ts";
 import { FixedInstallationExecutor } from "./agent-installation/fixed-installation-executor.ts";
-import type { AuditStore } from "./audit/audit-store.ts";
 import { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
 import type { DaemonConfig } from "./config.ts";
 import { DaemonDiagnosticLog } from "./daemon-diagnostic-log.ts";
-import { AuditInstallationEvents, DaemonAcpObserver, DaemonInstallationObserver } from "./daemon-observers.ts";
+import { DaemonAcpObserver, DaemonInstallationObserver } from "./daemon-observers.ts";
 import { DaemonTurnRegistry } from "./daemon-turn-registry.ts";
 import { AcpContentExternalizer } from "./external-content/acp-content-externalizer.ts";
 import { LocalExternalContentStore } from "./external-content/local-external-content-store.ts";
@@ -108,17 +107,14 @@ export interface RunDaemonOptions {
 
 export async function runDaemon(
     config: DaemonConfig,
-    audit: AuditStore,
     signal: AbortSignal,
     timer: DaemonTimer = systemDaemonTimer,
     options: RunDaemonOptions = {},
 ): Promise<void> {
-    const installationAudit = new AuditInstallationEvents(audit);
     const stateDirectory = config.localContext.stateDirectory;
     const specifications = supportedLocalAgentSpecifications();
     const installationExecutor = new FixedInstallationExecutor({
         defaultWorkspace: config.defaultWorkspace,
-        audit: installationAudit,
         catalog: config.catalog,
         environment: config.localContext.environment,
         publishCatalog: async (installationSignal) => await publishAgentCatalog(config, installationSignal),
@@ -177,43 +173,29 @@ export async function runDaemon(
     const directories = new WorkspaceDirectoryService(config.bindingId, config.defaultWorkspace);
     const installationObserver = new DaemonInstallationObserver();
     const diagnostics = new RelayConnectionDiagnostics(
-        audit,
         config.channelId,
         config.relayUrl,
         new DaemonDiagnosticLog(stateDirectory),
     );
-    const nativeSessions = new NativeSessionService(
-        config,
-        directories,
-        agentRuntime,
-        audit,
-        async (request, options) => {
-            return await activeTurns.executionSnapshot(async (command) => {
-                if (command.sessionId !== request.targetSessionId || command.agentId !== request.agentId) {
-                    return false;
-                }
-                const cwd = await directories.resolve(command.bindingId, command.directoryId, options.signal);
-                const additionalDirectories = await directories.resolveMany(
-                    command.bindingId,
-                    command.additionalDirectoryIds,
-                    options.signal,
-                );
-                return (
-                    cwd === options.cwd &&
-                    additionalDirectories.length === options.additionalDirectories.length &&
-                    additionalDirectories.every(
-                        (directory, index) => directory === options.additionalDirectories[index],
-                    )
-                );
-            });
-        },
-    );
-    const installations = new AgentInstallationManager(
-        specifications,
-        installationExecutor,
-        installationObserver,
-        installationAudit,
-    );
+    const nativeSessions = new NativeSessionService(config, directories, agentRuntime, async (request, options) => {
+        return await activeTurns.executionSnapshot(async (command) => {
+            if (command.sessionId !== request.targetSessionId || command.agentId !== request.agentId) {
+                return false;
+            }
+            const cwd = await directories.resolve(command.bindingId, command.directoryId, options.signal);
+            const additionalDirectories = await directories.resolveMany(
+                command.bindingId,
+                command.additionalDirectoryIds,
+                options.signal,
+            );
+            return (
+                cwd === options.cwd &&
+                additionalDirectories.length === options.additionalDirectories.length &&
+                additionalDirectories.every((directory, index) => directory === options.additionalDirectories[index])
+            );
+        });
+    });
+    const installations = new AgentInstallationManager(specifications, installationExecutor, installationObserver);
     let connectionEpoch = 0;
     let automaticIntegrationProvisioningStarted = false;
     let automaticIntegrationProvisioning = Promise.resolve();
@@ -276,7 +258,6 @@ export async function runDaemon(
                 await runRelayConnection({
                     config,
                     directories,
-                    audit,
                     sessions: agentRuntime,
                     installations,
                     installationObserver,

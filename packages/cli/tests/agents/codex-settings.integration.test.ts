@@ -12,7 +12,7 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { expect, test } from "vitest";
 import { CodexAgentSpecification } from "../../src/agent-catalog/agents/codex-agent.ts";
-import { executableLaunch } from "../../src/process/executable.ts";
+import { executableLaunch } from "../../src/util/process/executable.ts";
 import { CodexFixture } from "../support/agents/codex.ts";
 import { withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";

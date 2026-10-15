@@ -3,7 +3,7 @@ import type { SessionCapabilities } from "@moxt-ai/mobius-protocol";
 
 import type { InProcessAcpEndpointFactory } from "../acp/in-process/acp-endpoint.ts";
 import { unsupportedSessionCapabilities } from "../acp/session-capabilities.ts";
-import { ExecutableIdentity } from "../process/executable.ts";
+import { ExecutableIdentity } from "../util/process/executable.ts";
 
 function readTrustedIdentity(path: string): ExecutableIdentity {
     const resolvedPath = realpathSync(path);

@@ -12,7 +12,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import cliPackage from "../../package.json" with { type: "json" };
 import { sendLocalRequest } from "../../src/daemon-local-control.ts";
 import { openMobiusCliInstallation, openMobiusControlInstallation } from "../../src/pairing/pair-local-machine.ts";
-import { findExecutableOnPath, runBoundedProcess } from "../../src/process/executable.ts";
+import { findExecutableOnPath, runBoundedProcess } from "../../src/util/process/executable.ts";
 
 // The npm registry stores real packed releases; the Relay stores catalogs and
 // remains online across replacement processes. Neither replaces product code.

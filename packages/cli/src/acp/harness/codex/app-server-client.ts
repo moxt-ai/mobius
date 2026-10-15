@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 
-import { executableLaunch, platformSpawnOptions } from "../../../process/executable.ts";
+import { executableLaunch, platformSpawnOptions } from "../../../util/process/executable.ts";
 
 import { AcpExecutionError } from "../../acp-error.ts";
 import { type AcpEndpointTermination, acpEndpointTerminationError } from "../../in-process/acp-endpoint.ts";

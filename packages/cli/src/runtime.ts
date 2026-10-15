@@ -8,7 +8,6 @@ import {
 } from "./agent-catalog/discover-local-agents.ts";
 import { publishAgentCatalog } from "./agent-catalog/publish-agent-catalog.ts";
 import { createCatalogAgentResolver } from "./agent-catalog/resolve-catalog-agent.ts";
-import { AuditStore } from "./audit/audit-store.ts";
 import { createDaemonConfig, type DaemonConfig, DaemonLocalContext, loadDefaultWorkspace } from "./config.ts";
 import { runDaemon } from "./run-daemon.ts";
 import { readStateDirectory } from "./storage/state-directory.ts";
@@ -167,15 +166,13 @@ export class MobiusRuntimeEngine {
         }
         signal.throwIfAborted();
         this.#state = new RunningMobiusRuntimeState();
-        const audit = new AuditStore();
         try {
-            await runDaemon(this.#config, audit, signal, undefined, {
+            await runDaemon(this.#config, signal, undefined, {
                 ...(this.#options.onConnectionStatus === undefined
                     ? {}
                     : { onConnectionStatus: this.#options.onConnectionStatus }),
             });
         } finally {
-            audit.close();
             this.#state = new FinishedMobiusRuntimeState();
         }
     };

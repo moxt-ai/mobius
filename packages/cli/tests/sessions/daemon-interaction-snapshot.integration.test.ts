@@ -39,7 +39,6 @@ import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { expect, test } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { LocalAgentDefinition } from "../../src/agent-catalog/local-agent.ts";
-import { AuditStore } from "../../src/audit/audit-store.ts";
 import { createDaemonConfig, DaemonLocalContext } from "../../src/config.ts";
 import { runDaemon } from "../../src/run-daemon.ts";
 
@@ -118,8 +117,7 @@ test("Given an Agent was inspected transiently, When its first Turn materializes
         new DaemonLocalContext(stateDirectory),
     );
     const cancellation = new AbortController();
-    const audit = new AuditStore();
-    const daemon = runDaemon(config, audit, cancellation.signal);
+    const daemon = runDaemon(config, cancellation.signal);
     try {
         const socket = await connected.promise;
         const messages = new Messages(socket);
@@ -228,7 +226,6 @@ test("Given an Agent was inspected transiently, When its first Turn materializes
     } finally {
         cancellation.abort();
         await daemon;
-        audit.close();
         for (const socket of websocketServer.clients) {
             socket.terminate();
         }
@@ -264,8 +261,7 @@ test("Given a real daemon prepared a Session, When Platform queries its metadata
         new DaemonLocalContext(stateDirectory),
     );
     const cancellation = new AbortController();
-    const audit = new AuditStore();
-    const daemon = runDaemon(config, audit, cancellation.signal);
+    const daemon = runDaemon(config, cancellation.signal);
     try {
         const socket = await connected.promise;
         const messages = new Messages(socket);
@@ -307,7 +303,6 @@ test("Given a real daemon prepared a Session, When Platform queries its metadata
     } finally {
         cancellation.abort();
         await daemon;
-        audit.close();
         for (const socket of websocketServer.clients) {
             socket.terminate();
         }
@@ -342,12 +337,11 @@ test("Given a real daemon persisted a Session, When Platform restores it by iden
         [],
         new DaemonLocalContext(stateDirectory),
     );
-    const audit = new AuditStore();
     const startDaemon = async () => {
         const connected = Promise.withResolvers<WebSocket>();
         websocketServer.once("connection", (socket) => connected.resolve(socket));
         const cancellation = new AbortController();
-        const completion = runDaemon(config, audit, cancellation.signal);
+        const completion = runDaemon(config, cancellation.signal);
         return { cancellation, completion, socket: await connected.promise };
     };
     try {
@@ -442,7 +436,6 @@ test("Given a real daemon persisted a Session, When Platform restores it by iden
             await restored.completion;
         }
     } finally {
-        audit.close();
         for (const socket of websocketServer.clients) {
             socket.terminate();
         }
