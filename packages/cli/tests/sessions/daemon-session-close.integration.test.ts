@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,12 +13,10 @@ import {
 import {
     decodeMessageKind,
     decodeSessionClosedEvent,
-    decodeSessionEventV2,
     decodeSessionOperationFailedEvent,
-    decodeSessionRestoredEvent,
+    decodeSessionStatusChangedEvent,
     encodeSessionCloseCommand,
     encodeSessionPromptCommand,
-    encodeSessionRestoreCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { expect, test, vi } from "vitest";
@@ -129,7 +127,7 @@ test("Given retained Agent teardown does not finish, When the Session close dead
     });
 });
 
-test("Given an active Agent session holding an exclusive writer lock, When a public close command reaches the daemon, Then the process stops and restoring acquires the released writer lock", async () => {
+test("Given an active Agent session holding an exclusive writer lock, When a public close command reaches the daemon, Then the process stops and releases the writer lock", async () => {
     const directory = await mkdtemp(join(tmpdir(), "mobius-session-close-"));
     const executableDirectory = join(directory, "bin");
     const executable = join(executableDirectory, "dsh");
@@ -147,12 +145,13 @@ test("Given an active Agent session holding an exclusive writer lock, When a pub
             { MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory, PATH: executableDirectory },
             async (peer) => {
                 const sessionId = await prepareNewRealSession(peer, "deepseek-harness");
+                const promptCommandId = crypto.randomUUID();
                 peer.send(
                     encodeSessionPromptCommand({
                         additionalDirectoryIds: [],
                         agentId: "deepseek-harness",
                         bindingId: peer.bindingId,
-                        commandId: crypto.randomUUID(),
+                        commandId: promptCommandId,
                         directoryId: "default",
                         disposition: SessionPromptDisposition.Reject,
                         images: [],
@@ -164,12 +163,15 @@ test("Given an active Agent session holding an exclusive writer lock, When a pub
                     }),
                 );
                 for (;;) {
-                    const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+                    const message = await peer.nextMessage();
+                    if (decodeMessageKind(message) !== "session.status.changed") {
+                        continue;
+                    }
+                    const event = decodeSessionStatusChangedEvent(message);
                     if (
-                        event.type === "acp" &&
-                        event.payload.sessionUpdate === "agent_message_chunk" &&
-                        event.payload.content.type === "text" &&
-                        event.payload.content.text.includes("interleave progress and hold")
+                        event.sessionId === sessionId &&
+                        event.status.kind === "working" &&
+                        event.status.commandId === promptCommandId
                     ) {
                         break;
                     }
@@ -186,7 +188,11 @@ test("Given an active Agent session holding an exclusive writer lock, When a pub
                     const message = await peer.nextMessage();
                     const kind = decodeMessageKind(message);
                     if (kind === "session.operation.failed") {
-                        throw new Error(JSON.stringify(decodeSessionOperationFailedEvent(message)));
+                        const failure = decodeSessionOperationFailedEvent(message);
+                        if (failure.requestId === closeRequestId) {
+                            throw new Error(JSON.stringify(failure));
+                        }
+                        continue;
                     }
                     if (kind !== "session.closed") {
                         continue;
@@ -198,27 +204,7 @@ test("Given an active Agent session holding an exclusive writer lock, When a pub
                     });
                     break;
                 }
-
-                const restoreRequestId = crypto.randomUUID();
-                peer.send(
-                    encodeSessionRestoreCommand({
-                        kind: "session.restore",
-                        requestId: restoreRequestId,
-                        sessionId,
-                    }),
-                );
-                for (;;) {
-                    const message = await peer.nextMessage();
-                    if (decodeMessageKind(message) !== "session.restored") {
-                        continue;
-                    }
-                    expect(decodeSessionRestoredEvent(message)).toMatchObject({
-                        kind: "session.restored",
-                        requestId: restoreRequestId,
-                        ready: { sessionId },
-                    });
-                    break;
-                }
+                expect((await readdir(nativeStateDirectory)).filter((entry) => entry.endsWith(".writer"))).toEqual([]);
             },
         );
     } finally {
