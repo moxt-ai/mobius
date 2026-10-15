@@ -10,6 +10,7 @@ import { formatAgentDiagnostics } from "./agent-catalog/agent-diagnostics.ts";
 import { discoverLocalAgentInventory } from "./agent-catalog/discover-local-agents.ts";
 import { DaemonLocalContext, loadDefaultWorkspace } from "./config.ts";
 import { type ManagedRuntimeSummary, requestManager, runManager } from "./daemon-manager.ts";
+import { runWorker } from "./daemon-worker.ts";
 import { openMobiusCliInstallation } from "./pairing/pair-local-machine.ts";
 
 const shutdown = new AbortController();
@@ -158,6 +159,10 @@ function createProgram(): Command {
     program.command("__manager", { hidden: true }).action(async () => {
         const installation = await openMobiusCliInstallation(shutdown.signal, process.env);
         await runManager(installation, packageMetadata.version, shutdown.signal);
+    });
+
+    program.command("__worker", { hidden: true }).action(async () => {
+        await runWorker(packageMetadata.version, shutdown.signal);
     });
 
     const pair = program.command("pair").description("pair this machine or manage saved pairings");

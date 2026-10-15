@@ -1,16 +1,15 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { watch } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createConnection, type Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import cliPackage from "../../package.json" with { type: "json" };
-import { runManager } from "../../src/daemon-manager.ts";
 import { openMobiusCliInstallation } from "../../src/pairing/pair-local-machine.ts";
+import { platformSupportFor } from "../../src/platform/index.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -27,7 +26,7 @@ describe("Mobius manager version compatibility", () => {
         const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: stateRoot };
 
         try {
-            const started = await runCli(["start"], environment, AbortSignal.timeout(15_000));
+            const started = await runCli(["start"], environment, AbortSignal.timeout(60_000));
 
             expect(started.code).toBe(0);
             expect(started.stderr).toBe("");
@@ -35,83 +34,80 @@ describe("Mobius manager version compatibility", () => {
             expect(started.stdout).toContain(`Mobius daemon ${cliPackage.version} started\n`);
             expect(started.stdout).toContain("Mobius daemon is running.\n");
 
-            const ensured = await runCli(["start"], environment, AbortSignal.timeout(15_000));
+            const installation = await openMobiusCliInstallation(AbortSignal.timeout(10_000), environment);
+            const managerPid = Number(await readFile(join(installation.stateDirectory, "manager.lock"), "utf8"));
+            expect(
+                (await platformSupportFor(process.platform).readProcessTable()).filter(
+                    (entry) => entry.parentProcessId === managerPid,
+                ),
+            ).toHaveLength(1);
+            const ensured = await runCli(["start"], environment, AbortSignal.timeout(60_000));
             expect(ensured).toEqual({ code: 0, stderr: "", stdout: "Mobius daemon is running.\n" });
         } finally {
             await runCli(["quit"], environment, AbortSignal.timeout(10_000)).catch(() => undefined);
         }
     });
 
-    it.skipIf(process.platform === "win32")(
-        "Given an older manager owns the installation, When the current CLI lists pairings, Then it replaces the manager before serving the command",
-        async () => {
-            const stateRoot = await mkdtemp(join(tmpdir(), "mobius-manager-version-"));
-            temporaryDirectories.push(stateRoot);
-            const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: stateRoot };
-            const deadline = AbortSignal.timeout(15_000);
+    it("Given an installed daemon, When another CLI version starts, Then only the working process changes", async () => {
+        const directory = await mkdtemp(join(tmpdir(), "mobius-worker-upgrade-"));
+        temporaryDirectories.push(directory);
+        const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: join(directory, "state") };
+        const deadline = AbortSignal.timeout(90_000);
+        const release = join(directory, "release");
+        await cp(resolve(import.meta.dirname, "../../src"), join(release, "src"), { recursive: true });
+        await writeFile(join(release, "package.json"), JSON.stringify({ ...cliPackage, version: "0.0.225-test" }));
+        await symlink(resolve(import.meta.dirname, "../../node_modules"), join(release, "node_modules"), "junction");
+        try {
+            expect((await runCli(["start"], environment, deadline)).code).toBe(0);
             const installation = await openMobiusCliInstallation(deadline, environment);
-            const socketName = basename(controlSocketPath(installation.stateDirectory));
-            const socketReady = waitForDirectoryEntry(tmpdir(), socketName, deadline);
-            const oldManagerController = new AbortController();
-            const oldManager = runManager(installation, "0.0.1-test", oldManagerController.signal);
+            const manager = await readFile(join(installation.stateDirectory, "manager.lock"), "utf8");
+            const worker = await readFile(join(installation.stateDirectory, "worker.lock"), "utf8");
+            const upgraded = await runCli(["start"], environment, deadline, join(release, "src/cli.ts"));
+            expect(upgraded).toEqual({ code: 0, stderr: "", stdout: "Mobius daemon is running.\n" });
+            expect(await readFile(join(installation.stateDirectory, "manager.lock"), "utf8")).toBe(manager);
+            const replacement = await readFile(join(installation.stateDirectory, "worker.lock"), "utf8");
+            expect(replacement).not.toBe(worker);
+            expect(
+                (await platformSupportFor(process.platform).readProcessTable()).filter(
+                    (entry) => entry.parentProcessId === Number(manager),
+                ),
+            ).toHaveLength(1);
+            expect((await runCli(["start"], environment, deadline, join(release, "src/cli.ts"))).code).toBe(0);
+            expect(await readFile(join(installation.stateDirectory, "worker.lock"), "utf8")).toBe(replacement);
+        } finally {
+            await runCli(["quit"], environment, AbortSignal.timeout(20_000)).catch(() => undefined);
+        }
+    });
 
-            try {
-                await socketReady;
-
-                const listed = await runCli(["pair", "list"], environment, deadline);
-
-                expect(listed.code).toBe(0);
-                expect(listed.stderr).toBe("");
-                expect(listed.stdout).toContain(`Starting mobius daemon ${cliPackage.version}\n`);
-                expect(listed.stdout).toContain(`Mobius daemon ${cliPackage.version} started\n`);
-                expect(listed.stdout).toContain("| connection_id");
-                await expect(oldManager).resolves.toBeUndefined();
-            } finally {
-                oldManagerController.abort();
-                await runCli(["quit"], environment, AbortSignal.timeout(10_000)).catch(() => undefined);
-                await oldManager.catch(() => undefined);
-            }
-        },
-    );
-
-    it.skipIf(process.platform === "win32")(
-        "Given another control client remains connected, When the CLI quits, Then the manager exits before reporting success",
-        async () => {
-            const stateRoot = await mkdtemp(join(tmpdir(), "mobius-manager-quit-"));
-            temporaryDirectories.push(stateRoot);
-            const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: stateRoot };
-            const deadline = AbortSignal.timeout(15_000);
+    it("Given another control client remains connected, When the CLI quits, Then both daemon processes exit", async () => {
+        const stateRoot = await mkdtemp(join(tmpdir(), "mobius-manager-quit-"));
+        temporaryDirectories.push(stateRoot);
+        const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: stateRoot };
+        const deadline = AbortSignal.timeout(60_000);
+        let heldConnection: Socket | undefined;
+        try {
+            expect((await runCli(["start"], environment, deadline)).code).toBe(0);
             const installation = await openMobiusCliInstallation(deadline, environment);
-            const socketName = basename(controlSocketPath(installation.stateDirectory));
-            const socketReady = waitForDirectoryEntry(tmpdir(), socketName, deadline);
-            const managerController = new AbortController();
-            const manager = runManager(installation, "0.0.92", managerController.signal);
-            let heldConnection: Socket | undefined;
-
-            try {
-                await socketReady;
-                heldConnection = await holdControlConnection(installation.stateDirectory, deadline);
-
-                const quit = await runCli(["quit"], environment, deadline);
-
-                expect(quit).toEqual({ code: 0, stderr: "", stdout: "Mobius daemon stopped.\n" });
-                await expect(readFile(join(installation.stateDirectory, "manager.lock"), "utf8")).rejects.toMatchObject(
-                    {
-                        code: "ENOENT",
-                    },
-                );
-                await expect(manager).resolves.toBeUndefined();
-            } finally {
-                heldConnection?.destroy();
-                managerController.abort();
-                await manager.catch(() => undefined);
+            heldConnection = await holdControlConnection(installation.stateDirectory, deadline);
+            expect(await runCli(["quit"], environment, deadline)).toEqual({
+                code: 0,
+                stderr: "",
+                stdout: "Mobius daemon stopped.\n",
+            });
+            for (const name of ["manager.lock", "worker.lock"]) {
+                await expect(readFile(join(installation.stateDirectory, name), "utf8")).rejects.toMatchObject({
+                    code: "ENOENT",
+                });
             }
-        },
-    );
+        } finally {
+            heldConnection?.destroy();
+            await runCli(["quit"], environment, AbortSignal.timeout(20_000)).catch(() => undefined);
+        }
+    });
 });
 
 describe("Mobius pairing lifecycle", () => {
-    it("Given a standalone saved pairing, When it is stopped and removed by connection ID, Then list shows it stopped before removing it", async () => {
+    it("Given two saved pairings in one working daemon, When one is stopped and removed, Then the other stays available", async () => {
         const stateRoot = await mkdtemp(join(tmpdir(), "mobius-manager-pairing-lifecycle-"));
         temporaryDirectories.push(stateRoot);
         const executableDirectory = join(stateRoot, "empty-path");
@@ -133,6 +129,18 @@ describe("Mobius pairing lifecycle", () => {
             deadline,
         );
 
+        const second = await installation.saveConnection(
+            {
+                appId: "app_test2",
+                channelId: "channel_test2",
+                defaultWorkspace: workspace,
+                pairingId: "",
+                relayOrigin: new URL("http://127.0.0.1:1"),
+                runtimeCredential: "b".repeat(43),
+                runtimeId: "runtime_test2",
+            },
+            deadline,
+        );
         try {
             const initiallyListed = await runCli(["pair", "list"], environment, deadline);
             expect(initiallyListed.code).toBe(0);
@@ -141,6 +149,14 @@ describe("Mobius pairing lifecycle", () => {
             expect(initiallyListed.stdout).toContain(connection.connectionId);
             expect(initiallyListed.stdout).toContain("app_test");
 
+            expect(initiallyListed.stdout).toContain(second.connectionId);
+            const managerPid = Number(await readFile(join(installation.stateDirectory, "manager.lock"), "utf8"));
+            const workerPid = await readFile(join(installation.stateDirectory, "worker.lock"), "utf8");
+            expect(
+                (await platformSupportFor(process.platform).readProcessTable()).filter(
+                    (entry) => entry.parentProcessId === managerPid,
+                ),
+            ).toHaveLength(1);
             const outputPath = join(stateRoot, "pairings.json");
             await writeFile(outputPath, "", { mode: 0o600 });
             const listedAsJson = await runCli(["pair", "list", `--output-json=${outputPath}`], environment, deadline);
@@ -150,6 +166,13 @@ describe("Mobius pairing lifecycle", () => {
                     app_id: "app_test",
                     connection_id: connection.connectionId,
                     runtime_id: "runtime_test",
+                    status: "reconnecting",
+                    workspace,
+                },
+                {
+                    app_id: "app_test2",
+                    connection_id: second.connectionId,
+                    runtime_id: "runtime_test2",
                     status: "reconnecting",
                     workspace,
                 },
@@ -171,6 +194,7 @@ describe("Mobius pairing lifecycle", () => {
             expect(stopped.code).toBe(0);
             expect(stopped.stdout).toContain(`Pairing stopped: ${connection.connectionId}\n`);
 
+            expect(await readFile(join(installation.stateDirectory, "worker.lock"), "utf8")).toBe(workerPid);
             const listedStopped = await runCli(["pair", "list"], environment, deadline);
             expect(listedStopped.stdout).toContain(connection.connectionId);
             expect(listedStopped.stdout).toContain("stopped");
@@ -191,6 +215,7 @@ describe("Mobius pairing lifecycle", () => {
 
             const listedRemoved = await runCli(["pair", "list"], environment, deadline);
             expect(listedRemoved.stdout).not.toContain(connection.connectionId);
+            expect(listedRemoved.stdout).toContain(second.connectionId);
         } finally {
             await runCli(["quit"], environment, AbortSignal.timeout(10_000)).catch(() => undefined);
         }
@@ -202,18 +227,6 @@ function controlSocketPath(stateDirectory: string): string {
     return process.platform === "win32"
         ? `\\\\.\\pipe\\mobius-${installationHash}`
         : join(tmpdir(), `mobius-${installationHash}.sock`);
-}
-
-async function waitForDirectoryEntry(directory: string, entry: string, signal: AbortSignal): Promise<void> {
-    await new Promise<void>((resolve_, reject) => {
-        const watcher = watch(directory, { encoding: "utf8", signal }, (_event, filename) => {
-            if (filename === entry) {
-                watcher.close();
-                resolve_();
-            }
-        });
-        watcher.once("error", reject);
-    });
 }
 
 async function holdControlConnection(stateDirectory: string, signal: AbortSignal): Promise<Socket> {
@@ -264,8 +277,8 @@ async function runCli(
     arguments_: readonly string[],
     environment: Readonly<NodeJS.ProcessEnv>,
     signal: AbortSignal,
+    cliPath = resolve(import.meta.dirname, "../../src/cli.ts"),
 ): Promise<{ readonly code: number | null; readonly stderr: string; readonly stdout: string }> {
-    const cliPath = resolve(import.meta.dirname, "../../src/cli.ts");
     const child = spawn(process.execPath, [cliPath, ...arguments_], {
         env: environment,
         signal,
