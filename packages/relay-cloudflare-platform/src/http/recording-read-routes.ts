@@ -17,6 +17,14 @@ type PlatformApplicationEnvironment = {
 
 const recordingQuery = v.object({ runtimeId: v.string() });
 const recordingCursor = v.pipe(v.string(), v.regex(/^(?:(?:0|[1-9][0-9]*)|v2:[1-9][0-9]*:(?:0|[1-9][0-9]*))$/u));
+const turnPageQuery = v.object({
+    before: v.optional(v.pipe(v.string(), v.regex(/^turn:[1-9][0-9]*$/u))),
+    limit: v.optional(v.pipe(v.string(), v.regex(/^[1-9][0-9]{0,2}$/u))),
+});
+const turnItemPageQuery = v.object({
+    after: v.optional(v.pipe(v.string(), v.regex(/^item:(?:0|[1-9][0-9]*)$/u))),
+    limit: v.optional(v.pipe(v.string(), v.regex(/^[1-9][0-9]{0,3}$/u))),
+});
 const recordingIncrementalQuery = v.object({
     after: v.optional(recordingCursor),
     limit: v.optional(v.pipe(v.string(), v.regex(/^[1-9][0-9]{0,4}$/u))),
@@ -80,6 +88,51 @@ async function readRecording(
     }
 }
 
+function definedQuery(
+    context: Context<PlatformApplicationEnvironment>,
+    names: readonly string[],
+): Record<string, string> {
+    const values: Record<string, string> = {};
+    for (const name of names) {
+        const value = context.req.query(name);
+        if (value !== undefined) {
+            values[name] = value;
+        }
+    }
+    return values;
+}
+
+function forwardedQuery(runtimeId: string, query: Readonly<Record<string, string | undefined>>): URLSearchParams {
+    const forwarded = new URLSearchParams({ runtimeId });
+    for (const [name, value] of Object.entries(query)) {
+        if (value !== undefined) {
+            forwarded.set(name, value);
+        }
+    }
+    return forwarded;
+}
+
+/** Resolves the Recording Session addressed by a Turn history read. */
+function turnTarget(context: Context<PlatformApplicationEnvironment>): {
+    readonly projectId: string;
+    readonly runtimeId: string;
+    readonly sessionPath: string;
+} | null {
+    const runtimeId = context.req.query("runtimeId");
+    const projectId = decodedIdentifier(context.req.param("projectId"));
+    const sessionId = decodedIdentifier(context.req.param("sessionId"));
+    if (runtimeId === undefined || !isIdentifier(runtimeId) || projectId === null || sessionId === null) {
+        return null;
+    }
+    return {
+        projectId,
+        runtimeId,
+        sessionPath: `/v1/projects/${encodeURIComponent(projectId)}/runtimes/${encodeURIComponent(
+            runtimeId,
+        )}/sessions/${encodeURIComponent(sessionId)}`,
+    };
+}
+
 export const recordingReadRoutes = new Hono<PlatformApplicationEnvironment>()
     .get("/sessions", async (context): Promise<Response> => {
         const query = v.safeParse(recordingQuery, { runtimeId: context.req.query("runtimeId") ?? "" });
@@ -117,6 +170,47 @@ export const recordingReadRoutes = new Hono<PlatformApplicationEnvironment>()
             query.output.runtimeId,
         )}/sessions/${encodeURIComponent(sessionId)}/events`;
         return await readRecording(context, projectId, recordingPath, forwarded);
+    })
+    .get("/sessions/:sessionId/turns", async (context): Promise<Response> => {
+        const target = turnTarget(context);
+        const query = v.safeParse(turnPageQuery, definedQuery(context, ["before", "limit"]));
+        if (target === null || !query.success) {
+            return errorResponse("invalid_request", "The Recording Turn read is invalid", 400);
+        }
+        return await readRecording(
+            context,
+            target.projectId,
+            `${target.sessionPath}/turns`,
+            forwardedQuery(target.runtimeId, query.output),
+        );
+    })
+    .get("/sessions/:sessionId/turns/:commandId/items", async (context): Promise<Response> => {
+        const target = turnTarget(context);
+        const commandId = decodedIdentifier(context.req.param("commandId"));
+        const query = v.safeParse(turnItemPageQuery, definedQuery(context, ["after", "limit"]));
+        if (target === null || commandId === null || !query.success) {
+            return errorResponse("invalid_request", "The Recording Turn item read is invalid", 400);
+        }
+        return await readRecording(
+            context,
+            target.projectId,
+            `${target.sessionPath}/turns/${encodeURIComponent(commandId)}/items`,
+            forwardedQuery(target.runtimeId, query.output),
+        );
+    })
+    .get("/sessions/:sessionId/turns/:commandId/items/:itemId", async (context): Promise<Response> => {
+        const target = turnTarget(context);
+        const commandId = decodedIdentifier(context.req.param("commandId"));
+        const itemId = context.req.param("itemId");
+        if (target === null || commandId === null || itemId.length === 0 || itemId.length > 4_200) {
+            return errorResponse("invalid_request", "The Recording Turn item read is invalid", 400);
+        }
+        return await readRecording(
+            context,
+            target.projectId,
+            `${target.sessionPath}/turns/${encodeURIComponent(commandId)}/items/${encodeURIComponent(itemId)}`,
+            new URLSearchParams({ runtimeId: target.runtimeId }),
+        );
     });
 
 export const recordingSessionStatusRoutes = new Hono<PlatformApplicationEnvironment>()

@@ -1,7 +1,17 @@
 import { z } from "zod";
 import { ProtocolMessageError } from "./codecs/messages.ts";
+import { sessionElicitationRequestedEventSchema, sessionPermissionRequestedEventSchema } from "./control-messages.ts";
 import { identifierStringSchema } from "./identifier.ts";
-import { sessionEventEnvelopeV2Schema, sessionLiveEventV2Schema } from "./session-event-log-v2.ts";
+import {
+    boundedJsonSchema,
+    contentBlockV2Schema,
+    sessionEventEnvelopeV2Schema,
+    sessionLiveEventV2Schema,
+    toolCallContentSchema,
+    toolCallLocationSchema,
+    toolKindSchema,
+    toolStatusSchema,
+} from "./session-event-log-v2.ts";
 
 const sessionRecordingWriteSchema = z
     .object({
@@ -62,7 +72,202 @@ const sessionRecordingDirectorySchema = z
     })
     .readonly();
 
+/** Turns returned by one Turn history page at most. */
+export const SESSION_RECORDING_TURN_PAGE_MAX_LIMIT = 100;
+/** Items returned by one Turn item page at most. */
+export const SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT = 1_000;
+
+const isoTimestamp = z.iso.datetime({ offset: true });
+const shortText = z.string().max(2_048);
+// A full item read is not bounded by the page budget; a merged answer can exceed one chunk's limit.
+const itemText = z.string().max(50_000_000);
+// Opaque Turn history cursors: a page continues with Turns older than the Turn order it names.
+const turnCursorSchema = z.string().regex(/^turn:[1-9][0-9]*$/);
+// Opaque Turn item cursors: a page continues with items after the item sequence it names.
+const turnItemCursorSchema = z.string().regex(/^item:(?:0|[1-9][0-9]*)$/);
+
+const attemptTiming = {
+    attemptId: identifierStringSchema.optional(),
+    startedAt: isoTimestamp.optional(),
+};
+
+/** Where a Turn's prompt is in its lifecycle, as projected from Recording lifecycle events. */
+export const sessionRecordingTurnAttemptSchema = z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("none") }).readonly(),
+    z.object({ ...attemptTiming, kind: z.literal("running") }).readonly(),
+    z
+        .object({
+            ...attemptTiming,
+            interactionIds: z.array(identifierStringSchema).min(1).max(100).readonly(),
+            kind: z.literal("waiting_input"),
+        })
+        .readonly(),
+    z
+        .object({ ...attemptTiming, completedAt: isoTimestamp, kind: z.literal("succeeded"), stopReason: shortText })
+        .readonly(),
+    z.object({ ...attemptTiming, cancelledAt: isoTimestamp, kind: z.literal("cancelled") }).readonly(),
+    z
+        .object({
+            ...attemptTiming,
+            code: identifierStringSchema,
+            failedAt: isoTimestamp,
+            kind: z.literal("failed"),
+            message: z.string().min(1).max(500),
+        })
+        .readonly(),
+    // A Session generation change restarted the local Agent process before this attempt ended.
+    z
+        .object({
+            ...attemptTiming,
+            detectedAt: isoTimestamp,
+            kind: z.literal("indeterminate"),
+            reason: z.literal("session_generation_changed"),
+        })
+        .readonly(),
+]);
+
+const turnItemBase = {
+    // Opaque and stable for the life of the item; derived from the event, message, or tool call it merges.
+    itemId: z.string().min(1).max(4_200),
+    // Creation order inside the Turn; answer, thought, and tool items share one sequence.
+    sequence: z.number().int().nonnegative().safe(),
+};
+
+// Text items list at most a bounded prefix; `omittedCharacters` counts what a full item read returns.
+const textItemFields = {
+    omittedCharacters: z.number().int().nonnegative().safe(),
+    text: itemText,
+};
+
+const sessionRecordingToolDetailSchema = z.discriminatedUnion("kind", [
+    z
+        .object({
+            content: z.array(toolCallContentSchema).max(1_000).readonly(),
+            kind: z.literal("inline"),
+            rawInput: boundedJsonSchema.optional(),
+            rawOutput: boundedJsonSchema.optional(),
+        })
+        .readonly(),
+    // The detail exceeded the page bound; a full item read returns it inline.
+    z.object({ kind: z.literal("omitted") }).readonly(),
+]);
+
+export const sessionRecordingTurnItemSchema = z.discriminatedUnion("kind", [
+    z.object({ ...turnItemBase, ...textItemFields, kind: z.literal("answer") }).readonly(),
+    z.object({ ...turnItemBase, ...textItemFields, kind: z.literal("thought") }).readonly(),
+    z
+        .object({
+            ...turnItemBase,
+            attemptId: identifierStringSchema.optional(),
+            detail: sessionRecordingToolDetailSchema,
+            kind: z.literal("tool"),
+            locations: z.array(toolCallLocationSchema).max(1_000).readonly(),
+            name: shortText.nullable(),
+            status: toolStatusSchema.nullable(),
+            title: itemText,
+            toolCallId: shortText,
+            toolKind: toolKindSchema.nullable(),
+        })
+        .readonly(),
+]);
+
+export const sessionRecordingTurnPromptSchema = z
+    .object({
+        content: z.array(contentBlockV2Schema).min(1).max(100).readonly(),
+        disposition: shortText.optional(),
+        targetCommandId: identifierStringSchema.optional(),
+    })
+    .readonly();
+
+const sessionRecordingTurnSchema = z
+    .object({
+        answerLength: z.number().int().nonnegative().safe(),
+        attempt: sessionRecordingTurnAttemptSchema,
+        commandId: identifierStringSchema,
+        createdAt: isoTimestamp,
+        generationId: identifierStringSchema,
+        itemCount: z.number().int().nonnegative().safe(),
+        items: z.array(sessionRecordingTurnItemSchema).max(SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT).readonly(),
+        // Continues this Turn's items after the listed prefix, or null when every item is listed.
+        itemsCursor: turnItemCursorSchema.nullable(),
+        messageId: shortText.nullable(),
+        // Creation order of Turns in the Session; newer Turns have larger orders.
+        order: z.number().int().positive().safe(),
+        // Null when the Recording holds Agent output for a command whose prompt it never recorded.
+        prompt: sessionRecordingTurnPromptSchema.nullable(),
+    })
+    .readonly();
+
+export const sessionRecordingInteractionSchema = z.discriminatedUnion("kind", [
+    z
+        .object({
+            commandId: identifierStringSchema,
+            event: sessionPermissionRequestedEventSchema,
+            interactionId: identifierStringSchema,
+            kind: z.literal("permission"),
+        })
+        .readonly(),
+    z
+        .object({
+            commandId: identifierStringSchema,
+            event: sessionElicitationRequestedEventSchema,
+            interactionId: identifierStringSchema,
+            kind: z.literal("elicitation"),
+        })
+        .readonly(),
+]);
+
+const sessionRecordingTurnPageSchema = z
+    .object({
+        // Commands that own Agent output in the newest Session generation, innermost last.
+        activeCommands: z
+            .object({
+                commandIds: z.array(identifierStringSchema).max(1_000).readonly(),
+                generationId: identifierStringSchema,
+            })
+            .readonly()
+            .nullable(),
+        // Requests still waiting for an answer in a Turn that can still receive one.
+        interactions: z.array(sessionRecordingInteractionSchema).max(1_000).readonly(),
+        // Continues with older Turns, or null when the oldest Turn is listed.
+        nextCursor: turnCursorSchema.nullable(),
+        sessionId: identifierStringSchema,
+        // The Recording cursor at the last event this snapshot includes; live reads continue after it.
+        tailCursor: recordingCursorSchema,
+        title: z.string().max(1_000).nullable(),
+        turns: z.array(sessionRecordingTurnSchema).max(SESSION_RECORDING_TURN_PAGE_MAX_LIMIT).readonly(),
+        version: z.literal(1),
+    })
+    .readonly();
+
+const sessionRecordingTurnItemPageSchema = z
+    .object({
+        commandId: identifierStringSchema,
+        items: z.array(sessionRecordingTurnItemSchema).max(SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT).readonly(),
+        nextCursor: turnItemCursorSchema.nullable(),
+        sessionId: identifierStringSchema,
+        version: z.literal(1),
+    })
+    .readonly();
+
+const sessionRecordingTurnItemDetailSchema = z
+    .object({
+        commandId: identifierStringSchema,
+        item: sessionRecordingTurnItemSchema,
+        sessionId: identifierStringSchema,
+        version: z.literal(1),
+    })
+    .readonly();
+
 export type SessionRecordingWrite = z.infer<typeof sessionRecordingWriteSchema>;
+export type SessionRecordingTurnAttempt = z.infer<typeof sessionRecordingTurnAttemptSchema>;
+export type SessionRecordingTurnPrompt = z.infer<typeof sessionRecordingTurnPromptSchema>;
+export type SessionRecordingTurnItem = z.infer<typeof sessionRecordingTurnItemSchema>;
+export type SessionRecordingTurn = z.infer<typeof sessionRecordingTurnSchema>;
+export type SessionRecordingInteraction = z.infer<typeof sessionRecordingInteractionSchema>;
+export type SessionRecordingTurnPage = z.infer<typeof sessionRecordingTurnPageSchema>;
+export type SessionRecordingTurnItemPage = z.infer<typeof sessionRecordingTurnItemPageSchema>;
+export type SessionRecordingTurnItemDetail = z.infer<typeof sessionRecordingTurnItemDetailSchema>;
 export type SessionRecordingHistory = z.infer<typeof sessionRecordingHistorySchema>;
 export type SessionRecordingHistoryPage = z.infer<typeof sessionRecordingHistoryPageSchema>;
 export type SessionRecordingSummary = z.infer<typeof sessionRecordingSummarySchema>;
@@ -101,3 +306,21 @@ export const decodeSessionRecordingDirectory = (encoded: string): SessionRecordi
 
 export const encodeSessionRecordingDirectory = (value: SessionRecordingDirectory): string =>
     JSON.stringify(sessionRecordingDirectorySchema.parse(value));
+
+export const decodeSessionRecordingTurnPage = (encoded: string): SessionRecordingTurnPage =>
+    decode(encoded, sessionRecordingTurnPageSchema);
+
+export const encodeSessionRecordingTurnPage = (value: SessionRecordingTurnPage): string =>
+    JSON.stringify(sessionRecordingTurnPageSchema.parse(value));
+
+export const decodeSessionRecordingTurnItemPage = (encoded: string): SessionRecordingTurnItemPage =>
+    decode(encoded, sessionRecordingTurnItemPageSchema);
+
+export const encodeSessionRecordingTurnItemPage = (value: SessionRecordingTurnItemPage): string =>
+    JSON.stringify(sessionRecordingTurnItemPageSchema.parse(value));
+
+export const decodeSessionRecordingTurnItemDetail = (encoded: string): SessionRecordingTurnItemDetail =>
+    decode(encoded, sessionRecordingTurnItemDetailSchema);
+
+export const encodeSessionRecordingTurnItemDetail = (value: SessionRecordingTurnItemDetail): string =>
+    JSON.stringify(sessionRecordingTurnItemDetailSchema.parse(value));

@@ -2,14 +2,21 @@ import { DurableObject } from "cloudflare:workers";
 import {
     decodeSessionRecordingWrite,
     encodeSessionRecordingDirectory,
+    encodeSessionRecordingTurnItemDetail,
+    encodeSessionRecordingTurnItemPage,
+    encodeSessionRecordingTurnPage,
     isIdentifier,
     ProtocolMessageError,
+    SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT,
+    SESSION_RECORDING_TURN_PAGE_MAX_LIMIT,
     type SessionRecordingWrite,
 } from "@moxt-ai/mobius-protocol";
 import { Hono } from "hono";
 import { RecordingDirectory } from "./service/recording-directory.ts";
+import { SessionTurnHistory, type TurnHistoryRead } from "./service/session-turn-history.ts";
 import { RecordingDirectoryStorage } from "./storage/recording-directory-storage.ts";
 import { SessionRecordingStorage } from "./storage/session-recording-storage.ts";
+import { SessionTurnHistoryStorage } from "./storage/session-turn-history-storage.ts";
 
 export interface RecordingWorkerBindings {
     readonly RECORDING_DIRECTORY: DurableObjectNamespace<RecordingDirectoryDurableObject>;
@@ -21,6 +28,7 @@ export interface RecordingWorker {
 
 type RecordingEnvironment = { readonly Bindings: RecordingWorkerBindings };
 type SessionRecordingRoutes = Pick<SessionRecordingStorage, "append" | "read" | "readPage">;
+type TurnHistoryRoutes = Pick<SessionTurnHistory, "item" | "itemPage" | "project" | "turnPage">;
 const jsonHeaders = { "content-type": "application/json" } as const;
 
 function errorResponse(code: string, status: number): Response {
@@ -64,17 +72,79 @@ function requireSingleSession(write: SessionRecordingWrite): SessionRecordingWri
     throw new ProtocolMessageError("A Recording batch must target one Session");
 }
 
-function sessionRecordingRoutes(storage: SessionRecordingRoutes): Hono<RecordingEnvironment> {
+function sessionRecordingRoutes(
+    storage: SessionRecordingRoutes,
+    history: TurnHistoryRoutes,
+    scheduleBackfill: () => Promise<void>,
+): Hono<RecordingEnvironment> {
     return new Hono<RecordingEnvironment>()
         .onError((cause, context): Response => internalErrorResponse(cause, context.req.raw))
         .post("/events", async (context): Promise<Response> => {
+            let write: SessionRecordingWrite;
             try {
-                return storage.append(requireSingleSession(await decode(context.req.raw)))
-                    ? context.json({ recorded: true }, 201)
-                    : errorResponse("recording_identity_conflict", 409);
+                write = requireSingleSession(await decode(context.req.raw));
             } catch (cause) {
                 return envelopeError(cause);
             }
+            let projected = true;
+            const recorded = storage.append(write, (ordinal, events) => {
+                projected = history.project(ordinal, events);
+            });
+            if (!recorded) {
+                return errorResponse("recording_identity_conflict", 409);
+            }
+            if (!projected) {
+                await scheduleBackfill();
+            }
+            return context.json({ recorded: true }, 201);
+        })
+        .get("/turns", async (context): Promise<Response> => {
+            const target = eventTarget(context.req.raw);
+            const before = optionalCursor(context.req.query("before"), /^turn:([1-9][0-9]*)$/u);
+            const limit = boundedLimit(
+                context.req.query("limit"),
+                defaultTurnPageLimit,
+                SESSION_RECORDING_TURN_PAGE_MAX_LIMIT,
+            );
+            if (target === null || before === undefined || limit === null) {
+                return errorResponse("invalid_target", 400);
+            }
+            return await turnHistoryResponse(
+                history.turnPage(target, before, limit),
+                encodeSessionRecordingTurnPage,
+                scheduleBackfill,
+            );
+        })
+        .get("/turn-items", async (context): Promise<Response> => {
+            const target = eventTarget(context.req.raw);
+            const commandId = decodedIdentifier(context.req.query("commandId"));
+            const after = optionalCursor(context.req.query("after"), /^item:(0|[1-9][0-9]*)$/u);
+            const limit = boundedLimit(
+                context.req.query("limit"),
+                defaultTurnItemPageLimit,
+                SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT,
+            );
+            if (target === null || commandId === null || after === undefined || limit === null) {
+                return errorResponse("invalid_target", 400);
+            }
+            return await turnHistoryResponse(
+                history.itemPage(target, commandId, after, limit),
+                encodeSessionRecordingTurnItemPage,
+                scheduleBackfill,
+            );
+        })
+        .get("/turn-item", async (context): Promise<Response> => {
+            const target = eventTarget(context.req.raw);
+            const commandId = decodedIdentifier(context.req.query("commandId"));
+            const itemId = turnItemId(context.req.query("itemId"));
+            if (target === null || commandId === null || itemId === null) {
+                return errorResponse("invalid_target", 400);
+            }
+            return await turnHistoryResponse(
+                history.item(target, commandId, itemId),
+                encodeSessionRecordingTurnItemDetail,
+                scheduleBackfill,
+            );
         })
         .get("/events", (context): Response => {
             const target = eventTarget(context.req.raw);
@@ -170,6 +240,53 @@ function eventTarget(request: Request): {
     return projectId === null || runtimeId === null || sessionId === null ? null : { projectId, runtimeId, sessionId };
 }
 
+const defaultTurnPageLimit = 20;
+const defaultTurnItemPageLimit = 200;
+
+/** Parses an optional opaque cursor: null when absent, undefined when malformed. */
+function optionalCursor(value: string | undefined, pattern: RegExp): number | null | undefined {
+    if (value === undefined) {
+        return null;
+    }
+    const match = pattern.exec(value);
+    const position = match?.[1] === undefined ? Number.NaN : Number(match[1]);
+    return Number.isSafeInteger(position) ? position : undefined;
+}
+
+function boundedLimit(value: string | undefined, fallback: number, maximum: number): number | null {
+    if (value === undefined) {
+        return fallback;
+    }
+    if (!/^[1-9][0-9]{0,4}$/u.test(value)) {
+        return null;
+    }
+    const limit = Number(value);
+    return limit <= maximum ? limit : null;
+}
+
+function turnItemId(value: string | undefined): string | null {
+    return value === undefined || value.length === 0 || value.length > 4_200 ? null : value;
+}
+
+async function turnHistoryResponse<T>(
+    read: TurnHistoryRead<T>,
+    encode: (value: T) => string,
+    scheduleBackfill: () => Promise<void>,
+): Promise<Response> {
+    switch (read.kind) {
+        case "ready":
+            return new Response(encode(read.value), { headers: jsonHeaders, status: 200 });
+        case "not_found":
+            return errorResponse("not_found", 404);
+        case "building": {
+            await scheduleBackfill();
+            const response = errorResponse("projection_building", 503);
+            response.headers.set("retry-after", "1");
+            return response;
+        }
+    }
+}
+
 function historyResponse<T>(value: T | null): Response {
     return value === null ? errorResponse("not_found", 404) : Response.json(value);
 }
@@ -200,6 +317,48 @@ function readTarget(context: { readonly req: { readonly param: (name: string) =>
     const runtimeId = decodedIdentifier(context.req.param("runtimeId"));
     const sessionId = decodedIdentifier(context.req.param("sessionId"));
     return { projectId, runtimeId, sessionId };
+}
+
+type SessionRouteContext = {
+    readonly env: RecordingWorkerBindings;
+    readonly req: { readonly param: (name: string) => string | undefined; readonly raw: Request };
+};
+
+function sessionQuery(context: SessionRouteContext): URLSearchParams | null {
+    const target = readTarget(context);
+    if (target.projectId === null || target.runtimeId === null || target.sessionId === null) {
+        return null;
+    }
+    return new URLSearchParams({
+        projectId: target.projectId,
+        runtimeId: target.runtimeId,
+        sessionId: target.sessionId,
+    });
+}
+
+function forwardQuery(
+    source: Record<string, string | undefined>,
+    target: URLSearchParams,
+    names: readonly string[],
+): void {
+    for (const name of names) {
+        const value = source[name];
+        if (value !== undefined) {
+            target.set(name, value);
+        }
+    }
+}
+
+async function sessionRecordingFetch(
+    context: SessionRouteContext,
+    query: URLSearchParams,
+    path: string,
+): Promise<Response> {
+    return await durableObjectFetch(
+        context.env.SESSION_RECORDING,
+        JSON.stringify([query.get("projectId"), query.get("sessionId")]),
+        new Request(`https://recording.internal/${path}?${query}`, { signal: context.req.raw.signal }),
+    );
 }
 
 function durableObjectFetch(namespace: DurableObjectNamespace, name: string, request: Request): Promise<Response> {
@@ -290,6 +449,44 @@ export function createRecordingWorker(): RecordingWorker {
             );
         })
         .get(
+            "/v1/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/turns",
+            async (context): Promise<Response> => {
+                const query = sessionQuery(context);
+                if (query === null) {
+                    return errorResponse("not_found", 404);
+                }
+                forwardQuery(context.req.query(), query, ["before", "limit"]);
+                return await sessionRecordingFetch(context, query, "turns");
+            },
+        )
+        .get(
+            "/v1/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/turns/:commandId/items",
+            async (context): Promise<Response> => {
+                const query = sessionQuery(context);
+                const commandId = decodedIdentifier(context.req.param("commandId"));
+                if (query === null || commandId === null) {
+                    return errorResponse("not_found", 404);
+                }
+                query.set("commandId", commandId);
+                forwardQuery(context.req.query(), query, ["after", "limit"]);
+                return await sessionRecordingFetch(context, query, "turn-items");
+            },
+        )
+        .get(
+            "/v1/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/turns/:commandId/items/:itemId",
+            async (context): Promise<Response> => {
+                const query = sessionQuery(context);
+                const commandId = decodedIdentifier(context.req.param("commandId"));
+                const itemId = turnItemId(context.req.param("itemId"));
+                if (query === null || commandId === null || itemId === null) {
+                    return errorResponse("not_found", 404);
+                }
+                query.set("commandId", commandId);
+                query.set("itemId", itemId);
+                return await sessionRecordingFetch(context, query, "turn-item");
+            },
+        )
+        .get(
             "/v1/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/events",
             async (context): Promise<Response> => {
                 const target = readTarget(context);
@@ -327,14 +524,28 @@ export function createRecordingWorker(): RecordingWorker {
 }
 
 export class SessionRecordingDurableObject extends DurableObject<RecordingWorkerBindings> {
+    readonly #history: SessionTurnHistory;
     readonly #routes: Hono<RecordingEnvironment>;
     constructor(state: DurableObjectState, _environment: RecordingWorkerBindings) {
         super(state, _environment);
-        this.#routes = sessionRecordingRoutes(new SessionRecordingStorage(state.storage));
+        const recording = new SessionRecordingStorage(state.storage);
+        this.#history = new SessionTurnHistory(recording, new SessionTurnHistoryStorage(state.storage));
+        this.#routes = sessionRecordingRoutes(recording, this.#history, this.#scheduleBackfill);
     }
     override async fetch(request: Request): Promise<Response> {
         return await this.#routes.fetch(request);
     }
+    /** Folds one bounded step of unprojected Recording batches and keeps stepping until caught up. */
+    override async alarm(): Promise<void> {
+        if (!this.#history.backfill()) {
+            await this.ctx.storage.setAlarm(Date.now());
+        }
+    }
+    readonly #scheduleBackfill = async (): Promise<void> => {
+        if ((await this.ctx.storage.getAlarm()) === null) {
+            await this.ctx.storage.setAlarm(Date.now());
+        }
+    };
 }
 
 export class RecordingDirectoryDurableObject extends DurableObject<RecordingWorkerBindings> {
