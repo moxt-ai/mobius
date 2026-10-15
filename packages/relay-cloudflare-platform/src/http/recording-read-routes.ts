@@ -1,4 +1,12 @@
-import { isIdentifier } from "@moxt-ai/mobius-protocol";
+import {
+    isIdentifier,
+    parseSessionRecordingPageLimit,
+    parseSessionRecordingTurnCursor,
+    parseSessionRecordingTurnItemCursor,
+    SESSION_RECORDING_TURN_ITEM_ID_MAX_LENGTH,
+    SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT,
+    SESSION_RECORDING_TURN_PAGE_MAX_LIMIT,
+} from "@moxt-ai/mobius-protocol";
 import { ProjectPermission } from "@moxt-ai/mobius-relay-core";
 import { type Context, Hono } from "hono";
 import * as v from "valibot";
@@ -17,6 +25,26 @@ type PlatformApplicationEnvironment = {
 
 const recordingQuery = v.object({ runtimeId: v.string() });
 const recordingCursor = v.pipe(v.string(), v.regex(/^(?:(?:0|[1-9][0-9]*)|v2:[1-9][0-9]*:(?:0|[1-9][0-9]*))$/u));
+function pageLimit(maximum: number) {
+    return v.pipe(
+        v.string(),
+        v.check((value) => parseSessionRecordingPageLimit(value, maximum) !== null),
+    );
+}
+function cursor(parse: (value: string) => number | null) {
+    return v.pipe(
+        v.string(),
+        v.check((value) => parse(value) !== null),
+    );
+}
+const turnPageQuery = v.object({
+    before: v.optional(cursor(parseSessionRecordingTurnCursor)),
+    limit: v.optional(pageLimit(SESSION_RECORDING_TURN_PAGE_MAX_LIMIT)),
+});
+const turnItemPageQuery = v.object({
+    after: v.optional(cursor(parseSessionRecordingTurnItemCursor)),
+    limit: v.optional(pageLimit(SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT)),
+});
 const recordingIncrementalQuery = v.object({
     after: v.optional(recordingCursor),
     limit: v.optional(v.pipe(v.string(), v.regex(/^[1-9][0-9]{0,4}$/u))),
@@ -80,6 +108,42 @@ async function readRecording(
     }
 }
 
+/** The query parameters among `names` that the request carries. */
+function definedQuery(
+    context: Context<PlatformApplicationEnvironment>,
+    names: readonly string[],
+): Record<string, string> {
+    const values: Record<string, string> = {};
+    for (const name of names) {
+        const value = context.req.query(name);
+        if (value !== undefined) {
+            values[name] = value;
+        }
+    }
+    return values;
+}
+
+/** Resolves the Recording Session addressed by a Turn history read. */
+function turnTarget(context: Context<PlatformApplicationEnvironment>): {
+    readonly projectId: string;
+    readonly runtimeId: string;
+    readonly sessionPath: string;
+} | null {
+    const runtimeId = context.req.query("runtimeId");
+    const projectId = decodedIdentifier(context.req.param("projectId"));
+    const sessionId = decodedIdentifier(context.req.param("sessionId"));
+    if (runtimeId === undefined || !isIdentifier(runtimeId) || projectId === null || sessionId === null) {
+        return null;
+    }
+    return {
+        projectId,
+        runtimeId,
+        sessionPath: `/v1/projects/${encodeURIComponent(projectId)}/runtimes/${encodeURIComponent(
+            runtimeId,
+        )}/sessions/${encodeURIComponent(sessionId)}`,
+    };
+}
+
 export const recordingReadRoutes = new Hono<PlatformApplicationEnvironment>()
     .get("/sessions", async (context): Promise<Response> => {
         const query = v.safeParse(recordingQuery, { runtimeId: context.req.query("runtimeId") ?? "" });
@@ -117,6 +181,54 @@ export const recordingReadRoutes = new Hono<PlatformApplicationEnvironment>()
             query.output.runtimeId,
         )}/sessions/${encodeURIComponent(sessionId)}/events`;
         return await readRecording(context, projectId, recordingPath, forwarded);
+    })
+    .get("/sessions/:sessionId/turns", async (context): Promise<Response> => {
+        const target = turnTarget(context);
+        const values = definedQuery(context, ["before", "limit"]);
+        const query = v.safeParse(turnPageQuery, values);
+        if (target === null || !query.success) {
+            return errorResponse("invalid_request", "The Recording Turn read is invalid", 400);
+        }
+        return await readRecording(
+            context,
+            target.projectId,
+            `${target.sessionPath}/turns`,
+            new URLSearchParams({ ...values, runtimeId: target.runtimeId }),
+        );
+    })
+    .get("/sessions/:sessionId/turns/:commandId/items", async (context): Promise<Response> => {
+        const target = turnTarget(context);
+        const commandId = decodedIdentifier(context.req.param("commandId"));
+        const values = definedQuery(context, ["after", "limit"]);
+        const query = v.safeParse(turnItemPageQuery, values);
+        if (target === null || commandId === null || !query.success) {
+            return errorResponse("invalid_request", "The Recording Turn item read is invalid", 400);
+        }
+        return await readRecording(
+            context,
+            target.projectId,
+            `${target.sessionPath}/turns/${encodeURIComponent(commandId)}/items`,
+            new URLSearchParams({ ...values, runtimeId: target.runtimeId }),
+        );
+    })
+    .get("/sessions/:sessionId/turns/:commandId/items/:itemId", async (context): Promise<Response> => {
+        const target = turnTarget(context);
+        const commandId = decodedIdentifier(context.req.param("commandId"));
+        const itemId = context.req.param("itemId");
+        if (
+            target === null ||
+            commandId === null ||
+            itemId.length === 0 ||
+            itemId.length > SESSION_RECORDING_TURN_ITEM_ID_MAX_LENGTH
+        ) {
+            return errorResponse("invalid_request", "The Recording Turn item read is invalid", 400);
+        }
+        return await readRecording(
+            context,
+            target.projectId,
+            `${target.sessionPath}/turns/${encodeURIComponent(commandId)}/items/${encodeURIComponent(itemId)}`,
+            new URLSearchParams({ runtimeId: target.runtimeId }),
+        );
     });
 
 export const recordingSessionStatusRoutes = new Hono<PlatformApplicationEnvironment>()

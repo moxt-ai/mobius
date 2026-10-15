@@ -64,7 +64,7 @@ function boundedJsonIssue(value: unknown, depth = 0): string | null {
     return "Value is not bounded JSON";
 }
 
-const boundedJsonSchema = z.unknown().superRefine((value, context) => {
+export const boundedJsonSchema = z.unknown().superRefine((value, context) => {
     const issue = boundedJsonIssue(value);
     if (issue !== null) {
         context.addIssue({ code: "custom", message: issue });
@@ -175,7 +175,7 @@ export type ExternalImageContentBlockV2 = z.infer<typeof externalImageContentSch
 export type ExternalAudioContentBlockV2 = z.infer<typeof externalAudioContentSchema>;
 export type ExternalResourceContentBlockV2 = z.infer<typeof externalResourceContentSchema>;
 
-const toolCallContentSchema = z.discriminatedUnion("type", [
+export const toolCallContentSchema = z.discriminatedUnion("type", [
     z.object({ content: contentBlockV2Schema, type: z.literal("content") }).readonly(),
     z
         .object({
@@ -187,13 +187,13 @@ const toolCallContentSchema = z.discriminatedUnion("type", [
         .readonly(),
     z.object({ terminalId: shortString, type: z.literal("terminal") }).readonly(),
 ]);
-const toolCallLocationSchema = z
+export const toolCallLocationSchema = z
     .object({
         line: z.number().int().nonnegative().safe().nullable().optional(),
         path: boundedString,
     })
     .readonly();
-const toolKindSchema = z.enum([
+export const toolKindSchema = z.enum([
     "read",
     "edit",
     "delete",
@@ -205,7 +205,7 @@ const toolKindSchema = z.enum([
     "switch_mode",
     "other",
 ]);
-const toolStatusSchema = z.enum(["pending", "in_progress", "completed", "failed"]);
+export const toolStatusSchema = z.enum(["pending", "in_progress", "completed", "failed"]);
 const toolPatchFields = {
     content: z.array(toolCallContentSchema).max(MAX_COLLECTION_SIZE).readonly().nullable().optional(),
     kind: toolKindSchema.nullable().optional(),

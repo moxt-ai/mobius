@@ -4,14 +4,14 @@ import {
     type SessionLiveEventV2,
     type SessionRecordingWrite,
 } from "@moxt-ai/mobius-protocol";
-import { and, asc, desc, eq, gte } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, lt } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/durable-sqlite";
 import { sessionRecordingDurableObjectMigrations } from "../generated/session-recording-do-migrations.ts";
 import * as schema from "../schema/session-recording-do/index.ts";
 import { recordedSessionEvent, recordingMetadata } from "../schema/session-recording-do/index.ts";
 import { applyDurableObjectMigrations } from "./durable-object-migrations.ts";
 
-interface RecordedBatch {
+export interface RecordedBatch {
     readonly events: readonly SessionLiveEventV2[];
     readonly generation: string;
     readonly ordinal: number;
@@ -155,13 +155,16 @@ export class SessionRecordingStorage {
         };
     };
 
-    readonly #tailCursor = (): string => {
-        const tail = this.#database
+    readonly #tail = () =>
+        this.#database
             .select({ lastPosition: recordedSessionEvent.lastPosition, ordinal: recordedSessionEvent.ordinal })
             .from(recordedSessionEvent)
             .orderBy(desc(recordedSessionEvent.ordinal))
             .limit(1)
             .get();
+
+    readonly #tailCursor = (): string => {
+        const tail = this.#tail();
         if (tail === undefined) {
             return "v2:0:0";
         }
@@ -175,7 +178,14 @@ export class SessionRecordingStorage {
     readonly #cursor = (batch: RecordedBatch, index: number): string =>
         `v2:${batch.ordinal}:${batch.events[index]?.position ?? "0"}`;
 
-    readonly append = (write: SessionRecordingWrite): boolean =>
+    /**
+     * Appends one batch. `project` runs inside the same transaction with the new batch ordinal, so a
+     * projection derived from the batch commits or rolls back together with it.
+     */
+    readonly append = (
+        write: SessionRecordingWrite,
+        project: (ordinal: number, events: readonly SessionLiveEventV2[]) => void = () => undefined,
+    ): boolean =>
         this.#storage.transactionSync(() => {
             const [event, ...remainingEvents] = write.envelope.events;
             if (event === undefined || remainingEvents.some((candidate) => candidate.sessionId !== event.sessionId)) {
@@ -207,7 +217,7 @@ export class SessionRecordingStorage {
                     })
                     .run();
             }
-            this.#database
+            const inserted = this.#database
                 .insert(recordedSessionEvent)
                 .values({
                     envelopeJson: encodeSessionEventEnvelopeV2(write.envelope),
@@ -216,9 +226,32 @@ export class SessionRecordingStorage {
                     recordedAt: Date.parse(event.recordedAt),
                     sessionGenerationId: event.sessionGenerationId,
                 })
-                .run();
+                .returning({ ordinal: recordedSessionEvent.ordinal })
+                .get();
+            project(inserted.ordinal, write.envelope.events);
             return true;
         });
+
+    /** True when this Durable Object holds the Recording of exactly this Session. */
+    readonly records = (projectId: string, runtimeId: string, sessionId: string): boolean =>
+        this.#metadata(projectId, runtimeId, sessionId) !== undefined;
+
+    /** Yields the batches appended after `ordinal`, in append order and bounded decoding chunks. */
+    readonly batchesAfter = (ordinal: number): Generator<RecordedBatch> => this.#batchesFrom(ordinal + 1);
+
+    /** True when a batch was appended after `afterOrdinal` and before `beforeOrdinal`. */
+    readonly hasBatchBetween = (afterOrdinal: number, beforeOrdinal: number): boolean =>
+        this.#database
+            .select({ ordinal: recordedSessionEvent.ordinal })
+            .from(recordedSessionEvent)
+            .where(and(gt(recordedSessionEvent.ordinal, afterOrdinal), lt(recordedSessionEvent.ordinal, beforeOrdinal)))
+            .limit(1)
+            .get() !== undefined;
+
+    readonly latestOrdinal = (): number => this.#tail()?.ordinal ?? 0;
+
+    /** The cursor at the newest recorded event. */
+    readonly tailCursor = (): string => this.#tailCursor();
     readonly read = (projectId: string, runtimeId: string, sessionId: string): RecordedSessionLiveHistory | null => {
         const rows = this.#requireMetadata(projectId, runtimeId, sessionId);
         if (rows === null) {

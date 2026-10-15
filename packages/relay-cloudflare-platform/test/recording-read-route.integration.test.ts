@@ -3,6 +3,7 @@ import { env } from "cloudflare:workers";
 import {
     decodeSessionRecordingHistory,
     decodeSessionRecordingHistoryPage,
+    decodeSessionRecordingTurnPage,
     encodeSessionEventEnvelopeV2,
     MOBIUS_API_PREFIX,
 } from "@moxt-ai/mobius-protocol";
@@ -375,6 +376,112 @@ describe.sequential("Platform Recording read route", () => {
             generationReset: false,
             version: 2,
         });
+    });
+
+    it("Given an enabled Project policy, When a Platform app reads Turn history through the production boundary, Then Recording serves the projected page", async () => {
+        const worker = createTestMobiusPlatformApp(
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
+            createPlatformGateways,
+        );
+        const environment = bindings();
+
+        const tenants = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/platform/tenants`, {
+                    headers: developerHeaders(),
+                }),
+                environment,
+            ),
+            200,
+        );
+        const tenantValues = tenants["tenants"];
+        if (!Array.isArray(tenantValues) || tenantValues.length === 0) {
+            throw new Error("Expected a Platform tenant");
+        }
+        const app = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps`, {
+                    body: JSON.stringify({
+                        displayName: "Recording route App",
+                        tenantId: text(tenantValues[0], "tenantId"),
+                    }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const appId = text(app, "appId");
+        const credential = text(record(app["defaultCredential"]), "credential");
+        const project = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${appId}/projects`, {
+                    body: JSON.stringify({
+                        displayName: "Recording route Project",
+                        idempotencyKey: `recording-route-${appId}`,
+                        locationHint: "apac",
+                    }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const projectId = text(project, "projectId");
+        await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${appId}/recording-policy`, {
+                    body: JSON.stringify({ mode: "enabled" }),
+                    headers: developerHeaders(),
+                    method: "PUT",
+                }),
+                environment,
+            ),
+            200,
+        );
+
+        const sessionId = "recording-route-session";
+        const runtimeId = projectId;
+        await recordThroughRelay(projectId, sessionId, "recording route answer");
+
+        const turnsUrl =
+            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}` +
+            `/recording/sessions/${sessionId}/turns?runtimeId=${runtimeId}&limit=10`;
+        const turns = await worker.fetch(
+            new Request(turnsUrl, { headers: credentialHeaders(credential) }),
+            environment,
+        );
+        expect(turns.status).toBe(200);
+        expect(decodeSessionRecordingTurnPage(await turns.text())).toMatchObject({
+            nextCursor: null,
+            sessionId,
+            tailCursor: "v2:1:1",
+            turns: [],
+            version: 1,
+        });
+
+        const invalid = await worker.fetch(
+            new Request(`${turnsUrl}&before=item:1`, { headers: credentialHeaders(credential) }),
+            environment,
+        );
+        expect(invalid.status).toBe(400);
+        const oversized = await worker.fetch(
+            new Request(turnsUrl.replace("limit=10", "limit=101"), { headers: credentialHeaders(credential) }),
+            environment,
+        );
+        expect(oversized.status).toBe(400);
+        expect(await oversized.json()).toMatchObject({ error: { code: "invalid_request" } });
+        const missing = await worker.fetch(
+            new Request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}` +
+                    `/recording/sessions/${sessionId}/turns/missing-command/items?runtimeId=${runtimeId}`,
+                { headers: credentialHeaders(credential) },
+            ),
+            environment,
+        );
+        expect(missing.status).toBe(404);
     });
 
     it("Given a daemon reload and Session generation reset, When a Platform app continues from an append cursor, Then reloaded events are retained", async () => {
