@@ -1,12 +1,12 @@
 import { isAbsolute } from "node:path";
+import { readStateDirectory } from "../storage/state-directory.ts";
 import {
     findExecutableOnPath,
     ProcessExecutionError,
     type ResolvedExecutable,
     resolveExecutablePath,
     runBoundedProcess,
-} from "../process/executable.ts";
-import { readStateDirectory } from "../storage/state-directory.ts";
+} from "../util/process/executable.ts";
 import type { LocalAgentDiscoveryContext } from "./agent-discovery-context.ts";
 import {
     DirectAcpAgentDefinition,

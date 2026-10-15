@@ -10,7 +10,6 @@ import {
 import type { WebSocket } from "undici";
 import { AcpExecutionError, type AgentRuntimeManager } from "./acp/agent-runtime-manager.ts";
 import type { AcpSessionEventPageV2 } from "./acp/session-event-store-v2.ts";
-import type { AuditStore } from "./audit/audit-store.ts";
 import { resolveSessionDirectories } from "./authorization/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
 import type { DaemonConfig } from "./config.ts";
@@ -122,7 +121,6 @@ export async function executeSessionLiveHistoryV2PageLoad(
     command: ReturnType<typeof decodeSessionLiveHistoryV2PageLoad>,
     config: DaemonConfig,
     directories: WorkspaceDirectoryService,
-    audit: AuditStore,
     diagnostics: RelayConnectionDiagnostics,
     sessions: AgentRuntimeManager,
     nativeSessions: NativeSessionService,
@@ -160,11 +158,6 @@ export async function executeSessionLiveHistoryV2PageLoad(
             async (eventLimit, cursor) => await sessions.loadSessionEventsV2(loadOptions, eventLimit, cursor),
         );
         signal.throwIfAborted();
-        audit.record({
-            commandId: command.requestId,
-            event: "session_event_log_v2_loaded",
-            sessionId: command.sessionId,
-        });
         send(socket, {
             events,
             kind: SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND,
@@ -183,15 +176,6 @@ export async function executeSessionLiveHistoryV2PageLoad(
                 },
                 error,
             );
-            audit.record({
-                commandId: command.requestId,
-                details: {
-                    ...(agentId === undefined ? {} : { agentId }),
-                    code: operationErrorCode(error),
-                },
-                event: "session_history_v2_load_failed",
-                sessionId: command.sessionId,
-            });
             reportOperationFailure(socket, command.requestId, command.sessionId, error);
         }
     }
@@ -202,7 +186,6 @@ export async function executeSessionPreviewHistoryPageLoad(
     command: ReturnType<typeof decodeSessionPreviewHistoryPageLoad>,
     config: DaemonConfig,
     directories: WorkspaceDirectoryService,
-    audit: AuditStore,
     diagnostics: RelayConnectionDiagnostics,
     sessions: AgentRuntimeManager,
     signal: AbortSignal,
@@ -232,11 +215,6 @@ export async function executeSessionPreviewHistoryPageLoad(
                 await sessions.previewNativeSessionEventsV2(loadOptions, command.sessionId, eventLimit, cursor),
         );
         signal.throwIfAborted();
-        audit.record({
-            commandId: command.requestId,
-            event: "session_event_log_v2_loaded",
-            sessionId: command.sessionId,
-        });
         send(socket, {
             events,
             kind: SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND,
@@ -255,12 +233,6 @@ export async function executeSessionPreviewHistoryPageLoad(
                 },
                 error,
             );
-            audit.record({
-                commandId: command.requestId,
-                details: { agentId: command.agentId, code: operationErrorCode(error) },
-                event: "session_history_v2_load_failed",
-                sessionId: command.sessionId,
-            });
             reportOperationFailure(socket, command.requestId, command.sessionId, error);
         }
     }

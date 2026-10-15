@@ -36,7 +36,6 @@ import type { AgentRuntimeManager } from "./acp/agent-runtime-manager.ts";
 import { createAgentSettingsDiscoveryHandler } from "./agent-catalog/handle-agent-settings-discovery.ts";
 import type { AgentInstallationManager } from "./agent-installation/agent-installation-manager.ts";
 import { streamLocalFile } from "./artifacts/local-file-streamer.ts";
-import type { AuditStore } from "./audit/audit-store.ts";
 import type { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
 import type { DaemonConfig } from "./config.ts";
 import { reportOperationFailure, send, settleAbandonedTurn } from "./daemon-command-results.ts";
@@ -63,7 +62,6 @@ import type { DaemonSessionEventProjectionV2 } from "./session-event-projection-
 export interface DaemonCommandOptions {
     readonly config: DaemonConfig;
     readonly directories: WorkspaceDirectoryService;
-    readonly audit: AuditStore;
     readonly sessions: AgentRuntimeManager;
     readonly installations: AgentInstallationManager;
     readonly nativeSessions: NativeSessionService;
@@ -81,7 +79,6 @@ export interface DaemonCommandOptions {
 export function createDaemonCommandHandler({
     config,
     directories,
-    audit,
     sessions,
     installations,
     nativeSessions,
@@ -102,7 +99,6 @@ export function createDaemonCommandHandler({
     const handleSettingsDiscovery = createAgentSettingsDiscoveryHandler({
         config,
         directories,
-        audit,
         sessions,
         diagnostics,
         socket,
@@ -115,7 +111,6 @@ export function createDaemonCommandHandler({
         });
     };
     const nativeRequestHandler = createNativeSessionRequestHandler({
-        audit,
         diagnostics,
         nativeSessions,
         signal: signal,
@@ -130,7 +125,6 @@ export function createDaemonCommandHandler({
                 const pending = requestDaemonUpgrade(
                     message,
                     config.relayUrl,
-                    audit,
                     (result) => {
                         if (socket.readyState === WebSocket.OPEN) {
                             send(socket, result);
@@ -148,12 +142,6 @@ export function createDaemonCommandHandler({
             }
             if (kind === "runtime.diagnostics.read") {
                 // This fixed capability cannot select files, paths or arbitrary local state.
-                audit.record({
-                    event: "runtime_diagnostics_read",
-                    commandId: message.requestId,
-                    sessionId: "runtime",
-                    details: {},
-                });
                 try {
                     send(socket, {
                         kind: "runtime.diagnostics.result",
@@ -162,12 +150,6 @@ export function createDaemonCommandHandler({
                         ...diagnostics.snapshot(),
                     });
                 } catch {
-                    audit.record({
-                        event: "runtime_diagnostics_failed",
-                        commandId: message.requestId,
-                        sessionId: "runtime",
-                        details: { code: "diagnostics_unavailable" },
-                    });
                     send(socket, {
                         kind: "session.operation.failed",
                         requestId: message.requestId,
@@ -188,7 +170,6 @@ export function createDaemonCommandHandler({
                     message,
                     config,
                     directories,
-                    audit,
                     diagnostics,
                     sessions,
                     nativeSessions,
@@ -203,7 +184,6 @@ export function createDaemonCommandHandler({
                     message,
                     config,
                     directories,
-                    audit,
                     diagnostics,
                     sessions,
                     signal,
@@ -248,22 +228,15 @@ export function createDaemonCommandHandler({
                 const cancellation = message;
                 const turn = activeTurns.get(cancellation.commandId);
                 if (turn === undefined || !turn.matches(cancellation)) {
-                    void settleAbandonedTurn(eventProjectionV2, operations, audit, cancellation).catch(
-                        (error: unknown) => {
-                            console.error("Could not settle abandoned turn", error);
-                        },
-                    );
+                    void settleAbandonedTurn(eventProjectionV2, operations, cancellation).catch((error: unknown) => {
+                        console.error("Could not settle abandoned turn", error);
+                    });
                     return;
                 }
                 const cancellationState = turn.requestCancellation();
                 if (cancellationState === "already-requested") {
                     return;
                 }
-                audit.record({
-                    commandId: cancellation.commandId,
-                    event: "session_cancellation_requested",
-                    sessionId: cancellation.sessionId,
-                });
                 if (cancellationState === "pending") {
                     return;
                 }
@@ -274,19 +247,9 @@ export function createDaemonCommandHandler({
             }
             if (kind === SESSION_CLOSE_KIND) {
                 const command = message;
-                audit.record({
-                    commandId: command.requestId,
-                    event: "session_close_requested",
-                    sessionId: command.sessionId,
-                });
                 void sessions
                     .closeSession(command.sessionId, signal)
                     .then(() => {
-                        audit.record({
-                            commandId: command.requestId,
-                            event: "session_closed",
-                            sessionId: command.sessionId,
-                        });
                         send(socket, {
                             kind: SESSION_CLOSED_KIND,
                             requestId: command.requestId,
@@ -313,17 +276,17 @@ export function createDaemonCommandHandler({
             }
             if (kind === WORKSPACE_LIST_KIND) {
                 const command = message;
-                void executeWorkspaceList(socket, command, directories, audit, signal);
+                void executeWorkspaceList(socket, command, directories, signal);
                 return;
             }
             if (kind === SESSION_PREPARE_KIND) {
                 const command = message;
-                void executeSessionPrepare(socket, command, config, directories, audit, sessions, diagnostics, signal);
+                void executeSessionPrepare(socket, command, config, directories, sessions, diagnostics, signal);
                 return;
             }
             if (kind === SESSION_CONFIGURE_KIND) {
                 const command = message;
-                void executeSessionConfigure(socket, command, config, directories, audit, sessions, signal);
+                void executeSessionConfigure(socket, command, config, directories, sessions, signal);
                 return;
             }
             if (kind === SESSION_LIST_KIND) {
@@ -365,7 +328,6 @@ export function createDaemonCommandHandler({
                     command,
                     config,
                     directories,
-                    audit,
                     sessions,
                     nativeSessions,
                     diagnostics,
@@ -375,34 +337,16 @@ export function createDaemonCommandHandler({
             }
             if (kind === SESSION_PERMISSION_RESPOND_KIND) {
                 const command = message;
-                void sessions
-                    .respondPermission(command)
-                    .then(() => {
-                        audit.record({
-                            commandId: command.interactionId,
-                            event: "session_permission_resolved",
-                            sessionId: command.sessionId,
-                        });
-                    })
-                    .catch((error: unknown) => {
-                        reportOperationFailure(socket, command.interactionId, command.sessionId, error);
-                    });
+                void sessions.respondPermission(command).catch((error: unknown) => {
+                    reportOperationFailure(socket, command.interactionId, command.sessionId, error);
+                });
                 return;
             }
             if (kind === SESSION_ELICITATION_RESPOND_KIND) {
                 const command = message;
-                void sessions
-                    .respondElicitation(command)
-                    .then(() => {
-                        audit.record({
-                            commandId: command.interactionId,
-                            event: "session_elicitation_resolved",
-                            sessionId: command.sessionId,
-                        });
-                    })
-                    .catch((error: unknown) => {
-                        reportOperationFailure(socket, command.interactionId, command.sessionId, error);
-                    });
+                void sessions.respondElicitation(command).catch((error: unknown) => {
+                    reportOperationFailure(socket, command.interactionId, command.sessionId, error);
+                });
                 return;
             }
             if (kind === AGENT_INSTALL_REQUEST_KIND) {
@@ -430,12 +374,6 @@ export function createDaemonCommandHandler({
             );
             if (receipt.kind === "conflict") {
                 const code = "command_identity_conflict";
-                audit.record({
-                    commandId: command.commandId,
-                    details: { code },
-                    event: "session_prompt_rejected",
-                    sessionId: command.sessionId,
-                });
                 send(socket, {
                     code,
                     requestId: command.commandId,
@@ -457,7 +395,6 @@ export function createDaemonCommandHandler({
                 command,
                 config,
                 directories,
-                audit,
                 sessions,
                 attemptId: receipt.attemptId,
                 activateAttempt: turn.activate,

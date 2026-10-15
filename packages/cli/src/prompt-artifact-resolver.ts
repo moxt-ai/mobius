@@ -4,8 +4,8 @@ import { isIdentifier, type PromptImage, type PromptResource } from "@moxt-ai/mo
 import { fetch } from "undici";
 
 import type { DaemonConfig } from "./config.ts";
-import { environmentProxyDispatcher } from "./network/environment-proxy.ts";
 import { relayHttpEndpoint, runtimeAuthorization } from "./relay-connection/runtime-authentication.ts";
+import { environmentProxyDispatcher } from "./util/network/environment-proxy.ts";
 
 const ARTIFACT_SCHEME = "mobius-artifact:";
 const ARTIFACT_DOWNLOAD_TIMEOUT_MILLISECONDS = 20_000;

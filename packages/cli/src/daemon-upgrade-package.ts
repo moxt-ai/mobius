@@ -5,8 +5,8 @@ import { z } from "zod";
 import type { WorkerLaunch } from "./daemon-lifecycle-protocol.ts";
 import { decodeWorkerLaunch } from "./daemon-worker-process.ts";
 import { validateLocalPath } from "./filesystem/private-path.ts";
-import { findExecutableOnPath, runBoundedProcess } from "./process/executable.ts";
 import { readStateDirectory } from "./storage/state-directory.ts";
+import { findExecutableOnPath, runBoundedProcess } from "./util/process/executable.ts";
 
 export class DaemonUpgradeError extends Error {
     readonly code: string;

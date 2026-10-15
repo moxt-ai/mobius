@@ -23,13 +23,11 @@ import {
     type AgentInstallation,
     CancelledInstallation,
     FailedInstallation,
-    type InstallationAudit,
     type InstallationObserver,
     RequestedInstallation,
     RunningInstallation,
     SucceededInstallation,
 } from "./agent-installation/agent-installation-manager.ts";
-import type { AuditStore } from "./audit/audit-store.ts";
 import { send } from "./daemon-command-results.ts";
 
 export class DaemonAcpObserver implements AcpSessionObserver {
@@ -92,28 +90,6 @@ export class DaemonAcpObserver implements AcpSessionObserver {
     readonly onUsage = (event: SessionUsageUpdatedEvent): Promise<void> => {
         this.#record(event.sessionId, event);
         return Promise.resolve();
-    };
-}
-
-export class AuditInstallationEvents implements InstallationAudit {
-    readonly #audit: AuditStore;
-
-    constructor(audit: AuditStore) {
-        this.#audit = audit;
-    }
-
-    readonly record = (
-        event: string,
-        requestId: string,
-        agentId: string,
-        details: Readonly<Record<string, string>> = {},
-    ): void => {
-        this.#audit.record({
-            commandId: requestId,
-            details,
-            event,
-            sessionId: `agent-installation:${agentId}`,
-        });
     };
 }
 

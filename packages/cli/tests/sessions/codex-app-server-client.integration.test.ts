@@ -5,7 +5,7 @@ import { afterEach, expect, it } from "vitest";
 import { CodexAppServerClient } from "../../src/acp/harness/codex/app-server-client.ts";
 import { LocalAgentDefinition } from "../../src/agent-catalog/local-agent.ts";
 import { readCodexFullHistory } from "../../src/native-sessions/codex-history.ts";
-import { stopProcessTree } from "../../src/process/executable.ts";
+import { stopProcessTree } from "../../src/util/process/executable.ts";
 
 const temporaryDirectories: string[] = [];
 

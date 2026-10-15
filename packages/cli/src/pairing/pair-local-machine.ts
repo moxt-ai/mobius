@@ -16,13 +16,13 @@ import {
     loadDefaultWorkspace,
     OpaqueDaemonReconnectTarget,
 } from "../config.ts";
-import { environmentProxyDispatcher } from "../network/environment-proxy.ts";
 import {
     openRuntimeInstallationStore,
     type RuntimeInstallationStore,
     type VerifiedRuntimeConnection,
 } from "../storage/runtime-installation-store.ts";
 import { readStateDirectory } from "../storage/state-directory.ts";
+import { environmentProxyDispatcher } from "../util/network/environment-proxy.ts";
 
 const PAIRING_TIMEOUT_MILLISECONDS = 20_000;
 const PAIRING_CODE_PATTERN = /^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){4}$/;

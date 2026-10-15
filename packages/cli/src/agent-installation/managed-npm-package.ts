@@ -6,7 +6,7 @@ import {
     type ResolvedExecutable,
     resolveExecutablePath,
     runBoundedProcess,
-} from "../process/executable.ts";
+} from "../util/process/executable.ts";
 
 const INSTALL_TIMEOUT_MILLISECONDS = 5 * 60 * 1_000;
 const PACKAGE_METADATA_LIMIT_BYTES = 64 * 1024;

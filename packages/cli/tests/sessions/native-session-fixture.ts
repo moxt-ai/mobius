@@ -9,7 +9,6 @@ import {
     NullAcpSessionObserver,
 } from "../../src/acp/agent-runtime-manager.ts";
 import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
-import { AuditStore } from "../../src/audit/audit-store.ts";
 import { WorkspaceDirectoryService } from "../../src/authorization/workspace-directory.ts";
 import { createDaemonConfig, LocalAgentDefinition } from "../../src/config.ts";
 import { NativeSessionService } from "../../src/native-sessions/service.ts";
@@ -74,7 +73,6 @@ export async function fixture(
     const store = new MemoryAcpSessionStore();
     const observer = new NativeSessionObserver();
     let sessions = new AgentRuntimeManager(observer, store, nativeHistoryReader, sessionIdentity);
-    const audit = new AuditStore();
     const config = createDaemonConfig(
         {
             defaultWorkspace: workspace,
@@ -84,7 +82,7 @@ export async function fixture(
         [agent],
     );
     const directories = new WorkspaceDirectoryService("workspace", workspace);
-    let service = new NativeSessionService(config, directories, sessions, audit, async () => ({
+    let service = new NativeSessionService(config, directories, sessions, async () => ({
         turn: null,
         queued: [],
     }));
@@ -137,7 +135,6 @@ export async function fixture(
     };
     const close = async (): Promise<void> => {
         await sessions.close();
-        audit.close();
         if (previous === undefined) {
             delete process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
         } else {
@@ -147,7 +144,6 @@ export async function fixture(
     };
     return {
         agent,
-        audit,
         config,
         observer,
         directories,
@@ -164,7 +160,7 @@ export async function fixture(
         restart: async () => {
             await sessions.close();
             sessions = new AgentRuntimeManager(observer, store, nativeHistoryReader, sessionIdentity);
-            service = new NativeSessionService(config, directories, sessions, audit, async () => ({
+            service = new NativeSessionService(config, directories, sessions, async () => ({
                 turn: null,
                 queued: [],
             }));

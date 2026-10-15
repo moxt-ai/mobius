@@ -27,7 +27,6 @@ import {
 import { listen, port, sendText } from "@moxt-ai/mobius-test/websocket";
 import { describe, expect, it } from "vitest";
 import { LocalAgentDefinition } from "../../src/agent-catalog/local-agent.ts";
-import { AuditStore } from "../../src/audit/audit-store.ts";
 import { createDaemonConfig, DaemonLocalContext } from "../../src/config.ts";
 import { SESSION_EVENT_V2_BATCH_WINDOW_MILLISECONDS } from "../../src/relay-connection/session-event-publisher.ts";
 import type { DaemonScheduledTask, DaemonTimer } from "../../src/relay-connection/timer.ts";
@@ -225,9 +224,8 @@ async function startControlledDaemon(options: { readonly stateDirectory?: string
         new DaemonLocalContext(stateDirectory),
     );
     const cancellation = new AbortController();
-    const audit = new AuditStore();
     const timer = new ControllableDaemonTimer();
-    const daemon = runDaemon(config, audit, cancellation.signal, timer);
+    const daemon = runDaemon(config, cancellation.signal, timer);
     const socket = await socketReady.promise;
     return {
         agent,
@@ -239,7 +237,6 @@ async function startControlledDaemon(options: { readonly stateDirectory?: string
         close: async () => {
             cancellation.abort();
             await daemon;
-            audit.close();
             for (const relaySocket of relaySockets) {
                 relaySocket.destroy();
             }
