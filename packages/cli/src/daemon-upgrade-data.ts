@@ -5,12 +5,8 @@ import { isNodeError } from "./daemon-local-control.ts";
 import { readSwitchStatus } from "./daemon-switch-status.ts";
 import { readStateDirectory } from "./storage/state-directory.ts";
 
-export async function prepareUpgradeData(
-    controlDirectory: string,
-    version: string,
-    signal: AbortSignal,
-): Promise<void> {
-    const transition = await readSwitchStatus(controlDirectory, signal);
+export async function prepareUpgradeData(version: string, signal: AbortSignal): Promise<void> {
+    const transition = await readSwitchStatus(signal);
     if (transition?.kind !== "switching" || transition.next.version !== version) {
         return;
     }

@@ -37,7 +37,7 @@ export async function runWorker(version: string, signal: AbortSignal): Promise<v
     const disconnect = (): void => shutdown.abort();
     process.once("disconnect", disconnect);
     const control = await openMobiusControlInstallation(combined, process.env);
-    await prepareUpgradeData(control.stateDirectory, version, combined);
+    await prepareUpgradeData(version, combined);
     const installation = await openMobiusCliInstallation(combined, process.env);
     const deadline = AbortSignal.any([combined, AbortSignal.timeout(15_000)]);
     let release: (() => Promise<void>) | null = null;

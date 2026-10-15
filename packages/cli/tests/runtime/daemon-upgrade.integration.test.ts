@@ -30,12 +30,12 @@ async function packedRelease(
         await writeFile(join(source, "package.json"), JSON.stringify({ ...cliPackage, version }));
         await symlink(resolve(import.meta.dirname, "../../node_modules"), join(source, "node_modules"), "junction");
         await writeFile(
-            join(root, "dist/cli.js"),
-            `import ${JSON.stringify(pathToFileURL(join(source, "src/entrypoint/cli.ts")).href)};`,
+            join(root, "dist/daemon-worker.js"),
+            `import ${JSON.stringify(pathToFileURL(join(source, "src/entrypoint/daemon-worker.ts")).href)};`,
         );
     } else {
         await writeFile(
-            join(root, "dist/cli.js"),
+            join(root, "dist/daemon-worker.js"),
             'console.log("Starting controlled release"); throw new Error("Controlled startup failure");',
         );
     }

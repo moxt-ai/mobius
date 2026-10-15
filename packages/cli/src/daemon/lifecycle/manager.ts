@@ -21,13 +21,13 @@ export async function runManager(stateDirectory: string, signal: AbortSignal): P
     let queue: Promise<unknown> = Promise.resolve();
     const status = (): LifecycleResponse => ({
         kind: "status",
-        protocolVersion: 2,
+        protocolVersion: 3,
         worker: worker?.running ? { pid: worker.pid, version: worker.launch.version } : null,
     });
     const start = async (launch: WorkerLaunch): Promise<void> => {
         combined.throwIfAborted();
         await worker?.close();
-        const replacement = new WorkerProcess(launch, combined, process.env);
+        const replacement = new WorkerProcess(launch, combined, process.env, { handle, responded });
         worker = replacement;
         try {
             await replacement.ready;
@@ -145,35 +145,26 @@ export async function runManager(stateDirectory: string, signal: AbortSignal): P
         queue = result.catch(() => undefined);
         return await result;
     };
+    const responded = (response: unknown): void => {
+        if (typeof response === "object" && response !== null && "kind" in response && response.kind === "switching") {
+            const pending = queue.then(async () => {
+                const state = switchState;
+                if (state?.kind === "switching") {
+                    await switchWorker(state);
+                }
+            });
+            queue = pending.catch(() => {
+                if (!combined.aborted) {
+                    process.stderr.write("Daemon switch or rollback failed; run mobius start to retry.\n");
+                }
+            });
+        }
+        if (typeof response === "object" && response !== null && "kind" in response && response.kind === "stopped") {
+            shutdown.abort();
+        }
+    };
     try {
-        await serveLocalControl(stateDirectory, "manager", combined, handle, undefined, (response) => {
-            if (
-                typeof response === "object" &&
-                response !== null &&
-                "kind" in response &&
-                response.kind === "switching"
-            ) {
-                const pending = queue.then(async () => {
-                    const state = switchState;
-                    if (state?.kind === "switching") {
-                        await switchWorker(state);
-                    }
-                });
-                queue = pending.catch(() => {
-                    if (!combined.aborted) {
-                        process.stderr.write("Daemon switch or rollback failed; run mobius start to retry.\n");
-                    }
-                });
-            }
-            if (
-                typeof response === "object" &&
-                response !== null &&
-                "kind" in response &&
-                response.kind === "stopped"
-            ) {
-                shutdown.abort();
-            }
-        });
+        await serveLocalControl(stateDirectory, "manager", combined, handle, undefined, responded);
     } finally {
         shutdown.abort();
         await queue;

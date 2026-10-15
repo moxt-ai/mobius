@@ -1,24 +1,35 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, fork } from "node:child_process";
+import { once } from "node:events";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { type LifecycleResponse, lifecycleResponse } from "../../daemon-lifecycle-protocol.ts";
 import { CONTROL_TIMEOUT_MILLISECONDS, isNodeError, sendLocalRequest } from "../../daemon-local-control.ts";
 import { currentWorkerLaunch } from "../../daemon-worker-process.ts";
 
-async function spawnManager(): Promise<ChildProcess> {
-    const child = spawn(process.execPath, [process.argv[1] ?? "", "__manager"], {
+import { daemonEntrypoint } from "./entrypoint.ts";
+
+async function spawnManager(signal: AbortSignal): Promise<ChildProcess> {
+    const child = fork(daemonEntrypoint("manager"), [], {
+        execArgv: [],
         detached: true,
         windowsHide: true,
         env: process.env,
-        stdio: "ignore",
+        stdio: ["ignore", "ignore", "ignore", "ipc"],
     });
+    try {
+        await once(child, "spawn", { signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]) });
+    } catch (cause) {
+        child.kill();
+        throw cause;
+    }
+    child.disconnect();
     child.unref();
     return child;
 }
 
-async function launchManager(managerVersion: string): Promise<void> {
+async function launchManager(managerVersion: string, signal: AbortSignal): Promise<void> {
     process.stdout.write(`Starting mobius daemon ${managerVersion}\n`);
-    await spawnManager();
+    await spawnManager(signal);
 }
 
 async function waitForManagerExit(stateDirectory: string, signal: AbortSignal): Promise<void> {
@@ -84,14 +95,14 @@ async function ensureManager(stateDirectory: string, managerVersion: string, sig
             }
             // Replace an older lifecycle protocol once; subsequent worker upgrades keep this manager.
             await stopManager(stateDirectory, signal);
-            await launchManager(managerVersion);
+            await launchManager(managerVersion, signal);
             managerStarted = true;
         } catch (cause) {
             if (!isNodeError(cause, "ENOENT") && !isNodeError(cause, "ECONNREFUSED")) {
                 throw cause;
             }
             if (!managerStarted) {
-                await launchManager(managerVersion);
+                await launchManager(managerVersion, signal);
                 managerStarted = true;
             }
             await new Promise<void>((resolve, reject) => {

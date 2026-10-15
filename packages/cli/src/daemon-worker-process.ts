@@ -1,17 +1,15 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, fork } from "node:child_process";
 import { realpath, stat } from "node:fs/promises";
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute } from "node:path";
 
-import { type WorkerLaunch, workerLaunch } from "./daemon-lifecycle-protocol.ts";
+import { daemonEntrypoint } from "./daemon/lifecycle/entrypoint.ts";
+import { workerManagerRequest } from "./daemon/lifecycle/parent-ipc.ts";
+import { type LifecycleResponse, type WorkerLaunch, workerLaunch } from "./daemon-lifecycle-protocol.ts";
 
 export function currentWorkerLaunch(version: string): WorkerLaunch {
-    const entry = process.argv[1];
-    if (entry === undefined || entry.length === 0) {
-        throw new Error("The Mobius CLI entry path is unavailable");
-    }
     return {
         executable: process.execPath,
-        entry: resolve(entry),
+        entry: daemonEntrypoint("worker"),
         version,
     };
 }
@@ -55,10 +53,20 @@ export class WorkerProcess {
     readonly launch: WorkerLaunch;
     readonly ready: Promise<unknown>;
 
-    constructor(launch: WorkerLaunch, signal: AbortSignal, environment: NodeJS.ProcessEnv) {
+    constructor(
+        launch: WorkerLaunch,
+        signal: AbortSignal,
+        environment: NodeJS.ProcessEnv,
+        control: {
+            readonly handle: (command: unknown, signal: AbortSignal) => Promise<LifecycleResponse>;
+            readonly responded: (response: LifecycleResponse) => void;
+        },
+    ) {
         signal.throwIfAborted();
         this.launch = launch;
-        this.#child = spawn(launch.executable, [launch.entry, "__worker"], {
+        this.#child = fork(launch.entry, [], {
+            execPath: launch.executable,
+            execArgv: [],
             env: environment,
             windowsHide: true,
             stdio: ["ignore", "pipe", "pipe", "ipc"],
@@ -84,6 +92,30 @@ export class WorkerProcess {
                     this.#started.resolve(value);
                 }
                 return;
+            }
+            const parsed = workerManagerRequest.safeParse(value);
+            if (parsed.success) {
+                const request = parsed.data;
+                void control
+                    .handle(request.command, signal)
+                    .then((response) => {
+                        if (!this.#child.connected) {
+                            return;
+                        }
+                        this.#child.send(
+                            { kind: "manager-response", requestId: request.requestId, response },
+                            (cause) => {
+                                if (!cause) {
+                                    control.responded(response);
+                                }
+                            },
+                        );
+                    })
+                    .catch((cause: unknown) => {
+                        if (!signal.aborted) {
+                            console.error("Worker lifecycle request failed", cause);
+                        }
+                    });
             }
         });
         this.#child.once("error", (cause) => {

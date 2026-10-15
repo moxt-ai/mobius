@@ -21,6 +21,13 @@ afterEach(async () => {
 });
 
 describe("Mobius manager version compatibility", () => {
+    it("Given the public CLI, When a legacy internal daemon command is invoked, Then it is rejected instead of starting a daemon", async () => {
+        for (const command of ["__manager", "__worker"]) {
+            const result = await runCli([command], process.env, AbortSignal.timeout(10_000));
+            expect(result.code).not.toBe(0);
+            expect(result.stderr).toContain("too many arguments");
+        }
+    });
     it("Given the daemon is stopped, When the user runs mobius start, Then the daemon is running without requiring a connection", async () => {
         const stateRoot = await mkdtemp(join(tmpdir(), "mobius-manager-start-"));
         temporaryDirectories.push(stateRoot);

@@ -2,11 +2,10 @@ import { randomUUID } from "node:crypto";
 import { setInterval } from "node:timers/promises";
 import { decodeIdentifier, type RuntimeUpgradeResult } from "@moxt-ai/mobius-protocol";
 import packageMetadata from "../package.json" with { type: "json" };
+import { requestParentManager } from "./daemon/lifecycle/parent-ipc.ts";
 import { lifecycleResponse } from "./daemon-lifecycle-protocol.ts";
-import { sendLocalRequest } from "./daemon-local-control.ts";
 import { readSwitchStatus } from "./daemon-switch-status.ts";
 import { DaemonUpgradeError, findNewDaemonRelease, installDaemonRelease } from "./daemon-upgrade-package.ts";
-import { openMobiusControlInstallation } from "./pairing/pair-local-machine.ts";
 
 export async function reportDaemonUpgrade(
     send: (result: RuntimeUpgradeResult) => void,
@@ -15,8 +14,7 @@ export async function reportDaemonUpgrade(
     if (!process.connected) {
         return;
     }
-    const control = await openMobiusControlInstallation(signal, process.env);
-    const transition = await readSwitchStatus(control.stateDirectory, signal, true);
+    const transition = await readSwitchStatus(signal, true);
     if (transition === null) {
         return;
     }
@@ -64,8 +62,7 @@ export async function runDaemonUpgrades(signal: AbortSignal): Promise<void> {
 }
 
 async function checkDaemonUpgrade(signal: AbortSignal): Promise<void> {
-    const control = await openMobiusControlInstallation(signal, process.env);
-    const transition = await readSwitchStatus(control.stateDirectory, signal);
+    const transition = await readSwitchStatus(signal);
     if (
         transition?.kind === "switching" ||
         (transition?.kind === "rolled-back" && transition.retryAfter > Date.now())
@@ -78,12 +75,7 @@ async function checkDaemonUpgrade(signal: AbortSignal): Promise<void> {
     }
     const launch = await installDaemonRelease(version, signal);
     const response = lifecycleResponse.parse(
-        await sendLocalRequest(
-            control.stateDirectory,
-            "manager",
-            { kind: "switch", id: randomUUID(), context: "npm", launch },
-            signal,
-        ),
+        await requestParentManager({ kind: "switch", id: randomUUID(), context: "npm", launch }, signal),
     );
     if (response.kind === "error") {
         throw new DaemonUpgradeError(response.code, response.message);

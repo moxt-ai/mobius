@@ -50,7 +50,7 @@ export const lifecycleResponse = z
     .discriminatedUnion("kind", [
         z.object({
             kind: z.literal("status"),
-            protocolVersion: z.literal(2),
+            protocolVersion: z.literal(3),
             worker: z.object({ pid: z.number().int().positive(), version: z.string() }).readonly().nullable(),
         }),
         z.object({ kind: z.literal("switch-status"), state: daemonSwitchState.nullable() }),

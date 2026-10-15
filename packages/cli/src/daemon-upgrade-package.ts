@@ -48,14 +48,12 @@ export async function installDaemonRelease(version: string, signal: AbortSignal)
             outputLimitBytes: 64 * 1024,
         });
         const packageRoot = await realpath(join(prefix, "node_modules", "@moxt-ai", "mobius"));
-        const metadata = z
-            .object({
-                name: z.literal("@moxt-ai/mobius"),
-                version: z.literal(version),
-                bin: z.object({ mobius: z.literal("dist/cli.js") }),
-            })
-            .parse(JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8")));
-        const entry = await realpath(join(packageRoot, metadata.bin.mobius));
+        z.object({
+            name: z.literal("@moxt-ai/mobius"),
+            version: z.literal(version),
+            bin: z.object({ mobius: z.literal("dist/cli.js") }),
+        }).parse(JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8")));
+        const entry = await realpath(join(packageRoot, "dist", "daemon-worker.js"));
         const resolved = relative(await realpath(prefix), entry);
         if (resolved.startsWith("..") || isAbsolute(resolved)) {
             throw new Error("Installed entry escaped npm prefix");
