@@ -49,6 +49,8 @@ type QueuedTurn = {
     reject: (err: unknown) => void;
 };
 
+type PiSteerOutcome = { readonly kind: "idle" } | { readonly kind: "injected" };
+
 type PermissionResponse = Awaited<ReturnType<PiAcpClient["requestPermission"]>>;
 
 const CONFIRM_PERMISSION_OPTIONS: PermissionOption[] = [
@@ -417,6 +419,23 @@ export class PiAcpSession {
         });
 
         return turnPromise;
+    }
+
+    async steer(message: string, images: unknown[], signal: AbortSignal): Promise<PiSteerOutcome> {
+        const target = this.pendingTurn;
+        if (target === null) {
+            return { kind: "idle" };
+        }
+        const expandedMessage = expandSlashCommand(message, this.fileCommands);
+        try {
+            await this.proc.steer(expandedMessage, images, signal);
+        } catch (error: unknown) {
+            if (this.pendingTurn !== target) {
+                return { kind: "idle" };
+            }
+            throw error;
+        }
+        return { kind: "injected" };
     }
 
     async cancel(): Promise<void> {

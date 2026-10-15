@@ -29,6 +29,7 @@ function stripAnsi(s: string): string {
 
 type PiRpcCommand =
     | { type: "prompt"; id?: string; message: string; images?: unknown[] }
+    | { type: "steer"; id?: string; message: string; images?: unknown[] }
     | { type: "abort"; id?: string }
     | { type: "get_state"; id?: string }
     // Model
@@ -297,6 +298,13 @@ export class PiRpcProcess {
         }
     }
 
+    async steer(message: string, images: unknown[], signal: AbortSignal): Promise<void> {
+        const res = await this.request({ type: "steer", message, images }, { signal });
+        if (!res.success) {
+            throw new Error(`pi steer failed: ${res.error ?? JSON.stringify(res.data)}`);
+        }
+    }
+
     async abort(): Promise<void> {
         const res = await this.request({ type: "abort" });
         if (!res.success) {
@@ -432,7 +440,7 @@ export class PiRpcProcess {
         await this.writeLine(`${JSON.stringify({ type: "extension_ui_response", ...response })}\n`);
     }
 
-    private request(cmd: PiRpcCommand, opts?: { timeoutMs?: number }): Promise<PiRpcResponse> {
+    private request(cmd: PiRpcCommand, opts?: { signal?: AbortSignal; timeoutMs?: number }): Promise<PiRpcResponse> {
         const id = crypto.randomUUID();
         const withId = { ...cmd, id };
         const timeoutMs = opts?.timeoutMs;
@@ -440,7 +448,13 @@ export class PiRpcProcess {
         const line = `${JSON.stringify(withId)}\n`;
 
         return new Promise<PiRpcResponse>((resolve, reject) => {
+            const signal = opts?.signal;
+            if (signal?.aborted === true) {
+                reject(signal.reason);
+                return;
+            }
             let timer: ReturnType<typeof setTimeout> | undefined;
+            let abort: (() => void) | undefined;
 
             // Returns false when the id was already dropped (e.g. by the timeout), so the
             // caller can avoid settling the promise twice.
@@ -448,6 +462,10 @@ export class PiRpcProcess {
                 if (timer !== undefined) {
                     clearTimeout(timer);
                     timer = undefined;
+                }
+                if (abort !== undefined) {
+                    signal?.removeEventListener("abort", abort);
+                    abort = undefined;
                 }
                 return this.pending.delete(id);
             };
@@ -463,10 +481,18 @@ export class PiRpcProcess {
                 },
             });
 
+            abort = () => {
+                if (!drop()) {
+                    return;
+                }
+                reject(signal?.reason);
+            };
+            signal?.addEventListener("abort", abort, { once: true });
+
             if (timeoutMs !== undefined) {
                 timer = setTimeout(() => {
                     timer = undefined;
-                    if (!this.pending.delete(id)) {
+                    if (!drop()) {
                         return;
                     }
                     reject(new Error(`pi ${cmd.type} timed out after ${timeoutMs}ms`));
