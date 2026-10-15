@@ -437,6 +437,63 @@ describe("Recording Turn history", () => {
         });
     });
 
+    it("Given a request waiting when a new attempt of its Turn starts, When a client reads Turns, Then the request is no longer pending", async () => {
+        await record([
+            requested("command-1", "Deploy"),
+            started("command-1"),
+            permissionRequest("command-1", "interaction-1"),
+            lifecycle({ attemptId: "attempt-retry", commandId: "command-1", epoch: "epoch-1", kind: "prompt.started" }),
+        ]);
+        const page = await turnPage();
+        expect(page.turns[0]?.attempt).toMatchObject({ attemptId: "attempt-retry", kind: "running" });
+        expect(page.interactions).toEqual([]);
+    });
+
+    it("Given an answered request, When the same request event is recorded again, Then it stays answered", async () => {
+        await record([
+            requested("command-1", "Deploy"),
+            started("command-1"),
+            permissionRequest("command-1", "interaction-1"),
+            permissionResolved("interaction-1"),
+            permissionRequest("command-1", "interaction-1"),
+        ]);
+        const page = await turnPage();
+        expect(page.turns[0]?.attempt.kind).toBe("running");
+        expect(page.interactions).toEqual([]);
+    });
+
+    it("Given answer text from two Agent messages in a row, When a client reads the Turn, Then each message is its own answer item", async () => {
+        const reply = (messageId: string, text: string) =>
+            acp({ content: { text, type: "text" }, messageId, sessionUpdate: "agent_message_chunk" });
+        await record([
+            requested("command-1", "Greet"),
+            started("command-1"),
+            reply("message-1", "Hel"),
+            reply("message-1", "lo."),
+            reply("message-2", "World."),
+            completed("command-1"),
+        ]);
+        expect((await turnPage()).turns[0]?.items).toMatchObject([
+            { kind: "answer", sequence: 0, text: "Hello." },
+            { kind: "answer", sequence: 1, text: "World." },
+        ]);
+    });
+
+    it("Given an undecodable projection state, When backfill runs, Then reads report the failure instead of building forever", async () => {
+        await completedTurn("command-1", "Prompt 1", "Reply 1");
+        const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, sessionId]));
+        await runInDurableObject(stub, (_instance, state) => {
+            state.storage.sql.exec("UPDATE recording_projection SET state_json = '{}'");
+        });
+        await completedTurn("command-2", "Prompt 2", "Reply 2");
+        while (await runDurableObjectAlarm(stub)) {
+            // Each due attempt fails on the undecodable state and records the failure.
+        }
+        const failed = await worker.fetch(new Request(sessionPath("turns")), env);
+        expect(failed.status).toBe(503);
+        expect(await failed.json()).toMatchObject({ error: { code: "projection_failed" } });
+    });
+
     it("Given an unknown Session or a malformed cursor, When a client reads Turns, Then the read is rejected", async () => {
         expect((await worker.fetch(new Request(sessionPath("turns")), env)).status).toBe(404);
         await completedTurn("command-1", "Prompt 1", "Reply 1");

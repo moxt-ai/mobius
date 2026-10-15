@@ -155,13 +155,16 @@ export class SessionRecordingStorage {
         };
     };
 
-    readonly #tailCursor = (): string => {
-        const tail = this.#database
+    readonly #tail = () =>
+        this.#database
             .select({ lastPosition: recordedSessionEvent.lastPosition, ordinal: recordedSessionEvent.ordinal })
             .from(recordedSessionEvent)
             .orderBy(desc(recordedSessionEvent.ordinal))
             .limit(1)
             .get();
+
+    readonly #tailCursor = (): string => {
+        const tail = this.#tail();
         if (tail === undefined) {
             return "v2:0:0";
         }
@@ -245,13 +248,7 @@ export class SessionRecordingStorage {
             .limit(1)
             .get() !== undefined;
 
-    readonly latestOrdinal = (): number =>
-        this.#database
-            .select({ ordinal: recordedSessionEvent.ordinal })
-            .from(recordedSessionEvent)
-            .orderBy(desc(recordedSessionEvent.ordinal))
-            .limit(1)
-            .get()?.ordinal ?? 0;
+    readonly latestOrdinal = (): number => this.#tail()?.ordinal ?? 0;
 
     /** The cursor at the newest recorded event. */
     readonly tailCursor = (): string => this.#tailCursor();

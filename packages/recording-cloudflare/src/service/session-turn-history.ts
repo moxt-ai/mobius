@@ -33,8 +33,9 @@ const listedTextCharacters = 100_000;
 const listedToolCharacters = 32_768;
 const listedToolLabelCharacters = 2_048;
 const listedToolLocations = 20;
-// A full item read returns at most this much text; the protocol bounds a single item to it.
-const itemTextCharacters = 50_000_000;
+// A full item read returns at most this many code points. SQLite counts code points while the protocol
+// bounds an item to 50M UTF-16 units, so half of it fits even when every character is astral.
+const itemTextCharacters = 25_000_000;
 const listedItemsPerTurn = 200;
 // Rows a page reads per query, so the character budget stops loading as soon as it is spent.
 const turnReadChunk = 10;
@@ -222,7 +223,7 @@ class ProjectionFold {
             itemCount: 0,
             messageId: null,
             nextSequence: 0,
-            openAnswerItemId: null,
+            openAnswer: null,
             openThought: null,
             order: this.#turnCount,
             prompt: null,
@@ -372,6 +373,8 @@ class ProjectionFold {
                     generationId: event.sessionGenerationId,
                 });
                 this.#pushActive(event, payload.commandId);
+                // A new attempt starts without waiting; requests of the attempt it replaces cannot be answered.
+                this.#closeInteractions(payload.commandId);
                 return;
             }
             case "prompt.completed": {
@@ -436,6 +439,10 @@ class ProjectionFold {
     }
 
     #requestInteraction(event: SessionLiveEventV2, interaction: StoredInteraction): void {
+        // A repeated request event must not reopen a request that was already answered or closed.
+        if (this.#interaction(interaction.interactionId)?.resolved === true) {
+            return;
+        }
         const turn = this.#ensureTurn(interaction.commandId, event);
         // A Turn that ended or lost its process cannot consume an answer, so its request is closed at once.
         const consumable = !isTerminal(turn.attempt) && turn.attempt.kind !== "indeterminate";
@@ -495,7 +502,7 @@ class ProjectionFold {
         switch (update.sessionUpdate) {
             case "agent_message_chunk": {
                 if (update.content.type === "text") {
-                    this.#appendAnswer(event, commandId, update.content.text);
+                    this.#appendAnswer(event, commandId, update.messageId ?? null, update.content.text);
                 }
                 const turn = this.#ensureTurn(commandId, event);
                 if (update.messageId !== undefined && update.messageId !== null) {
@@ -517,9 +524,12 @@ class ProjectionFold {
         }
     }
 
-    #appendAnswer(event: SessionLiveEventV2, commandId: string, text: string): void {
+    #appendAnswer(event: SessionLiveEventV2, commandId: string, messageId: string | null, text: string): void {
         const turn = this.#ensureTurn(commandId, event);
-        const open = turn.openAnswerItemId === null ? null : this.#item(commandId, turn.openAnswerItemId);
+        const open =
+            turn.openAnswer !== null && turn.openAnswer.messageId === messageId
+                ? this.#item(commandId, turn.openAnswer.itemId)
+                : null;
         if (open !== null && open.item.kind === "answer") {
             this.#appendText(open, text);
             this.#putTurn({ ...turn, answerLength: turn.answerLength + text.length });
@@ -533,7 +543,7 @@ class ProjectionFold {
             answerLength: turn.answerLength + text.length,
             itemCount: turn.itemCount + 1,
             nextSequence: turn.nextSequence + 1,
-            openAnswerItemId: itemId,
+            openAnswer: { itemId, messageId },
             openThought: null,
         });
     }
@@ -547,7 +557,7 @@ class ProjectionFold {
         // Reasoning interrupts the answer stream, so the next answer chunk opens a new item.
         if (open !== null && open.item.kind === "thought") {
             this.#appendText(open, text);
-            this.#putTurn({ ...turn, openAnswerItemId: null });
+            this.#putTurn({ ...turn, openAnswer: null });
             return;
         }
         const itemId = `thought:${event.eventId}`;
@@ -556,7 +566,7 @@ class ProjectionFold {
             ...turn,
             itemCount: turn.itemCount + 1,
             nextSequence: turn.nextSequence + 1,
-            openAnswerItemId: null,
+            openAnswer: null,
             openThought: { itemId, messageId },
         });
     }
@@ -600,7 +610,7 @@ class ProjectionFold {
         this.#putTurn({
             ...turn,
             ...(previous === null ? { itemCount: turn.itemCount + 1, nextSequence: turn.nextSequence + 1 } : {}),
-            openAnswerItemId: null,
+            openAnswer: null,
             openThought: null,
         });
     }
@@ -685,23 +695,15 @@ export class SessionTurnHistory {
             });
         } catch (cause) {
             console.error("Recording Turn history backfill failed", cause);
-            const current = this.#history.projection() ?? emptyProjection;
-            const attempts = (current.failure?.attempts ?? 0) + 1;
+            // The failure may come from the projection row itself, so it is recorded without decoding it.
+            const attempts = this.#history.failureAttempts() + 1;
             const delay = Math.min(backfillRetryBaseMilliseconds * 2 ** (attempts - 1), backfillRetryMaxMilliseconds);
             const retryAt = new Date(now.getTime() + delay);
-            this.#history.writeProjection({
-                interactions: [],
-                items: [],
-                projection: {
-                    ...current,
-                    failure: {
-                        attempts,
-                        code: "projection_fold_failed",
-                        failedAt: now.toISOString(),
-                        retryAt: retryAt.toISOString(),
-                    },
-                },
-                turns: [],
+            this.#history.saveFailure({
+                attempts,
+                code: "projection_fold_failed",
+                failedAt: now.toISOString(),
+                retryAt: retryAt.toISOString(),
             });
             return { kind: "failed", retryAt };
         }
@@ -783,7 +785,7 @@ export class SessionTurnHistory {
         if (readable.kind !== "ready") {
             return readable;
         }
-        if (this.#history.turn(commandId) === null) {
+        if (!this.#history.hasTurn(commandId)) {
             return { kind: "not_found" };
         }
         const listed = this.#listItems(commandId, afterSequence, limit, pageCharacterBudget);
@@ -869,13 +871,14 @@ export class SessionTurnHistory {
         if (!this.#recording.records(target.projectId, target.runtimeId, target.sessionId)) {
             return { kind: "not_found" };
         }
+        const failure = this.#history.failure();
+        if (failure !== null) {
+            const delay = Date.parse(failure.retryAt) - Date.now();
+            return { kind: "failed", retryAfterSeconds: Math.max(1, Math.ceil(delay / 1_000)) };
+        }
         const projection = this.#history.projection();
         if (projection !== null && projection.foldedThroughOrdinal >= this.#recording.latestOrdinal()) {
             return { kind: "ready", value: projection.state };
-        }
-        if (projection !== null && projection.failure !== null) {
-            const delay = Date.parse(projection.failure.retryAt) - Date.now();
-            return { kind: "failed", retryAfterSeconds: Math.max(1, Math.ceil(delay / 1_000)) };
         }
         return { kind: "building" };
     }

@@ -19,8 +19,9 @@ export const storedTurnSchema = z
         itemCount: count,
         messageId: z.string().nullable(),
         nextSequence: count,
-        // The answer item that the next answer chunk extends; reasoning and tool work close it.
-        openAnswerItemId: z.string().nullable(),
+        // The answer item that the next answer chunk of the same message extends; reasoning, tool
+        // work, and answer text from another message close it.
+        openAnswer: z.object({ itemId: z.string(), messageId: z.string().nullable() }).readonly().nullable(),
         // The thought item that the next reasoning chunk of the same message extends; answer text and
         // tool work close it, and reasoning from another message starts a new item.
         openThought: z.object({ itemId: z.string(), messageId: z.string().nullable() }).readonly().nullable(),

@@ -1,9 +1,11 @@
 import { and, asc, desc, eq, gt, inArray, lt, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/durable-sqlite";
 import {
+    emptyProjection,
     type ProjectionWrites,
     type StoredInteractionRecord,
     type StoredProjection,
+    type StoredProjectionFailure,
     type StoredTurn,
     type StoredTurnItem,
     type StoredTurnItemRead,
@@ -22,6 +24,14 @@ import {
     recordingProjection,
 } from "../schema/session-recording-do/index.ts";
 import { applyDurableObjectMigrations } from "./durable-object-migrations.ts";
+
+function safeJson(encoded: string): unknown {
+    try {
+        return JSON.parse(encoded);
+    } catch {
+        return null;
+    }
+}
 
 function decodeJson<T>(encoded: string, decode: (value: unknown) => T): T {
     return decode(JSON.parse(encoded));
@@ -53,6 +63,38 @@ export class SessionTurnHistoryStorage {
                   state: decodeJson(row.stateJson, (value) => storedProjectionStateSchema.parse(value)),
                   turnCount: row.turnCount,
               };
+    };
+
+    /** The recorded fold failure; reads only that column, so an undecodable projection state cannot hide it. */
+    readonly failure = (): StoredProjectionFailure | null => {
+        const row = this.#database
+            .select({ failureJson: recordingProjection.failureJson })
+            .from(recordingProjection)
+            .where(eq(recordingProjection.singleton, 1))
+            .get();
+        if (row === undefined || row.failureJson === null) {
+            return null;
+        }
+        const parsed = storedProjectionFailureSchema.safeParse(safeJson(row.failureJson));
+        return parsed.success ? parsed.data : null;
+    };
+
+    readonly failureAttempts = (): number => this.failure()?.attempts ?? 0;
+
+    /** Records a fold failure without decoding or rewriting the rest of the projection. */
+    readonly saveFailure = (failure: StoredProjectionFailure): void => {
+        const failureJson = JSON.stringify(storedProjectionFailureSchema.parse(failure));
+        this.#database
+            .insert(recordingProjection)
+            .values({
+                failureJson,
+                foldedThroughOrdinal: emptyProjection.foldedThroughOrdinal,
+                singleton: 1,
+                stateJson: JSON.stringify(emptyProjection.state),
+                turnCount: emptyProjection.turnCount,
+            })
+            .onConflictDoUpdate({ target: recordingProjection.singleton, set: { failureJson } })
+            .run();
     };
 
     /**
@@ -140,6 +182,14 @@ export class SessionTurnHistoryStorage {
             .get();
         return row === undefined ? null : decodeTurn(row.turnJson);
     };
+
+    readonly hasTurn = (commandId: string): boolean =>
+        this.#database
+            .select({ commandId: recordedTurn.commandId })
+            .from(recordedTurn)
+            .where(eq(recordedTurn.commandId, commandId))
+            .limit(1)
+            .get() !== undefined;
 
     readonly openTurns = (): readonly StoredTurn[] =>
         this.#database

@@ -87,9 +87,15 @@ function sessionRecordingRoutes(
                 return envelopeError(cause);
             }
             let projected = true;
-            const recorded = storage.append(write, (ordinal, events) => {
-                projected = history.project(ordinal, events);
-            });
+            let recorded: boolean;
+            try {
+                // Folding never throws out of `project`, so an error here is the envelope itself.
+                recorded = storage.append(write, (ordinal, events) => {
+                    projected = history.project(ordinal, events);
+                });
+            } catch (cause) {
+                return envelopeError(cause);
+            }
             if (!recorded) {
                 return errorResponse("recording_identity_conflict", 409);
             }
@@ -495,32 +501,19 @@ export function createRecordingWorker(): RecordingWorker {
         .get(
             "/v1/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/events",
             async (context): Promise<Response> => {
-                const target = readTarget(context);
-                if (target.projectId === null || target.runtimeId === null || target.sessionId === null) {
+                const query = sessionQuery(context);
+                if (query === null) {
                     return errorResponse("not_found", 404);
                 }
                 const incremental = incrementalReadQuery(context.req.query());
                 if (incremental !== null && "error" in incremental) {
                     return errorResponse("invalid_request", 400);
                 }
-                const query = new URLSearchParams({
-                    projectId: target.projectId,
-                    runtimeId: target.runtimeId,
-                    sessionId: target.sessionId,
-                });
-                const path = incremental === null ? "events" : "page-events";
-                const cursor = incremental;
-                if (cursor !== null) {
-                    query.set("after", cursor["after"]);
-                    query.set("limit", cursor["limit"].toString());
+                if (incremental !== null) {
+                    query.set("after", incremental.after);
+                    query.set("limit", incremental.limit.toString());
                 }
-                return await durableObjectFetch(
-                    context.env.SESSION_RECORDING,
-                    JSON.stringify([target.projectId, target.sessionId]),
-                    new Request(`https://recording.internal/${path}?${query}`, {
-                        signal: context.req.raw.signal,
-                    }),
-                );
+                return await sessionRecordingFetch(context, query, incremental === null ? "events" : "page-events");
             },
         )
         .all("*", (): Response => errorResponse("not_found", 404));
