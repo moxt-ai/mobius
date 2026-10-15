@@ -13,10 +13,13 @@ import {
 import {
     decodeMessageKind,
     decodeSessionClosedEvent,
+    decodeSessionEventV2,
     decodeSessionOperationFailedEvent,
     decodeSessionRestoredEvent,
     encodeSessionCloseCommand,
+    encodeSessionPromptCommand,
     encodeSessionRestoreCommand,
+    SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { expect, test, vi } from "vitest";
 import type {
@@ -126,7 +129,7 @@ test("Given retained Agent teardown does not finish, When the Session close dead
     });
 });
 
-test("Given an Agent session holding an exclusive writer lock, When a public close command reaches the daemon, Then restoring the session acquires the released writer lock", async () => {
+test("Given an active Agent session holding an exclusive writer lock, When a public close command reaches the daemon, Then the process stops and restoring acquires the released writer lock", async () => {
     const directory = await mkdtemp(join(tmpdir(), "mobius-session-close-"));
     const executableDirectory = join(directory, "bin");
     const executable = join(executableDirectory, "dsh");
@@ -144,6 +147,33 @@ test("Given an Agent session holding an exclusive writer lock, When a public clo
             { MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory, PATH: executableDirectory },
             async (peer) => {
                 const sessionId = await prepareNewRealSession(peer, "deepseek-harness");
+                peer.send(
+                    encodeSessionPromptCommand({
+                        additionalDirectoryIds: [],
+                        agentId: "deepseek-harness",
+                        bindingId: peer.bindingId,
+                        commandId: crypto.randomUUID(),
+                        directoryId: "default",
+                        disposition: SessionPromptDisposition.Reject,
+                        images: [],
+                        kind: "session.prompt",
+                        prompt: "interleave progress and hold",
+                        resources: [],
+                        sessionId,
+                        targetCommandId: "",
+                    }),
+                );
+                for (;;) {
+                    const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+                    if (
+                        event.type === "acp" &&
+                        event.payload.sessionUpdate === "agent_message_chunk" &&
+                        event.payload.content.type === "text" &&
+                        event.payload.content.text.includes("interleave progress and hold")
+                    ) {
+                        break;
+                    }
+                }
                 const closeRequestId = crypto.randomUUID();
                 peer.send(
                     encodeSessionCloseCommand({
@@ -154,7 +184,11 @@ test("Given an Agent session holding an exclusive writer lock, When a public clo
                 );
                 for (;;) {
                     const message = await peer.nextMessage();
-                    if (decodeMessageKind(message) !== "session.closed") {
+                    const kind = decodeMessageKind(message);
+                    if (kind === "session.operation.failed") {
+                        throw new Error(JSON.stringify(decodeSessionOperationFailedEvent(message)));
+                    }
+                    if (kind !== "session.closed") {
                         continue;
                     }
                     expect(decodeSessionClosedEvent(message)).toEqual({

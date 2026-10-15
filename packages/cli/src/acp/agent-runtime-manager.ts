@@ -637,18 +637,13 @@ export class AgentRuntimeManager {
                 await waitForSharedOperation(existing, options.signal);
                 return;
             }
-            if (
-                this.#executions.isBusy(options.sessionId) ||
-                this.#executionProcesses.isBusy(options.sessionId) ||
-                this.#isNativeSessionOperationActive(options.sessionId)
-            ) {
-                throw new AcpExecutionError("The session is busy", {}, "session_busy");
-            }
-            const runtime = this.#executionProcesses.get(options.sessionId);
-            if (runtime === undefined) {
-                return;
-            }
-            const release = this.#retireSessionProcess(options.sessionId, runtime, async () => await runtime.close());
+            const release = (async (): Promise<void> => {
+                const pending = this.#executionProcesses.pending(options.sessionId);
+                const runtime = pending === undefined ? this.#executionProcesses.get(options.sessionId) : await pending;
+                if (runtime !== undefined) {
+                    await this.#retireSessionProcess(options.sessionId, runtime, async () => await runtime.close());
+                }
+            })();
             const deadline = Promise.withResolvers<void>();
             const timeout = this.#timer.schedule(
                 () =>
