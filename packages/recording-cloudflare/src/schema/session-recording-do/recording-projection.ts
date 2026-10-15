@@ -10,6 +10,8 @@ export const recordingProjection = sqliteTable(
         foldedThroughOrdinal: integer("folded_through_ordinal").notNull(),
         turnCount: integer("turn_count").notNull(),
         stateJson: text("state_json").notNull(),
+        // Set while folding the next batch fails; backfill retries it with backoff.
+        failureJson: text("failure_json"),
     },
     (table) => [check("recording_projection_singleton_check", sql`${table.singleton} = 1`)],
 );

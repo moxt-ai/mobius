@@ -2,7 +2,6 @@ import type {
     AcpSessionUpdateV2,
     LifecycleMetadataV2,
     SessionLiveEventV2,
-    SessionRecordingInteraction,
     SessionRecordingTurn,
     SessionRecordingTurnAttempt,
     SessionRecordingTurnItem,
@@ -11,12 +10,17 @@ import type {
     SessionRecordingTurnPage,
 } from "@moxt-ai/mobius-protocol";
 import {
-    emptyProjectionState,
+    emptyProjection,
+    type ItemTextChange,
+    type ProjectionWrites,
     type StoredInteraction,
+    type StoredInteractionRecord,
     type StoredProjection,
     type StoredProjectionState,
     type StoredTurn,
     type StoredTurnItem,
+    type StoredTurnItemRead,
+    type TurnItemWrite,
 } from "../entity/session-turn-history.ts";
 import type { SessionRecordingStorage } from "../storage/session-recording-storage.ts";
 import type { SessionTurnHistoryStorage } from "../storage/session-turn-history-storage.ts";
@@ -25,9 +29,19 @@ import type { SessionTurnHistoryStorage } from "../storage/session-turn-history-
 const pageCharacterBudget = 2_000_000;
 // Listed answer and thought text keep this prefix; a full item read returns the rest.
 const listedTextCharacters = 100_000;
-// Listed tool detail larger than this is omitted; a full item read returns it.
-const listedToolDetailCharacters = 32_768;
+// A listed tool item larger than this omits its detail, then bounds its labels; a full item read returns it.
+const listedToolCharacters = 32_768;
+const listedToolLabelCharacters = 2_048;
+const listedToolLocations = 20;
+// A full item read returns at most this much text; the protocol bounds a single item to it.
+const itemTextCharacters = 50_000_000;
 const listedItemsPerTurn = 200;
+// Rows a page reads per query, so the character budget stops loading as soon as it is spent.
+const turnReadChunk = 10;
+const itemReadChunk = 20;
+const waitingInteractionLimit = 100;
+const backfillRetryBaseMilliseconds = 1_000;
+const backfillRetryMaxMilliseconds = 60 * 60 * 1_000;
 const titleCharacters = 1_000;
 const interactionLimit = 1_000;
 const activeCommandLimit = 1_000;
@@ -44,7 +58,14 @@ export type TurnHistoryRead<T> =
     | { readonly kind: "ready"; readonly value: T }
     // The projection has not folded every recorded batch yet; a backfill step is due.
     | { readonly kind: "building" }
+    // Folding the next batch failed; backfill retries it after the given delay.
+    | { readonly kind: "failed"; readonly retryAfterSeconds: number }
     | { readonly kind: "not_found" };
+
+export type BackfillOutcome =
+    | { readonly kind: "caught_up" }
+    | { readonly kind: "behind" }
+    | { readonly kind: "failed"; readonly retryAt: Date };
 
 interface AttemptTiming {
     readonly attemptId?: string;
@@ -80,16 +101,46 @@ function isInterruptible(attempt: SessionRecordingTurnAttempt): boolean {
     return attempt.kind === "running" || attempt.kind === "waiting_input";
 }
 
+/** Bounds a tool item for a page: oversized detail is omitted first, then oversized labels are cut. */
+function toolListing(item: StoredTurnItem): StoredTurnItem | null {
+    if (item.kind !== "tool" || JSON.stringify(item).length <= listedToolCharacters) {
+        return null;
+    }
+    const omitted: StoredTurnItem = { ...item, detail: { kind: "omitted" } };
+    if (JSON.stringify(omitted).length <= listedToolCharacters) {
+        return omitted;
+    }
+    return {
+        ...omitted,
+        locations: omitted.locations
+            .slice(0, listedToolLocations)
+            .map((location) => ({ ...location, path: location.path.slice(0, listedToolLabelCharacters) })),
+        name: omitted.name?.slice(0, listedToolLabelCharacters) ?? null,
+        title: omitted.title.slice(0, listedToolLabelCharacters),
+    };
+}
+
+interface CachedItem {
+    readonly commandId: string;
+    readonly item: StoredTurnItem;
+    readonly listing: StoredTurnItem | null;
+    // Text this fold adds; a new item sets it, an existing item appends it in storage.
+    readonly text: ItemTextChange;
+}
+
 /**
- * Folds Recording events into the stored projection. Reads go through an in-memory cache and writes
- * are committed once, so one batch decodes and rewrites each touched Turn and item a single time.
+ * Folds Recording events into the stored projection. Reads go through an in-memory cache and every
+ * write is collected, so one batch touches each Turn, item, and request once and commits them together.
+ * Answer and thought text is never read back: folding only appends to it.
  */
 class ProjectionFold {
     readonly #storage: SessionTurnHistoryStorage;
     readonly #turns = new Map<string, StoredTurn>();
-    readonly #items = new Map<string, { readonly commandId: string; readonly item: StoredTurnItem }>();
+    readonly #items = new Map<string, CachedItem>();
+    readonly #interactions = new Map<string, StoredInteractionRecord>();
     readonly #dirtyTurns = new Set<string>();
     readonly #dirtyItems = new Set<string>();
+    readonly #dirtyInteractions = new Set<string>();
     #state: StoredProjectionState;
     #turnCount: number;
 
@@ -115,20 +166,27 @@ class ProjectionFold {
         }
     };
 
-    readonly commit = (foldedThroughOrdinal: number): void => {
-        for (const commandId of this.#dirtyTurns) {
+    readonly writes = (foldedThroughOrdinal: number): ProjectionWrites => {
+        const turns = [...this.#dirtyTurns].flatMap((commandId) => {
             const turn = this.#turns.get(commandId);
-            if (turn !== undefined) {
-                this.#storage.saveTurn(turn, isInterruptible(turn.attempt));
-            }
-        }
-        for (const key of this.#dirtyItems) {
-            const entry = this.#items.get(key);
-            if (entry !== undefined) {
-                this.#storage.saveItem(entry.commandId, entry.item);
-            }
-        }
-        this.#storage.saveProjection({ foldedThroughOrdinal, state: this.#state, turnCount: this.#turnCount });
+            return turn === undefined ? [] : [{ open: isInterruptible(turn.attempt), turn }];
+        });
+        const items = [...this.#dirtyItems].flatMap((key): TurnItemWrite[] => {
+            const cached = this.#items.get(key);
+            return cached === undefined
+                ? []
+                : [{ commandId: cached.commandId, item: cached.item, listing: cached.listing, text: cached.text }];
+        });
+        const interactions = [...this.#dirtyInteractions].flatMap((interactionId) => {
+            const record = this.#interactions.get(interactionId);
+            return record === undefined ? [] : [record];
+        });
+        return {
+            interactions,
+            items,
+            projection: { failure: null, foldedThroughOrdinal, state: this.#state, turnCount: this.#turnCount },
+            turns,
+        };
     };
 
     #turn(commandId: string): StoredTurn | null {
@@ -165,29 +223,77 @@ class ProjectionFold {
             messageId: null,
             nextSequence: 0,
             openAnswerItemId: null,
+            openThought: null,
             order: this.#turnCount,
             prompt: null,
-            thoughtSegment: 0,
         });
     }
 
-    #item(commandId: string, itemId: string): StoredTurnItem | null {
+    #item(commandId: string, itemId: string): CachedItem | null {
         const key = `${commandId}\0${itemId}`;
         const cached = this.#items.get(key);
         if (cached !== undefined) {
-            return cached.item;
+            return cached;
         }
         const stored = this.#storage.item(commandId, itemId);
+        if (stored === null) {
+            return null;
+        }
+        const loaded: CachedItem = { commandId, item: stored, listing: null, text: { kind: "append", text: "" } };
+        this.#items.set(key, loaded);
+        return loaded;
+    }
+
+    #putItem(commandId: string, item: StoredTurnItem, text: ItemTextChange): void {
+        const key = `${commandId}\0${item.itemId}`;
+        this.#items.set(key, { commandId, item, listing: toolListing(item), text });
+        this.#dirtyItems.add(key);
+    }
+
+    /** Starts a text item; its text is kept outside the stored item fields. */
+    #createTextItem(
+        commandId: string,
+        kind: "answer" | "thought",
+        itemId: string,
+        sequence: number,
+        text: string,
+    ): void {
+        this.#putItem(commandId, { itemId, kind, omittedCharacters: 0, sequence, text: "" }, { kind: "set", text });
+    }
+
+    #appendText(cached: CachedItem, text: string): void {
+        this.#putItem(cached.commandId, cached.item, { kind: cached.text.kind, text: `${cached.text.text}${text}` });
+    }
+
+    #interaction(interactionId: string): StoredInteractionRecord | null {
+        const cached = this.#interactions.get(interactionId);
+        if (cached !== undefined) {
+            return cached;
+        }
+        const stored = this.#storage.interaction(interactionId);
         if (stored !== null) {
-            this.#items.set(key, { commandId, item: stored });
+            this.#interactions.set(interactionId, stored);
         }
         return stored;
     }
 
-    #putItem(commandId: string, item: StoredTurnItem): void {
-        const key = `${commandId}\0${item.itemId}`;
-        this.#items.set(key, { commandId, item });
-        this.#dirtyItems.add(key);
+    #putInteraction(record: StoredInteractionRecord): void {
+        this.#interactions.set(record.interaction.interactionId, record);
+        this.#dirtyInteractions.add(record.interaction.interactionId);
+    }
+
+    /** Closes every request of a Turn that can no longer consume an answer. */
+    #closeInteractions(commandId: string): void {
+        for (const record of this.#storage.unresolvedInteractionsOf([commandId])) {
+            if (!this.#interactions.has(record.interaction.interactionId)) {
+                this.#interactions.set(record.interaction.interactionId, record);
+            }
+        }
+        for (const record of this.#interactions.values()) {
+            if (record.interaction.commandId === commandId && !record.resolved) {
+                this.#putInteraction({ ...record, resolved: true });
+            }
+        }
     }
 
     #markInterruptedAttempts(event: SessionLiveEventV2): void {
@@ -202,6 +308,7 @@ class ProjectionFold {
             if (!isInterruptible(turn.attempt) || turn.generationId === event.sessionGenerationId) {
                 continue;
             }
+            this.#turns.set(turn.commandId, turn);
             this.#putTurn({
                 ...turn,
                 attempt: {
@@ -211,6 +318,7 @@ class ProjectionFold {
                     reason: "session_generation_changed",
                 },
             });
+            this.#closeInteractions(turn.commandId);
         }
     }
 
@@ -282,6 +390,7 @@ class ProjectionFold {
                           },
                 });
                 this.#removeActive(event, payload.commandId);
+                this.#closeInteractions(payload.commandId);
                 return;
             }
             case "prompt.failed":
@@ -300,6 +409,7 @@ class ProjectionFold {
                     },
                 });
                 this.#removeActive(event, payload.commandId);
+                this.#closeInteractions(payload.commandId);
                 return;
             }
             case "session.permission.requested":
@@ -326,33 +436,48 @@ class ProjectionFold {
     }
 
     #requestInteraction(event: SessionLiveEventV2, interaction: StoredInteraction): void {
-        this.#storage.saveInteraction(interaction, false);
         const turn = this.#ensureTurn(interaction.commandId, event);
-        // A request recorded after its Turn ended cannot reopen it.
-        if (isTerminal(turn.attempt)) {
+        // A Turn that ended or lost its process cannot consume an answer, so its request is closed at once.
+        const consumable = !isTerminal(turn.attempt) && turn.attempt.kind !== "indeterminate";
+        this.#putInteraction({ interaction, requestedAt: Date.parse(event.recordedAt), resolved: !consumable });
+        if (!consumable) {
             return;
         }
+        const waiting = turn.attempt.kind === "waiting_input" ? turn.attempt.interactionIds : [];
         this.#putTurn({
             ...turn,
             attempt: {
                 ...attemptTiming(turn.attempt),
-                interactionIds: [interaction.interactionId],
+                interactionIds: [
+                    ...waiting.filter((candidate) => candidate !== interaction.interactionId),
+                    interaction.interactionId,
+                ].slice(-waitingInteractionLimit),
                 kind: "waiting_input",
             },
         });
     }
 
     #resolveInteraction(interactionId: string): void {
-        const stored = this.#storage.interaction(interactionId);
-        if (stored === null) {
+        const record = this.#interaction(interactionId);
+        // An already closed request no longer belongs to a waiting attempt.
+        if (record === null || record.resolved) {
             return;
         }
-        this.#storage.saveInteraction(stored.interaction, true);
-        const turn = this.#turn(stored.interaction.commandId);
-        if (turn === null || isTerminal(turn.attempt)) {
+        this.#putInteraction({ ...record, resolved: true });
+        const turn = this.#turn(record.interaction.commandId);
+        if (turn === null || turn.attempt.kind !== "waiting_input") {
             return;
         }
-        this.#putTurn({ ...turn, attempt: { ...attemptTiming(turn.attempt), kind: "running" } });
+        const remaining = turn.attempt.interactionIds.filter((candidate) => candidate !== interactionId);
+        const [first, ...rest] = remaining;
+        // The attempt keeps waiting until every one of its requests is answered.
+        this.#putTurn({
+            ...turn,
+            attempt:
+                first === undefined
+                    ? { ...attemptTiming(turn.attempt), kind: "running" }
+                    : { ...turn.attempt, interactionIds: [first, ...rest] },
+        });
     }
 
     #foldAcp(event: SessionLiveEventV2, update: AcpSessionUpdateV2): void {
@@ -395,39 +520,44 @@ class ProjectionFold {
     #appendAnswer(event: SessionLiveEventV2, commandId: string, text: string): void {
         const turn = this.#ensureTurn(commandId, event);
         const open = turn.openAnswerItemId === null ? null : this.#item(commandId, turn.openAnswerItemId);
-        if (open !== null && open.kind === "answer") {
-            this.#putItem(commandId, { ...open, text: `${open.text}${text}` });
+        if (open !== null && open.item.kind === "answer") {
+            this.#appendText(open, text);
             this.#putTurn({ ...turn, answerLength: turn.answerLength + text.length });
             return;
         }
         const itemId = `answer:${event.eventId}`;
-        this.#putItem(commandId, { itemId, kind: "answer", omittedCharacters: 0, sequence: turn.nextSequence, text });
+        this.#createTextItem(commandId, "answer", itemId, turn.nextSequence, text);
+        // Answer text interrupts reasoning, so later reasoning starts a new thought item.
         this.#putTurn({
             ...turn,
             answerLength: turn.answerLength + text.length,
             itemCount: turn.itemCount + 1,
             nextSequence: turn.nextSequence + 1,
             openAnswerItemId: itemId,
-            thoughtSegment: turn.thoughtSegment + 1,
+            openThought: null,
         });
     }
 
     #appendThought(event: SessionLiveEventV2, commandId: string, messageId: string | null, text: string): void {
         const turn = this.#ensureTurn(commandId, event);
-        const itemId = `thought:${messageId ?? "current"}:${turn.thoughtSegment}`;
-        const previous = this.#item(commandId, itemId);
+        const open =
+            turn.openThought !== null && turn.openThought.messageId === messageId
+                ? this.#item(commandId, turn.openThought.itemId)
+                : null;
         // Reasoning interrupts the answer stream, so the next answer chunk opens a new item.
-        if (previous !== null && previous.kind === "thought") {
-            this.#putItem(commandId, { ...previous, text: `${previous.text}${text}` });
+        if (open !== null && open.item.kind === "thought") {
+            this.#appendText(open, text);
             this.#putTurn({ ...turn, openAnswerItemId: null });
             return;
         }
-        this.#putItem(commandId, { itemId, kind: "thought", omittedCharacters: 0, sequence: turn.nextSequence, text });
+        const itemId = `thought:${event.eventId}`;
+        this.#createTextItem(commandId, "thought", itemId, turn.nextSequence, text);
         this.#putTurn({
             ...turn,
             itemCount: turn.itemCount + 1,
             nextSequence: turn.nextSequence + 1,
             openAnswerItemId: null,
+            openThought: { itemId, messageId },
         });
     }
 
@@ -439,81 +569,56 @@ class ProjectionFold {
         const turn = this.#ensureTurn(commandId, event);
         const itemId = `tool:${update.toolCallId}`;
         const stored = this.#item(commandId, itemId);
-        const previous = stored !== null && stored.kind === "tool" ? stored : null;
+        const previous = stored !== null && stored.item.kind === "tool" ? stored.item : null;
         const previousDetail = previous !== null && previous.detail.kind === "inline" ? previous.detail : null;
         const rawInput = update.rawInput === undefined ? previousDetail?.rawInput : update.rawInput;
         const rawOutput = update.rawOutput === undefined ? previousDetail?.rawOutput : update.rawOutput;
         const { attemptId } = attemptTiming(turn.attempt);
-        this.#putItem(commandId, {
-            ...(attemptId === undefined ? {} : { attemptId }),
-            detail: {
-                content: update.content ?? previousDetail?.content ?? [],
-                kind: "inline",
-                ...(rawInput === undefined ? {} : { rawInput }),
-                ...(rawOutput === undefined ? {} : { rawOutput }),
+        this.#putItem(
+            commandId,
+            {
+                ...(attemptId === undefined ? {} : { attemptId }),
+                detail: {
+                    content: update.content ?? previousDetail?.content ?? [],
+                    kind: "inline",
+                    ...(rawInput === undefined ? {} : { rawInput }),
+                    ...(rawOutput === undefined ? {} : { rawOutput }),
+                },
+                itemId,
+                kind: "tool",
+                locations: update.locations ?? previous?.locations ?? [],
+                name: update.name ?? previous?.name ?? null,
+                sequence: previous?.sequence ?? turn.nextSequence,
+                status: update.status ?? previous?.status ?? "pending",
+                title: update.title ?? previous?.title ?? "",
+                toolCallId: update.toolCallId,
+                toolKind: update.kind ?? previous?.toolKind ?? null,
             },
-            itemId,
-            kind: "tool",
-            locations: update.locations ?? previous?.locations ?? [],
-            name: update.name ?? previous?.name ?? null,
-            sequence: previous?.sequence ?? turn.nextSequence,
-            status: update.status ?? previous?.status ?? "pending",
-            title: update.title ?? previous?.title ?? "",
-            toolCallId: update.toolCallId,
-            toolKind: update.kind ?? previous?.toolKind ?? null,
-        });
+            stored === null ? { kind: "set", text: "" } : stored.text,
+        );
         // Tool work interrupts both the answer stream and the current run of reasoning.
         this.#putTurn({
             ...turn,
             ...(previous === null ? { itemCount: turn.itemCount + 1, nextSequence: turn.nextSequence + 1 } : {}),
             openAnswerItemId: null,
-            thoughtSegment: turn.thoughtSegment + 1,
+            openThought: null,
         });
     }
 }
 
-/** Bounds an item for a page; full item reads return it unchanged. */
-function listedItem(item: StoredTurnItem): SessionRecordingTurnItem {
-    switch (item.kind) {
+/** The item a page lists: a bounded text prefix, or the bounded tool listing stored with the item. */
+function listedItem(read: StoredTurnItemRead, textCharacters: number): SessionRecordingTurnItem {
+    switch (read.item.kind) {
         case "answer":
         case "thought":
-            return item.text.length <= listedTextCharacters
-                ? item
-                : {
-                      ...item,
-                      omittedCharacters: item.text.length - listedTextCharacters,
-                      text: item.text.slice(0, listedTextCharacters),
-                  };
+            return {
+                ...read.item,
+                omittedCharacters: Math.max(0, read.textLength - textCharacters),
+                text: read.textPrefix,
+            };
         case "tool":
-            return JSON.stringify(item.detail).length <= listedToolDetailCharacters
-                ? item
-                : { ...item, detail: { kind: "omitted" } };
+            return read.listing ?? read.item;
     }
-}
-
-/** Lists items in order until `limit` or the character budget; `stored` holds one extra item when more exist. */
-function listItems(
-    stored: readonly StoredTurnItem[],
-    limit: number,
-    budget: number,
-): { readonly items: readonly SessionRecordingTurnItem[]; readonly remaining: number; readonly cursor: string | null } {
-    const items: SessionRecordingTurnItem[] = [];
-    let remaining = budget;
-    for (const item of stored.slice(0, limit)) {
-        const listed = listedItem(item);
-        const size = JSON.stringify(listed).length;
-        if (items.length > 0 && size > remaining) {
-            break;
-        }
-        items.push(listed);
-        remaining -= size;
-    }
-    const last = items.at(-1);
-    return {
-        cursor: last !== undefined && items.length < stored.length ? `item:${last.sequence}` : null,
-        items,
-        remaining,
-    };
 }
 
 /**
@@ -531,46 +636,76 @@ export class SessionTurnHistory {
     }
 
     /**
-     * Folds a batch that was just appended. Returns false when earlier batches are still unfolded,
-     * so the caller schedules a backfill step instead of folding out of order.
+     * Folds a batch that was just appended, inside the transaction that records it. Returns false when
+     * the batch is left for backfill: earlier batches are unfolded, an earlier fold failed, or this
+     * fold failed. A failed fold rolls back on its own and never prevents the batch from recording.
      */
     readonly project = (ordinal: number, events: readonly SessionLiveEventV2[]): boolean => {
-        const projection = this.#history.projection() ?? {
-            foldedThroughOrdinal: 0,
-            state: emptyProjectionState,
-            turnCount: 0,
-        };
-        if (this.#recording.hasBatchBetween(projection.foldedThroughOrdinal, ordinal)) {
+        try {
+            return this.#history.transaction(() => {
+                const projection = this.#history.projection() ?? emptyProjection;
+                if (
+                    projection.failure !== null ||
+                    this.#recording.hasBatchBetween(projection.foldedThroughOrdinal, ordinal)
+                ) {
+                    return false;
+                }
+                const fold = new ProjectionFold(this.#history, projection);
+                fold.fold(events);
+                this.#history.writeProjection(fold.writes(ordinal));
+                return true;
+            });
+        } catch (cause) {
+            console.error("Recording Turn history could not fold an appended batch", cause);
             return false;
         }
-        const fold = new ProjectionFold(this.#history, projection);
-        fold.fold(events);
-        fold.commit(ordinal);
-        return true;
     };
 
-    /** Folds up to `eventBudget` unfolded events; returns true once the projection reaches the tail. */
-    readonly backfill = (eventBudget = backfillEventsPerStep): boolean =>
-        this.#history.transaction(() => {
-            const projection = this.#history.projection() ?? {
-                foldedThroughOrdinal: 0,
-                state: emptyProjectionState,
-                turnCount: 0,
-            };
-            const fold = new ProjectionFold(this.#history, projection);
-            let foldedThrough = projection.foldedThroughOrdinal;
-            let folded = 0;
-            for (const batch of this.#recording.batchesAfter(foldedThrough)) {
-                if (folded >= eventBudget) {
-                    break;
+    /**
+     * Folds up to `eventBudget` unfolded events. A failure is recorded with the time of its next
+     * attempt, which backs off exponentially, so reads can report it instead of waiting indefinitely.
+     */
+    readonly backfill = (now: Date, eventBudget = backfillEventsPerStep): BackfillOutcome => {
+        try {
+            return this.#history.transaction((): BackfillOutcome => {
+                const projection = this.#history.projection() ?? emptyProjection;
+                const fold = new ProjectionFold(this.#history, projection);
+                let foldedThrough = projection.foldedThroughOrdinal;
+                let folded = 0;
+                for (const batch of this.#recording.batchesAfter(foldedThrough)) {
+                    if (folded >= eventBudget) {
+                        break;
+                    }
+                    fold.fold(batch.events);
+                    foldedThrough = batch.ordinal;
+                    folded += batch.events.length;
                 }
-                fold.fold(batch.events);
-                foldedThrough = batch.ordinal;
-                folded += batch.events.length;
-            }
-            fold.commit(foldedThrough);
-            return foldedThrough >= this.#recording.latestOrdinal();
-        });
+                this.#history.writeProjection(fold.writes(foldedThrough));
+                return foldedThrough >= this.#recording.latestOrdinal() ? { kind: "caught_up" } : { kind: "behind" };
+            });
+        } catch (cause) {
+            console.error("Recording Turn history backfill failed", cause);
+            const current = this.#history.projection() ?? emptyProjection;
+            const attempts = (current.failure?.attempts ?? 0) + 1;
+            const delay = Math.min(backfillRetryBaseMilliseconds * 2 ** (attempts - 1), backfillRetryMaxMilliseconds);
+            const retryAt = new Date(now.getTime() + delay);
+            this.#history.writeProjection({
+                interactions: [],
+                items: [],
+                projection: {
+                    ...current,
+                    failure: {
+                        attempts,
+                        code: "projection_fold_failed",
+                        failedAt: now.toISOString(),
+                        retryAt: retryAt.toISOString(),
+                    },
+                },
+                turns: [],
+            });
+            return { kind: "failed", retryAt };
+        }
+    };
 
     readonly turnPage = (
         target: RecordingTarget,
@@ -582,33 +717,38 @@ export class SessionTurnHistory {
             return readable;
         }
         const state = readable.value;
-        const stored = this.#history.turnsBefore(beforeOrder, limit + 1);
         const turns: SessionRecordingTurn[] = [];
         let budget = pageCharacterBudget;
-        for (const turn of stored.slice(0, limit)) {
-            if (turns.length > 0 && budget <= 0) {
+        let cursor = beforeOrder;
+        // Turns load in small chunks and the budget is checked before each one, so a page reads only
+        // what it lists; the first Turn is always listed so paging never stalls.
+        reading: while (turns.length < limit) {
+            const chunk = this.#history.turnsBefore(cursor, Math.min(turnReadChunk, limit - turns.length));
+            for (const turn of chunk) {
+                if (turns.length > 0 && budget <= 0) {
+                    break reading;
+                }
+                budget -= JSON.stringify(turn.prompt).length;
+                const listed = this.#listItems(turn.commandId, null, listedItemsPerTurn, budget);
+                budget = listed.remaining;
+                turns.push({
+                    answerLength: turn.answerLength,
+                    attempt: turn.attempt,
+                    commandId: turn.commandId,
+                    createdAt: turn.createdAt,
+                    generationId: turn.generationId,
+                    itemCount: turn.itemCount,
+                    items: listed.items,
+                    itemsCursor: listed.cursor,
+                    messageId: turn.messageId,
+                    order: turn.order,
+                    prompt: turn.prompt,
+                });
+                cursor = turn.order;
+            }
+            if (chunk.length < turnReadChunk) {
                 break;
             }
-            budget -= JSON.stringify(turn.prompt).length;
-            const listed = listItems(
-                this.#history.itemsAfter(turn.commandId, null, listedItemsPerTurn + 1),
-                listedItemsPerTurn,
-                budget,
-            );
-            budget = listed.remaining;
-            turns.push({
-                answerLength: turn.answerLength,
-                attempt: turn.attempt,
-                commandId: turn.commandId,
-                createdAt: turn.createdAt,
-                generationId: turn.generationId,
-                itemCount: turn.itemCount,
-                items: listed.items,
-                itemsCursor: listed.cursor,
-                messageId: turn.messageId,
-                order: turn.order,
-                prompt: turn.prompt,
-            });
         }
         const last = turns.at(-1);
         const active = state.activeCommands;
@@ -622,8 +762,8 @@ export class SessionTurnHistory {
                               commandIds: active.commandIds.slice(-activeCommandLimit),
                               generationId: active.generationId,
                           },
-                interactions: this.#pendingInteractions(),
-                nextCursor: last !== undefined && turns.length < stored.length ? `turn:${last.order}` : null,
+                interactions: this.#history.pendingInteractions(interactionLimit).map((record) => record.interaction),
+                nextCursor: last !== undefined && this.#history.hasTurnBefore(last.order) ? `turn:${last.order}` : null,
                 sessionId: target.sessionId,
                 tailCursor: this.#recording.tailCursor(),
                 title: state.title,
@@ -646,11 +786,7 @@ export class SessionTurnHistory {
         if (this.#history.turn(commandId) === null) {
             return { kind: "not_found" };
         }
-        const listed = listItems(
-            this.#history.itemsAfter(commandId, afterSequence, limit + 1),
-            limit,
-            pageCharacterBudget,
-        );
+        const listed = this.#listItems(commandId, afterSequence, limit, pageCharacterBudget);
         return {
             kind: "ready",
             value: {
@@ -672,31 +808,75 @@ export class SessionTurnHistory {
         if (readable.kind !== "ready") {
             return readable;
         }
-        const item = this.#history.item(commandId, itemId);
-        return item === null
-            ? { kind: "not_found" }
-            : { kind: "ready", value: { commandId, item, sessionId: target.sessionId, version: 1 } };
+        const read = this.#history.itemRead(commandId, itemId, itemTextCharacters);
+        if (read === null) {
+            return { kind: "not_found" };
+        }
+        const item = read.item.kind === "tool" ? read.item : listedItem(read, itemTextCharacters);
+        return { kind: "ready", value: { commandId, item, sessionId: target.sessionId, version: 1 } };
     };
+
+    /**
+     * Lists a Turn's items in sequence order until `limit` or the character budget is reached. Items
+     * load in small chunks with bounded text, and the first item is always listed.
+     */
+    #listItems(
+        commandId: string,
+        afterSequence: number | null,
+        limit: number,
+        budget: number,
+    ): {
+        readonly cursor: string | null;
+        readonly items: readonly SessionRecordingTurnItem[];
+        readonly remaining: number;
+    } {
+        const items: SessionRecordingTurnItem[] = [];
+        let remaining = budget;
+        let after = afterSequence;
+        reading: while (items.length < limit) {
+            const chunk = this.#history.itemReadsAfter(
+                commandId,
+                after,
+                Math.min(itemReadChunk, limit - items.length),
+                listedTextCharacters,
+            );
+            for (const read of chunk) {
+                const listed = listedItem(read, listedTextCharacters);
+                const size = JSON.stringify(listed).length;
+                if (items.length > 0 && size > remaining) {
+                    break reading;
+                }
+                items.push(listed);
+                remaining -= size;
+                after = listed.sequence;
+            }
+            if (chunk.length < itemReadChunk) {
+                break;
+            }
+        }
+        const last = items.at(-1);
+        return {
+            cursor:
+                last !== undefined && this.#history.hasItemAfter(commandId, last.sequence)
+                    ? `item:${last.sequence}`
+                    : null,
+            items,
+            remaining,
+        };
+    }
 
     #readable(target: RecordingTarget): TurnHistoryRead<StoredProjectionState> {
         if (!this.#recording.records(target.projectId, target.runtimeId, target.sessionId)) {
             return { kind: "not_found" };
         }
         const projection = this.#history.projection();
-        if (projection === null || projection.foldedThroughOrdinal < this.#recording.latestOrdinal()) {
-            return { kind: "building" };
+        if (projection !== null && projection.foldedThroughOrdinal >= this.#recording.latestOrdinal()) {
+            return { kind: "ready", value: projection.state };
         }
-        return { kind: "ready", value: projection.state };
-    }
-
-    /** Requests that a Turn can still consume: its attempt has not ended and its process was not restarted. */
-    #pendingInteractions(): readonly SessionRecordingInteraction[] {
-        return this.#history
-            .unresolvedInteractions()
-            .filter((interaction) => {
-                const turn = this.#history.turn(interaction.commandId);
-                return turn !== null && !isTerminal(turn.attempt) && turn.attempt.kind !== "indeterminate";
-            })
-            .slice(0, interactionLimit);
+        if (projection !== null && projection.failure !== null) {
+            const delay = Date.parse(projection.failure.retryAt) - Date.now();
+            return { kind: "failed", retryAfterSeconds: Math.max(1, Math.ceil(delay / 1_000)) };
+        }
+        return { kind: "building" };
     }
 }

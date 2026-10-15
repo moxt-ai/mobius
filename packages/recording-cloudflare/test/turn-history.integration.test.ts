@@ -52,6 +52,31 @@ const answer = (text: string) =>
     acp({ content: { text, type: "text" }, messageId: "message-1", sessionUpdate: "agent_message_chunk" });
 const thought = (text: string) =>
     acp({ content: { text, type: "text" }, messageId: "message-1", sessionUpdate: "agent_thought_chunk" });
+const permissionRequest = (commandId: string, interactionId: string) =>
+    lifecycle({
+        event: {
+            commandId,
+            interactionId,
+            kind: "session.permission.requested",
+            options: [{ kind: "allow_once", name: "Allow", optionId: "allow" }],
+            sessionId,
+            title: `Approve ${interactionId}`,
+            toolCallId: `tool-${interactionId}`,
+            toolKind: "execute",
+        },
+        kind: "session.permission.requested",
+    });
+const permissionResolved = (interactionId: string) =>
+    lifecycle({
+        event: {
+            interactionId,
+            kind: "session.permission.resolved",
+            optionId: "allow",
+            outcome: "selected",
+            sessionId,
+        },
+        kind: "session.permission.resolved",
+    });
 
 async function record(events: readonly unknown[]): Promise<void> {
     const response = await worker.fetch(
@@ -281,6 +306,135 @@ describe("Recording Turn history", () => {
         const rebuilt = await turnPage();
         expect(promptText(rebuilt)).toEqual(["Prompt 3", "Prompt 2", "Prompt 1"]);
         expect(rebuilt.turns.slice(1)).toEqual(projected.turns);
+    });
+
+    it("Given a Turn waiting on two requests, When they resolve one at a time and the Turn ends, Then it keeps waiting until both are answered and no request outlives it", async () => {
+        await record([
+            requested("command-1", "Deploy"),
+            started("command-1"),
+            permissionRequest("command-1", "interaction-1"),
+            permissionRequest("command-1", "interaction-2"),
+        ]);
+        const both = await turnPage();
+        expect(both.turns[0]?.attempt).toMatchObject({
+            interactionIds: ["interaction-1", "interaction-2"],
+            kind: "waiting_input",
+        });
+        expect(both.interactions.map((interaction) => interaction.interactionId)).toEqual([
+            "interaction-1",
+            "interaction-2",
+        ]);
+
+        await record([permissionResolved("interaction-1")]);
+        const one = await turnPage();
+        expect(one.turns[0]?.attempt).toMatchObject({ interactionIds: ["interaction-2"], kind: "waiting_input" });
+        expect(one.interactions.map((interaction) => interaction.interactionId)).toEqual(["interaction-2"]);
+
+        await record([permissionResolved("interaction-2"), permissionRequest("command-1", "interaction-3")]);
+        expect((await turnPage()).turns[0]?.attempt).toMatchObject({
+            interactionIds: ["interaction-3"],
+            kind: "waiting_input",
+        });
+        await record([completed("command-1")]);
+        const ended = await turnPage();
+        expect(ended.turns[0]?.attempt.kind).toBe("succeeded");
+        expect(ended.interactions).toEqual([]);
+    });
+
+    it("Given an attempt interrupted by a restart, When its request resolves afterwards, Then the attempt stays indeterminate", async () => {
+        await record([
+            requested("command-1", "Run tests"),
+            started("command-1"),
+            permissionRequest("command-1", "interaction-1"),
+        ]);
+        generation = "generation-2";
+        await record([requested("command-2", "Try again")]);
+        const interrupted = (await turnPage()).turns[1]?.attempt;
+        expect(interrupted?.kind).toBe("indeterminate");
+
+        await record([permissionResolved("interaction-1"), permissionRequest("command-1", "interaction-2")]);
+        const page = await turnPage();
+        expect(page.turns[1]?.attempt).toEqual(interrupted);
+        expect(page.interactions).toEqual([]);
+    });
+
+    it("Given reasoning from interleaved messages, When a client reads the Turn, Then each run of reasoning keeps its recorded order", async () => {
+        const reasoning = (messageId: string, text: string) =>
+            acp({ content: { text, type: "text" }, messageId, sessionUpdate: "agent_thought_chunk" });
+        await record([
+            requested("command-1", "Think"),
+            started("command-1"),
+            reasoning("message-1", "First "),
+            reasoning("message-1", "idea."),
+            reasoning("message-2", "Second idea."),
+            reasoning("message-1", "Back to the first."),
+            completed("command-1"),
+        ]);
+        expect((await turnPage()).turns[0]?.items).toMatchObject([
+            { kind: "thought", sequence: 0, text: "First idea." },
+            { kind: "thought", sequence: 1, text: "Second idea." },
+            { kind: "thought", sequence: 2, text: "Back to the first." },
+        ]);
+    });
+
+    it("Given a long answer streamed over many batches, When a client reads it, Then pages list a bounded prefix and the item read returns all of it", async () => {
+        await record([requested("command-1", "Write a lot"), started("command-1")]);
+        const chunk = "abcdefghij".repeat(1_500);
+        for (let index = 0; index < 10; index += 1) {
+            await record([answer(chunk)]);
+        }
+        await record([completed("command-1")]);
+
+        const [turn] = (await turnPage()).turns;
+        expect(turn?.answerLength).toBe(150_000);
+        const [item] = turn?.items ?? [];
+        expect(item).toMatchObject({ kind: "answer", omittedCharacters: 50_000 });
+        expect(item?.kind === "answer" ? item.text : "").toBe(chunk.repeat(10).slice(0, 100_000));
+
+        const detail = await worker.fetch(
+            new Request(sessionPath(`turns/command-1/items/${encodeURIComponent(item?.itemId ?? "")}`)),
+            env,
+        );
+        expect(detail.status).toBe(200);
+        const full = decodeSessionRecordingTurnItemDetail(await detail.text()).item;
+        expect(full).toMatchObject({ kind: "answer", omittedCharacters: 0 });
+        expect(full.kind === "answer" ? full.text : "").toBe(chunk.repeat(10));
+    });
+
+    it("Given a stored Turn that can no longer be folded, When the Session keeps recording, Then events are still recorded and reads report the failure until backfill succeeds", async () => {
+        await record([requested("command-1", "Prompt 1"), started("command-1")]);
+        const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, sessionId]));
+        const original = await runInDurableObject(stub, (_instance, state) => {
+            const row = state.storage.sql
+                .exec("SELECT turn_json FROM recorded_turns WHERE command_id = 'command-1'")
+                .toArray()[0];
+            state.storage.sql.exec("UPDATE recorded_turns SET turn_json = '{}' WHERE command_id = 'command-1'");
+            return String(row?.["turn_json"]);
+        });
+
+        await record([answer("Still recorded."), completed("command-1")]);
+        const live = await worker.fetch(new Request(sessionPath("events?after=0&limit=100")), env);
+        expect(
+            decodeSessionRecordingHistoryPage(await live.text()).events.map((candidate) => candidate.eventId),
+        ).toEqual(["event-1", "event-2", "event-3", "event-4"]);
+
+        while (await runDurableObjectAlarm(stub)) {
+            // Run every backfill attempt that is due; each one fails on the unreadable Turn.
+        }
+        const failed = await worker.fetch(new Request(sessionPath("turns")), env);
+        expect(failed.status).toBe(503);
+        expect(Number(failed.headers.get("retry-after"))).toBeGreaterThanOrEqual(1);
+        expect(await failed.json()).toMatchObject({ error: { code: "projection_failed" } });
+
+        await runInDurableObject(stub, (_instance, state) => {
+            state.storage.sql.exec("UPDATE recorded_turns SET turn_json = ? WHERE command_id = 'command-1'", original);
+        });
+        await runDurableObjectAlarm(stub);
+        const recovered = await turnPage();
+        expect(recovered.turns[0]).toMatchObject({
+            attempt: { kind: "succeeded" },
+            items: [{ kind: "answer", text: "Still recorded." }],
+        });
     });
 
     it("Given an unknown Session or a malformed cursor, When a client reads Turns, Then the read is rejected", async () => {

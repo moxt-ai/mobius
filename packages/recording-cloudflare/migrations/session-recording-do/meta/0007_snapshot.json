@@ -1,7 +1,7 @@
 {
     "version": "6",
     "dialect": "sqlite",
-    "id": "65c58d21-37f2-4108-afe8-fd0a560d8e7f",
+    "id": "47f543e2-bf86-454a-bb56-c2e8498f0205",
     "prevId": "608cacfe-fac9-4830-946e-8fd93db61b34",
     "tables": {
         "recorded_interactions": {
@@ -28,6 +28,13 @@
                     "notNull": true,
                     "autoincrement": false
                 },
+                "requested_at": {
+                    "name": "requested_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
                 "request_json": {
                     "name": "request_json",
                     "type": "text",
@@ -37,9 +44,14 @@
                 }
             },
             "indexes": {
-                "recorded_interactions_resolved": {
-                    "name": "recorded_interactions_resolved",
-                    "columns": ["resolved"],
+                "recorded_interactions_pending": {
+                    "name": "recorded_interactions_pending",
+                    "columns": ["resolved", "requested_at", "interaction_id"],
+                    "isUnique": false
+                },
+                "recorded_interactions_command": {
+                    "name": "recorded_interactions_command",
+                    "columns": ["command_id", "resolved"],
                     "isUnique": false
                 }
             },
@@ -185,6 +197,21 @@
                     "primaryKey": false,
                     "notNull": true,
                     "autoincrement": false
+                },
+                "text": {
+                    "name": "text",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false,
+                    "default": "''"
+                },
+                "listing_json": {
+                    "name": "listing_json",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
                 }
             },
             "indexes": {
@@ -283,6 +310,13 @@
                     "type": "text",
                     "primaryKey": false,
                     "notNull": true,
+                    "autoincrement": false
+                },
+                "failure_json": {
+                    "name": "failure_json",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": false,
                     "autoincrement": false
                 }
             },

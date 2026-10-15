@@ -1,11 +1,14 @@
-import { and, asc, desc, eq, gt, lt } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, lt, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/durable-sqlite";
 import {
-    type StoredInteraction,
+    type ProjectionWrites,
+    type StoredInteractionRecord,
     type StoredProjection,
     type StoredTurn,
     type StoredTurnItem,
+    type StoredTurnItemRead,
     storedInteractionSchema,
+    storedProjectionFailureSchema,
     storedProjectionStateSchema,
     storedTurnItemSchema,
     storedTurnSchema,
@@ -34,6 +37,7 @@ export class SessionTurnHistoryStorage {
         this.#storage = storage;
     }
 
+    /** Runs `operation` atomically; nested inside another transaction it rolls back on its own. */
     readonly transaction = <T>(operation: () => T): T => this.#storage.transactionSync(operation);
 
     readonly projection = (): StoredProjection | null => {
@@ -41,23 +45,90 @@ export class SessionTurnHistoryStorage {
         return row === undefined
             ? null
             : {
+                  failure:
+                      row.failureJson === null
+                          ? null
+                          : decodeJson(row.failureJson, (value) => storedProjectionFailureSchema.parse(value)),
                   foldedThroughOrdinal: row.foldedThroughOrdinal,
                   state: decodeJson(row.stateJson, (value) => storedProjectionStateSchema.parse(value)),
                   turnCount: row.turnCount,
               };
     };
 
-    readonly saveProjection = (projection: StoredProjection): void => {
-        const values = {
-            foldedThroughOrdinal: projection.foldedThroughOrdinal,
+    /**
+     * Commits one fold. Every record is validated and encoded before the first write, so a record
+     * that does not fit its schema leaves the stored projection untouched.
+     */
+    readonly writeProjection = (writes: ProjectionWrites): void => {
+        const projectionValues = {
+            failureJson:
+                writes.projection.failure === null
+                    ? null
+                    : JSON.stringify(storedProjectionFailureSchema.parse(writes.projection.failure)),
+            foldedThroughOrdinal: writes.projection.foldedThroughOrdinal,
             singleton: 1,
-            stateJson: JSON.stringify(storedProjectionStateSchema.parse(projection.state)),
-            turnCount: projection.turnCount,
+            stateJson: JSON.stringify(storedProjectionStateSchema.parse(writes.projection.state)),
+            turnCount: writes.projection.turnCount,
         };
+        const turnRows = writes.turns.map(({ open, turn }) => ({
+            commandId: turn.commandId,
+            open,
+            turnJson: JSON.stringify(storedTurnSchema.parse(turn)),
+            turnOrder: turn.order,
+        }));
+        const itemRows = writes.items.map((write) => ({
+            change: write.text,
+            values: {
+                commandId: write.commandId,
+                itemId: write.item.itemId,
+                itemJson: JSON.stringify(storedTurnItemSchema.parse(write.item)),
+                listingJson: write.listing === null ? null : JSON.stringify(storedTurnItemSchema.parse(write.listing)),
+                sequence: write.item.sequence,
+                text: write.text.text,
+            },
+        }));
+        const interactionRows = writes.interactions.map((record) => ({
+            commandId: record.interaction.commandId,
+            interactionId: record.interaction.interactionId,
+            requestJson: JSON.stringify(storedInteractionSchema.parse(record.interaction)),
+            requestedAt: record.requestedAt,
+            resolved: record.resolved,
+        }));
+
+        for (const values of turnRows) {
+            this.#database
+                .insert(recordedTurn)
+                .values(values)
+                .onConflictDoUpdate({ target: recordedTurn.commandId, set: values })
+                .run();
+        }
+        for (const { change, values } of itemRows) {
+            this.#database
+                .insert(recordedTurnItem)
+                .values(values)
+                .onConflictDoUpdate({
+                    target: [recordedTurnItem.commandId, recordedTurnItem.itemId],
+                    set: {
+                        itemJson: values.itemJson,
+                        listingJson: values.listingJson,
+                        sequence: values.sequence,
+                        // Appending in SQL keeps a growing answer from being read back and rewritten per batch.
+                        text: change.kind === "append" ? sql`${recordedTurnItem.text} || ${change.text}` : change.text,
+                    },
+                })
+                .run();
+        }
+        for (const values of interactionRows) {
+            this.#database
+                .insert(recordedInteraction)
+                .values(values)
+                .onConflictDoUpdate({ target: recordedInteraction.interactionId, set: values })
+                .run();
+        }
         this.#database
             .insert(recordingProjection)
-            .values(values)
-            .onConflictDoUpdate({ target: recordingProjection.singleton, set: values })
+            .values(projectionValues)
+            .onConflictDoUpdate({ target: recordingProjection.singleton, set: projectionValues })
             .run();
     };
 
@@ -78,20 +149,6 @@ export class SessionTurnHistoryStorage {
             .all()
             .map((row) => decodeTurn(row.turnJson));
 
-    readonly saveTurn = (turn: StoredTurn, open: boolean): void => {
-        const values = {
-            commandId: turn.commandId,
-            open,
-            turnJson: JSON.stringify(storedTurnSchema.parse(turn)),
-            turnOrder: turn.order,
-        };
-        this.#database
-            .insert(recordedTurn)
-            .values(values)
-            .onConflictDoUpdate({ target: recordedTurn.commandId, set: values })
-            .run();
-    };
-
     /** Reads Turns newest first, strictly older than `beforeOrder` when it is given. */
     readonly turnsBefore = (beforeOrder: number | null, limit: number): readonly StoredTurn[] =>
         this.#database
@@ -103,6 +160,15 @@ export class SessionTurnHistoryStorage {
             .all()
             .map((row) => decodeTurn(row.turnJson));
 
+    readonly hasTurnBefore = (order: number): boolean =>
+        this.#database
+            .select({ order: recordedTurn.turnOrder })
+            .from(recordedTurn)
+            .where(lt(recordedTurn.turnOrder, order))
+            .limit(1)
+            .get() !== undefined;
+
+    /** Reads an item's fields without its text, which folding only ever appends to. */
     readonly item = (commandId: string, itemId: string): StoredTurnItem | null => {
         const row = this.#database
             .select({ itemJson: recordedTurnItem.itemJson })
@@ -112,24 +178,28 @@ export class SessionTurnHistoryStorage {
         return row === undefined ? null : decodeItem(row.itemJson);
     };
 
-    readonly saveItem = (commandId: string, item: StoredTurnItem): void => {
-        const values = {
-            commandId,
-            itemId: item.itemId,
-            itemJson: JSON.stringify(storedTurnItemSchema.parse(item)),
-            sequence: item.sequence,
-        };
-        this.#database
-            .insert(recordedTurnItem)
-            .values(values)
-            .onConflictDoUpdate({ target: [recordedTurnItem.commandId, recordedTurnItem.itemId], set: values })
-            .run();
+    /** Reads one item with at most `textCharacters` of its text. */
+    readonly itemRead = (commandId: string, itemId: string, textCharacters: number): StoredTurnItemRead | null => {
+        const row = this.#database
+            .select(itemReadColumns(textCharacters))
+            .from(recordedTurnItem)
+            .where(and(eq(recordedTurnItem.commandId, commandId), eq(recordedTurnItem.itemId, itemId)))
+            .get();
+        return row === undefined ? null : decodeItemRead(row);
     };
 
-    /** Reads a Turn's items in sequence order, strictly after `afterSequence` when it is given. */
-    readonly itemsAfter = (commandId: string, afterSequence: number | null, limit: number): readonly StoredTurnItem[] =>
+    /**
+     * Reads a Turn's items in sequence order, strictly after `afterSequence` when it is given, with at
+     * most `textCharacters` of each item's text so a page never loads a whole merged answer.
+     */
+    readonly itemReadsAfter = (
+        commandId: string,
+        afterSequence: number | null,
+        limit: number,
+        textCharacters: number,
+    ): readonly StoredTurnItemRead[] =>
         this.#database
-            .select({ itemJson: recordedTurnItem.itemJson })
+            .select(itemReadColumns(textCharacters))
             .from(recordedTurnItem)
             .where(
                 and(
@@ -140,40 +210,85 @@ export class SessionTurnHistoryStorage {
             .orderBy(asc(recordedTurnItem.sequence))
             .limit(limit)
             .all()
-            .map((row) => decodeItem(row.itemJson));
+            .map(decodeItemRead);
 
-    readonly interaction = (
-        interactionId: string,
-    ): { readonly interaction: StoredInteraction; readonly resolved: boolean } | null => {
+    readonly hasItemAfter = (commandId: string, sequence: number): boolean =>
+        this.#database
+            .select({ sequence: recordedTurnItem.sequence })
+            .from(recordedTurnItem)
+            .where(and(eq(recordedTurnItem.commandId, commandId), gt(recordedTurnItem.sequence, sequence)))
+            .limit(1)
+            .get() !== undefined;
+
+    readonly interaction = (interactionId: string): StoredInteractionRecord | null => {
         const row = this.#database
-            .select({ requestJson: recordedInteraction.requestJson, resolved: recordedInteraction.resolved })
+            .select({
+                requestJson: recordedInteraction.requestJson,
+                requestedAt: recordedInteraction.requestedAt,
+                resolved: recordedInteraction.resolved,
+            })
             .from(recordedInteraction)
             .where(eq(recordedInteraction.interactionId, interactionId))
             .get();
-        return row === undefined ? null : { interaction: decodeInteraction(row.requestJson), resolved: row.resolved };
+        return row === undefined ? null : decodeInteractionRecord(row);
     };
 
-    readonly saveInteraction = (interaction: StoredInteraction, resolved: boolean): void => {
-        const values = {
-            commandId: interaction.commandId,
-            interactionId: interaction.interactionId,
-            requestJson: JSON.stringify(storedInteractionSchema.parse(interaction)),
-            resolved,
-        };
-        this.#database
-            .insert(recordedInteraction)
-            .values(values)
-            .onConflictDoUpdate({ target: recordedInteraction.interactionId, set: values })
-            .run();
-    };
+    readonly unresolvedInteractionsOf = (commandIds: readonly string[]): readonly StoredInteractionRecord[] =>
+        commandIds.length === 0
+            ? []
+            : this.#database
+                  .select({
+                      requestJson: recordedInteraction.requestJson,
+                      requestedAt: recordedInteraction.requestedAt,
+                      resolved: recordedInteraction.resolved,
+                  })
+                  .from(recordedInteraction)
+                  .where(
+                      and(
+                          inArray(recordedInteraction.commandId, [...commandIds]),
+                          eq(recordedInteraction.resolved, false),
+                      ),
+                  )
+                  .all()
+                  .map(decodeInteractionRecord);
 
-    readonly unresolvedInteractions = (): readonly StoredInteraction[] =>
+    /** Unresolved requests, oldest first. */
+    readonly pendingInteractions = (limit: number): readonly StoredInteractionRecord[] =>
         this.#database
-            .select({ requestJson: recordedInteraction.requestJson })
+            .select({
+                requestJson: recordedInteraction.requestJson,
+                requestedAt: recordedInteraction.requestedAt,
+                resolved: recordedInteraction.resolved,
+            })
             .from(recordedInteraction)
             .where(eq(recordedInteraction.resolved, false))
+            .orderBy(asc(recordedInteraction.requestedAt), asc(recordedInteraction.interactionId))
+            .limit(limit)
             .all()
-            .map((row) => decodeInteraction(row.requestJson));
+            .map(decodeInteractionRecord);
+}
+
+function itemReadColumns(textCharacters: number) {
+    return {
+        itemJson: recordedTurnItem.itemJson,
+        listingJson: recordedTurnItem.listingJson,
+        textLength: sql<number>`length(${recordedTurnItem.text})`,
+        textPrefix: sql<string>`substr(${recordedTurnItem.text}, 1, ${textCharacters})`,
+    };
+}
+
+function decodeItemRead(row: {
+    readonly itemJson: string;
+    readonly listingJson: string | null;
+    readonly textLength: number;
+    readonly textPrefix: string;
+}): StoredTurnItemRead {
+    return {
+        item: decodeItem(row.itemJson),
+        listing: row.listingJson === null ? null : decodeItem(row.listingJson),
+        textLength: row.textLength,
+        textPrefix: row.textPrefix,
+    };
 }
 
 function decodeTurn(encoded: string): StoredTurn {
@@ -184,6 +299,14 @@ function decodeItem(encoded: string): StoredTurnItem {
     return decodeJson(encoded, (value) => storedTurnItemSchema.parse(value));
 }
 
-function decodeInteraction(encoded: string): StoredInteraction {
-    return decodeJson(encoded, (value) => storedInteractionSchema.parse(value));
+function decodeInteractionRecord(row: {
+    readonly requestJson: string;
+    readonly requestedAt: number;
+    readonly resolved: boolean;
+}): StoredInteractionRecord {
+    return {
+        interaction: decodeJson(row.requestJson, (value) => storedInteractionSchema.parse(value)),
+        requestedAt: row.requestedAt,
+        resolved: row.resolved,
+    };
 }

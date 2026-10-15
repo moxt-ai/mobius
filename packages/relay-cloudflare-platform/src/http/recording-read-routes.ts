@@ -1,4 +1,8 @@
-import { isIdentifier } from "@moxt-ai/mobius-protocol";
+import {
+    isIdentifier,
+    SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT,
+    SESSION_RECORDING_TURN_PAGE_MAX_LIMIT,
+} from "@moxt-ai/mobius-protocol";
 import { ProjectPermission } from "@moxt-ai/mobius-relay-core";
 import { type Context, Hono } from "hono";
 import * as v from "valibot";
@@ -17,13 +21,20 @@ type PlatformApplicationEnvironment = {
 
 const recordingQuery = v.object({ runtimeId: v.string() });
 const recordingCursor = v.pipe(v.string(), v.regex(/^(?:(?:0|[1-9][0-9]*)|v2:[1-9][0-9]*:(?:0|[1-9][0-9]*))$/u));
+function pageLimit(maximum: number) {
+    return v.pipe(
+        v.string(),
+        v.regex(/^[1-9][0-9]{0,4}$/u),
+        v.check((value) => Number(value) <= maximum),
+    );
+}
 const turnPageQuery = v.object({
     before: v.optional(v.pipe(v.string(), v.regex(/^turn:[1-9][0-9]*$/u))),
-    limit: v.optional(v.pipe(v.string(), v.regex(/^[1-9][0-9]{0,2}$/u))),
+    limit: v.optional(pageLimit(SESSION_RECORDING_TURN_PAGE_MAX_LIMIT)),
 });
 const turnItemPageQuery = v.object({
     after: v.optional(v.pipe(v.string(), v.regex(/^item:(?:0|[1-9][0-9]*)$/u))),
-    limit: v.optional(v.pipe(v.string(), v.regex(/^[1-9][0-9]{0,3}$/u))),
+    limit: v.optional(pageLimit(SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT)),
 });
 const recordingIncrementalQuery = v.object({
     after: v.optional(recordingCursor),

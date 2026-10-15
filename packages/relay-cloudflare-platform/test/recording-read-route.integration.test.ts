@@ -467,6 +467,12 @@ describe.sequential("Platform Recording read route", () => {
             environment,
         );
         expect(invalid.status).toBe(400);
+        const oversized = await worker.fetch(
+            new Request(turnsUrl.replace("limit=10", "limit=101"), { headers: credentialHeaders(credential) }),
+            environment,
+        );
+        expect(oversized.status).toBe(400);
+        expect(await oversized.json()).toMatchObject({ error: { code: "invalid_request" } });
         const missing = await worker.fetch(
             new Request(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}` +

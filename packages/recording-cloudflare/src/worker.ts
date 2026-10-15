@@ -284,6 +284,12 @@ async function turnHistoryResponse<T>(
             response.headers.set("retry-after", "1");
             return response;
         }
+        case "failed": {
+            // Backfill already retries on its own schedule; the client waits for that attempt.
+            const response = errorResponse("projection_failed", 503);
+            response.headers.set("retry-after", String(read.retryAfterSeconds));
+            return response;
+        }
     }
 }
 
@@ -537,8 +543,16 @@ export class SessionRecordingDurableObject extends DurableObject<RecordingWorker
     }
     /** Folds one bounded step of unprojected Recording batches and keeps stepping until caught up. */
     override async alarm(): Promise<void> {
-        if (!this.#history.backfill()) {
-            await this.ctx.storage.setAlarm(Date.now());
+        const outcome = this.#history.backfill(new Date());
+        switch (outcome.kind) {
+            case "caught_up":
+                return;
+            case "behind":
+                await this.ctx.storage.setAlarm(Date.now());
+                return;
+            case "failed":
+                await this.ctx.storage.setAlarm(outcome.retryAt.getTime());
+                return;
         }
     }
     readonly #scheduleBackfill = async (): Promise<void> => {
