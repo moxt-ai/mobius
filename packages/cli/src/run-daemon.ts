@@ -102,17 +102,14 @@ export async function runDaemon(
     await using externalContent = new LocalExternalContentStore(stateDirectory);
     const operations = new DaemonOperationState();
     const publisher = new DaemonSessionEventPublisher(timer);
-    const eventProjectionV2 = new DaemonSessionEventProjectionV2(publisher, (sessionId, event) =>
-        agentRuntime.recordLifecycleEventV2(sessionId, event),
-    );
     const activeTurns = new DaemonTurnRegistry(operations);
+    const eventProjectionV2 = new DaemonSessionEventProjectionV2(
+        publisher,
+        (sessionId, event) => agentRuntime.recordLifecycleEventV2(sessionId, event),
+        activeTurns.recordSessionEventV2,
+    );
     const agentRuntime = new AgentRuntimeManager(
-        new DaemonAcpObserver((_sessionId, event) => {
-            activeTurns.recordEvent(event);
-            if (event.kind === "session.info.updated") {
-                publisher.publishInfo(event);
-            }
-        }, eventProjectionV2.record),
+        new DaemonAcpObserver(eventProjectionV2.record, activeTurns.recordEvent, publisher.publishInfo),
         sessionStore,
         {
             access: (options) =>
