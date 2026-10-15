@@ -29,4 +29,6 @@ export interface SqlDatabase {
         signal: AbortSignal,
     ) => Promise<readonly SqlResult<unknown>[]>;
 }
+
+export { runtimeUpgradeState } from "../schema/runtime-connection-do/runtime-upgrade-state.ts";
 export type { DatabaseResolver } from "./database-resolver.ts";

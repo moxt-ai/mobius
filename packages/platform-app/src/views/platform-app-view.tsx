@@ -1,9 +1,10 @@
 import type { MobiusRecordingPolicyMode } from "@moxt-ai/mobius-sdk/platform";
 import { AppWindow, Check, Clipboard, LoaderCircle, Pencil, Plus, Trash2, X } from "lucide-react";
-import { type ReactNode, useCallback, useEffect } from "react";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { ConfirmAction } from "../components/confirm-action.tsx";
 import { CreateNameDialog } from "../components/create-name-dialog.tsx";
 import { RecordingPanel } from "../components/recording-panel.tsx";
+import { RuntimeUpgradePanel } from "../components/runtime-upgrade-panel.tsx";
 import { SecretDialog } from "../components/secret-dialog.tsx";
 import { SessionStatusWebhookPanel } from "../components/session-status-webhook-panel.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.tsx";
@@ -92,7 +93,25 @@ export function PlatformApp({ endpoint, getToken, userControl, organization, org
         setSecretVisible,
     } = usePlatformStore();
 
+    const [operator, setOperator] = useState(false);
     const client = useCallback(() => createPlatformClient(endpoint, getToken), [endpoint, getToken]);
+
+    useEffect(() => {
+        const controller = new AbortController();
+        void client()
+            .readConfiguration(controller.signal)
+            .then(() => {
+                if (!controller.signal.aborted) {
+                    setOperator(true);
+                }
+            })
+            .catch(() => {
+                if (!controller.signal.aborted) {
+                    setOperator(false);
+                }
+            });
+        return () => controller.abort();
+    }, [client]);
 
     useEffect(() => {
         if (notice === null) {
@@ -546,13 +565,30 @@ export function PlatformApp({ endpoint, getToken, userControl, organization, org
                                 <Tabs
                                     value={appTab}
                                     onValueChange={(value) =>
-                                        setAppTab(value === "recording" ? "recording" : "api-keys")
+                                        setAppTab(
+                                            value === "upgrades"
+                                                ? "upgrades"
+                                                : value === "recording"
+                                                  ? "recording"
+                                                  : "api-keys",
+                                        )
                                     }
                                 >
                                     <TabsList className="mt-6" aria-label="Application settings">
                                         <TabsTrigger value="api-keys">API keys</TabsTrigger>
                                         <TabsTrigger value="recording">Recording</TabsTrigger>
+                                        {operator && <TabsTrigger value="upgrades">Runtime upgrades</TabsTrigger>}
                                     </TabsList>
+                                    {operator && (
+                                        <TabsContent value="upgrades">
+                                            <RuntimeUpgradePanel
+                                                key={selectedAppId}
+                                                appId={selectedAppId}
+                                                endpoint={endpoint}
+                                                getToken={getToken}
+                                            />
+                                        </TabsContent>
+                                    )}
                                     <TabsContent value="recording">
                                         <RecordingPanel
                                             appRecording={appRecording}

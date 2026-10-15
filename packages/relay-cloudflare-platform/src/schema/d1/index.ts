@@ -3,6 +3,7 @@ export { platformAppCredential } from "./platform-app-credential.ts";
 export { platformAppCredentialProject } from "./platform-app-credential-project.ts";
 export { platformAppRecordingPolicy } from "./platform-app-recording-policy.ts";
 export { platformAppSessionStatusWebhook } from "./platform-app-session-status-webhook.ts";
+export * from "./platform-app-upgrade.ts";
 export { platformAuditEvent } from "./platform-audit-event.ts";
 export { platformDashboardAuditEvent } from "./platform-dashboard-audit-event.ts";
 export { platformOrganizationInviteLink } from "./platform-organization-invite-link.ts";

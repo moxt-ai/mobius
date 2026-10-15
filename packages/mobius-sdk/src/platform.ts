@@ -1,4 +1,18 @@
 import {
+    type AppUpgradeInput,
+    appUpgradeInputSchema,
+    appUpgradeTaskResponseSchema,
+    runtimeUpgradePageSchema,
+} from "@moxt-ai/mobius-protocol";
+
+export type {
+    AppUpgradeInput,
+    AppUpgradeTask,
+    RuntimeUpgradePage,
+    RuntimeUpgradeSnapshot,
+} from "@moxt-ai/mobius-protocol";
+
+import {
     createdOrganizationInviteSchema,
     decodeIdentifier,
     type Identifier,
@@ -536,6 +550,30 @@ export class MobiusPlatformDeveloperClient {
             ),
         );
 
+    readonly readUpgradeTask = async (appId: string, signal: AbortSignal) =>
+        appUpgradeTaskResponseSchema.parse(
+            await this.#executor.get(`dashboard/v1/apps/${requestedIdentifier(appId, "App")}/upgrade`, signal),
+        );
+    readonly setUpgradeTask = async (appId: string, input: AppUpgradeInput, signal: AbortSignal) =>
+        appUpgradeTaskResponseSchema.parse(
+            await this.#executor.put(
+                `dashboard/v1/apps/${requestedIdentifier(appId, "App")}/upgrade`,
+                appUpgradeInputSchema.parse(input),
+                signal,
+            ),
+        );
+    readonly clearUpgradeTask = async (appId: string, signal: AbortSignal) =>
+        appUpgradeTaskResponseSchema.parse(
+            await this.#executor.delete(`dashboard/v1/apps/${requestedIdentifier(appId, "App")}/upgrade`, signal),
+        );
+    readonly listUpgradeRuntimes = async (appId: string, cursor: string, signal: AbortSignal) =>
+        runtimeUpgradePageSchema.parse(
+            await this.#executor.get(
+                `dashboard/v1/apps/${requestedIdentifier(appId, "App")}/upgrade/runtimes?cursor=${encodeURIComponent(cursor)}`,
+                signal,
+            ),
+        );
+
     readonly readConfiguration = async (signal: AbortSignal): Promise<MobiusPlatformConfiguration> =>
         new MobiusPlatformConfiguration(
             record(await this.#executor.get("dashboard/v1/platform/configuration", signal), "Platform configuration"),
@@ -902,3 +940,5 @@ export class MobiusPlatformAppClient {
             ),
         );
 }
+
+export { isRuntimeUpgradeNeeded } from "@moxt-ai/mobius-protocol";

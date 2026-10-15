@@ -1,4 +1,9 @@
-import { isIdentifier, MOBIUS_API_PREFIX, PROJECT_LOCATION_HINTS } from "@moxt-ai/mobius-protocol";
+import {
+    appUpgradeInputSchema,
+    isIdentifier,
+    MOBIUS_API_PREFIX,
+    PROJECT_LOCATION_HINTS,
+} from "@moxt-ai/mobius-protocol";
 import {
     errorMiddleware,
     notFoundResponse,
@@ -18,6 +23,7 @@ import {
 import { bodyParser } from "../middleware/body-parser.ts";
 import { createBrowserCors } from "../middleware/browser-cors.ts";
 import type { AppSessionStatusWebhookService } from "../service/app-session-status-webhook-service.ts";
+import type { AppUpgradeService } from "../service/app-upgrade-service.ts";
 import type { OrganizationInviteService } from "../service/organization-invite-service.ts";
 import type { RecordingPolicyService } from "../service/recording-policy-service.ts";
 
@@ -54,6 +60,7 @@ const sessionStatusWebhookBody = v.strictObject({
 type PlatformHttpEnvironment = PlatformAuthenticationEnvironment & {
     readonly Bindings: {
         readonly allowedOrigins: ReadonlySet<string>;
+        readonly upgrades: AppUpgradeService;
         readonly invites: OrganizationInviteService;
         readonly recordingPolicies: RecordingPolicyService;
         readonly appSessionStatusWebhooks: AppSessionStatusWebhookService;
@@ -113,6 +120,54 @@ export function createPlatformControlApplication() {
             createBrowserCors(
                 ["GET", "POST", "PUT", "DELETE"],
                 ["authorization", "content-type", "x-mobius-oidc-provider"],
+            ),
+        )
+        .get("/v1/apps/:appId/upgrade", async (context) =>
+            context.json(
+                await context.env.upgrades.read(
+                    await authenticateDeveloper(context),
+                    path(context.req.param("appId")),
+                    context.var.signal,
+                ),
+            ),
+        )
+        .put("/v1/apps/:appId/upgrade", async (context) => {
+            const identity = await authenticateDeveloper(context);
+            const input = appUpgradeInputSchema.safeParse(await context.req.json().catch(() => null));
+            if (!input.success) {
+                throw new PlatformControlPlaneError(
+                    "invalid_request",
+                    "An exact version and percentage from 0 to 100 are required",
+                    400,
+                );
+            }
+            return context.json(
+                await context.env.upgrades.write(
+                    identity,
+                    path(context.req.param("appId")),
+                    input.data,
+                    context.var.signal,
+                ),
+            );
+        })
+        .delete("/v1/apps/:appId/upgrade", async (context) =>
+            context.json(
+                await context.env.upgrades.write(
+                    await authenticateDeveloper(context),
+                    path(context.req.param("appId")),
+                    null,
+                    context.var.signal,
+                ),
+            ),
+        )
+        .get("/v1/apps/:appId/upgrade/runtimes", async (context) =>
+            context.json(
+                await context.env.upgrades.page(
+                    await authenticateDeveloper(context),
+                    path(context.req.param("appId")),
+                    context.req.query("cursor") ?? "",
+                    context.var.signal,
+                ),
             ),
         )
         .get("/health", (context) => context.json({ service: "mobius-relay-platform", status: "ok" }))

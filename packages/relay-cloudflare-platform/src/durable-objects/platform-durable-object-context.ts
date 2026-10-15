@@ -16,12 +16,16 @@ export interface PlatformDurableObjectEnvironment extends PlatformStorageBinding
     readonly RECORDING?: Fetcher;
     readonly RECORDING_PROVIDER_ID?: string;
     readonly RUNTIME_RELAY: DurableObjectNamespace;
+    readonly SENTRY_DSN?: string;
 }
 
 export function createPlatformDurableObjectContext(
     state: DurableObjectState,
     environment: PlatformDurableObjectEnvironment,
-    storage: { readonly database: DurableObjectSqlDatabase },
+    storage: {
+        readonly database: DurableObjectSqlDatabase;
+        readonly management?: import("@moxt-ai/mobius-relay-core").RuntimeManagement;
+    },
 ) {
     const databases = new PlatformDatabaseResolver(environment);
     const registry = new PlatformStorageRegistry(environment);
@@ -36,6 +40,7 @@ export function createPlatformDurableObjectContext(
         databases,
         projects,
         doDatabase: storage.database,
+        ...(storage.management === undefined ? {} : { management: storage.management }),
         recording: new PlatformSessionRecording(
             new RecordingPolicyStorage(environment.PLATFORM_DIRECTORY_DATABASE),
             platformRecordingProvider(environment),

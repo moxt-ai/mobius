@@ -3,6 +3,7 @@ import { createRuntimeRoutes } from "../http/do/runtime-routes.ts";
 import type { DatabaseResolver } from "../infra/database-resolver.ts";
 import type { DoSqlDatabase } from "../infra/do-sql-database.ts";
 import type { ProjectStorageDirectory } from "../infra/project-storage-directory.ts";
+import type { RuntimeManagement } from "../infra/runtime-management.ts";
 import { DisabledSessionRecording, type SessionRecording } from "../infra/session-recording.ts";
 import { BestEffortRecording } from "../service/channel/best-effort-recording.ts";
 import { ChannelActor } from "../service/channel/channel-actor.ts";
@@ -21,6 +22,7 @@ function createRuntimeRelayDependencies(cx: {
     readonly gateways: {
         readonly peers: RuntimePeers;
         readonly recording: SessionRecording;
+        readonly management?: RuntimeManagement;
     };
     readonly utilities: {
         readonly waitUntil: (operation: Promise<void>) => void;
@@ -81,6 +83,7 @@ export function createDurableObjectDependencies(cx: {
     readonly gateways: {
         readonly peers: RuntimePeers;
         readonly recording?: SessionRecording;
+        readonly management?: RuntimeManagement;
     };
     readonly utilities: {
         readonly waitUntil: (operation: Promise<void>) => void;
@@ -90,6 +93,7 @@ export function createDurableObjectDependencies(cx: {
         database: cx.doDatabase,
         gateways: {
             peers: cx.gateways.peers,
+            ...(cx.gateways.management === undefined ? {} : { management: cx.gateways.management }),
             recording: cx.gateways.recording ?? new DisabledSessionRecording(),
         },
         storages: cx.storages,

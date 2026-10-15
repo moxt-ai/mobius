@@ -47,6 +47,7 @@ export {
     validatePairingCode,
     validateToken,
 } from "./entity/pairing/pairing.ts";
+export { CloudflareChannelPeers } from "./gateway/cloudflare-channel-peers.ts";
 export { CloudflareChannelRuntime } from "./gateway/cloudflare-channel-runtime.ts";
 export type { ChannelGateway } from "./gateway/index.ts";
 export type { ProjectAccessAuthorizer } from "./gateway/project-access-authorizer.ts";
@@ -75,6 +76,7 @@ export type {
     ProjectStoragePlacement,
 } from "./infra/project-storage-directory.ts";
 export { instrumentD1Database, RequestAccessMetrics } from "./infra/request-access-metrics.ts";
+export type { RuntimeManagement } from "./infra/runtime-management.ts";
 export {
     DisabledSessionRecording,
     type SessionRecording,

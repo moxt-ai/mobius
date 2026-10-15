@@ -47,6 +47,7 @@ import {
     type ProjectWorkerRoutingBindings,
     routeProjectDurableObject,
 } from "./gateway/project-durable-object-routing.ts";
+import { RuntimeUpgradeGateway } from "./gateway/runtime-upgrade-gateway.ts";
 import { createPlatformControlApplication } from "./http/platform-routes.ts";
 import { createProjectApplication } from "./http/project-routes.ts";
 import { recordingReadRoutes, recordingSessionStatusRoutes } from "./http/recording-read-routes.ts";
@@ -60,12 +61,14 @@ import {
 } from "./middleware/session-access-target.ts";
 import { AppCredentialAuthenticationService } from "./service/app-credential-authentication-service.ts";
 import { AppSessionStatusWebhookService } from "./service/app-session-status-webhook-service.ts";
+import { AppUpgradeService } from "./service/app-upgrade-service.ts";
 import { OrganizationInviteService } from "./service/organization-invite-service.ts";
 import { PlatformControlPlaneService } from "./service/platform-control-plane-service.ts";
 import { RecordingPolicyService } from "./service/recording-policy-service.ts";
 import { SessionAccessService, type SessionAccessTarget } from "./service/session-access-service.ts";
 import { AppCredentialCacheStorage } from "./storage/app-credential-cache-storage.ts";
 import { AppSessionStatusWebhookStorage } from "./storage/app-session-status-webhook-storage.ts";
+import { AppUpgradeStorage } from "./storage/app-upgrade-storage.ts";
 import { OrganizationInviteStorage } from "./storage/organization-invite-storage.ts";
 import { PlatformControlPlaneStorage } from "./storage/platform-control-plane-storage.ts";
 import {
@@ -78,6 +81,7 @@ import { RecordingPolicyStorage } from "./storage/recording-policy-storage.ts";
 
 export interface PlatformRelayBindings extends PlatformStorageBindings, ProjectWorkerRoutingBindings {
     readonly CLERK_SECRET_KEY?: string;
+    readonly SENTRY_DSN?: string;
     readonly APP_CREDENTIAL_CACHE: KVNamespace;
     readonly MOBIUS_SESSION_EVENT_PUSH_SECRET?: string;
     readonly MOBIUS_SESSION_STATUS_WEBHOOK_URL?: string;
@@ -194,6 +198,18 @@ export function createPlatformApplication(
     const controlHandler: Handler<DispatchEnvironment> = (context) =>
         controlApplication.fetch(context.req.raw, {
             control: context.var.control,
+            upgrades: new AppUpgradeService(
+                context.var.control,
+                new AppUpgradeStorage(context.env),
+                new RuntimeUpgradeGateway(context.env.RUNTIME_RELAY),
+                (promise) => {
+                    try {
+                        context.executionCtx.waitUntil(promise);
+                    } catch {
+                        void promise;
+                    }
+                },
+            ),
             appAuthentication: context.var.appAuthentication,
             allowedOrigins: authentication.allowedOrigins,
             invites: new OrganizationInviteService(

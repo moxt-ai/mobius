@@ -21,6 +21,7 @@ import {
     MOBIUS_API_PREFIX,
 } from "@moxt-ai/mobius-protocol";
 import {
+    CloudflareChannelPeers,
     DurableObjectDatabaseAdapter,
     DurableObjectSqlDatabase,
     RuntimeRelay,
@@ -31,11 +32,29 @@ import { createDurableObjectDependencies } from "../../relay-core/src/di/create-
 import { createTestMobiusPlatformApp } from "../../test-support/src/app.ts";
 import { FakeClerk } from "../../test-support/src/clerk.ts";
 import { createPlatformDurableObjectContext } from "../src/durable-objects/platform-durable-object-context.ts";
+import { UpgradeErrorReporting } from "../src/gateway/upgrade-error-reporting.ts";
+import { RuntimeUpgradeService } from "../src/service/runtime-upgrade-service.ts";
+import { AppUpgradeStorage } from "../src/storage/app-upgrade-storage.ts";
+import { RuntimeUpgradeStorage } from "../src/storage/runtime-upgrade-storage.ts";
 import {
     createPlatformGateways,
     PlatformAuthenticationConfiguration,
     type PlatformRelayBindings,
 } from "../src/worker.ts";
+
+class UpgradeErrorCollector {
+    readonly events: unknown[] = [];
+    readonly fetch: typeof fetch = async (input, init) => {
+        const request = new Request(input, init);
+        if (new URL(request.url).pathname !== "/sentry/api/1/envelope/" || request.method !== "POST") {
+            return new Response(null, { status: 404 });
+        }
+        const lines = new TextDecoder().decode(await request.arrayBuffer()).split("\n");
+        const event = JSON.parse(lines[2] ?? "null");
+        this.events.push(event);
+        return Response.json({ id: event.event_id });
+    };
+}
 
 class ControlledRecording implements SessionRecording {
     readonly started = Promise.withResolvers<void>();
@@ -174,10 +193,32 @@ class SocketMessages {
     readonly #messages: string[] = [];
     readonly #resolvers: Array<(message: string) => void> = [];
 
-    constructor(socket: WebSocket) {
+    constructor(socket: WebSocket, daemonVersion?: string) {
         socket.addEventListener("message", (event) => {
             if (typeof event.data !== "string") {
                 throw new Error("Expected a text WebSocket message");
+            }
+            const message: unknown = JSON.parse(event.data);
+            if (
+                daemonVersion !== undefined &&
+                typeof message === "object" &&
+                message !== null &&
+                "kind" in message &&
+                "requestId" in message &&
+                message["kind"] === "runtime.diagnostics.read" &&
+                typeof message["requestId"] === "string" &&
+                message["requestId"].startsWith("updiag_")
+            ) {
+                socket.send(
+                    JSON.stringify({
+                        kind: "runtime.diagnostics.result",
+                        requestId: message["requestId"],
+                        version: daemonVersion,
+                        truncated: false,
+                        entries: [],
+                    }),
+                );
+                return;
             }
             const resolve = this.#resolvers.shift();
             if (resolve === undefined) {
@@ -228,6 +269,55 @@ afterEach(() => {
 });
 
 describe.sequential("Platform Session-only boundary", () => {
+    it("Given two Apps, When an operator replaces and clears an upgrade task, Then tasks remain App-scoped and ordinary developers cannot change them", async () => {
+        const worker = createTestMobiusPlatformApp(
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
+            createPlatformGateways,
+        );
+        const environment = bindings();
+        const request = (path: string, method = "GET", body?: unknown, headers = developerHeaders()) =>
+            worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1${path}`, {
+                    method,
+                    headers,
+                    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+                }),
+                environment,
+            );
+        const tenants = await responseJson(await request("/platform/tenants"), 200);
+        const values = tenants["tenants"];
+        if (!Array.isArray(values)) {
+            throw new Error("Missing tenants");
+        }
+        const tenantId = text(record(values[0]), "tenantId");
+        const first = await responseJson(
+            await request("/apps", "POST", { tenantId, displayName: "Upgrade first" }),
+            201,
+        );
+        const second = await responseJson(
+            await request("/apps", "POST", { tenantId, displayName: "Upgrade second" }),
+            201,
+        );
+        const path = `/apps/${text(first, "appId")}/upgrade`;
+        expect(await responseJson(await request(path), 200)).toMatchObject({ task: null });
+        const saved = await responseJson(await request(path, "PUT", { version: "0.0.229", percentage: 10 }), 200);
+        expect(saved).toMatchObject({ task: { version: "0.0.229", percentage: 10 } });
+        const revised = await responseJson(await request(path, "PUT", { version: "0.0.230", percentage: 20 }), 200);
+        expect(record(revised["task"])["revision"]).not.toBe(record(saved["task"])["revision"]);
+        expect(await responseJson(await request(`/apps/${text(second, "appId")}/upgrade`), 200)).toMatchObject({
+            task: null,
+        });
+        const ordinary = new Headers({
+            authorization: `Bearer ${clerk.session("developer-2", clerk.defaultOrganizationId)}`,
+            "content-type": "application/json",
+            "x-mobius-oidc-provider": "clerk",
+        });
+        expect((await request(path, "PUT", { version: "0.0.229", percentage: 100 }, ordinary)).status).toBe(403);
+        expect((await request(path, "PUT", { version: "latest", percentage: 101 })).status).toBe(400);
+        expect((await request(path, "DELETE")).status).toBe(200);
+        expect(await responseJson(await request(path), 200)).toMatchObject({ task: null });
+    });
+
     it("Given no viewers are connected, When the daemon broadcasts and Recording first fails, Then later events are still recorded without redelivery", async () => {
         await runInDurableObject(env.RUNTIME_RELAY.getByName("unwatched-runtime"), async (_instance, state) => {
             const recording = new ControlledRecording();
@@ -666,6 +756,353 @@ describe.sequential("Platform Session-only boundary", () => {
     });
 
     // Graceful eviction drains in-flight Runtime events before hibernating the sockets.
+    it("Given an App rollout, When an operator selects a connected Runtime and its upgrade fails, Then the RuntimeRelay persists status and cooldown across hibernation", async () => {
+        vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+        const worker = createTestMobiusPlatformApp(
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
+            createPlatformGateways,
+        );
+        const environment = bindings();
+        const tenants = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/platform/tenants`, {
+                    headers: developerHeaders(),
+                }),
+                environment,
+            ),
+            200,
+        );
+        const tenantValues = tenants["tenants"];
+        if (!Array.isArray(tenantValues) || tenantValues.length === 0) {
+            throw new Error("Expected a Platform tenant");
+        }
+        const tenantId = text(record(tenantValues[0]), "tenantId");
+        const app = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps`, {
+                    body: JSON.stringify({ displayName: "Private reconnect", tenantId }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const appId = text(app, "appId");
+        const appCredential = text(record(app["defaultCredential"]), "credential");
+        const project = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${appId}/projects`, {
+                    body: JSON.stringify({
+                        displayName: "Private reconnect Project",
+                        idempotencyKey: "private-reconnect-project",
+                        locationHint: "apac",
+                    }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const projectId = text(project, "projectId");
+        const pairing = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtime-pairings`, {
+                    body: JSON.stringify({ idempotencyKey: "private-reconnect-runtime" }),
+                    headers: credentialHeaders(appCredential),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const claimed = await responseJson(
+            await worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtime-pairings/${text(pairing, "pairingId")}/redeem`,
+                    {
+                        body: JSON.stringify({
+                            agents: readyAgents,
+                            installableAgents: [],
+                            machineName: "Private reconnect Runtime",
+                            pairingCode: text(pairing, "pairingCode"),
+                            workspaceName: "private-reconnect-workspace",
+                        }),
+                        headers: { "content-type": "application/json" },
+                        method: "POST",
+                    },
+                ),
+                environment,
+            ),
+            200,
+        );
+        expect(claimed["appId"]).toBe(appId);
+        const runtimeId = text(claimed, "runtimeId");
+        expect(
+            await responseJson(
+                await worker.fetch(
+                    new Request(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtimes/${runtimeId}/agents`,
+                        { headers: credentialHeaders(appCredential) },
+                    ),
+                    environment,
+                ),
+                200,
+            ),
+        ).toMatchObject({ agents: [{ id: "codex", label: "Codex" }], runtimeId });
+        const taskUrl = `${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${appId}/upgrade`;
+        const task = async (percentage: number) =>
+            responseJson(
+                await worker.fetch(
+                    new Request(taskUrl, {
+                        method: "PUT",
+                        headers: developerHeaders(),
+                        body: JSON.stringify({ version: "0.0.228", percentage }),
+                    }),
+                    environment,
+                ),
+                200,
+            );
+        const page = async () =>
+            responseJson(
+                await worker.fetch(new Request(`${taskUrl}/runtimes`, { headers: developerHeaders() }), environment),
+                200,
+            );
+        await task(0);
+        const connected = await worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect?liveness=1`, {
+                headers: { authorization: `Bearer ${text(claimed, "runtimeCredential")}`, Upgrade: "websocket" },
+            }),
+            environment,
+        );
+        if (connected.webSocket === null) {
+            throw new Error("Expected daemon connection");
+        }
+        const daemon = connected.webSocket;
+        const messages = new SocketMessages(daemon);
+        daemon.accept();
+        try {
+            expect(decodeServiceToDaemonMessage(await messages.next()).kind).toBe("runtime.liveness.ready");
+            const diagnostic = decodeServiceToDaemonMessage(await messages.next());
+            if (diagnostic.kind !== "runtime.diagnostics.read") {
+                throw new Error("Expected version discovery");
+            }
+            daemon.send(
+                JSON.stringify({
+                    kind: "runtime.diagnostics.result",
+                    requestId: diagnostic.requestId,
+                    version: "0.0.227",
+                    truncated: false,
+                    entries: [],
+                }),
+            );
+            daemon.send(JSON.stringify({ kind: "runtime.heartbeat", heartbeatId: "before-rollout" }));
+            expect(decodeServiceToDaemonMessage(await messages.next()).kind).toBe("runtime.heartbeat.ack");
+            expect(await page()).toMatchObject({
+                runtimes: [{ runtimeId, matched: false, connection: "online", version: "0.0.227" }],
+            });
+            await task(100);
+            const upgrade = decodeServiceToDaemonMessage(await messages.next());
+            expect(upgrade).toMatchObject({ kind: "runtime.upgrade.request", version: "0.0.228" });
+            if (upgrade.kind !== "runtime.upgrade.request") {
+                throw new Error("Expected upgrade request");
+            }
+            const failed = {
+                kind: "runtime.upgrade.result",
+                requestId: upgrade.requestId,
+                version: "0.0.227",
+                targetVersion: "0.0.228",
+                outcome: {
+                    status: "failed",
+                    code: "worker_exited",
+                    message: "Worker exited",
+                    stderr: "token=secret-value startup failed",
+                    retryAfter: Date.now() + 3600000,
+                },
+            };
+            await runInDurableObject(env.RUNTIME_RELAY.getByName(runtimeId), async (_instance, state) => {
+                const database = new DurableObjectSqlDatabase(state.storage);
+                const collector = new UpgradeErrorCollector();
+                const pending: Promise<void>[] = [];
+                const management = new RuntimeUpgradeService(
+                    new CloudflareChannelPeers(state),
+                    new RuntimeUpgradeStorage(database),
+                    new AppUpgradeStorage(environment),
+                    new UpgradeErrorReporting("https://public-key@sentry.test/sentry/1", collector.fetch),
+                    (promise) => {
+                        pending.push(promise);
+                    },
+                );
+                const relay = new RuntimeRelay(
+                    createPlatformDurableObjectContext(state, environment, { database, management }),
+                );
+                const socket = state.getWebSockets("daemon")[0];
+                if (socket === undefined) {
+                    throw new Error("Expected connected daemon socket");
+                }
+                await relay.webSocketMessage(socket, JSON.stringify(failed));
+                await relay.webSocketMessage(socket, JSON.stringify(failed));
+                await Promise.all(pending);
+                expect(collector.events).toHaveLength(1);
+                expect(collector.events[0]).toMatchObject({
+                    level: "error",
+                    tags: { appId, runtimeId, projectId },
+                    extra: { stderr: "[redacted] startup failed" },
+                });
+            });
+            const result = await page();
+            expect(result).toMatchObject({
+                runtimes: [
+                    {
+                        runtimeId,
+                        matched: true,
+                        latest: { result: { outcome: { status: "failed" } } },
+                        lastFailure: { result: { outcome: { stderr: "[redacted] startup failed" } } },
+                    },
+                ],
+            });
+            await evictDurableObject(env.RUNTIME_RELAY.getByName(runtimeId), { webSockets: "hibernate" });
+            expect(await page()).toMatchObject({
+                runtimes: [
+                    { runtimeId, version: "0.0.227", lastFailure: { result: { requestId: upgrade.requestId } } },
+                ],
+            });
+            await task(100);
+            daemon.send(JSON.stringify({ kind: "runtime.heartbeat", heartbeatId: "cooldown" }));
+            expect(decodeServiceToDaemonMessage(await messages.next()).kind).toBe("runtime.heartbeat.ack");
+            vi.setSystemTime(new Date(Date.now() + 3600001));
+            await task(100);
+            const retry = decodeServiceToDaemonMessage(await messages.next());
+            if (retry.kind !== "runtime.upgrade.request") {
+                throw new Error("Expected retry after cooldown");
+            }
+            daemon.send(
+                JSON.stringify({
+                    kind: "runtime.upgrade.result",
+                    requestId: retry.requestId,
+                    version: "0.0.228",
+                    targetVersion: retry.version,
+                    outcome: { status: "succeeded" },
+                }),
+            );
+            daemon.send(JSON.stringify(failed));
+            await runInDurableObject(env.RUNTIME_RELAY.getByName(runtimeId), async () => undefined);
+            expect(await page()).toMatchObject({
+                runtimes: [
+                    {
+                        version: "0.0.228",
+                        latest: { result: { requestId: retry.requestId, outcome: { status: "succeeded" } } },
+                    },
+                ],
+            });
+            await task(50);
+            const selectedPage = await page();
+            const selectedRows = selectedPage["runtimes"];
+            if (!Array.isArray(selectedRows)) {
+                throw new Error("Expected Runtime rows");
+            }
+            const selected = record(selectedRows[0]);
+            await task(50);
+            expect(await page()).toMatchObject({ runtimes: [{ matched: selected["matched"] }] });
+            expect(
+                await responseJson(
+                    await worker.fetch(
+                        new Request(taskUrl, { method: "DELETE", headers: developerHeaders() }),
+                        environment,
+                    ),
+                    200,
+                ),
+            ).toEqual({ task: null });
+            const viewer = await worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtimes/${runtimeId}/host?token=${appCredential}`,
+                    { headers: { Upgrade: "websocket" } },
+                ),
+                environment,
+            );
+            if (viewer.webSocket === null) {
+                throw new Error("Expected viewer socket");
+            }
+            const closed = Promise.withResolvers<CloseEvent>();
+            viewer.webSocket.addEventListener("close", closed.resolve, { once: true });
+            viewer.webSocket.accept();
+            viewer.webSocket.send(
+                JSON.stringify({
+                    kind: "runtime.upgrade.request",
+                    requestId: "forbidden-viewer-upgrade",
+                    version: "0.0.229",
+                }),
+            );
+            expect((await closed.promise).code).toBe(1008);
+            const extraProject = await responseJson(
+                await worker.fetch(
+                    new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${appId}/projects`, {
+                        method: "POST",
+                        headers: developerHeaders(),
+                        body: JSON.stringify({
+                            displayName: "Second project",
+                            idempotencyKey: "second-upgrade-project",
+                            locationHint: "apac",
+                        }),
+                    }),
+                    environment,
+                ),
+                201,
+            );
+            const extra = await responseJson(
+                await worker.fetch(
+                    new Request(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${text(extraProject, "projectId")}/runtime-pairings`,
+                        {
+                            method: "POST",
+                            headers: credentialHeaders(appCredential),
+                            body: JSON.stringify({ idempotencyKey: "page-runtime" }),
+                        },
+                    ),
+                    environment,
+                ),
+                201,
+            );
+            await responseJson(
+                await worker.fetch(
+                    new Request(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtime-pairings/${text(extra, "pairingId")}/redeem`,
+                        {
+                            method: "POST",
+                            headers: { "content-type": "application/json" },
+                            body: JSON.stringify({
+                                agents: readyAgents,
+                                installableAgents: [],
+                                machineName: "Offline second project",
+                                workspaceName: "pagination",
+                                pairingCode: text(extra, "pairingCode"),
+                            }),
+                        },
+                    ),
+                    environment,
+                ),
+                200,
+            );
+            const first = await page();
+            expect(first["runtimes"]).toHaveLength(1);
+            const next = text(first, "next");
+            const second = await responseJson(
+                await worker.fetch(
+                    new Request(`${taskUrl}/runtimes?cursor=${encodeURIComponent(next)}`, {
+                        headers: developerHeaders(),
+                    }),
+                    environment,
+                ),
+                200,
+            );
+            expect(second["runtimes"]).toHaveLength(1);
+            expect(second["next"]).toBeNull();
+        } finally {
+            daemon.close();
+        }
+    }, 90_000);
+
     it("Given a linked Codex Runtime, When Chat imports, forks, configures and prompts Sessions across Relay hibernation, Then results, answers and connection status arrive without cloud Session storage", async () => {
         vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
         const worker = createTestMobiusPlatformApp(
@@ -784,31 +1221,13 @@ describe.sequential("Platform Session-only boundary", () => {
         }
         const daemon = daemonResponse.webSocket;
         const host = hostResponse.webSocket;
-        const daemonMessages = new SocketMessages(daemon);
+        const daemonMessages = new SocketMessages(daemon, "0.0.227");
         const hostMessages = new SocketMessages(host);
         daemon.accept();
         host.accept();
         try {
             expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("runtime.liveness.ready");
             expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "runtime.status", online: true });
-            const upgrade = { kind: "runtime.upgrade.request", requestId: "upgrade-request", version: "0.0.228" };
-            host.send(JSON.stringify(upgrade));
-            expect(decodeServiceToDaemonMessage(await daemonMessages.next())).toEqual(upgrade);
-            expect(JSON.parse(await hostMessages.next())).toEqual(upgrade);
-            const rollback = {
-                kind: "runtime.upgrade.result",
-                requestId: upgrade.requestId,
-                version: "0.0.227",
-                targetVersion: upgrade.version,
-                outcome: {
-                    status: "failed",
-                    code: "worker_exited",
-                    message: "The new daemon exited before becoming ready",
-                    retryAfter: 3600000,
-                },
-            };
-            daemon.send(JSON.stringify(rollback));
-            expect(JSON.parse(await hostMessages.next())).toEqual(rollback);
             const closeResponse = worker.fetch(
                 new Request(
                     `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtimes/${runtimeId}/sessions/session-to-close/close`,
@@ -1401,7 +1820,7 @@ describe.sequential("Platform Session-only boundary", () => {
                 throw new Error("Expected the reconnected Runtime socket");
             }
             const reconnected = reconnectResponse.webSocket;
-            const reconnectMessages = new SocketMessages(reconnected);
+            const reconnectMessages = new SocketMessages(reconnected, "0.0.227");
             reconnected.accept();
             expect(decodeServiceToDaemonMessage(await reconnectMessages.next()).kind).toBe("runtime.liveness.ready");
             expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "runtime.status", online: true });
@@ -1428,7 +1847,7 @@ describe.sequential("Platform Session-only boundary", () => {
                 throw new Error("Expected the replacement Runtime socket");
             }
             const replacement = replacementResponse.webSocket;
-            const replacementMessages = new SocketMessages(replacement);
+            const replacementMessages = new SocketMessages(replacement, "0.0.227");
             replacement.accept();
             try {
                 expect(decodeServiceToDaemonMessage(await replacementMessages.next()).kind).toBe(
@@ -1802,7 +2221,7 @@ describe.sequential("Platform Turn submission", () => {
             throw new Error("Expected the Runtime socket");
         }
         const daemon = daemonResponse.webSocket;
-        const daemonMessages = new SocketMessages(daemon);
+        const daemonMessages = new SocketMessages(daemon, "0.0.227");
         daemon.accept();
         try {
             expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("runtime.liveness.ready");

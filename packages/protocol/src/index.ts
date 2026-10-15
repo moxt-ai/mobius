@@ -12,6 +12,7 @@ export * from "./prompt-usage.ts";
 export * from "./resource-model.ts";
 export * from "./runtime-diagnostics.ts";
 export * from "./runtime-upgrade.ts";
+export * from "./runtime-upgrade-management.ts";
 export * from "./session-access.ts";
 export * from "./session-event-log-v2.ts";
 export * from "./session-events.ts";

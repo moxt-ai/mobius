@@ -12,6 +12,7 @@ import {
     UnsupportedProtocolMessageKindError,
 } from "@moxt-ai/mobius-protocol";
 import { ProjectScope } from "../../entity/do/session.ts";
+import type { RuntimeManagement } from "../../infra/runtime-management.ts";
 import type { ChannelActor, ChannelPeers, ChannelSocket } from "./channel-actor.ts";
 import type { ChannelCredentialService } from "./channel-credential-service.ts";
 import type { RuntimeConnectionService } from "./runtime-connection-service.ts";
@@ -61,6 +62,7 @@ interface RuntimeContext {
     };
     readonly gateways: {
         readonly peers: RuntimePeers;
+        readonly management?: RuntimeManagement;
     };
     readonly utilities: {
         readonly waitUntil: (operation: Promise<void>) => void;
@@ -172,6 +174,7 @@ export class RuntimeService {
         }
         try {
             await this.attachDaemon(runtimeId, scope, previous.length > 0, signal);
+            this.connectManagement(runtimeId, scope.projectId);
         } catch (error) {
             accepted.socket.close(1011, "Runtime attachment failed");
             throw error;
@@ -184,6 +187,17 @@ export class RuntimeService {
         return { kind: "accepted", response: accepted.response };
     };
 
+    private readonly connectManagement = (runtimeId: string, projectId: string): void => {
+        const management = this.#cx.gateways.management;
+        if (management !== undefined) {
+            this.#cx.utilities.waitUntil(
+                management.connected(runtimeId, projectId, AbortSignal.timeout(15_000)).catch(() => {
+                    console.warn("Runtime management connection unavailable");
+                }),
+            );
+        }
+    };
+
     private readonly deferDaemonAttachment = (
         identity: DaemonSocketIdentity,
         socket: RuntimeSocket,
@@ -192,10 +206,11 @@ export class RuntimeService {
     ): void => {
         const attachment = { controller: new AbortController(), identity };
         this.#attachments.add(attachment);
-        const signal = AbortSignal.any([
-            attachment.controller.signal,
-            AbortSignal.timeout(DAEMON_ATTACHMENT_TIMEOUT_MILLISECONDS),
-        ]);
+        const timeout = setTimeout(
+            () => attachment.controller.abort(new DOMException("Runtime attachment timed out", "TimeoutError")),
+            DAEMON_ATTACHMENT_TIMEOUT_MILLISECONDS,
+        );
+        const signal = attachment.controller.signal;
         const operation = (async () => {
             try {
                 await this.attachDaemon(identity.runtimeId, scope, replaced, signal);
@@ -209,6 +224,7 @@ export class RuntimeService {
                 }
                 const ready: RuntimeLivenessReadyEvent = { kind: RUNTIME_LIVENESS_READY_KIND };
                 socket.send(encodeServiceToDaemonMessage(ready));
+                this.connectManagement(identity.runtimeId, scope.projectId);
             } catch (error) {
                 if (!attachment.controller.signal.aborted) {
                     console.error("Runtime attachment failed", error);
@@ -217,6 +233,7 @@ export class RuntimeService {
                     socket.close(1011, "Runtime attachment failed");
                 }
             } finally {
+                clearTimeout(timeout);
                 this.#attachments.delete(attachment);
             }
         })();
@@ -323,6 +340,24 @@ export class RuntimeService {
         signal.throwIfAborted();
         const scope = new ProjectScope(identity.projectId);
         if (identity.role === "host" || identity.role === "relay") {
+            if (typeof message === "string") {
+                try {
+                    const value: unknown = JSON.parse(message);
+                    if (
+                        typeof value === "object" &&
+                        value !== null &&
+                        "kind" in value &&
+                        value.kind === "runtime.upgrade.request"
+                    ) {
+                        socket.close(1008, "Platform operator upgrade task required");
+                        return;
+                    }
+                } catch {
+                    /* The channel decoder handles malformed messages. */
+                }
+            }
+        }
+        if (identity.role === "host" || identity.role === "relay") {
             if (identity.role === "relay") {
                 const channel = this.channel(identity.runtimeId, scope);
                 await channel.receiveHostMessage(socket, message, signal);
@@ -361,6 +396,14 @@ export class RuntimeService {
                 socket.replaceDaemon();
                 return;
             }
+            if (this.#cx.gateways.management !== undefined) {
+                this.#cx.utilities.waitUntil(
+                    this.#cx.gateways.management
+                        .message(identity.runtimeId, identity.projectId, daemonMessage, AbortSignal.timeout(15_000))
+                        .then(() => undefined)
+                        .catch(() => undefined),
+                );
+            }
             socket.send(
                 encodeServiceToDaemonMessage({
                     heartbeatId: daemonMessage.heartbeatId,
@@ -379,6 +422,16 @@ export class RuntimeService {
                 }
                 if (!this.#cx.services.connections.isCurrent(identity)) {
                     socket.replaceDaemon();
+                    return;
+                }
+                if (
+                    await this.#cx.gateways.management?.message(
+                        identity.runtimeId,
+                        identity.projectId,
+                        daemonMessage,
+                        signal,
+                    )
+                ) {
                     return;
                 }
                 const channel = this.channel(identity.runtimeId, scope);

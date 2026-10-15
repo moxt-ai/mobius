@@ -38,7 +38,7 @@ export type WebhookState =
 
 interface PlatformStore {
     readonly appRecording: RecordingState;
-    readonly appTab: "api-keys" | "recording";
+    readonly appTab: "api-keys" | "recording" | "upgrades";
     readonly apps: readonly MobiusPlatformApp[];
     readonly busy: string;
     readonly credentials:
@@ -56,7 +56,7 @@ interface PlatformStore {
     readonly setApps: (value: readonly MobiusPlatformApp[]) => void;
     readonly setAppRecording: (appId: string, value: MobiusPlatformRecordingPolicy) => void;
     readonly failAppRecording: (appId: string) => void;
-    readonly setAppTab: (value: "api-keys" | "recording") => void;
+    readonly setAppTab: (value: "api-keys" | "recording" | "upgrades") => void;
     readonly setBusy: (value: string) => void;
     readonly setCredentials: (appId: string, value: readonly MobiusPlatformAppCredentialMetadata[]) => void;
     readonly failCredentials: (appId: string) => void;
