@@ -1,10 +1,5 @@
 import { Hono } from "hono";
-import {
-    validateAgentCatalog,
-    validateAgents,
-    validateIdentifier,
-    validateLegacyInstallableAgents,
-} from "../../entity/pairing/pairing.ts";
+import { validateAgents, validateIdentifier, validateLegacyInstallableAgents } from "../../entity/pairing/pairing.ts";
 import { bearerToken, readString } from "../../infra/relay-http.ts";
 import { bodyParser } from "../middleware/body-parser.ts";
 import { errorMiddleware, rethrowHonoError } from "../middleware/error-middleware.ts";
@@ -22,7 +17,6 @@ export function createChannelRoutes() {
                 const body = context.req.valid("json");
                 const agents = validateAgents(body["agents"]);
                 validateLegacyInstallableAgents(body["installableAgents"]);
-                validateAgentCatalog(agents);
                 await useCases.updateAgentCatalog(
                     validateIdentifier(context.req.param("channelId"), "channel_id"),
                     context.req.query("token") ?? bearerToken(context.req.raw),

@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import {
-    validateAgentCatalog,
     validateAgents,
     validateDisplayName,
     validateIdentifier,
@@ -37,7 +36,6 @@ export function createProjectRuntimePairingRoutes() {
                 const body = context.req.valid("json");
                 const agents = validateAgents(body["agents"]);
                 validateLegacyInstallableAgents(body["installableAgents"]);
-                validateAgentCatalog(agents);
                 const redeemed = await context.env.services.runtimePairings.redeemRuntimePairing(
                     validateIdentifier(context.req.param("pairingId"), "pairing_id"),
                     validatePairingCode(body["pairingCode"]),
