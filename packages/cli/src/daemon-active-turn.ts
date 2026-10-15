@@ -1,11 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
-    AGENT_ACTIVITY_KIND,
-    AGENT_ACTIVITY_NARRATION_KIND,
     AGENT_CONTENT_KIND,
-    AGENT_MESSAGE_DELTA_KIND,
     type AgentDisplayContent,
-    type AgentMessageDeltaEvent,
     decodeIdentifier,
     type NativeMessageActivity,
     type NativeSessionResult,
@@ -21,6 +17,7 @@ import {
     SessionPromptDisposition,
     type SessionPromptDispositionCommand,
 } from "@moxt-ai/mobius-protocol";
+import type { AcpActivity, AcpActivityNarration } from "./acp/activity.ts";
 
 type ActiveTurnSnapshot = Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"];
 type ActiveTurnMessage = NonNullable<ActiveTurnSnapshot>["messages"][number];
@@ -34,13 +31,6 @@ interface TurnRecovery {
 export type ActiveTurnRecovery =
     | (TurnRecovery & { readonly state: "running" })
     | (TurnRecovery & { readonly state: "completed" });
-type ActiveTurnEventInput =
-    | {
-          readonly kind: typeof AGENT_MESSAGE_DELTA_KIND;
-          readonly messageId: string;
-          readonly text: string;
-      }
-    | Exclude<RecordedSessionEvent, AgentMessageDeltaEvent>;
 
 type ActiveTimelineEntry =
     | {
@@ -167,68 +157,66 @@ export class ActiveDaemonTurn {
     readonly effectiveDisposition = (): string =>
         this.#dispatch.kind === "promoted" ? SessionPromptDisposition.Steer : this.command.disposition;
 
-    readonly recordEvent = (event: ActiveTurnEventInput): RecordedSessionEvent => {
-        if (event.kind === AGENT_MESSAGE_DELTA_KIND) {
-            const sequence = this.advance();
-            this.appendMessageText(event.messageId, event.text);
-            return {
-                commandId: this.command.commandId,
-                epoch: this.#epoch,
-                kind: AGENT_MESSAGE_DELTA_KIND,
-                messageId: event.messageId,
-                sequence,
-                sessionId: this.command.sessionId,
-                text: event.text,
-            };
+    readonly recordText = (messageId: string, text: string): void => {
+        this.advance();
+        this.appendMessageText(messageId, text);
+    };
+
+    readonly recordActivity = (activity: AcpActivity): void => {
+        if (!this.#activities.has(activity.activityId)) {
+            this.#timeline = [
+                ...this.#timeline,
+                { activityId: activity.activityId, id: decodeIdentifier(randomUUID()), kind: "activity" },
+            ];
         }
+        this.#activities.set(activity.activityId, {
+            activityId: activity.activityId,
+            activityType: activity.activityType,
+            content: activity.content,
+            input: activity.input,
+            locations: activity.locations,
+            name: activity.name,
+            output: activity.output,
+            sequence: activity.sequence,
+            status: activity.status,
+            title: activity.title,
+            toolKind: activity.toolKind,
+        });
+        this.advance();
+    };
+
+    readonly recordNarration = (narration: AcpActivityNarration): void => {
+        const previous = this.#activities.get(narration.activityId);
+        if (previous === undefined) {
+            this.#timeline = [
+                ...this.#timeline,
+                { activityId: narration.activityId, id: decodeIdentifier(randomUUID()), kind: "activity" },
+            ];
+        }
+        this.#activities.set(narration.activityId, {
+            activityId: narration.activityId,
+            activityType: narration.activityType,
+            content: previous?.content ?? [],
+            input: previous?.input ?? "",
+            locations: previous?.locations ?? [],
+            name: previous?.name ?? "",
+            output: `${previous?.output ?? ""}${narration.text}`,
+            sequence: narration.sequence,
+            status: previous?.status ?? "running",
+            title: previous?.title ?? "Thinking",
+            toolKind: previous?.toolKind ?? "",
+        });
+        this.advance();
+    };
+
+    readonly recordEvent = (event: RecordedSessionEvent): RecordedSessionEvent => {
         if (
             event.sessionId !== this.command.sessionId ||
             ("commandId" in event && event.commandId !== this.command.commandId)
         ) {
             return event;
         }
-        if (event.kind === AGENT_ACTIVITY_KIND) {
-            if (!this.#activities.has(event.activityId)) {
-                this.#timeline = [
-                    ...this.#timeline,
-                    { activityId: event.activityId, id: decodeIdentifier(randomUUID()), kind: "activity" },
-                ];
-            }
-            this.#activities.set(event.activityId, {
-                activityId: event.activityId,
-                activityType: event.activityType,
-                content: event.content,
-                input: event.input,
-                locations: event.locations,
-                name: event.name,
-                output: event.output,
-                sequence: event.sequence,
-                status: event.status,
-                title: event.title,
-                toolKind: event.toolKind,
-            });
-        } else if (event.kind === AGENT_ACTIVITY_NARRATION_KIND) {
-            const previous = this.#activities.get(event.activityId);
-            if (previous === undefined) {
-                this.#timeline = [
-                    ...this.#timeline,
-                    { activityId: event.activityId, id: decodeIdentifier(randomUUID()), kind: "activity" },
-                ];
-            }
-            this.#activities.set(event.activityId, {
-                activityId: event.activityId,
-                activityType: event.activityType,
-                content: previous?.content ?? [],
-                input: previous?.input ?? "",
-                locations: previous?.locations ?? [],
-                name: previous?.name ?? "",
-                output: `${previous?.output ?? ""}${event.text}`,
-                sequence: event.sequence,
-                status: previous?.status ?? "running",
-                title: previous?.title ?? "Thinking",
-                toolKind: previous?.toolKind ?? "",
-            });
-        } else if (event.kind === AGENT_CONTENT_KIND) {
+        if (event.kind === AGENT_CONTENT_KIND) {
             const target = this.#timeline.findLastIndex(
                 (entry) => entry.kind === "message" && entry.sourceMessageId === event.messageId,
             );
@@ -261,11 +249,7 @@ export class ActiveDaemonTurn {
         ) {
             this.#interaction = null;
         }
-        if (
-            event.kind === AGENT_ACTIVITY_KIND ||
-            event.kind === AGENT_ACTIVITY_NARRATION_KIND ||
-            event.kind === AGENT_CONTENT_KIND
-        ) {
+        if (event.kind === AGENT_CONTENT_KIND) {
             this.advance();
         }
         return event;

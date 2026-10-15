@@ -366,7 +366,9 @@ export function createDaemonCommandHandler({
                         });
                     }),
                 signal: turn.signal,
-                recordTurnEvent: turn.recordEvent,
+                recordTurnActivity: turn.recordActivity,
+                recordTurnNarration: turn.recordNarration,
+                recordTurnText: turn.recordText,
                 recordSteeringPrompt: () => activeTurns.recordSteeringPrompt(command),
                 cancellationRequested: turn.cancellationRequested,
             })

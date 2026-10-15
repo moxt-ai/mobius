@@ -1,8 +1,5 @@
 import type { z } from "zod";
 import {
-    decodeAgentActivityEvent,
-    decodeAgentActivityNarrationEvent,
-    decodeAgentMessageDeltaEvent,
     decodeMessageKind,
     decodeSessionCompletedEvent,
     decodeSessionFailedEvent,
@@ -43,12 +40,6 @@ import {
     type SessionUsageUpdatedEvent,
 } from "./control-messages.ts";
 import {
-    AGENT_ACTIVITY_KIND,
-    AGENT_ACTIVITY_NARRATION_KIND,
-    AGENT_MESSAGE_DELTA_KIND,
-    type AgentActivityEvent,
-    type AgentActivityNarrationEvent,
-    type AgentMessageDeltaEvent,
     SESSION_COMPLETED_KIND,
     SESSION_FAILED_KIND,
     SESSION_STARTED_KIND,
@@ -58,10 +49,7 @@ import {
 } from "./messages.ts";
 
 export type RecordedSessionEvent =
-    | AgentActivityEvent
-    | AgentActivityNarrationEvent
     | AgentContentEvent
-    | AgentMessageDeltaEvent
     | SessionCommandsUpdatedEvent
     | SessionCompletedEvent
     | SessionConfigUpdatedEvent
@@ -104,14 +92,8 @@ const _encode = <T>(message: T, schema: z.ZodType<T>): string => {
 export function decodeRecordedSessionEvent(encoded: string): RecordedSessionEvent {
     const kind = decodeMessageKind(encoded);
     switch (kind) {
-        case AGENT_ACTIVITY_KIND:
-            return decodeAgentActivityEvent(encoded);
-        case AGENT_ACTIVITY_NARRATION_KIND:
-            return decodeAgentActivityNarrationEvent(encoded);
         case AGENT_CONTENT_KIND:
             return decodeAgentContentEvent(encoded);
-        case AGENT_MESSAGE_DELTA_KIND:
-            return decodeAgentMessageDeltaEvent(encoded);
         case SESSION_COMMANDS_UPDATED_KIND:
             return decodeSessionCommandsUpdatedEvent(encoded);
         case SESSION_COMPLETED_KIND:

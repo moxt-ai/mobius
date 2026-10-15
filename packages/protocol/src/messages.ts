@@ -12,9 +12,6 @@ export const RUNTIME_PING_KIND = "runtime.ping";
 export const RUNTIME_PONG_KIND = "runtime.pong";
 export const SESSION_STARTED_KIND = "session.started";
 export const SESSION_QUEUED_KIND = "session.queued";
-export const AGENT_MESSAGE_DELTA_KIND = "agent.message.delta";
-export const AGENT_ACTIVITY_KIND = "agent.activity";
-export const AGENT_ACTIVITY_NARRATION_KIND = "agent.activity.narration";
 export const AGENT_ACTIVITY_DETAIL_LIMIT = 500_000;
 export const AGENT_ACTIVITY_RECORDED_FIELD_LIMIT = 4_000_000;
 export const AGENT_ACTIVITY_RECORDED_DETAIL_LIMIT = 6_000_000;
@@ -102,45 +99,6 @@ export interface SessionStartedEvent {
     readonly prompt: string;
     readonly sequence: 0;
     readonly sessionId: string;
-}
-
-export interface AgentMessageDeltaEvent {
-    readonly commandId: string;
-    readonly epoch: string;
-    readonly kind: typeof AGENT_MESSAGE_DELTA_KIND;
-    readonly messageId: string;
-    readonly sequence: number;
-    readonly sessionId: string;
-    readonly text: string;
-}
-
-/** A bounded Agent narration increment. Sequence orders activities, not narration chunks. */
-export interface AgentActivityNarrationEvent {
-    readonly activityId: string;
-    readonly activityType: string;
-    readonly commandId: string;
-    readonly kind: typeof AGENT_ACTIVITY_NARRATION_KIND;
-    readonly sequence: number;
-    readonly sessionId: string;
-    readonly text: string;
-}
-
-export interface AgentActivityEvent {
-    readonly activityId: string;
-    readonly activityType: string;
-    readonly commandId: string;
-    readonly content: readonly AgentDisplayContent[];
-    readonly detail: AgentActivityDetailCapture;
-    readonly input: string;
-    readonly kind: typeof AGENT_ACTIVITY_KIND;
-    readonly locations: readonly string[];
-    readonly name: string;
-    readonly output: string;
-    readonly sequence: number;
-    readonly sessionId: string;
-    readonly status: string;
-    readonly title: string;
-    readonly toolKind: string;
 }
 
 export type AgentActivityDetailCapture =
