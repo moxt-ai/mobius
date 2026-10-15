@@ -1,6 +1,7 @@
 import {
     decodeAgentSettingsDiscoverCommand,
     decodeNativeSessionRequest,
+    decodeSessionCloseCommand,
     decodeSessionConfigureCommand,
     decodeSessionListCommand,
     decodeSessionPrepareCommand,
@@ -278,6 +279,29 @@ export function createProjectRuntimeRoutes() {
                 const command = decodeSessionRestoreCommand(
                     JSON.stringify({
                         kind: "session.restore",
+                        requestId: crypto.randomUUID(),
+                        sessionId: validateIdentifier(context.req.param("sessionId"), "session_id"),
+                    }),
+                );
+                const result = await context.env.services.runtimePairings.requestControl(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
+                    bearerToken(context.req.raw),
+                    command,
+                    context.req.raw.signal,
+                );
+                context.header("Cache-Control", "no-store");
+                return context.json(result);
+            },
+        )
+        .post(
+            "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/close",
+            bodyParser<RelayHttpEnvironment>(),
+            async (context) => {
+                validated(sessionRestoreSchema, context.req.valid("json"));
+                const command = decodeSessionCloseCommand(
+                    JSON.stringify({
+                        kind: "session.close",
                         requestId: crypto.randomUUID(),
                         sessionId: validateIdentifier(context.req.param("sessionId"), "session_id"),
                     }),

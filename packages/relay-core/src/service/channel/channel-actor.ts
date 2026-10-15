@@ -22,6 +22,7 @@ import {
     decodeRuntimePingCommand,
     decodeRuntimeUpgradeRequest,
     decodeSessionCancelCommand,
+    decodeSessionCloseCommand,
     decodeSessionConfigureCommand,
     decodeSessionElicitationRespondCommand,
     decodeSessionListCommand,
@@ -53,6 +54,8 @@ import {
     RUNTIME_PONG_KIND,
     RUNTIME_STATUS_KIND,
     SESSION_CANCEL_KIND,
+    SESSION_CLOSE_KIND,
+    SESSION_CLOSED_KIND,
     SESSION_CONFIG_UPDATED_KIND,
     SESSION_CONFIGURE_KIND,
     SESSION_ELICITATION_RESPOND_KIND,
@@ -329,6 +332,8 @@ export class ChannelActor {
                 return;
             case SESSION_RESTORED_KIND:
                 return;
+            case SESSION_CLOSED_KIND:
+                return;
             case SESSION_LISTED_KIND:
                 return;
             case SESSION_CONFIG_UPDATED_KIND:
@@ -400,6 +405,10 @@ export class ChannelActor {
             }
             case SESSION_RESTORE_KIND: {
                 const command = decodeSessionRestoreCommand(message);
+                return { message: command, requestId: command.requestId, sessionId: command.sessionId };
+            }
+            case SESSION_CLOSE_KIND: {
+                const command = decodeSessionCloseCommand(message);
                 return { message: command, requestId: command.requestId, sessionId: command.sessionId };
             }
             case SESSION_LIST_KIND: {

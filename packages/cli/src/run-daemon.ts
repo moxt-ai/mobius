@@ -173,6 +173,7 @@ export async function runDaemon(
         "native",
         publisher.publishStatus,
         new AcpContentExternalizer(externalContent),
+        timer,
     );
     const directories = new WorkspaceDirectoryService(config.bindingId, config.defaultWorkspace);
     const installationObserver = new DaemonInstallationObserver();

@@ -11,6 +11,8 @@ import {
     RUNTIME_PING_KIND,
     RUNTIME_PONG_KIND,
     SESSION_CANCEL_KIND,
+    SESSION_CLOSE_KIND,
+    SESSION_CLOSED_KIND,
     SESSION_CONFIGURE_KIND,
     SESSION_ELICITATION_RESPOND_KIND,
     SESSION_LIST_KIND,
@@ -268,6 +270,32 @@ export function createDaemonCommandHandler({
                 void sessions.cancelPrompt(cancellation.sessionId).catch((error) => {
                     console.error("Mobius daemon could not cancel the agent turn", error);
                 });
+                return;
+            }
+            if (kind === SESSION_CLOSE_KIND) {
+                const command = message;
+                audit.record({
+                    commandId: command.requestId,
+                    event: "session_close_requested",
+                    sessionId: command.sessionId,
+                });
+                void sessions
+                    .closeSession(command.sessionId, signal)
+                    .then(() => {
+                        audit.record({
+                            commandId: command.requestId,
+                            event: "session_closed",
+                            sessionId: command.sessionId,
+                        });
+                        send(socket, {
+                            kind: SESSION_CLOSED_KIND,
+                            requestId: command.requestId,
+                            sessionId: command.sessionId,
+                        });
+                    })
+                    .catch((error: unknown) => {
+                        reportOperationFailure(socket, command.requestId, command.sessionId, error);
+                    });
                 return;
             }
             if (kind === SESSION_PROMPT_DISPOSITION_KIND) {

@@ -12,6 +12,7 @@ import {
     decodeRuntimeDiagnosticsResult,
     decodeRuntimePongEvent,
     decodeRuntimeStatusEvent,
+    decodeSessionClosedEvent,
     decodeSessionCompletedEvent,
     decodeSessionConfigUpdatedEvent,
     decodeSessionElicitationResolvedEvent,
@@ -43,6 +44,8 @@ import {
     type RuntimePingCommand,
     type RuntimePongEvent,
     type SessionCancelCommand,
+    type SessionCloseCommand,
+    type SessionClosedEvent,
     type SessionCompletedEvent,
     type SessionConfigUpdatedEvent,
     type SessionConfigureCommand,
@@ -138,6 +141,7 @@ export type RuntimeControlCommand =
     | NativeSessionRequest
     | SessionPrepareCommand
     | SessionConfigureCommand
+    | SessionCloseCommand
     | SessionCancelCommand
     | SessionPromptDispositionCommand
     | SessionPromptCommand
@@ -154,6 +158,7 @@ export type RuntimeControlResult =
     | NativeSessionResult
     | SessionReadyEvent
     | SessionConfigUpdatedEvent
+    | SessionClosedEvent
     | SessionCompletedEvent
     | SessionStartedEvent
     | SessionQueuedEvent
@@ -482,11 +487,13 @@ export async function requestRuntimeControl(
                                     ? decodeSessionsQueriedEvent(raw)
                                     : command.kind === "session.restore" && kind === "session.restored"
                                       ? decodeSessionRestoredEvent(raw)
-                                      : command.kind === "session.prepare" && kind === "session.ready"
-                                        ? decodeSessionReadyEvent(raw)
-                                        : command.kind === "session.configure" && kind === "session.config.updated"
-                                          ? decodeSessionConfigUpdatedEvent(raw)
-                                          : null;
+                                      : command.kind === "session.close" && kind === "session.closed"
+                                        ? decodeSessionClosedEvent(raw)
+                                        : command.kind === "session.prepare" && kind === "session.ready"
+                                          ? decodeSessionReadyEvent(raw)
+                                          : command.kind === "session.configure" && kind === "session.config.updated"
+                                            ? decodeSessionConfigUpdatedEvent(raw)
+                                            : null;
                     const resolved =
                         result ??
                         (command.kind === "session.preview-history.page.load" &&
