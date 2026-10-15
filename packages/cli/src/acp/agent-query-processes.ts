@@ -1,5 +1,5 @@
 import type { NativeSessionHistory } from "@moxt-ai/mobius-protocol";
-import { withoutHarnessLiveEvents } from "../adapter/harness-adapter.ts";
+import { NullHarnessLiveEventPublisher } from "../adapter/harness-adapter.ts";
 import type { HarnessAdapterRegistry } from "../adapter/harness-adapter-registry.ts";
 import type { AcpContentExternalizer } from "../external-content/acp-content-externalizer.ts";
 import { AcpExecutionError } from "./acp-error.ts";
@@ -21,6 +21,7 @@ export class AgentQueryProcesses {
     readonly #processesByQuery: RetainedAgentProcesses;
     readonly #processes: AgentProcessPool;
     readonly #observer = new NullAcpSessionObserver();
+    readonly #nullLiveEvents = new NullHarnessLiveEventPublisher();
     readonly #store = new MemoryAcpSessionStore();
     readonly #contentExternalizer: AcpContentExternalizer;
 
@@ -53,7 +54,8 @@ export class AgentQueryProcesses {
                     options,
                     () => this.#observer,
                     this.#store,
-                    withoutHarnessLiveEvents(this.#adapters.forAgent(options.agent.id)),
+                    this.#adapters.forAgent(options.agent.id),
+                    this.#nullLiveEvents,
                     this.#contentExternalizer,
                 ),
             {
@@ -143,7 +145,8 @@ export class AgentQueryProcesses {
                     options,
                     () => this.#observer,
                     new MemoryAcpSessionStore(),
-                    withoutHarnessLiveEvents(this.#adapters.forAgent(options.agent.id)),
+                    this.#adapters.forAgent(options.agent.id),
+                    this.#nullLiveEvents,
                     this.#contentExternalizer,
                 ),
             async (runtime) => {
@@ -169,7 +172,8 @@ export class AgentQueryProcesses {
                         options,
                         () => this.#observer,
                         store,
-                        withoutHarnessLiveEvents(adapter),
+                        adapter,
+                        this.#nullLiveEvents,
                         this.#contentExternalizer,
                     ),
                 async (runtime) => {

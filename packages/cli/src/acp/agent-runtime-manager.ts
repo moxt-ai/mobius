@@ -13,7 +13,7 @@ import type {
     SessionStatus,
     SessionStatusChangedEvent,
 } from "@moxt-ai/mobius-protocol";
-import { type HarnessLiveEventSubscription, withoutHarnessLiveEvents } from "../adapter/harness-adapter.ts";
+import { type HarnessLiveEventSubscription, NullHarnessLiveEventPublisher } from "../adapter/harness-adapter.ts";
 import { HarnessAdapterRegistry } from "../adapter/harness-adapter-registry.ts";
 import { AcpContentExternalizer } from "../external-content/acp-content-externalizer.ts";
 import { UnretainedExternalContentStore } from "../external-content/local-external-content-store.ts";
@@ -80,6 +80,7 @@ export class AgentRuntimeManager {
     readonly #queryProcesses: AgentQueryProcesses;
     readonly #executions = new ActiveExecutions();
     readonly #agentSettingsObserver = new NullAcpSessionObserver();
+    readonly #nullLiveEvents = new NullHarnessLiveEventPublisher();
     readonly #adapters: HarnessAdapterRegistry;
     readonly #liveEvents: HarnessLiveEventSubscription;
     readonly #nativeOperations = new Set<string>();
@@ -180,6 +181,7 @@ export class AgentRuntimeManager {
         recovery: AcpSessionRecovery,
         metrics: OperationMetrics = unmeasuredOperationMetrics,
     ): Promise<AgentSession> {
+        const adapter = this.#adapters.forAgent(options.agent.id);
         return await this.#executionProcesses.prepare(options.sessionId, async () => {
             return await this.#startRetainedSessionProcess(
                 options,
@@ -194,7 +196,8 @@ export class AgentRuntimeManager {
                         recovery,
                         () => this.#observer,
                         this.#store,
-                        this.#adapters.forAgent(options.agent.id),
+                        adapter,
+                        adapter,
                         metrics,
                         this.#contentExternalizer,
                     ),
@@ -208,6 +211,7 @@ export class AgentRuntimeManager {
         recovery: AcpSessionRecovery,
         metrics: OperationMetrics,
     ): Promise<AgentSession> {
+        const adapter = this.#adapters.forAgent(options.agent.id);
         return await this.#executionProcesses.prepare(options.sessionId, async () => {
             await this.#retireSessionProcess(
                 options.sessionId,
@@ -223,7 +227,8 @@ export class AgentRuntimeManager {
                         recovery,
                         () => this.#observer,
                         this.#store,
-                        this.#adapters.forAgent(options.agent.id),
+                        adapter,
+                        adapter,
                         metrics,
                         this.#contentExternalizer,
                     ),
@@ -233,6 +238,7 @@ export class AgentRuntimeManager {
 
     async #replaceExecutionPreparation(existing: AgentSession, options: AcpPrepareOptions): Promise<AgentSession> {
         const desiredConfigOptions = existing.prepared().configOptions;
+        const adapter = this.#adapters.forAgent(options.agent.id);
         return await this.#executionProcesses.prepare(options.sessionId, async () => {
             await this.#retireSessionProcess(options.sessionId, existing, async () => await existing.close());
             const runtime = await this.#startRetainedSessionProcess(
@@ -243,7 +249,8 @@ export class AgentRuntimeManager {
                         { kind: "interactive-only" },
                         () => this.#observer,
                         this.#store,
-                        this.#adapters.forAgent(options.agent.id),
+                        adapter,
+                        adapter,
                         unmeasuredOperationMetrics,
                         this.#contentExternalizer,
                     ),
@@ -371,6 +378,7 @@ export class AgentRuntimeManager {
         options: AcpAgentSettingsInspectionOptions,
     ): Promise<AcpAgentSettingsSnapshot> =>
         this.#operations.run(options, async (options) => {
+            const adapter = this.#adapters.forAgent(options.agent.id);
             return await this.#processes.runTransient(
                 options.signal,
                 async () =>
@@ -382,7 +390,8 @@ export class AgentRuntimeManager {
                         { kind: "interactive-only" },
                         () => this.#agentSettingsObserver,
                         new MemoryAcpSessionStore(),
-                        withoutHarnessLiveEvents(this.#adapters.forAgent(options.agent.id)),
+                        adapter,
+                        this.#nullLiveEvents,
                         unmeasuredOperationMetrics,
                         this.#contentExternalizer,
                     ),
