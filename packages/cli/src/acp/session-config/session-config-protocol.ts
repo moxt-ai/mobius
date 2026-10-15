@@ -195,6 +195,7 @@ export function normalizeConfigOptions(value: unknown, modes: unknown): readonly
         }
         const currentValue = truncate(readString(modes["currentModeId"]), 500);
         if (
+            values.length > 1 &&
             currentValue.length > 0 &&
             values.some((entry) => entry.value === currentValue) &&
             !normalized.some((entry) => entry.category === "mode") &&

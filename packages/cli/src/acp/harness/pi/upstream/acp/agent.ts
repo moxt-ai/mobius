@@ -1412,8 +1412,9 @@ function buildConfigOptions(state: {
         currentModeId: string;
     };
 }): SessionConfigOption[] {
-    const configOptions: SessionConfigOption[] = [
-        {
+    const configOptions: SessionConfigOption[] = [];
+    if (state.modes.availableModes.length > 1) {
+        configOptions.push({
             type: "select",
             id: THOUGHT_LEVEL_CONFIG_ID,
             category: "thought_level",
@@ -1425,8 +1426,8 @@ function buildConfigOptions(state: {
                 name: thinkingLevelName(mode.id),
                 description: mode.description ?? null,
             })),
-        },
-    ];
+        });
+    }
 
     if (state.models?.availableModels.length) {
         configOptions.unshift({

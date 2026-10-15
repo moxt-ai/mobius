@@ -15,7 +15,7 @@ import { withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 import { fakeProviderPrompts } from "../support/llm/scenarios.ts";
 
-test("Given real Pi exposes thinking levels, When a session is prepared, Then the daemon exposes one clearly labeled Thinking control", async () => {
+test("Given real Pi only supports disabled thinking, When a session is prepared, Then the daemon omits the non-configurable Thinking control", async () => {
     await using provider = await FakeOpenAiProvider.start("gpt-4.1", "REAL_PI_REPLY");
     await using agent = await PiFixture.create(provider);
     await withRealDaemon(new PiAgentSpecification(), agent.environment, async (peer) => {
@@ -42,13 +42,7 @@ test("Given real Pi exposes thinking levels, When a session is prepared, Then th
                 continue;
             }
             expect(ready.configOptions.filter((option) => option.category === "mode")).toEqual([]);
-            expect(ready.configOptions.filter((option) => option.category === "thought_level")).toEqual([
-                expect.objectContaining({
-                    currentValue: "off",
-                    name: "Thinking",
-                    values: expect.arrayContaining([expect.objectContaining({ name: "Off", value: "off" })]),
-                }),
-            ]);
+            expect(ready.configOptions.filter((option) => option.category === "thought_level")).toEqual([]);
             break;
         }
     });
