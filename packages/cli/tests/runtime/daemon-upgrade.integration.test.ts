@@ -208,8 +208,15 @@ describe("Daemon server-requested upgrade", () => {
             const control = await openMobiusControlInstallation(signal, environment);
             const manager = await readFile(join(control.stateDirectory, "manager.lock"), "utf8");
             const originalWorker = await readFile(join(control.stateDirectory, "worker.lock"), "utf8");
+            // A leftover file, even with a live PID, must not block this process.
+            await writeFile(join(control.stateDirectory, "upgrade.lock"), String(process.pid));
             request("upgrade_missing", "99.99.99");
             expect((await next()).outcome.status).toBe("accepted");
+            request("upgrade_concurrent", good);
+            expect(await next()).toMatchObject({
+                requestId: "upgrade_concurrent",
+                outcome: { status: "rejected", code: "upgrade_busy" },
+            });
             expect(await next()).toMatchObject({
                 requestId: "upgrade_missing",
                 outcome: { status: "failed", code: "npm_install_failed" },

@@ -10,10 +10,13 @@ import { z } from "zod";
 import packageMetadata from "../package.json" with { type: "json" };
 import type { AuditStore } from "./audit/audit-store.ts";
 import { lifecycleResponse } from "./daemon-lifecycle-protocol.ts";
-import { acquireManagerLock, isNodeError, sendLocalRequest } from "./daemon-local-control.ts";
+import { isNodeError, sendLocalRequest } from "./daemon-local-control.ts";
 import { readSwitchState, waitForSwitchResult, writePrivateJson } from "./daemon-switch-state.ts";
 import { DaemonUpgradeError, installDaemonRelease } from "./daemon-upgrade-package.ts";
 import { openMobiusControlInstallation } from "./pairing/pair-local-machine.ts";
+
+// Shared by every Relay connection in this working process.
+let upgradeInProgress = false;
 
 const pendingUpgrade = z.object({ request: runtimeUpgradeRequestSchema, relayKey: z.string() }).readonly();
 const relayKey = (url: URL): string => createHash("sha256").update(url.href).digest("hex");
@@ -91,13 +94,13 @@ export async function requestDaemonUpgrade(
         reject("manager_required", "This daemon must be started by its manager to upgrade");
         return;
     }
-    const control = await openMobiusControlInstallation(signal, process.env);
-    const release = await acquireManagerLock(control.stateDirectory, "upgrade.lock");
-    if (release === null) {
+    if (upgradeInProgress) {
         reject("upgrade_busy", "Another upgrade is already in progress");
         return;
     }
+    upgradeInProgress = true;
     try {
+        const control = await openMobiusControlInstallation(signal, process.env);
         const transition = await readSwitchState(control.stateDirectory);
         if (transition?.kind === "rolled-back" && transition.retryAfter > Date.now()) {
             reject("upgrade_cooldown", "Upgrades are blocked for one hour after a failed start", transition.retryAfter);
@@ -150,6 +153,6 @@ export async function requestDaemonUpgrade(
         });
         reply({ status: "failed", code, message, retryAfter: 0 });
     } finally {
-        await release();
+        upgradeInProgress = false;
     }
 }
