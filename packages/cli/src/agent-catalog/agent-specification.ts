@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { ClientConnection, InitializeResponse } from "@agentclientprotocol/sdk";
 
 import type { InProcessAcpEndpointFactory } from "../acp/in-process/acp-endpoint.ts";
-import { type ResolvedExecutable, resolveExecutablePath } from "../process/executable.ts";
+import { type ResolvedExecutable, resolveExecutablePath } from "../util/process/executable.ts";
 import type { LocalAgentDiscoveryContext } from "./agent-discovery-context.ts";
 import { normalizeVersionOutput } from "./version-output.ts";
 

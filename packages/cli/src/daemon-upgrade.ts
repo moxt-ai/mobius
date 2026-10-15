@@ -5,7 +5,6 @@ import {
     runtimeUpgradeRequestSchema,
 } from "@moxt-ai/mobius-protocol";
 import packageMetadata from "../package.json" with { type: "json" };
-import type { AuditStore } from "./audit/audit-store.ts";
 import { lifecycleResponse } from "./daemon-lifecycle-protocol.ts";
 import { sendLocalRequest } from "./daemon-local-control.ts";
 import { readSwitchStatus } from "./daemon-switch-status.ts";
@@ -62,7 +61,6 @@ export async function reportDaemonUpgrade(
 export async function requestDaemonUpgrade(
     request: RuntimeUpgradeRequest,
     relayUrl: URL,
-    audit: AuditStore,
     send: (result: RuntimeUpgradeResult) => void,
     signal: AbortSignal,
 ): Promise<void> {
@@ -103,12 +101,6 @@ export async function requestDaemonUpgrade(
             reply({ status: "succeeded" });
             return;
         }
-        audit.record({
-            event: "runtime_upgrade_requested",
-            commandId: request.requestId,
-            sessionId: "runtime",
-            details: { version: request.version },
-        });
         reply({ status: "accepted" });
         const launch = await installDaemonRelease(request.version, signal);
         const response = lifecycleResponse.parse(
@@ -130,12 +122,6 @@ export async function requestDaemonUpgrade(
         const code = cause instanceof DaemonUpgradeError ? cause.code : "upgrade_failed";
         const message =
             cause instanceof DaemonUpgradeError ? cause.message : "The daemon upgrade could not be prepared";
-        audit.record({
-            event: "runtime_upgrade_failed",
-            commandId: request.requestId,
-            sessionId: "runtime",
-            details: { code },
-        });
         reply({ status: "failed", code, message, retryAfter: 0 });
     } finally {
         upgradeInProgress = false;

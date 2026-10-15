@@ -6,7 +6,6 @@ import {
 import { WebSocket } from "undici";
 import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp/agent-runtime-manager.ts";
 import { LocalAgentCatalogError } from "./agent-catalog/local-agent.ts";
-import type { AuditStore } from "./audit/audit-store.ts";
 import { LocalAuthorizationError } from "./authorization/local-authorization-error.ts";
 import type { DurationMetric } from "./infra/operation-metrics.ts";
 import { PromptArtifactError } from "./prompt-artifact-resolver.ts";
@@ -33,7 +32,6 @@ export function send(socket: WebSocket, message: DaemonToServiceMessage): void {
 export async function settleAbandonedTurn(
     projection: DaemonSessionEventProjectionV2,
     operations: DaemonOperationState,
-    audit: AuditStore,
     cancellation: SessionCancelCommand,
 ): Promise<void> {
     const attemptId = operations.findUnsettledAttemptId(cancellation.commandId, cancellation.sessionId);
@@ -41,11 +39,6 @@ export async function settleAbandonedTurn(
         console.warn("Mobius daemon ignored cancellation for an inactive turn");
         return;
     }
-    audit.record({
-        commandId: cancellation.commandId,
-        event: "session_abandoned_turn_settled",
-        sessionId: cancellation.sessionId,
-    });
     await projection.failed(
         cancellation.sessionId,
         cancellation.commandId,

@@ -8,7 +8,6 @@ import type {
 import type { WebSocket } from "undici";
 import { AcpExecutionError } from "./acp/acp-error.ts";
 import type { AcpSessionRecovery, AgentRuntimeManager } from "./acp/agent-runtime-manager.ts";
-import type { AuditStore } from "./audit/audit-store.ts";
 import { resolveSessionDirectories } from "./authorization/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
 import type { AcpAgentDefinition, DaemonConfig } from "./config.ts";
@@ -31,7 +30,6 @@ async function prepareSession(
     recovery: AcpSessionRecovery,
     config: DaemonConfig,
     directories: WorkspaceDirectoryService,
-    audit: AuditStore,
     sessions: AgentRuntimeManager,
     metrics: AccumulatingOperationMetrics,
     signal: AbortSignal,
@@ -82,18 +80,6 @@ async function prepareSession(
             "workspace-list",
             async () => await directories.list(config.bindingId, command.directoryId, signal),
         );
-        audit.record({
-            commandId: command.requestId,
-            event: "session_prepared",
-            sessionId: command.sessionId,
-        });
-        if (command.configuration !== undefined) {
-            audit.record({
-                commandId: command.requestId,
-                event: "session_configured",
-                sessionId: command.sessionId,
-            });
-        }
         return {
             additionalDirectories: resolved.additionalDirectoryEntries,
             agentId: command.agentId,
@@ -116,16 +102,10 @@ export async function executeWorkspaceList(
     socket: WebSocket,
     command: WorkspaceListCommand,
     directories: WorkspaceDirectoryService,
-    audit: AuditStore,
     signal: AbortSignal,
 ): Promise<void> {
     try {
         const listing = await directories.list(command.bindingId, command.directoryId, signal);
-        audit.record({
-            commandId: command.requestId,
-            event: "workspace_list_authorized",
-            sessionId: "workspace-browser",
-        });
         send(socket, {
             bindingId: command.bindingId,
             directoryId: listing.directoryId,
@@ -145,7 +125,6 @@ export async function executeSessionPrepare(
     command: SessionPrepareCommand,
     config: DaemonConfig,
     directories: WorkspaceDirectoryService,
-    audit: AuditStore,
     sessions: AgentRuntimeManager,
     diagnostics: RelayConnectionDiagnostics,
     signal: AbortSignal,
@@ -157,7 +136,6 @@ export async function executeSessionPrepare(
             { kind: "interactive-only" },
             config,
             directories,
-            audit,
             sessions,
             metrics,
             signal,
@@ -177,15 +155,6 @@ export async function executeSessionPrepare(
             },
             error,
         );
-        audit.record({
-            commandId: command.requestId,
-            details: {
-                agentId: command.agentId,
-                code: operationErrorCode(error),
-            },
-            event: "session_prepare_failed",
-            sessionId: command.sessionId,
-        });
         reportOperationFailure(socket, command.requestId, command.sessionId, error, metrics.snapshot());
     }
 }
@@ -195,7 +164,6 @@ export async function executeSessionRestore(
     command: SessionRestoreCommand,
     config: DaemonConfig,
     directories: WorkspaceDirectoryService,
-    audit: AuditStore,
     sessions: AgentRuntimeManager,
     nativeSessions: NativeSessionService,
     diagnostics: RelayConnectionDiagnostics,
@@ -224,7 +192,6 @@ export async function executeSessionRestore(
             { kind: "history-required" },
             config,
             directories,
-            audit,
             sessions,
             metrics,
             signal,
@@ -245,12 +212,6 @@ export async function executeSessionRestore(
             },
             error,
         );
-        audit.record({
-            commandId: command.requestId,
-            details: { code: operationErrorCode(error) },
-            event: "session_restore_failed",
-            sessionId: command.sessionId,
-        });
         reportOperationFailure(socket, command.requestId, command.sessionId, error, metrics.snapshot());
     }
 }
@@ -260,7 +221,6 @@ export async function executeSessionConfigure(
     command: SessionConfigureCommand,
     config: DaemonConfig,
     directories: WorkspaceDirectoryService,
-    audit: AuditStore,
     sessions: AgentRuntimeManager,
     signal: AbortSignal,
 ): Promise<void> {
@@ -283,11 +243,6 @@ export async function executeSessionConfigure(
             signal,
             value: command.value,
             valueType: command.valueType,
-        });
-        audit.record({
-            commandId: command.requestId,
-            event: "session_configured",
-            sessionId: command.sessionId,
         });
         send(socket, {
             configOptions,

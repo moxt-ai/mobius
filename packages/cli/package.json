@@ -1,6 +1,6 @@
 {
     "name": "@moxt-ai/mobius",
-    "version": "0.0.229",
+    "version": "0.0.230",
     "description": "Mobius CLI for pairing and running local AI agent services.",
     "type": "module",
     "bin": {
@@ -10,7 +10,7 @@
     "exports": {
         ".": "./src/index.ts",
         "./runtime": "./src/runtime.ts",
-        "./process": "./src/process/executable.ts",
+        "./process": "./src/util/process/executable.ts",
         "./filesystem": "./src/filesystem/private-path.ts"
     },
     "files": [
@@ -34,9 +34,9 @@
                 "default": "./dist/runtime.js"
             },
             "./process": {
-                "types": "./dist/process/executable.d.ts",
-                "import": "./dist/process/executable.js",
-                "default": "./dist/process/executable.js"
+                "types": "./dist/util/process/executable.d.ts",
+                "import": "./dist/util/process/executable.js",
+                "default": "./dist/util/process/executable.js"
             },
             "./filesystem": {
                 "types": "./dist/filesystem/private-path.d.ts",
@@ -52,7 +52,7 @@
     },
     "scripts": {
         "prebuild": "tsc --project src/acp/harness/claude/upstream/tsconfig.json && tsc --project src/acp/harness/pi/upstream/tsconfig.json",
-        "build": "tsc --project tsconfig.build.json && esbuild src/cli.ts src/index.ts src/runtime.ts src/process/executable.ts src/filesystem/private-path.ts --bundle --platform=node --format=esm --sourcemap --outdir=dist --external:@agentclientprotocol/sdk --external:undici",
+        "build": "tsc --project tsconfig.build.json && esbuild src/cli.ts src/index.ts src/runtime.ts src/util/process/executable.ts src/filesystem/private-path.ts --bundle --platform=node --format=esm --sourcemap --outdir=dist --external:@agentclientprotocol/sdk --external:undici",
         "dev": "node --watch src/cli.ts",
         "pretypecheck": "tsc --project src/acp/harness/claude/upstream/tsconfig.json && tsc --project src/acp/harness/pi/upstream/tsconfig.json",
         "prepack": "pnpm build",

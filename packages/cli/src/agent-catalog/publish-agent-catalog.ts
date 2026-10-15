@@ -1,8 +1,8 @@
 import { fetch } from "undici";
 
 import type { DaemonConfig } from "../config.ts";
-import { environmentProxyDispatcher } from "../network/environment-proxy.ts";
 import { relayHttpEndpoint, runtimeAuthorization } from "../relay-connection/runtime-authentication.ts";
+import { environmentProxyDispatcher } from "../util/network/environment-proxy.ts";
 
 const CATALOG_UPDATE_TIMEOUT_MILLISECONDS = 20_000;
 type FetchResponse = Awaited<ReturnType<typeof fetch>>;

@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { executableLaunch } from "../../../src/process/executable.ts";
+import { executableLaunch } from "../../../src/util/process/executable.ts";
 import { FakeOpenAiProvider } from "../llm/openai.ts";
 import { resolveTestExecutable } from "./executable.ts";
 

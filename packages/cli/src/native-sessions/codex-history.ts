@@ -17,7 +17,7 @@ import {
     platformSpawnOptions,
     revalidateExecutable,
     stopProcessTree,
-} from "../process/executable.ts";
+} from "../util/process/executable.ts";
 import { embedLocalHistoryImages } from "./history-images.ts";
 
 const responseSchema = z.union([

@@ -1,5 +1,5 @@
 import { writeFile } from "node:fs/promises";
-import { executableLaunch } from "../../../src/process/executable.ts";
+import { executableLaunch } from "../../../src/util/process/executable.ts";
 import type { CodexFixture } from "./codex.ts";
 
 /** Forward the real process protocol; inject a single transport fault selected by the test. */

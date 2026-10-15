@@ -13,7 +13,6 @@ import { AcpExecutionError, type AcpPrepareOptions, type AgentRuntimeManager } f
 import type { NativeSessionInfo } from "../acp/native-session.ts";
 import { nativeSessionIdSchema } from "../acp/native-session.ts";
 import type { AcpStoredSession } from "../acp/session-store.ts";
-import type { AuditStore } from "../audit/audit-store.ts";
 import { LocalAuthorizationError } from "../authorization/local-authorization-error.ts";
 import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
 import type { DaemonConfig } from "../config.ts";
@@ -68,7 +67,6 @@ export class NativeSessionService {
     readonly #config: DaemonConfig;
     readonly #directories: WorkspaceDirectoryService;
     readonly #sessions: AgentRuntimeManager;
-    readonly #audit: AuditStore;
     readonly #activeTurn: (
         command: Extract<NativeSessionCommand, { readonly action: "active-turn" }>,
         options: AcpPrepareOptions,
@@ -78,7 +76,6 @@ export class NativeSessionService {
         config: DaemonConfig,
         directories: WorkspaceDirectoryService,
         sessions: AgentRuntimeManager,
-        audit: AuditStore,
         activeTurn: (
             command: Extract<NativeSessionCommand, { readonly action: "active-turn" }>,
             options: AcpPrepareOptions,
@@ -87,7 +84,6 @@ export class NativeSessionService {
         this.#config = config;
         this.#directories = directories;
         this.#sessions = sessions;
-        this.#audit = audit;
         this.#activeTurn = activeTurn;
     }
 
@@ -113,7 +109,6 @@ export class NativeSessionService {
         };
         if (command.action === "active-turn") {
             nativeSessionIdSchema.parse(command.targetSessionId);
-            this.record(command, "active_turn_read");
             return {
                 action: "active-turn",
                 kind: "native.session.result",
@@ -206,7 +201,6 @@ export class NativeSessionService {
                     cursor: page.nextCursor,
                 });
             }
-            this.record(command, "native_sessions_listed");
             return {
                 ...envelope,
                 action: "list",
@@ -225,7 +219,6 @@ export class NativeSessionService {
                 if (found !== undefined) {
                     const entry = await register(found);
                     if (entry !== null) {
-                        this.record(command, "native_session_found");
                         return { ...envelope, action: "find", entry };
                     }
                     break;
@@ -310,7 +303,6 @@ export class NativeSessionService {
             restored: true,
             sessionId: opened.sessionId,
         };
-        this.record(command, action === "fork" ? "native_session_forked" : "native_session_imported");
         return {
             ...envelope,
             action,
@@ -442,14 +434,5 @@ export class NativeSessionService {
             {},
             "native_session_not_found",
         );
-    };
-
-    private readonly record = (command: NativeSessionCommand, event: string): void => {
-        this.#audit.record({
-            commandId: command.requestId,
-            sessionId: command.sessionId,
-            event,
-            details: { agentId: command.agentId },
-        });
     };
 }

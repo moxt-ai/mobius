@@ -11,7 +11,7 @@ import { PiAcpEndpoint } from "../../acp/harness/pi/endpoint.ts";
 import type { InProcessAcpEndpointFactory } from "../../acp/in-process/acp-endpoint.ts";
 import { validateManagedNpmPackage } from "../../agent-installation/managed-npm-package.ts";
 import { PI_AGENT_PACKAGE } from "../../agent-installation/pi-managed-packages.ts";
-import type { ResolvedExecutable } from "../../process/executable.ts";
+import type { ResolvedExecutable } from "../../util/process/executable.ts";
 import { AgentProbeError } from "../agent-probe-error.ts";
 import { InProcessAcpAgentDefinition } from "../agent-specification.ts";
 

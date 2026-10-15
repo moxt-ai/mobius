@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import type { SessionConfigOption, SessionConfigurationSelection } from "@moxt-ai/mobius-protocol";
 import { applyAgentLaunchSettings } from "../../agent-catalog/agent-settings-adapter.ts";
 import type { AcpAgentDefinition } from "../../agent-catalog/local-agent.ts";
-import type { AuditStore } from "../../audit/audit-store.ts";
 import { AcpExecutionError, type AgentRuntimeManager } from "../agent-runtime-manager.ts";
 
 function invalidSessionConfiguration(message: string): AcpExecutionError {
@@ -109,7 +108,6 @@ function unavailableSessionConfigurationCategory(selection: SessionConfiguration
 
 async function applySessionConfigurationSelection(
     sessions: AgentRuntimeManager,
-    audit: AuditStore,
     options: readonly SessionConfigOption[],
     selection: SessionConfigurationSelection,
     agent: AcpAgentDefinition,
@@ -122,7 +120,6 @@ async function applySessionConfigurationSelection(
     const option = options.find((candidate) => candidate.id === selection.configId);
     if (option === undefined) {
         warnIgnoredSetting(
-            audit,
             "session_configuration_setting_ignored",
             commandId,
             sessionId,
@@ -135,7 +132,6 @@ async function applySessionConfigurationSelection(
     }
     if (option.type !== selection.valueType) {
         warnIgnoredSetting(
-            audit,
             "session_configuration_setting_ignored",
             commandId,
             sessionId,
@@ -151,7 +147,6 @@ async function applySessionConfigurationSelection(
         (option.type === "select" && selection.booleanValue)
     ) {
         warnIgnoredSetting(
-            audit,
             "session_configuration_setting_ignored",
             commandId,
             sessionId,
@@ -164,7 +159,6 @@ async function applySessionConfigurationSelection(
     }
     if (option.type === "select" && !option.values.some((value) => value.value === selection.value)) {
         warnIgnoredSetting(
-            audit,
             "session_configuration_setting_ignored",
             commandId,
             sessionId,
@@ -194,7 +188,6 @@ async function applySessionConfigurationSelection(
 
 export async function applyCompleteSessionConfiguration(
     sessions: AgentRuntimeManager,
-    audit: AuditStore,
     initialOptions: readonly SessionConfigOption[],
     selections: readonly SessionConfigurationSelection[],
     agent: AcpAgentDefinition,
@@ -213,7 +206,6 @@ export async function applyCompleteSessionConfiguration(
     for (const selection of orderedSelections) {
         options = await applySessionConfigurationSelection(
             sessions,
-            audit,
             options,
             selection,
             agent,
@@ -228,7 +220,6 @@ export async function applyCompleteSessionConfiguration(
 }
 
 function warnIgnoredSetting(
-    audit: AuditStore,
     event: string,
     commandId: string,
     sessionId: string,
@@ -244,6 +235,5 @@ function warnIgnoredSetting(
         reason,
         requestedValue: selection.value,
     };
-    audit.record({ commandId, details, event, sessionId });
     process.stderr.write(`Mobius daemon warning ${JSON.stringify({ commandId, event, sessionId, ...details })}\n`);
 }

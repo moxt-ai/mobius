@@ -5,7 +5,6 @@ import {
     AcpExecutionError,
     type AgentRuntimeManager,
 } from "../acp/agent-runtime-manager.ts";
-import type { AuditStore } from "../audit/audit-store.ts";
 import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
 import type { DaemonConfig } from "../config.ts";
 import {
@@ -21,7 +20,6 @@ import { discoverAgentSettings } from "./discover-agent-settings.ts";
 interface SettingsDiscoveryDependencies {
     readonly config: DaemonConfig;
     readonly directories: WorkspaceDirectoryService;
-    readonly audit: AuditStore;
     readonly sessions: AgentRuntimeManager;
     readonly diagnostics: RelayConnectionDiagnostics;
     readonly socket: WebSocket;
@@ -30,7 +28,7 @@ interface SettingsDiscoveryDependencies {
 }
 
 export function createAgentSettingsDiscoveryHandler(dependencies: SettingsDiscoveryDependencies) {
-    const { config, directories, audit, sessions, diagnostics, socket, signal, timer } = dependencies;
+    const { config, directories, sessions, diagnostics, socket, signal, timer } = dependencies;
     const agentSettingsDiscoveries = new Map<
         string,
         {
@@ -97,27 +95,12 @@ export function createAgentSettingsDiscoveryHandler(dependencies: SettingsDiscov
                 const result = await discoverAgentSettings(command, config, directories, sessions, operationSignal);
                 for (const diagnostic of result.unsupportedModels) {
                     const details = agentSettingsFailureDetails(command.agentId, diagnostic);
-                    audit.record({
-                        commandId: command.requestId,
-                        details,
-                        event: "agent_settings_model_unsupported",
-                        sessionId: `agent-settings:${command.agentId}`,
-                    });
                     diagnostics.daemonDiagnostic("agent_settings_model_unsupported", command.requestId, details);
                     process.stderr.write(
                         `Mobius daemon diagnostic ${JSON.stringify({ event: "agent_settings_model_unsupported", requestId: command.requestId, ...details })}\n`,
                     );
                 }
                 for (const requestId of requestIds) {
-                    audit.record({
-                        commandId: requestId,
-                        details: {
-                            agentId: command.agentId,
-                            unsupportedModelCount: result.unsupportedModels.length.toString(),
-                        },
-                        event: "agent_settings_discovered",
-                        sessionId: `agent-settings:${command.agentId}`,
-                    });
                     if (socket.readyState === WebSocket.OPEN) {
                         send(socket, { ...result.event, requestId });
                     }
@@ -132,14 +115,6 @@ export function createAgentSettingsDiscoveryHandler(dependencies: SettingsDiscov
                       ))
                     : error;
                 const details = agentSettingsFailureDetails(command.agentId, failure);
-                for (const requestId of requestIds) {
-                    audit.record({
-                        commandId: requestId,
-                        details,
-                        event: "agent_settings_discovery_failed",
-                        sessionId: `agent-settings:${command.agentId}`,
-                    });
-                }
                 diagnostics.daemonDiagnostic("agent_settings_discovery_failed", command.requestId, details, failure);
                 if (failure instanceof AcpConfigurationValueUnavailableError) {
                     process.stderr.write(

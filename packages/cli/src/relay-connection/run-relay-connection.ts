@@ -7,7 +7,6 @@ import {
 import { type MessageEvent, WebSocket } from "undici";
 import type { AgentRuntimeManager } from "../acp/agent-runtime-manager.ts";
 import type { AgentInstallationManager } from "../agent-installation/agent-installation-manager.ts";
-import type { AuditStore } from "../audit/audit-store.ts";
 import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
 import type { DaemonConfig } from "../config.ts";
 import { createDaemonCommandHandler } from "../daemon-command-handler.ts";
@@ -42,7 +41,6 @@ function closeRelaySocket(socket: WebSocket, code: number, reason: string): void
 export interface RelayConnectionOptions {
     readonly config: DaemonConfig;
     readonly directories: WorkspaceDirectoryService;
-    readonly audit: AuditStore;
     readonly sessions: AgentRuntimeManager;
     readonly installations: AgentInstallationManager;
     readonly installationObserver: DaemonInstallationObserver;
@@ -62,7 +60,6 @@ export interface RelayConnectionOptions {
 export async function runRelayConnection({
     config,
     directories,
-    audit,
     sessions,
     installations,
     installationObserver,
@@ -86,7 +83,6 @@ export async function runRelayConnection({
     const commands = createDaemonCommandHandler({
         config,
         directories,
-        audit,
         sessions,
         installations,
         nativeSessions,

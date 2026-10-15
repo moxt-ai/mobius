@@ -1,6 +1,5 @@
-import type { AuditStore } from "../audit/audit-store.ts";
 import type { DaemonDiagnosticLog } from "../daemon-diagnostic-log.ts";
-import { describeEnvironmentProxyRoute } from "../network/environment-proxy.ts";
+import { describeEnvironmentProxyRoute } from "../util/network/environment-proxy.ts";
 
 const MAX_DIAGNOSTIC_TEXT_LENGTH = 256;
 
@@ -48,7 +47,6 @@ function addFailureDetails(details: Record<string, string>, failure: unknown): v
 }
 
 export class RelayConnectionDiagnostics {
-    readonly #audit: AuditStore;
     readonly #channelId: string;
     readonly #localLog: DaemonDiagnosticLog;
     #lastClosedEpoch = 0;
@@ -56,8 +54,7 @@ export class RelayConnectionDiagnostics {
     readonly #relayOrigin: string;
     readonly #route: Readonly<Record<string, string>>;
 
-    constructor(audit: AuditStore, channelId: string, relayUrl: URL, localLog: DaemonDiagnosticLog) {
-        this.#audit = audit;
+    constructor(channelId: string, relayUrl: URL, localLog: DaemonDiagnosticLog) {
         this.#channelId = channelId;
         this.#localLog = localLog;
         this.#relayOrigin = relayUrl.origin;
@@ -69,7 +66,7 @@ export class RelayConnectionDiagnostics {
     readonly catalogFailed = (failure: unknown): void => {
         const details: Record<string, string> = { ...this.#route, relayOrigin: this.#relayOrigin };
         addFailureDetails(details, failure);
-        this.#record("agent_catalog_publish_failed", "catalog", details, true);
+        this.#record("agent_catalog_publish_failed", details, true);
     };
 
     readonly connectionClosed = (connectionEpoch: number, code: number, reason: string, source: string): void => {
@@ -79,7 +76,6 @@ export class RelayConnectionDiagnostics {
         this.#lastClosedEpoch = connectionEpoch;
         this.#record(
             "relay_connection_closed",
-            connectionEpoch.toString(),
             {
                 closeCode: code.toString(),
                 closeReason: sanitizeDiagnosticText(reason),
@@ -104,13 +100,12 @@ export class RelayConnectionDiagnostics {
             ...this.#route,
         };
         addFailureDetails(details, failure);
-        this.#record("relay_connection_failed", connectionEpoch.toString(), details, true);
+        this.#record("relay_connection_failed", details, true);
     };
 
     readonly connectionOpened = (connectionEpoch: number): void => {
         this.#record(
             "relay_connection_opened",
-            connectionEpoch.toString(),
             {
                 connectionEpoch: connectionEpoch.toString(),
                 relayOrigin: this.#relayOrigin,
@@ -123,7 +118,6 @@ export class RelayConnectionDiagnostics {
     readonly heartbeatTimedOut = (connectionEpoch: number, heartbeatId: string, timeoutMilliseconds: number): void => {
         this.#record(
             "relay_heartbeat_timed_out",
-            connectionEpoch.toString(),
             {
                 connectionEpoch: connectionEpoch.toString(),
                 heartbeatId,
@@ -156,18 +150,7 @@ export class RelayConnectionDiagnostics {
         );
     };
 
-    readonly #record = (
-        event: string,
-        commandId: string,
-        details: Readonly<Record<string, string>>,
-        warning: boolean,
-    ): void => {
-        this.#audit.record({
-            commandId,
-            details,
-            event,
-            sessionId: this.#channelId,
-        });
+    readonly #record = (event: string, details: Readonly<Record<string, string>>, warning: boolean): void => {
         const encoded = JSON.stringify({
             timestamp: new Date().toISOString(),
             channelId: this.#channelId,

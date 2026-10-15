@@ -25,7 +25,6 @@ import {
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
 } from "../../../protocol/src/index.ts";
-import { AuditStore } from "../../src/audit/audit-store.ts";
 import { createDaemonConfig, LocalAgentDefinition } from "../../src/config.ts";
 import { RuntimeRelayRevokedError } from "../../src/relay-connection/runtime-revocation.ts";
 import { SESSION_EVENT_V2_BATCH_WINDOW_MILLISECONDS } from "../../src/relay-connection/session-event-publisher.ts";
@@ -280,8 +279,6 @@ describe("daemon relay connection liveness", () => {
             upgradeWaiters.shift()?.();
         });
         await listen(relay);
-
-        const audit = new AuditStore();
         const cancellation = new AbortController();
         const previousCodexPath = process.env["MOBIUS_CODEX_PATH"];
         const previousClaudePath = process.env["MOBIUS_CLAUDE_PATH"];
@@ -306,7 +303,7 @@ describe("daemon relay connection liveness", () => {
         vi.useFakeTimers({ toFake: ["Date", "clearTimeout", "setTimeout"] });
         vi.setSystemTime(new Date("2026-09-04T00:00:00.000Z"));
         const firstConnection = waitForUpgrade();
-        const daemon = runDaemon(config, audit, cancellation.signal);
+        const daemon = runDaemon(config, cancellation.signal);
 
         try {
             await firstConnection;
@@ -360,7 +357,6 @@ describe("daemon relay connection liveness", () => {
             cancellation.abort();
             await vi.runAllTimersAsync();
             await daemon;
-            audit.close();
             for (const socket of sockets) {
                 socket.destroy();
             }
@@ -429,8 +425,6 @@ describe("daemon relay connection liveness", () => {
             resolveUpgrade(socket);
         });
         await listen(relay);
-
-        const audit = new AuditStore();
         const cancellation = new AbortController();
         const previousCodexPath = process.env["MOBIUS_CODEX_PATH"];
         const previousClaudePath = process.env["MOBIUS_CLAUDE_PATH"];
@@ -451,7 +445,7 @@ describe("daemon relay connection liveness", () => {
                 `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/runtime-revoked-channel/daemon`,
             ),
         });
-        const daemon = runDaemon(config, audit, cancellation.signal);
+        const daemon = runDaemon(config, cancellation.signal);
 
         try {
             const socket = await upgraded;
@@ -467,7 +461,6 @@ describe("daemon relay connection liveness", () => {
         } finally {
             cancellation.abort();
             await daemon.catch(() => undefined);
-            audit.close();
             for (const socket of sockets) {
                 socket.destroy();
             }
@@ -555,8 +548,6 @@ describe("daemon relay connection liveness", () => {
             upgradeWaiters.shift()?.();
         });
         await listen(relay);
-
-        const audit = new AuditStore();
         const cancellation = new AbortController();
         const previousCodexPath = process.env["MOBIUS_CODEX_PATH"];
         const previousClaudePath = process.env["MOBIUS_CLAUDE_PATH"];
@@ -579,7 +570,7 @@ describe("daemon relay connection liveness", () => {
         vi.useFakeTimers({ toFake: ["Date", "clearTimeout", "setTimeout"] });
         vi.setSystemTime(new Date("2026-09-04T00:00:00.000Z"));
         const firstConnection = waitForUpgrade();
-        const daemon = runDaemon(config, audit, cancellation.signal);
+        const daemon = runDaemon(config, cancellation.signal);
 
         try {
             await catalogFailure;
@@ -619,7 +610,6 @@ describe("daemon relay connection liveness", () => {
             cancellation.abort();
             await vi.runAllTimersAsync();
             await daemon;
-            audit.close();
             for (const socket of sockets) {
                 socket.destroy();
             }
@@ -740,8 +730,6 @@ describe("daemon relay connection liveness", () => {
             upgradeWaiters.shift()?.();
         });
         await listen(relay);
-
-        const audit = new AuditStore();
         let cancellation = new AbortController();
         const timer = new ControllableDaemonTimer();
         const previousFakeAcpStateDirectory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
@@ -766,7 +754,7 @@ describe("daemon relay connection liveness", () => {
         vi.useFakeTimers({ toFake: ["Date"] });
         vi.setSystemTime(new Date("2026-09-08T00:00:00.000Z"));
         const firstConnection = waitForUpgrade();
-        let daemon = runDaemon(config, audit, cancellation.signal, timer);
+        let daemon = runDaemon(config, cancellation.signal, timer);
 
         try {
             await firstConnection;
@@ -896,7 +884,7 @@ describe("daemon relay connection liveness", () => {
             await daemon;
             cancellation = new AbortController();
             const restarted = waitForUpgrade();
-            daemon = runDaemon(config, audit, cancellation.signal, timer);
+            daemon = runDaemon(config, cancellation.signal, timer);
             await restarted;
             (await timer.waitForTask(SESSION_EVENT_V2_BATCH_WINDOW_MILLISECONDS)).run();
             const freshFrames = clientFrames[2];
@@ -925,7 +913,6 @@ describe("daemon relay connection liveness", () => {
         } finally {
             cancellation.abort();
             await daemon;
-            audit.close();
             for (const socket of sockets) {
                 socket.destroy();
             }

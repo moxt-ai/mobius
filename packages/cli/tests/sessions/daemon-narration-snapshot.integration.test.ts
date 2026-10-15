@@ -18,7 +18,6 @@ import {
 import { listen, port, sendText } from "@moxt-ai/mobius-test/websocket";
 import { describe, expect, it } from "vitest";
 import { LocalAgentDefinition } from "../../src/agent-catalog/local-agent.ts";
-import { AuditStore } from "../../src/audit/audit-store.ts";
 import { createDaemonConfig, DaemonLocalContext } from "../../src/config.ts";
 import { runDaemon } from "../../src/run-daemon.ts";
 
@@ -160,8 +159,7 @@ describe("daemon narration delivery", () => {
             new DaemonLocalContext(stateDirectory),
         );
         const cancellation = new AbortController();
-        const audit = new AuditStore();
-        const daemon = runDaemon(config, audit, cancellation.signal);
+        const daemon = runDaemon(config, cancellation.signal);
 
         try {
             const socket = await socketReady.promise;
@@ -221,7 +219,6 @@ describe("daemon narration delivery", () => {
         } finally {
             cancellation.abort();
             await daemon;
-            audit.close();
             for (const socket of relaySockets) {
                 socket.destroy();
             }

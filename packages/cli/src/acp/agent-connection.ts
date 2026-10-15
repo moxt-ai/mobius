@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { type ClientConnection, ndJsonStream, RequestError } from "@agentclientprotocol/sdk";
 import type { AcpAgentDefinition } from "../config.ts";
-import { executableLaunch, platformSpawnOptions, stopProcessTree } from "../process/executable.ts";
+import { executableLaunch, platformSpawnOptions, stopProcessTree } from "../util/process/executable.ts";
 import { AcpExecutionError } from "./acp-error.ts";
 import { type AcpClientHandler, createAcpClient } from "./create-client.ts";
 import {

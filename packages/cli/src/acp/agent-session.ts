@@ -30,7 +30,7 @@ import type { AcpAgentDefinition } from "../config.ts";
 import type { AcpContentExternalizer } from "../external-content/acp-content-externalizer.ts";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
 import { embedLocalHistoryImages } from "../native-sessions/history-images.ts";
-import { revalidateExecutable } from "../process/executable.ts";
+import { revalidateExecutable } from "../util/process/executable.ts";
 import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp-error.ts";
 import { imageDisplayContent, isProgressMessage, normalizeContentBlock } from "./activity-content.ts";
 import { AgentConnection } from "./agent-connection.ts";

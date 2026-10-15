@@ -15,11 +15,15 @@ import { InstallationManagerError } from "./agent-installation-manager.ts";
 
 export interface FixedInstallationExecutorOptions {
     readonly defaultWorkspace: string;
-    readonly audit: InstallationAudit;
+    readonly audit?: InstallationAudit;
     readonly catalog: LocalAgentCatalog;
     readonly environment: Readonly<NodeJS.ProcessEnv>;
     readonly publishCatalog: (signal: AbortSignal) => Promise<void>;
 }
+
+const nullInstallationAudit: InstallationAudit = {
+    record: () => undefined,
+};
 
 function findSpecification(
     specifications: readonly LocalAgentSpecification[],
@@ -72,7 +76,7 @@ export class FixedInstallationExecutor implements InstallationExecutor {
     ) {
         const defaultWorkspace = resolveDefaultWorkspace(options.defaultWorkspace);
         this.#defaultWorkspace = defaultWorkspace;
-        this.#audit = options.audit;
+        this.#audit = options.audit ?? nullInstallationAudit;
         this.#catalog = options.catalog;
         this.#environment = Object.freeze({ ...options.environment });
         this.#publishCatalog = options.publishCatalog;

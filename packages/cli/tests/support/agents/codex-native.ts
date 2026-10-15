@@ -10,7 +10,6 @@ import {
 import { CodexAcpAgent } from "../../../src/acp/harness/codex/agent.ts";
 import { MemoryAcpSessionStore } from "../../../src/acp/session-store.ts";
 import { InProcessAcpAgentDefinition } from "../../../src/agent-catalog/local-agent.ts";
-import { AuditStore } from "../../../src/audit/audit-store.ts";
 import { WorkspaceDirectoryService } from "../../../src/authorization/workspace-directory.ts";
 import { createDaemonConfig } from "../../../src/config.ts";
 import { NativeSessionService } from "../../../src/native-sessions/service.ts";
@@ -41,7 +40,6 @@ export async function codexFixture(
         acpNativeHistoryReader,
         sessionIdentity,
     );
-    const audit = new AuditStore();
     const config = createDaemonConfig(
         {
             defaultWorkspace: workspace,
@@ -51,7 +49,7 @@ export async function codexFixture(
         [agent],
     );
     const directories = new WorkspaceDirectoryService("workspace", workspace);
-    const service = new NativeSessionService(config, directories, sessions, audit, async () => ({
+    const service = new NativeSessionService(config, directories, sessions, async () => ({
         turn: null,
         queued: [],
     }));
@@ -99,7 +97,6 @@ export async function codexFixture(
     };
     const close = async (): Promise<void> => {
         await sessions.close();
-        audit.close();
         await codex[Symbol.asyncDispose]();
         await provider[Symbol.asyncDispose]();
         await rm(temporary, { recursive: true, force: true });

@@ -24,7 +24,6 @@ import { expect, test } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { CodexAcpAgent } from "../../src/acp/harness/codex/agent.ts";
 import { InProcessAcpAgentDefinition } from "../../src/agent-catalog/local-agent.ts";
-import { AuditStore } from "../../src/audit/audit-store.ts";
 import { createDaemonConfig, DaemonLocalContext } from "../../src/config.ts";
 import { runDaemon } from "../../src/run-daemon.ts";
 import { CodexFixture } from "../support/agents/codex.ts";
@@ -111,8 +110,7 @@ test("Given real Codex dispatches and waits for a subagent, When the turn runs t
         new DaemonLocalContext(stateDirectory),
     );
     const cancellation = new AbortController();
-    const audit = new AuditStore();
-    const daemon = runDaemon(config, audit, cancellation.signal);
+    const daemon = runDaemon(config, cancellation.signal);
 
     try {
         const socket = await connected.promise;
@@ -187,7 +185,6 @@ test("Given real Codex dispatches and waits for a subagent, When the turn runs t
     } finally {
         cancellation.abort();
         await daemon;
-        audit.close();
         for (const socket of websocketServer.clients) {
             socket.terminate();
         }

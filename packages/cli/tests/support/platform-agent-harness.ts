@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { mobiusApiPath } from "@moxt-ai/mobius-protocol";
 import { MobiusClient, StaticMobiusCredentialProvider } from "@moxt-ai/mobius-sdk/server";
 import * as v from "valibot";
-import { AuditStore } from "../../src/audit/audit-store.ts";
 import { createDaemonConfig, DaemonLocalContext } from "../../src/config.ts";
 import { runDaemon } from "../../src/run-daemon.ts";
 import {
@@ -118,7 +117,7 @@ export async function createFakeAgentHarnessRuntime(options: {
             [],
             localContext,
         );
-        daemon = runDaemon(config, new AuditStore(), signal);
+        daemon = runDaemon(config, signal);
         void daemon.catch((error: unknown) => {
             if (!signal.aborted) {
                 console.error("Controlled Agent harness daemon failed", error);

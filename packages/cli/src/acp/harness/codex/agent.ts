@@ -10,7 +10,7 @@ import {
     type SessionNotification,
 } from "@agentclientprotocol/sdk";
 
-import { captureProcessTree, type ProcessTreeIdentity, stopProcessTree } from "../../../process/executable.ts";
+import { captureProcessTree, type ProcessTreeIdentity, stopProcessTree } from "../../../util/process/executable.ts";
 import { AcpExecutionError } from "../../acp-error.ts";
 import {
     type AcpEndpointTermination,
