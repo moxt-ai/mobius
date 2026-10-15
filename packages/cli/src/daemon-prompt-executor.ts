@@ -1,13 +1,5 @@
-import {
-    AGENT_ACTIVITY_KIND,
-    AGENT_ACTIVITY_NARRATION_KIND,
-    AGENT_MESSAGE_DELTA_KIND,
-    type AgentActivityEvent,
-    type RecordedSessionEvent,
-    type SessionPromptCommand,
-    SessionPromptDisposition,
-} from "@moxt-ai/mobius-protocol";
-import type { AcpActivity } from "./acp/activity.ts";
+import { type SessionPromptCommand, SessionPromptDisposition } from "@moxt-ai/mobius-protocol";
+import type { AcpActivity, AcpActivityNarration } from "./acp/activity.ts";
 import { AcpExecutionError, type AgentRuntimeManager } from "./acp/agent-runtime-manager.ts";
 import {
     agentForSessionConfiguration,
@@ -17,32 +9,11 @@ import {
 import { resolveSessionDirectories } from "./authorization/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
 import type { DaemonConfig } from "./config.ts";
-import type { DaemonTurnCommand } from "./daemon-command-results.ts";
 import { operationErrorCode, operationErrorMessage } from "./daemon-command-results.ts";
 import { resolveCatalogAgent } from "./daemon-session-commands.ts";
 import { resolvePromptArtifacts } from "./prompt-artifact-resolver.ts";
 import type { DaemonOperationState } from "./relay-connection/daemon-operation-state.ts";
 import type { DaemonSessionEventProjectionV2 } from "./session-event-projection-v2.ts";
-
-function daemonActivity(command: DaemonTurnCommand, activity: AcpActivity): AgentActivityEvent {
-    return {
-        activityId: activity.activityId,
-        activityType: activity.activityType,
-        commandId: command.commandId,
-        content: activity.content,
-        detail: activity.detail,
-        input: activity.input,
-        kind: AGENT_ACTIVITY_KIND,
-        locations: activity.locations,
-        name: activity.name,
-        output: activity.output,
-        sequence: activity.sequence,
-        sessionId: command.sessionId,
-        status: activity.status,
-        title: activity.title,
-        toolKind: activity.toolKind,
-    };
-}
 
 export interface ExecutePromptOptions {
     readonly operations: DaemonOperationState;
@@ -61,11 +32,9 @@ export interface ExecutePromptOptions {
         | { readonly kind: "queue-target-unavailable" }
     >;
     readonly signal: AbortSignal;
-    readonly recordTurnEvent: (
-        event:
-            | { readonly kind: typeof AGENT_MESSAGE_DELTA_KIND; readonly messageId: string; readonly text: string }
-            | Exclude<RecordedSessionEvent, { readonly kind: typeof AGENT_MESSAGE_DELTA_KIND }>,
-    ) => RecordedSessionEvent;
+    readonly recordTurnActivity: (activity: AcpActivity) => void;
+    readonly recordTurnNarration: (narration: AcpActivityNarration) => void;
+    readonly recordTurnText: (messageId: string, text: string) => void;
     readonly recordSteeringPrompt: () => boolean;
     readonly cancellationRequested: () => boolean;
 }
@@ -81,7 +50,9 @@ export async function executePrompt({
     activateAttempt,
     waitForSessionAvailability,
     signal,
-    recordTurnEvent,
+    recordTurnActivity,
+    recordTurnNarration,
+    recordTurnText,
     recordSteeringPrompt,
     cancellationRequested,
 }: ExecutePromptOptions): Promise<void> {
@@ -186,18 +157,13 @@ export async function executePrompt({
                 images: attachments.images,
                 lifecycleV2,
                 onActivity: async (activity) => {
-                    recordTurnEvent(daemonActivity(command, activity));
+                    recordTurnActivity(activity);
                 },
                 onNarration: async (increment) => {
-                    recordTurnEvent({
-                        ...increment,
-                        commandId: command.commandId,
-                        sessionId: command.sessionId,
-                        kind: AGENT_ACTIVITY_NARRATION_KIND,
-                    });
+                    recordTurnNarration(increment);
                 },
                 onText: async (text, messageId) => {
-                    recordTurnEvent({ kind: AGENT_MESSAGE_DELTA_KIND, text, messageId });
+                    recordTurnText(messageId, text);
                 },
                 prompt: command.prompt,
                 resources: attachments.resources,

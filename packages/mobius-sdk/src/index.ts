@@ -1,5 +1,4 @@
 export type {
-    AgentActivityEvent,
     AgentContentEvent,
     AgentDisplayContent,
     AgentExecutionConfiguration,

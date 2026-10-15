@@ -1,24 +1,10 @@
 import {
-    decodeAgentDisplayContentValue,
     decodePromptImagesValue,
     decodePromptResourcesValue,
-    decodeRecordedAgentContentValue,
     decodeSessionConfigurationSelections,
 } from "../control-messages.ts";
 import { decodeIdentifier, type Identifier, isIdentifier } from "../identifier.ts";
 import {
-    AGENT_ACTIVITY_DETAIL_LIMIT,
-    AGENT_ACTIVITY_KIND,
-    AGENT_ACTIVITY_LOCATION_LENGTH_LIMIT,
-    AGENT_ACTIVITY_LOCATION_LIMIT,
-    AGENT_ACTIVITY_NARRATION_KIND,
-    AGENT_ACTIVITY_RECORDED_DETAIL_LIMIT,
-    AGENT_ACTIVITY_RECORDED_FIELD_LIMIT,
-    AGENT_MESSAGE_DELTA_KIND,
-    type AgentActivityDetailCapture,
-    type AgentActivityEvent,
-    type AgentActivityNarrationEvent,
-    type AgentMessageDeltaEvent,
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_HEARTBEAT_KIND,
     RUNTIME_LIVENESS_READY_KIND,
@@ -51,24 +37,6 @@ import {
 const DIRECTORY_IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/;
 const MAX_PROMPT_LENGTH = 100_000;
 export const MAX_PROMPT_ATTACHMENT_LENGTH = 6_000_000;
-const MAX_EVENT_TEXT_LENGTH = 100_000;
-const ACTIVITY_TYPES = new Set(["notice", "plan", "progress", "reasoning", "tool"]);
-// Only narrative activities stream incrementally; tools and plans are replaced wholesale.
-const NARRATION_ACTIVITY_TYPES = new Set(["progress", "reasoning"]);
-const ACTIVITY_STATUSES = new Set(["pending", "running", "completed", "failed"]);
-const TOOL_KINDS = new Set([
-    "",
-    "delete",
-    "edit",
-    "execute",
-    "fetch",
-    "move",
-    "other",
-    "read",
-    "search",
-    "switch_mode",
-    "think",
-]);
 
 export class ProtocolMessageError extends Error {
     readonly code = "invalid_protocol_message";
@@ -129,18 +97,6 @@ function readText(value: Readonly<Record<string, unknown>>, key: string, maximum
     return field;
 }
 
-function readAllowedString(
-    value: Readonly<Record<string, unknown>>,
-    key: string,
-    allowedValues: ReadonlySet<string>,
-): string {
-    const field = readText(value, key, 64);
-    if (!allowedValues.has(field)) {
-        throw new ProtocolMessageError(`Invalid value field: ${key}`);
-    }
-    return field;
-}
-
 function readPromptDisposition(value: Readonly<Record<string, unknown>>): string {
     const field = value["disposition"];
     if (field === undefined || field === SessionPromptDisposition.Reject) {
@@ -163,30 +119,6 @@ function readSequence(value: Readonly<Record<string, unknown>>, key: string): nu
     return field;
 }
 
-function readLocations(value: Readonly<Record<string, unknown>>): readonly string[] {
-    const field = value["locations"];
-    if (!Array.isArray(field) || field.length > AGENT_ACTIVITY_LOCATION_LIMIT) {
-        throw new ProtocolMessageError("Invalid locations field");
-    }
-    const locations: string[] = [];
-    const unique = new Set<string>();
-    for (const location of field) {
-        if (
-            typeof location !== "string" ||
-            location.length === 0 ||
-            location.length > AGENT_ACTIVITY_LOCATION_LENGTH_LIMIT
-        ) {
-            throw new ProtocolMessageError("Invalid activity location");
-        }
-        if (unique.has(location)) {
-            throw new ProtocolMessageError("Duplicate activity location");
-        }
-        unique.add(location);
-        locations.push(location);
-    }
-    return locations;
-}
-
 function readDirectoryIdentifiers(
     value: Readonly<Record<string, unknown>>,
     key: string,
@@ -206,58 +138,6 @@ function readDirectoryIdentifiers(
         identifiers.push(candidate);
     }
     return identifiers;
-}
-
-function readActivityContent(
-    value: Readonly<Record<string, unknown>>,
-): readonly ReturnType<typeof decodeAgentDisplayContentValue>[] {
-    const field = value["content"];
-    if (!Array.isArray(field) || field.length > 100) {
-        throw new ProtocolMessageError("Invalid activity content field");
-    }
-    return field.map((entry) => decodeAgentDisplayContentValue(entry));
-}
-
-function readActivityDetail(value: Readonly<Record<string, unknown>>): AgentActivityDetailCapture {
-    const field = value["detail"];
-    if (!isRecord(field)) {
-        throw new ProtocolMessageError("Invalid activity detail field");
-    }
-    const kind = readString(field, "kind", 32);
-    if (kind === "available") {
-        return {
-            artifactId: readIdentifier(field, "artifactId"),
-            kind,
-        };
-    }
-    if (kind === "unrecorded") {
-        return { kind };
-    }
-    if (kind === "truncated") {
-        const capturedBytes = readSequence(field, "capturedBytes");
-        const originalBytes = readSequence(field, "originalBytes");
-        if (capturedBytes > originalBytes) {
-            throw new ProtocolMessageError("Invalid truncated activity detail size");
-        }
-        return { capturedBytes, kind, originalBytes };
-    }
-    if (kind === "recorded") {
-        const contentValue = field["content"];
-        if (!Array.isArray(contentValue) || contentValue.length > 100) {
-            throw new ProtocolMessageError("Invalid recorded activity content");
-        }
-        const detail = {
-            content: contentValue.map((entry) => decodeRecordedAgentContentValue(entry)),
-            input: readText(field, "input", AGENT_ACTIVITY_RECORDED_FIELD_LIMIT),
-            kind,
-            output: readText(field, "output", AGENT_ACTIVITY_RECORDED_FIELD_LIMIT),
-        } as const;
-        if (JSON.stringify(detail).length > AGENT_ACTIVITY_RECORDED_DETAIL_LIMIT) {
-            throw new ProtocolMessageError("Recorded activity detail is too large");
-        }
-        return detail;
-    }
-    throw new ProtocolMessageError("Invalid activity detail availability");
 }
 
 function readIdentifier(value: Readonly<Record<string, unknown>>, key: string): Identifier {
@@ -450,49 +330,6 @@ export function decodeSessionStartedEvent(encoded: string): SessionStartedEvent 
     };
 }
 
-export function decodeAgentMessageDeltaEvent(encoded: string): AgentMessageDeltaEvent {
-    const value = parseJson(encoded);
-    assertKind(value, AGENT_MESSAGE_DELTA_KIND);
-
-    const sequence = readSequence(value, "sequence");
-    if (sequence === 0) {
-        throw new ProtocolMessageError("Invalid live sequence");
-    }
-
-    return {
-        commandId: readIdentifier(value, "commandId"),
-        epoch: readIdentifier(value, "epoch"),
-        kind: AGENT_MESSAGE_DELTA_KIND,
-        messageId: value["messageId"] === undefined ? "" : readText(value, "messageId", 255),
-        sequence,
-        sessionId: readIdentifier(value, "sessionId"),
-        text: readString(value, "text", MAX_EVENT_TEXT_LENGTH),
-    };
-}
-
-export function decodeAgentActivityEvent(encoded: string): AgentActivityEvent {
-    const value = parseJson(encoded);
-    assertKind(value, AGENT_ACTIVITY_KIND);
-
-    return {
-        activityId: readIdentifier(value, "activityId"),
-        activityType: readAllowedString(value, "activityType", ACTIVITY_TYPES),
-        commandId: readIdentifier(value, "commandId"),
-        content: readActivityContent(value),
-        detail: readActivityDetail(value),
-        input: readText(value, "input", AGENT_ACTIVITY_DETAIL_LIMIT),
-        kind: AGENT_ACTIVITY_KIND,
-        locations: readLocations(value),
-        name: readText(value, "name", 128),
-        output: readText(value, "output", AGENT_ACTIVITY_DETAIL_LIMIT),
-        sequence: readSequence(value, "sequence"),
-        sessionId: readIdentifier(value, "sessionId"),
-        status: readAllowedString(value, "status", ACTIVITY_STATUSES),
-        title: readString(value, "title", 500),
-        toolKind: readAllowedString(value, "toolKind", TOOL_KINDS),
-    };
-}
-
 export function decodeSessionCompletedEvent(encoded: string): SessionCompletedEvent {
     const value = parseJson(encoded);
     assertKind(value, SESSION_COMPLETED_KIND);
@@ -560,33 +397,6 @@ export function encodeRuntimePongEvent(message: RuntimePongEvent): string {
 
 export function encodeSessionStartedEvent(message: SessionStartedEvent): string {
     return JSON.stringify(decodeSessionStartedEvent(JSON.stringify(message)));
-}
-
-export function encodeAgentMessageDeltaEvent(message: AgentMessageDeltaEvent): string {
-    return JSON.stringify(decodeAgentMessageDeltaEvent(JSON.stringify(message)));
-}
-
-export function encodeAgentActivityEvent(message: AgentActivityEvent): string {
-    return JSON.stringify(decodeAgentActivityEvent(JSON.stringify(message)));
-}
-
-export function decodeAgentActivityNarrationEvent(encoded: string): AgentActivityNarrationEvent {
-    const value = parseJson(encoded);
-    assertKind(value, AGENT_ACTIVITY_NARRATION_KIND);
-
-    return {
-        activityId: readIdentifier(value, "activityId"),
-        activityType: readAllowedString(value, "activityType", NARRATION_ACTIVITY_TYPES),
-        commandId: readIdentifier(value, "commandId"),
-        kind: AGENT_ACTIVITY_NARRATION_KIND,
-        sequence: readSequence(value, "sequence"),
-        sessionId: readIdentifier(value, "sessionId"),
-        text: readText(value, "text", MAX_EVENT_TEXT_LENGTH),
-    };
-}
-
-export function encodeAgentActivityNarrationEvent(message: AgentActivityNarrationEvent): string {
-    return JSON.stringify(decodeAgentActivityNarrationEvent(JSON.stringify(message)));
 }
 
 export function encodeSessionCompletedEvent(message: SessionCompletedEvent): string {
