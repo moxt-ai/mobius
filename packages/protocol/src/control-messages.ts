@@ -14,6 +14,8 @@ export const SESSION_QUERY_KIND = "session.query";
 export const SESSION_QUERIED_KIND = "session.queried";
 export const SESSION_RESTORE_KIND = "session.restore";
 export const SESSION_RESTORED_KIND = "session.restored";
+export const SESSION_CLOSE_KIND = "session.close";
+export const SESSION_CLOSED_KIND = "session.closed";
 export const SESSION_STATUS_CHANGED_KIND = "session.status.changed";
 export const SESSION_CONFIGURE_KIND = "session.configure";
 export const SESSION_CONFIG_UPDATED_KIND = "session.config.updated";
@@ -145,6 +147,16 @@ const sessionRestoreCommandSchema = z
     .readonly();
 
 export type SessionRestoreCommand = z.infer<typeof sessionRestoreCommandSchema>;
+
+const sessionCloseCommandSchema = z
+    .object({
+        kind: z.literal(SESSION_CLOSE_KIND),
+        requestId: IDENTIFIER,
+        sessionId: IDENTIFIER,
+    })
+    .readonly();
+
+export type SessionCloseCommand = z.infer<typeof sessionCloseCommandSchema>;
 
 const fileReadCommandSchema = z
     .object({
@@ -647,6 +659,16 @@ const sessionRestoredEventSchema = z
 
 export type SessionRestoredEvent = z.infer<typeof sessionRestoredEventSchema>;
 
+const sessionClosedEventSchema = z
+    .object({
+        kind: z.literal(SESSION_CLOSED_KIND),
+        requestId: IDENTIFIER,
+        sessionId: IDENTIFIER,
+    })
+    .readonly();
+
+export type SessionClosedEvent = z.infer<typeof sessionClosedEventSchema>;
+
 const sessionConfigureCommandSchema = z
     .object({
         ...sessionIdentityFields,
@@ -1026,6 +1048,14 @@ export const decodeSessionRestoredEvent = (encoded: string): SessionRestoredEven
     decode(encoded, sessionRestoredEventSchema);
 export const encodeSessionRestoredEvent = (message: SessionRestoredEvent): string =>
     encode(message, sessionRestoredEventSchema);
+export const decodeSessionCloseCommand = (encoded: string): SessionCloseCommand =>
+    decode(encoded, sessionCloseCommandSchema);
+export const encodeSessionCloseCommand = (message: SessionCloseCommand): string =>
+    encode(message, sessionCloseCommandSchema);
+export const decodeSessionClosedEvent = (encoded: string): SessionClosedEvent =>
+    decode(encoded, sessionClosedEventSchema);
+export const encodeSessionClosedEvent = (message: SessionClosedEvent): string =>
+    encode(message, sessionClosedEventSchema);
 export const decodeSessionStatusChangedEvent = (encoded: string): SessionStatusChangedEvent =>
     decode(encoded, sessionStatusChangedEventSchema);
 export const encodeSessionStatusChangedEvent = (message: SessionStatusChangedEvent): string =>

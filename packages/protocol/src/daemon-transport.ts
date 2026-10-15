@@ -46,6 +46,8 @@ import {
     decodeFileEndEvent,
     decodeFileFailedEvent,
     decodeFileReadCommand,
+    decodeSessionCloseCommand,
+    decodeSessionClosedEvent,
     decodeSessionConfigUpdatedEvent,
     decodeSessionConfigureCommand,
     decodeSessionElicitationRespondCommand,
@@ -78,6 +80,8 @@ import {
     encodeFileEndEvent,
     encodeFileFailedEvent,
     encodeFileReadCommand,
+    encodeSessionCloseCommand,
+    encodeSessionClosedEvent,
     encodeSessionConfigUpdatedEvent,
     encodeSessionConfigureCommand,
     encodeSessionElicitationRespondCommand,
@@ -100,6 +104,8 @@ import {
     FILE_END_KIND,
     FILE_FAILED_KIND,
     FILE_READ_KIND,
+    SESSION_CLOSE_KIND,
+    SESSION_CLOSED_KIND,
     SESSION_CONFIG_UPDATED_KIND,
     SESSION_CONFIGURE_KIND,
     SESSION_ELICITATION_RESPOND_KIND,
@@ -226,6 +232,11 @@ const serviceToDaemonSignatures = {
         encodeSessionRestoreCommand,
         decodeSessionRestoreCommand,
     ),
+    [SESSION_CLOSE_KIND]: defineMessageSignature(
+        SESSION_CLOSE_KIND,
+        encodeSessionCloseCommand,
+        decodeSessionCloseCommand,
+    ),
     [NATIVE_SESSION_CANCEL_KIND]: defineMessageSignature(
         NATIVE_SESSION_CANCEL_KIND,
         encodeNativeSessionCancel,
@@ -325,6 +336,11 @@ export function encodeServiceToDaemonMessage(message: ServiceToDaemonMessage): s
 }
 
 const daemonToServiceSignatures = {
+    [SESSION_CLOSED_KIND]: defineMessageSignature(
+        SESSION_CLOSED_KIND,
+        encodeSessionClosedEvent,
+        decodeSessionClosedEvent,
+    ),
     [SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND]: defineMessageSignature(
         SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND,
         encodeSessionPreviewHistoryPageLoaded,

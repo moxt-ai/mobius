@@ -4,6 +4,7 @@ import {
     decodeMobiusSessionExportV2,
     decodeNativeSessionEventsV2,
     decodeNativeSessionResult,
+    decodeSessionClosedEvent,
     decodeSessionConfigUpdatedEvent,
     decodeSessionEventLogPageV2,
     decodeSessionLiveEventBatchV2,
@@ -1040,6 +1041,20 @@ export class MobiusSessionResources {
                     projectPath(
                         this.#projectId,
                         `runtimes/${encodeURIComponent(runtimeId)}/sessions/${encodeURIComponent(sessionId)}/restore`,
+                    ),
+                    {},
+                    signal,
+                ),
+            ),
+        );
+
+    readonly close = async (runtimeId: string, sessionId: string, signal: AbortSignal) =>
+        decodeSessionClosedEvent(
+            JSON.stringify(
+                await this.#executor.post(
+                    projectPath(
+                        this.#projectId,
+                        `runtimes/${encodeURIComponent(runtimeId)}/sessions/${encodeURIComponent(sessionId)}/close`,
                     ),
                     {},
                     signal,

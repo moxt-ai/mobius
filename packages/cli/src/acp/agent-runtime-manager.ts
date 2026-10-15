@@ -81,6 +81,7 @@ export class AgentRuntimeManager {
     readonly #executions = new ActiveExecutions();
     readonly #agentSettingsObserver = new NullAcpSessionObserver();
     readonly #nativeOperations = new Set<string>();
+    readonly #sessionClosures = new Map<string, Promise<void>>();
     readonly #store: AcpSessionStore;
     readonly #nativeHistoryReader: AcpNativeHistoryReader;
     readonly #sessionIdentity: "assigned" | "native";
@@ -279,6 +280,13 @@ export class AgentRuntimeManager {
         metrics: OperationMetrics = unmeasuredOperationMetrics,
     ): Promise<AcpPreparedSession> {
         return await this.#operations.run(options, async (options) => {
+            for (;;) {
+                const closing = this.#sessionClosures.get(options.sessionId);
+                if (closing === undefined) {
+                    break;
+                }
+                await waitForSharedOperation(closing, options.signal);
+            }
             const stored = metrics.measureSync("session-state-read", () => this.#store.read(options.sessionId));
 
             if (
@@ -620,6 +628,36 @@ export class AgentRuntimeManager {
         await runtime.respondElicitation(options);
     };
 
+    readonly closeSession = async (sessionId: string, signal: AbortSignal): Promise<void> =>
+        this.#operations.run({ sessionId, signal }, async (options) => {
+            const existing = this.#sessionClosures.get(options.sessionId);
+            if (existing !== undefined) {
+                await waitForSharedOperation(existing, options.signal);
+                return;
+            }
+            if (
+                this.#executions.isBusy(options.sessionId) ||
+                this.#executionProcesses.isBusy(options.sessionId) ||
+                this.#isNativeSessionOperationActive(options.sessionId)
+            ) {
+                throw new AcpExecutionError("The session is busy", {}, "session_busy");
+            }
+            const runtime = this.#executionProcesses.get(options.sessionId);
+            if (runtime === undefined) {
+                return;
+            }
+            const completion = Promise.withResolvers<void>();
+            this.#sessionClosures.set(options.sessionId, completion.promise);
+            void this.#retireSessionProcess(options.sessionId, runtime, async () => await runtime.close())
+                .then(completion.resolve, completion.reject)
+                .finally(() => {
+                    if (this.#sessionClosures.get(options.sessionId) === completion.promise) {
+                        this.#sessionClosures.delete(options.sessionId);
+                    }
+                });
+            await waitForSharedOperation(completion.promise, options.signal);
+        });
+
     readonly close = async (): Promise<void> =>
         this.#operations.close(async () => {
             const sessions = [...this.#executionProcesses.entries()];
@@ -628,6 +666,7 @@ export class AgentRuntimeManager {
                     async ([sessionId, runtime]) =>
                         await this.#retireSessionProcess(sessionId, runtime, async () => await runtime.close()),
                 ),
+                ...this.#sessionClosures.values(),
                 this.#queryProcesses.close(),
             ]);
         });
