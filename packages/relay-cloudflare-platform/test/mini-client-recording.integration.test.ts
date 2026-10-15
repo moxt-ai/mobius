@@ -64,7 +64,53 @@ function text(value: Record<string, unknown>, key: string): string {
     return result;
 }
 
-async function recordThroughRelay(projectId: string, runtimeId: string, sessionId: string): Promise<void> {
+function turnMessage(sessionId: string): string {
+    return encodeSessionEventEnvelopeV2({
+        kind: "session.event.v2",
+        events: [
+            {
+                eventId: `${sessionId}-requested`,
+                position: "0",
+                provenance: { kind: "original" },
+                recordedAt: "2026-10-12T00:00:00.000Z",
+                sessionGenerationId: `${sessionId}-generation`,
+                sessionId,
+                type: "lifecycle-metadata",
+                payload: {
+                    kind: "prompt.requested",
+                    commandId: "turn-1",
+                    content: [{ type: "text", text: "Mini-client recording prompt" }],
+                    context: { agentId: "codex", directoryId: "default", additionalDirectoryIds: [] },
+                },
+            },
+            {
+                eventId: `${sessionId}-reply`,
+                position: "1",
+                provenance: { kind: "original" },
+                recordedAt: "2026-10-12T00:00:01.000Z",
+                sessionGenerationId: `${sessionId}-generation`,
+                sessionId,
+                type: "acp",
+                payload: {
+                    sessionUpdate: "agent_message_chunk",
+                    content: { type: "text", text: "Durable mini-client reply" },
+                },
+            },
+            {
+                eventId: `${sessionId}-completed`,
+                position: "2",
+                provenance: { kind: "original" },
+                recordedAt: "2026-10-12T00:00:02.000Z",
+                sessionGenerationId: `${sessionId}-generation`,
+                sessionId,
+                type: "lifecycle-metadata",
+                payload: { kind: "prompt.completed", commandId: "turn-1", stopReason: "end_turn" },
+            },
+        ],
+    });
+}
+
+async function recordThroughRelay(projectId: string, runtimeId: string, messages: readonly string[]): Promise<void> {
     await runInDurableObject(env.RUNTIME_RELAY.getByName(projectId), async (_instance, state) => {
         const pending: Promise<void>[] = [];
         const database = new DurableObjectSqlDatabase(state.storage);
@@ -94,58 +140,87 @@ async function recordThroughRelay(projectId: string, runtimeId: string, sessionI
         }
         client.accept();
         try {
-            await relay.webSocketMessage(
-                daemon,
-                encodeSessionEventEnvelopeV2({
-                    kind: "session.event.v2",
-                    events: [
-                        {
-                            eventId: `${sessionId}-requested`,
-                            position: "0",
-                            provenance: { kind: "original" },
-                            recordedAt: "2026-10-12T00:00:00.000Z",
-                            sessionGenerationId: `${sessionId}-generation`,
-                            sessionId,
-                            type: "lifecycle-metadata",
-                            payload: {
-                                kind: "prompt.requested",
-                                commandId: "turn-1",
-                                content: [{ type: "text", text: "Mini-client recording prompt" }],
-                                context: { agentId: "codex", directoryId: "default", additionalDirectoryIds: [] },
-                            },
-                        },
-                        {
-                            eventId: `${sessionId}-reply`,
-                            position: "1",
-                            provenance: { kind: "original" },
-                            recordedAt: "2026-10-12T00:00:01.000Z",
-                            sessionGenerationId: `${sessionId}-generation`,
-                            sessionId,
-                            type: "acp",
-                            payload: {
-                                sessionUpdate: "agent_message_chunk",
-                                content: { type: "text", text: "Durable mini-client reply" },
-                            },
-                        },
-                        {
-                            eventId: `${sessionId}-completed`,
-                            position: "2",
-                            provenance: { kind: "original" },
-                            recordedAt: "2026-10-12T00:00:02.000Z",
-                            sessionGenerationId: `${sessionId}-generation`,
-                            sessionId,
-                            type: "lifecycle-metadata",
-                            payload: { kind: "prompt.completed", commandId: "turn-1", stopReason: "end_turn" },
-                        },
-                    ],
-                }),
-            );
+            // Delivered back to back, as a streaming Agent does, without waiting for any write.
+            await Promise.all(messages.map((message) => relay.webSocketMessage(daemon, message)));
             await Promise.all(pending.splice(0));
         } finally {
             client.close(1000, "Mini-client Recording test complete");
             await Promise.allSettled(pending);
         }
     });
+}
+
+async function createRecordingProject(): Promise<{
+    readonly credential: string;
+    readonly environment: PlatformRelayBindings;
+    readonly projectId: string;
+    readonly worker: ReturnType<typeof createTestMobiusPlatformApp>;
+}> {
+    const worker = createTestMobiusPlatformApp(
+        new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-mini-recording"])),
+        createPlatformGateways,
+    );
+    const environment = bindings();
+    const tenants = await json(
+        await worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/platform/tenants`, {
+                headers: developerHeaders(),
+            }),
+            environment,
+        ),
+        200,
+    );
+    const tenantValues = tenants["tenants"];
+    if (!Array.isArray(tenantValues) || tenantValues.length === 0) {
+        throw new Error("Expected a Platform tenant");
+    }
+    const app = await json(
+        await worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps`, {
+                body: JSON.stringify({
+                    displayName: "Mini-client Recording App",
+                    tenantId: text(tenantValues[0] as Record<string, unknown>, "tenantId"),
+                }),
+                headers: developerHeaders(),
+                method: "POST",
+            }),
+            environment,
+        ),
+        201,
+    );
+    const credentialValue = app["defaultCredential"];
+    if (typeof credentialValue !== "object" || credentialValue === null) {
+        throw new Error("Expected a default AppCredential");
+    }
+    const credential = text(credentialValue as Record<string, unknown>, "credential");
+    const project = await json(
+        await worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${text(app, "appId")}/projects`, {
+                body: JSON.stringify({
+                    displayName: "Mini-client Recording Project",
+                    idempotencyKey: `mini-recording-${Date.now()}`,
+                    locationHint: "wnam",
+                }),
+                headers: developerHeaders(),
+                method: "POST",
+            }),
+            environment,
+        ),
+        201,
+    );
+    const projectId = text(project, "projectId");
+    await json(
+        await worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${text(app, "appId")}/recording-policy`, {
+                body: JSON.stringify({ mode: "enabled" }),
+                headers: developerHeaders(),
+                method: "PUT",
+            }),
+            environment,
+        ),
+        200,
+    );
+    return { credential, environment, projectId, worker };
 }
 
 beforeEach(() => {
@@ -156,77 +231,11 @@ beforeEach(() => {
 
 describe.sequential("Mini-client Recording integration", () => {
     it("Given an enabled Project and recorded Turn, When a mini-client reads through MobiusClient, Then it sees durable history and the session directory", async () => {
-        const worker = createTestMobiusPlatformApp(
-            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-mini-recording"])),
-            createPlatformGateways,
-        );
-        const environment = bindings();
-        const tenants = await json(
-            await worker.fetch(
-                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/platform/tenants`, {
-                    headers: developerHeaders(),
-                }),
-                environment,
-            ),
-            200,
-        );
-        const tenantValues = tenants["tenants"];
-        if (!Array.isArray(tenantValues) || tenantValues.length === 0) {
-            throw new Error("Expected a Platform tenant");
-        }
-        const app = await json(
-            await worker.fetch(
-                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps`, {
-                    body: JSON.stringify({
-                        displayName: "Mini-client Recording App",
-                        tenantId: text(tenantValues[0] as Record<string, unknown>, "tenantId"),
-                    }),
-                    headers: developerHeaders(),
-                    method: "POST",
-                }),
-                environment,
-            ),
-            201,
-        );
-        const credentialValue = app["defaultCredential"];
-        if (typeof credentialValue !== "object" || credentialValue === null) {
-            throw new Error("Expected a default AppCredential");
-        }
-        const credential = text(credentialValue as Record<string, unknown>, "credential");
-        const project = await json(
-            await worker.fetch(
-                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${text(app, "appId")}/projects`, {
-                    body: JSON.stringify({
-                        displayName: "Mini-client Recording Project",
-                        idempotencyKey: `mini-recording-${Date.now()}`,
-                        locationHint: "wnam",
-                    }),
-                    headers: developerHeaders(),
-                    method: "POST",
-                }),
-                environment,
-            ),
-            201,
-        );
-        const projectId = text(project, "projectId");
-        await json(
-            await worker.fetch(
-                new Request(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${text(app, "appId")}/recording-policy`,
-                    {
-                        body: JSON.stringify({ mode: "enabled" }),
-                        headers: developerHeaders(),
-                        method: "PUT",
-                    },
-                ),
-                environment,
-            ),
-            200,
-        );
+        const { credential, environment, projectId, worker } = await createRecordingProject();
 
         const runtimeId = "runtime-mini-recording";
         const sessionId = "mini-client-recording-session";
-        await recordThroughRelay(projectId, runtimeId, sessionId);
+        await recordThroughRelay(projectId, runtimeId, [turnMessage(sessionId)]);
 
         new MobiusClient({
             credentialProvider: new StaticMobiusCredentialProvider(credential),
@@ -267,5 +276,44 @@ describe.sequential("Mini-client Recording integration", () => {
         expect(decodeSessionRecordingDirectory(JSON.stringify(directory))).toMatchObject({
             sessions: [{ sessionId, status: "idle", title: "Mini-client recording prompt" }],
         });
+    });
+
+    it("Given an Agent streaming hundreds of reply chunks back to back, When history is read, Then every chunk is recorded in order", async () => {
+        const { credential, environment, projectId, worker } = await createRecordingProject();
+        const runtimeId = "runtime-streamed-recording";
+        const sessionId = "streamed-recording-session";
+        const chunkCount = 400;
+        const messages = Array.from({ length: chunkCount }, (_, index) =>
+            encodeSessionEventEnvelopeV2({
+                kind: "session.event.v2",
+                events: [
+                    {
+                        eventId: `${sessionId}-chunk-${index}`,
+                        position: String(index),
+                        provenance: { kind: "original" },
+                        recordedAt: "2026-10-12T00:00:00.000Z",
+                        sessionGenerationId: `${sessionId}-generation`,
+                        sessionId,
+                        type: "acp",
+                        payload: {
+                            sessionUpdate: "agent_message_chunk",
+                            content: { type: "text", text: `chunk-${index};` },
+                        },
+                    },
+                ],
+            }),
+        );
+        await recordThroughRelay(projectId, runtimeId, messages);
+
+        const history = await json(
+            await worker.request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/recording/sessions/${sessionId}/events?runtimeId=${runtimeId}`,
+                { headers: { authorization: `Bearer ${credential}` } },
+                environment,
+            ),
+            200,
+        );
+        const recorded = decodeSessionRecordingHistory(JSON.stringify(history)).events.map((event) => event.eventId);
+        expect(recorded).toEqual(Array.from({ length: chunkCount }, (_, index) => `${sessionId}-chunk-${index}`));
     });
 });
