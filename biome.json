@@ -45,31 +45,6 @@
                     }
                 }
             }
-        },
-        {
-            "includes": ["packages/web/src/components/sidebar-resize-handle.tsx"],
-            "linter": {
-                "rules": {
-                    "a11y": {
-                        "useSemanticElements": "off"
-                    }
-                }
-            }
-        },
-        {
-            "includes": [
-                "packages/web/src/components/agent-activity-list.tsx",
-                "packages/web/src/components/agent-markdown.tsx",
-                "packages/web/src/components/agent-rich-content.tsx"
-            ],
-            "linter": {
-                "rules": {
-                    "a11y": {
-                        "noNoninteractiveTabindex": "off",
-                        "useSemanticElements": "off"
-                    }
-                }
-            }
         }
     ],
     "formatter": {
