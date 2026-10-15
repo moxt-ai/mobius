@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { describe, expect, it } from "vitest";
+import { ControlledCodexFixture } from "../support/agents/controlled-codex.ts";
 
 const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
@@ -35,6 +36,7 @@ async function closeServer(server: Server, sockets: Set<Socket>): Promise<void> 
 
 describe("daemon environment proxy", () => {
     it("Given proxy environment variables, When pairing and opening the relay, Then both connections use the proxy", async () => {
+        await using codex = await ControlledCodexFixture.create();
         const pairingSockets = new Set<Socket>();
         const relaySockets = new Set<Socket>();
         const proxySockets = new Set<Socket>();
@@ -144,6 +146,9 @@ describe("daemon environment proxy", () => {
         const previousLowerNoProxy = process.env["no_proxy"];
         const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
         const previousPath = process.env["PATH"];
+        const previousClaudePath = process.env["MOBIUS_CLAUDE_PATH"];
+        const previousCodexPath = process.env["MOBIUS_CODEX_PATH"];
+        const previousPiPath = process.env["MOBIUS_PI_PATH"];
         const proxyOrigin = `http://127.0.0.1:${port(proxyServer)}`;
         const proxyUrl = proxyOrigin.replace("http://", "http://mobius:proxy-secret@");
 
@@ -155,6 +160,7 @@ describe("daemon environment proxy", () => {
         delete process.env["no_proxy"];
         process.env["MOBIUS_STATE_DIRECTORY"] = stateDirectory;
         process.env["PATH"] = "";
+        Object.assign(process.env, codex.environment);
 
         try {
             const { openRuntimeInstallationStore, pairMobiusRuntime } = await import("../../src/runtime.ts");
@@ -242,6 +248,21 @@ describe("daemon environment proxy", () => {
                 delete process.env["PATH"];
             } else {
                 process.env["PATH"] = previousPath;
+            }
+            if (previousClaudePath === undefined) {
+                delete process.env["MOBIUS_CLAUDE_PATH"];
+            } else {
+                process.env["MOBIUS_CLAUDE_PATH"] = previousClaudePath;
+            }
+            if (previousCodexPath === undefined) {
+                delete process.env["MOBIUS_CODEX_PATH"];
+            } else {
+                process.env["MOBIUS_CODEX_PATH"] = previousCodexPath;
+            }
+            if (previousPiPath === undefined) {
+                delete process.env["MOBIUS_PI_PATH"];
+            } else {
+                process.env["MOBIUS_PI_PATH"] = previousPiPath;
             }
             await Promise.all([
                 closeServer(pairingServer, pairingSockets),

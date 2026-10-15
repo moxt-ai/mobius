@@ -302,7 +302,6 @@ function buildPairedDaemon(
     inventory: LocalAgentInventory,
     localContext: DaemonLocalContext,
 ): PairedDaemon {
-    assertInventoryUsable(inventory);
     const relayUrl = mobiusApiUrl(connection.relayOrigin, "/v1/runtimes/connect");
     relayUrl.protocol = relayUrl.protocol === "https:" ? "wss:" : "ws:";
     relayUrl.searchParams.set("token", connection.runtimeCredential);
