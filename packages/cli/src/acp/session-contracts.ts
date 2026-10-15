@@ -143,10 +143,10 @@ export class NullAcpSessionObserver implements AcpSessionObserver {
     readonly onSessionEventV2 = (_event: SessionLiveEventV2): Promise<void> => Promise.resolve();
     readonly onCommands = (): Promise<void> => Promise.resolve();
     readonly onConfig = (): Promise<void> => Promise.resolve();
-    readonly onContent = (): Promise<void> => Promise.resolve();
+    readonly onContent = (_event: AgentContentEvent): Promise<void> => Promise.resolve();
     readonly onElicitation = (): Promise<void> => Promise.resolve();
     readonly onElicitationResolved = (): Promise<void> => Promise.resolve();
-    readonly onInfo = (): Promise<void> => Promise.resolve();
+    readonly onInfo = (_event: SessionInfoUpdatedEvent): Promise<void> => Promise.resolve();
     readonly onPermission = (): Promise<void> => Promise.resolve();
     readonly onPermissionResolved = (): Promise<void> => Promise.resolve();
     readonly onUsage = (): Promise<void> => Promise.resolve();

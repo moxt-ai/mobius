@@ -3,6 +3,7 @@ import {
     type RecordedSessionEvent,
     SESSION_ELICITATION_RESOLVED_KIND,
     SESSION_PERMISSION_RESOLVED_KIND,
+    type SessionLiveEventV2,
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -104,6 +105,18 @@ export class DaemonTurnRegistry {
             }
         }
         return event;
+    };
+
+    readonly recordSessionEventV2 = (event: SessionLiveEventV2): void => {
+        if (
+            event.type === "lifecycle-metadata" &&
+            (event.payload.kind === "session.permission.requested" ||
+                event.payload.kind === "session.permission.resolved" ||
+                event.payload.kind === "session.elicitation.requested" ||
+                event.payload.kind === "session.elicitation.resolved")
+        ) {
+            this.recordEvent(event.payload.event);
+        }
     };
 
     readonly recordSteeringPrompt = (command: SessionPromptCommand): boolean => {

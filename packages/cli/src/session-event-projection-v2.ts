@@ -56,13 +56,16 @@ export class DaemonSessionEventProjectionV2 {
     readonly #terminal = new Map<string, SessionLiveEventV2>();
     readonly #publications = new Map<string, SessionLiveEventV2[]>();
     readonly #queued = new Map<string, QueuedPromptRequestV2>();
+    readonly #recordActiveTurn: (event: SessionLiveEventV2) => void;
 
     readonly #recordLifecycle: (sessionId: string, event: SessionEventPayloadV2) => Promise<boolean>;
     constructor(
         publisher: DaemonSessionEventPublisher,
         recordLifecycle: (sessionId: string, event: SessionEventPayloadV2) => Promise<boolean>,
+        recordActiveTurn: (event: SessionLiveEventV2) => void,
     ) {
         this.#recordLifecycle = recordLifecycle;
+        this.#recordActiveTurn = recordActiveTurn;
         this.#publisher = publisher;
     }
 
@@ -112,6 +115,7 @@ export class DaemonSessionEventProjectionV2 {
     };
 
     readonly record = (recorded: SessionLiveEventV2): void => {
+        this.#recordActiveTurn(recorded);
         const sessionId = recorded.sessionId;
         if (
             recorded.type === "lifecycle-metadata" &&
