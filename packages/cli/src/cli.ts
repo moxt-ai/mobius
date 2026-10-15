@@ -9,8 +9,28 @@ import packageMetadata from "../package.json" with { type: "json" };
 import { formatAgentDiagnostics } from "./agent-catalog/agent-diagnostics.ts";
 import { discoverLocalAgentInventory } from "./agent-catalog/discover-local-agents.ts";
 import { DaemonLocalContext, loadDefaultWorkspace } from "./config.ts";
-import { type ManagedRuntimeSummary, requestManager, runManager } from "./daemon-manager.ts";
-import { openMobiusCliInstallation } from "./pairing/pair-local-machine.ts";
+import { runManager } from "./daemon-manager.ts";
+import { ensureWorkingProcess, stopManager } from "./daemon-manager-client.ts";
+import { reloadDaemon, runWorker } from "./daemon-worker.ts";
+import { openMobiusCliInstallation, pairLocalMachine } from "./pairing/pair-local-machine.ts";
+import type { VerifiedRuntimeConnection } from "./storage/runtime-installation-store.ts";
+
+type SavedPairSummary = {
+    readonly appId: string;
+    readonly connectionId: string;
+    readonly runtimeId: string;
+    readonly status: VerifiedRuntimeConnection["activation"];
+    readonly workspace: string;
+};
+function savedSummary(connection: VerifiedRuntimeConnection): SavedPairSummary {
+    return {
+        appId: connection.appId,
+        connectionId: connection.connectionId,
+        runtimeId: connection.runtimeId,
+        workspace: connection.defaultWorkspace,
+        status: connection.activation,
+    };
+}
 
 const shutdown = new AbortController();
 process.once("SIGINT", () => shutdown.abort());
@@ -40,7 +60,7 @@ interface PairListOptions {
     readonly outputJson?: string;
 }
 
-function formatPairTable(pairs: readonly ManagedRuntimeSummary[]): string {
+function formatPairTable(pairs: readonly SavedPairSummary[]): string {
     const headers = ["connection_id", "app_id", "runtime_id", "workspace", "status"];
     const rows = pairs.map((pair) => [pair.connectionId, pair.appId, pair.runtimeId, pair.workspace, pair.status]);
     const widths = headers.map((header, index) =>
@@ -86,7 +106,7 @@ function pairArguments(options: PairOptions): readonly string[] {
     ];
 }
 
-async function writePairList(path: string, pairs: readonly ManagedRuntimeSummary[]): Promise<void> {
+async function writePairList(path: string, pairs: readonly SavedPairSummary[]): Promise<void> {
     shutdown.signal.throwIfAborted();
     let file: FileHandle;
     try {
@@ -157,9 +177,12 @@ function createProgram(): Command {
 
     program.command("__manager", { hidden: true }).action(async () => {
         const installation = await openMobiusCliInstallation(shutdown.signal, process.env);
-        await runManager(installation, packageMetadata.version, shutdown.signal);
+        await runManager(installation.stateDirectory, shutdown.signal);
     });
 
+    program.command("__worker", { hidden: true }).action(async () => {
+        await runWorker(packageMetadata.version, shutdown.signal);
+    });
     const pair = program.command("pair").description("pair this machine or manage saved pairings");
     pair.addOption(valueOption("--url <relay-url>", "relay HTTP or HTTPS URL"))
         .addOption(valueOption("--code <pairing-code>", "pairing code shown in the browser"))
@@ -173,25 +196,18 @@ function createProgram(): Command {
             };
             const installation = await openMobiusCliInstallation(shutdown.signal, process.env);
             process.stdout.write(`mobius version: ${packageMetadata.version}\n`);
-            const response = await requestManager(
-                installation,
-                packageMetadata.version,
-                { arguments: pairArguments(requested), kind: "pair" },
+            const paired = await pairLocalMachine(pairArguments(requested), shutdown.signal);
+            const connection = await installation.setConnectionActivation(
+                paired.connectionId,
+                "active",
                 shutdown.signal,
             );
-            if (response.kind === "error") {
-                throw new Error(response.message);
-            }
-            if (response.kind !== "ready") {
-                throw new Error("The Mobius manager returned an unexpected response");
-            }
+            await ensureWorkingProcess(installation.stateDirectory, packageMetadata.version, shutdown.signal);
+            await reloadDaemon(installation.stateDirectory, shutdown.signal);
             process.stdout.write(
-                response.alreadyOnline ? "\nThis pairing is already online.\n" : "\nLocal machine paired.\n",
+                `\nLocal machine paired.\nApp ID: ${connection.appId}\nConnection ID: ${connection.connectionId}\n`,
             );
-            process.stdout.write(`App ID: ${response.pair.appId}\n`);
-            process.stdout.write(`Connection ID: ${response.pair.connectionId}\n`);
-            process.stdout.write(`Status: ${response.pair.status}\n`);
-            process.stdout.write("Mobius daemon is ready for Agent requests.\n");
+            process.stdout.write("Mobius daemon is running; connection will reconnect automatically.\n");
         });
 
     pair.command("list")
@@ -200,22 +216,16 @@ function createProgram(): Command {
         .action(async (options: PairListOptions) => {
             const installation = await openMobiusCliInstallation(shutdown.signal, process.env);
             const outputPath = options.outputJson === undefined ? null : resolve(options.outputJson);
-            const response = await requestManager(
-                installation,
-                packageMetadata.version,
-                { kind: "list" },
-                shutdown.signal,
-            );
-            if (response.kind === "error") {
-                throw new Error(response.message);
-            }
-            if (response.kind !== "listed") {
-                throw new Error("The Mobius manager returned an unexpected response");
-            }
+            const pairs = (await installation.listConnections(shutdown.signal))
+                .map(savedSummary)
+                .sort(
+                    (left, right) =>
+                        left.appId.localeCompare(right.appId) || left.connectionId.localeCompare(right.connectionId),
+                );
             if (outputPath === null) {
-                process.stdout.write(formatPairTable(response.pairs));
+                process.stdout.write(formatPairTable(pairs));
             } else {
-                await writePairList(outputPath, response.pairs);
+                await writePairList(outputPath, pairs);
             }
         });
 
@@ -225,27 +235,13 @@ function createProgram(): Command {
             .addOption(valueOption("--connection <connection-id>", "saved Runtime connection identifier", true))
             .action(async (options: ConnectionOptions) => {
                 const installation = await openMobiusCliInstallation(shutdown.signal, process.env);
-                const response = await requestManager(
-                    installation,
-                    packageMetadata.version,
-                    {
-                        connectionId: options.connection,
-                        kind: name === "stop" ? "stop-pair" : "remove-pair",
-                    },
-                    shutdown.signal,
-                );
-                if (response.kind === "error") {
-                    throw new Error(response.message);
+                if (name === "remove") {
+                    await installation.removeConnection(options.connection, shutdown.signal);
+                } else {
+                    await installation.setConnectionActivation(options.connection, "stopped", shutdown.signal);
                 }
-                if (name === "stop" && response.kind === "pair-stopped") {
-                    process.stdout.write(`Pairing stopped: ${response.pair.connectionId}\n`);
-                    return;
-                }
-                if (name === "remove" && response.kind === "pair-removed") {
-                    process.stdout.write(`Pairing removed: ${response.connectionId}\n`);
-                    return;
-                }
-                throw new Error("The Mobius manager returned an unexpected response");
+                await reloadDaemon(installation.stateDirectory, shutdown.signal);
+                process.stdout.write(`Pairing ${name === "remove" ? "removed" : "stopped"}: ${options.connection}\n`);
             });
     };
     addPairMutation("stop");
@@ -257,28 +253,12 @@ function createProgram(): Command {
         .addOption(valueOption("--connection <connection-id>", "saved Runtime connection identifier"))
         .action(async (options: StartOptions) => {
             const installation = await openMobiusCliInstallation(shutdown.signal, process.env);
-            const response = await requestManager(
-                installation,
-                packageMetadata.version,
-                options.connection === undefined
-                    ? { kind: "list" }
-                    : { arguments: ["--connection", options.connection], kind: "start" },
-                shutdown.signal,
-            );
-            if (response.kind === "error") {
-                throw new Error(response.message);
+            if (options.connection !== undefined) {
+                await installation.setConnectionActivation(options.connection, "active", shutdown.signal);
             }
-            if (options.connection === undefined && response.kind === "listed") {
-                process.stdout.write("Mobius daemon is running.\n");
-                return;
-            }
-            if (response.kind !== "ready") {
-                throw new Error("The Mobius manager returned an unexpected response");
-            }
-            process.stdout.write("\nSaved local Runtime connection loaded.\n");
-            process.stdout.write(`Connection ID: ${response.pair.connectionId}\n`);
-            process.stdout.write(`Status: ${response.pair.status}\n`);
-            process.stdout.write("Mobius daemon is ready for Agent requests.\n");
+            await ensureWorkingProcess(installation.stateDirectory, packageMetadata.version, shutdown.signal);
+            await reloadDaemon(installation.stateDirectory, shutdown.signal);
+            process.stdout.write("Mobius daemon is running.\n");
         });
 
     program
@@ -286,15 +266,7 @@ function createProgram(): Command {
         .description("stop the manager and every active Runtime")
         .action(async () => {
             const installation = await openMobiusCliInstallation(shutdown.signal, process.env);
-            const response = await requestManager(
-                installation,
-                packageMetadata.version,
-                { kind: "stop" },
-                shutdown.signal,
-            );
-            if (response.kind === "error") {
-                throw new Error(response.message);
-            }
+            await stopManager(installation.stateDirectory, shutdown.signal);
             process.stdout.write("Mobius daemon stopped.\n");
         });
 
