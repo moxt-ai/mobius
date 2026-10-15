@@ -212,10 +212,10 @@ async function startControlledDaemon(options: { readonly stateDirectory?: string
     const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
     relayUrl.searchParams.set("token", "d".repeat(43));
     const agent = new LocalAgentDefinition(
-        "opencode",
-        "OpenCode",
+        "controlled-acp",
+        "Controlled ACP",
         process.execPath,
-        [fakeAgentPath, "--agent-name", "OpenCode"],
+        [fakeAgentPath, "--agent-name", "Controlled ACP"],
         { MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory },
     );
     const config = createDaemonConfig(
@@ -485,7 +485,7 @@ describe("daemon V2 live delivery", () => {
                         order.push("first-message");
                     }
                     accumulated += update.content.text;
-                    if (accumulated.includes("OpenCode turn 1: interleave progress and hold")) {
+                    if (accumulated.includes("Controlled ACP turn 1: interleave progress and hold")) {
                         order.push("final-message");
                         break;
                     }
@@ -508,7 +508,7 @@ describe("daemon V2 live delivery", () => {
                 ),
             ).toHaveLength(1);
             const active = await activeTurn(fixture, command);
-            expect(active?.messages.some((message) => message.text.includes("OpenCode turn 1:"))).toBe(true);
+            expect(active?.messages.some((message) => message.text.includes("Controlled ACP turn 1:"))).toBe(true);
             await cancel(fixture, command);
         } finally {
             await fixture.close();
@@ -570,7 +570,7 @@ describe("daemon V2 live delivery", () => {
                 }
             }
             expect(text).toBe(
-                `Gathering contextOpenCode turn 1: ${Array.from({ length: 64 }, (_, index) => `token-${index} `).join("")}`,
+                `Gathering contextControlled ACP turn 1: ${Array.from({ length: 64 }, (_, index) => `token-${index} `).join("")}`,
             );
             expect(fixture.timer.batchWindowMilliseconds).toContain(100);
             expect(fixture.liveBatchSizes.some((size) => size > 1)).toBe(true);
@@ -589,7 +589,7 @@ describe("daemon V2 live delivery", () => {
                     )
                     .join(""),
             ).toBe(
-                `Gathering contextOpenCode turn 1: ${Array.from({ length: 64 }, (_, index) => `token-${index} `).join("")}`,
+                `Gathering contextControlled ACP turn 1: ${Array.from({ length: 64 }, (_, index) => `token-${index} `).join("")}`,
             );
         } finally {
             await fixture.close();

@@ -23,10 +23,6 @@ export interface AcpClientHandler {
     readonly onUpdate: (notification: SessionNotification) => Promise<void>;
 }
 
-function discardExtensionParams(_params: unknown): Readonly<Record<string, never>> {
-    return Object.freeze({});
-}
-
 export const createAcpClient = (handler: AcpClientHandler): ClientApp =>
     client({ name: "mobius" })
         .onRequest(
@@ -42,16 +38,4 @@ export const createAcpClient = (handler: AcpClientHandler): ClientApp =>
         })
         .onNotification(methods.client.elicitation.complete, async (context) => {
             await handler.onElicitationComplete(context.params);
-        })
-        .onRequest("cursor/ask_question", discardExtensionParams, async () => ({
-            outcome: {
-                outcome: "skipped",
-                reason: "Mobius does not expose Cursor question extensions",
-            },
-        }))
-        .onRequest("cursor/create_plan", discardExtensionParams, async () => ({
-            outcome: { outcome: "cancelled" },
-        }))
-        .onNotification("cursor/update_todos", discardExtensionParams, async () => Promise.resolve())
-        .onNotification("cursor/task", discardExtensionParams, async () => Promise.resolve())
-        .onNotification("cursor/generate_image", discardExtensionParams, async () => Promise.resolve());
+        });

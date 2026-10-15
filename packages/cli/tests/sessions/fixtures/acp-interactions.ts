@@ -1,5 +1,5 @@
 import * as acp from "@agentclientprotocol/sdk";
-import { isRecord, waitForFile } from "../../support/acp-process.ts";
+import { waitForFile } from "../../support/acp-process.ts";
 
 export async function runInteractionScenario(
     context: acp.AgentRequestContext<acp.PromptRequest>,
@@ -111,64 +111,5 @@ export async function runInteractionScenario(
             elicitationId,
         });
     }
-    if (prompt === "exercise Cursor extensions") {
-        const question: unknown = await context.client.request("cursor/ask_question", {
-            questions: [
-                {
-                    allowMultiple: false,
-                    id: "mode",
-                    options: [
-                        { id: "agent", label: "Agent" },
-                        { id: "plan", label: "Plan" },
-                    ],
-                    prompt: "Which mode should be used?",
-                },
-            ],
-            title: "Choose a mode",
-            toolCallId: "cursor-question",
-        });
-        const questionOutcome = isRecord(question) ? question["outcome"] : undefined;
-        if (!isRecord(questionOutcome) || questionOutcome["outcome"] !== "skipped") {
-            throw new Error("Cursor question extension was not safely skipped");
-        }
-        const plan: unknown = await context.client.request("cursor/create_plan", {
-            name: "Verify Mobius",
-            plan: "Run the integration scenario",
-            todos: [
-                {
-                    content: "Run the integration scenario",
-                    id: "verify",
-                    status: "pending",
-                },
-            ],
-            toolCallId: "cursor-plan",
-        });
-        const planOutcome = isRecord(plan) ? plan["outcome"] : undefined;
-        if (!isRecord(planOutcome) || planOutcome["outcome"] !== "cancelled") {
-            throw new Error("Cursor plan extension was not safely cancelled");
-        }
-        await context.client.notify("cursor/update_todos", {
-            merge: false,
-            todos: [
-                {
-                    content: "Run the integration scenario",
-                    id: "verify",
-                    status: "completed",
-                },
-            ],
-            toolCallId: "cursor-todos",
-        });
-        await context.client.notify("cursor/task", {
-            description: "Inspect the repository",
-            prompt: "Find the Agent catalog",
-            subagentType: "explore",
-            toolCallId: "cursor-task",
-        });
-        await context.client.notify("cursor/generate_image", {
-            description: "A generated test image",
-            toolCallId: "cursor-image",
-        });
-    }
-
     return { branch: selectedBranch };
 }

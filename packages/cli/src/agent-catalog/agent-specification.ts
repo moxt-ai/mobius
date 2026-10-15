@@ -3,7 +3,6 @@ import { join } from "node:path";
 import type { ClientConnection, InitializeResponse } from "@agentclientprotocol/sdk";
 
 import type { InProcessAcpEndpointFactory } from "../acp/in-process/acp-endpoint.ts";
-import type { ManagedNpmPackageDefinition } from "../agent-installation/managed-npm-package.ts";
 import { type ResolvedExecutable, resolveExecutablePath } from "../process/executable.ts";
 import type { LocalAgentDiscoveryContext } from "./agent-discovery-context.ts";
 import { normalizeVersionOutput } from "./version-output.ts";
@@ -119,30 +118,4 @@ export abstract class InProcessAcpAgentDefinition extends LocalAgentSpecificatio
         this.managedAdapterExecutablePath = Object.freeze([...managedExecutablePath]);
         this.managedAgentExecutablePath = this.managedAdapterExecutablePath;
     }
-}
-
-export abstract class BridgedAcpAgentDefinition extends LocalAgentSpecification {
-    abstract readonly adapterEnvironmentVariable: string;
-    abstract readonly adapterPackageDefinition: ManagedNpmPackageDefinition;
-    readonly launchArguments: readonly string[] = Object.freeze([]);
-
-    get adapterExecutable(): string {
-        return this.adapterPackageDefinition.executableName;
-    }
-
-    get adapterPackage(): string {
-        return this.adapterPackageDefinition.packageName;
-    }
-
-    get adapterVersion(): string {
-        return this.adapterPackageDefinition.version;
-    }
-
-    override readonly createLaunchEnvironment = async (
-        agent: ResolvedExecutable,
-        _context: LocalAgentDiscoveryContext,
-    ): Promise<Readonly<Record<string, string>>> => Object.freeze({ [this.adapterEnvironmentVariable]: agent.path });
-
-    override readonly recoveryCommand = (): string =>
-        `npm install -g --omit=optional ${this.adapterPackage}@${this.adapterVersion}`;
 }

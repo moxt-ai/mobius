@@ -64,45 +64,15 @@ export function registerInitialization(agent: ReturnType<typeof acp.agent>) {
                           }),
                 },
             },
-            authMethods:
-                agentName === "Cursor CLI"
-                    ? [
-                          {
-                              description: "Use the existing local Cursor login",
-                              id: "cursor_login",
-                              name: "Cursor Login",
-                          },
-                      ]
-                    : agentName === "Grok Build"
-                      ? [
-                            {
-                                description: "Use an xAI API key",
-                                id: "xai.api_key",
-                                name: "xAI API key",
-                            },
-                            {
-                                description: "Use the existing local Grok login",
-                                id: "grok.com",
-                                name: "Grok",
-                            },
-                        ]
-                      : agentName === "WorkBuddy"
-                        ? [
-                              {
-                                  description: "Use the existing local WorkBuddy login",
-                                  id: "external",
-                                  name: "External login",
-                              },
-                          ]
-                        : process.argv.includes("--external-authentication")
-                          ? [
-                                {
-                                    description: "Use the existing local Agent login",
-                                    id: "external",
-                                    name: "External login",
-                                },
-                            ]
-                          : [],
+            authMethods: process.argv.includes("--external-authentication")
+                ? [
+                      {
+                          description: "Use the existing local Agent login",
+                          id: "external",
+                          name: "External login",
+                      },
+                  ]
+                : [],
             agentInfo: { name: "Mobius test agent", version: readAgentVersion() },
             protocolVersion: acp.PROTOCOL_VERSION,
         };

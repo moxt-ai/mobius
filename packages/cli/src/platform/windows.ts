@@ -219,7 +219,4 @@ export const windowsPlatform: PlatformSupport = {
         }
         return paths;
     },
-    workBuddyExecutablePaths: () => [],
-    openCodeArchives: {},
-    grokDependencies: {},
 };

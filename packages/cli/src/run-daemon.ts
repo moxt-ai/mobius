@@ -122,7 +122,6 @@ export async function runDaemon(
         catalog: config.catalog,
         environment: config.localContext.environment,
         publishCatalog: async (installationSignal) => await publishAgentCatalog(config, installationSignal),
-        stateDirectory,
     });
     const channelHash = createHash("sha256").update(config.channelId).digest("hex");
     const sessionDatabase = openAcpSessionDatabase(join(stateDirectory, "sessions", `${channelHash}.sqlite`));

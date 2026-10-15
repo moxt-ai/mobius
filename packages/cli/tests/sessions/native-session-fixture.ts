@@ -33,7 +33,7 @@ class NativeSessionObserver extends NullAcpSessionObserver {
 }
 
 export async function fixture(
-    label: string,
+    label: "Claude Code" | "Codex" | "Pi",
     profile:
         | "load-only"
         | "replay-history-once"
@@ -55,12 +55,10 @@ export async function fixture(
     // Controlled ACP peers are used only for protocol-specific scenarios.
     const executable = join(temporary, "agent.mjs");
     await writeFile(executable, `#!${process.execPath}\nawait import(${JSON.stringify(acpUrl)});\n`, { mode: 0o700 });
-    const agentId =
-        label === "Claude Code" ? "claude" : label === "Codex" ? "codex" : label === "Pi" ? "pi" : "opencode";
+    const agentId = label === "Claude Code" ? "claude" : label === "Codex" ? "codex" : "pi";
     const agent = new LocalAgentDefinition(agentId, label, executable, [
         "--agent-name",
         label,
-        ...(agentId === "opencode" ? ["--opencode-native-id"] : []),
         ...(profile === "load-only" ? ["--load-only"] : []),
         ...(profile === "replay-history-once" ? ["--load-only", "--replay-history-once"] : []),
         ...(profile === "unsupported"

@@ -16,7 +16,7 @@ import { fakeProviderPrompts } from "../support/llm/scenarios.ts";
 
 test("Given native Claude is installed outside PATH, When two prompts execute through the daemon, Then discovery finds it and both streamed replies arrive", async () => {
     await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-6", "REAL_CLAUDE_REPLY");
-    await using agent = await ClaudeFixture.create(provider, { requireAdapter: false });
+    await using agent = await ClaudeFixture.create(provider);
     const home = agent.environment["HOME"];
     if (home === undefined) {
         throw new Error("The Claude fixture home is unavailable");
@@ -103,7 +103,7 @@ test.skipIf(process.platform !== "darwin")(
         await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-6", "CLAUDE_RECOVERED", {
             disconnectsBeforeSuccess: 1,
         });
-        await using agent = await ClaudeFixture.create(provider, { requireAdapter: false });
+        await using agent = await ClaudeFixture.create(provider);
         await withRealDaemon(new ClaudeCodeAgentSpecification(), agent.environment, async (peer) => {
             const commandId = randomUUID();
             peer.send(

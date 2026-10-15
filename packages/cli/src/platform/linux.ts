@@ -135,31 +135,4 @@ export const linuxPlatform: PlatformSupport = {
             ? [join(homeDirectory, ".local", "bin", "claude")]
             : [];
     },
-    workBuddyExecutablePaths: () => [],
-    openCodeArchives: {
-        arm64: {
-            asset: "opencode-linux-arm64.tar.gz",
-            sha256: "70baf769395ca4e7a68924026530c390eace194f3b7e4919d4efcb2aa2eed3c0",
-            format: "tar.gz",
-        },
-        x64: {
-            asset: "opencode-linux-x64.tar.gz",
-            sha256: "ea800b7ff56226b70952126c9fc1e2517ca4c4b5682fd9d3f9e87449697a1194",
-            format: "tar.gz",
-        },
-    },
-    grokDependencies: {
-        arm64: {
-            name: "@xai-official/grok-linux-arm64",
-            integrity:
-                "sha512-Jlwz9XtZPNKz/V/ydifC8OVu3hIZz7pmoStt8c4KCqkSWjWiZ/PBIC0iJiq8rvByhx5Z0EdSyq8ZXVwtocceGA==",
-            tarballUrl: "https://registry.npmjs.org/@xai-official/grok-linux-arm64/-/grok-linux-arm64-1.0.21.tgz",
-        },
-        x64: {
-            name: "@xai-official/grok-linux-x64",
-            integrity:
-                "sha512-AjDV5ifEz5LFG2Jt5IlhAeEkJati/wOvCchVbR4eIj2ogjvmXoXlzBrYRXuAJpXBy5q0se/Yuez5FxDU9Ju81w==",
-            tarballUrl: "https://registry.npmjs.org/@xai-official/grok-linux-x64/-/grok-linux-x64-1.0.21.tgz",
-        },
-    },
 };

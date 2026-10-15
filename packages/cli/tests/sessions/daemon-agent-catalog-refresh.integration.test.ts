@@ -21,10 +21,7 @@ import { listen, port, sendText } from "@moxt-ai/mobius-test/websocket";
 import { expect, test } from "vitest";
 import type { LocalAgentSpecification } from "../../src/agent-catalog/agent-specification.ts";
 import { DirectAcpAgentDefinition } from "../../src/agent-catalog/agent-specification.ts";
-import {
-    DeepSeekHarnessAgentSpecification,
-    discoverLocalAgentInventory,
-} from "../../src/agent-catalog/discover-local-agents.ts";
+import { discoverLocalAgentInventory } from "../../src/agent-catalog/discover-local-agents.ts";
 import { publishAgentCatalog } from "../../src/agent-catalog/publish-agent-catalog.ts";
 import { createCatalogAgentResolver } from "../../src/agent-catalog/resolve-catalog-agent.ts";
 import { AuditStore } from "../../src/audit/audit-store.ts";
@@ -34,13 +31,26 @@ import { runDaemon } from "../../src/run-daemon.ts";
 const websocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
 
+class RefreshableAgentSpecification extends DirectAcpAgentDefinition {
+    readonly adapterVersion = "1.0.0";
+    readonly agentExecutable = "controlled-acp";
+    readonly id = "controlled-acp";
+    readonly label = "Controlled ACP";
+    override readonly maximumTestedAgentVersion = this.adapterVersion;
+    override readonly minimumSupportedAgentVersion = this.adapterVersion;
+
+    constructor() {
+        super("MOBIUS_TEST_REFRESHABLE_AGENT_PATH", [], ["agents", "controlled-acp", "bin.js"]);
+    }
+}
+
 // A second ready Agent whose executable never changes, so a refresh of the upgraded Agent must
 // keep exactly one catalog entry for it.
 class UnchangedPeerAgentSpecification extends DirectAcpAgentDefinition {
-    readonly adapterVersion = "0.1.5-rc.3";
-    readonly agentExecutable = "dsh-peer";
-    readonly id = "deepseek-harness-peer";
-    readonly label = "DeepSeek Harness Peer";
+    readonly adapterVersion = "1.0.0";
+    readonly agentExecutable = "controlled-acp-peer";
+    readonly id = "controlled-acp-peer";
+    readonly label = "Controlled ACP Peer";
 
     constructor() {
         super("MOBIUS_TEST_PEER_PATH", ["--profile", "acp"], ["agents", "peer", "bin.js"]);
@@ -48,7 +58,7 @@ class UnchangedPeerAgentSpecification extends DirectAcpAgentDefinition {
 }
 
 function specifications(): readonly LocalAgentSpecification[] {
-    return [new DeepSeekHarnessAgentSpecification(), new UnchangedPeerAgentSpecification()];
+    return [new RefreshableAgentSpecification(), new UnchangedPeerAgentSpecification()];
 }
 
 function launcherSource(version: string, peerUrl: string): string {
@@ -59,7 +69,7 @@ if (process.argv.includes("--version")) {
     process.exit(0);
 }
 process.argv.push(
-    "--agent-name", "DeepSeek Harness",
+    "--agent-name", "Controlled ACP",
     "--agent-version", version,
     "--no-load-session",
     "--http-mcp",
@@ -171,22 +181,22 @@ test("Given the local Agent executable is upgraded after the daemon started, Whe
     const workspace = join(stateDirectory, "workspace");
     const nativeStateDirectory = join(stateDirectory, "native");
     const binDirectory = join(stateDirectory, "bin");
-    const firstLauncher = join(stateDirectory, "dsh-v1");
-    const secondLauncher = join(stateDirectory, "dsh-v2");
-    const link = join(binDirectory, "dsh");
-    const peerLauncher = join(stateDirectory, "dsh-peer");
+    const firstLauncher = join(stateDirectory, "controlled-acp-v1");
+    const secondLauncher = join(stateDirectory, "controlled-acp-v2");
+    const link = join(binDirectory, "controlled-acp");
+    const peerLauncher = join(stateDirectory, "controlled-acp-peer");
     await Promise.all([mkdir(workspace), mkdir(nativeStateDirectory), mkdir(binDirectory)]);
-    await writeFile(firstLauncher, launcherSource("0.1.5-rc.3", new URL(`file://${fakeAgentPath}`).toString()), {
+    await writeFile(firstLauncher, launcherSource("1.0.0", new URL(`file://${fakeAgentPath}`).toString()), {
         mode: 0o700,
     });
-    await writeFile(secondLauncher, launcherSource("0.1.6.0", new URL(`file://${fakeAgentPath}`).toString()), {
+    await writeFile(secondLauncher, launcherSource("1.1.0", new URL(`file://${fakeAgentPath}`).toString()), {
         mode: 0o700,
     });
-    await writeFile(peerLauncher, launcherSource("0.1.5-rc.3", new URL(`file://${fakeAgentPath}`).toString()), {
+    await writeFile(peerLauncher, launcherSource("1.0.0", new URL(`file://${fakeAgentPath}`).toString()), {
         mode: 0o700,
     });
     await symlink(firstLauncher, link);
-    await symlink(peerLauncher, join(binDirectory, "dsh-peer"));
+    await symlink(peerLauncher, join(binDirectory, "controlled-acp-peer"));
 
     const catalogBodies: string[] = [];
     const socketReady = Promise.withResolvers<Duplex>();
@@ -238,7 +248,7 @@ test("Given the local Agent executable is upgraded after the daemon started, Whe
         signal: AbortSignal.timeout(60_000),
         specifications: specifications(),
     });
-    const agent = inventory.readyAgents().find((entry) => entry.id === "deepseek-harness");
+    const agent = inventory.readyAgents().find((entry) => entry.id === "controlled-acp");
     if (agent === undefined || inventory.readyAgents().length !== 2) {
         await rm(stateDirectory, { force: true, recursive: true });
         throw new Error(`Controlled agent was not discovered: ${JSON.stringify(inventory.unavailable)}`);
@@ -276,7 +286,7 @@ test("Given the local Agent executable is upgraded after the daemon started, Whe
             await socketReady.promise,
             encodeSessionPrepareCommand({
                 additionalDirectoryIds: [],
-                agentId: "deepseek-harness",
+                agentId: "controlled-acp",
                 bindingId: config.bindingId,
                 directoryId: "default",
                 kind: "session.prepare",
@@ -290,14 +300,14 @@ test("Given the local Agent executable is upgraded after the daemon started, Whe
         );
         expect(prepared).toMatchObject({
             kind: "session.ready",
-            ready: { agentVersion: "0.1.6.0", sessionId: upgradedSessionId },
+            ready: { agentVersion: "1.1.0", sessionId: upgradedSessionId },
         });
 
         const settingsRequestId = "settings-after-agent-upgrade";
         sendText(
             await socketReady.promise,
             encodeAgentSettingsDiscoverCommand({
-                agentId: "deepseek-harness",
+                agentId: "controlled-acp",
                 kind: AGENT_SETTINGS_DISCOVER_KIND,
                 requestId: settingsRequestId,
             }),
@@ -305,16 +315,16 @@ test("Given the local Agent executable is upgraded after the daemon started, Whe
         const discovered = await nextCommandOutcome(frames, settingsRequestId);
         expect(discovered).toMatchObject({
             kind: AGENT_SETTINGS_DISCOVERED_KIND,
-            discovered: { agentVersion: "0.1.6.0" },
+            discovered: { agentVersion: "1.1.0" },
         });
 
         const republished = catalogBodies
             .map((body) => JSON.parse(body) as { agents: { agentVersion: string; id: string }[] })
-            .filter((catalog) => catalog.agents.some((entry) => entry.agentVersion === "0.1.6.0"));
+            .filter((catalog) => catalog.agents.some((entry) => entry.agentVersion === "1.1.0"));
         expect(republished).toHaveLength(1);
         expect(republished[0]?.agents.map((entry) => entry.id).sort()).toEqual([
-            "deepseek-harness",
-            "deepseek-harness-peer",
+            "controlled-acp",
+            "controlled-acp-peer",
         ]);
     } finally {
         cancellation.abort();

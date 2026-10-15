@@ -10,7 +10,7 @@ import {
     encodeSessionPrepareCommand,
 } from "@moxt-ai/mobius-protocol";
 import { expect, test } from "vitest";
-import { DeepSeekHarnessAgentSpecification } from "../../src/agent-catalog/discover-local-agents.ts";
+import { ControlledAcpAgentSpecification } from "../support/agents/controlled-acp.ts";
 import { withRealDaemon } from "../support/agents/real-daemon.ts";
 
 const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
@@ -22,17 +22,17 @@ function executableSource(source: string): string {
 test("Given an ACP Agent repeatedly fails Runtime initialization, When a conversation is prepared, Then the public failure has a correlated local diagnostic with the sanitized cause chain", async () => {
     const directory = await mkdtemp(join(tmpdir(), "mobius-prepare-diagnostics-"));
     const executableDirectory = join(directory, "bin");
-    const executable = join(executableDirectory, "dsh");
+    const executable = join(executableDirectory, "controlled-acp");
     await mkdir(executableDirectory);
     await writeFile(
         executable,
         executableSource(`
 if (process.argv.includes("--version")) {
-  process.stdout.write("0.1.5-rc.3\\n");
+  process.stdout.write("1.0.0\\n");
 } else {
   process.argv.push(
-    "--agent-name", "DeepSeek Harness",
-    "--agent-version", "0.1.5-rc.3",
+    "--agent-name", "Controlled ACP",
+    "--agent-version", "1.0.0",
     "--no-load-session",
     "--http-mcp",
     "--no-additional-directories",
@@ -48,10 +48,10 @@ if (process.argv.includes("--version")) {
     await chmod(executable, 0o700);
     try {
         await withRealDaemon(
-            new DeepSeekHarnessAgentSpecification(),
+            new ControlledAcpAgentSpecification(),
             {
                 MOBIUS_FAKE_ACP_ALWAYS_FAIL_RUNTIME_INITIALIZATION: "1",
-                MOBIUS_FAKE_ACP_FAIL_RUNTIME_INITIALIZATION: "DeepSeek Harness",
+                MOBIUS_FAKE_ACP_FAIL_RUNTIME_INITIALIZATION: "Controlled ACP",
                 PATH: executableDirectory,
             },
             async (peer) => {
@@ -59,7 +59,7 @@ if (process.argv.includes("--version")) {
                 peer.send(
                     encodeSessionPrepareCommand({
                         additionalDirectoryIds: [],
-                        agentId: "deepseek-harness",
+                        agentId: "controlled-acp",
                         bindingId: peer.bindingId,
                         directoryId: "default",
                         kind: "session.prepare",

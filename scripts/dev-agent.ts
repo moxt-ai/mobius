@@ -3,18 +3,8 @@ import { resolve } from "node:path";
 
 import { ClaudeFixture } from "../packages/cli/tests/support/agents/claude.ts";
 import { CodexFixture } from "../packages/cli/tests/support/agents/codex.ts";
-import { CopilotFixture } from "../packages/cli/tests/support/agents/copilot.ts";
-import { CursorFixture } from "../packages/cli/tests/support/agents/cursor.ts";
-import { DeepSeekFixture } from "../packages/cli/tests/support/agents/deepseek.ts";
-import { GeminiFixture } from "../packages/cli/tests/support/agents/gemini.ts";
-import { GrokFixture } from "../packages/cli/tests/support/agents/grok.ts";
-import { HermesFixture } from "../packages/cli/tests/support/agents/hermes.ts";
-import { OpenCodeFixture } from "../packages/cli/tests/support/agents/opencode.ts";
 import { PiFixture } from "../packages/cli/tests/support/agents/pi.ts";
-import { WorkBuddyFixture } from "../packages/cli/tests/support/agents/workbuddy.ts";
 import { FakeAnthropicProvider } from "../packages/cli/tests/support/llm/anthropic.ts";
-import { FakeCursorProvider } from "../packages/cli/tests/support/llm/cursor.ts";
-import { FakeGeminiProvider } from "../packages/cli/tests/support/llm/gemini.ts";
 import { FakeOpenAiProvider } from "../packages/cli/tests/support/llm/openai.ts";
 
 interface Disposable {
@@ -59,44 +49,14 @@ const agents = {
             "Response from Claude Code through the local fake provider",
         );
         try {
-            return { fixture: await ClaudeFixture.create(provider, { requireAdapter: false }), provider };
+            return { fixture: await ClaudeFixture.create(provider), provider };
         } catch (error) {
             await provider[Symbol.asyncDispose]();
             throw error;
         }
     },
     codex: openAiAgent("gpt-5.6-sol", "Codex", CodexFixture.create),
-    copilot: openAiAgent("gpt-4.1", "GitHub Copilot CLI", CopilotFixture.create),
-    cursor: async (): Promise<AgentSession> => {
-        const provider = await FakeCursorProvider.start();
-        try {
-            const fixture = await CursorFixture.create(provider);
-            return {
-                arguments: ["--disable-auto-update", "--authless", "--agent-endpoint", provider.agentOrigin],
-                executable: fixture.cliExecutable,
-                fixture,
-                provider,
-            };
-        } catch (error) {
-            await provider[Symbol.asyncDispose]();
-            throw error;
-        }
-    },
-    deepseek: openAiAgent("deepseek-chat", "DeepSeek Harness", DeepSeekFixture.create),
-    gemini: async (): Promise<AgentSession> => {
-        const provider = await FakeGeminiProvider.start("Response from Gemini through the local fake provider");
-        try {
-            return { fixture: await GeminiFixture.create(provider), provider };
-        } catch (error) {
-            await provider[Symbol.asyncDispose]();
-            throw error;
-        }
-    },
-    grok: openAiAgent("grok-build", "Grok Build", GrokFixture.create),
-    hermes: openAiAgent("mobius-test-model", "Hermes", HermesFixture.create),
-    opencode: openAiAgent("mobius-test-model", "OpenCode", OpenCodeFixture.create),
     pi: openAiAgent("gpt-5.5", "Pi", PiFixture.create),
-    workbuddy: openAiAgent("mobius-workbuddy", "WorkBuddy", WorkBuddyFixture.create),
 } satisfies Readonly<Record<string, AgentFactory>>;
 
 type AgentName = keyof typeof agents;
@@ -153,9 +113,6 @@ async function run(): Promise<void> {
                 import.meta.dirname,
                 `../.mobius/dev-agents/${requestedAgent}`,
             );
-            if (requestedAgent === "claude") {
-                delete environment["MOBIUS_CLAUDE_ACP_PATH"];
-            }
         }
         const description = target === "daemon" ? "production Mobius daemon" : `real ${requestedAgent}`;
         process.stderr.write(`Starting ${description} with fake provider ${session.provider.origin}\n`);
