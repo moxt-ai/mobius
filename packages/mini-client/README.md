@@ -27,7 +27,7 @@ The state directory contains an AppCredential and Runtime credentials. `create` 
    ```
 
 3. Obtain an App ID and AppCredential provisioned in that local Platform. The default Worker origin is `http://127.0.0.1:8787`.
-4. Confirm that at least one supported local Agent is installed:
+4. Install at least one supported local Agent. Pairing the Runtime works without one, but the Session commands below need an installed Agent:
 
    ```sh
    pnpm mobius agents
