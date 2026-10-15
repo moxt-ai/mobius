@@ -64,7 +64,7 @@ import {
     type AcpTurnOptions,
 } from "./session-contracts.ts";
 import { readAcpSessionFailure } from "./session-failure.ts";
-import { AcpHistoryReplay } from "./session-history.ts";
+import type { AcpHistoryReplay } from "./session-history.ts";
 import { AcpSessionInteractions } from "./session-interactions.ts";
 import { type AcpSessionStore, AcpStoredSession, FoundAcpStoredSession } from "./session-store.ts";
 import { isRecord, truncate } from "./value-utils.ts";
@@ -310,7 +310,7 @@ export class AgentSession implements AcpClientHandler {
 
     readonly #removeStoredSession = (sessionId: string): void => {
         this.#store.remove(sessionId);
-        this.#harness.events.remove(sessionId);
+        this.#harness.removeHistoryEvents(sessionId);
     };
 
     readonly #captureSelectedConfigurationValues = (): void => {
@@ -391,9 +391,9 @@ export class AgentSession implements AcpClientHandler {
     async #completedHistory(signal: AbortSignal, exitMessage: string): Promise<AcpHistoryReplay> {
         if (!this.#prompted && this.#nativeHistoryOwnership.kind === "fresh-session") {
             if (this.#sessionLoad.kind === "not-requested") {
-                this.#harness.events.reset(this.#mobiusSessionId);
+                this.#harness.resetHistoryEvents(this.#mobiusSessionId);
                 this.#sessionLoad = {
-                    history: new AcpHistoryReplay(this.#harness.events, this.#mobiusSessionId),
+                    history: this.#harness.createHistoryReplay(this.#mobiusSessionId),
                     kind: "loaded",
                     response: {},
                 };
@@ -412,8 +412,8 @@ export class AgentSession implements AcpClientHandler {
         if (this.#sessionLoad.kind === "capturing") {
             return await waitForSharedOperation(this.#sessionLoad.completion, signal);
         }
-        this.#harness.events.reset(this.#mobiusSessionId);
-        const history = new AcpHistoryReplay(this.#harness.events, this.#mobiusSessionId);
+        this.#harness.resetHistoryEvents(this.#mobiusSessionId);
+        const history = this.#harness.createHistoryReplay(this.#mobiusSessionId);
         const completion = Promise.resolve().then(async (): Promise<LoadedSession> => {
             try {
                 const response = await this.race(
@@ -947,7 +947,7 @@ export class AgentSession implements AcpClientHandler {
         if (!this.#capabilities.loadSession && this.#sessionLoad.kind === "not-requested") {
             this.#sessionLoad = {
                 kind: "loaded",
-                history: new AcpHistoryReplay(this.#harness.events, this.#mobiusSessionId),
+                history: this.#harness.createHistoryReplay(this.#mobiusSessionId),
                 response: {},
             };
         }
@@ -970,8 +970,7 @@ export class AgentSession implements AcpClientHandler {
             this.prepareAgentContent,
         );
         this.#turn = running;
-        this.#turnHistory =
-            completedHistory === null ? null : new AcpHistoryReplay(this.#harness.events, this.#mobiusSessionId);
+        this.#turnHistory = completedHistory === null ? null : this.#harness.createHistoryReplay(this.#mobiusSessionId);
         const lifecycleV2 = options.lifecycleV2;
         if (lifecycleV2 !== undefined) {
             await this.recordLifecycleEventV2({

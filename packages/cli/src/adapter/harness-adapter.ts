@@ -1,6 +1,6 @@
 import type { NativeSessionHistory, SessionLiveEventV2 } from "@moxt-ai/mobius-protocol";
 import type { AcpNativeEventReplayV2, AcpPrepareOptions } from "../acp/session-contracts.ts";
-import type { AcpSessionEventStoreV2 } from "../acp/session-event-store-v2.ts";
+import type { AcpHistoryReplay } from "../acp/session-history.ts";
 
 export type HarnessNativeHistoryAccess =
     | { readonly kind: "acp" }
@@ -45,8 +45,10 @@ export interface HarnessLiveEventSubscription {
 export type HarnessLiveEventSubscriber = (event: SessionLiveEventV2) => Promise<void>;
 
 export interface HarnessSessionAdapter {
-    readonly events: AcpSessionEventStoreV2;
+    readonly createHistoryReplay: (sessionId: string) => AcpHistoryReplay;
     readonly publishLiveEvent: (event: SessionLiveEventV2) => Promise<void>;
+    readonly removeHistoryEvents: (sessionId: string) => void;
+    readonly resetHistoryEvents: (sessionId: string) => void;
 }
 
 export interface HarnessAdapter extends HarnessSessionAdapter {
@@ -60,7 +62,9 @@ export interface HarnessAdapter extends HarnessSessionAdapter {
 
 export function withoutHarnessLiveEvents(adapter: HarnessAdapter): HarnessSessionAdapter {
     return {
-        events: adapter.events,
+        createHistoryReplay: adapter.createHistoryReplay,
         publishLiveEvent: () => Promise.resolve(),
+        removeHistoryEvents: adapter.removeHistoryEvents,
+        resetHistoryEvents: adapter.resetHistoryEvents,
     };
 }

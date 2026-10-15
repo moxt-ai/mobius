@@ -127,7 +127,7 @@ export class AgentRuntimeManager {
 
     readonly #removeStoredSession = (sessionId: string, agentId: string): void => {
         this.#store.remove(sessionId);
-        this.#adapters.forAgent(agentId).events.remove(sessionId);
+        this.#adapters.forAgent(agentId).removeHistoryEvents(sessionId);
     };
 
     #isNativeSessionOperationActive(sessionId: string): boolean {
@@ -850,7 +850,7 @@ export class AgentRuntimeManager {
                     nativeSessionId,
                     options,
                     readFromHarness: async () =>
-                        await this.#queryProcesses.previewEventsV2(options, nativeSessionId, eventLimit, cursor),
+                        await this.#queryProcesses.previewEventsV2(options, nativeSessionId, eventLimit),
                 });
             } finally {
                 this.#nativeOperations.delete(key);

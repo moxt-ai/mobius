@@ -17,7 +17,6 @@ import { MemoryAcpSessionStore } from "./session-store.ts";
 
 /** Owns query processes; execution processes remain separately retained. */
 export class AgentQueryProcesses {
-    readonly #eventPreviewsBySession = new Map<string, { readonly nativeSessionId: string }>();
     readonly #adapters: HarnessAdapterRegistry;
     readonly #processesByQuery: RetainedAgentProcesses;
     readonly #processes: AgentProcessPool;
@@ -159,19 +158,9 @@ export class AgentQueryProcesses {
         options: AcpPrepareOptions,
         nativeSessionId: string,
         eventLimit: number,
-        cursor: string | null,
     ): Promise<AcpNativeEventReplayV2> => {
         const adapter = this.#adapters.forAgent(options.agent.id);
-        const previewKey = `${options.agent.id}:${options.sessionId}`;
-        if (cursor !== null) {
-            const preview = this.#eventPreviewsBySession.get(previewKey);
-            if (preview === undefined || preview.nativeSessionId !== nativeSessionId) {
-                throw new Error("The native event cursor is invalid");
-            }
-            return adapter.events.page(options.sessionId, eventLimit, cursor);
-        }
         const store = new MemoryAcpSessionStore();
-        this.#eventPreviewsBySession.set(previewKey, { nativeSessionId });
         try {
             return await this.#processes.runTransient(
                 options.signal,
@@ -189,11 +178,6 @@ export class AgentQueryProcesses {
                 },
                 async (runtime) => await runtime.closeProcess(),
             );
-        } catch (error) {
-            if (this.#eventPreviewsBySession.get(previewKey)?.nativeSessionId === nativeSessionId) {
-                this.#eventPreviewsBySession.delete(previewKey);
-            }
-            throw error;
         } finally {
             store.close();
         }
@@ -203,6 +187,5 @@ export class AgentQueryProcesses {
         await Promise.all(
             this.#processesByQuery.entries().map(async ([id, runtime]) => await this.retire(id, runtime)),
         );
-        this.#eventPreviewsBySession.clear();
     };
 }

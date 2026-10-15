@@ -44,19 +44,28 @@ export class CodexHarnessAdapter extends AcpHarnessAdapter {
     override readonly previewPageHistoryEvents = async (request: HarnessHistoryPreviewRequest) => {
         const access = this.#nativeHistory.access(request.options);
         if (access.kind === "acp") {
-            return await request.readFromHarness();
+            return await this.readHarnessPreviewPage(request);
         }
-        const history = await access.read(request.nativeSessionId, () => null);
-        if (history.status === "unavailable") {
-            throw new AcpExecutionError(history.cause.message, {}, history.cause.code);
+        const plan = this.planPreviewPage(request);
+        if (plan.kind === "cached") {
+            return plan.page;
         }
-        return nativeHistoryEventsV2(
-            request.options.sessionId,
-            request.nativeSessionId,
-            history,
-            request.eventLimit,
-            request.cursor,
-            this.events,
-        );
+        try {
+            const history = await access.read(request.nativeSessionId, () => null);
+            if (history.status === "unavailable") {
+                throw new AcpExecutionError(history.cause.message, {}, history.cause.code);
+            }
+            return nativeHistoryEventsV2(
+                request.options.sessionId,
+                request.nativeSessionId,
+                history,
+                request.eventLimit,
+                request.cursor,
+                this.events,
+            );
+        } catch (error) {
+            this.failPreviewPage(request.options.sessionId, plan.token);
+            throw error;
+        }
     };
 }
