@@ -2,6 +2,7 @@ import {
     sessionRecordingInteractionSchema,
     sessionRecordingTurnAttemptSchema,
     sessionRecordingTurnItemSchema,
+    sessionRecordingTurnPrecedingSchema,
     sessionRecordingTurnPromptSchema,
 } from "@moxt-ai/mobius-protocol";
 import { z } from "zod";
@@ -26,6 +27,7 @@ export const storedTurnSchema = z
         // tool work close it, and reasoning from another message starts a new item.
         openThought: z.object({ itemId: z.string(), messageId: z.string().nullable() }).readonly().nullable(),
         order: z.number().int().positive().safe(),
+        preceding: sessionRecordingTurnPrecedingSchema.nullable(),
         prompt: sessionRecordingTurnPromptSchema.nullable(),
     })
     .readonly();

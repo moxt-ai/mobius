@@ -604,6 +604,31 @@ describe("Recording Turn history", () => {
         ]);
     });
 
+    it("Given a steer requested between two tool calls, When a client reads Turns, Then the steer records the running command and how much work it had done", async () => {
+        const tool = (toolCallId: string) =>
+            acp({ sessionUpdate: "tool_call", status: "completed", title: toolCallId, toolCallId });
+        await record([
+            requested("command-1", "Refactor"),
+            started("command-1"),
+            tool("tool-1"),
+            tool("tool-2"),
+            lifecycle({
+                commandId: "command-2",
+                content: [{ text: "Use the new API", type: "text" }],
+                disposition: "steer",
+                kind: "prompt.requested",
+                targetCommandId: "command-1",
+            }),
+            tool("tool-3"),
+            completed("command-1"),
+        ]);
+        const page = await turnPage();
+        expect(page.turns.map((turn) => [turn.commandId, turn.preceding])).toEqual([
+            ["command-2", { commandId: "command-1", itemCount: 2 }],
+            ["command-1", null],
+        ]);
+    });
+
     it("Given an unknown Session or a malformed cursor, When a client reads Turns, Then the read is rejected", async () => {
         expect((await worker.fetch(new Request(sessionPath("turns")), env)).status).toBe(404);
         await completedTurn("command-1", "Prompt 1", "Reply 1");

@@ -203,6 +203,13 @@ export const sessionRecordingTurnPromptSchema = z
     })
     .readonly();
 
+export const sessionRecordingTurnPrecedingSchema = z
+    .object({
+        commandId: identifierStringSchema,
+        itemCount: z.number().int().nonnegative().safe(),
+    })
+    .readonly();
+
 const sessionRecordingTurnSchema = z
     .object({
         answerLength: z.number().int().nonnegative().safe(),
@@ -219,6 +226,10 @@ const sessionRecordingTurnSchema = z
         order: z.number().int().positive().safe(),
         // Null when the Recording holds Agent output for a command whose prompt it never recorded.
         prompt: sessionRecordingTurnPromptSchema.nullable(),
+        // The command whose work was running when this prompt was requested and how many items it had
+        // by then, so a prompt that records no work of its own (a steer) can be placed where it was sent.
+        // Null when no other command was running.
+        preceding: sessionRecordingTurnPrecedingSchema.nullable(),
     })
     .readonly();
 
