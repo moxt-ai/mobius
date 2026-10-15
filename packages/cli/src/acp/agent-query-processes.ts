@@ -1,9 +1,9 @@
 import type { NativeSessionHistory } from "@moxt-ai/mobius-protocol";
+import type { OpenedSession } from "../adapter/harness-adapter.ts";
 import type { HarnessAdapterRegistry } from "../adapter/harness-adapter-registry.ts";
 import type { AcpContentExternalizer } from "../external-content/acp-content-externalizer.ts";
 import { AcpExecutionError } from "./acp-error.ts";
 import type { AgentProcessPool } from "./agent-process-pool.ts";
-import { AgentSession } from "./agent-session.ts";
 import { RetainedAgentProcesses } from "./retained-agent-processes.ts";
 import { waitForSharedOperation } from "./runtime-operations.ts";
 import {
@@ -36,7 +36,7 @@ export class AgentQueryProcesses {
             changed: processes.notifyChanged,
         });
     }
-    readonly retire = async (sessionId: string, runtime: AgentSession): Promise<void> => {
+    readonly retire = async (sessionId: string, runtime: OpenedSession): Promise<void> => {
         const retained = this.#processesByQuery.detach(sessionId, runtime);
         if (retained) {
             this.#store.remove(sessionId);
@@ -44,17 +44,17 @@ export class AgentQueryProcesses {
         await this.#processes.retire(runtime, () => runtime.close());
     };
 
-    async #startRetained(options: AcpPrepareOptions): Promise<AgentSession> {
+    async #startRetained(options: AcpPrepareOptions): Promise<OpenedSession> {
         const runtime = await this.#processes.startRetained(
             options.signal,
-            () =>
-                AgentSession.startNativeSessionBrowser(
+            async () =>
+                await this.#adapters.forAgent(options.agent.id).openSession({
+                    contentExternalizer: this.#contentExternalizer,
+                    getObserver: () => this.#observer,
+                    kind: "native-browser",
                     options,
-                    () => this.#observer,
-                    this.#store,
-                    this.#adapters.forAgent(options.agent.id),
-                    this.#contentExternalizer,
-                ),
+                    store: this.#store,
+                }),
             {
                 isBusy: () => this.#processesByQuery.isBusy(options.sessionId),
                 retire: (runtime) => this.retire(options.sessionId, runtime),
@@ -64,13 +64,13 @@ export class AgentQueryProcesses {
         return runtime;
     }
 
-    async #startPreparation(options: AcpPrepareOptions): Promise<AgentSession> {
+    async #startPreparation(options: AcpPrepareOptions): Promise<OpenedSession> {
         return await this.#processesByQuery.prepare(options.sessionId, async () => {
             return await this.#startRetained(options);
         });
     }
 
-    async #replacePreparation(existing: AgentSession, options: AcpPrepareOptions): Promise<AgentSession> {
+    async #replacePreparation(existing: OpenedSession, options: AcpPrepareOptions): Promise<OpenedSession> {
         return await this.#processesByQuery.prepare(options.sessionId, async () => {
             await this.retire(options.sessionId, existing);
             return await this.#startRetained(options);
@@ -107,7 +107,7 @@ export class AgentQueryProcesses {
         return runtime.prepared();
     };
 
-    async #ensure(options: AcpPrepareOptions): Promise<AgentSession> {
+    async #ensure(options: AcpPrepareOptions): Promise<OpenedSession> {
         const existing = this.#processesByQuery.get(options.sessionId);
         if (existing !== undefined) {
             if (!existing.belongsTo(options.agent.id, options.cwd, options.additionalDirectories)) {
@@ -130,7 +130,7 @@ export class AgentQueryProcesses {
 
     readonly use = async <T>(
         options: AcpPrepareOptions,
-        operation: (runtime: AgentSession) => Promise<T>,
+        operation: (runtime: OpenedSession) => Promise<T>,
     ): Promise<T> =>
         await this.#processesByQuery.use(options.sessionId, async () => await operation(await this.#ensure(options)));
 
@@ -138,13 +138,13 @@ export class AgentQueryProcesses {
         return await this.#processes.runTransient(
             options.signal,
             async () =>
-                await AgentSession.startNativeSessionBrowser(
+                await this.#adapters.forAgent(options.agent.id).openSession({
+                    contentExternalizer: this.#contentExternalizer,
+                    getObserver: () => this.#observer,
+                    kind: "native-browser",
                     options,
-                    () => this.#observer,
-                    new MemoryAcpSessionStore(),
-                    this.#adapters.forAgent(options.agent.id),
-                    this.#contentExternalizer,
-                ),
+                    store: new MemoryAcpSessionStore(),
+                }),
             async (runtime) => {
                 runtime.selectNativeSession(nativeSessionId);
                 return await runtime.loadHistory(options.signal);
@@ -164,13 +164,13 @@ export class AgentQueryProcesses {
             return await this.#processes.runTransient(
                 options.signal,
                 async () =>
-                    await AgentSession.startNativeSessionBrowser(
+                    await adapter.openSession({
+                        contentExternalizer: this.#contentExternalizer,
+                        getObserver: () => this.#observer,
+                        kind: "native-browser",
                         options,
-                        () => this.#observer,
                         store,
-                        adapter,
-                        this.#contentExternalizer,
-                    ),
+                    }),
                 async (runtime) => {
                     runtime.selectNativeSession(nativeSessionId);
                     return await runtime.loadHistoryEventsV2(eventLimit, null, options.signal);

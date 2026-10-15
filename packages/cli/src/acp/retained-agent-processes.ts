@@ -1,11 +1,11 @@
-import type { AgentSession } from "./agent-session.ts";
+import type { OpenedSession } from "../adapter/harness-adapter.ts";
 
-type Resource = { readonly kind: "empty" } | { readonly kind: "ready"; readonly runtime: AgentSession };
+type Resource = { readonly kind: "empty" } | { readonly kind: "ready"; readonly runtime: OpenedSession };
 type Lifecycle =
     | Resource
     | {
           readonly kind: "preparing";
-          readonly completion: Promise<AgentSession>;
+          readonly completion: Promise<OpenedSession>;
           readonly resource: Resource;
       };
 interface Entry {
@@ -13,7 +13,7 @@ interface Entry {
     readonly users: number;
 }
 interface RetainedSessionEvents {
-    readonly touch: (runtime: AgentSession) => void;
+    readonly touch: (runtime: OpenedSession) => void;
     readonly changed: () => void;
 }
 
@@ -35,11 +35,11 @@ export class RetainedAgentProcesses {
     };
     readonly #resource = (entry: Entry): Resource =>
         entry.lifecycle.kind === "preparing" ? entry.lifecycle.resource : entry.lifecycle;
-    readonly get = (id: string): AgentSession | undefined => {
+    readonly get = (id: string): OpenedSession | undefined => {
         const resource = this.#resource(this.#entry(id));
         return resource.kind === "ready" ? resource.runtime : undefined;
     };
-    readonly pending = (id: string): Promise<AgentSession> | undefined => {
+    readonly pending = (id: string): Promise<OpenedSession> | undefined => {
         const state = this.#entry(id).lifecycle;
         return state.kind === "preparing" ? state.completion : undefined;
     };
@@ -59,18 +59,18 @@ export class RetainedAgentProcesses {
             lifecycle: entry.lifecycle.kind === "preparing" ? { ...entry.lifecycle, resource } : resource,
         });
     };
-    readonly retain = (id: string, runtime: AgentSession): void => {
+    readonly retain = (id: string, runtime: OpenedSession): void => {
         this.#setResource(id, { kind: "ready", runtime });
     };
-    readonly detach = (id: string, expected: AgentSession): boolean => {
+    readonly detach = (id: string, expected: OpenedSession): boolean => {
         if (this.get(id) !== expected) {
             return false;
         }
         this.#setResource(id, { kind: "empty" });
         return true;
     };
-    readonly entries = (): readonly (readonly [string, AgentSession])[] => {
-        const result: (readonly [string, AgentSession])[] = [];
+    readonly entries = (): readonly (readonly [string, OpenedSession])[] => {
+        const result: (readonly [string, OpenedSession])[] = [];
         for (const id of this.#entries.keys()) {
             const runtime = this.get(id);
             if (runtime !== undefined) {
@@ -79,12 +79,12 @@ export class RetainedAgentProcesses {
         }
         return result;
     };
-    readonly prepare = (id: string, start: () => Promise<AgentSession>): Promise<AgentSession> => {
+    readonly prepare = (id: string, start: () => Promise<OpenedSession>): Promise<OpenedSession> => {
         const pending = this.pending(id);
         if (pending !== undefined) {
             return pending;
         }
-        const completion = Promise.withResolvers<AgentSession>();
+        const completion = Promise.withResolvers<OpenedSession>();
         const entry = this.#entry(id);
         this.#write(id, {
             ...entry,
@@ -94,7 +94,7 @@ export class RetainedAgentProcesses {
                 resource: this.#resource(entry),
             },
         });
-        const run = async (): Promise<AgentSession> => {
+        const run = async (): Promise<OpenedSession> => {
             try {
                 return await start();
             } finally {

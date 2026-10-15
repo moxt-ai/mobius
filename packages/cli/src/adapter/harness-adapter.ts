@@ -1,6 +1,14 @@
 import type { NativeSessionHistory, SessionLiveEventV2 } from "@moxt-ai/mobius-protocol";
-import type { AcpNativeEventReplayV2, AcpPrepareOptions } from "../acp/session-contracts.ts";
-import type { AcpHistoryReplay } from "../acp/session-history.ts";
+import type { AgentSession } from "../acp/agent-session.ts";
+import type {
+    AcpNativeEventReplayV2,
+    AcpPrepareOptions,
+    AcpSessionObserver,
+    AcpSessionRecovery,
+} from "../acp/session-contracts.ts";
+import type { AcpSessionStore } from "../acp/session-store.ts";
+import type { AcpContentExternalizer } from "../external-content/acp-content-externalizer.ts";
+import type { OperationMetrics } from "../infra/operation-metrics.ts";
 
 export type HarnessNativeHistoryAccess =
     | { readonly kind: "acp" }
@@ -34,16 +42,33 @@ export interface HarnessLiveEventSubscription {
 
 export type HarnessLiveEventSubscriber = (event: SessionLiveEventV2) => Promise<void>;
 
-export interface HarnessSessionEvents {
-    readonly createHistoryReplay: (sessionId: string) => AcpHistoryReplay;
-    readonly publishLiveEvent: (event: SessionLiveEventV2) => Promise<void>;
-    readonly removeHistoryEvents: (sessionId: string) => void;
-    readonly resetHistoryEvents: (sessionId: string) => void;
+interface HarnessSessionRequest {
+    readonly contentExternalizer: AcpContentExternalizer;
+    readonly getObserver: () => AcpSessionObserver;
+    readonly options: AcpPrepareOptions;
+    readonly store: AcpSessionStore;
 }
 
-export interface HarnessAdapter extends HarnessSessionEvents {
+export interface HarnessCreateSessionRequest extends HarnessSessionRequest {
+    readonly authorizeNativeSessionId: (nativeSessionId: string) => void;
+    readonly metrics: OperationMetrics;
+}
+
+export type HarnessOpenSessionRequest =
+    | (HarnessSessionRequest & {
+          readonly kind: "execution";
+          readonly metrics: OperationMetrics;
+          readonly recovery: AcpSessionRecovery;
+      })
+    | (HarnessSessionRequest & { readonly kind: "native-browser" });
+
+export type OpenedSession = AgentSession;
+
+export interface HarnessAdapter {
     readonly close: () => void;
+    readonly createSession: (request: HarnessCreateSessionRequest) => Promise<OpenedSession>;
     readonly id: string;
+    readonly openSession: (request: HarnessOpenSessionRequest) => Promise<OpenedSession>;
     readonly previewPageHistoryEvents: (request: HarnessHistoryPreviewRequest) => Promise<AcpNativeEventReplayV2>;
     readonly readPageHistoryEvents: (request: HarnessHistoryPageRequest) => Promise<AcpNativeEventReplayV2>;
     readonly subscribeLiveEvents: (subscriber: HarnessLiveEventSubscriber) => HarnessLiveEventSubscription;

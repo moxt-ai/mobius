@@ -1,13 +1,13 @@
 import type { NativeSessionHistory, SessionLiveEventV2 } from "@moxt-ai/mobius-protocol";
 import type { AcpNativeEventReplayV2 } from "../acp/session-contracts.ts";
 import type { AcpSessionEventStoreV2 } from "../acp/session-event-store-v2.ts";
-import { AcpHistoryReplay } from "../acp/session-history.ts";
 import { nativeHistoryEventsV2 } from "../native-sessions/native-history-events-v2.ts";
 import type {
     HarnessHistoryPreviewRequest,
     HarnessLiveEventSubscriber,
     HarnessLiveEventSubscription,
 } from "./harness-adapter.ts";
+import { AdapterOpenedSessionEvents, type OpenedSessionEvents } from "./opened-session-events.ts";
 
 export type AdapterPreviewPagePlan =
     | { readonly kind: "cached"; readonly page: AcpNativeEventReplayV2 }
@@ -16,6 +16,7 @@ export type AdapterPreviewPagePlan =
 export class AdapterEventCache {
     readonly #events: AcpSessionEventStoreV2;
     readonly #historyPreviews = new Map<string, { readonly nativeSessionId: string; readonly token: symbol }>();
+    readonly #openedSessions = new Map<string, AdapterOpenedSessionEvents>();
     readonly #subscriptions = new Set<{ readonly subscriber: HarnessLiveEventSubscriber }>();
     #lifecycle: "closed" | "open" = "open";
 
@@ -45,8 +46,36 @@ export class AdapterEventCache {
         }
     };
 
-    readonly createHistoryReplay = (sessionId: string): AcpHistoryReplay =>
-        new AcpHistoryReplay(this.#events, sessionId);
+    readonly openSessionEvents = (sessionId: string): OpenedSessionEvents => {
+        if (this.#lifecycle === "closed") {
+            throw new Error("The harness adapter event cache is closed");
+        }
+        const existing = this.#openedSessions.get(sessionId);
+        if (existing !== undefined) {
+            return existing;
+        }
+        const opened = new AdapterOpenedSessionEvents(
+            this.#events,
+            sessionId,
+            this.publishLiveEvent,
+            (closedSessionId) => {
+                this.#historyPreviews.delete(closedSessionId);
+                this.#events.remove(closedSessionId);
+                this.#openedSessions.delete(closedSessionId);
+            },
+        );
+        this.#openedSessions.set(sessionId, opened);
+        return opened;
+    };
+
+    readonly createSessionEvents = (sessionId: string): OpenedSessionEvents => {
+        if (this.#openedSessions.has(sessionId)) {
+            throw new Error("The harness session is already open");
+        }
+        this.#historyPreviews.delete(sessionId);
+        this.#events.reset(sessionId);
+        return this.openSessionEvents(sessionId);
+    };
 
     readonly materializeNativeHistory = (
         sessionId: string,
@@ -56,10 +85,6 @@ export class AdapterEventCache {
         cursor: string | null,
     ): AcpNativeEventReplayV2 =>
         nativeHistoryEventsV2(sessionId, nativeSessionId, history, eventLimit, cursor, this.#events);
-
-    readonly removeHistoryEvents = (sessionId: string): void => this.#events.remove(sessionId);
-
-    readonly resetHistoryEvents = (sessionId: string): void => this.#events.reset(sessionId);
 
     readonly publishLiveEvent = async (event: SessionLiveEventV2): Promise<void> => {
         for (const subscription of this.#subscriptions) {
@@ -92,6 +117,10 @@ export class AdapterEventCache {
         this.#lifecycle = "closed";
         this.#subscriptions.clear();
         this.#historyPreviews.clear();
+        for (const session of this.#openedSessions.values()) {
+            session.shutdown();
+        }
+        this.#openedSessions.clear();
         this.#events.close();
     };
 }

@@ -23,7 +23,7 @@ import {
     type SessionConfigOption,
     type SessionEventPayloadV2,
 } from "@moxt-ai/mobius-protocol";
-import type { HarnessSessionEvents } from "../adapter/harness-adapter.ts";
+import type { OpenedSessionEvents } from "../adapter/opened-session-events.ts";
 import type { LocalRasterImage } from "../authorization/local-raster.ts";
 import { readInlineRaster, readLocalRaster } from "../authorization/local-raster.ts";
 import { type LocalVideo, readInlineVideo } from "../authorization/local-video.ts";
@@ -64,7 +64,6 @@ import {
     type AcpTurnOptions,
 } from "./session-contracts.ts";
 import { readAcpSessionFailure } from "./session-failure.ts";
-import type { AcpHistoryReplay } from "./session-history.ts";
 import { AcpSessionInteractions } from "./session-interactions.ts";
 import { type AcpSessionStore, AcpStoredSession, FoundAcpStoredSession } from "./session-store.ts";
 import { isRecord, truncate } from "./value-utils.ts";
@@ -84,7 +83,6 @@ type SessionLoadState =
     | { readonly kind: "not-requested" }
     | {
           readonly completion: Promise<LoadedSession>;
-          readonly history: AcpHistoryReplay;
           readonly kind: "capturing";
       }
     | LoadedSession;
@@ -94,8 +92,11 @@ type NativeHistoryOwnership =
     | { readonly kind: "fresh-session" }
     | { readonly kind: "agent-owned" };
 
+type SessionEventsState =
+    | { readonly kind: "creating" }
+    | { readonly events: OpenedSessionEvents; readonly kind: "opened" };
+
 interface LoadedSession {
-    readonly history: AcpHistoryReplay;
     readonly kind: "loaded";
     readonly response: unknown;
 }
@@ -113,7 +114,6 @@ export function recordsEqual(left: Readonly<Record<string, string>>, right: Read
 export class AgentSession implements AcpClientHandler {
     readonly #connection: AgentConnection;
     readonly #contentExternalizer: AcpContentExternalizer;
-    readonly #events: HarnessSessionEvents;
     readonly #interactions: AcpSessionInteractions;
     readonly #additionalDirectories: readonly string[];
     readonly #agentId: string;
@@ -140,7 +140,7 @@ export class AgentSession implements AcpClientHandler {
     #sessionTitle: string | null = null;
     #sessionUpdatedAt = "";
     #turn: AcpTurnState = new IdleAcpTurn();
-    #turnHistory: AcpHistoryReplay | null = null;
+    #sessionEvents: SessionEventsState;
 
     private constructor(
         agent: AcpAgentDefinition,
@@ -149,7 +149,7 @@ export class AgentSession implements AcpClientHandler {
         mobiusSessionId: string,
         getObserver: () => AcpSessionObserver,
         store: AcpSessionStore,
-        events: HarnessSessionEvents,
+        sessionEvents: SessionEventsState,
         metrics: OperationMetrics,
         contentExternalizer: AcpContentExternalizer,
     ) {
@@ -164,7 +164,7 @@ export class AgentSession implements AcpClientHandler {
         this.#metrics = metrics;
         this.#sessionConfigProtocol = sessionConfigProtocolForAgent(agent.id);
         this.#store = store;
-        this.#events = events;
+        this.#sessionEvents = sessionEvents;
         this.#verifiedAgentVersion = agent.agentVersion;
         this.#interactions = new AcpSessionInteractions({
             sessionId: () => this.#mobiusSessionId,
@@ -181,7 +181,7 @@ export class AgentSession implements AcpClientHandler {
         options: AcpPrepareOptions,
         getObserver: () => AcpSessionObserver,
         store: AcpSessionStore,
-        events: HarnessSessionEvents,
+        sessionEvents: SessionEventsState,
         initialize: (runtime: AgentSession) => Promise<void>,
         metrics: OperationMetrics,
         contentExternalizer: AcpContentExternalizer,
@@ -217,7 +217,7 @@ export class AgentSession implements AcpClientHandler {
                         options.sessionId,
                         getObserver,
                         store,
-                        events,
+                        sessionEvents,
                         metrics,
                         contentExternalizer,
                     ),
@@ -248,7 +248,7 @@ export class AgentSession implements AcpClientHandler {
         recovery: AcpSessionRecovery,
         getObserver: () => AcpSessionObserver,
         store: AcpSessionStore,
-        events: HarnessSessionEvents,
+        sessionEvents: OpenedSessionEvents,
         metrics: OperationMetrics,
         contentExternalizer: AcpContentExternalizer,
     ): Promise<AgentSession> =>
@@ -256,7 +256,7 @@ export class AgentSession implements AcpClientHandler {
             options,
             getObserver,
             store,
-            events,
+            { events: sessionEvents, kind: "opened" },
             async (runtime) => await runtime.initialize(options.signal, recovery, options.origin),
             metrics,
             contentExternalizer,
@@ -266,14 +266,14 @@ export class AgentSession implements AcpClientHandler {
         options: AcpPrepareOptions,
         getObserver: () => AcpSessionObserver,
         store: AcpSessionStore,
-        events: HarnessSessionEvents,
+        sessionEvents: OpenedSessionEvents,
         contentExternalizer: AcpContentExternalizer,
     ): Promise<AgentSession> =>
         await AgentSession.#start(
             options,
             getObserver,
             store,
-            events,
+            { events: sessionEvents, kind: "opened" },
             async (runtime) => await runtime.#initializeAgent(options.signal),
             unmeasuredOperationMetrics,
             contentExternalizer,
@@ -290,6 +290,30 @@ export class AgentSession implements AcpClientHandler {
     readonly canRebind = (): boolean => !this.#prompted && !this.#turn.running;
 
     readonly hasRunningTurn = (): boolean => this.#turn.running;
+
+    static readonly create = async (
+        options: AcpPrepareOptions,
+        getObserver: () => AcpSessionObserver,
+        store: AcpSessionStore,
+        metrics: OperationMetrics,
+        contentExternalizer: AcpContentExternalizer,
+    ): Promise<AgentSession> =>
+        await AgentSession.#start(
+            options,
+            getObserver,
+            store,
+            { kind: "creating" },
+            async (runtime) => await runtime.initialize(options.signal, { kind: "interactive-only" }),
+            metrics,
+            contentExternalizer,
+        );
+
+    readonly #openedSessionEvents = (): OpenedSessionEvents => {
+        if (this.#sessionEvents.kind === "creating") {
+            throw new Error("The session event stream has not been opened");
+        }
+        return this.#sessionEvents.events;
+    };
 
     readonly #writeStoredSession = (updatedAt: string): void => {
         this.#store.write(
@@ -309,7 +333,6 @@ export class AgentSession implements AcpClientHandler {
 
     readonly #removeStoredSession = (sessionId: string): void => {
         this.#store.remove(sessionId);
-        this.#events.removeHistoryEvents(sessionId);
     };
 
     readonly #captureSelectedConfigurationValues = (): void => {
@@ -357,7 +380,7 @@ export class AgentSession implements AcpClientHandler {
             };
         }
         const history = await this.#completedHistory(signal, "ACP agent exited while loading history");
-        return await embedLocalHistoryImages(await history.snapshot(), signal);
+        return await embedLocalHistoryImages(await history.historySnapshot(), signal);
     };
 
     readonly ensureHistoryLoaded = async (signal: AbortSignal): Promise<void> => {
@@ -384,24 +407,24 @@ export class AgentSession implements AcpClientHandler {
             );
         }
         const history = await this.#completedHistory(signal, "ACP agent exited while loading history");
-        return history.eventPage(eventLimit, cursor);
+        return history.historyEventPage(eventLimit, cursor);
     };
 
-    async #completedHistory(signal: AbortSignal, exitMessage: string): Promise<AcpHistoryReplay> {
+    async #completedHistory(signal: AbortSignal, exitMessage: string): Promise<OpenedSessionEvents> {
         if (!this.#prompted && this.#nativeHistoryOwnership.kind === "fresh-session") {
             if (this.#sessionLoad.kind === "not-requested") {
-                this.#events.resetHistoryEvents(this.#mobiusSessionId);
+                this.#openedSessionEvents().startHistoryLoad();
                 this.#sessionLoad = {
-                    history: this.#events.createHistoryReplay(this.#mobiusSessionId),
                     kind: "loaded",
                     response: {},
                 };
             }
             if (this.#sessionLoad.kind === "loaded") {
-                return this.#sessionLoad.history;
+                return this.#openedSessionEvents();
             }
         }
-        return (await this.#loadSession(signal, exitMessage)).history;
+        await this.#loadSession(signal, exitMessage);
+        return this.#openedSessionEvents();
     }
 
     async #loadSession(signal: AbortSignal, exitMessage: string): Promise<LoadedSession> {
@@ -411,8 +434,7 @@ export class AgentSession implements AcpClientHandler {
         if (this.#sessionLoad.kind === "capturing") {
             return await waitForSharedOperation(this.#sessionLoad.completion, signal);
         }
-        this.#events.resetHistoryEvents(this.#mobiusSessionId);
-        const history = this.#events.createHistoryReplay(this.#mobiusSessionId);
+        this.#openedSessionEvents().startHistoryLoad();
         const completion = Promise.resolve().then(async (): Promise<LoadedSession> => {
             try {
                 const response = await this.race(
@@ -431,7 +453,7 @@ export class AgentSession implements AcpClientHandler {
                 );
                 await this.#updates.drained();
                 signal.throwIfAborted();
-                const loaded = { history, kind: "loaded", response } satisfies LoadedSession;
+                const loaded = { kind: "loaded", response } satisfies LoadedSession;
                 this.#sessionLoad = loaded;
                 return loaded;
             } catch (cause) {
@@ -439,7 +461,7 @@ export class AgentSession implements AcpClientHandler {
                 throw cause;
             }
         });
-        this.#sessionLoad = { completion, history, kind: "capturing" };
+        this.#sessionLoad = { completion, kind: "capturing" };
         return await completion;
     }
 
@@ -764,7 +786,10 @@ export class AgentSession implements AcpClientHandler {
 
     readonly nativeSessionId = (): string => this.#updates.sessionId();
 
-    readonly adoptNativeSessionId = (sessionId: string): void => {
+    readonly finishCreation = (sessionId: string, sessionEvents: OpenedSessionEvents): void => {
+        if (this.#sessionEvents.kind !== "creating") {
+            throw new Error("The session creation has already finished");
+        }
         if (this.#prompted || this.#updates.sessionId() !== sessionId) {
             throw new AcpExecutionError("The new native Session cannot be adopted", {}, "session_identity_mismatch");
         }
@@ -782,8 +807,9 @@ export class AgentSession implements AcpClientHandler {
                 this.#sessionConfigurations.stored(),
             ),
         );
-        this.#removeStoredSession(previousSessionId);
+        this.#store.remove(previousSessionId);
         this.#mobiusSessionId = sessionId;
+        this.#sessionEvents = { events: sessionEvents, kind: "opened" };
     };
 
     readonly #applyConfiguration = async (
@@ -936,17 +962,20 @@ export class AgentSession implements AcpClientHandler {
             throw new AcpExecutionError("Another prompt is already running in this conversation", {}, "session_busy");
         }
         if (!this.#capabilities.loadSession && this.#sessionLoad.kind === "not-requested") {
+            this.#openedSessionEvents().startHistoryLoad();
             this.#sessionLoad = {
                 kind: "loaded",
-                history: this.#events.createHistoryReplay(this.#mobiusSessionId),
                 response: {},
             };
         }
-        const completedHistory = this.#capabilities.loadSession
+        const openedSession = this.#capabilities.loadSession
             ? await this.#completedHistory(options.signal, "ACP agent exited while loading history before a prompt")
             : this.#sessionLoad.kind === "loaded"
-              ? this.#sessionLoad.history
-              : null;
+              ? this.#openedSessionEvents()
+              : undefined;
+        if (openedSession === undefined) {
+            throw new AcpExecutionError("The Session history is unavailable");
+        }
         const prompt = this.buildPrompt(options);
         if (this.#sessionTitle === null || this.#sessionTitle.length === 0) {
             this.#sessionTitle = truncate(options.prompt, 500);
@@ -961,7 +990,7 @@ export class AgentSession implements AcpClientHandler {
             this.prepareAgentContent,
         );
         this.#turn = running;
-        this.#turnHistory = completedHistory === null ? null : this.#events.createHistoryReplay(this.#mobiusSessionId);
+        openedSession.startTurn();
         const lifecycleV2 = options.lifecycleV2;
         if (lifecycleV2 !== undefined) {
             await this.recordLifecycleEventV2({
@@ -1057,10 +1086,7 @@ export class AgentSession implements AcpClientHandler {
             }
             throw failure;
         } finally {
-            if (completedHistory !== null && this.#turnHistory !== null) {
-                await completedHistory.append(this.#turnHistory);
-            }
-            this.#turnHistory = null;
+            await openedSession.completeTurn();
             this.#turn = new IdleAcpTurn();
         }
     };
@@ -1201,11 +1227,7 @@ export class AgentSession implements AcpClientHandler {
         if (event.type !== "lifecycle-metadata" || this.#sessionLoad.kind !== "loaded") {
             return;
         }
-        const liveEvent =
-            this.#turnHistory === null
-                ? this.#sessionLoad.history.recordLifecycle(event)
-                : this.#turnHistory.recordLifecycle(event);
-        await this.#events.publishLiveEvent(liveEvent);
+        await this.#openedSessionEvents().recordLifecycleEvent(event);
     };
 
     readonly selectNativeSession = (sessionId: string): void => {
@@ -1223,13 +1245,9 @@ export class AgentSession implements AcpClientHandler {
         const update = externalized.agent;
         const rawUpdate = decodeAcpSessionUpdateV2(JSON.stringify(externalized.event));
         if (this.#sessionLoad.kind === "capturing") {
-            await this.#sessionLoad.history.record(update, rawUpdate);
-        } else {
-            if (this.#turnHistory !== null) {
-                await this.#turnHistory.record(update, rawUpdate, this.#events.publishLiveEvent);
-            } else if (this.#sessionLoad.kind === "loaded") {
-                await this.#sessionLoad.history.record(update, rawUpdate, this.#events.publishLiveEvent);
-            }
+            await this.#openedSessionEvents().recordHistoryUpdate(update, rawUpdate);
+        } else if (this.#sessionLoad.kind === "loaded") {
+            await this.#openedSessionEvents().recordLiveUpdate(update, rawUpdate);
         }
         if (
             this.#sessionLoad.kind === "capturing" &&
@@ -1384,7 +1402,13 @@ export class AgentSession implements AcpClientHandler {
                 }
             }
         } finally {
-            await this.closeProcess();
+            try {
+                await this.closeProcess();
+            } finally {
+                if (this.#sessionEvents.kind === "opened") {
+                    this.#sessionEvents.events.close();
+                }
+            }
         }
     };
 

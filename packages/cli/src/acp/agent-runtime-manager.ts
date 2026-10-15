@@ -1,6 +1,5 @@
 import { ActiveExecutions } from "./active-executions.ts";
 import { AgentQueryProcesses } from "./agent-query-processes.ts";
-import { AgentSession } from "./agent-session.ts";
 import { RetainedAgentProcesses } from "./retained-agent-processes.ts";
 import { RuntimeOperations, waitForSharedOperation } from "./runtime-operations.ts";
 
@@ -13,13 +12,12 @@ import type {
     SessionStatus,
     SessionStatusChangedEvent,
 } from "@moxt-ai/mobius-protocol";
-import type { HarnessLiveEventSubscription } from "../adapter/harness-adapter.ts";
+import type { HarnessLiveEventSubscription, OpenedSession } from "../adapter/harness-adapter.ts";
 import { HarnessAdapterRegistry } from "../adapter/harness-adapter-registry.ts";
 import { AcpContentExternalizer } from "../external-content/acp-content-externalizer.ts";
 import { UnretainedExternalContentStore } from "../external-content/local-external-content-store.ts";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
 import { isNativeChatSessionId } from "../native-sessions/chat-agent.ts";
-import { nativeHistoryEventsV2 } from "../native-sessions/native-history-events-v2.ts";
 import { type DaemonTimer, systemDaemonTimer } from "../relay-connection/timer.ts";
 import { AcpExecutionError } from "./acp-error.ts";
 import { AgentProcessPool, type AgentProcessRetention } from "./agent-process-pool.ts";
@@ -125,9 +123,8 @@ export class AgentRuntimeManager {
         this.#observer = observer;
     };
 
-    readonly #removeStoredSession = (sessionId: string, agentId: string): void => {
+    readonly #removeStoredSession = (sessionId: string): void => {
         this.#store.remove(sessionId);
-        this.#adapters.forAgent(agentId).removeHistoryEvents(sessionId);
     };
 
     #isNativeSessionOperationActive(sessionId: string): boolean {
@@ -148,7 +145,7 @@ export class AgentRuntimeManager {
         };
     }
 
-    async #retireSessionProcess(sessionId: string, runtime: AgentSession, close: () => Promise<void>): Promise<void> {
+    async #retireSessionProcess(sessionId: string, runtime: OpenedSession, close: () => Promise<void>): Promise<void> {
         const retained = this.#executionProcesses.detach(sessionId, runtime);
         try {
             await this.#processes.retire(runtime, close);
@@ -160,7 +157,7 @@ export class AgentRuntimeManager {
                     stored.session.nativeSessionId === sessionId &&
                     isNativeChatSessionId(stored.session.agentId, sessionId)
                 ) {
-                    this.#removeStoredSession(sessionId, stored.session.agentId);
+                    this.#removeStoredSession(sessionId);
                 }
             }
         }
@@ -168,8 +165,8 @@ export class AgentRuntimeManager {
 
     async #startRetainedSessionProcess(
         options: AcpPrepareOptions,
-        start: () => Promise<AgentSession>,
-    ): Promise<AgentSession> {
+        start: () => Promise<OpenedSession>,
+    ): Promise<OpenedSession> {
         const runtime = await this.#processes.startRetained(options.signal, start, this.#retention(options.sessionId));
         this.#executionProcesses.retain(options.sessionId, runtime);
         return runtime;
@@ -179,36 +176,38 @@ export class AgentRuntimeManager {
         options: AcpPrepareOptions,
         recovery: AcpSessionRecovery,
         metrics: OperationMetrics = unmeasuredOperationMetrics,
-    ): Promise<AgentSession> {
+    ): Promise<OpenedSession> {
         const adapter = this.#adapters.forAgent(options.agent.id);
         return await this.#executionProcesses.prepare(options.sessionId, async () => {
+            const sessionOptions: AcpPrepareOptions =
+                options.origin === undefined &&
+                this.#sessionIdentity === "native" &&
+                isNativeChatSessionId(options.agent.id, options.sessionId) &&
+                this.#store.read(options.sessionId) instanceof MissingAcpStoredSession
+                    ? { ...options, origin: { kind: "import", nativeSessionId: options.sessionId, title: "" } }
+                    : options;
             return await this.#startRetainedSessionProcess(
                 options,
                 async () =>
-                    await AgentSession.start(
-                        options.origin === undefined &&
-                            this.#sessionIdentity === "native" &&
-                            isNativeChatSessionId(options.agent.id, options.sessionId) &&
-                            this.#store.read(options.sessionId) instanceof MissingAcpStoredSession
-                            ? { ...options, origin: { kind: "import", nativeSessionId: options.sessionId, title: "" } }
-                            : options,
-                        recovery,
-                        () => this.#observer,
-                        this.#store,
-                        adapter,
+                    await adapter.openSession({
+                        contentExternalizer: this.#contentExternalizer,
+                        getObserver: () => this.#observer,
+                        kind: "execution",
                         metrics,
-                        this.#contentExternalizer,
-                    ),
+                        options: sessionOptions,
+                        recovery,
+                        store: this.#store,
+                    }),
             );
         });
     }
 
     async #replacePreparation(
-        existing: AgentSession,
+        existing: OpenedSession,
         options: AcpPrepareOptions,
         recovery: AcpSessionRecovery,
         metrics: OperationMetrics,
-    ): Promise<AgentSession> {
+    ): Promise<OpenedSession> {
         const adapter = this.#adapters.forAgent(options.agent.id);
         return await this.#executionProcesses.prepare(options.sessionId, async () => {
             await this.#retireSessionProcess(
@@ -216,24 +215,24 @@ export class AgentRuntimeManager {
                 existing,
                 async () => await metrics.measure("runtime-replacement-close", async () => await existing.close()),
             );
-            this.#removeStoredSession(options.sessionId, options.agent.id);
+            this.#removeStoredSession(options.sessionId);
             return await this.#startRetainedSessionProcess(
                 options,
                 async () =>
-                    await AgentSession.start(
+                    await adapter.openSession({
+                        contentExternalizer: this.#contentExternalizer,
+                        getObserver: () => this.#observer,
+                        kind: "execution",
+                        metrics,
                         options,
                         recovery,
-                        () => this.#observer,
-                        this.#store,
-                        adapter,
-                        metrics,
-                        this.#contentExternalizer,
-                    ),
+                        store: this.#store,
+                    }),
             );
         });
     }
 
-    async #replaceExecutionPreparation(existing: AgentSession, options: AcpPrepareOptions): Promise<AgentSession> {
+    async #replaceExecutionPreparation(existing: OpenedSession, options: AcpPrepareOptions): Promise<OpenedSession> {
         const desiredConfigOptions = existing.prepared().configOptions;
         const adapter = this.#adapters.forAgent(options.agent.id);
         return await this.#executionProcesses.prepare(options.sessionId, async () => {
@@ -241,15 +240,15 @@ export class AgentRuntimeManager {
             const runtime = await this.#startRetainedSessionProcess(
                 options,
                 async () =>
-                    await AgentSession.start(
+                    await adapter.openSession({
+                        contentExternalizer: this.#contentExternalizer,
+                        getObserver: () => this.#observer,
+                        kind: "execution",
+                        metrics: unmeasuredOperationMetrics,
                         options,
-                        { kind: "interactive-only" },
-                        () => this.#observer,
-                        this.#store,
-                        adapter,
-                        unmeasuredOperationMetrics,
-                        this.#contentExternalizer,
-                    ),
+                        recovery: { kind: "interactive-only" },
+                        store: this.#store,
+                    }),
             );
             try {
                 for (const desired of desiredConfigOptions) {
@@ -375,21 +374,23 @@ export class AgentRuntimeManager {
     ): Promise<AcpAgentSettingsSnapshot> =>
         this.#operations.run(options, async (options) => {
             const adapter = this.#adapters.forAgent(options.agent.id);
+            const sessionId = `agent-settings-${crypto.randomUUID()}`;
+            const store = new MemoryAcpSessionStore();
             return await this.#processes.runTransient(
                 options.signal,
                 async () =>
-                    await AgentSession.start(
-                        {
+                    await adapter.openSession({
+                        contentExternalizer: this.#contentExternalizer,
+                        getObserver: () => this.#agentSettingsObserver,
+                        kind: "execution",
+                        metrics: unmeasuredOperationMetrics,
+                        options: {
                             ...options,
-                            sessionId: `agent-settings-${crypto.randomUUID()}`,
+                            sessionId,
                         },
-                        { kind: "interactive-only" },
-                        () => this.#agentSettingsObserver,
-                        new MemoryAcpSessionStore(),
-                        adapter,
-                        unmeasuredOperationMetrics,
-                        this.#contentExternalizer,
-                    ),
+                        recovery: { kind: "interactive-only" },
+                        store,
+                    }),
                 async (runtime) => {
                     const prepared = runtime.prepared();
                     const discoveredModelEffort = runtime.agentSettingsModelEffort();
@@ -405,7 +406,7 @@ export class AgentRuntimeManager {
                                           (option) => option.id === "model" || option.category === "model",
                                       )?.id ?? "model",
                                   requestId: "agent-settings-model",
-                                  sessionId: `agent-settings-${crypto.randomUUID()}`,
+                                  sessionId,
                                   value: model,
                                   valueType: "select",
                               });
@@ -449,7 +450,7 @@ export class AgentRuntimeManager {
                     try {
                         await this.#retireSessionProcess(options.sessionId, runtime, async () => await runtime.close());
                     } finally {
-                        this.#removeStoredSession(options.sessionId, options.agent.id);
+                        this.#removeStoredSession(options.sessionId);
                     }
                 }
             });
@@ -729,47 +730,45 @@ export class AgentRuntimeManager {
 
     readonly createNativeSession = async (options: AcpPrepareOptions): Promise<string> =>
         this.#operations.run(options, async (options) => {
-            const temporarySessionId = `new-${crypto.randomUUID()}`;
-            const temporaryOptions = { ...options, sessionId: temporarySessionId };
-            return await this.#executionProcesses.use(temporarySessionId, async () => {
-                try {
-                    const runtime = await this.#startPreparation(temporaryOptions, { kind: "interactive-only" });
-                    let adopted = false;
-                    try {
-                        const nativeSessionId = runtime.nativeSessionId();
-                        if (
-                            !isNativeChatSessionId(options.agent.id, nativeSessionId) ||
-                            this.#executionProcesses.get(nativeSessionId) !== undefined ||
-                            !(this.#store.read(nativeSessionId) instanceof MissingAcpStoredSession)
-                        ) {
-                            throw new AcpExecutionError(
-                                "The Agent returned an invalid new Session ID",
-                                {},
-                                "invalid_native_session_response",
-                            );
-                        }
-                        runtime.adoptNativeSessionId(nativeSessionId);
-                        this.#executionProcesses.detach(temporarySessionId, runtime);
-                        this.#executionProcesses.retain(nativeSessionId, runtime);
-                        this.#processes.retain(runtime, this.#retention(nativeSessionId));
-                        adopted = true;
-                        return nativeSessionId;
-                    } finally {
-                        if (!adopted) {
-                            await this.#retireSessionProcess(
-                                temporarySessionId,
-                                runtime,
-                                async () => await runtime.closeProcess(),
-                            );
-                        }
-                    }
-                } finally {
-                    this.#removeStoredSession(temporarySessionId, options.agent.id);
+            const adapter = this.#adapters.forAgent(options.agent.id);
+            const runtime = await this.#processes.startTransient(
+                options.signal,
+                async () =>
+                    await adapter.createSession({
+                        authorizeNativeSessionId: (nativeSessionId) => {
+                            if (
+                                this.#executionProcesses.get(nativeSessionId) !== undefined ||
+                                !(this.#store.read(nativeSessionId) instanceof MissingAcpStoredSession)
+                            ) {
+                                throw new AcpExecutionError(
+                                    "The Agent returned an invalid new Session ID",
+                                    {},
+                                    "invalid_native_session_response",
+                                );
+                            }
+                        },
+                        contentExternalizer: this.#contentExternalizer,
+                        getObserver: () => this.#observer,
+                        metrics: unmeasuredOperationMetrics,
+                        options,
+                        store: this.#store,
+                    }),
+            );
+            let retained = false;
+            try {
+                const nativeSessionId = runtime.nativeSessionId();
+                this.#executionProcesses.retain(nativeSessionId, runtime);
+                this.#processes.retain(runtime, this.#retention(nativeSessionId));
+                retained = true;
+                return nativeSessionId;
+            } finally {
+                if (!retained) {
+                    await this.#processes.retire(runtime, async () => await runtime.close());
                 }
-            });
+            }
         });
 
-    readonly ensureSession = async (options: AcpPrepareOptions): Promise<AgentSession> =>
+    readonly ensureSession = async (options: AcpPrepareOptions): Promise<OpenedSession> =>
         this.#operations.run(options, async (options) => {
             const existing = this.#executionProcesses.get(options.sessionId);
             if (existing !== undefined) {
@@ -958,7 +957,7 @@ export class AgentRuntimeManager {
                         this.#processes.notifyChanged();
                     }
                 } catch (error) {
-                    this.#removeStoredSession(options.sessionId, options.agent.id);
+                    this.#removeStoredSession(options.sessionId);
                     const runtime = this.#executionProcesses.get(options.sessionId);
                     if (runtime !== undefined) {
                         await this.#retireSessionProcess(

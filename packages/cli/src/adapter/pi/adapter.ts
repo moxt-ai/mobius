@@ -1,13 +1,15 @@
-import type { SessionLiveEventV2 } from "@moxt-ai/mobius-protocol";
 import type { AcpSessionEventStoreV2 } from "../../acp/session-event-store-v2.ts";
-import type { AcpHistoryReplay } from "../../acp/session-history.ts";
+import { createAcpSession, openAcpSession } from "../acp-session-lifecycle.ts";
 import { AdapterEventCache } from "../adapter-event-cache.ts";
 import type {
     HarnessAdapter,
+    HarnessCreateSessionRequest,
     HarnessHistoryPageRequest,
     HarnessHistoryPreviewRequest,
     HarnessLiveEventSubscriber,
     HarnessLiveEventSubscription,
+    HarnessOpenSessionRequest,
+    OpenedSession,
 } from "../harness-adapter.ts";
 
 export class PiHarnessAdapter implements HarnessAdapter {
@@ -33,15 +35,11 @@ export class PiHarnessAdapter implements HarnessAdapter {
         }
     };
 
-    readonly createHistoryReplay = (sessionId: string): AcpHistoryReplay =>
-        this.#eventCache.createHistoryReplay(sessionId);
+    readonly createSession = async (request: HarnessCreateSessionRequest): Promise<OpenedSession> =>
+        await createAcpSession(this.id, this.#eventCache, request);
 
-    readonly removeHistoryEvents = (sessionId: string): void => this.#eventCache.removeHistoryEvents(sessionId);
-
-    readonly resetHistoryEvents = (sessionId: string): void => this.#eventCache.resetHistoryEvents(sessionId);
-
-    readonly publishLiveEvent = async (event: SessionLiveEventV2): Promise<void> =>
-        await this.#eventCache.publishLiveEvent(event);
+    readonly openSession = async (request: HarnessOpenSessionRequest): Promise<OpenedSession> =>
+        await openAcpSession(this.#eventCache, request);
 
     readonly subscribeLiveEvents = (subscriber: HarnessLiveEventSubscriber): HarnessLiveEventSubscription =>
         this.#eventCache.subscribeLiveEvents(subscriber);

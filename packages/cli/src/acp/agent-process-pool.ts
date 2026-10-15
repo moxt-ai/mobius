@@ -1,17 +1,17 @@
-import type { AgentSession } from "./agent-session.ts";
+import type { OpenedSession } from "../adapter/harness-adapter.ts";
 import { AcpProcessCapacityLock, waitForAcpProcessCapacity } from "./process-capacity.ts";
 
 const MAX_ACP_PROCESSES = 10;
 
 export interface AgentProcessRetention {
     readonly isBusy: () => boolean;
-    readonly retire: (runtime: AgentSession) => Promise<void>;
+    readonly retire: (runtime: OpenedSession) => Promise<void>;
 }
 
 type ProcessSlot =
     | { readonly kind: "starting" }
-    | { readonly kind: "retained"; readonly runtime: AgentSession; readonly retention: AgentProcessRetention }
-    | { readonly kind: "transient" | "retiring"; readonly runtime: AgentSession };
+    | { readonly kind: "retained"; readonly runtime: OpenedSession; readonly retention: AgentProcessRetention }
+    | { readonly kind: "transient" | "retiring"; readonly runtime: OpenedSession };
 
 /** Owns each capacity slot from reservation until the process has stopped. */
 export class AgentProcessPool {
@@ -25,7 +25,7 @@ export class AgentProcessPool {
         changed.resolve();
     };
 
-    readonly #find = (runtime: AgentSession): symbol | undefined => {
+    readonly #find = (runtime: OpenedSession): symbol | undefined => {
         for (const [id, slot] of this.#slots) {
             if (slot.kind !== "starting" && slot.runtime === runtime) {
                 return id;
@@ -34,7 +34,7 @@ export class AgentProcessPool {
         return undefined;
     };
 
-    readonly touch = (runtime: AgentSession): void => {
+    readonly touch = (runtime: OpenedSession): void => {
         const id = this.#find(runtime);
         if (id === undefined) {
             return;
@@ -47,7 +47,7 @@ export class AgentProcessPool {
         this.#slots.set(id, slot);
     };
 
-    readonly retain = (runtime: AgentSession, retention: AgentProcessRetention): void => {
+    readonly retain = (runtime: OpenedSession, retention: AgentProcessRetention): void => {
         const id = this.#find(runtime);
         if (id === undefined) {
             throw new Error("Cannot retain an unowned ACP process");
@@ -55,7 +55,7 @@ export class AgentProcessPool {
         this.#slots.set(id, { kind: "retained", runtime, retention });
     };
 
-    readonly releaseClosed = (runtime: AgentSession): void => {
+    readonly releaseClosed = (runtime: OpenedSession): void => {
         const id = this.#find(runtime);
         if (id !== undefined) {
             this.#slots.delete(id);
@@ -63,7 +63,7 @@ export class AgentProcessPool {
         this.notifyChanged();
     };
 
-    readonly retire = async (runtime: AgentSession, close: () => Promise<void>): Promise<void> => {
+    readonly retire = async (runtime: OpenedSession, close: () => Promise<void>): Promise<void> => {
         const id = this.#find(runtime);
         if (id !== undefined) {
             this.#slots.set(id, { kind: "retiring", runtime });
@@ -101,9 +101,9 @@ export class AgentProcessPool {
 
     readonly #start = async (
         signal: AbortSignal,
-        start: () => Promise<AgentSession>,
+        start: () => Promise<OpenedSession>,
         retention: AgentProcessRetention | null,
-    ): Promise<AgentSession> => {
+    ): Promise<OpenedSession> => {
         const id = await this.#reserve(signal);
         try {
             const runtime = await start();
@@ -122,17 +122,20 @@ export class AgentProcessPool {
 
     readonly startRetained = (
         signal: AbortSignal,
-        start: () => Promise<AgentSession>,
+        start: () => Promise<OpenedSession>,
         retention: AgentProcessRetention,
-    ): Promise<AgentSession> => this.#start(signal, start, retention);
+    ): Promise<OpenedSession> => this.#start(signal, start, retention);
+
+    readonly startTransient = (signal: AbortSignal, start: () => Promise<OpenedSession>): Promise<OpenedSession> =>
+        this.#start(signal, start, null);
 
     readonly runTransient = async <T>(
         signal: AbortSignal,
-        start: () => Promise<AgentSession>,
-        operation: (runtime: AgentSession) => Promise<T>,
-        close: (runtime: AgentSession) => Promise<void>,
+        start: () => Promise<OpenedSession>,
+        operation: (runtime: OpenedSession) => Promise<T>,
+        close: (runtime: OpenedSession) => Promise<void>,
     ): Promise<T> => {
-        const runtime = await this.#start(signal, start, null);
+        const runtime = await this.startTransient(signal, start);
         try {
             return await operation(runtime);
         } finally {
