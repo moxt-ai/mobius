@@ -183,11 +183,62 @@ describe("Mobius manager version compatibility", () => {
                 join(release, "src/entrypoint/cli.ts"),
             );
             expect(otherList.code).toBe(0);
-            expect(otherList.stdout).not.toContain(saved.connectionId);
+            expect(otherList.stdout).toContain(saved.connectionId);
             const originalList = await runCli(["pair", "list"], environment, deadline);
             expect(originalList.code).toBe(0);
             expect(originalList.stdout).toContain(saved.connectionId);
             expect(await readFile(data.connectionPath(saved.connectionId), "utf8")).toContain("app_isolated");
+        } finally {
+            await runCli(["quit"], environment, AbortSignal.timeout(20_000)).catch(() => undefined);
+        }
+    });
+
+    it("Given a stopped daemon with saved data, When a manually installed version starts, Then it inherits the last data directory and retains the pointer after quit", async () => {
+        const directory = await mkdtemp(join(tmpdir(), "mobius-manual-data-upgrade-"));
+        temporaryDirectories.push(directory);
+        const stateRoot = join(directory, "state");
+        const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: stateRoot };
+        const deadline = AbortSignal.timeout(90_000);
+        const release = join(directory, "release");
+        const nextVersion = "99.0.0";
+        await cp(resolve(import.meta.dirname, "../../src"), join(release, "src"), { recursive: true });
+        await writeFile(join(release, "package.json"), JSON.stringify({ ...cliPackage, version: nextVersion }));
+        await symlink(resolve(import.meta.dirname, "../../node_modules"), join(release, "node_modules"), "junction");
+        const nextCli = join(release, "src/entrypoint/cli.ts");
+        const pointer = join(stateRoot, "current-data.txt");
+        try {
+            const data = await openMobiusCliInstallation(deadline, environment);
+            const saved = await data.saveConnection(
+                {
+                    appId: "app_inherited",
+                    channelId: "channel_inherited",
+                    defaultWorkspace: directory,
+                    pairingId: "",
+                    relayOrigin: new URL("http://127.0.0.1:1"),
+                    runtimeCredential: "a".repeat(43),
+                    runtimeId: "runtime_inherited",
+                },
+                deadline,
+            );
+            await data.setConnectionActivation(saved.connectionId, "stopped", deadline);
+            const original = join(stateRoot, "versions", cliPackage.version);
+            await writeFile(join(original, "retained-data"), "original");
+            expect((await runCli(["start"], environment, deadline)).code).toBe(0);
+            expect((await runCli(["quit"], environment, deadline)).code).toBe(0);
+            expect((await readFile(pointer, "utf8")).trim()).toBe(`versions/${cliPackage.version}`);
+            const listed = await runCli(["pair", "list"], environment, deadline, nextCli);
+            expect(listed.code).toBe(0);
+            expect(listed.stdout).toContain(saved.connectionId);
+            expect((await readFile(pointer, "utf8")).trim()).toBe(`versions/${cliPackage.version}`);
+            expect((await runCli(["start"], environment, deadline, nextCli)).code).toBe(0);
+            expect((await readFile(pointer, "utf8")).trim()).toBe(`versions/${nextVersion}`);
+            expect((await runCli(["quit"], environment, deadline, nextCli)).code).toBe(0);
+            expect((await readFile(pointer, "utf8")).trim()).toBe(`versions/${nextVersion}`);
+            expect(await readFile(join(stateRoot, "versions", nextVersion, "retained-data"), "utf8")).toBe("original");
+            await writeFile(join(stateRoot, "versions", nextVersion, "retained-data"), "newer");
+            expect((await runCli(["start"], environment, deadline)).code).toBe(0);
+            expect(await readFile(join(original, "retained-data"), "utf8")).toBe("original");
+            expect((await readFile(pointer, "utf8")).trim()).toBe(`versions/${cliPackage.version}`);
         } finally {
             await runCli(["quit"], environment, AbortSignal.timeout(20_000)).catch(() => undefined);
         }

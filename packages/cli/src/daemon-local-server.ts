@@ -7,7 +7,7 @@ export async function serveLocalControl(
     endpoint: "manager" | "worker",
     signal: AbortSignal,
     handle: (request: unknown, signal: AbortSignal) => Promise<unknown>,
-    onListening: () => void = () => undefined,
+    onListening: () => void | Promise<void> = () => undefined,
     onResponse: (response: unknown) => void = () => undefined,
 ): Promise<void> {
     signal.throwIfAborted();
@@ -52,7 +52,7 @@ export async function serveLocalControl(
             server.listen(path);
         });
         await platform.secureControlSocket(path);
-        onListening();
+        await onListening();
         if (!signal.aborted) {
             await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
         }
