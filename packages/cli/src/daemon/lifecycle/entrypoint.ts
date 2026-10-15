@@ -1,18 +1,3 @@
-import { extname } from "node:path";
-import { fileURLToPath } from "node:url";
-
-export function daemonEntrypoint(role: "manager" | "worker"): string {
-    // Source execution and the published bundle both have dedicated entrypoints.
-    return fileURLToPath(
-        new URL(
-            extname(fileURLToPath(import.meta.url)) === ".ts"
-                ? `../../entrypoint/daemon-${role}.ts`
-                : `./daemon-${role}.js`,
-            import.meta.url,
-        ),
-    );
-}
-
 export async function runDaemonEntrypoint(run: (signal: AbortSignal) => Promise<void>): Promise<void> {
     const shutdown = new AbortController();
     const abort = (): void => shutdown.abort();

@@ -1,15 +1,20 @@
 import { type ChildProcess, fork } from "node:child_process";
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { extname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { type LifecycleResponse, lifecycleResponse } from "../../daemon-lifecycle-protocol.ts";
 import { CONTROL_TIMEOUT_MILLISECONDS, isNodeError, sendLocalRequest } from "../../daemon-local-control.ts";
 import { currentWorkerLaunch } from "../../daemon-worker-process.ts";
 
-import { daemonEntrypoint } from "./entrypoint.ts";
-
 async function spawnManager(signal: AbortSignal): Promise<ChildProcess> {
-    const child = fork(daemonEntrypoint("manager"), [], {
+    const entry = new URL(
+        extname(fileURLToPath(import.meta.url)) === ".ts"
+            ? "../../entrypoint/daemon-manager.ts"
+            : "./daemon-manager.js",
+        import.meta.url,
+    );
+    const child = fork(entry, [], {
         execArgv: [],
         detached: true,
         windowsHide: true,

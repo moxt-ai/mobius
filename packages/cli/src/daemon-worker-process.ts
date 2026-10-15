@@ -1,15 +1,22 @@
 import { type ChildProcess, fork } from "node:child_process";
 import { realpath, stat } from "node:fs/promises";
-import { isAbsolute } from "node:path";
+import { extname, isAbsolute } from "node:path";
 
-import { daemonEntrypoint } from "./daemon/lifecycle/entrypoint.ts";
+import { fileURLToPath } from "node:url";
 import { workerManagerRequest } from "./daemon/lifecycle/parent-ipc.ts";
 import { type LifecycleResponse, type WorkerLaunch, workerLaunch } from "./daemon-lifecycle-protocol.ts";
 
 export function currentWorkerLaunch(version: string): WorkerLaunch {
     return {
         executable: process.execPath,
-        entry: daemonEntrypoint("worker"),
+        entry: fileURLToPath(
+            new URL(
+                extname(fileURLToPath(import.meta.url)) === ".ts"
+                    ? "./entrypoint/daemon-worker.ts"
+                    : "./daemon-worker.js",
+                import.meta.url,
+            ),
+        ),
         version,
     };
 }
