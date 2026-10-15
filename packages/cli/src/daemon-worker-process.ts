@@ -1,14 +1,17 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { realpath, stat } from "node:fs/promises";
-import { extname, isAbsolute } from "node:path";
-import { fileURLToPath } from "node:url";
+import { isAbsolute, resolve } from "node:path";
 
 import { type WorkerLaunch, workerLaunch } from "./daemon-lifecycle-protocol.ts";
 
 export function currentWorkerLaunch(version: string): WorkerLaunch {
+    const entry = process.argv[1];
+    if (entry === undefined || entry.length === 0) {
+        throw new Error("The Mobius CLI entry path is unavailable");
+    }
     return {
         executable: process.execPath,
-        entry: fileURLToPath(new URL(`./cli${extname(import.meta.url)}`, import.meta.url)),
+        entry: resolve(entry),
         version,
     };
 }

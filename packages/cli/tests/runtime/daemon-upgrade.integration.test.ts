@@ -31,7 +31,7 @@ async function packedRelease(
         await symlink(resolve(import.meta.dirname, "../../node_modules"), join(source, "node_modules"), "junction");
         await writeFile(
             join(root, "dist/cli.js"),
-            `import ${JSON.stringify(pathToFileURL(join(source, "src/cli.ts")).href)};`,
+            `import ${JSON.stringify(pathToFileURL(join(source, "src/cli/index.ts")).href)};`,
         );
     } else {
         await writeFile(
@@ -77,7 +77,7 @@ describe("Daemon server-requested upgrade", () => {
         const cli = async (
             args: readonly string[],
             deadline = signal,
-            entry = resolve(import.meta.dirname, "../../src/cli.ts"),
+            entry = resolve(import.meta.dirname, "../../src/cli/index.ts"),
         ): Promise<void> => {
             const child = spawn(process.execPath, [entry, ...args], {
                 cwd: directory,
@@ -288,7 +288,7 @@ describe("Daemon server-requested upgrade", () => {
                 code: "ENOENT",
             });
             await cli(["quit"]);
-            await cli(["start"], signal, join(directory, `source-${reuse}`, "src/cli.ts"));
+            await cli(["start"], signal, join(directory, `source-${reuse}`, "src/cli/index.ts"));
             expect(
                 await sendLocalRequest(
                     control.stateDirectory,
