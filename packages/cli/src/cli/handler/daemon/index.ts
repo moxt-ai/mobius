@@ -1,0 +1,17 @@
+import type { Command } from "commander";
+
+import type { CliContext } from "../../context.ts";
+import { registerManagerCommand } from "./manager.ts";
+import { registerQuitCommand } from "./quit.ts";
+import { registerStartCommand } from "./start.ts";
+import { registerWorkerCommand } from "./worker.ts";
+
+export function registerInternalDaemonHandlers(program: Command, context: CliContext): void {
+    registerManagerCommand(program, context);
+    registerWorkerCommand(program, context);
+}
+
+export function registerDaemonLifecycleHandlers(program: Command, context: CliContext): void {
+    registerStartCommand(program, context);
+    registerQuitCommand(program, context);
+}

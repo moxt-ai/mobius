@@ -1,9 +1,9 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { type LifecycleResponse, lifecycleResponse } from "./daemon-lifecycle-protocol.ts";
-import { CONTROL_TIMEOUT_MILLISECONDS, isNodeError, sendLocalRequest } from "./daemon-local-control.ts";
-import { currentWorkerLaunch } from "./daemon-worker-process.ts";
+import { type LifecycleResponse, lifecycleResponse } from "../../daemon-lifecycle-protocol.ts";
+import { CONTROL_TIMEOUT_MILLISECONDS, isNodeError, sendLocalRequest } from "../../daemon-local-control.ts";
+import { currentWorkerLaunch } from "../../daemon-worker-process.ts";
 
 async function spawnManager(): Promise<ChildProcess> {
     const child = spawn(process.execPath, [process.argv[1] ?? "", "__manager"], {

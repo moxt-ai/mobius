@@ -162,7 +162,7 @@ describe("Mobius manager version compatibility", () => {
             );
             await data.setConnectionActivation(saved.connectionId, "stopped", deadline);
 
-            const upgraded = await runCli(["start"], environment, deadline, join(release, "src/cli.ts"));
+            const upgraded = await runCli(["start"], environment, deadline, join(release, "src/entrypoint/cli.ts"));
             expect(upgraded).toEqual({ code: 0, stderr: "", stdout: "Mobius daemon is running.\n" });
             expect(await readFile(join(control.stateDirectory, "manager.lock"), "utf8")).toBe(manager);
             const replacement = await readFile(join(control.stateDirectory, "worker.lock"), "utf8");
@@ -172,9 +172,16 @@ describe("Mobius manager version compatibility", () => {
                     (entry) => entry.parentProcessId === Number(manager),
                 ),
             ).toHaveLength(1);
-            expect((await runCli(["start"], environment, deadline, join(release, "src/cli.ts"))).code).toBe(0);
+            expect((await runCli(["start"], environment, deadline, join(release, "src/entrypoint/cli.ts"))).code).toBe(
+                0,
+            );
             expect(await readFile(join(control.stateDirectory, "worker.lock"), "utf8")).toBe(replacement);
-            const otherList = await runCli(["pair", "list"], environment, deadline, join(release, "src/cli.ts"));
+            const otherList = await runCli(
+                ["pair", "list"],
+                environment,
+                deadline,
+                join(release, "src/entrypoint/cli.ts"),
+            );
             expect(otherList.code).toBe(0);
             expect(otherList.stdout).not.toContain(saved.connectionId);
             const originalList = await runCli(["pair", "list"], environment, deadline);
@@ -398,7 +405,7 @@ async function runCli(
     arguments_: readonly string[],
     environment: Readonly<NodeJS.ProcessEnv>,
     signal: AbortSignal,
-    cliPath = resolve(import.meta.dirname, "../../src/cli.ts"),
+    cliPath = resolve(import.meta.dirname, "../../src/entrypoint/cli.ts"),
 ): Promise<{ readonly code: number | null; readonly stderr: string; readonly stdout: string }> {
     const child = spawn(process.execPath, [cliPath, ...arguments_], {
         env: environment,

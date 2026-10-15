@@ -4,10 +4,10 @@ import {
     type LifecycleResponse,
     lifecycleCommand,
     type WorkerLaunch,
-} from "./daemon-lifecycle-protocol.ts";
-import { acquireManagerLock } from "./daemon-local-control.ts";
-import { serveLocalControl } from "./daemon-local-server.ts";
-import { decodeWorkerLaunch, WorkerProcess, WorkerStartupError } from "./daemon-worker-process.ts";
+} from "../../daemon-lifecycle-protocol.ts";
+import { acquireManagerLock } from "../../daemon-local-control.ts";
+import { serveLocalControl } from "../../daemon-local-server.ts";
+import { decodeWorkerLaunch, WorkerProcess, WorkerStartupError } from "../../daemon-worker-process.ts";
 
 export async function runManager(stateDirectory: string, signal: AbortSignal): Promise<void> {
     const release = await acquireManagerLock(stateDirectory);
