@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { type FileHandle, mkdir, open, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { setTimeout } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import {
     type NativeSessionEventsV2,
@@ -55,7 +56,7 @@ const pairSummarySchema = v.strictObject({
     app_id: v.string(),
     connection_id: v.string(),
     runtime_id: v.string(),
-    status: v.picklist(["starting", "online", "reconnecting", "failed", "stopped"]),
+    status: v.picklist(["active", "stopped"]),
     workspace: v.string(),
 });
 const pairListSchema = v.array(pairSummarySchema);
@@ -177,6 +178,30 @@ async function listCliPairs(directory: string): Promise<readonly PairSummary[]> 
     }
 }
 
+async function waitForRuntimeOnline(service: MobiusClient, runtimeId: string): Promise<void> {
+    const deadline = AbortSignal.timeout(PAIRING_TIMEOUT_MILLISECONDS);
+    const signal = AbortSignal.any([shutdown.signal, deadline]);
+    try {
+        while (true) {
+            const runtime = (await service.runtimes.list(signal)).find(
+                (candidate) => candidate.runtimeId === runtimeId,
+            );
+            if (runtime?.online === true) {
+                return;
+            }
+            await setTimeout(100, undefined, { signal });
+        }
+    } catch (cause) {
+        shutdown.signal.throwIfAborted();
+        if (deadline.aborted) {
+            throw new MiniClientError("runtime_unavailable", "The paired local Runtime did not become online", {
+                cause,
+            });
+        }
+        throw cause;
+    }
+}
+
 async function createCommand(directory: string, flags: ReadonlyMap<string, string>): Promise<void> {
     await requireFreshState(directory);
     const appId = requireFlag(flags, "app-id");
@@ -230,9 +255,10 @@ async function createCommand(directory: string, flags: ReadonlyMap<string, strin
         const connected = pairs.find(
             (candidate) => candidate.app_id === appId && candidate.runtime_id === pairing.runtimeId,
         );
-        if (connected === undefined || connected.status !== "online") {
+        if (connected === undefined || connected.status !== "active") {
             throw new MiniClientError("runtime_unavailable", "The paired local Runtime did not become online");
         }
+        await waitForRuntimeOnline(service, pairing.runtimeId);
         const state: MiniClientState = {
             appId,
             appSecret,
