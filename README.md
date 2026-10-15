@@ -77,65 +77,6 @@ pnpm build
 
 `pnpm dev` starts the local Platform Worker. Committed migrations under `packages/*/migrations` define fresh local databases; `pnpm db:codegen` generates ignored SQL import modules used by the Worker and tests.
 
-## Standalone Worker
-
-Standalone runs the Relay without the Platform control plane. Each browser pairing
-workflow automatically creates a Project and a Project owner credential. A separate
-deployment-owned bearer credential can administer every Project. Generate the deployment credential and start it locally:
-
-```sh
-printf 'MOBIUS_STANDALONE_TOKEN=%s\n' "$(openssl rand -hex 32)" > packages/relay-cloudflare-standalone/.dev.vars
-pnpm dev:cloudflare:standalone
-```
-
-The local command applies the committed D1 migration before starting Wrangler. The
-credential file is ignored by Git. The bundled Web app never receives this deployment
-credential. Its deployment adapter creates a Project and its Project-scoped owner
-credential, then uses the generic `MobiusClient` for Runtime pairing,
-Runtime discovery and management, and Agent configuration. Conversation operations
-remain available to SDK clients such as Morty. The browser persists the
-Project credential after pairing so page loads and WebSocket reconnects return to the
-same Project.
-
-For an operator-driven pairing, first send `POST /mobius/api/v1/standalone/projects`
-to create a Project, then send `POST /mobius/api/v1/projects/{projectId}/runtime-pairings`
-with either its returned Project credential or the deployment credential and
-`{"idempotencyKey":"my-machine"}`.
-
-```sh
-curl -sS -X POST http://127.0.0.1:8787/mobius/api/v1/standalone/projects
-
-curl -sS -X POST http://127.0.0.1:8787/mobius/api/v1/projects/<projectId>/runtime-pairings \
-  -H "Authorization: Bearer <projectToken>" \
-  -H 'Content-Type: application/json' \
-  -d '{"idempotencyKey":"my-machine"}'
-```
-
-The response supplies `pairingId` and `pairingCode` for the existing CLI:
-
-```sh
-pnpm mobius pair --url http://127.0.0.1:8787 --pairing <pairingId> --code <pairingCode>
-```
-
-Operator clients can use the same deployment credential for Project and Session API
-requests. Keep it private: it grants full access to every Standalone Project. Browser
-apps should follow the bundled Web app and keep the Project credential inside their
-deployment integration. The SDK's WebSocket transport is available at `/mobius/api/v1/transport`.
-A connected local Runtime supplies Session history when Recording is disabled. When
-Recording is installed and enabled for a Standalone Project during pairing, the Web
-app loads that Project's durable history from Recording instead. The Standalone Worker
-acts as one deployment-owned Platform principal, but does not expose the hosted
-Platform's identity, App, or organization control-plane routes.
-
-The repository deploys the production Standalone Worker to
-`https://mobius-standalone.moxt.ai` after `main` passes CI. The workflow deploys
-the Worker and Web assets with the `MOBIUS_STANDALONE_TOKEN` GitHub environment
-secret and verifies the deployed page. Before deploying the Worker, CI applies
-the committed `packages/relay-cloudflare-standalone/migrations/d1` migrations to the dedicated
-production D1 database with the D1 Edit-only `CLOUDFLARE_D1_API_TOKEN`
-environment secret and stops the deployment if migration fails.
-Self-hosted deployments need their own bearer credential and D1 binding.
-
 ## Local Runtime connections
 
 Pairing starts or reuses one detached Mobius manager for the current user. If the
