@@ -3,11 +3,11 @@ import { isAbsolute, join, relative } from "node:path";
 import { runtimeUpgradeVersionSchema } from "@moxt-ai/mobius-protocol";
 import { gt } from "semver";
 import { z } from "zod";
-import type { WorkerLaunch } from "./daemon-lifecycle-protocol.ts";
-import { decodeWorkerLaunch } from "./daemon-worker-process.ts";
-import { validateLocalPath } from "./filesystem/private-path.ts";
-import { readStateDirectory } from "./storage/state-directory.ts";
-import { findExecutableOnPath, runBoundedProcess } from "./util/process/executable.ts";
+import { validateLocalPath } from "../../filesystem/private-path.ts";
+import { readStateDirectory } from "../../storage/state-directory.ts";
+import { findExecutableOnPath, runBoundedProcess } from "../../util/process/executable.ts";
+import type { WorkerLaunch } from "../control/protocol.ts";
+import { decodeWorkerLaunch } from "../lifecycle/worker-process.ts";
 
 export class DaemonUpgradeError extends Error {
     readonly code: string;

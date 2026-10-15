@@ -5,16 +5,23 @@ import type {
     SessionRestoreCommand,
     WorkspaceListCommand,
 } from "@moxt-ai/mobius-protocol";
+import {
+    SESSION_CONFIGURE_KIND,
+    SESSION_PREPARE_KIND,
+    SESSION_RESTORE_KIND,
+    WORKSPACE_LIST_KIND,
+} from "@moxt-ai/mobius-protocol";
 import type { WebSocket } from "undici";
-import { AcpExecutionError } from "./acp/acp-error.ts";
-import type { AcpSessionRecovery, AgentRuntimeManager } from "./acp/agent-runtime-manager.ts";
-import { resolveSessionDirectories } from "./authorization/resolve-session-directories.ts";
-import type { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
-import type { AcpAgentDefinition, DaemonConfig } from "./config.ts";
-import { operationErrorCode, reportOperationFailure, send } from "./daemon-command-results.ts";
-import { AccumulatingOperationMetrics } from "./infra/operation-metrics.ts";
-import type { NativeSessionService } from "./native-sessions/service.ts";
-import type { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
+import { AcpExecutionError } from "../../../acp/acp-error.ts";
+import type { AcpSessionRecovery, AgentRuntimeManager } from "../../../acp/agent-runtime-manager.ts";
+import { resolveSessionDirectories } from "../../../authorization/resolve-session-directories.ts";
+import type { WorkspaceDirectoryService } from "../../../authorization/workspace-directory.ts";
+import type { AcpAgentDefinition, DaemonConfig } from "../../../config.ts";
+import { AccumulatingOperationMetrics } from "../../../infra/operation-metrics.ts";
+import type { NativeSessionService } from "../../../native-sessions/service.ts";
+import type { RelayConnectionDiagnostics } from "../../../relay-connection/diagnostics.ts";
+import { operationErrorCode, reportOperationFailure, send } from "../../command-dispatcher.ts";
+import type { DaemonCommand } from "../definition.ts";
 
 export async function resolveCatalogAgent(
     config: DaemonConfig,
@@ -257,3 +264,67 @@ export async function executeSessionConfigure(
         reportOperationFailure(socket, command.requestId, command.sessionId, error);
     }
 }
+
+export const workspaceListCommand: DaemonCommand = {
+    kind: WORKSPACE_LIST_KIND,
+    handle: (context, message): void => {
+        if (message.kind !== WORKSPACE_LIST_KIND) {
+            throw new Error("Command kind mismatch");
+        }
+        void executeWorkspaceList(context.socket, message, context.directories, context.signal);
+    },
+};
+
+export const sessionPrepareCommand: DaemonCommand = {
+    kind: SESSION_PREPARE_KIND,
+    handle: (context, message): void => {
+        if (message.kind !== SESSION_PREPARE_KIND) {
+            throw new Error("Command kind mismatch");
+        }
+        void executeSessionPrepare(
+            context.socket,
+            message,
+            context.config,
+            context.directories,
+            context.sessions,
+            context.diagnostics,
+            context.signal,
+        );
+    },
+};
+
+export const sessionConfigureCommand: DaemonCommand = {
+    kind: SESSION_CONFIGURE_KIND,
+    handle: (context, message): void => {
+        if (message.kind !== SESSION_CONFIGURE_KIND) {
+            throw new Error("Command kind mismatch");
+        }
+        void executeSessionConfigure(
+            context.socket,
+            message,
+            context.config,
+            context.directories,
+            context.sessions,
+            context.signal,
+        );
+    },
+};
+
+export const sessionRestoreCommand: DaemonCommand = {
+    kind: SESSION_RESTORE_KIND,
+    handle: (context, message): void => {
+        if (message.kind !== SESSION_RESTORE_KIND) {
+            throw new Error("Command kind mismatch");
+        }
+        void executeSessionRestore(
+            context.socket,
+            message,
+            context.config,
+            context.directories,
+            context.sessions,
+            context.nativeSessions,
+            context.diagnostics,
+            context.signal,
+        );
+    },
+};

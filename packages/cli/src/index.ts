@@ -15,16 +15,16 @@ export {
     pairMobiusRuntime,
     resumeLocalMachine,
     resumeMobiusRuntime,
-} from "./pairing/pair-local-machine.ts";
-export { RuntimeRelayRevokedError } from "./relay-connection/runtime-revocation.ts";
-export { runDaemon } from "./run-daemon.ts";
+} from "./daemon/pairing/pair-local-machine.ts";
+export { runDaemon } from "./daemon/run.ts";
 export {
     createMobiusRuntimeEngine,
     loadMobiusRuntimeConnection,
     MobiusRuntimeConfigurationError,
     MobiusRuntimeEngine,
     type MobiusRuntimeEngineOptions,
-} from "./runtime.ts";
+} from "./daemon/runtime.ts";
+export { RuntimeRelayRevokedError } from "./relay-connection/runtime-revocation.ts";
 export {
     openRuntimeInstallationStore,
     type RuntimeConnectionInput,

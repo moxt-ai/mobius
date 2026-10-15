@@ -40,7 +40,7 @@ import { type WebSocket, WebSocketServer } from "ws";
 import { CodexAcpAgent } from "../../src/acp/harness/codex/agent.ts";
 import { InProcessAcpAgentDefinition } from "../../src/agent-catalog/local-agent.ts";
 import { createDaemonConfig, DaemonLocalContext } from "../../src/config.ts";
-import { runDaemon } from "../../src/run-daemon.ts";
+import { runDaemon } from "../../src/daemon/run.ts";
 import { CodexFixture } from "../support/agents/codex.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 

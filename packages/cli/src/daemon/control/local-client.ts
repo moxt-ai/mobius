@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { readFile, unlink, writeFile } from "node:fs/promises";
 import { createConnection, type Socket } from "node:net";
 import { join } from "node:path";
-import { platformSupportFor } from "./platform/index.ts";
+import { platformSupportFor } from "../../platform/index.ts";
 
 export const CONTROL_TIMEOUT_MILLISECONDS = 130_000;
 const MAXIMUM_MESSAGE_BYTES = 64 * 1024;

@@ -1,4 +1,4 @@
-import type { DaemonDiagnosticLog } from "../daemon-diagnostic-log.ts";
+import type { DaemonDiagnosticLog } from "../daemon/observability/diagnostic-log.ts";
 import { describeEnvironmentProxyRoute } from "../util/network/environment-proxy.ts";
 
 const MAX_DIAGNOSTIC_TEXT_LENGTH = 256;

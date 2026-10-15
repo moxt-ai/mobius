@@ -5,7 +5,7 @@ import {
     openMobiusCliInstallation,
     openMobiusControlInstallation,
     pairLocalMachine,
-} from "../../../pairing/pair-local-machine.ts";
+} from "../../../daemon/pairing/pair-local-machine.ts";
 import type { CliContext } from "../../context.ts";
 import { valueOption } from "../../util/options.ts";
 import { type ParsedPairOptions, pairArguments, requirePairOptions } from "./logic/options.ts";

@@ -17,7 +17,7 @@ import {
     SessionPromptDisposition,
     type SessionPromptDispositionCommand,
 } from "@moxt-ai/mobius-protocol";
-import type { AcpActivity, AcpActivityNarration } from "./acp/activity.ts";
+import type { AcpActivity, AcpActivityNarration } from "../acp/activity.ts";
 
 type ActiveTurnSnapshot = Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"];
 type ActiveTurnMessage = NonNullable<ActiveTurnSnapshot>["messages"][number];

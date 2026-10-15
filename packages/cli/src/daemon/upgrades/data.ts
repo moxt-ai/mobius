@@ -2,10 +2,10 @@ import { randomUUID } from "node:crypto";
 import { cp, lstat, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { runtimeUpgradeVersionSchema } from "@moxt-ai/mobius-protocol";
-import { isNodeError } from "./daemon-local-control.ts";
-import { readSwitchStatus } from "./daemon-switch-status.ts";
-import { validateLocalPath } from "./filesystem/private-path.ts";
-import { readStateDirectory } from "./storage/state-directory.ts";
+import { validateLocalPath } from "../../filesystem/private-path.ts";
+import { readStateDirectory } from "../../storage/state-directory.ts";
+import { isNodeError } from "../control/local-client.ts";
+import { readSwitchStatus } from "../control/switch-status.ts";
 
 export class DataInheritanceError extends Error {
     readonly code = "data_inheritance_failed";

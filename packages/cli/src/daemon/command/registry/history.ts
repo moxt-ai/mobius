@@ -3,21 +3,24 @@ import {
     type decodeSessionPreviewHistoryPageLoad,
     type NativeSessionEventsV2,
     type QueuedPromptRequestEventLogV2,
+    SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND,
     SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND,
+    SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND,
     SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND,
     type SessionEventV2,
 } from "@moxt-ai/mobius-protocol";
 import type { WebSocket } from "undici";
-import { AcpExecutionError, type AgentRuntimeManager } from "./acp/agent-runtime-manager.ts";
-import type { AcpSessionEventPageV2 } from "./acp/session-event-store-v2.ts";
-import { resolveSessionDirectories } from "./authorization/resolve-session-directories.ts";
-import type { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
-import type { DaemonConfig } from "./config.ts";
-import { operationErrorCode, reportOperationFailure, send } from "./daemon-command-results.ts";
-import { resolveCatalogAgent } from "./daemon-session-commands.ts";
-import type { NativeSessionService } from "./native-sessions/service.ts";
-import type { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
-import type { DaemonSessionEventProjectionV2 } from "./session-event-projection-v2.ts";
+import { AcpExecutionError, type AgentRuntimeManager } from "../../../acp/agent-runtime-manager.ts";
+import type { AcpSessionEventPageV2 } from "../../../acp/session-event-store-v2.ts";
+import { resolveSessionDirectories } from "../../../authorization/resolve-session-directories.ts";
+import type { WorkspaceDirectoryService } from "../../../authorization/workspace-directory.ts";
+import type { DaemonConfig } from "../../../config.ts";
+import type { NativeSessionService } from "../../../native-sessions/service.ts";
+import type { RelayConnectionDiagnostics } from "../../../relay-connection/diagnostics.ts";
+import type { DaemonSessionEventProjectionV2 } from "../../../session-event-projection-v2.ts";
+import { operationErrorCode, reportOperationFailure, send } from "../../command-dispatcher.ts";
+import type { DaemonCommand } from "../definition.ts";
+import { resolveCatalogAgent } from "./session.ts";
 
 function isAgentReasoning(event: SessionEventV2 | undefined): boolean {
     return event?.type === "acp" && event.payload.sessionUpdate === "agent_thought_chunk";
@@ -237,3 +240,41 @@ export async function executeSessionPreviewHistoryPageLoad(
         }
     }
 }
+
+export const liveHistoryPageLoadCommand: DaemonCommand = {
+    kind: SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND,
+    handle: (context, message): void => {
+        if (message.kind !== SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND) {
+            throw new Error("Command kind mismatch");
+        }
+        void executeSessionLiveHistoryV2PageLoad(
+            context.socket,
+            message,
+            context.config,
+            context.directories,
+            context.diagnostics,
+            context.sessions,
+            context.nativeSessions,
+            context.eventProjectionV2,
+            context.signal,
+        );
+    },
+};
+
+export const previewHistoryPageLoadCommand: DaemonCommand = {
+    kind: SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND,
+    handle: (context, message): void => {
+        if (message.kind !== SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND) {
+            throw new Error("Command kind mismatch");
+        }
+        void executeSessionPreviewHistoryPageLoad(
+            context.socket,
+            message,
+            context.config,
+            context.directories,
+            context.diagnostics,
+            context.sessions,
+            context.signal,
+        );
+    },
+};

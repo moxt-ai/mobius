@@ -2,7 +2,7 @@ import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it } from "vitest";
-import { createMobiusRuntimeEngine } from "../../src/runtime.ts";
+import { createMobiusRuntimeEngine } from "../../src/daemon/runtime.ts";
 
 it("Given an opaque relay-issued credential, When an embedding host creates a Runtime, Then startup proceeds without interpreting the credential format", async () => {
     const directory = await mkdtemp(join(tmpdir(), "mobius-runtime-credential-"));

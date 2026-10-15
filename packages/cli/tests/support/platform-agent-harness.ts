@@ -5,7 +5,7 @@ import { mobiusApiPath } from "@moxt-ai/mobius-protocol";
 import { MobiusClient, StaticMobiusCredentialProvider } from "@moxt-ai/mobius-sdk/server";
 import * as v from "valibot";
 import { createDaemonConfig, DaemonLocalContext } from "../../src/config.ts";
-import { runDaemon } from "../../src/run-daemon.ts";
+import { runDaemon } from "../../src/daemon/run.ts";
 import {
     defaultFakeAgentHarness,
     type FakeAgentHarnessDefinition,

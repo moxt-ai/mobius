@@ -2,7 +2,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { realpath, stat } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 
-import { type WorkerLaunch, workerLaunch } from "./daemon-lifecycle-protocol.ts";
+import { type WorkerLaunch, workerLaunch } from "../control/protocol.ts";
 
 export function currentWorkerLaunch(version: string): WorkerLaunch {
     const entry = process.argv[1];
