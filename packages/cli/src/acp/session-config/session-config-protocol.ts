@@ -111,6 +111,21 @@ function normalizeConfigValues(value: unknown): readonly SessionConfigValue[] {
     return normalized.slice(0, 500);
 }
 
+function duplicatesThinkingOption(
+    options: readonly SessionConfigOption[],
+    currentValue: string,
+    values: readonly SessionConfigValue[],
+): boolean {
+    return options.some(
+        (option) =>
+            option.type === "select" &&
+            option.category === "thought_level" &&
+            option.currentValue === currentValue &&
+            option.values.length === values.length &&
+            values.every((value) => option.values.some((candidate) => candidate.value === value.value)),
+    );
+}
+
 export function normalizeConfigOptions(value: unknown, modes: unknown): readonly SessionConfigOption[] {
     const normalized: SessionConfigOption[] = [];
     if (Array.isArray(value)) {
@@ -180,9 +195,11 @@ export function normalizeConfigOptions(value: unknown, modes: unknown): readonly
         }
         const currentValue = truncate(readString(modes["currentModeId"]), 500);
         if (
+            values.length > 1 &&
             currentValue.length > 0 &&
             values.some((entry) => entry.value === currentValue) &&
-            !normalized.some((entry) => entry.category === "mode")
+            !normalized.some((entry) => entry.category === "mode") &&
+            !duplicatesThinkingOption(normalized, currentValue, values)
         ) {
             normalized.unshift({
                 booleanValue: false,

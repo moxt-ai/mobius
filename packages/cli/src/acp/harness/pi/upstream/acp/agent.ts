@@ -52,6 +52,13 @@ type AdvertisedModel = {
 const MODEL_CONFIG_ID = "model";
 const THOUGHT_LEVEL_CONFIG_ID = "thought_level";
 
+function thinkingLevelName(id: string): string {
+    return id
+        .split(/[_-]/u)
+        .map((part) => (part.length === 0 ? part : `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`))
+        .join(" ");
+}
+
 function builtinAvailableCommands(): AvailableCommand[] {
     return [
         {
@@ -1354,7 +1361,7 @@ async function getThinkingState(
         currentModeId: current,
         availableModes: available.map((id) => ({
             id,
-            name: `Thinking: ${id}`,
+            name: `Thinking: ${thinkingLevelName(id)}`,
             description: null,
         })),
     };
@@ -1405,8 +1412,9 @@ function buildConfigOptions(state: {
         currentModeId: string;
     };
 }): SessionConfigOption[] {
-    const configOptions: SessionConfigOption[] = [
-        {
+    const configOptions: SessionConfigOption[] = [];
+    if (state.modes.availableModes.length > 1) {
+        configOptions.push({
             type: "select",
             id: THOUGHT_LEVEL_CONFIG_ID,
             category: "thought_level",
@@ -1415,11 +1423,11 @@ function buildConfigOptions(state: {
             currentValue: state.modes.currentModeId,
             options: state.modes.availableModes.map((mode) => ({
                 value: mode.id,
-                name: mode.name,
+                name: thinkingLevelName(mode.id),
                 description: mode.description ?? null,
             })),
-        },
-    ];
+        });
+    }
 
     if (state.models?.availableModels.length) {
         configOptions.unshift({

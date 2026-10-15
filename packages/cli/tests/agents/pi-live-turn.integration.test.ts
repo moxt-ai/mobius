@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import {
+    decodeMessageKind,
     decodeSessionEventV2,
+    decodeSessionReadyEvent,
     encodeSessionPermissionRespondCommand,
+    encodeSessionPrepareCommand,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -11,6 +14,39 @@ import { PiFixture } from "../support/agents/pi.ts";
 import { withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 import { fakeProviderPrompts } from "../support/llm/scenarios.ts";
+
+test("Given real Pi only supports disabled thinking, When a session is prepared, Then the daemon omits the non-configurable Thinking control", async () => {
+    await using provider = await FakeOpenAiProvider.start("gpt-4.1", "REAL_PI_REPLY");
+    await using agent = await PiFixture.create(provider);
+    await withRealDaemon(new PiAgentSpecification(), agent.environment, async (peer) => {
+        const requestId = randomUUID();
+        peer.send(
+            encodeSessionPrepareCommand({
+                additionalDirectoryIds: [],
+                agentId: "pi",
+                bindingId: peer.bindingId,
+                directoryId: "default",
+                kind: "session.prepare",
+                requestId,
+                sessionId: peer.sessionId,
+            }),
+        );
+
+        for (;;) {
+            const message = await peer.nextMessage();
+            if (decodeMessageKind(message) !== "session.ready") {
+                continue;
+            }
+            const ready = decodeSessionReadyEvent(message);
+            if (ready.requestId !== requestId) {
+                continue;
+            }
+            expect(ready.configOptions.filter((option) => option.category === "mode")).toEqual([]);
+            expect(ready.configOptions.filter((option) => option.category === "thought_level")).toEqual([]);
+            break;
+        }
+    });
+});
 
 test("Given real Pi without an external ACP adapter, When Bash executes through the daemon, Then the command and result are observable with both replies", async () => {
     await using provider = await FakeOpenAiProvider.start("gpt-4.1", "REAL_PI_REPLY");
