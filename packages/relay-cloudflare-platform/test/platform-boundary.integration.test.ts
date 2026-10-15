@@ -8,6 +8,7 @@ import {
     decodeSessionRecordingHistory,
     encodeNativeSessionRequest,
     encodeNativeSessionResult,
+    encodeSessionClosedEvent,
     encodeSessionConfigUpdatedEvent,
     encodeSessionConfigureCommand,
     encodeSessionEventEnvelopeV2,
@@ -808,6 +809,43 @@ describe.sequential("Platform Session-only boundary", () => {
             };
             daemon.send(JSON.stringify(rollback));
             expect(JSON.parse(await hostMessages.next())).toEqual(rollback);
+            const closeResponse = worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtimes/${runtimeId}/sessions/session-to-close/close`,
+                    {
+                        body: "{}",
+                        headers: credentialHeaders(appCredential),
+                        method: "POST",
+                    },
+                ),
+                environment,
+            );
+            const closeCommand = decodeServiceToDaemonMessage(await daemonMessages.next());
+            expect(closeCommand).toMatchObject({
+                kind: "session.close",
+                sessionId: "session-to-close",
+            });
+            if (closeCommand.kind !== "session.close") {
+                throw new Error("Expected a Session close command");
+            }
+            expect(decodeServiceToDaemonMessage(await hostMessages.next())).toMatchObject(closeCommand);
+            daemon.send(
+                encodeSessionClosedEvent({
+                    kind: "session.closed",
+                    requestId: closeCommand.requestId,
+                    sessionId: "session-to-close",
+                }),
+            );
+            expect(decodeDaemonToServiceMessage(await hostMessages.next())).toMatchObject({
+                kind: "session.closed",
+                requestId: closeCommand.requestId,
+                sessionId: "session-to-close",
+            });
+            expect(await responseJson(await closeResponse, 200)).toEqual({
+                kind: "session.closed",
+                requestId: closeCommand.requestId,
+                sessionId: "session-to-close",
+            });
             // A Host can multiplex discovery, but routing must remain bounded and reject overload explicitly.
             const discoveryRequests = Array.from({ length: 4 }, (_, index) => ({
                 kind: "agent.settings.discover",
