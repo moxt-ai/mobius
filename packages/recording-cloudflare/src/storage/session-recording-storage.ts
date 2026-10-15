@@ -4,7 +4,7 @@ import {
     type SessionLiveEventV2,
     type SessionRecordingWrite,
 } from "@moxt-ai/mobius-protocol";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, gte } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/durable-sqlite";
 import { sessionRecordingDurableObjectMigrations } from "../generated/session-recording-do-migrations.ts";
 import * as schema from "../schema/session-recording-do/index.ts";
@@ -24,10 +24,27 @@ interface SelectedEvent {
 }
 
 interface ResolvedCursor {
+    readonly generation: string;
     readonly index: number;
     readonly legacy: boolean;
     readonly ordinal: number;
 }
+
+interface BatchSummary {
+    readonly firstPosition: number | null;
+    readonly lastPosition: number | null;
+    readonly ordinal: number;
+    readonly sessionGenerationId: string | null;
+}
+
+interface BatchBounds {
+    readonly firstPosition: number;
+    readonly generation: string;
+    readonly lastPosition: number;
+}
+
+/** Batches decoded per query while paging; small enough that one read stays far below Durable Object memory. */
+const batchReadChunk = 32;
 
 interface RecordedSessionLiveHistory {
     readonly events: readonly SessionLiveEventV2[];
@@ -51,24 +68,109 @@ export class SessionRecordingStorage {
         this.#storage = storage;
     }
 
-    readonly #batches = (): readonly RecordedBatch[] =>
-        this.#database
+    /** Decodes one stored batch; rows written before the generation column existed carry it in their events. */
+    readonly #batch = (row: {
+        readonly envelopeJson: string;
+        readonly ordinal: number;
+        readonly sessionGenerationId: string | null;
+    }): RecordedBatch => {
+        const events = this.#decode(row);
+        return {
+            events,
+            generation: row.sessionGenerationId ?? events[0]?.sessionGenerationId ?? "",
+            ordinal: row.ordinal,
+        };
+    };
+
+    readonly #batchAt = (ordinal: number): RecordedBatch | undefined => {
+        const row = this.#database
             .select({
                 envelopeJson: recordedSessionEvent.envelopeJson,
                 ordinal: recordedSessionEvent.ordinal,
                 sessionGenerationId: recordedSessionEvent.sessionGenerationId,
             })
             .from(recordedSessionEvent)
+            .where(eq(recordedSessionEvent.ordinal, ordinal))
+            .get();
+        return row === undefined ? undefined : this.#batch(row);
+    };
+
+    /**
+     * Yields batches from an ordinal in bounded chunks so a page decodes only the batches it spans
+     * instead of the whole Session, whose size grows without bound over a long-running conversation.
+     */
+    *#batchesFrom(ordinal: number): Generator<RecordedBatch> {
+        let nextOrdinal = ordinal;
+        for (;;) {
+            const rows = this.#database
+                .select({
+                    envelopeJson: recordedSessionEvent.envelopeJson,
+                    ordinal: recordedSessionEvent.ordinal,
+                    sessionGenerationId: recordedSessionEvent.sessionGenerationId,
+                })
+                .from(recordedSessionEvent)
+                .where(gte(recordedSessionEvent.ordinal, nextOrdinal))
+                .orderBy(asc(recordedSessionEvent.ordinal))
+                .limit(batchReadChunk)
+                .all();
+            for (const row of rows) {
+                yield this.#batch(row);
+            }
+            const last = rows.at(-1);
+            if (last === undefined || rows.length < batchReadChunk) {
+                return;
+            }
+            nextOrdinal = last.ordinal + 1;
+        }
+    }
+
+    /** Lists batch boundaries from indexed columns without decoding any envelope. */
+    readonly #summaries = (): readonly BatchSummary[] =>
+        this.#database
+            .select({
+                firstPosition: recordedSessionEvent.firstPosition,
+                lastPosition: recordedSessionEvent.lastPosition,
+                ordinal: recordedSessionEvent.ordinal,
+                sessionGenerationId: recordedSessionEvent.sessionGenerationId,
+            })
+            .from(recordedSessionEvent)
             .orderBy(asc(recordedSessionEvent.ordinal))
-            .all()
-            .map((row) => {
-                const events = this.#decode(row);
-                return {
-                    events,
-                    generation: row.sessionGenerationId ?? events[0]?.sessionGenerationId ?? "",
-                    ordinal: row.ordinal,
-                };
-            });
+            .all();
+
+    /** Rows recorded before the boundary columns existed are decoded to recover the same values. */
+    readonly #bounds = (summary: BatchSummary): BatchBounds => {
+        if (summary.firstPosition !== null && summary.lastPosition !== null && summary.sessionGenerationId !== null) {
+            return {
+                firstPosition: summary.firstPosition,
+                generation: summary.sessionGenerationId,
+                lastPosition: summary.lastPosition,
+            };
+        }
+        const batch = this.#batchAt(summary.ordinal);
+        const firstPosition = Number(batch?.events[0]?.position ?? 0);
+        return {
+            firstPosition,
+            generation: batch?.generation ?? "",
+            lastPosition: Number(batch?.events.at(-1)?.position ?? firstPosition),
+        };
+    };
+
+    readonly #tailCursor = (): string => {
+        const tail = this.#database
+            .select({ lastPosition: recordedSessionEvent.lastPosition, ordinal: recordedSessionEvent.ordinal })
+            .from(recordedSessionEvent)
+            .orderBy(desc(recordedSessionEvent.ordinal))
+            .limit(1)
+            .get();
+        if (tail === undefined) {
+            return "v2:0:0";
+        }
+        if (tail.lastPosition !== null) {
+            return `v2:${tail.ordinal}:${tail.lastPosition}`;
+        }
+        const batch = this.#batchAt(tail.ordinal);
+        return batch === undefined ? "v2:0:0" : this.#cursor(batch, batch.events.length - 1);
+    };
 
     readonly #cursor = (batch: RecordedBatch, index: number): string =>
         `v2:${batch.ordinal}:${batch.events[index]?.position ?? "0"}`;
@@ -136,25 +238,24 @@ export class SessionRecordingStorage {
         if (metadata === undefined) {
             return null;
         }
-        const batches = this.#batches();
-        const cursor = this.#resolveCursor(batches, after);
+        const cursor = this.#resolveCursor(after);
         if (cursor === null) {
             throw new Error("The Recording cursor is invalid");
         }
-        const tail = batches.at(-1);
-        const tailCursor = tail === undefined ? "v2:0:0" : this.#cursor(tail, tail.events.length - 1);
-        let selected: SelectedEvent[] = [];
+        const tailCursor = this.#tailCursor();
+        // Position-only legacy cursors have no generation scope. Once a generation switch exists,
+        // replay the full durable history so clients replace reconstructed state instead of dropping it.
+        const replay = cursor.legacy && this.#hasGenerationReset();
+        const start: ResolvedCursor = replay ? { generation: "", index: -1, legacy: true, ordinal: 0 } : cursor;
+        const selected: SelectedEvent[] = [];
         let truncated = false;
-        let generationReset = false;
-        for (const batch of batches) {
-            if (batch.ordinal < cursor.ordinal) {
-                continue;
-            }
-            if (batch.generation !== this.#cursorGeneration(batches, cursor.ordinal)) {
+        let generationReset = replay;
+        for (const batch of this.#batchesFrom(start.ordinal)) {
+            if (!replay && batch.generation !== start.generation) {
                 generationReset = true;
             }
             for (const [index, event] of batch.events.entries()) {
-                if (batch.ordinal === cursor.ordinal && index <= cursor.index) {
+                if (batch.ordinal === start.ordinal && index <= start.index) {
                     continue;
                 }
                 if (selected.length >= limit) {
@@ -165,25 +266,6 @@ export class SessionRecordingStorage {
             }
             if (truncated) {
                 break;
-            }
-        }
-        // Position-only legacy cursors have no generation scope. Once a generation switch exists,
-        // replay the full durable history so clients replace reconstructed state instead of dropping it.
-        if (cursor.legacy && this.#hasGenerationReset(batches)) {
-            selected = [];
-            truncated = false;
-            generationReset = true;
-            for (const batch of batches) {
-                for (const [index, event] of batch.events.entries()) {
-                    if (selected.length >= limit) {
-                        truncated = true;
-                        break;
-                    }
-                    selected.push({ batch, event, index });
-                }
-                if (truncated) {
-                    break;
-                }
             }
         }
         const last = selected.at(-1);
@@ -198,64 +280,76 @@ export class SessionRecordingStorage {
         };
     };
 
-    readonly #resolveCursor = (batches: readonly RecordedBatch[], after: string): ResolvedCursor | null => {
+    readonly #resolveCursor = (after: string): ResolvedCursor | null => {
         const [cursorKind, ordinalToken, positionToken] = after.split(":");
         if (cursorKind === "v2" && ordinalToken !== undefined && positionToken !== undefined) {
             const ordinal = Number(ordinalToken);
-            const batch = batches.find((candidate) => candidate.ordinal === ordinal);
+            const batch = this.#batchAt(ordinal);
             if (batch === undefined) {
                 return null;
             }
             const index = batch.events.findIndex((event) => Number(event.position) === Number(positionToken));
-            return index === -1 ? null : { index, legacy: false, ordinal };
+            return index === -1 ? null : { generation: batch.generation, index, legacy: false, ordinal };
         }
         if (!/^(?:0|[1-9][0-9]*)$/.test(after)) {
             return null;
         }
-        const position = Number(after);
-        let cursor: ResolvedCursor = { index: -1, legacy: true, ordinal: 0 };
+        return this.#resolveLegacyCursor(Number(after));
+    };
+
+    /**
+     * Finds the last event at or before a position in the first contiguous generation run. Batch
+     * boundaries come from indexed columns, so only the batch holding the cursor is decoded; the
+     * daemon assigns increasing positions inside one batch, so its bounds order its events.
+     */
+    readonly #resolveLegacyCursor = (position: number): ResolvedCursor => {
+        const initial: ResolvedCursor = { generation: "", index: -1, legacy: true, ordinal: 0 };
+        let containing: { readonly generation: string; readonly ordinal: number } | null = null;
         let generation: string | null = null;
         let previousPosition = 0;
-        for (const batch of batches) {
-            if (generation !== null && batch.generation !== generation) {
-                return cursor;
+        for (const summary of this.#summaries()) {
+            const bounds = this.#bounds(summary);
+            if (
+                (generation !== null && bounds.generation !== generation) ||
+                bounds.firstPosition < previousPosition ||
+                bounds.firstPosition > position
+            ) {
+                break;
             }
-            generation = batch.generation;
-            for (const [index, event] of batch.events.entries()) {
-                const current = Number(event.position);
-                if (current < previousPosition) {
-                    return cursor;
-                }
-                if (current <= position) {
-                    cursor = { index, legacy: true, ordinal: batch.ordinal };
-                }
-                previousPosition = current;
+            generation = bounds.generation;
+            containing = { generation: bounds.generation, ordinal: summary.ordinal };
+            if (bounds.lastPosition > position) {
+                break;
             }
+            previousPosition = bounds.lastPosition;
         }
-        return cursor;
+        if (containing === null) {
+            return initial;
+        }
+        const batch = this.#batchAt(containing.ordinal);
+        let index = -1;
+        for (const [candidateIndex, event] of (batch?.events ?? []).entries()) {
+            if (Number(event.position) > position) {
+                break;
+            }
+            index = candidateIndex;
+        }
+        return { generation: containing.generation, index, legacy: true, ordinal: containing.ordinal };
     };
 
-    readonly #cursorGeneration = (batches: readonly RecordedBatch[], ordinal: number): string => {
-        if (ordinal === 0) {
-            return "";
-        }
-        return batches.find((batch) => batch.ordinal === ordinal)?.generation ?? "";
-    };
-
-    readonly #hasGenerationReset = (batches: readonly RecordedBatch[]): boolean => {
+    readonly #hasGenerationReset = (): boolean => {
         let previousGeneration: string | null = null;
         let previousPosition = 0;
-        for (const batch of batches) {
-            const firstPosition = Number(batch.events[0]?.position ?? 0);
-            const lastPosition = Number(batch.events.at(-1)?.position ?? previousPosition);
+        for (const summary of this.#summaries()) {
+            const bounds = this.#bounds(summary);
             if (
                 previousGeneration !== null &&
-                (batch.generation !== previousGeneration || firstPosition < previousPosition)
+                (bounds.generation !== previousGeneration || bounds.firstPosition < previousPosition)
             ) {
                 return true;
             }
-            previousGeneration = batch.generation;
-            previousPosition = lastPosition;
+            previousGeneration = bounds.generation;
+            previousPosition = bounds.lastPosition;
         }
         return false;
     };
