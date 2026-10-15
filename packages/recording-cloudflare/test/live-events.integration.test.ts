@@ -472,4 +472,26 @@ describe("Recording incremental reads", () => {
             error: { code: "internal_error", message: "The Recording request could not be completed" },
         });
     });
+    it("Given a long recorded session, When a caller reads a late page, Then it receives only that page and never the earlier history", async () => {
+        const batchSize = 50;
+        const batchCount = 60;
+        for (let batch = 0; batch < batchCount; batch += 1) {
+            const events = numberedEvents(batchSize, batch * batchSize);
+            expect((await worker.fetch(write("runtime-live", { kind: "session.event.v2", events }), env)).status).toBe(
+                201,
+            );
+        }
+        const late = decodeSessionRecordingHistoryPage(
+            await (await worker.fetch(read(`?after=v2:56:${55 * batchSize + batchSize - 1}&limit=3`), env)).text(),
+        );
+        expect(late.events.map((candidate) => candidate.eventId)).toEqual(["event-2800", "event-2801", "event-2802"]);
+        expect(late.nextCursor).toBe("v2:57:2802");
+        expect(late.tailCursor).toBe(`v2:60:${batchCount * batchSize - 1}`);
+        expect(late.truncated).toBe(true);
+        const legacy = decodeSessionRecordingHistoryPage(
+            await (await worker.fetch(read(`?after=${batchCount * batchSize - 3}&limit=2`), env)).text(),
+        );
+        expect(legacy.events.map((candidate) => candidate.eventId)).toEqual(["event-2998", "event-2999"]);
+        expect(legacy.nextCursor).toBe("v2:60:2999");
+    });
 });

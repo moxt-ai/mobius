@@ -4,7 +4,7 @@ import {
     type SessionLiveEventV2,
     type SessionRecordingWrite,
 } from "@moxt-ai/mobius-protocol";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/durable-sqlite";
 import { sessionRecordingDurableObjectMigrations } from "../generated/session-recording-do-migrations.ts";
 import * as schema from "../schema/session-recording-do/index.ts";
@@ -28,6 +28,31 @@ interface ResolvedCursor {
     readonly legacy: boolean;
     readonly ordinal: number;
 }
+
+/** Stored batch bounds read without decoding the envelope, so a late page never pays for earlier history. */
+interface CompleteBatchBounds {
+    readonly firstPosition: number;
+    readonly generation: string;
+    readonly lastPosition: number;
+    readonly ordinal: number;
+}
+
+/** Where a paged read resumes: the first candidate batch, its already-delivered prefix, and its generation. */
+interface BoundedCursor {
+    readonly generation: string;
+    readonly index: number;
+    readonly legacy: boolean;
+    readonly start: number;
+}
+
+interface RecordedEvent {
+    readonly event: SessionLiveEventV2;
+    readonly index: number;
+    readonly ordinal: number;
+}
+
+/** Stored batches decoded per page read. A page rarely spans more than one window. */
+const DECODE_BATCH_WINDOW = 8;
 
 interface RecordedSessionLiveHistory {
     readonly events: readonly SessionLiveEventV2[];
@@ -136,6 +161,229 @@ export class SessionRecordingStorage {
         if (metadata === undefined) {
             return null;
         }
+        const bounds = this.#batchBounds();
+        // Batches recorded before the position and generation columns were backfilled carry no
+        // usable bounds, so their pages fall back to the decode-everything reader instead of guessing.
+        if (bounds === null) {
+            return this.#readPageWithoutBounds(sessionId, after, limit);
+        }
+        const cursor = this.#resolveBoundedCursor(bounds, after);
+        if (cursor === null) {
+            throw new Error("The Recording cursor is invalid");
+        }
+        const newest = bounds.at(-1);
+        const tailCursor = newest === undefined ? "v2:0:0" : `v2:${newest.ordinal}:${newest.lastPosition}`;
+        // Position-only legacy cursors have no generation scope. Once a generation switch exists,
+        // replay the full durable history so clients replace reconstructed state instead of dropping it.
+        const replay = cursor.legacy && this.#hasBoundedGenerationReset(bounds);
+        const selected = replay
+            ? this.#selectFrom(bounds, 0, -1, "", limit)
+            : this.#selectFrom(bounds, cursor.start, cursor.index, cursor.generation, limit);
+        return {
+            events: selected.events.map((recorded) => recorded.event),
+            generationReset: replay || selected.generationReset,
+            nextCursor: this.#nextCursor(selected.events),
+            sessionId,
+            tailCursor,
+            truncated: selected.truncated,
+            version: 2,
+        };
+    };
+
+    readonly #nextCursor = (selected: readonly RecordedEvent[]): string | null => {
+        const last = selected.at(-1);
+        return last === undefined ? null : `v2:${last.ordinal}:${last.event.position}`;
+    };
+
+    /**
+     * Reads every stored batch bound without decoding envelopes, or null when any batch predates
+     * the position columns and can only be resolved by decoding.
+     */
+    readonly #batchBounds = (): readonly CompleteBatchBounds[] | null => {
+        const bounds: CompleteBatchBounds[] = [];
+        const rows = this.#database
+            .select({
+                firstPosition: recordedSessionEvent.firstPosition,
+                lastPosition: recordedSessionEvent.lastPosition,
+                ordinal: recordedSessionEvent.ordinal,
+                sessionGenerationId: recordedSessionEvent.sessionGenerationId,
+            })
+            .from(recordedSessionEvent)
+            .orderBy(asc(recordedSessionEvent.ordinal))
+            .all();
+        for (const row of rows) {
+            if (row.firstPosition === null || row.lastPosition === null) {
+                return null;
+            }
+            bounds.push({
+                firstPosition: row.firstPosition,
+                generation: row.sessionGenerationId ?? "",
+                lastPosition: row.lastPosition,
+                ordinal: row.ordinal,
+            });
+        }
+        return bounds;
+    };
+
+    /**
+     * Collects up to `limit` events from batches at or after `start`, decoding only the batches the
+     * page actually reaches. `skipThroughIndex` drops the already-delivered prefix of the starting
+     * batch, and `cursorGeneration` decides whether a later generation is a reset.
+     */
+    readonly #selectFrom = (
+        bounds: readonly CompleteBatchBounds[],
+        start: number,
+        skipThroughIndex: number,
+        cursorGeneration: string,
+        limit: number,
+    ): {
+        readonly events: readonly RecordedEvent[];
+        readonly generationReset: boolean;
+        readonly truncated: boolean;
+    } => {
+        const events: RecordedEvent[] = [];
+        const startOrdinal = bounds[start]?.ordinal;
+        let truncated = false;
+        let generationReset = false;
+        for (let window = start; window < bounds.length && !truncated; window += DECODE_BATCH_WINDOW) {
+            for (const batch of this.#decodedBatches(bounds.slice(window, window + DECODE_BATCH_WINDOW))) {
+                if (batch.generation !== cursorGeneration) {
+                    generationReset = true;
+                }
+                for (const [index, event] of batch.events.entries()) {
+                    if (batch.ordinal === startOrdinal && index <= skipThroughIndex) {
+                        continue;
+                    }
+                    if (events.length >= limit) {
+                        truncated = true;
+                        break;
+                    }
+                    events.push({ event, index, ordinal: batch.ordinal });
+                }
+                if (truncated) {
+                    break;
+                }
+            }
+        }
+        return { events, generationReset, truncated };
+    };
+
+    /** Decodes exactly the listed stored batches, oldest first. */
+    readonly #decodedBatches = (bounds: readonly CompleteBatchBounds[]): readonly RecordedBatch[] => {
+        if (bounds.length === 0) {
+            return [];
+        }
+        return this.#database
+            .select({
+                envelopeJson: recordedSessionEvent.envelopeJson,
+                ordinal: recordedSessionEvent.ordinal,
+                sessionGenerationId: recordedSessionEvent.sessionGenerationId,
+            })
+            .from(recordedSessionEvent)
+            .where(
+                inArray(
+                    recordedSessionEvent.ordinal,
+                    bounds.map((batch) => batch.ordinal),
+                ),
+            )
+            .orderBy(asc(recordedSessionEvent.ordinal))
+            .all()
+            .map((row) => {
+                const events = this.#decode(row);
+                return {
+                    events,
+                    generation: row.sessionGenerationId ?? events[0]?.sessionGenerationId ?? "",
+                    ordinal: row.ordinal,
+                };
+            });
+    };
+
+    /** Resolves a cursor against stored bounds, decoding at most the batch the cursor lands inside. */
+    readonly #resolveBoundedCursor = (bounds: readonly CompleteBatchBounds[], after: string): BoundedCursor | null => {
+        const [cursorKind, ordinalToken, positionToken] = after.split(":");
+        if (cursorKind === "v2" && ordinalToken !== undefined && positionToken !== undefined) {
+            const ordinal = Number(ordinalToken);
+            const start = bounds.findIndex((candidate) => candidate.ordinal === ordinal);
+            if (start === -1) {
+                return null;
+            }
+            const decoded = this.#decodedBatches(bounds.slice(start, start + 1))[0];
+            const index = decoded?.events.findIndex((event) => Number(event.position) === Number(positionToken)) ?? -1;
+            if (index === -1) {
+                return null;
+            }
+            // Ordinal zero carries no generation scope, matching the append-order cursor contract.
+            const generation = ordinal === 0 ? "" : (bounds[start]?.generation ?? "");
+            return { generation, index, legacy: false, start };
+        }
+        if (!/^(?:0|[1-9][0-9]*)$/.test(after)) {
+            return null;
+        }
+        const position = Number(after);
+        let cursor: BoundedCursor = { generation: "", index: -1, legacy: true, start: 0 };
+        let generation: string | null = null;
+        let previousPosition = 0;
+        for (const [start, batch] of bounds.entries()) {
+            if (generation !== null && batch.generation !== generation) {
+                return cursor;
+            }
+            generation = batch.generation;
+            if (batch.firstPosition < previousPosition) {
+                return cursor;
+            }
+            if (batch.lastPosition <= position) {
+                // The whole batch is at or before the cursor, so delivery resumes with the next one.
+                cursor = { generation: batch.generation, index: -1, legacy: true, start: start + 1 };
+                previousPosition = batch.lastPosition;
+                continue;
+            }
+            if (batch.firstPosition <= position) {
+                // The cursor lands inside this batch, so it is the only batch that must be decoded.
+                const decoded = this.#decodedBatches([batch])[0];
+                let index = -1;
+                for (const [candidateIndex, event] of (decoded?.events ?? []).entries()) {
+                    const current = Number(event.position);
+                    if (current < previousPosition) {
+                        return cursor;
+                    }
+                    if (current <= position) {
+                        index = candidateIndex;
+                    }
+                    previousPosition = current;
+                }
+                cursor = { generation: batch.generation, index, legacy: true, start };
+                continue;
+            }
+            return cursor;
+        }
+        return cursor;
+    };
+
+    readonly #hasBoundedGenerationReset = (bounds: readonly CompleteBatchBounds[]): boolean => {
+        let previousGeneration: string | null = null;
+        let previousPosition = 0;
+        for (const batch of bounds) {
+            if (
+                previousGeneration !== null &&
+                (batch.generation !== previousGeneration || batch.firstPosition < previousPosition)
+            ) {
+                return true;
+            }
+            previousGeneration = batch.generation;
+            previousPosition = batch.lastPosition;
+        }
+        return false;
+    };
+
+    /**
+     * Legacy reader for batches without stored bounds. It decodes the whole Recording, so it stays
+     * reachable only for rows recorded before the bound columns existed.
+     */
+    readonly #readPageWithoutBounds = (
+        sessionId: string,
+        after: string,
+        limit: number,
+    ): RecordedSessionLiveHistoryPage => {
         const batches = this.#batches();
         const cursor = this.#resolveCursor(batches, after);
         if (cursor === null) {
@@ -167,8 +415,6 @@ export class SessionRecordingStorage {
                 break;
             }
         }
-        // Position-only legacy cursors have no generation scope. Once a generation switch exists,
-        // replay the full durable history so clients replace reconstructed state instead of dropping it.
         if (cursor.legacy && this.#hasGenerationReset(batches)) {
             selected = [];
             truncated = false;
