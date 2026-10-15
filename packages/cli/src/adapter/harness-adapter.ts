@@ -34,21 +34,14 @@ export interface HarnessLiveEventSubscription {
 
 export type HarnessLiveEventSubscriber = (event: SessionLiveEventV2) => Promise<void>;
 
-export interface HarnessHistoryEvents {
+export interface HarnessSessionEvents {
     readonly createHistoryReplay: (sessionId: string) => AcpHistoryReplay;
+    readonly publishLiveEvent: (event: SessionLiveEventV2) => Promise<void>;
     readonly removeHistoryEvents: (sessionId: string) => void;
     readonly resetHistoryEvents: (sessionId: string) => void;
 }
 
-export interface HarnessLiveEventPublisher {
-    readonly publishLiveEvent: (event: SessionLiveEventV2) => Promise<void>;
-}
-
-export class NullHarnessLiveEventPublisher implements HarnessLiveEventPublisher {
-    readonly publishLiveEvent = (_event: SessionLiveEventV2): Promise<void> => Promise.resolve();
-}
-
-export interface HarnessAdapter extends HarnessHistoryEvents, HarnessLiveEventPublisher {
+export interface HarnessAdapter extends HarnessSessionEvents {
     readonly close: () => void;
     readonly id: string;
     readonly previewPageHistoryEvents: (request: HarnessHistoryPreviewRequest) => Promise<AcpNativeEventReplayV2>;

@@ -13,7 +13,7 @@ import type {
     SessionStatus,
     SessionStatusChangedEvent,
 } from "@moxt-ai/mobius-protocol";
-import { type HarnessLiveEventSubscription, NullHarnessLiveEventPublisher } from "../adapter/harness-adapter.ts";
+import type { HarnessLiveEventSubscription } from "../adapter/harness-adapter.ts";
 import { HarnessAdapterRegistry } from "../adapter/harness-adapter-registry.ts";
 import { AcpContentExternalizer } from "../external-content/acp-content-externalizer.ts";
 import { UnretainedExternalContentStore } from "../external-content/local-external-content-store.ts";
@@ -80,7 +80,6 @@ export class AgentRuntimeManager {
     readonly #queryProcesses: AgentQueryProcesses;
     readonly #executions = new ActiveExecutions();
     readonly #agentSettingsObserver = new NullAcpSessionObserver();
-    readonly #nullLiveEvents = new NullHarnessLiveEventPublisher();
     readonly #adapters: HarnessAdapterRegistry;
     readonly #liveEvents: HarnessLiveEventSubscription;
     readonly #nativeOperations = new Set<string>();
@@ -197,7 +196,6 @@ export class AgentRuntimeManager {
                         () => this.#observer,
                         this.#store,
                         adapter,
-                        adapter,
                         metrics,
                         this.#contentExternalizer,
                     ),
@@ -228,7 +226,6 @@ export class AgentRuntimeManager {
                         () => this.#observer,
                         this.#store,
                         adapter,
-                        adapter,
                         metrics,
                         this.#contentExternalizer,
                     ),
@@ -249,7 +246,6 @@ export class AgentRuntimeManager {
                         { kind: "interactive-only" },
                         () => this.#observer,
                         this.#store,
-                        adapter,
                         adapter,
                         unmeasuredOperationMetrics,
                         this.#contentExternalizer,
@@ -391,7 +387,6 @@ export class AgentRuntimeManager {
                         () => this.#agentSettingsObserver,
                         new MemoryAcpSessionStore(),
                         adapter,
-                        this.#nullLiveEvents,
                         unmeasuredOperationMetrics,
                         this.#contentExternalizer,
                     ),
