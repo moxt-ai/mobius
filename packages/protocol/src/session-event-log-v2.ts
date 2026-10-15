@@ -97,7 +97,7 @@ const audioContentSchema = z
     .object({ ...contentFields, data: boundedString, mimeType: shortString, type: z.literal("audio") })
     .readonly();
 const externalImageContentSchema = z
-    .strictObject({
+    .object({
         ...contentFields,
         byteLength: z.number().int().positive().safe(),
         imageKey: externalContentKeySchema,
@@ -107,7 +107,7 @@ const externalImageContentSchema = z
     })
     .readonly();
 const externalAudioContentSchema = z
-    .strictObject({
+    .object({
         ...contentFields,
         audioKey: externalContentKeySchema,
         byteLength: z.number().int().positive().safe(),
@@ -116,7 +116,7 @@ const externalAudioContentSchema = z
     })
     .readonly();
 const externalResourceContentSchema = z
-    .strictObject({
+    .object({
         ...contentFields,
         byteLength: z.number().int().positive().safe(),
         encoding: z.enum(["binary", "text"]),
