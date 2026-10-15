@@ -20,6 +20,7 @@ import {
     decodeNativeSessionRequest,
     decodeRuntimeDiagnosticsRequest,
     decodeRuntimePingCommand,
+    decodeRuntimeUpgradeRequest,
     decodeSessionCancelCommand,
     decodeSessionConfigureCommand,
     decodeSessionElicitationRespondCommand,
@@ -340,6 +341,7 @@ export class ChannelActor {
                 return;
             case WORKSPACE_ENTRIES_KIND:
                 return;
+            case "runtime.upgrade.result":
             case "runtime.diagnostics.result":
             case RUNTIME_PONG_KIND:
                 return;
@@ -435,6 +437,10 @@ export class ChannelActor {
             case FILE_READ_KIND: {
                 const command = decodeFileReadCommand(message);
                 return { message: command, requestId: command.requestId, sessionId: command.sessionId };
+            }
+            case "runtime.upgrade.request": {
+                const command = decodeRuntimeUpgradeRequest(message);
+                return { message: command, requestId: command.requestId, sessionId: "" };
             }
             case "runtime.diagnostics.read": {
                 const command = decodeRuntimeDiagnosticsRequest(message);

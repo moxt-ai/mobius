@@ -790,6 +790,24 @@ describe.sequential("Platform Session-only boundary", () => {
         try {
             expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("runtime.liveness.ready");
             expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "runtime.status", online: true });
+            const upgrade = { kind: "runtime.upgrade.request", requestId: "upgrade-request", version: "0.0.228" };
+            host.send(JSON.stringify(upgrade));
+            expect(decodeServiceToDaemonMessage(await daemonMessages.next())).toEqual(upgrade);
+            expect(JSON.parse(await hostMessages.next())).toEqual(upgrade);
+            const rollback = {
+                kind: "runtime.upgrade.result",
+                requestId: upgrade.requestId,
+                version: "0.0.227",
+                targetVersion: upgrade.version,
+                outcome: {
+                    status: "failed",
+                    code: "worker_exited",
+                    message: "The new daemon exited before becoming ready",
+                    retryAfter: 3600000,
+                },
+            };
+            daemon.send(JSON.stringify(rollback));
+            expect(JSON.parse(await hostMessages.next())).toEqual(rollback);
             // A Host can multiplex discovery, but routing must remain bounded and reject overload explicitly.
             const discoveryRequests = Array.from({ length: 4 }, (_, index) => ({
                 kind: "agent.settings.discover",

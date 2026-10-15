@@ -1,7 +1,12 @@
 import { setTimeout } from "node:timers/promises";
 import { acquireManagerLock, isNodeError, sendLocalRequest } from "./daemon-local-control.ts";
 import { serveLocalControl } from "./daemon-local-server.ts";
-import { openMobiusCliInstallation, resumeMobiusRuntime } from "./pairing/pair-local-machine.ts";
+import { prepareUpgradeData } from "./daemon-upgrade-data.ts";
+import {
+    openMobiusCliInstallation,
+    openMobiusControlInstallation,
+    resumeMobiusRuntime,
+} from "./pairing/pair-local-machine.ts";
 import { MobiusRuntimeEngine } from "./runtime.ts";
 
 export async function reloadDaemon(stateDirectory: string, signal: AbortSignal): Promise<void> {
@@ -30,12 +35,14 @@ export async function runWorker(version: string, signal: AbortSignal): Promise<v
     const combined = AbortSignal.any([signal, shutdown.signal]);
     const disconnect = (): void => shutdown.abort();
     process.once("disconnect", disconnect);
+    const control = await openMobiusControlInstallation(combined, process.env);
+    await prepareUpgradeData(control.stateDirectory, version, combined);
     const installation = await openMobiusCliInstallation(combined, process.env);
     const deadline = AbortSignal.any([combined, AbortSignal.timeout(15_000)]);
     let release: (() => Promise<void>) | null = null;
     while (release === null) {
         deadline.throwIfAborted();
-        release = await acquireManagerLock(installation.stateDirectory, "worker.lock");
+        release = await acquireManagerLock(control.stateDirectory, "worker.lock");
         if (release === null) {
             await setTimeout(25, undefined, { signal: deadline });
         }
@@ -83,7 +90,7 @@ export async function runWorker(version: string, signal: AbortSignal): Promise<v
     try {
         await reconcile();
         await serveLocalControl(
-            installation.stateDirectory,
+            control.stateDirectory,
             "worker",
             combined,
             async (request) => {

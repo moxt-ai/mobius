@@ -82,7 +82,7 @@ async function ensureManager(stateDirectory: string, managerVersion: string, sig
                 }
                 return;
             }
-            // A pre-split daemon does not understand lifecycle status; migrate it once.
+            // Replace an older lifecycle protocol once; subsequent worker upgrades keep this manager.
             await stopManager(stateDirectory, signal);
             await launchManager(managerVersion);
             managerStarted = true;

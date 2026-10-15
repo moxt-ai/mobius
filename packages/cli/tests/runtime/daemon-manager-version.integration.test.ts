@@ -9,7 +9,7 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import cliPackage from "../../package.json" with { type: "json" };
-import { openMobiusCliInstallation } from "../../src/pairing/pair-local-machine.ts";
+import { openMobiusCliInstallation, openMobiusControlInstallation } from "../../src/pairing/pair-local-machine.ts";
 import { platformSupportFor } from "../../src/platform/index.ts";
 
 const temporaryDirectories: string[] = [];
@@ -35,8 +35,8 @@ describe("Mobius manager version compatibility", () => {
             expect(started.stdout).toContain(`Mobius daemon ${cliPackage.version} started\n`);
             expect(started.stdout).toContain("Mobius daemon is running.\n");
 
-            const installation = await openMobiusCliInstallation(AbortSignal.timeout(10_000), environment);
-            const managerPid = Number(await readFile(join(installation.stateDirectory, "manager.lock"), "utf8"));
+            const control = await openMobiusControlInstallation(AbortSignal.timeout(10_000), environment);
+            const managerPid = Number(await readFile(join(control.stateDirectory, "manager.lock"), "utf8"));
             expect(
                 (await platformSupportFor(process.platform).readProcessTable()).filter(
                     (entry) => entry.parentProcessId === managerPid,
@@ -56,15 +56,15 @@ describe("Mobius manager version compatibility", () => {
         const deadline = AbortSignal.timeout(60_000);
         try {
             expect((await runCli(["start"], environment, deadline)).code).toBe(0);
-            const installation = await openMobiusCliInstallation(deadline, environment);
-            const manager = await readFile(join(installation.stateDirectory, "manager.lock"), "utf8");
-            const previous = await readFile(join(installation.stateDirectory, "worker.lock"), "utf8");
+            const control = await openMobiusControlInstallation(deadline, environment);
+            const manager = await readFile(join(control.stateDirectory, "manager.lock"), "utf8");
+            const previous = await readFile(join(control.stateDirectory, "worker.lock"), "utf8");
             const replacement = new Promise<string>((resolve_, reject) => {
-                const watcher = watch(installation.stateDirectory, (_event, filename) => {
+                const watcher = watch(control.stateDirectory, (_event, filename) => {
                     if (filename !== "worker.lock") {
                         return;
                     }
-                    void readFile(join(installation.stateDirectory, "worker.lock"), "utf8").then(
+                    void readFile(join(control.stateDirectory, "worker.lock"), "utf8").then(
                         (pid) => {
                             if (Number(pid) > 1 && pid !== previous) {
                                 cleanup();
@@ -91,9 +91,9 @@ describe("Mobius manager version compatibility", () => {
             process.kill(Number(previous), "SIGKILL");
             const next = await replacement;
             expect(next).not.toBe(previous);
-            expect(await readFile(join(installation.stateDirectory, "manager.lock"), "utf8")).toBe(manager);
+            expect(await readFile(join(control.stateDirectory, "manager.lock"), "utf8")).toBe(manager);
             expect((await runCli(["pair", "list"], environment, deadline)).code).toBe(0);
-            expect(await readFile(join(installation.stateDirectory, "worker.lock"), "utf8")).toBe(next);
+            expect(await readFile(join(control.stateDirectory, "worker.lock"), "utf8")).toBe(next);
         } finally {
             await runCli(["quit"], environment, AbortSignal.timeout(20_000)).catch(() => undefined);
         }
@@ -107,10 +107,30 @@ describe("Mobius manager version compatibility", () => {
         const result = await runCli(["pair", "list"], environment, deadline);
         expect(result.code).toBe(0);
         expect(result.stdout).not.toContain("Starting mobius");
-        const installation = await openMobiusCliInstallation(deadline, environment);
-        await expect(readFile(join(installation.stateDirectory, "manager.lock"))).rejects.toMatchObject({
+        const control = await openMobiusControlInstallation(deadline, environment);
+        await expect(readFile(join(control.stateDirectory, "manager.lock"))).rejects.toMatchObject({
             code: "ENOENT",
         });
+    });
+
+    it("Given saved data from another version, When the current CLI lists pairings, Then it uses its own directory and preserves existing data", async () => {
+        const directory = await mkdtemp(join(tmpdir(), "mobius-version-data-"));
+        temporaryDirectories.push(directory);
+        const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: directory };
+        const oldDirectory = join(directory, "versions", "0.0.1");
+        await mkdir(oldDirectory, { recursive: true });
+        await writeFile(join(oldDirectory, "retained.sqlite"), "old-version-data");
+        const deadline = AbortSignal.timeout(30_000);
+        expect((await runCli(["pair", "list"], environment, deadline)).code).toBe(0);
+        const installation = await openMobiusCliInstallation(deadline, environment);
+        expect(
+            installation.stateDirectory.startsWith(`${join(directory, "versions", cliPackage.version)}/`) ||
+                installation.stateDirectory.startsWith(`${join(directory, "versions", cliPackage.version)}\\`),
+        ).toBe(true);
+        expect(await readFile(join(oldDirectory, "retained.sqlite"), "utf8")).toBe("old-version-data");
+        await expect(
+            readFile(join(directory, "versions", cliPackage.version, "retained.sqlite")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
     });
 
     it("Given an installed daemon, When another CLI version starts, Then only the working process changes", async () => {
@@ -124,13 +144,28 @@ describe("Mobius manager version compatibility", () => {
         await symlink(resolve(import.meta.dirname, "../../node_modules"), join(release, "node_modules"), "junction");
         try {
             expect((await runCli(["start"], environment, deadline)).code).toBe(0);
-            const installation = await openMobiusCliInstallation(deadline, environment);
-            const manager = await readFile(join(installation.stateDirectory, "manager.lock"), "utf8");
-            const worker = await readFile(join(installation.stateDirectory, "worker.lock"), "utf8");
+            const control = await openMobiusControlInstallation(deadline, environment);
+            const manager = await readFile(join(control.stateDirectory, "manager.lock"), "utf8");
+            const worker = await readFile(join(control.stateDirectory, "worker.lock"), "utf8");
+            const data = await openMobiusCliInstallation(deadline, environment);
+            const saved = await data.saveConnection(
+                {
+                    appId: "app_isolated",
+                    channelId: "channel_isolated",
+                    defaultWorkspace: directory,
+                    pairingId: "",
+                    relayOrigin: new URL("http://127.0.0.1:1"),
+                    runtimeCredential: "a".repeat(43),
+                    runtimeId: "runtime_isolated",
+                },
+                deadline,
+            );
+            await data.setConnectionActivation(saved.connectionId, "stopped", deadline);
+
             const upgraded = await runCli(["start"], environment, deadline, join(release, "src/cli.ts"));
             expect(upgraded).toEqual({ code: 0, stderr: "", stdout: "Mobius daemon is running.\n" });
-            expect(await readFile(join(installation.stateDirectory, "manager.lock"), "utf8")).toBe(manager);
-            const replacement = await readFile(join(installation.stateDirectory, "worker.lock"), "utf8");
+            expect(await readFile(join(control.stateDirectory, "manager.lock"), "utf8")).toBe(manager);
+            const replacement = await readFile(join(control.stateDirectory, "worker.lock"), "utf8");
             expect(replacement).not.toBe(worker);
             expect(
                 (await platformSupportFor(process.platform).readProcessTable()).filter(
@@ -138,7 +173,14 @@ describe("Mobius manager version compatibility", () => {
                 ),
             ).toHaveLength(1);
             expect((await runCli(["start"], environment, deadline, join(release, "src/cli.ts"))).code).toBe(0);
-            expect(await readFile(join(installation.stateDirectory, "worker.lock"), "utf8")).toBe(replacement);
+            expect(await readFile(join(control.stateDirectory, "worker.lock"), "utf8")).toBe(replacement);
+            const otherList = await runCli(["pair", "list"], environment, deadline, join(release, "src/cli.ts"));
+            expect(otherList.code).toBe(0);
+            expect(otherList.stdout).not.toContain(saved.connectionId);
+            const originalList = await runCli(["pair", "list"], environment, deadline);
+            expect(originalList.code).toBe(0);
+            expect(originalList.stdout).toContain(saved.connectionId);
+            expect(await readFile(data.connectionPath(saved.connectionId), "utf8")).toContain("app_isolated");
         } finally {
             await runCli(["quit"], environment, AbortSignal.timeout(20_000)).catch(() => undefined);
         }
@@ -152,15 +194,15 @@ describe("Mobius manager version compatibility", () => {
         let heldConnection: Socket | undefined;
         try {
             expect((await runCli(["start"], environment, deadline)).code).toBe(0);
-            const installation = await openMobiusCliInstallation(deadline, environment);
-            heldConnection = await holdControlConnection(installation.stateDirectory, deadline);
+            const control = await openMobiusControlInstallation(deadline, environment);
+            heldConnection = await holdControlConnection(control.stateDirectory, deadline);
             expect(await runCli(["quit"], environment, deadline)).toEqual({
                 code: 0,
                 stderr: "",
                 stdout: "Mobius daemon stopped.\n",
             });
             for (const name of ["manager.lock", "worker.lock"]) {
-                await expect(readFile(join(installation.stateDirectory, name), "utf8")).rejects.toMatchObject({
+                await expect(readFile(join(control.stateDirectory, name), "utf8")).rejects.toMatchObject({
                     code: "ENOENT",
                 });
             }
@@ -181,6 +223,7 @@ describe("Mobius pairing lifecycle", () => {
         const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: stateRoot, PATH: executableDirectory };
         const deadline = AbortSignal.timeout(60_000);
         const installation = await openMobiusCliInstallation(deadline, environment);
+        const control = await openMobiusControlInstallation(deadline, environment);
         const connection = await installation.saveConnection(
             {
                 appId: "app_test",
@@ -216,8 +259,8 @@ describe("Mobius pairing lifecycle", () => {
             expect(initiallyListed.stdout).toContain("app_test");
 
             expect(initiallyListed.stdout).toContain(second.connectionId);
-            const managerPid = Number(await readFile(join(installation.stateDirectory, "manager.lock"), "utf8"));
-            const workerPid = await readFile(join(installation.stateDirectory, "worker.lock"), "utf8");
+            const managerPid = Number(await readFile(join(control.stateDirectory, "manager.lock"), "utf8"));
+            const workerPid = await readFile(join(control.stateDirectory, "worker.lock"), "utf8");
             expect(
                 (await platformSupportFor(process.platform).readProcessTable()).filter(
                     (entry) => entry.parentProcessId === managerPid,
@@ -260,7 +303,7 @@ describe("Mobius pairing lifecycle", () => {
             expect(stopped.code).toBe(0);
             expect(stopped.stdout).toContain(`Pairing stopped: ${connection.connectionId}\n`);
 
-            expect(await readFile(join(installation.stateDirectory, "worker.lock"), "utf8")).toBe(workerPid);
+            expect(await readFile(join(control.stateDirectory, "worker.lock"), "utf8")).toBe(workerPid);
             const listedStopped = await runCli(["pair", "list"], environment, deadline);
             expect(listedStopped.stdout).toContain(connection.connectionId);
             expect(listedStopped.stdout).toContain("stopped");
@@ -282,7 +325,7 @@ describe("Mobius pairing lifecycle", () => {
             const listedRemoved = await runCli(["pair", "list"], environment, deadline);
             expect(listedRemoved.stdout).not.toContain(connection.connectionId);
             expect(listedRemoved.stdout).toContain(second.connectionId);
-            await expect(readFile(join(installation.stateDirectory, "manager.lock"))).rejects.toMatchObject({
+            await expect(readFile(join(control.stateDirectory, "manager.lock"))).rejects.toMatchObject({
                 code: "ENOENT",
             });
             const stoppedOffline = await runCli(
@@ -291,7 +334,7 @@ describe("Mobius pairing lifecycle", () => {
                 deadline,
             );
             expect(stoppedOffline.code).toBe(0);
-            await expect(readFile(join(installation.stateDirectory, "manager.lock"))).rejects.toMatchObject({
+            await expect(readFile(join(control.stateDirectory, "manager.lock"))).rejects.toMatchObject({
                 code: "ENOENT",
             });
         } finally {

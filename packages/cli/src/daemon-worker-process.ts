@@ -30,8 +30,22 @@ export async function decodeWorkerLaunch(value: unknown): Promise<WorkerLaunch> 
     return { entry: resolvedEntry, executable: resolvedExecutable, version };
 }
 
+export class WorkerStartupError extends Error {
+    readonly code: string;
+    readonly stdout: string;
+    readonly stderr: string;
+    constructor(code: string, message: string, options?: ErrorOptions, stdout = "", stderr = "") {
+        super(message, options);
+        this.code = code;
+        this.stdout = stdout;
+        this.stderr = stderr;
+    }
+}
+
 export class WorkerProcess {
     readonly #child: ChildProcess;
+    #stdout = "";
+    #stderr = "";
     readonly #started = Promise.withResolvers<unknown>();
     readonly #closed = Promise.withResolvers<void>();
     readonly exited = this.#closed.promise;
@@ -44,12 +58,25 @@ export class WorkerProcess {
         this.#child = spawn(launch.executable, [launch.entry, "__worker"], {
             env: environment,
             windowsHide: true,
-            stdio: ["ignore", "inherit", "inherit", "ipc"],
+            stdio: ["ignore", "pipe", "pipe", "ipc"],
+        });
+        this.#child.stdout?.setEncoding("utf8").on("data", (chunk: string) => {
+            this.#stdout = (this.#stdout + chunk).slice(-4096);
+            process.stdout.write(chunk);
+        });
+        this.#child.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
+            this.#stderr = (this.#stderr + chunk).slice(-4096);
+            process.stderr.write(chunk);
         });
         this.#child.on("message", (value: unknown) => {
             if (isRecord(value) && value["kind"] === "worker-ready") {
                 if (value["version"] !== launch.version) {
-                    this.#started.reject(new Error("The working daemon version does not match the requested version"));
+                    this.#started.reject(
+                        new WorkerStartupError(
+                            "worker_version_mismatch",
+                            "The new daemon reported a different version",
+                        ),
+                    );
                 } else {
                     this.#started.resolve(value);
                 }
@@ -57,13 +84,25 @@ export class WorkerProcess {
             }
         });
         this.#child.once("error", (cause) => {
-            this.#started.reject(cause);
+            this.#started.reject(
+                new WorkerStartupError("worker_spawn_failed", "The new daemon process could not be launched", {
+                    cause,
+                }),
+            );
             if (this.#child.pid === undefined) {
                 this.#closed.resolve();
             }
         });
         this.#child.once("exit", () => {
-            this.#started.reject(new Error("The working daemon exited"));
+            this.#started.reject(
+                new WorkerStartupError(
+                    "worker_exited",
+                    "The new daemon exited before becoming ready",
+                    undefined,
+                    this.#stdout,
+                    this.#stderr,
+                ),
+            );
             this.#closed.resolve();
         });
         this.ready = this.#waitForStart(signal);
@@ -95,7 +134,18 @@ export class WorkerProcess {
 
     async #waitForStart(signal: AbortSignal): Promise<unknown> {
         const deadline = AbortSignal.any([signal, AbortSignal.timeout(120_000)]);
-        const abort = (): void => this.#started.reject(deadline.reason);
+        const abort = (): void =>
+            this.#started.reject(
+                signal.aborted
+                    ? signal.reason
+                    : new WorkerStartupError(
+                          "worker_start_timeout",
+                          "The new daemon did not become ready within 120 seconds",
+                          { cause: deadline.reason },
+                          this.#stdout,
+                          this.#stderr,
+                      ),
+            );
         deadline.addEventListener("abort", abort, { once: true });
         try {
             return await this.#started.promise;
