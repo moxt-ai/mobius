@@ -791,15 +791,11 @@ describe.sequential("Platform Session-only boundary", () => {
         try {
             expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("runtime.liveness.ready");
             expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "runtime.status", online: true });
-            const upgrade = { kind: "runtime.upgrade.request", requestId: "upgrade-request", version: "0.0.228" };
-            host.send(JSON.stringify(upgrade));
-            expect(decodeServiceToDaemonMessage(await daemonMessages.next())).toEqual(upgrade);
-            expect(JSON.parse(await hostMessages.next())).toEqual(upgrade);
             const rollback = {
                 kind: "runtime.upgrade.result",
-                requestId: upgrade.requestId,
+                requestId: "local-npm-upgrade",
                 version: "0.0.227",
-                targetVersion: upgrade.version,
+                targetVersion: "0.0.228",
                 outcome: {
                     status: "failed",
                     code: "worker_exited",

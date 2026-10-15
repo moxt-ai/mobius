@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { decodeDaemonToServiceMessage, decodeServiceToDaemonMessage } from "../src/index.ts";
 
 describe("Runtime upgrade wire contract", () => {
-    it("Given an exact npm version, When the service requests upgrade, Then the daemon accepts the bounded request", () => {
+    it("Given a server upgrade command, When decoded, Then remote upgrade triggering is rejected", () => {
         const request = { kind: "runtime.upgrade.request", requestId: "upgrade_1", version: "0.0.228" };
-        expect(decodeServiceToDaemonMessage(JSON.stringify(request))).toEqual(request);
+        expect(() => decodeServiceToDaemonMessage(JSON.stringify(request))).toThrow();
     });
     it.each(["latest", "../evil", "https://example.com/a.tgz", "1.2.3 --script=evil", "^1.2.3"])(
         "Given an unsafe target %s, When requested, Then it is rejected",

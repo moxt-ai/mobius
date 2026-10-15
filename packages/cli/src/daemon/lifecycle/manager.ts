@@ -68,7 +68,7 @@ export async function runManager(stateDirectory: string, signal: AbortSignal): P
                 message,
                 stdout: cause instanceof WorkerStartupError ? cause.stdout : "",
                 stderr: cause instanceof WorkerStartupError ? cause.stderr : "",
-                retryAfter: Date.now() + 3_600_000,
+                retryAfter: Date.now() + 8 * 3_600_000,
             };
             await start(transition.previous);
         }

@@ -1,6 +1,7 @@
 import { setTimeout } from "node:timers/promises";
 import { acquireManagerLock, isNodeError, sendLocalRequest } from "../../daemon-local-control.ts";
 import { serveLocalControl } from "../../daemon-local-server.ts";
+import { runDaemonUpgrades } from "../../daemon-upgrade.ts";
 import { prepareUpgradeData } from "../../daemon-upgrade-data.ts";
 import {
     openMobiusCliInstallation,
@@ -87,6 +88,7 @@ export async function runWorker(version: string, signal: AbortSignal): Promise<v
         }
     };
     let reload: Promise<void> = Promise.resolve();
+    let upgrades: Promise<void> = Promise.resolve();
     try {
         await reconcile();
         await serveLocalControl(
@@ -108,6 +110,7 @@ export async function runWorker(version: string, signal: AbortSignal): Promise<v
                 return { kind: "reloaded" };
             },
             () => {
+                upgrades = runDaemonUpgrades(combined);
                 if (process.connected) {
                     process.send?.({ kind: "worker-ready", version }, () => undefined);
                 }
@@ -115,6 +118,7 @@ export async function runWorker(version: string, signal: AbortSignal): Promise<v
         );
     } finally {
         shutdown.abort();
+        await upgrades;
         await reload;
         await Promise.all([...active.values()].map((running) => running.completion));
         await release();
