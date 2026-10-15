@@ -1,10 +1,7 @@
 import { describe, expect, it } from "vitest";
-import {
-    AgentRuntimeManager,
-    acpNativeHistoryReader,
-    NullAcpSessionObserver,
-} from "../../src/acp/agent-runtime-manager.ts";
+import { AgentRuntimeManager, NullAcpSessionObserver } from "../../src/acp/agent-runtime-manager.ts";
 import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
+import { HarnessAdapterRegistry } from "../../src/adapter/harness-adapter-registry.ts";
 
 import { fixture } from "./native-session-fixture.ts";
 
@@ -182,7 +179,7 @@ describe("native session identity", () => {
             const restarted = new AgentRuntimeManager(
                 new NullAcpSessionObserver(),
                 new MemoryAcpSessionStore(),
-                acpNativeHistoryReader,
+                HarnessAdapterRegistry.inMemory(),
                 "native",
             );
             try {

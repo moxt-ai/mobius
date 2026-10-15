@@ -9,16 +9,16 @@ import {
     SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT,
 } from "@moxt-ai/mobius-protocol";
 import { z } from "zod";
-import { AcpExecutionError } from "../acp/acp-error.ts";
-import { nativeSessionIdSchema } from "../acp/native-session.ts";
-import type { AcpAgentDefinition } from "../agent-catalog/local-agent.ts";
+import { AcpExecutionError } from "../../acp/acp-error.ts";
+import { nativeSessionIdSchema } from "../../acp/native-session.ts";
+import type { AcpAgentDefinition } from "../../agent-catalog/local-agent.ts";
+import { embedLocalHistoryImages } from "../../native-sessions/history-images.ts";
 import {
     executableLaunch,
     platformSpawnOptions,
     revalidateExecutable,
     stopProcessTree,
-} from "../process/executable.ts";
-import { embedLocalHistoryImages } from "./history-images.ts";
+} from "../../process/executable.ts";
 
 const responseSchema = z.union([
     z.object({

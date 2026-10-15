@@ -7,6 +7,7 @@ import { AGENT_INSTALL_REQUEST_KIND } from "@moxt-ai/mobius-protocol";
 import { AgentRuntimeManager } from "./acp/agent-runtime-manager.ts";
 import { CachedAcpSessionEventStoreV2 } from "./acp/session-event-store-v2.ts";
 import { SqliteAcpSessionStore } from "./acp/session-store.ts";
+import { HarnessAdapterRegistry } from "./adapter/harness-adapter-registry.ts";
 import { supportedLocalAgentSpecifications } from "./agent-catalog/discover-local-agents.ts";
 import { AgentIntegrationDefinition } from "./agent-catalog/local-agent.ts";
 import { publishAgentCatalog } from "./agent-catalog/publish-agent-catalog.ts";
@@ -21,7 +22,6 @@ import { DaemonTurnRegistry } from "./daemon-turn-registry.ts";
 import { AcpContentExternalizer } from "./external-content/acp-content-externalizer.ts";
 import { LocalExternalContentStore } from "./external-content/local-external-content-store.ts";
 import { openAcpSessionDatabase, openSessionEventCacheV2Database } from "./local-databases.ts";
-import { readCodexFullHistory } from "./native-sessions/codex-history.ts";
 import { NativeSessionService } from "./native-sessions/service.ts";
 import { DaemonOperationState } from "./relay-connection/daemon-operation-state.ts";
 import { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
@@ -126,17 +126,23 @@ export async function runDaemon(
     });
     const channelHash = createHash("sha256").update(config.channelId).digest("hex");
     const sessionDatabase = openAcpSessionDatabase(join(stateDirectory, "sessions", `${channelHash}.sqlite`));
-    let eventsV2: CachedAcpSessionEventStoreV2;
+    let adapters: HarnessAdapterRegistry;
     try {
-        eventsV2 = new CachedAcpSessionEventStoreV2(
-            openSessionEventCacheV2Database(join(stateDirectory, "sessions", `${channelHash}.events.sqlite`)),
-            new SqliteSessionLiveEventPosition(sessionDatabase),
+        const liveEventPositions = new SqliteSessionLiveEventPosition(sessionDatabase);
+        adapters = HarnessAdapterRegistry.create(
+            (adapterId) =>
+                new CachedAcpSessionEventStoreV2(
+                    openSessionEventCacheV2Database(
+                        join(stateDirectory, "sessions", `${channelHash}.${adapterId}.events.sqlite`),
+                    ),
+                    liveEventPositions,
+                ),
         );
     } catch (error) {
         sessionDatabase.close();
         throw error;
     }
-    const sessionStore = new SqliteAcpSessionStore(sessionDatabase, eventsV2);
+    const sessionStore = new SqliteAcpSessionStore(sessionDatabase);
     await using externalContent = new LocalExternalContentStore(stateDirectory);
     const operations = new DaemonOperationState();
     const publisher = new DaemonSessionEventPublisher(timer);
@@ -152,24 +158,7 @@ export async function runDaemon(
             }
         }, eventProjectionV2.record),
         sessionStore,
-        {
-            access: (options) =>
-                options.agent.id === "codex"
-                    ? {
-                          kind: "direct",
-                          read: async (nativeSessionId, nativeTurn) =>
-                              (
-                                  await readCodexFullHistory(
-                                      options.agent,
-                                      options.cwd,
-                                      nativeSessionId,
-                                      options.signal,
-                                      nativeTurn,
-                                  )
-                              ).history,
-                      }
-                    : { kind: "acp" },
-        },
+        adapters,
         "native",
         publisher.publishStatus,
         new AcpContentExternalizer(externalContent),

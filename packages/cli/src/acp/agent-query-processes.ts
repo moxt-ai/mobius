@@ -1,4 +1,6 @@
 import type { NativeSessionHistory } from "@moxt-ai/mobius-protocol";
+import { withoutHarnessLiveEvents } from "../adapter/harness-adapter.ts";
+import type { HarnessAdapterRegistry } from "../adapter/harness-adapter-registry.ts";
 import type { AcpContentExternalizer } from "../external-content/acp-content-externalizer.ts";
 import { AcpExecutionError } from "./acp-error.ts";
 import type { AgentProcessPool } from "./agent-process-pool.ts";
@@ -15,19 +17,22 @@ import { MemoryAcpSessionStore } from "./session-store.ts";
 
 /** Owns query processes; execution processes remain separately retained. */
 export class AgentQueryProcesses {
-    readonly #eventPreviewsBySession = new Map<
-        string,
-        { readonly nativeSessionId: string; readonly store: MemoryAcpSessionStore }
-    >();
+    readonly #eventPreviewsBySession = new Map<string, { readonly nativeSessionId: string }>();
+    readonly #adapters: HarnessAdapterRegistry;
     readonly #processesByQuery: RetainedAgentProcesses;
     readonly #processes: AgentProcessPool;
     readonly #observer = new NullAcpSessionObserver();
     readonly #store = new MemoryAcpSessionStore();
     readonly #contentExternalizer: AcpContentExternalizer;
 
-    constructor(processes: AgentProcessPool, contentExternalizer: AcpContentExternalizer) {
+    constructor(
+        processes: AgentProcessPool,
+        contentExternalizer: AcpContentExternalizer,
+        adapters: HarnessAdapterRegistry,
+    ) {
         this.#processes = processes;
         this.#contentExternalizer = contentExternalizer;
+        this.#adapters = adapters;
         this.#processesByQuery = new RetainedAgentProcesses({
             touch: processes.touch,
             changed: processes.notifyChanged,
@@ -49,6 +54,7 @@ export class AgentQueryProcesses {
                     options,
                     () => this.#observer,
                     this.#store,
+                    withoutHarnessLiveEvents(this.#adapters.forAgent(options.agent.id)),
                     this.#contentExternalizer,
                 ),
             {
@@ -138,6 +144,7 @@ export class AgentQueryProcesses {
                     options,
                     () => this.#observer,
                     new MemoryAcpSessionStore(),
+                    withoutHarnessLiveEvents(this.#adapters.forAgent(options.agent.id)),
                     this.#contentExternalizer,
                 ),
             async (runtime) => {
@@ -154,17 +161,17 @@ export class AgentQueryProcesses {
         eventLimit: number,
         cursor: string | null,
     ): Promise<AcpNativeEventReplayV2> => {
+        const adapter = this.#adapters.forAgent(options.agent.id);
+        const previewKey = `${options.agent.id}:${options.sessionId}`;
         if (cursor !== null) {
-            const preview = this.#eventPreviewsBySession.get(options.sessionId);
+            const preview = this.#eventPreviewsBySession.get(previewKey);
             if (preview === undefined || preview.nativeSessionId !== nativeSessionId) {
                 throw new Error("The native event cursor is invalid");
             }
-            return preview.store.eventsV2.page(options.sessionId, eventLimit, cursor);
+            return adapter.events.page(options.sessionId, eventLimit, cursor);
         }
         const store = new MemoryAcpSessionStore();
-        const previous = this.#eventPreviewsBySession.get(options.sessionId);
-        previous?.store.close();
-        this.#eventPreviewsBySession.set(options.sessionId, { nativeSessionId, store });
+        this.#eventPreviewsBySession.set(previewKey, { nativeSessionId });
         try {
             return await this.#processes.runTransient(
                 options.signal,
@@ -173,6 +180,7 @@ export class AgentQueryProcesses {
                         options,
                         () => this.#observer,
                         store,
+                        withoutHarnessLiveEvents(adapter),
                         this.#contentExternalizer,
                     ),
                 async (runtime) => {
@@ -182,11 +190,12 @@ export class AgentQueryProcesses {
                 async (runtime) => await runtime.closeProcess(),
             );
         } catch (error) {
-            if (this.#eventPreviewsBySession.get(options.sessionId)?.store === store) {
-                this.#eventPreviewsBySession.delete(options.sessionId);
+            if (this.#eventPreviewsBySession.get(previewKey)?.nativeSessionId === nativeSessionId) {
+                this.#eventPreviewsBySession.delete(previewKey);
             }
-            store.close();
             throw error;
+        } finally {
+            store.close();
         }
     };
 
@@ -194,9 +203,6 @@ export class AgentQueryProcesses {
         await Promise.all(
             this.#processesByQuery.entries().map(async ([id, runtime]) => await this.retire(id, runtime)),
         );
-        for (const preview of this.#eventPreviewsBySession.values()) {
-            preview.store.close();
-        }
         this.#eventPreviewsBySession.clear();
     };
 }

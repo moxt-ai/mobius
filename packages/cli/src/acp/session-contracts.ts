@@ -3,7 +3,6 @@ import type {
     AgentModelEffort,
     AgentPromptResponse,
     ContentBlockV2,
-    NativeSessionHistory,
     PromptExecutionContextV2,
     PromptImage,
     PromptResource,
@@ -35,24 +34,6 @@ export interface AcpPrepareOptions {
 }
 
 export type AcpSessionRecovery = { readonly kind: "history-required" } | { readonly kind: "interactive-only" };
-
-export type AcpNativeHistoryAccess =
-    | { readonly kind: "acp" }
-    | {
-          readonly kind: "direct";
-          readonly read: (
-              nativeSessionId: string,
-              nativeTurn: () => { readonly commandId: string; readonly nativeTurnId: string } | null,
-          ) => Promise<NativeSessionHistory>;
-      };
-
-export interface AcpNativeHistoryReader {
-    readonly access: (options: AcpPrepareOptions) => AcpNativeHistoryAccess;
-}
-
-export const acpNativeHistoryReader: AcpNativeHistoryReader = {
-    access: () => ({ kind: "acp" }),
-};
 
 export interface AcpNativeEventReplayV2 {
     readonly nextCursor: string | null;

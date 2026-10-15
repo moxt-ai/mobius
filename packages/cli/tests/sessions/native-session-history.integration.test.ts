@@ -3,9 +3,44 @@ import { readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
+import { LocalAgentDefinition } from "../../src/config.ts";
 import { fixture } from "./native-session-fixture.ts";
 
 describe("native session history", () => {
+    it("Given Claude and Pi preview history through the same page identity, When each adapter advances independently, Then the Claude cursor remains readable", async () => {
+        const f = await fixture("Claude Code");
+        try {
+            const nativeSessionId = await f.seed("Adapter-owned preview cache");
+            const pi = new LocalAgentDefinition("pi", "Pi", f.agent.command, f.agent.arguments, f.agent.environment);
+            const options = {
+                additionalDirectories: [],
+                cwd: f.workspace,
+                sessionId: "shared-history-page",
+                signal: new AbortController().signal,
+            };
+            const claudePage = await f.sessions.previewNativeSessionEventsV2(
+                { ...options, agent: f.agent },
+                nativeSessionId,
+                2,
+                null,
+            );
+            expect(claudePage.nextCursor).not.toBeNull();
+
+            await f.sessions.previewNativeSessionEventsV2({ ...options, agent: pi }, nativeSessionId, 2, null);
+
+            await expect(
+                f.sessions.previewNativeSessionEventsV2(
+                    { ...options, agent: f.agent },
+                    nativeSessionId,
+                    2,
+                    claudePage.nextCursor,
+                ),
+            ).resolves.toMatchObject({ events: expect.any(Array) });
+        } finally {
+            await f.close();
+        }
+    });
+
     it("Given Codex already owns a native session writer, When Chat previews that session, Then Runtime reads history without requesting another writer", async () => {
         const f = await fixture("Codex", "exclusive-writer", "assigned", {
             access: () => ({

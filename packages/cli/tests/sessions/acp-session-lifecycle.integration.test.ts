@@ -8,13 +8,10 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
-import {
-    AgentRuntimeManager,
-    acpNativeHistoryReader,
-    createWritableAcpStream,
-} from "../../src/acp/agent-runtime-manager.ts";
+import { AgentRuntimeManager, createWritableAcpStream } from "../../src/acp/agent-runtime-manager.ts";
 import { CachedAcpSessionEventStoreV2 } from "../../src/acp/session-event-store-v2.ts";
 import { FoundAcpStoredSession, MemoryAcpSessionStore, SqliteAcpSessionStore } from "../../src/acp/session-store.ts";
+import { HarnessAdapterRegistry } from "../../src/adapter/harness-adapter-registry.ts";
 import { LocalAgentDefinition } from "../../src/config.ts";
 import { acpSessionStoreMigrations } from "../../src/generated/acp-session-store-migrations.ts";
 import { AccumulatingOperationMetrics } from "../../src/infra/operation-metrics.ts";
@@ -457,7 +454,12 @@ describe("ACP conversation sessions", () => {
         ]);
         const signal = new AbortController().signal;
         const firstStore = new SqliteAcpSessionStore(openAcpSessionDatabase(databasePath));
-        const firstRuntime = new AgentRuntimeManager(undefined, firstStore, acpNativeHistoryReader, "native");
+        const firstRuntime = new AgentRuntimeManager(
+            undefined,
+            firstStore,
+            HarnessAdapterRegistry.inMemory(),
+            "native",
+        );
 
         try {
             await firstRuntime.runPrompt({
@@ -479,7 +481,12 @@ describe("ACP conversation sessions", () => {
         }
 
         const restartedStore = new SqliteAcpSessionStore(openAcpSessionDatabase(databasePath));
-        const restartedRuntime = new AgentRuntimeManager(undefined, restartedStore, acpNativeHistoryReader, "native");
+        const restartedRuntime = new AgentRuntimeManager(
+            undefined,
+            restartedStore,
+            HarnessAdapterRegistry.inMemory(),
+            "native",
+        );
         try {
             expect(restartedRuntime.findSessions([sessionId])).toEqual([
                 expect.objectContaining({ agentId: "claude", prompted: true, sessionId }),

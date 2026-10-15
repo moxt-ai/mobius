@@ -4,7 +4,6 @@ import { z } from "zod";
 import type { LocalSqliteDatabase } from "../infra/local-sqlite-database.ts";
 import { acpSession } from "../schema/acp-session-store/index.ts";
 import { type AcpStoredSessionConfiguration, decodeStoredSessionConfigurations } from "./session-configuration.ts";
-import { type AcpSessionEventStoreV2, MemoryAcpSessionEventStoreV2 } from "./session-event-store-v2.ts";
 
 export class AcpStoredSession {
     readonly additionalDirectories: readonly string[];
@@ -60,7 +59,6 @@ export class FoundAcpStoredSession extends AcpStoredSessionLookup {
 
 export interface AcpSessionStore {
     readonly close: () => void;
-    readonly eventsV2: AcpSessionEventStoreV2;
     readonly findNative: (agentId: string, nativeSessionId: string) => readonly AcpStoredSession[];
     readonly list: () => readonly AcpStoredSession[];
     readonly read: (sessionId: string) => AcpStoredSessionLookup;
@@ -69,16 +67,10 @@ export interface AcpSessionStore {
 }
 
 export class MemoryAcpSessionStore implements AcpSessionStore {
-    readonly eventsV2: AcpSessionEventStoreV2;
     readonly #sessions = new Map<string, AcpStoredSession>();
-
-    constructor(eventsV2: AcpSessionEventStoreV2 = new MemoryAcpSessionEventStoreV2()) {
-        this.eventsV2 = eventsV2;
-    }
 
     readonly close = (): void => {
         this.#sessions.clear();
-        this.eventsV2.close();
     };
 
     readonly findNative = (agentId: string, nativeSessionId: string): readonly AcpStoredSession[] =>
@@ -96,7 +88,6 @@ export class MemoryAcpSessionStore implements AcpSessionStore {
 
     readonly remove = (sessionId: string): void => {
         this.#sessions.delete(sessionId);
-        this.eventsV2.remove(sessionId);
     };
 
     readonly write = (session: AcpStoredSession): void => {
@@ -136,26 +127,15 @@ function decodeStoredSession(value: unknown): AcpStoredSession {
 }
 
 export class SqliteAcpSessionStore implements AcpSessionStore {
-    readonly eventsV2: AcpSessionEventStoreV2;
     readonly #database: NodeSQLiteDatabase;
     readonly #localDatabase: LocalSqliteDatabase;
 
-    constructor(
-        localDatabase: LocalSqliteDatabase,
-        eventsV2: AcpSessionEventStoreV2 = new MemoryAcpSessionEventStoreV2(),
-    ) {
-        this.eventsV2 = eventsV2;
+    constructor(localDatabase: LocalSqliteDatabase) {
         this.#localDatabase = localDatabase;
         this.#database = localDatabase.orm;
     }
 
-    readonly close = (): void => {
-        try {
-            this.#localDatabase.close();
-        } finally {
-            this.eventsV2.close();
-        }
-    };
+    readonly close = (): void => this.#localDatabase.close();
 
     readonly findNative = (agentId: string, nativeSessionId: string): readonly AcpStoredSession[] =>
         this.#database
@@ -175,7 +155,6 @@ export class SqliteAcpSessionStore implements AcpSessionStore {
 
     readonly remove = (sessionId: string): void => {
         this.#database.delete(acpSession).where(eq(acpSession.sessionId, sessionId)).run();
-        this.eventsV2.remove(sessionId);
     };
 
     readonly write = (session: AcpStoredSession): void => {

@@ -13,6 +13,8 @@ import type {
     SessionStatus,
     SessionStatusChangedEvent,
 } from "@moxt-ai/mobius-protocol";
+import { type HarnessLiveEventSubscription, withoutHarnessLiveEvents } from "../adapter/harness-adapter.ts";
+import { HarnessAdapterRegistry } from "../adapter/harness-adapter-registry.ts";
 import { AcpContentExternalizer } from "../external-content/acp-content-externalizer.ts";
 import { UnretainedExternalContentStore } from "../external-content/local-external-content-store.ts";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
@@ -40,7 +42,6 @@ export {
     type AcpConfigureOptions,
     type AcpElicitationResponseOptions,
     type AcpNativeEventReplayV2,
-    type AcpNativeHistoryReader,
     type AcpPermissionResponseOptions,
     AcpPreparedSession,
     type AcpPrepareOptions,
@@ -49,7 +50,6 @@ export {
     type AcpSessionRecovery,
     type AcpSteerOptions,
     type AcpTurnOptions,
-    acpNativeHistoryReader,
     NullAcpSessionObserver,
 } from "./session-contracts.ts";
 
@@ -59,7 +59,6 @@ import {
     type AcpConfigureOptions,
     type AcpElicitationResponseOptions,
     type AcpNativeEventReplayV2,
-    type AcpNativeHistoryReader,
     type AcpPermissionResponseOptions,
     type AcpPreparedSession,
     type AcpPrepareOptions,
@@ -68,7 +67,6 @@ import {
     type AcpSessionRecovery,
     type AcpSteerOptions,
     type AcpTurnOptions,
-    acpNativeHistoryReader,
     NullAcpSessionObserver,
 } from "./session-contracts.ts";
 
@@ -82,10 +80,11 @@ export class AgentRuntimeManager {
     readonly #queryProcesses: AgentQueryProcesses;
     readonly #executions = new ActiveExecutions();
     readonly #agentSettingsObserver = new NullAcpSessionObserver();
+    readonly #adapters: HarnessAdapterRegistry;
+    readonly #liveEvents: HarnessLiveEventSubscription;
     readonly #nativeOperations = new Set<string>();
     readonly #sessionClosures = new Map<string, Promise<void>>();
     readonly #store: AcpSessionStore;
-    readonly #nativeHistoryReader: AcpNativeHistoryReader;
     readonly #sessionIdentity: "assigned" | "native";
     readonly #onSessionStatusChanged: (event: SessionStatusChangedEvent) => void;
     readonly #contentExternalizer: AcpContentExternalizer;
@@ -95,7 +94,7 @@ export class AgentRuntimeManager {
     constructor(
         observer: AcpSessionObserver = new NullAcpSessionObserver(),
         store: AcpSessionStore = new MemoryAcpSessionStore(),
-        nativeHistoryReader: AcpNativeHistoryReader = acpNativeHistoryReader,
+        adapters: HarnessAdapterRegistry = HarnessAdapterRegistry.inMemory(),
         sessionIdentity: "assigned" | "native" = "assigned",
         onSessionStatusChanged: (event: SessionStatusChangedEvent) => void = () => undefined,
         contentExternalizer: AcpContentExternalizer = new AcpContentExternalizer(new UnretainedExternalContentStore()),
@@ -103,12 +102,15 @@ export class AgentRuntimeManager {
     ) {
         this.#observer = observer;
         this.#store = store;
-        this.#nativeHistoryReader = nativeHistoryReader;
+        this.#adapters = adapters;
         this.#sessionIdentity = sessionIdentity;
         this.#onSessionStatusChanged = onSessionStatusChanged;
         this.#contentExternalizer = contentExternalizer;
         this.#timer = timer;
-        this.#queryProcesses = new AgentQueryProcesses(this.#processes, contentExternalizer);
+        this.#queryProcesses = new AgentQueryProcesses(this.#processes, contentExternalizer, adapters);
+        this.#liveEvents = adapters.subscribeLiveEvents(async (event) => {
+            await this.#observer.onSessionEventV2?.(event);
+        });
     }
 
     readonly recordLifecycleEventV2 = async (sessionId: string, event: SessionEventPayloadV2): Promise<boolean> => {
@@ -121,6 +123,11 @@ export class AgentRuntimeManager {
 
     readonly setObserver = (observer: AcpSessionObserver): void => {
         this.#observer = observer;
+    };
+
+    readonly #removeStoredSession = (sessionId: string, agentId: string): void => {
+        this.#store.remove(sessionId);
+        this.#adapters.forAgent(agentId).events.remove(sessionId);
     };
 
     #isNativeSessionOperationActive(sessionId: string): boolean {
@@ -153,7 +160,7 @@ export class AgentRuntimeManager {
                     stored.session.nativeSessionId === sessionId &&
                     isNativeChatSessionId(stored.session.agentId, sessionId)
                 ) {
-                    this.#store.remove(sessionId);
+                    this.#removeStoredSession(sessionId, stored.session.agentId);
                 }
             }
         }
@@ -187,6 +194,7 @@ export class AgentRuntimeManager {
                         recovery,
                         () => this.#observer,
                         this.#store,
+                        this.#adapters.forAgent(options.agent.id),
                         metrics,
                         this.#contentExternalizer,
                     ),
@@ -206,7 +214,7 @@ export class AgentRuntimeManager {
                 existing,
                 async () => await metrics.measure("runtime-replacement-close", async () => await existing.close()),
             );
-            this.#store.remove(options.sessionId);
+            this.#removeStoredSession(options.sessionId, options.agent.id);
             return await this.#startRetainedSessionProcess(
                 options,
                 async () =>
@@ -215,6 +223,7 @@ export class AgentRuntimeManager {
                         recovery,
                         () => this.#observer,
                         this.#store,
+                        this.#adapters.forAgent(options.agent.id),
                         metrics,
                         this.#contentExternalizer,
                     ),
@@ -234,6 +243,7 @@ export class AgentRuntimeManager {
                         { kind: "interactive-only" },
                         () => this.#observer,
                         this.#store,
+                        this.#adapters.forAgent(options.agent.id),
                         unmeasuredOperationMetrics,
                         this.#contentExternalizer,
                     ),
@@ -372,6 +382,7 @@ export class AgentRuntimeManager {
                         { kind: "interactive-only" },
                         () => this.#agentSettingsObserver,
                         new MemoryAcpSessionStore(),
+                        withoutHarnessLiveEvents(this.#adapters.forAgent(options.agent.id)),
                         unmeasuredOperationMetrics,
                         this.#contentExternalizer,
                     ),
@@ -434,7 +445,7 @@ export class AgentRuntimeManager {
                     try {
                         await this.#retireSessionProcess(options.sessionId, runtime, async () => await runtime.close());
                     } finally {
-                        this.#store.remove(options.sessionId);
+                        this.#removeStoredSession(options.sessionId, options.agent.id);
                     }
                 }
             });
@@ -669,15 +680,20 @@ export class AgentRuntimeManager {
 
     readonly close = async (): Promise<void> =>
         this.#operations.close(async () => {
-            const sessions = [...this.#executionProcesses.entries()];
-            await Promise.all([
-                ...sessions.map(
-                    async ([sessionId, runtime]) =>
-                        await this.#retireSessionProcess(sessionId, runtime, async () => await runtime.close()),
-                ),
-                ...this.#sessionClosures.values(),
-                this.#queryProcesses.close(),
-            ]);
+            try {
+                const sessions = [...this.#executionProcesses.entries()];
+                await Promise.all([
+                    ...sessions.map(
+                        async ([sessionId, runtime]) =>
+                            await this.#retireSessionProcess(sessionId, runtime, async () => await runtime.close()),
+                    ),
+                    ...this.#sessionClosures.values(),
+                    this.#queryProcesses.close(),
+                ]);
+            } finally {
+                this.#liveEvents.close();
+                this.#adapters.close();
+            }
         });
 
     readonly findSessions = (sessionIds: readonly string[]) =>
@@ -744,7 +760,7 @@ export class AgentRuntimeManager {
                         }
                     }
                 } finally {
-                    this.#store.remove(temporarySessionId);
+                    this.#removeStoredSession(temporarySessionId, options.agent.id);
                 }
             });
         });
@@ -828,24 +844,14 @@ export class AgentRuntimeManager {
             }
             this.#nativeOperations.add(key);
             try {
-                const historyAccess = this.#nativeHistoryReader.access(options);
-                if (historyAccess.kind === "direct") {
-                    // Preview is read-only. Direct readers must not resume the source session
-                    // or require its writer lock; ACP access owns the session/load fallback.
-                    const history = await historyAccess.read(nativeSessionId, () => null);
-                    if (history.status === "unavailable") {
-                        throw new AcpExecutionError(history.cause.message, {}, history.cause.code);
-                    }
-                    return nativeHistoryEventsV2(
-                        options.sessionId,
-                        nativeSessionId,
-                        history,
-                        eventLimit,
-                        cursor,
-                        this.#store.eventsV2,
-                    );
-                }
-                return await this.#queryProcesses.previewEventsV2(options, nativeSessionId, eventLimit, cursor);
+                return await this.#adapters.forAgent(options.agent.id).previewPageHistoryEvents({
+                    cursor,
+                    eventLimit,
+                    nativeSessionId,
+                    options,
+                    readFromHarness: async () =>
+                        await this.#queryProcesses.previewEventsV2(options, nativeSessionId, eventLimit, cursor),
+                });
             } finally {
                 this.#nativeOperations.delete(key);
             }
@@ -856,9 +862,13 @@ export class AgentRuntimeManager {
             return await this.#executionProcesses.use(options.sessionId, async () => {
                 const runtime = await this.ensureSession(options);
                 const stored = this.#store.read(options.sessionId);
-                const historyAccess = this.#nativeHistoryReader.access(options);
-                if (stored instanceof FoundAcpStoredSession && historyAccess.kind === "direct") {
-                    return await historyAccess.read(stored.session.nativeSessionId, runtime.nativeHistoryTurn);
+                if (stored instanceof FoundAcpStoredSession) {
+                    return await this.#adapters.forAgent(options.agent.id).readHistory({
+                        nativeSessionId: stored.session.nativeSessionId,
+                        nativeTurn: runtime.nativeHistoryTurn,
+                        options,
+                        readFromHarness: async () => await runtime.loadHistory(options.signal),
+                    });
                 }
                 return await runtime.loadHistory(options.signal);
             });
@@ -872,7 +882,12 @@ export class AgentRuntimeManager {
         this.#operations.run(options, async (options) => {
             return await this.#executionProcesses.use(options.sessionId, async () => {
                 const runtime = await this.ensureSession(options);
-                return await runtime.loadHistoryEventsV2(eventLimit, cursor, options.signal);
+                return await this.#adapters.forAgent(options.agent.id).readPageHistoryEvents({
+                    cursor,
+                    eventLimit,
+                    options,
+                    readFromHarness: async () => await runtime.loadHistoryEventsV2(eventLimit, cursor, options.signal),
+                });
             });
         });
 
@@ -956,7 +971,7 @@ export class AgentRuntimeManager {
                         this.#processes.notifyChanged();
                     }
                 } catch (error) {
-                    this.#store.remove(options.sessionId);
+                    this.#removeStoredSession(options.sessionId, options.agent.id);
                     const runtime = this.#executionProcesses.get(options.sessionId);
                     if (runtime !== undefined) {
                         await this.#retireSessionProcess(

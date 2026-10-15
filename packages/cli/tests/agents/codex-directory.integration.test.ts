@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, it } from "vitest";
-import { readCodexFullHistory } from "../../src/native-sessions/codex-history.ts";
+import { readCodexFullHistory } from "../../src/adapter/codex/history.ts";
 import { codexFixture } from "../support/agents/codex-native.ts";
 
 it("Given saved Codex threads, When its directory is listed through the in-process Agent, Then every thread opens without a synthesized submitted-prompt echo", async () => {

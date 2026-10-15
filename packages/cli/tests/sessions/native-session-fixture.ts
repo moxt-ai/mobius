@@ -2,13 +2,10 @@ import { mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AcpSessionUpdateV2, NativeSessionCommand, SessionLiveEventV2 } from "@moxt-ai/mobius-protocol";
-import {
-    type AcpNativeHistoryReader,
-    AgentRuntimeManager,
-    acpNativeHistoryReader,
-    NullAcpSessionObserver,
-} from "../../src/acp/agent-runtime-manager.ts";
+import { AgentRuntimeManager, NullAcpSessionObserver } from "../../src/acp/agent-runtime-manager.ts";
 import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
+import { acpHarnessNativeHistoryReader, type HarnessNativeHistoryReader } from "../../src/adapter/harness-adapter.ts";
+import { HarnessAdapterRegistry } from "../../src/adapter/harness-adapter-registry.ts";
 import { AuditStore } from "../../src/audit/audit-store.ts";
 import { WorkspaceDirectoryService } from "../../src/authorization/workspace-directory.ts";
 import { createDaemonConfig, LocalAgentDefinition } from "../../src/config.ts";
@@ -43,7 +40,7 @@ export async function fixture(
         | "exclusive-writer"
         | "persist-after-first-prompt" = "supported",
     sessionIdentity: "assigned" | "native" = "assigned",
-    nativeHistoryReader: AcpNativeHistoryReader = acpNativeHistoryReader,
+    nativeHistoryReader: HarnessNativeHistoryReader = acpHarnessNativeHistoryReader,
 ) {
     const temporary = await realpath(await mkdtemp(join(tmpdir(), "mobius-native-boundary-")));
     const workspace = join(temporary, "workspace");
@@ -75,7 +72,12 @@ export async function fixture(
     ]);
     const store = new MemoryAcpSessionStore();
     const observer = new NativeSessionObserver();
-    let sessions = new AgentRuntimeManager(observer, store, nativeHistoryReader, sessionIdentity);
+    let sessions = new AgentRuntimeManager(
+        observer,
+        store,
+        HarnessAdapterRegistry.inMemory(nativeHistoryReader),
+        sessionIdentity,
+    );
     const audit = new AuditStore();
     const config = createDaemonConfig(
         {
@@ -165,7 +167,12 @@ export async function fixture(
         },
         restart: async () => {
             await sessions.close();
-            sessions = new AgentRuntimeManager(observer, store, nativeHistoryReader, sessionIdentity);
+            sessions = new AgentRuntimeManager(
+                observer,
+                store,
+                HarnessAdapterRegistry.inMemory(nativeHistoryReader),
+                sessionIdentity,
+            );
             service = new NativeSessionService(config, directories, sessions, audit, async () => ({
                 turn: null,
                 queued: [],
