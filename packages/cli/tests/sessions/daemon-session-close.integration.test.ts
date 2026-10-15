@@ -4,17 +4,127 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+    type AgentApp,
+    type AgentConnection,
+    agent as createAgentApp,
+    methods,
+    PROTOCOL_VERSION,
+} from "@agentclientprotocol/sdk";
+import {
     decodeMessageKind,
     decodeSessionClosedEvent,
+    decodeSessionOperationFailedEvent,
     decodeSessionRestoredEvent,
     encodeSessionCloseCommand,
     encodeSessionRestoreCommand,
 } from "@moxt-ai/mobius-protocol";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
+import type {
+    AcpEndpointTermination,
+    InProcessAcpEndpoint,
+    InProcessAcpEndpointFactory,
+} from "../../src/acp/in-process/acp-endpoint.ts";
+import { InProcessAcpAgentDefinition } from "../../src/agent-catalog/agent-specification.ts";
 import { DeepSeekHarnessAgentSpecification } from "../../src/agent-catalog/discover-local-agents.ts";
 import { prepareNewRealSession, withRealDaemon } from "../support/agents/real-daemon.ts";
 
 const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
+
+class ControlledCloseEndpoint implements InProcessAcpEndpoint {
+    readonly #app: AgentApp;
+    readonly #closeGate: Promise<void>;
+    readonly #closeStarted: (() => void) | null;
+    #connection: AgentConnection | null = null;
+    readonly #termination = Promise.withResolvers<AcpEndpointTermination>();
+    readonly terminated = this.#termination.promise;
+
+    constructor(closeGate: Promise<void>, closeStarted: (() => void) | null) {
+        this.#closeGate = closeGate;
+        this.#closeStarted = closeStarted;
+        this.#app = createAgentApp({ name: "controlled-close-agent" })
+            .onConnect((connection) => {
+                this.#connection = connection;
+            })
+            .onRequest(methods.agent.initialize, () => ({
+                agentCapabilities: {
+                    loadSession: false,
+                    promptCapabilities: { embeddedContext: false, image: false },
+                    sessionCapabilities: { close: {} },
+                },
+                agentInfo: { name: "Controlled Close Agent", version: "1.0.0" },
+                authMethods: [],
+                protocolVersion: PROTOCOL_VERSION,
+            }))
+            .onRequest(methods.agent.session.new, () => ({ sessionId: crypto.randomUUID() }))
+            .onRequest(methods.agent.session.close, () => ({}));
+    }
+
+    readonly app = (): AgentApp => this.#app;
+    readonly initialize = async (signal: AbortSignal): Promise<void> => signal.throwIfAborted();
+    readonly close = async (): Promise<void> => {
+        this.#closeStarted?.();
+        await this.#closeGate;
+        this.#connection?.close();
+        this.#termination.resolve({ kind: "closed" });
+    };
+}
+
+class ControlledCloseAgentSpecification extends InProcessAcpAgentDefinition {
+    readonly agentExecutable = "node";
+    readonly id = "controlled-close";
+    readonly label = "Controlled Close";
+    override readonly maximumTestedAgentVersion = process.versions.node;
+    override readonly minimumSupportedAgentVersion = process.versions.node;
+    readonly #closeGate = Promise.withResolvers<void>();
+    readonly closeStarted = Promise.withResolvers<void>();
+    #createdEndpoints = 0;
+    readonly createEndpoint: InProcessAcpEndpointFactory = () => {
+        const runtimeEndpoint = this.#createdEndpoints > 0;
+        this.#createdEndpoints += 1;
+        return new ControlledCloseEndpoint(
+            runtimeEndpoint ? this.#closeGate.promise : Promise.resolve(),
+            runtimeEndpoint ? this.closeStarted.resolve : null,
+        );
+    };
+
+    constructor() {
+        super("MOBIUS_TEST_CONTROLLED_CLOSE_PATH", ["controlled-close"]);
+    }
+
+    readonly releaseClose = (): void => this.#closeGate.resolve();
+}
+
+test("Given retained Agent teardown does not finish, When the Session close deadline elapses, Then the daemon reports a typed timeout", async () => {
+    const agent = new ControlledCloseAgentSpecification();
+    await withRealDaemon(agent, { MOBIUS_TEST_CONTROLLED_CLOSE_PATH: process.execPath }, async (peer) => {
+        const sessionId = await prepareNewRealSession(peer, agent.id);
+        vi.useFakeTimers({ toFake: ["clearTimeout", "setTimeout"] });
+        try {
+            const requestId = crypto.randomUUID();
+            peer.send(
+                encodeSessionCloseCommand({
+                    kind: "session.close",
+                    requestId,
+                    sessionId,
+                }),
+            );
+            await agent.closeStarted.promise;
+            const response = peer.nextMessage();
+            await vi.advanceTimersByTimeAsync(30_000);
+            expect(decodeSessionOperationFailedEvent(await response)).toEqual({
+                code: "session_close_timeout",
+                kind: "session.operation.failed",
+                message: "The Session could not close before its deadline",
+                requestId,
+                sessionId,
+            });
+        } finally {
+            agent.releaseClose();
+            await vi.runAllTimersAsync();
+            vi.useRealTimers();
+        }
+    });
+});
 
 test("Given an Agent session holding an exclusive writer lock, When a public close command reaches the daemon, Then restoring the session acquires the released writer lock", async () => {
     const directory = await mkdtemp(join(tmpdir(), "mobius-session-close-"));

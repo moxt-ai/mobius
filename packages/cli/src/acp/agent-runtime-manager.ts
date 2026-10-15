@@ -18,6 +18,7 @@ import { UnretainedExternalContentStore } from "../external-content/local-extern
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
 import { isNativeChatSessionId } from "../native-sessions/chat-agent.ts";
 import { nativeHistoryEventsV2 } from "../native-sessions/native-history-events-v2.ts";
+import { type DaemonTimer, systemDaemonTimer } from "../relay-connection/timer.ts";
 import { AcpExecutionError } from "./acp-error.ts";
 import { AgentProcessPool, type AgentProcessRetention } from "./agent-process-pool.ts";
 import type { NativeSessionOrigin, NativeSessionPage } from "./native-session.ts";
@@ -29,6 +30,7 @@ import {
 } from "./session-store.ts";
 
 const SESSION_CONTROL_TIMEOUT_MILLISECONDS = 30_000;
+const SESSION_CLOSE_TIMEOUT_MILLISECONDS = 30_000;
 
 export { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp-error.ts";
 export {
@@ -87,6 +89,7 @@ export class AgentRuntimeManager {
     readonly #sessionIdentity: "assigned" | "native";
     readonly #onSessionStatusChanged: (event: SessionStatusChangedEvent) => void;
     readonly #contentExternalizer: AcpContentExternalizer;
+    readonly #timer: DaemonTimer;
     #observer: AcpSessionObserver;
 
     constructor(
@@ -96,6 +99,7 @@ export class AgentRuntimeManager {
         sessionIdentity: "assigned" | "native" = "assigned",
         onSessionStatusChanged: (event: SessionStatusChangedEvent) => void = () => undefined,
         contentExternalizer: AcpContentExternalizer = new AcpContentExternalizer(new UnretainedExternalContentStore()),
+        timer: DaemonTimer = systemDaemonTimer,
     ) {
         this.#observer = observer;
         this.#store = store;
@@ -103,6 +107,7 @@ export class AgentRuntimeManager {
         this.#sessionIdentity = sessionIdentity;
         this.#onSessionStatusChanged = onSessionStatusChanged;
         this.#contentExternalizer = contentExternalizer;
+        this.#timer = timer;
         this.#queryProcesses = new AgentQueryProcesses(this.#processes, contentExternalizer);
     }
 
@@ -280,11 +285,8 @@ export class AgentRuntimeManager {
         metrics: OperationMetrics = unmeasuredOperationMetrics,
     ): Promise<AcpPreparedSession> {
         return await this.#operations.run(options, async (options) => {
-            for (;;) {
-                const closing = this.#sessionClosures.get(options.sessionId);
-                if (closing === undefined) {
-                    break;
-                }
+            const closing = this.#sessionClosures.get(options.sessionId);
+            if (closing !== undefined) {
                 await waitForSharedOperation(closing, options.signal);
             }
             const stored = metrics.measureSync("session-state-read", () => this.#store.read(options.sessionId));
@@ -646,16 +648,28 @@ export class AgentRuntimeManager {
             if (runtime === undefined) {
                 return;
             }
-            const completion = Promise.withResolvers<void>();
-            this.#sessionClosures.set(options.sessionId, completion.promise);
-            void this.#retireSessionProcess(options.sessionId, runtime, async () => await runtime.close())
-                .then(completion.resolve, completion.reject)
-                .finally(() => {
-                    if (this.#sessionClosures.get(options.sessionId) === completion.promise) {
-                        this.#sessionClosures.delete(options.sessionId);
-                    }
-                });
-            await waitForSharedOperation(completion.promise, options.signal);
+            const release = this.#retireSessionProcess(options.sessionId, runtime, async () => await runtime.close());
+            const deadline = Promise.withResolvers<void>();
+            const timeout = this.#timer.schedule(
+                () =>
+                    deadline.reject(
+                        new AcpExecutionError(
+                            "The Session could not close before its deadline",
+                            {},
+                            "session_close_timeout",
+                        ),
+                    ),
+                SESSION_CLOSE_TIMEOUT_MILLISECONDS,
+            );
+            const completion = Promise.race([release, deadline.promise]).finally(timeout.cancel);
+            this.#sessionClosures.set(options.sessionId, completion);
+            const releaseFinished = (): void => {
+                if (this.#sessionClosures.get(options.sessionId) === completion) {
+                    this.#sessionClosures.delete(options.sessionId);
+                }
+            };
+            void release.then(releaseFinished, releaseFinished);
+            await waitForSharedOperation(completion, options.signal);
         });
 
     readonly close = async (): Promise<void> =>
