@@ -28,6 +28,7 @@ CREATE TABLE `recorded_turn_items` (
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `recorded_turn_items_sequence` ON `recorded_turn_items` (`command_id`,`sequence`);--> statement-breakpoint
+CREATE INDEX `recorded_turn_items_item` ON `recorded_turn_items` (`item_id`);--> statement-breakpoint
 CREATE TABLE `recording_projection` (
 	`singleton` integer PRIMARY KEY NOT NULL,
 	`folded_through_ordinal` integer NOT NULL,

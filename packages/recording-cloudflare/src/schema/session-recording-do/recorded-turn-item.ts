@@ -1,4 +1,4 @@
-import { integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 // Merged answer, thought, and tool items of a projected Turn, in the Turn's creation sequence.
 export const recordedTurnItem = sqliteTable(
@@ -16,5 +16,7 @@ export const recordedTurnItem = sqliteTable(
     (table) => [
         primaryKey({ columns: [table.commandId, table.itemId] }),
         uniqueIndex("recorded_turn_items_sequence").on(table.commandId, table.sequence),
+        // Finds the Turn that started a tool call when a later update arrives under another command.
+        index("recorded_turn_items_item").on(table.itemId),
     ],
 );

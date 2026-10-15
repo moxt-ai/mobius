@@ -76,6 +76,30 @@ const sessionRecordingDirectorySchema = z
 export const SESSION_RECORDING_TURN_PAGE_MAX_LIMIT = 100;
 /** Items returned by one Turn item page at most. */
 export const SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT = 1_000;
+/** Longest Turn item identifier. */
+export const SESSION_RECORDING_TURN_ITEM_ID_MAX_LENGTH = 4_200;
+
+function cursorPosition(value: string, pattern: RegExp): number | null {
+    const position = Number(pattern.exec(value)?.[1] ?? Number.NaN);
+    return Number.isSafeInteger(position) ? position : null;
+}
+
+/** The Turn order a Turn history cursor continues before, or null when the cursor is malformed. */
+export const parseSessionRecordingTurnCursor = (value: string): number | null =>
+    cursorPosition(value, /^turn:([1-9][0-9]*)$/u);
+
+/** The item sequence a Turn item cursor continues after, or null when the cursor is malformed. */
+export const parseSessionRecordingTurnItemCursor = (value: string): number | null =>
+    cursorPosition(value, /^item:(0|[1-9][0-9]*)$/u);
+
+/** A page size between 1 and `maximum`, or null when the value is not one. */
+export function parseSessionRecordingPageLimit(value: string, maximum: number): number | null {
+    if (!/^[1-9][0-9]{0,4}$/u.test(value)) {
+        return null;
+    }
+    const limit = Number(value);
+    return limit <= maximum ? limit : null;
+}
 
 const isoTimestamp = z.iso.datetime({ offset: true });
 const shortText = z.string().max(2_048);
@@ -128,7 +152,7 @@ export const sessionRecordingTurnAttemptSchema = z.discriminatedUnion("kind", [
 
 const turnItemBase = {
     // Opaque and stable for the life of the item; derived from the event, message, or tool call it merges.
-    itemId: z.string().min(1).max(4_200),
+    itemId: z.string().min(1).max(SESSION_RECORDING_TURN_ITEM_ID_MAX_LENGTH),
     // Creation order inside the Turn; answer, thought, and tool items share one sequence.
     sequence: z.number().int().nonnegative().safe(),
 };

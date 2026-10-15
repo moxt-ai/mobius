@@ -7,6 +7,10 @@ import {
     encodeSessionRecordingTurnPage,
     isIdentifier,
     ProtocolMessageError,
+    parseSessionRecordingPageLimit,
+    parseSessionRecordingTurnCursor,
+    parseSessionRecordingTurnItemCursor,
+    SESSION_RECORDING_TURN_ITEM_ID_MAX_LENGTH,
     SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT,
     SESSION_RECORDING_TURN_PAGE_MAX_LIMIT,
     type SessionRecordingWrite,
@@ -75,7 +79,7 @@ function requireSingleSession(write: SessionRecordingWrite): SessionRecordingWri
 function sessionRecordingRoutes(
     storage: SessionRecordingRoutes,
     history: TurnHistoryRoutes,
-    scheduleBackfill: () => Promise<void>,
+    scheduleBackfill: (at?: Date) => Promise<void>,
 ): Hono<RecordingEnvironment> {
     return new Hono<RecordingEnvironment>()
         .onError((cause, context): Response => internalErrorResponse(cause, context.req.raw))
@@ -106,7 +110,7 @@ function sessionRecordingRoutes(
         })
         .get("/turns", async (context): Promise<Response> => {
             const target = eventTarget(context.req.raw);
-            const before = optionalCursor(context.req.query("before"), /^turn:([1-9][0-9]*)$/u);
+            const before = optionalCursor(context.req.query("before"), parseSessionRecordingTurnCursor);
             const limit = boundedLimit(
                 context.req.query("limit"),
                 defaultTurnPageLimit,
@@ -124,7 +128,7 @@ function sessionRecordingRoutes(
         .get("/turn-items", async (context): Promise<Response> => {
             const target = eventTarget(context.req.raw);
             const commandId = decodedIdentifier(context.req.query("commandId"));
-            const after = optionalCursor(context.req.query("after"), /^item:(0|[1-9][0-9]*)$/u);
+            const after = optionalCursor(context.req.query("after"), parseSessionRecordingTurnItemCursor);
             const limit = boundedLimit(
                 context.req.query("limit"),
                 defaultTurnItemPageLimit,
@@ -249,35 +253,25 @@ function eventTarget(request: Request): {
 const defaultTurnPageLimit = 20;
 const defaultTurnItemPageLimit = 200;
 
-/** Parses an optional opaque cursor: null when absent, undefined when malformed. */
-function optionalCursor(value: string | undefined, pattern: RegExp): number | null | undefined {
-    if (value === undefined) {
-        return null;
-    }
-    const match = pattern.exec(value);
-    const position = match?.[1] === undefined ? Number.NaN : Number(match[1]);
-    return Number.isSafeInteger(position) ? position : undefined;
+/** Parses an optional cursor: null when absent, undefined when malformed. */
+function optionalCursor(value: string | undefined, parse: (value: string) => number | null): number | null | undefined {
+    return value === undefined ? null : (parse(value) ?? undefined);
 }
 
 function boundedLimit(value: string | undefined, fallback: number, maximum: number): number | null {
-    if (value === undefined) {
-        return fallback;
-    }
-    if (!/^[1-9][0-9]{0,4}$/u.test(value)) {
-        return null;
-    }
-    const limit = Number(value);
-    return limit <= maximum ? limit : null;
+    return value === undefined ? fallback : parseSessionRecordingPageLimit(value, maximum);
 }
 
 function turnItemId(value: string | undefined): string | null {
-    return value === undefined || value.length === 0 || value.length > 4_200 ? null : value;
+    return value === undefined || value.length === 0 || value.length > SESSION_RECORDING_TURN_ITEM_ID_MAX_LENGTH
+        ? null
+        : value;
 }
 
 async function turnHistoryResponse<T>(
     read: TurnHistoryRead<T>,
     encode: (value: T) => string,
-    scheduleBackfill: () => Promise<void>,
+    scheduleBackfill: (at?: Date) => Promise<void>,
 ): Promise<Response> {
     switch (read.kind) {
         case "ready":
@@ -291,7 +285,8 @@ async function turnHistoryResponse<T>(
             return response;
         }
         case "failed": {
-            // Backfill already retries on its own schedule; the client waits for that attempt.
+            // Backfill retries on its own schedule; re-arming it covers an alarm that was lost.
+            await scheduleBackfill(read.retryAt);
             const response = errorResponse("projection_failed", 503);
             response.headers.set("retry-after", String(read.retryAfterSeconds));
             return response;
@@ -314,14 +309,11 @@ function incrementalReadQuery(query: Record<string, string | undefined>) {
     if (after !== undefined && !/^(?:(?:0|[1-9][0-9]*)|v2:[1-9][0-9]*:(?:0|[1-9][0-9]*))$/.test(after)) {
         return { error: true };
     }
-    if (limit !== undefined && !/^[1-9][0-9]{0,4}$/.test(limit)) {
+    const pageLimit = boundedLimit(limit, maximumPageEvents, maximumPageEvents);
+    if (pageLimit === null) {
         return { error: true };
     }
-    const boundedLimit = limit === undefined ? maximumPageEvents : Number(limit);
-    if (boundedLimit > maximumPageEvents) {
-        return { error: true };
-    }
-    return { after: after === undefined ? "0" : after, limit: boundedLimit };
+    return { after: after === undefined ? "0" : after, limit: pageLimit };
 }
 
 function readTarget(context: { readonly req: { readonly param: (name: string) => string | undefined } }) {
@@ -548,9 +540,10 @@ export class SessionRecordingDurableObject extends DurableObject<RecordingWorker
                 return;
         }
     }
-    readonly #scheduleBackfill = async (): Promise<void> => {
+    /** Arms a backfill step at `at` (now by default) unless one is already scheduled. */
+    readonly #scheduleBackfill = async (at?: Date): Promise<void> => {
         if ((await this.ctx.storage.getAlarm()) === null) {
-            await this.ctx.storage.setAlarm(Date.now());
+            await this.ctx.storage.setAlarm(Math.max(Date.now(), at?.getTime() ?? 0));
         }
     };
 }

@@ -1,5 +1,9 @@
 import {
     isIdentifier,
+    parseSessionRecordingPageLimit,
+    parseSessionRecordingTurnCursor,
+    parseSessionRecordingTurnItemCursor,
+    SESSION_RECORDING_TURN_ITEM_ID_MAX_LENGTH,
     SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT,
     SESSION_RECORDING_TURN_PAGE_MAX_LIMIT,
 } from "@moxt-ai/mobius-protocol";
@@ -24,16 +28,21 @@ const recordingCursor = v.pipe(v.string(), v.regex(/^(?:(?:0|[1-9][0-9]*)|v2:[1-
 function pageLimit(maximum: number) {
     return v.pipe(
         v.string(),
-        v.regex(/^[1-9][0-9]{0,4}$/u),
-        v.check((value) => Number(value) <= maximum),
+        v.check((value) => parseSessionRecordingPageLimit(value, maximum) !== null),
+    );
+}
+function cursor(parse: (value: string) => number | null) {
+    return v.pipe(
+        v.string(),
+        v.check((value) => parse(value) !== null),
     );
 }
 const turnPageQuery = v.object({
-    before: v.optional(v.pipe(v.string(), v.regex(/^turn:[1-9][0-9]*$/u))),
+    before: v.optional(cursor(parseSessionRecordingTurnCursor)),
     limit: v.optional(pageLimit(SESSION_RECORDING_TURN_PAGE_MAX_LIMIT)),
 });
 const turnItemPageQuery = v.object({
-    after: v.optional(v.pipe(v.string(), v.regex(/^item:(?:0|[1-9][0-9]*)$/u))),
+    after: v.optional(cursor(parseSessionRecordingTurnItemCursor)),
     limit: v.optional(pageLimit(SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT)),
 });
 const recordingIncrementalQuery = v.object({
@@ -206,7 +215,12 @@ export const recordingReadRoutes = new Hono<PlatformApplicationEnvironment>()
         const target = turnTarget(context);
         const commandId = decodedIdentifier(context.req.param("commandId"));
         const itemId = context.req.param("itemId");
-        if (target === null || commandId === null || itemId.length === 0 || itemId.length > 4_200) {
+        if (
+            target === null ||
+            commandId === null ||
+            itemId.length === 0 ||
+            itemId.length > SESSION_RECORDING_TURN_ITEM_ID_MAX_LENGTH
+        ) {
             return errorResponse("invalid_request", "The Recording Turn item read is invalid", 400);
         }
         return await readRecording(

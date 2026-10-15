@@ -1,7 +1,7 @@
 {
     "version": "6",
     "dialect": "sqlite",
-    "id": "47f543e2-bf86-454a-bb56-c2e8498f0205",
+    "id": "c1b75865-f7bd-4e9c-a720-f0d4de983fcb",
     "prevId": "608cacfe-fac9-4830-946e-8fd93db61b34",
     "tables": {
         "recorded_interactions": {
@@ -219,6 +219,11 @@
                     "name": "recorded_turn_items_sequence",
                     "columns": ["command_id", "sequence"],
                     "isUnique": true
+                },
+                "recorded_turn_items_item": {
+                    "name": "recorded_turn_items_item",
+                    "columns": ["item_id"],
+                    "isUnique": false
                 }
             },
             "foreignKeys": {},

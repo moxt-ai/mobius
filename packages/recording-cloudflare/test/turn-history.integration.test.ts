@@ -494,6 +494,116 @@ describe("Recording Turn history", () => {
         expect(await failed.json()).toMatchObject({ error: { code: "projection_failed" } });
     });
 
+    it("Given an attempt that failed after answering, When a retry of the same command answers, Then each attempt keeps its own answer item", async () => {
+        await record([
+            requested("command-1", "Summarize"),
+            started("command-1"),
+            answer("First try."),
+            lifecycle({
+                attemptId: "attempt-command-1",
+                code: "agent_crashed",
+                commandId: "command-1",
+                kind: "prompt.failed",
+                message: "The Agent stopped",
+            }),
+            lifecycle({ attemptId: "attempt-retry", commandId: "command-1", epoch: "epoch-1", kind: "prompt.started" }),
+            answer("Second try."),
+            completed("command-1"),
+        ]);
+        expect((await turnPage()).turns[0]?.items).toMatchObject([
+            { kind: "answer", sequence: 0, text: "First try." },
+            { kind: "answer", sequence: 1, text: "Second try." },
+        ]);
+    });
+
+    it("Given an undecodable projection state and no recorded failure, When a client reads Turns, Then the read schedules backfill and then reports the failure", async () => {
+        await completedTurn("command-1", "Prompt 1", "Reply 1");
+        const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, sessionId]));
+        await runInDurableObject(stub, (_instance, state) => {
+            state.storage.sql.exec("UPDATE recording_projection SET state_json = '{}'");
+        });
+        const building = await worker.fetch(new Request(sessionPath("turns")), env);
+        expect(building.status).toBe(503);
+        expect(await building.json()).toMatchObject({ error: { code: "projection_building" } });
+        while (await runDurableObjectAlarm(stub)) {
+            // Run every due backfill attempt; each one fails on the undecodable state.
+        }
+        const failed = await worker.fetch(new Request(sessionPath("turns")), env);
+        expect(failed.status).toBe(503);
+        expect(await failed.json()).toMatchObject({ error: { code: "projection_failed" } });
+    });
+
+    it("Given a Turn that fills most of a page, When a client reads Turns, Then an older Turn that does not fit moves to the next page", async () => {
+        await completedTurn("command-1", "x".repeat(900_000), "Reply 1");
+        await record([
+            lifecycle({
+                commandId: "command-2",
+                content: [
+                    { text: "y".repeat(800_000), type: "text" },
+                    { text: "z".repeat(800_000), type: "text" },
+                ],
+                kind: "prompt.requested",
+            }),
+        ]);
+        const newest = await turnPage();
+        expect(newest.turns.map((turn) => turn.commandId)).toEqual(["command-2"]);
+        expect(newest.nextCursor).toBe("turn:2");
+        const older = await turnPage(`?before=${encodeURIComponent(newest.nextCursor ?? "")}`);
+        expect(older.turns.map((turn) => turn.commandId)).toEqual(["command-1"]);
+    });
+
+    it("Given a batch from a replaced generation that arrives late, When a client reads Turns, Then the current generation keeps running", async () => {
+        await record([requested("command-1", "Old run"), started("command-1")]);
+        const lateBatch = [answer("Late output from the old process.")];
+        generation = "generation-2";
+        await record([requested("command-2", "New run"), started("command-2")]);
+        generation = "generation-1";
+        await record(lateBatch.map((late) => ({ ...late, eventId: `${late.eventId}-late` })));
+        generation = "generation-2";
+        await record([answer("Current output."), completed("command-2")]);
+
+        const page = await turnPage();
+        expect(page.turns.map((turn) => [turn.commandId, turn.attempt.kind])).toEqual([
+            ["command-2", "succeeded"],
+            ["command-1", "indeterminate"],
+        ]);
+        expect(page.turns[0]?.items).toMatchObject([{ kind: "answer", text: "Current output." }]);
+        expect(page.turns[1]?.items).toEqual([]);
+    });
+
+    it("Given more requests than an attempt lists, When the listed ones are answered, Then the attempt keeps waiting on the rest", async () => {
+        const requests = Array.from({ length: 101 }, (_, index) =>
+            permissionRequest("command-1", `interaction-${String(index).padStart(3, "0")}`),
+        );
+        await record([requested("command-1", "Approve everything"), started("command-1"), ...requests]);
+        const waiting = await turnPage();
+        expect(waiting.turns[0]?.attempt.kind).toBe("waiting_input");
+        await record(
+            Array.from({ length: 100 }, (_, index) =>
+                permissionResolved(`interaction-${String(index + 1).padStart(3, "0")}`),
+            ),
+        );
+        const page = await turnPage();
+        expect(page.turns[0]?.attempt).toMatchObject({ interactionIds: ["interaction-000"], kind: "waiting_input" });
+        expect(page.interactions.map((interaction) => interaction.interactionId)).toEqual(["interaction-000"]);
+    });
+
+    it("Given a tool call started by an outer command, When its update arrives while a nested command runs, Then the update lands on the original tool item", async () => {
+        await record([
+            requested("command-1", "Outer"),
+            started("command-1"),
+            acp({ sessionUpdate: "tool_call", status: "in_progress", title: "Build", toolCallId: "tool-1" }),
+            requested("command-2", "Steer"),
+            started("command-2"),
+            acp({ sessionUpdate: "tool_call_update", status: "completed", toolCallId: "tool-1" }),
+        ]);
+        const page = await turnPage();
+        expect(page.turns[0]).toMatchObject({ commandId: "command-2", itemCount: 0, items: [] });
+        expect(page.turns[1]?.items).toMatchObject([
+            { kind: "tool", status: "completed", title: "Build", toolCallId: "tool-1" },
+        ]);
+    });
+
     it("Given an unknown Session or a malformed cursor, When a client reads Turns, Then the read is rejected", async () => {
         expect((await worker.fetch(new Request(sessionPath("turns")), env)).status).toBe(404);
         await completedTurn("command-1", "Prompt 1", "Reply 1");

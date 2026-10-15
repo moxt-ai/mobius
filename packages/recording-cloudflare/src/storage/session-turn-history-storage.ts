@@ -124,7 +124,8 @@ export class SessionTurnHistoryStorage {
                 commandId: write.commandId,
                 itemId: write.item.itemId,
                 itemJson: JSON.stringify(storedTurnItemSchema.parse(write.item)),
-                listingJson: write.listing === null ? null : JSON.stringify(storedTurnItemSchema.parse(write.listing)),
+                // A listing only narrows the item validated above, so it is encoded without parsing it again.
+                listingJson: write.listing === null ? null : JSON.stringify(write.listing),
                 sequence: write.item.sequence,
                 text: write.text.text,
             },
@@ -261,6 +262,15 @@ export class SessionTurnHistoryStorage {
             .limit(limit)
             .all()
             .map(decodeItemRead);
+
+    /** The command of a Turn holding an item with this identifier, if any. */
+    readonly itemOwner = (itemId: string): string | null =>
+        this.#database
+            .select({ commandId: recordedTurnItem.commandId })
+            .from(recordedTurnItem)
+            .where(eq(recordedTurnItem.itemId, itemId))
+            .limit(1)
+            .get()?.commandId ?? null;
 
     readonly hasItemAfter = (commandId: string, sequence: number): boolean =>
         this.#database

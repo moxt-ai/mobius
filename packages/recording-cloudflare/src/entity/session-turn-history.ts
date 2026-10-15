@@ -51,6 +51,8 @@ export const storedProjectionStateSchema = z
             .nullable(),
         // Generation of the last folded event; a different generation clears the active commands.
         generationId: z.string().min(1).nullable(),
+        // Generations that a later one replaced. A batch from one of them arrives late and is not a restart.
+        retiredGenerationIds: z.array(z.string().min(1)).readonly(),
         title: z.string().nullable(),
     })
     .readonly();
@@ -77,7 +79,7 @@ export interface StoredProjection {
 export const emptyProjection: StoredProjection = {
     failure: null,
     foldedThroughOrdinal: 0,
-    state: { activeCommands: null, generationId: null, title: null },
+    state: { activeCommands: null, generationId: null, retiredGenerationIds: [], title: null },
     turnCount: 0,
 };
 
