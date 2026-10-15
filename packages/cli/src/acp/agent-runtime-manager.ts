@@ -81,6 +81,8 @@ export class AgentRuntimeManager {
     readonly #executions = new ActiveExecutions();
     readonly #agentSettingsObserver = new NullAcpSessionObserver();
     readonly #nativeOperations = new Set<string>();
+    /** Preview sessions whose direct-read history is already materialized in the event store. */
+    readonly #directPreviewNativeSessions = new Map<string, string>();
     readonly #store: AcpSessionStore;
     readonly #nativeHistoryReader: AcpNativeHistoryReader;
     readonly #sessionIdentity: "assigned" | "native";
@@ -768,8 +770,13 @@ export class AgentRuntimeManager {
         nativeSessionId: string,
         eventLimit: number,
         cursor: string | null,
-    ): Promise<AcpNativeEventReplayV2> =>
-        this.#operations.run(options, async (options) => {
+    ): Promise<AcpNativeEventReplayV2> => {
+        // Older pages are cut from the history this preview already materialized, so paging
+        // never re-reads the source transcript or contends with other native operations.
+        if (cursor !== null && this.#directPreviewNativeSessions.get(options.sessionId) === nativeSessionId) {
+            return this.#store.eventsV2.page(options.sessionId, eventLimit, cursor);
+        }
+        return await this.#operations.run(options, async (options) => {
             const key = `${options.agent.id}:${nativeSessionId}`;
             if (this.#nativeOperations.has(key)) {
                 throw new AcpExecutionError(
@@ -788,7 +795,7 @@ export class AgentRuntimeManager {
                     if (history.status === "unavailable") {
                         throw new AcpExecutionError(history.cause.message, {}, history.cause.code);
                     }
-                    return nativeHistoryEventsV2(
+                    const page = nativeHistoryEventsV2(
                         options.sessionId,
                         nativeSessionId,
                         history,
@@ -796,12 +803,15 @@ export class AgentRuntimeManager {
                         cursor,
                         this.#store.eventsV2,
                     );
+                    this.#directPreviewNativeSessions.set(options.sessionId, nativeSessionId);
+                    return page;
                 }
                 return await this.#queryProcesses.previewEventsV2(options, nativeSessionId, eventLimit, cursor);
             } finally {
                 this.#nativeOperations.delete(key);
             }
         });
+    };
 
     readonly loadSessionHistory = async (options: AcpPrepareOptions): Promise<NativeSessionHistory> =>
         this.#operations.run(options, async (options) => {

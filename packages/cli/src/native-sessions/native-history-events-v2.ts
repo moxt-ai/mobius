@@ -175,11 +175,12 @@ export function nativeHistoryEventsV2(
     eventStore: AcpSessionEventStoreV2,
 ): AcpNativeEventReplayV2 {
     const events = historyEvents(history);
-    const generationId = createHash("sha256")
-        .update(nativeSessionId)
-        .update("\0")
-        .update(JSON.stringify(events))
-        .digest("hex");
+    // Hash event by event: one JSON string of a long transcript would double its memory.
+    const digest = createHash("sha256").update(nativeSessionId).update("\0");
+    for (const event of events) {
+        digest.update(JSON.stringify(event)).update("\0");
+    }
+    const generationId = digest.digest("hex");
     eventStore.materialize(sessionId, generationId, events);
     return eventStore.page(sessionId, eventLimit, cursor);
 }

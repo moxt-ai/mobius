@@ -64,6 +64,62 @@ describe("native session history", () => {
         }
     });
 
+    it("Given a long Codex conversation is previewed, When Chat pages to older messages, Then Runtime pages the materialized history without reading the source again", async () => {
+        let reads = 0;
+        const f = await fixture("Codex", "supported", "assigned", {
+            access: () => ({
+                kind: "direct",
+                read: async () => {
+                    reads += 1;
+                    return {
+                        coveredCommandIds: [],
+                        coveredMessageIds: [],
+                        messages: Array.from({ length: 6 }, (_unused, index) => ({
+                            role: "user" as const,
+                            text: `Message ${index.toString()}`,
+                        })),
+                        status: "available",
+                        truncated: false,
+                    };
+                },
+            }),
+        });
+        const options = {
+            additionalDirectories: [],
+            agent: f.agent,
+            cwd: f.workspace,
+            sessionId: "codex-paged-preview",
+            signal: new AbortController().signal,
+        };
+        const texts = (page: { readonly events: readonly { readonly type: string }[] }): readonly string[] =>
+            page.events.flatMap((event) =>
+                event.type === "acp" &&
+                "payload" in event &&
+                typeof event.payload === "object" &&
+                event.payload !== null &&
+                "content" in event.payload &&
+                typeof event.payload.content === "object" &&
+                event.payload.content !== null &&
+                "text" in event.payload.content &&
+                typeof event.payload.content.text === "string"
+                    ? [event.payload.content.text]
+                    : [],
+            );
+        try {
+            const nativeSessionId = await f.seed("Long Codex session");
+            const newest = await f.sessions.previewNativeSessionEventsV2(options, nativeSessionId, 2, null);
+            expect(texts(newest)).toEqual(["Message 4", "Message 5"]);
+            expect(newest.nextCursor).not.toBeNull();
+
+            const older = await f.sessions.previewNativeSessionEventsV2(options, nativeSessionId, 2, newest.nextCursor);
+
+            expect(texts(older)).toEqual(["Message 2", "Message 3"]);
+            expect(reads).toBe(1);
+        } finally {
+            await f.close();
+        }
+    });
+
     it("Given Chat imports a titled Codex conversation, When the imported Chat opens, Then its source title and history remain visible without requesting another writer", async () => {
         const f = await fixture("Codex", "exclusive-writer", "assigned", {
             access: () => ({
