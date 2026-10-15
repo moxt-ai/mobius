@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 import { Command, CommanderError } from "commander";
 import packageMetadata from "../../package.json" with { type: "json" };
 
@@ -8,14 +6,6 @@ import { registerAgentsHandler } from "./handler/agents/index.ts";
 import { registerDaemonLifecycleHandlers, registerInternalDaemonHandlers } from "./handler/daemon/index.ts";
 import { registerPairHandlers } from "./handler/pair/index.ts";
 import { registerVersionHandler } from "./handler/version/index.ts";
-
-const shutdown = new AbortController();
-process.once("SIGINT", () => shutdown.abort());
-process.once("SIGTERM", () => shutdown.abort());
-const context: CliContext = {
-    shutdownSignal: shutdown.signal,
-    version: packageMetadata.version,
-};
 
 function createProgram(cliContext: CliContext): Command {
     const program = new Command()
@@ -38,18 +28,27 @@ function createProgram(cliContext: CliContext): Command {
     return program;
 }
 
-async function main(): Promise<void> {
-    await createProgram(context).parseAsync(process.argv);
-}
-
-try {
-    await main();
-} catch (error) {
-    if (error instanceof CommanderError) {
-        process.exitCode = error.exitCode;
-    } else if (!shutdown.signal.aborted) {
-        const message = error instanceof Error ? error.message : "Unknown failure";
-        process.stderr.write(`Mobius daemon failed: ${message}\n`);
-        process.exitCode = 1;
+export async function runCLI(): Promise<void> {
+    const shutdown = new AbortController();
+    const abort = (): void => shutdown.abort();
+    process.once("SIGINT", abort);
+    process.once("SIGTERM", abort);
+    const context: CliContext = {
+        shutdownSignal: shutdown.signal,
+        version: packageMetadata.version,
+    };
+    try {
+        await createProgram(context).parseAsync(process.argv);
+    } catch (error) {
+        if (error instanceof CommanderError) {
+            process.exitCode = error.exitCode;
+        } else if (!shutdown.signal.aborted) {
+            const message = error instanceof Error ? error.message : "Unknown failure";
+            process.stderr.write(`Mobius daemon failed: ${message}\n`);
+            process.exitCode = 1;
+        }
+    } finally {
+        process.off("SIGINT", abort);
+        process.off("SIGTERM", abort);
     }
 }

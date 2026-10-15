@@ -73,12 +73,16 @@ export async function withRealDaemon(
     let execution = new AbortController();
     const cliEnvironment = { ...process.env, ...environment, MOBIUS_STATE_DIRECTORY: directory };
     const cli = async (args: readonly string[], deadline = signal): Promise<void> => {
-        const child = spawn(process.execPath, [resolve(import.meta.dirname, "../../../src/cli/index.ts"), ...args], {
-            env: cliEnvironment,
-            signal: deadline,
-            stdio: ["ignore", "pipe", "pipe"],
-            windowsHide: true,
-        });
+        const child = spawn(
+            process.execPath,
+            [resolve(import.meta.dirname, "../../../src/entrypoint/cli.ts"), ...args],
+            {
+                env: cliEnvironment,
+                signal: deadline,
+                stdio: ["ignore", "pipe", "pipe"],
+                windowsHide: true,
+            },
+        );
         let output = "";
         child.stdout.on("data", (chunk: Buffer) => {
             output += chunk.toString();

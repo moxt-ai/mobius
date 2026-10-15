@@ -24,7 +24,7 @@
         "dev:agent": "node scripts/dev-agent.ts",
         "dev:cli": "pnpm --filter @moxt-ai/mobius dev",
         "dev:cloudflare:platform": "pnpm --filter @moxt-ai/mobius-relay-cloudflare-platform dev",
-        "mobius": "pnpm --filter @moxt-ai/mobius exec node src/cli/index.ts",
+        "mobius": "pnpm --filter @moxt-ai/mobius exec node src/entrypoint/cli.ts",
         "build": "pnpm --recursive --workspace-concurrency=3 --if-present build",
         "typecheck": "tsc --project tsconfig.json && pnpm --recursive --if-present typecheck",
         "check:no-chinese": "node scripts/check-no-chinese.ts",
