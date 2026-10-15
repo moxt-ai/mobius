@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { setInterval } from "node:timers/promises";
 import { decodeIdentifier, type RuntimeUpgradeResult } from "@moxt-ai/mobius-protocol";
-import packageMetadata from "../package.json" with { type: "json" };
-import { lifecycleResponse } from "./daemon-lifecycle-protocol.ts";
-import { sendLocalRequest } from "./daemon-local-control.ts";
-import { readSwitchStatus } from "./daemon-switch-status.ts";
-import { DaemonUpgradeError, findNewDaemonRelease, installDaemonRelease } from "./daemon-upgrade-package.ts";
-import { openMobiusControlInstallation } from "./pairing/pair-local-machine.ts";
+import packageMetadata from "../../../package.json" with { type: "json" };
+import { sendLocalRequest } from "../control/local-client.ts";
+import { lifecycleResponse } from "../control/protocol.ts";
+import { readSwitchStatus } from "../control/switch-status.ts";
+import { openMobiusControlInstallation } from "../pairing/pair-local-machine.ts";
+import { DaemonUpgradeError, findNewDaemonRelease, installDaemonRelease } from "./package.ts";
 
 export async function reportDaemonUpgrade(
     send: (result: RuntimeUpgradeResult) => void,

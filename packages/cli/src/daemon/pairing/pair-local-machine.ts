@@ -3,10 +3,10 @@ import { hostname } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { isIdentifier, mobiusApiUrl } from "@moxt-ai/mobius-protocol";
 import { fetch, type Response } from "undici";
-import packageMetadata from "../../package.json" with { type: "json" };
-import { discoverLocalAgentInventory, type LocalAgentInventory } from "../agent-catalog/discover-local-agents.ts";
-import { publishAgentCatalog } from "../agent-catalog/publish-agent-catalog.ts";
-import { createCatalogAgentResolver } from "../agent-catalog/resolve-catalog-agent.ts";
+import packageMetadata from "../../../package.json" with { type: "json" };
+import { discoverLocalAgentInventory, type LocalAgentInventory } from "../../agent-catalog/discover-local-agents.ts";
+import { publishAgentCatalog } from "../../agent-catalog/publish-agent-catalog.ts";
+import { createCatalogAgentResolver } from "../../agent-catalog/resolve-catalog-agent.ts";
 import {
     type AcpAgentDefinition,
     createDaemonConfig,
@@ -14,15 +14,15 @@ import {
     DaemonLocalContext,
     loadDefaultWorkspace,
     OpaqueDaemonReconnectTarget,
-} from "../config.ts";
-import { prepareVersionData } from "../daemon-upgrade-data.ts";
+} from "../../config.ts";
 import {
     openRuntimeInstallationStore,
     type RuntimeInstallationStore,
     type VerifiedRuntimeConnection,
-} from "../storage/runtime-installation-store.ts";
-import { readStateDirectory } from "../storage/state-directory.ts";
-import { environmentProxyDispatcher } from "../util/network/environment-proxy.ts";
+} from "../../storage/runtime-installation-store.ts";
+import { readStateDirectory } from "../../storage/state-directory.ts";
+import { environmentProxyDispatcher } from "../../util/network/environment-proxy.ts";
+import { prepareVersionData } from "../upgrades/data.ts";
 
 const PAIRING_TIMEOUT_MILLISECONDS = 20_000;
 const PAIRING_CODE_PATTERN = /^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){4}$/;

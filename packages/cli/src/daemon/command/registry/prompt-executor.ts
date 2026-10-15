@@ -1,19 +1,19 @@
 import { type SessionPromptCommand, SessionPromptDisposition } from "@moxt-ai/mobius-protocol";
-import type { AcpActivity, AcpActivityNarration } from "./acp/activity.ts";
-import { AcpExecutionError, type AgentRuntimeManager } from "./acp/agent-runtime-manager.ts";
+import type { AcpActivity, AcpActivityNarration } from "../../../acp/activity.ts";
+import { AcpExecutionError, type AgentRuntimeManager } from "../../../acp/agent-runtime-manager.ts";
 import {
     agentForSessionConfiguration,
     applyCompleteSessionConfiguration,
     assertAppliedSessionConfiguration,
-} from "./acp/session-config/apply-session-configuration.ts";
-import { resolveSessionDirectories } from "./authorization/resolve-session-directories.ts";
-import type { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
-import type { DaemonConfig } from "./config.ts";
-import { operationErrorCode, operationErrorMessage } from "./daemon-command-results.ts";
-import { resolveCatalogAgent } from "./daemon-session-commands.ts";
-import { resolvePromptArtifacts } from "./prompt-artifact-resolver.ts";
-import type { DaemonOperationState } from "./relay-connection/daemon-operation-state.ts";
-import type { DaemonSessionEventProjectionV2 } from "./session-event-projection-v2.ts";
+} from "../../../acp/session-config/apply-session-configuration.ts";
+import { resolveSessionDirectories } from "../../../authorization/resolve-session-directories.ts";
+import type { WorkspaceDirectoryService } from "../../../authorization/workspace-directory.ts";
+import type { DaemonConfig } from "../../../config.ts";
+import { resolvePromptArtifacts } from "../../../prompt-artifact-resolver.ts";
+import type { DaemonOperationState } from "../../../relay-connection/daemon-operation-state.ts";
+import type { DaemonSessionEventProjectionV2 } from "../../../session-event-projection-v2.ts";
+import { operationErrorCode, operationErrorMessage } from "../../command-dispatcher.ts";
+import { resolveCatalogAgent } from "./session.ts";
 
 export interface ExecutePromptOptions {
     readonly operations: DaemonOperationState;

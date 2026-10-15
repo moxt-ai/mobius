@@ -7,8 +7,8 @@ import {
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
-import { ActiveDaemonTurn, type ActiveTurnRecovery } from "./daemon-active-turn.ts";
-import type { DaemonOperationState } from "./relay-connection/daemon-operation-state.ts";
+import type { DaemonOperationState } from "../relay-connection/daemon-operation-state.ts";
+import { ActiveDaemonTurn, type ActiveTurnRecovery } from "./active-turn.ts";
 
 type ActiveTurnSnapshot = Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"];
 

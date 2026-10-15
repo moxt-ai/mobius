@@ -1,5 +1,5 @@
-import { type DaemonSwitchState, lifecycleResponse } from "./daemon-lifecycle-protocol.ts";
-import { sendLocalRequest } from "./daemon-local-control.ts";
+import { sendLocalRequest } from "./local-client.ts";
+import { type DaemonSwitchState, lifecycleResponse } from "./protocol.ts";
 
 export async function readSwitchStatus(
     directory: string,

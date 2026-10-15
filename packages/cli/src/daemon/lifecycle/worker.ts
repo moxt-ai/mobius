@@ -1,14 +1,14 @@
 import { setTimeout } from "node:timers/promises";
-import { acquireManagerLock, isNodeError, sendLocalRequest } from "../../daemon-local-control.ts";
-import { serveLocalControl } from "../../daemon-local-server.ts";
-import { runDaemonUpgrades } from "../../daemon-upgrade.ts";
-import { prepareUpgradeData, recordCurrentData } from "../../daemon-upgrade-data.ts";
+import { acquireManagerLock, isNodeError, sendLocalRequest } from "../control/local-client.ts";
+import { serveLocalControl } from "../control/local-server.ts";
 import {
     openMobiusCliInstallation,
     openMobiusControlInstallation,
     resumeMobiusRuntime,
-} from "../../pairing/pair-local-machine.ts";
-import { MobiusRuntimeEngine } from "../../runtime.ts";
+} from "../pairing/pair-local-machine.ts";
+import { MobiusRuntimeEngine } from "../runtime.ts";
+import { prepareUpgradeData, recordCurrentData } from "../upgrades/data.ts";
+import { runDaemonUpgrades } from "../upgrades/upgrade.ts";
 
 export async function reloadDaemon(stateDirectory: string, signal: AbortSignal): Promise<void> {
     try {

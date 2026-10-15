@@ -1,7 +1,10 @@
 import type { Command } from "commander";
 
 import { reloadDaemon } from "../../../daemon/lifecycle/worker.ts";
-import { openMobiusCliInstallation, openMobiusControlInstallation } from "../../../pairing/pair-local-machine.ts";
+import {
+    openMobiusCliInstallation,
+    openMobiusControlInstallation,
+} from "../../../daemon/pairing/pair-local-machine.ts";
 import type { CliContext } from "../../context.ts";
 import { valueOption } from "../../util/options.ts";
 import type { ConnectionOptions } from "./logic/options.ts";

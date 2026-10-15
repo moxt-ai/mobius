@@ -10,8 +10,11 @@ import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import cliPackage from "../../package.json" with { type: "json" };
-import { sendLocalRequest } from "../../src/daemon-local-control.ts";
-import { openMobiusCliInstallation, openMobiusControlInstallation } from "../../src/pairing/pair-local-machine.ts";
+import { sendLocalRequest } from "../../src/daemon/control/local-client.ts";
+import {
+    openMobiusCliInstallation,
+    openMobiusControlInstallation,
+} from "../../src/daemon/pairing/pair-local-machine.ts";
 import { findExecutableOnPath, runBoundedProcess } from "../../src/util/process/executable.ts";
 
 // The npm registry stores real packed releases; the Relay stores catalogs and

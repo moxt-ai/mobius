@@ -1,20 +1,27 @@
 import {
     type DaemonToServiceMessage,
     encodeDaemonToServiceMessage,
+    type ServiceToDaemonMessage,
     type SessionCancelCommand,
 } from "@moxt-ai/mobius-protocol";
 import { WebSocket } from "undici";
-import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp/agent-runtime-manager.ts";
-import { LocalAgentCatalogError } from "./agent-catalog/local-agent.ts";
-import { LocalAuthorizationError } from "./authorization/local-authorization-error.ts";
-import type { DurationMetric } from "./infra/operation-metrics.ts";
-import { PromptArtifactError } from "./prompt-artifact-resolver.ts";
-import type { DaemonOperationState } from "./relay-connection/daemon-operation-state.ts";
-import type { DaemonSessionEventProjectionV2 } from "./session-event-projection-v2.ts";
+import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "../acp/agent-runtime-manager.ts";
+import { LocalAgentCatalogError } from "../agent-catalog/local-agent.ts";
+import { LocalAuthorizationError } from "../authorization/local-authorization-error.ts";
+import type { DurationMetric } from "../infra/operation-metrics.ts";
+import { PromptArtifactError } from "../prompt-artifact-resolver.ts";
+import type { DaemonOperationState } from "../relay-connection/daemon-operation-state.ts";
+import type { DaemonSessionEventProjectionV2 } from "../session-event-projection-v2.ts";
+import type { CommandContext } from "./command/context.ts";
+import { createCommandRegistry } from "./command/registry/index.ts";
 
-export interface DaemonTurnCommand {
-    readonly commandId: string;
-    readonly sessionId: string;
+export type { CommandContext } from "./command/context.ts";
+
+export function createDaemonCommandDispatcher(options: CommandContext): {
+    readonly dispatch: (message: ServiceToDaemonMessage) => void;
+    readonly settle: () => Promise<void>;
+} {
+    return createCommandRegistry(options);
 }
 
 export function send(socket: WebSocket, message: DaemonToServiceMessage): void {
@@ -24,11 +31,6 @@ export function send(socket: WebSocket, message: DaemonToServiceMessage): void {
     socket.send(encodeDaemonToServiceMessage(message));
 }
 
-/**
- * Settles a Turn claimed by this live Runtime when its active process can no longer execute.
- * A lost connection can deliver cancellation after the process has stopped; the in-memory
- * receipt identifies the Attempt that should be reported as failed.
- */
 export async function settleAbandonedTurn(
     projection: DaemonSessionEventProjectionV2,
     operations: DaemonOperationState,
@@ -50,27 +52,21 @@ export async function settleAbandonedTurn(
 }
 
 export function operationErrorCode(error: unknown): string {
-    if (
-        error instanceof AcpExecutionError ||
+    return error instanceof AcpExecutionError ||
         error instanceof LocalAuthorizationError ||
         error instanceof LocalAgentCatalogError ||
         error instanceof PromptArtifactError
-    ) {
-        return error.code;
-    }
-    return "session_operation_failed";
+        ? error.code
+        : "session_operation_failed";
 }
 
 export function operationErrorMessage(error: unknown): string {
-    if (
-        error instanceof AcpExecutionError ||
+    return error instanceof AcpExecutionError ||
         error instanceof LocalAuthorizationError ||
         error instanceof LocalAgentCatalogError ||
         error instanceof PromptArtifactError
-    ) {
-        return error.message;
-    }
-    return "The local agent operation could not be completed";
+        ? error.message
+        : "The local agent operation could not be completed";
 }
 
 export function agentSettingsFailureDetails(agentId: string, failure: unknown): Readonly<Record<string, string>> {

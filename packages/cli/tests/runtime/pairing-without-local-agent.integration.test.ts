@@ -82,7 +82,7 @@ describe("pairing a machine without a local Agent", () => {
         const relay = await createPairingRelay();
 
         try {
-            const { openRuntimeInstallationStore, pairMobiusRuntime } = await import("../../src/runtime.ts");
+            const { openRuntimeInstallationStore, pairMobiusRuntime } = await import("../../src/daemon/runtime.ts");
             const installation = await openRuntimeInstallationStore(
                 { applicationId: "dev.mobius.unattended-test", stateDirectory },
                 AbortSignal.timeout(5_000),
@@ -126,7 +126,7 @@ describe("pairing a machine without a local Agent", () => {
 
         try {
             const { openRuntimeInstallationStore, pairMobiusRuntime, resumeMobiusRuntime } = await import(
-                "../../src/runtime.ts"
+                "../../src/daemon/runtime.ts"
             );
             const installation = await openRuntimeInstallationStore(
                 { applicationId: "dev.mobius.unattended-test", stateDirectory },

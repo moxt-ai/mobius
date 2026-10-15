@@ -1,7 +1,7 @@
 import { resolve } from "node:path";
 import type { Command } from "commander";
 
-import { openMobiusCliInstallation } from "../../../pairing/pair-local-machine.ts";
+import { openMobiusCliInstallation } from "../../../daemon/pairing/pair-local-machine.ts";
 import type { CliContext } from "../../context.ts";
 import { valueOption } from "../../util/options.ts";
 import type { PairListOptions } from "./logic/options.ts";

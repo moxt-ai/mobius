@@ -9,7 +9,10 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import cliPackage from "../../package.json" with { type: "json" };
-import { openMobiusCliInstallation, openMobiusControlInstallation } from "../../src/pairing/pair-local-machine.ts";
+import {
+    openMobiusCliInstallation,
+    openMobiusControlInstallation,
+} from "../../src/daemon/pairing/pair-local-machine.ts";
 import { platformSupportFor } from "../../src/platform/index.ts";
 
 const temporaryDirectories: string[] = [];
