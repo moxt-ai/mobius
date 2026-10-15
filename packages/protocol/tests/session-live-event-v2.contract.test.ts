@@ -99,6 +99,47 @@ describe("Session Event V2 contracts", () => {
         });
     });
 
+    it("Given externalized tool content with opaque metadata, When it crosses the recorded event boundary, Then the metadata is omitted", () => {
+        const event = {
+            ...sharedEvent,
+            payload: {
+                content: [
+                    {
+                        content: {
+                            _meta: { source: "agent" },
+                            byteLength: 68,
+                            imageKey: "a".repeat(64),
+                            mimeType: "image/png",
+                            type: "external_image",
+                        },
+                        type: "content",
+                    },
+                ],
+                sessionUpdate: "tool_call_update",
+                toolCallId: "tool-1",
+            },
+        };
+
+        expect(decodeSessionEventV2(event)).toEqual({
+            ...event,
+            payload: {
+                content: [
+                    {
+                        content: {
+                            byteLength: 68,
+                            imageKey: "a".repeat(64),
+                            mimeType: "image/png",
+                            type: "external_image",
+                        },
+                        type: "content",
+                    },
+                ],
+                sessionUpdate: "tool_call_update",
+                toolCallId: "tool-1",
+            },
+        });
+    });
+
     it("Given a live event with a position, When it crosses the protocol boundary, Then it is accepted without a sequence", () => {
         const event: SessionLiveEventV2 = { ...sharedEvent, position: "1" };
 
