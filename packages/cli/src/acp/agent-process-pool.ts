@@ -1,7 +1,22 @@
 import type { AgentSession } from "./agent-session.ts";
 import { AcpProcessCapacityLock, waitForAcpProcessCapacity } from "./process-capacity.ts";
 
-const MAX_ACP_PROCESSES = 10;
+const DEFAULT_MAX_ACP_PROCESSES = 1000;
+// Retired Sessions stay resumable through their stored row, so the cap bounds
+// live Agent processes only. Operators and tests may shrink it per daemon.
+const MAX_ACP_PROCESSES_ENVIRONMENT_KEY = "MOBIUS_MAX_ACP_PROCESSES";
+
+export function resolveMaxAcpProcesses(environment: Readonly<Record<string, string | undefined>>): number {
+    const configured = environment[MAX_ACP_PROCESSES_ENVIRONMENT_KEY];
+    if (configured === undefined || configured === "") {
+        return DEFAULT_MAX_ACP_PROCESSES;
+    }
+    const parsed = Number(configured);
+    if (!Number.isInteger(parsed) || parsed < 1) {
+        throw new Error(`${MAX_ACP_PROCESSES_ENVIRONMENT_KEY} must be a positive integer`);
+    }
+    return parsed;
+}
 
 export interface AgentProcessRetention {
     readonly isBusy: () => boolean;
@@ -15,9 +30,14 @@ type ProcessSlot =
 
 /** Owns each capacity slot from reservation until the process has stopped. */
 export class AgentProcessPool {
+    readonly #maxProcesses: number;
     readonly #slots = new Map<symbol, ProcessSlot>();
     readonly #lock = new AcpProcessCapacityLock();
     #changed = Promise.withResolvers<void>();
+
+    constructor(maxProcesses: number = DEFAULT_MAX_ACP_PROCESSES) {
+        this.#maxProcesses = maxProcesses;
+    }
 
     readonly notifyChanged = (): void => {
         const changed = this.#changed;
@@ -80,7 +100,7 @@ export class AgentProcessPool {
         try {
             for (;;) {
                 signal.throwIfAborted();
-                if (this.#slots.size < MAX_ACP_PROCESSES) {
+                if (this.#slots.size < this.#maxProcesses) {
                     const id = Symbol("ACP process slot");
                     this.#slots.set(id, { kind: "starting" });
                     return id;

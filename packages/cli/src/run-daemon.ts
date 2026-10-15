@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { styleText } from "node:util";
 
+import { resolveMaxAcpProcesses } from "./acp/agent-process-pool.ts";
 import { AgentRuntimeManager } from "./acp/agent-runtime-manager.ts";
 import { CachedAcpSessionEventStoreV2 } from "./acp/session-event-store-v2.ts";
 import { SqliteAcpSessionStore } from "./acp/session-store.ts";
@@ -135,6 +136,7 @@ export async function runDaemon(
         publisher.publishStatus,
         new AcpContentExternalizer(externalContent),
         timer,
+        resolveMaxAcpProcesses(config.localContext.environment),
     );
     const directories = new WorkspaceDirectoryService(config.bindingId, config.defaultWorkspace);
     const diagnostics = new RelayConnectionDiagnostics(

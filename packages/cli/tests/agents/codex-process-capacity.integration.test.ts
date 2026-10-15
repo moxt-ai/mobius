@@ -10,63 +10,67 @@ import {
 import { expect, test } from "vitest";
 import { CodexAgentSpecification } from "../../src/agent-catalog/agents/codex-agent.ts";
 import { CodexFixture } from "../support/agents/codex.ts";
-import { prepareNewRealSession, withRealDaemon } from "../support/agents/real-daemon.ts";
+import { prepareNewRealSession, type RealDaemonPeer, withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 
-test("Given a real Codex conversation, When more Sessions are opened than the daemon can retain, Then the original native Session continues with its history intact", async () => {
-    await using provider = await FakeOpenAiProvider.start("mobius-test-model", "RESTORED_REPLY");
-    await using agent = await CodexFixture.create(provider);
-    await withRealDaemon(new CodexAgentSpecification(), agent.environment, async (peer) => {
-        const identity = {
+// The production cap is far above any test scenario, so scenarios that need
+// retirement shrink the retained process budget through the daemon environment.
+const evictingEnvironment = (environment: Readonly<Record<string, string>>): Readonly<Record<string, string>> => ({
+    ...environment,
+    MOBIUS_MAX_ACP_PROCESSES: "2",
+});
+
+async function promptRealSession(peer: RealDaemonPeer, sessionId: string, text: string): Promise<void> {
+    const commandId = randomUUID();
+    peer.send(
+        encodeSessionPromptCommand({
+            kind: "session.prompt",
+            commandId,
+            sessionId,
             agentId: "codex",
             bindingId: peer.bindingId,
             directoryId: "default",
             additionalDirectoryIds: [],
-        };
-        const create = async (): Promise<string> => await prepareNewRealSession(peer, "codex");
-        const sessionId = await create();
-        const prompt = async (text: string): Promise<void> => {
-            const commandId = randomUUID();
-            peer.send(
-                encodeSessionPromptCommand({
-                    ...identity,
-                    kind: "session.prompt",
-                    commandId,
-                    sessionId,
-                    prompt: text,
-                    disposition: SessionPromptDisposition.Reject,
-                    targetCommandId: "",
-                    images: [],
-                    resources: [],
-                }),
-            );
-            let output = "";
-            for (;;) {
-                const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
-                if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.failed") {
-                    throw new Error(JSON.stringify(event));
-                }
-                if (
-                    event.type === "acp" &&
-                    event.payload.sessionUpdate === "agent_message_chunk" &&
-                    event.payload.content.type === "text"
-                ) {
-                    output += event.payload.content.text;
-                }
-                if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
-                    expect(event.payload.commandId).toBe(commandId);
-                    expect(event.sessionId).toBe(sessionId);
-                    expect(event.payload.stopReason).toBe("end_turn");
-                    expect(output).toContain("RESTORED_REPLY");
-                    break;
-                }
-            }
-        };
-        await prompt("Original conversation before opening other Sessions");
-        for (let index = 0; index < 11; index += 1) {
-            await create();
+            prompt: text,
+            disposition: SessionPromptDisposition.Reject,
+            targetCommandId: "",
+            images: [],
+            resources: [],
+        }),
+    );
+    let output = "";
+    for (;;) {
+        const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+        if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.failed") {
+            throw new Error(JSON.stringify(event));
         }
-        await prompt("Continue the original conversation after opening other Sessions");
+        if (
+            event.type === "acp" &&
+            event.payload.sessionUpdate === "agent_message_chunk" &&
+            event.payload.content.type === "text"
+        ) {
+            output += event.payload.content.text;
+        }
+        if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
+            expect(event.payload.commandId).toBe(commandId);
+            expect(event.sessionId).toBe(sessionId);
+            expect(event.payload.stopReason).toBe("end_turn");
+            expect(output).toContain("RESTORED_REPLY");
+            return;
+        }
+    }
+}
+
+test("Given a real Codex conversation, When more Sessions are opened than the daemon can retain, Then the original native Session continues with its history intact", async () => {
+    await using provider = await FakeOpenAiProvider.start("mobius-test-model", "RESTORED_REPLY");
+    await using agent = await CodexFixture.create(provider);
+    await withRealDaemon(new CodexAgentSpecification(), evictingEnvironment(agent.environment), async (peer) => {
+        const sessionId = await prepareNewRealSession(peer, "codex");
+        await promptRealSession(peer, sessionId, "Original conversation before opening other Sessions");
+        for (let index = 0; index < 11; index += 1) {
+            await prepareNewRealSession(peer, "codex");
+        }
+        await promptRealSession(peer, sessionId, "Continue the original conversation after opening other Sessions");
         peer.send(
             encodeSessionLiveHistoryV2PageLoad({
                 kind: "session.live-history.v2.page.load",
