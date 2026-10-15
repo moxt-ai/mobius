@@ -18,8 +18,7 @@ Use `AskUserQuestion` to confirm, and state clearly that:
   attached to a local branch, that branch pointer moves too;
 - local commits are no longer referenced by the current HEAD and
   tracked-file changes are discarded;
-- ordinary untracked files are not cleaned, but `.env` and
-  `packages/relay-cloudflare-standalone/.dev.vars` are deleted;
+- ordinary untracked files are not cleaned, but `.env` is deleted;
 - Git content may still be recoverable through reflog; never claim all
   content is permanently unrecoverable.
 

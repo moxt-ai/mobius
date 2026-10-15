@@ -11,8 +11,7 @@ Before running, explain the impact:
 
 - No `git reset` or `git clean` is run; existing source changes and the
   claimed port bundle are preserved;
-- `.env` and `packages/relay-cloudflare-standalone/.dev.vars` are
-  deleted;
+- `.env` is deleted;
 - dev services must already be stopped, otherwise the command fails at
   the `assert-stopped` check.
 
