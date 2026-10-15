@@ -49,9 +49,13 @@ export function createCatalogAgentResolver(
                     ...previous.agents.filter((entry) => entry.id !== agent.id),
                     ...inventory
                         .readyAgents()
+                        .filter((ready) => ready.id === agent.id)
                         .map((ready) => withDaemonEnvironment(ready, config.localContext.environment)),
                 ],
-                [...previous.installableAgents.filter((entry) => entry.id !== agent.id), ...inventory.installable],
+                [
+                    ...previous.installableAgents.filter((entry) => entry.id !== agent.id),
+                    ...inventory.installable.filter((installable) => installable.id === agent.id),
+                ],
             );
             try {
                 await publish(config, signal);

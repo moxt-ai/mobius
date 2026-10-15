@@ -19,6 +19,8 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { listen, port, sendText } from "@moxt-ai/mobius-test/websocket";
 import { expect, test } from "vitest";
+import type { LocalAgentSpecification } from "../../src/agent-catalog/agent-specification.ts";
+import { DirectAcpAgentDefinition } from "../../src/agent-catalog/agent-specification.ts";
 import {
     DeepSeekHarnessAgentSpecification,
     discoverLocalAgentInventory,
@@ -31,6 +33,23 @@ import { runDaemon } from "../../src/run-daemon.ts";
 
 const websocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
+
+// A second ready Agent whose executable never changes, so a refresh of the upgraded Agent must
+// keep exactly one catalog entry for it.
+class UnchangedPeerAgentSpecification extends DirectAcpAgentDefinition {
+    readonly adapterVersion = "0.1.5-rc.3";
+    readonly agentExecutable = "dsh-peer";
+    readonly id = "deepseek-harness-peer";
+    readonly label = "DeepSeek Harness Peer";
+
+    constructor() {
+        super("MOBIUS_TEST_PEER_PATH", ["--profile", "acp"], ["agents", "peer", "bin.js"]);
+    }
+}
+
+function specifications(): readonly LocalAgentSpecification[] {
+    return [new DeepSeekHarnessAgentSpecification(), new UnchangedPeerAgentSpecification()];
+}
 
 function launcherSource(version: string, peerUrl: string): string {
     return `#!${process.execPath}
@@ -145,7 +164,7 @@ class ClientFrames {
     };
 }
 
-test("Given the local Agent executable is upgraded after the daemon started, When a new conversation is prepared and its settings are discovered, Then both succeed with the upgraded Agent and the catalog is republished", {
+test("Given the local Agent executable is upgraded after the daemon started, When a new conversation is prepared and its settings are discovered, Then both succeed with the upgraded Agent and the catalog is republished without duplicating the unchanged Agent", {
     timeout: 120_000,
 }, async () => {
     const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-agent-refresh-"));
@@ -155,6 +174,7 @@ test("Given the local Agent executable is upgraded after the daemon started, Whe
     const firstLauncher = join(stateDirectory, "dsh-v1");
     const secondLauncher = join(stateDirectory, "dsh-v2");
     const link = join(binDirectory, "dsh");
+    const peerLauncher = join(stateDirectory, "dsh-peer");
     await Promise.all([mkdir(workspace), mkdir(nativeStateDirectory), mkdir(binDirectory)]);
     await writeFile(firstLauncher, launcherSource("0.1.5-rc.3", new URL(`file://${fakeAgentPath}`).toString()), {
         mode: 0o700,
@@ -162,7 +182,11 @@ test("Given the local Agent executable is upgraded after the daemon started, Whe
     await writeFile(secondLauncher, launcherSource("0.1.6.0", new URL(`file://${fakeAgentPath}`).toString()), {
         mode: 0o700,
     });
+    await writeFile(peerLauncher, launcherSource("0.1.5-rc.3", new URL(`file://${fakeAgentPath}`).toString()), {
+        mode: 0o700,
+    });
     await symlink(firstLauncher, link);
+    await symlink(peerLauncher, join(binDirectory, "dsh-peer"));
 
     const catalogBodies: string[] = [];
     const socketReady = Promise.withResolvers<Duplex>();
@@ -212,16 +236,16 @@ test("Given the local Agent executable is upgraded after the daemon started, Whe
         defaultWorkspace: workspace,
         environment,
         signal: AbortSignal.timeout(60_000),
-        specifications: [new DeepSeekHarnessAgentSpecification()],
+        specifications: specifications(),
     });
     const agent = inventory.readyAgents().find((entry) => entry.id === "deepseek-harness");
-    if (agent === undefined) {
+    if (agent === undefined || inventory.readyAgents().length !== 2) {
         await rm(stateDirectory, { force: true, recursive: true });
         throw new Error(`Controlled agent was not discovered: ${JSON.stringify(inventory.unavailable)}`);
     }
     const config: ReturnType<typeof createDaemonConfig> = createDaemonConfig(
         { channelId: "channel_alpha", defaultWorkspace: workspace, relayUrl },
-        [agent],
+        inventory.readyAgents(),
         [],
         new DaemonLocalContext(stateDirectory, environment),
         null,
@@ -231,7 +255,7 @@ test("Given the local Agent executable is upgraded after the daemon started, Whe
                     defaultWorkspace: workspace,
                     environment,
                     signal: refreshSignal,
-                    specifications: [new DeepSeekHarnessAgentSpecification()],
+                    specifications: specifications(),
                 }),
             () => config,
             publishAgentCatalog,
@@ -285,9 +309,13 @@ test("Given the local Agent executable is upgraded after the daemon started, Whe
         });
 
         const republished = catalogBodies
-            .map((body) => JSON.parse(body) as { agents: { agentVersion: string }[] })
+            .map((body) => JSON.parse(body) as { agents: { agentVersion: string; id: string }[] })
             .filter((catalog) => catalog.agents.some((entry) => entry.agentVersion === "0.1.6.0"));
         expect(republished).toHaveLength(1);
+        expect(republished[0]?.agents.map((entry) => entry.id).sort()).toEqual([
+            "deepseek-harness",
+            "deepseek-harness-peer",
+        ]);
     } finally {
         cancellation.abort();
         for (const socket of relaySockets) {
