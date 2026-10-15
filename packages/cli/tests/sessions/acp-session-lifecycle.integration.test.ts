@@ -723,7 +723,18 @@ child.once("exit", (code) => process.exit(code ?? 84));
     it("Given the least recently used conversation has an active turn, When an eleventh conversation starts, Then the active process is retained and the oldest idle process is released", async () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-active-process-lru-"));
         const store = new MemoryAcpSessionStore();
-        const manager = new AgentRuntimeManager(undefined, store);
+        // The scenario exercises retirement at the boundary, so it pins the
+        // retained process budget instead of inheriting the production default.
+        const manager = new AgentRuntimeManager(
+            undefined,
+            store,
+            acpNativeHistoryReader,
+            "assigned",
+            () => undefined,
+            undefined,
+            undefined,
+            10,
+        );
         const agent = new LocalAgentDefinition(
             "codex",
             "Codex",
