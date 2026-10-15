@@ -11,6 +11,7 @@ export const ACCESS_GRANT_LIFETIME_MILLISECONDS = 10 * 60 * 1_000;
 export const MIN_BROWSER_CREDENTIAL_LIFETIME_MILLISECONDS = 60 * 1_000;
 export const MAX_BROWSER_CREDENTIAL_LIFETIME_MILLISECONDS = 60 * 60 * 1_000;
 export const MAX_RUNTIMES_PER_PROJECT = 8;
+const EMPTY_INSTALLABLE_AGENTS: readonly never[] = Object.freeze([]);
 
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const PAIRING_CODE_PATTERN = /^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){4}$/;
@@ -38,37 +39,6 @@ export interface AgentDescriptor {
     readonly id: string;
     readonly label: string;
     readonly sessionTurnConfiguration?: boolean;
-}
-
-export abstract class InstallableAgentDescriptor {
-    readonly id: string;
-    readonly label: string;
-    abstract readonly status: string;
-
-    protected constructor(id: string, label: string) {
-        this.id = id;
-        this.label = label;
-    }
-}
-
-export class MissingAgentDescriptor extends InstallableAgentDescriptor {
-    readonly status = "agent_not_installed";
-
-    public constructor(id: string, label: string) {
-        super(id, label);
-    }
-}
-
-export class AgentIntegrationDescriptor extends InstallableAgentDescriptor {
-    readonly agentPath: string;
-    readonly agentVersion: string;
-    readonly status = "integration_not_installed";
-
-    constructor(id: string, label: string, agentPath: string, agentVersion: string) {
-        super(id, label);
-        this.agentPath = agentPath;
-        this.agentVersion = agentVersion;
-    }
 }
 
 export class CreatedRuntimePairing {
@@ -156,7 +126,7 @@ export class ChannelHostCredential extends VerifiedChannelAccess {
 export class ChannelDescriptor {
     readonly agents: readonly AgentDescriptor[];
     readonly channelId: string;
-    readonly installableAgents: readonly InstallableAgentDescriptor[];
+    readonly installableAgents = EMPTY_INSTALLABLE_AGENTS;
     readonly machineName: string;
     readonly projectId: string;
     readonly runtimeId: string;
@@ -169,11 +139,9 @@ export class ChannelDescriptor {
         workspaceName: string,
         projectId: string,
         runtimeId: string,
-        installableAgents: readonly InstallableAgentDescriptor[] = [],
     ) {
         this.agents = agents;
         this.channelId = channelId;
-        this.installableAgents = installableAgents;
         this.machineName = machineName;
         this.projectId = projectId;
         this.runtimeId = runtimeId;
@@ -223,7 +191,7 @@ export class ExpiredPairingStatus extends PairingStatus {
 export class PairedPairingStatus extends PairingStatus {
     readonly agents: readonly AgentDescriptor[];
     readonly channelId: string;
-    readonly installableAgents: readonly InstallableAgentDescriptor[];
+    readonly installableAgents = EMPTY_INSTALLABLE_AGENTS;
     readonly machineName: string;
     readonly projectId: string;
     readonly runtimeId: string;
@@ -237,12 +205,10 @@ export class PairedPairingStatus extends PairingStatus {
         workspaceName: string,
         projectId: string,
         runtimeId: string,
-        installableAgents: readonly InstallableAgentDescriptor[] = [],
     ) {
         super();
         this.agents = agents;
         this.channelId = channelId;
-        this.installableAgents = installableAgents;
         this.machineName = machineName;
         this.projectId = projectId;
         this.runtimeId = runtimeId;
@@ -368,18 +334,6 @@ export function parseAgents(encoded: string): readonly AgentDescriptor[] {
     return validateAgents(normalizePersistedAgents(value));
 }
 
-export function parseInstallableAgents(encoded: string): readonly InstallableAgentDescriptor[] {
-    let value: unknown;
-    try {
-        value = JSON.parse(encoded);
-    } catch (error) {
-        throw new PairingDirectoryError("invalid_directory_record", "The installable Agent directory is invalid", {
-            cause: error,
-        });
-    }
-    return validateInstallableAgents(normalizePersistedInstallableAgents(value));
-}
-
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -472,27 +426,6 @@ function validateAgentCapabilities(value: unknown): SessionCapabilities {
     return parsed.data;
 }
 
-function normalizePersistedInstallableAgents(value: unknown): unknown {
-    if (!Array.isArray(value)) {
-        return value;
-    }
-    return value.map((candidate) => {
-        if (
-            isRecord(candidate) &&
-            Object.keys(candidate).length === 2 &&
-            Object.hasOwn(candidate, "id") &&
-            Object.hasOwn(candidate, "label")
-        ) {
-            return {
-                id: candidate["id"],
-                label: candidate["label"],
-                status: "agent_not_installed",
-            };
-        }
-        return candidate;
-    });
-}
-
 export function validateAgents(value: unknown): readonly AgentDescriptor[] {
     if (!Array.isArray(value) || value.length > MAX_LOCAL_AGENT_DIRECTORY_ENTRIES) {
         throw new PairingDirectoryError("invalid_agents", "The ready Agent directory is invalid");
@@ -564,83 +497,15 @@ export function validateAgents(value: unknown): readonly AgentDescriptor[] {
     return agents;
 }
 
-export function validateInstallableAgents(value: unknown): readonly InstallableAgentDescriptor[] {
-    if (!Array.isArray(value) || value.length > MAX_LOCAL_AGENT_DIRECTORY_ENTRIES) {
-        throw new PairingDirectoryError("invalid_agents", "The installable Agent directory is invalid");
+export function validateAgentCatalog(agents: readonly AgentDescriptor[]): void {
+    if (agents.length === 0) {
+        throw new PairingDirectoryError("invalid_agents", "At least one ready local Agent is required");
     }
-    const agents: InstallableAgentDescriptor[] = [];
-    const identifiers = new Set<string>();
-    for (const candidate of value) {
-        if (!isRecord(candidate)) {
-            throw new PairingDirectoryError("invalid_agents", "The installable Agent directory is invalid");
-        }
-        const id = candidate["id"];
-        const label = candidate["label"];
-        if (
-            typeof id !== "string" ||
-            !isIdentifier(id) ||
-            typeof label !== "string" ||
-            label.trim().length === 0 ||
-            label.length > 80 ||
-            identifiers.has(id)
-        ) {
-            throw new PairingDirectoryError("invalid_agents", "The installable Agent directory is invalid");
-        }
-        identifiers.add(id);
-        const status = candidate["status"];
-        if (
-            status === "agent_not_installed" &&
-            Object.keys(candidate).length === 3 &&
-            Object.hasOwn(candidate, "id") &&
-            Object.hasOwn(candidate, "label") &&
-            Object.hasOwn(candidate, "status")
-        ) {
-            agents.push(new MissingAgentDescriptor(id, label.trim()));
-            continue;
-        }
-        if (
-            status === "integration_not_installed" &&
-            Object.keys(candidate).length === 5 &&
-            Object.hasOwn(candidate, "agentPath") &&
-            Object.hasOwn(candidate, "agentVersion") &&
-            Object.hasOwn(candidate, "id") &&
-            Object.hasOwn(candidate, "label") &&
-            Object.hasOwn(candidate, "status")
-        ) {
-            const agentPath = candidate["agentPath"];
-            const agentVersion = candidate["agentVersion"];
-            if (
-                typeof agentPath !== "string" ||
-                agentPath.trim().length === 0 ||
-                agentPath.length > 4_096 ||
-                typeof agentVersion !== "string" ||
-                agentVersion.trim().length === 0 ||
-                agentVersion.length > 128
-            ) {
-                throw new PairingDirectoryError("invalid_agents", "The installable Agent directory is invalid");
-            }
-            agents.push(new AgentIntegrationDescriptor(id, label.trim(), agentPath, agentVersion.trim()));
-            continue;
-        }
-        throw new PairingDirectoryError("invalid_agents", "The installable Agent directory is invalid");
-    }
-    return agents;
 }
 
-export function validateAgentCatalog(
-    agents: readonly AgentDescriptor[],
-    installableAgents: readonly InstallableAgentDescriptor[],
-): void {
-    const directorySize = agents.length + installableAgents.length;
-    if (directorySize === 0) {
-        throw new PairingDirectoryError("invalid_agents", "At least one ready or installable local Agent is required");
-    }
-    if (directorySize > MAX_LOCAL_AGENT_DIRECTORY_ENTRIES) {
-        throw new PairingDirectoryError("invalid_agents", "The local Agent directory exceeds its maximum size");
-    }
-    const readyIds = new Set(agents.map((agent) => agent.id));
-    if (installableAgents.some((agent) => readyIds.has(agent.id))) {
-        throw new PairingDirectoryError("invalid_agents", "An Agent cannot be both ready and installable");
+export function validateLegacyInstallableAgents(value: unknown): void {
+    if (!Array.isArray(value) || value.length > MAX_LOCAL_AGENT_DIRECTORY_ENTRIES) {
+        throw new PairingDirectoryError("invalid_agents", "The installable Agent directory is invalid");
     }
 }
 

@@ -39,7 +39,7 @@ child.once("exit", code => process.exit(code ?? 1));
         expect(inventory.available).toEqual([]);
         expect(inventory.unavailable).toEqual([
             expect.objectContaining({
-                agent: expect.objectContaining({ id: "codex" }),
+                specification: expect.objectContaining({ id: "codex" }),
                 status: "incompatible_adapter",
             }),
         ]);

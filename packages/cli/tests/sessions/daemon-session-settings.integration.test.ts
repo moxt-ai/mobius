@@ -253,7 +253,6 @@ describe("daemon session configuration boundary", () => {
                 relayUrl,
             },
             [agent],
-            [],
             new DaemonLocalContext(stateDirectory),
         );
         const cancellation = new AbortController();
@@ -349,7 +348,6 @@ describe("daemon session configuration boundary", () => {
                 relayUrl,
             },
             [agent],
-            [],
             new DaemonLocalContext(stateDirectory),
         );
         const cancellation = new AbortController();
@@ -445,7 +443,6 @@ describe("daemon session configuration boundary", () => {
                 relayUrl,
             },
             [agent],
-            [],
             new DaemonLocalContext(stateDirectory),
         );
         const cancellation = new AbortController();
@@ -544,7 +541,6 @@ describe("daemon session configuration boundary", () => {
                 relayUrl,
             },
             [agent],
-            [],
             new DaemonLocalContext(stateDirectory),
         );
         const cancellation = new AbortController();

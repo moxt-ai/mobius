@@ -386,18 +386,8 @@ export class PairingService {
         machineName,
         workspaceName,
         agents,
-        installableAgents,
         signal,
-    ) =>
-        await this.#pairings.redeemRuntimePairing(
-            pairingId,
-            pairingCode,
-            machineName,
-            workspaceName,
-            agents,
-            installableAgents,
-            signal,
-        );
+    ) => await this.#pairings.redeemRuntimePairing(pairingId, pairingCode, machineName, workspaceName, agents, signal);
 
     readonly authorizeProjectRuntimeHost = async (
         projectId: string,

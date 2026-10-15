@@ -106,7 +106,6 @@ test("Given real Codex dispatches and waits for a subagent, When the turn runs t
     const config = createDaemonConfig(
         { channelId: "real-codex-collaboration", defaultWorkspace: workspace, relayUrl },
         [agent],
-        [],
         new DaemonLocalContext(stateDirectory),
     );
     const cancellation = new AbortController();

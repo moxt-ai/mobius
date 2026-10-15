@@ -1,4 +1,4 @@
-import type { AgentDescriptor, InstallableAgentDescriptor } from "../../entity/pairing/pairing.ts";
+import type { AgentDescriptor } from "../../entity/pairing/pairing.ts";
 import type { ChannelGateway } from "../../gateway/index.ts";
 import type { PairingOperations } from "../pairing/pairing-operations.ts";
 export class ChannelService {
@@ -18,9 +18,8 @@ export class ChannelService {
         channelId: string,
         token: string,
         agents: readonly AgentDescriptor[],
-        installableAgents: readonly InstallableAgentDescriptor[],
         signal: AbortSignal,
-    ) => this.#pairings.updateAgentCatalog(channelId, token, agents, installableAgents, signal);
+    ) => this.#pairings.updateAgentCatalog(channelId, token, agents, signal);
 
     readonly createAccessGrant = (channelId: string, token: string, signal: AbortSignal) =>
         this.#pairings.createChannelAccessGrant(channelId, token, signal);

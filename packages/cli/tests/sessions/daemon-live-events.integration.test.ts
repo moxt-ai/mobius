@@ -220,7 +220,6 @@ async function startControlledDaemon(options: { readonly stateDirectory?: string
     const config = createDaemonConfig(
         { channelId: "channel_alpha", defaultWorkspace: workspace, relayUrl },
         [agent],
-        [],
         new DaemonLocalContext(stateDirectory),
     );
     const cancellation = new AbortController();

@@ -116,7 +116,6 @@ test("Given real Codex starts a tool, When clients watch and reopen the complete
     const config = createDaemonConfig(
         { channelId: "real-codex", defaultWorkspace: workspace, relayUrl },
         [agent],
-        [],
         new DaemonLocalContext(stateDirectory),
     );
     const cancellation = new AbortController();

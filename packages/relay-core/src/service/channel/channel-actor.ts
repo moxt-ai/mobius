@@ -1,17 +1,8 @@
 import {
-    AGENT_INSTALL_CANCEL_KIND,
-    AGENT_INSTALL_CANCELLED_KIND,
-    AGENT_INSTALL_COMPLETED_KIND,
-    AGENT_INSTALL_FAILED_KIND,
-    AGENT_INSTALL_PROGRESS_KIND,
-    AGENT_INSTALL_REQUEST_KIND,
-    AGENT_INSTALL_STARTED_KIND,
     AGENT_SETTINGS_DISCOVER_KIND,
     AGENT_SETTINGS_DISCOVERED_KIND,
     AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
     type DaemonToServiceMessage,
-    decodeAgentInstallCancelCommand,
-    decodeAgentInstallRequestCommand,
     decodeAgentSettingsDiscoverCommand,
     decodeFileReadCommand,
     decodeMessageKind,
@@ -354,16 +345,6 @@ export class ChannelActor {
                 return;
             case SESSION_READY_KIND:
                 return;
-            case AGENT_INSTALL_STARTED_KIND:
-                return;
-            case AGENT_INSTALL_PROGRESS_KIND:
-                return;
-            case AGENT_INSTALL_COMPLETED_KIND:
-                return;
-            case AGENT_INSTALL_FAILED_KIND:
-                return;
-            case AGENT_INSTALL_CANCELLED_KIND:
-                return;
             default:
                 throw new UnsupportedProtocolMessageKindError("daemon-to-service", message.kind);
         }
@@ -434,14 +415,6 @@ export class ChannelActor {
                     requestId: command.interactionId,
                     sessionId: command.sessionId,
                 };
-            }
-            case AGENT_INSTALL_REQUEST_KIND: {
-                const command = decodeAgentInstallRequestCommand(message);
-                return { message: command, requestId: command.requestId, sessionId: "" };
-            }
-            case AGENT_INSTALL_CANCEL_KIND: {
-                const command = decodeAgentInstallCancelCommand(message);
-                return { message: command, requestId: command.requestId, sessionId: "" };
             }
             case FILE_READ_KIND: {
                 const command = decodeFileReadCommand(message);

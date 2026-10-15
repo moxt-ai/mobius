@@ -11,10 +11,6 @@ export class ControlledAcpAgentSpecification extends DirectAcpAgentDefinition {
     override readonly minimumSupportedAgentVersion = this.adapterVersion;
 
     constructor() {
-        super(
-            "MOBIUS_TEST_CONTROLLED_ACP_PATH",
-            [],
-            ["agents", "controlled-acp", CONTROLLED_ACP_VERSION, "bin", "controlled-acp"],
-        );
+        super("MOBIUS_TEST_CONTROLLED_ACP_PATH", []);
     }
 }

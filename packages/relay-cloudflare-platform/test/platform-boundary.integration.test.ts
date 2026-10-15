@@ -666,7 +666,7 @@ describe.sequential("Platform Session-only boundary", () => {
     });
 
     // Graceful eviction drains in-flight Runtime events before hibernating the sockets.
-    it("Given a linked Codex Runtime, When Chat imports, forks, configures and prompts Sessions across Relay hibernation, Then results, answers and connection status arrive without cloud Session storage", async () => {
+    it("Given a linked Codex Runtime with required empty installation metadata, When Chat imports, forks, configures and prompts Sessions across Relay hibernation, Then results, answers and connection status arrive without cloud Session storage", async () => {
         vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
@@ -727,22 +727,34 @@ describe.sequential("Platform Session-only boundary", () => {
             ),
             201,
         );
+        const redemptionUrl = `${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtime-pairings/${text(pairing, "pairingId")}/redeem`;
+        const missingInstallationMetadata = await worker.fetch(
+            new Request(redemptionUrl, {
+                body: JSON.stringify({
+                    agents: readyAgents,
+                    machineName: "Private reconnect Runtime",
+                    pairingCode: text(pairing, "pairingCode"),
+                    workspaceName: "private-reconnect-workspace",
+                }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+            environment,
+        );
+        expect(missingInstallationMetadata.status).toBe(400);
         const claimed = await responseJson(
             await worker.fetch(
-                new Request(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtime-pairings/${text(pairing, "pairingId")}/redeem`,
-                    {
-                        body: JSON.stringify({
-                            agents: readyAgents,
-                            installableAgents: [],
-                            machineName: "Private reconnect Runtime",
-                            pairingCode: text(pairing, "pairingCode"),
-                            workspaceName: "private-reconnect-workspace",
-                        }),
-                        headers: { "content-type": "application/json" },
-                        method: "POST",
-                    },
-                ),
+                new Request(redemptionUrl, {
+                    body: JSON.stringify({
+                        agents: readyAgents,
+                        installableAgents: [],
+                        machineName: "Private reconnect Runtime",
+                        pairingCode: text(pairing, "pairingCode"),
+                        workspaceName: "private-reconnect-workspace",
+                    }),
+                    headers: { "content-type": "application/json" },
+                    method: "POST",
+                }),
                 environment,
             ),
             200,
@@ -760,7 +772,7 @@ describe.sequential("Platform Session-only boundary", () => {
                 ),
                 200,
             ),
-        ).toMatchObject({ agents: [{ id: "codex", label: "Codex" }], runtimeId });
+        ).toMatchObject({ agents: [{ id: "codex", label: "Codex" }], installableAgents: [], runtimeId });
         const sessionId = "local-codex-session";
         const daemonResponse = await worker.fetch(
             new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect?liveness=1`, {

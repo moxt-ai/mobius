@@ -1,5 +1,3 @@
-import { join } from "node:path";
-
 import {
     type AgentCapabilities,
     type ClientConnection,
@@ -9,9 +7,6 @@ import {
 
 import { PiAcpEndpoint } from "../../acp/harness/pi/endpoint.ts";
 import type { InProcessAcpEndpointFactory } from "../../acp/in-process/acp-endpoint.ts";
-import { validateManagedNpmPackage } from "../../agent-installation/managed-npm-package.ts";
-import { PI_AGENT_PACKAGE } from "../../agent-installation/pi-managed-packages.ts";
-import type { ResolvedExecutable } from "../../util/process/executable.ts";
 import { AgentProbeError } from "../agent-probe-error.ts";
 import { InProcessAcpAgentDefinition } from "../agent-specification.ts";
 
@@ -24,34 +19,11 @@ export class PiAgentSpecification extends InProcessAcpAgentDefinition {
     readonly id = "pi";
     readonly label = "Pi";
     override readonly minimumSupportedAgentVersion = "0.85.0";
-    override readonly maximumTestedAgentVersion = PI_AGENT_PACKAGE.version;
+    override readonly maximumTestedAgentVersion = "1.1.0";
     override readonly authenticationCommand = (): string => "pi";
     constructor() {
-        super("MOBIUS_PI_PATH", [
-            "agents",
-            "pi",
-            PI_AGENT_PACKAGE.version,
-            "node_modules",
-            "@earendil-works",
-            "pi-coding-agent",
-            "dist",
-            "bundle",
-            "cli.js",
-        ]);
+        super("MOBIUS_PI_PATH");
     }
-    override readonly resolveManagedAgent = async (
-        stateDirectory: string,
-        _platform: NodeJS.Platform,
-        signal: AbortSignal,
-    ): Promise<ResolvedExecutable> => {
-        signal.throwIfAborted();
-        const executable = await validateManagedNpmPackage(
-            join(stateDirectory, "agents", this.id, PI_AGENT_PACKAGE.version),
-            PI_AGENT_PACKAGE,
-        );
-        signal.throwIfAborted();
-        return executable;
-    };
 
     override readonly verifyAcp = async (
         connection: ClientConnection,

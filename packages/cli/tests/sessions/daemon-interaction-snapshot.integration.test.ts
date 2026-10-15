@@ -113,7 +113,6 @@ test("Given an Agent was inspected transiently, When its first Turn materializes
     const config = createDaemonConfig(
         { channelId: "interaction", defaultWorkspace: workspace, relayUrl },
         [agent],
-        [],
         new DaemonLocalContext(stateDirectory),
     );
     const cancellation = new AbortController();
@@ -257,7 +256,6 @@ test("Given a real daemon prepared a Session, When Platform queries its metadata
     const config = createDaemonConfig(
         { channelId: "session-query", defaultWorkspace: workspace, relayUrl },
         [agent],
-        [],
         new DaemonLocalContext(stateDirectory),
     );
     const cancellation = new AbortController();
@@ -334,7 +332,6 @@ test("Given a real daemon persisted a Session, When Platform restores it by iden
     const config = createDaemonConfig(
         { channelId: "session-restore", defaultWorkspace: workspace, relayUrl },
         [agent],
-        [],
         new DaemonLocalContext(stateDirectory),
     );
     const startDaemon = async () => {

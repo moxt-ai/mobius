@@ -53,7 +53,7 @@ class UnsupportedAgentVersionDiagnostic extends UnavailableAgentDiagnostic {
 
     constructor(discovery: UnsupportedAgentVersion) {
         super(discovery);
-        this.agentVersion = discovery.agent.agentVersion;
+        this.agentVersion = discovery.agentVersion;
         this.minimumSupportedVersion = discovery.minimumSupportedVersion;
     }
 }

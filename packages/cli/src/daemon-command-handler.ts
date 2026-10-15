@@ -1,7 +1,5 @@
 import type { ServiceToDaemonMessage } from "@moxt-ai/mobius-protocol";
 import {
-    AGENT_INSTALL_CANCEL_KIND,
-    AGENT_INSTALL_REQUEST_KIND,
     AGENT_SETTINGS_DISCOVER_KIND,
     encodeSessionPromptCommand,
     FILE_FAILED_KIND,
@@ -34,7 +32,6 @@ import { WebSocket } from "undici";
 import packageMetadata from "../package.json" with { type: "json" };
 import type { AgentRuntimeManager } from "./acp/agent-runtime-manager.ts";
 import { createAgentSettingsDiscoveryHandler } from "./agent-catalog/handle-agent-settings-discovery.ts";
-import type { AgentInstallationManager } from "./agent-installation/agent-installation-manager.ts";
 import { streamLocalFile } from "./artifacts/local-file-streamer.ts";
 import type { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
 import type { DaemonConfig } from "./config.ts";
@@ -63,7 +60,6 @@ export interface DaemonCommandOptions {
     readonly config: DaemonConfig;
     readonly directories: WorkspaceDirectoryService;
     readonly sessions: AgentRuntimeManager;
-    readonly installations: AgentInstallationManager;
     readonly nativeSessions: NativeSessionService;
     readonly operations: DaemonOperationState;
     readonly eventProjectionV2: DaemonSessionEventProjectionV2;
@@ -72,7 +68,6 @@ export interface DaemonCommandOptions {
     readonly diagnostics: RelayConnectionDiagnostics;
     readonly socket: WebSocket;
     readonly signal: AbortSignal;
-    readonly runtimeSignal: AbortSignal;
     readonly timer: DaemonTimer;
 }
 
@@ -80,7 +75,6 @@ export function createDaemonCommandHandler({
     config,
     directories,
     sessions,
-    installations,
     nativeSessions,
     operations,
     eventProjectionV2,
@@ -89,7 +83,6 @@ export function createDaemonCommandHandler({
     diagnostics,
     socket,
     signal,
-    runtimeSignal,
     timer,
 }: DaemonCommandOptions): {
     readonly handle: (message: ServiceToDaemonMessage) => void;
@@ -346,20 +339,6 @@ export function createDaemonCommandHandler({
                 const command = message;
                 void sessions.respondElicitation(command).catch((error: unknown) => {
                     reportOperationFailure(socket, command.interactionId, command.sessionId, error);
-                });
-                return;
-            }
-            if (kind === AGENT_INSTALL_REQUEST_KIND) {
-                const command = message;
-                void installations.request(command, runtimeSignal).catch((error: unknown) => {
-                    console.error("Mobius Agent integration installation failed", error);
-                });
-                return;
-            }
-            if (kind === AGENT_INSTALL_CANCEL_KIND) {
-                const command = message;
-                void installations.cancel(command.requestId).catch((error: unknown) => {
-                    reportOperationFailure(socket, command.requestId, "", error);
                 });
                 return;
             }

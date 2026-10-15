@@ -3,7 +3,7 @@ import {
     validateAgentCatalog,
     validateAgents,
     validateDisplayName,
-    validateInstallableAgents,
+    validateLegacyInstallableAgents,
     validatePairingCode,
 } from "../../entity/pairing/pairing.ts";
 import { bodyParser } from "../middleware/body-parser.ts";
@@ -26,23 +26,16 @@ export function createPairingClaimRoutes() {
             async (context) => {
                 const pairings = context.env.services.pairings;
                 const body = context.req.valid("json");
-                const {
-                    agents: agentsValue,
-                    installableAgents: installableAgentsValue,
-                    machineName,
-                    pairingCode,
-                    workspaceName,
-                } = body;
+                const { agents: agentsValue, machineName, pairingCode, workspaceName } = body;
                 const agents = validateAgents(agentsValue);
-                const installableAgents = validateInstallableAgents(installableAgentsValue);
-                validateAgentCatalog(agents, installableAgents);
+                validateLegacyInstallableAgents(body["installableAgents"]);
+                validateAgentCatalog(agents);
                 return context.json(
                     await pairings.claimPairing(
                         validatePairingCode(pairingCode),
                         validateDisplayName(machineName, "machine_name"),
                         validateDisplayName(workspaceName, "workspace_name"),
                         agents,
-                        installableAgents,
                         context.req.raw.signal,
                     ),
                 );

@@ -114,7 +114,6 @@ export async function createFakeAgentHarnessRuntime(options: {
         const config = createDaemonConfig(
             { channelId: pairing.channelId, defaultWorkspace: workspace, relayUrl },
             harnesses.map((definition) => fakeAgentHarness(definition, harnessState)),
-            [],
             localContext,
         );
         daemon = runDaemon(config, signal);

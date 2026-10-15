@@ -3,7 +3,7 @@ import {
     validateAgentCatalog,
     validateAgents,
     validateIdentifier,
-    validateInstallableAgents,
+    validateLegacyInstallableAgents,
 } from "../../entity/pairing/pairing.ts";
 import { bearerToken, readString } from "../../infra/relay-http.ts";
 import { bodyParser } from "../middleware/body-parser.ts";
@@ -21,13 +21,12 @@ export function createChannelRoutes() {
                 const useCases = context.env.services.channels;
                 const body = context.req.valid("json");
                 const agents = validateAgents(body["agents"]);
-                const installableAgents = validateInstallableAgents(body["installableAgents"]);
-                validateAgentCatalog(agents, installableAgents);
+                validateLegacyInstallableAgents(body["installableAgents"]);
+                validateAgentCatalog(agents);
                 await useCases.updateAgentCatalog(
                     validateIdentifier(context.req.param("channelId"), "channel_id"),
                     context.req.query("token") ?? bearerToken(context.req.raw),
                     agents,
-                    installableAgents,
                     context.req.raw.signal,
                 );
                 return new Response(null, { status: 204 });

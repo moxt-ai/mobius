@@ -1,10 +1,6 @@
 import { join, resolve } from "node:path";
 import { mobiusApiPath, RUNTIME_WORKSPACE_BINDING_ID } from "@moxt-ai/mobius-protocol";
-import {
-    type AcpAgentDefinition,
-    type InstallableAgentDefinition,
-    LocalAgentCatalog,
-} from "./agent-catalog/local-agent.ts";
+import { type AcpAgentDefinition, LocalAgentCatalog } from "./agent-catalog/local-agent.ts";
 import { readStateDirectory } from "./storage/state-directory.ts";
 
 export type { AcpAgentDefinition } from "./agent-catalog/local-agent.ts";
@@ -59,7 +55,6 @@ export interface DaemonConfig {
     readonly bindingId: string;
     readonly catalog: LocalAgentCatalog;
     readonly channelId: string;
-    readonly installableAgents: readonly InstallableAgentDefinition[];
     readonly localContext: DaemonLocalContext;
     readonly reconnectTarget: DaemonReconnectTarget | null;
     readonly relayUrl: URL;
@@ -80,7 +75,6 @@ export interface DaemonConnectionConfig {
 export function createDaemonConfig(
     connection: DaemonConnectionConfig,
     agents: readonly AcpAgentDefinition[] = [],
-    installableAgents: readonly InstallableAgentDefinition[] = [],
     localContext: DaemonLocalContext = new DaemonLocalContext(readStateDirectory(), process.env),
     reconnectTarget: DaemonReconnectTarget | null = null,
     resolveAgent?: DaemonConfig["resolveAgent"],
@@ -90,9 +84,8 @@ export function createDaemonConfig(
         agents: daemonAgents,
         defaultWorkspace: connection.defaultWorkspace,
         bindingId: RUNTIME_WORKSPACE_BINDING_ID,
-        catalog: new LocalAgentCatalog(daemonAgents, installableAgents),
+        catalog: new LocalAgentCatalog(daemonAgents),
         channelId: connection.channelId,
-        installableAgents,
         localContext,
         reconnectTarget,
         relayUrl: connection.relayUrl,
@@ -116,7 +109,6 @@ export function loadDaemonConfig(): DaemonConfig {
             channelId: process.env["MOBIUS_CHANNEL_ID"] ?? "local",
             relayUrl,
         },
-        [],
         [],
     );
 }

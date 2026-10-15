@@ -39,7 +39,7 @@ class RefreshableAgentSpecification extends DirectAcpAgentDefinition {
     override readonly minimumSupportedAgentVersion = this.adapterVersion;
 
     constructor() {
-        super("MOBIUS_TEST_REFRESHABLE_AGENT_PATH", [], ["agents", "controlled-acp", "bin.js"]);
+        super("MOBIUS_TEST_REFRESHABLE_AGENT_PATH", []);
     }
 }
 
@@ -52,7 +52,7 @@ class UnchangedPeerAgentSpecification extends DirectAcpAgentDefinition {
     readonly label = "Controlled ACP Peer";
 
     constructor() {
-        super("MOBIUS_TEST_PEER_PATH", ["--profile", "acp"], ["agents", "peer", "bin.js"]);
+        super("MOBIUS_TEST_PEER_PATH", ["--profile", "acp"]);
     }
 }
 
@@ -255,7 +255,6 @@ test("Given the local Agent executable is upgraded after the daemon started, Whe
     const config: ReturnType<typeof createDaemonConfig> = createDaemonConfig(
         { channelId: "channel_alpha", defaultWorkspace: workspace, relayUrl },
         inventory.readyAgents(),
-        [],
         new DaemonLocalContext(stateDirectory, environment),
         null,
         createCatalogAgentResolver(
