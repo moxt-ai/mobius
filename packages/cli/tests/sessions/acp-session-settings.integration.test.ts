@@ -3,12 +3,6 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { AgentRuntimeManager } from "../../src/acp/agent-runtime-manager.ts";
-import {
-    agentSettingsAdapterForAgent,
-    applyAgentLaunchSettings,
-    DEEPSEEK_HARNESS_ACCESS_MODE_SETTING_ID,
-    OPENCODE_PERMISSION_SETTING_ID,
-} from "../../src/agent-catalog/agent-settings-adapter.ts";
 import { LocalAgentDefinition } from "../../src/config.ts";
 
 import { createControlledSession } from "./acp-controls-fixture.ts";
@@ -18,7 +12,7 @@ const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.met
 describe("Agent setting capabilities", () => {
     it("Given an Agent reports its reasoning effort as the provider default, When a session is prepared, Then Mobius keeps the effort setting with that current value", async () => {
         const manager = new AgentRuntimeManager();
-        const agent = new LocalAgentDefinition("deepseek-harness", "DeepSeek Harness", process.execPath, [
+        const agent = new LocalAgentDefinition("controlled-acp", "Controlled ACP", process.execPath, [
             fakeAgentPath,
             "--effort-provider-default",
         ]);
@@ -26,7 +20,7 @@ describe("Agent setting capabilities", () => {
             additionalDirectories: [],
             agent,
             cwd: process.cwd(),
-            sessionId: "deepseek-provider-default-effort",
+            sessionId: "controlled-provider-default-effort",
             signal: new AbortController().signal,
         };
 
@@ -69,7 +63,7 @@ describe("Agent setting capabilities", () => {
 
     it("Given an Agent does not expose adjustable reasoning effort, When a session is prepared, Then Mobius does not invent an effort setting", async () => {
         const manager = new AgentRuntimeManager();
-        const agent = new LocalAgentDefinition("deepseek-harness", "DeepSeek Harness", process.execPath, [
+        const agent = new LocalAgentDefinition("controlled-acp", "Controlled ACP", process.execPath, [
             fakeAgentPath,
             "--without-reasoning-effort",
         ]);
@@ -77,7 +71,7 @@ describe("Agent setting capabilities", () => {
             additionalDirectories: [],
             agent,
             cwd: process.cwd(),
-            sessionId: "deepseek-without-effort",
+            sessionId: "controlled-without-effort",
             signal: new AbortController().signal,
         };
 
@@ -158,56 +152,6 @@ describe("Agent setting capabilities", () => {
         } finally {
             await manager.close();
         }
-    });
-
-    it("Given DeepSeek Harness and OpenCode expose adapter-owned launch settings, When a Turn selects one, Then only that Agent receives its supported local policy", () => {
-        const deepSeek = new LocalAgentDefinition("deepseek-harness", "DeepSeek Harness", process.execPath, [
-            fakeAgentPath,
-        ]);
-        const openCode = new LocalAgentDefinition("opencode", "OpenCode", process.execPath, [fakeAgentPath], {
-            OPENCODE_CONFIG_CONTENT: JSON.stringify({ theme: "mobius-test" }),
-        });
-
-        const deepSeekSetting = agentSettingsAdapterForAgent(deepSeek.id).settings(deepSeek);
-        expect(deepSeekSetting).toEqual(
-            expect.arrayContaining([expect.objectContaining({ id: DEEPSEEK_HARNESS_ACCESS_MODE_SETTING_ID })]),
-        );
-        const deepSeekApplied = applyAgentLaunchSettings(deepSeek, [
-            {
-                booleanValue: false,
-                configId: DEEPSEEK_HARNESS_ACCESS_MODE_SETTING_ID,
-                value: "read-only",
-                valueType: "select",
-            },
-        ]);
-        expect(deepSeekApplied.agent.environment["DSH_PERMISSION_MODE"]).toBe("read-only");
-        expect(deepSeekApplied.sessionConfigurations).toEqual([]);
-
-        const openCodeSetting = agentSettingsAdapterForAgent(openCode.id).settings(openCode);
-        expect(openCodeSetting).toEqual(
-            expect.arrayContaining([expect.objectContaining({ id: OPENCODE_PERMISSION_SETTING_ID })]),
-        );
-        const openCodeApplied = applyAgentLaunchSettings(openCode, [
-            {
-                booleanValue: false,
-                configId: OPENCODE_PERMISSION_SETTING_ID,
-                value: "read-only",
-                valueType: "select",
-            },
-        ]);
-        expect(JSON.parse(openCodeApplied.agent.environment["OPENCODE_CONFIG_CONTENT"] ?? "{}")).toMatchObject({
-            permission: {
-                "*": "deny",
-                glob: "allow",
-                grep: "allow",
-                lsp: "allow",
-                read: "allow",
-                skill: "allow",
-            },
-            theme: "mobius-test",
-        });
-        const pi = new LocalAgentDefinition("pi", "Pi", process.execPath, [fakeAgentPath]);
-        expect(agentSettingsAdapterForAgent(pi.id).settings(pi)).toEqual([]);
     });
 });
 

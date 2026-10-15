@@ -10,10 +10,10 @@ import { fakeAgent, fakeAgentPath, RecordingObserver } from "./acp-feature-fixtu
 describe("acp commands environment", () => {
     it("Given an ACP Agent has not advertised commands, When Mobius prepares a session, Then it does not invent compact", async () => {
         const manager = new AgentRuntimeManager();
-        const agent = new LocalAgentDefinition("opencode", "OpenCode", process.execPath, [
+        const agent = new LocalAgentDefinition("controlled-acp", "Controlled ACP", process.execPath, [
             fakeAgentPath,
             "--agent-name",
-            "OpenCode",
+            "Controlled ACP",
         ]);
 
         try {
@@ -21,7 +21,7 @@ describe("acp commands environment", () => {
                 additionalDirectories: [],
                 agent,
                 cwd: process.cwd(),
-                sessionId: "opencode-compact-session",
+                sessionId: "controlled-compact-session",
                 signal: new AbortController().signal,
             });
 

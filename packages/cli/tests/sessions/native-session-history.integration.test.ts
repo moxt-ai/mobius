@@ -207,7 +207,7 @@ describe("native session history", () => {
     });
 
     it("Given ACP replays committed native updates, When Runtime loads V2 source facts, Then every accepted notification is exposed once without V1 activity folding", async () => {
-        const f = await fixture("OpenCode");
+        const f = await fixture("Pi");
         try {
             const nativeSessionId = await f.seed("Preserve this update");
             const replay = await f.sessions.previewNativeSessionEventsV2(
@@ -244,7 +244,7 @@ describe("native session history", () => {
                     toolCallId: "error-assistant-1",
                 },
                 {
-                    content: { text: "OpenCode turn 1: Preserve this update", type: "text" },
+                    content: { text: "Pi turn 1: Preserve this update", type: "text" },
                     messageId: "assistant-1",
                     sessionUpdate: "agent_message_chunk",
                 },
@@ -287,16 +287,16 @@ describe("native session history", () => {
         }
     });
 
-    it("Given OpenCode emits persisted history only on the first session load, When Chat requests history after preparation, Then Runtime returns messages from that load", async () => {
-        const f = await fixture("OpenCode", "replay-history-once");
+    it("Given Pi emits persisted history only on the first session load, When Chat requests history after preparation, Then Runtime returns messages from that load", async () => {
+        const f = await fixture("Pi", "replay-history-once");
         const signal = new AbortController().signal;
         try {
-            await f.seed("Persisted OpenCode message");
+            await f.seed("Persisted Pi message");
             const entry = (await f.list()).entries[0];
             if (entry === undefined) {
-                throw new Error("Missing OpenCode conversation");
+                throw new Error("Missing Pi conversation");
             }
-            const sessionId = "restored-opencode-session";
+            const sessionId = "restored-pi-session";
             await f.service.execute(
                 { ...f.identity, action: "import", entryId: entry.entryId, targetSessionId: sessionId },
                 signal,
@@ -312,18 +312,18 @@ describe("native session history", () => {
 
             expect(history).toMatchObject({
                 status: "available",
-                messages: expect.arrayContaining([{ role: "user", text: "Persisted OpenCode message" }]),
+                messages: expect.arrayContaining([{ role: "user", text: "Persisted Pi message" }]),
             });
         } finally {
             await f.close();
         }
     });
 
-    it("Given two clients request OpenCode history while its first session load is in progress, When that load completes, Then both clients receive the same history", async () => {
-        const f = await fixture("OpenCode", "replay-history-once", "native");
+    it("Given two clients request Pi history while its first session load is in progress, When that load completes, Then both clients receive the same history", async () => {
+        const f = await fixture("Pi", "replay-history-once", "native");
         const signal = new AbortController().signal;
         try {
-            const sessionId = await f.seed("Shared OpenCode history");
+            const sessionId = await f.seed("Shared Pi history");
             await writeFile(join(f.native, "pause-load"), "");
             const paused = Promise.withResolvers<void>();
             const watcher = watch(f.native, () => {
@@ -347,7 +347,7 @@ describe("native session history", () => {
             for (const history of await Promise.all([first, second])) {
                 expect(history).toMatchObject({
                     status: "available",
-                    messages: expect.arrayContaining([{ role: "user", text: "Shared OpenCode history" }]),
+                    messages: expect.arrayContaining([{ role: "user", text: "Shared Pi history" }]),
                 });
             }
         } finally {

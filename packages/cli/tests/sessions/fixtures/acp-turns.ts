@@ -48,7 +48,7 @@ export function registerTurns(agent: ReturnType<typeof acp.agent>) {
             context.signal.throwIfAborted();
             const prompt = readPromptText(context.params.prompt);
             if (prompt === "fail with model unavailable") {
-                throw acp.RequestError.internalError(undefined, "Model unavailable: opencode/jev-1.13-free");
+                throw acp.RequestError.internalError(undefined, "Model unavailable: controlled/test-model");
             }
             if (prompt === "fail with invalid prompt detail") {
                 throw acp.RequestError.internalError({

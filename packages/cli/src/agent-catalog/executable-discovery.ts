@@ -1,6 +1,4 @@
-import { isAbsolute, join } from "node:path";
-
-import { validateManagedAdapter } from "../agent-installation/managed-adapter-installer.ts";
+import { isAbsolute } from "node:path";
 import {
     findExecutableOnPath,
     ProcessExecutionError,
@@ -11,7 +9,6 @@ import {
 import { readStateDirectory } from "../storage/state-directory.ts";
 import type { LocalAgentDiscoveryContext } from "./agent-discovery-context.ts";
 import {
-    BridgedAcpAgentDefinition,
     DirectAcpAgentDefinition,
     InProcessAcpAgentDefinition,
     type LocalAgentSpecification,
@@ -32,22 +29,6 @@ async function resolveManagedExecutable(
         context.signal.throwIfAborted();
         return null;
     }
-}
-
-async function resolveManagedAdapterExecutable(
-    specification: BridgedAcpAgentDefinition,
-    context: LocalAgentDiscoveryContext,
-): Promise<ResolvedExecutable | null> {
-    let managed: ResolvedExecutable;
-    try {
-        managed = await validateManagedAdapter(
-            join(readStateDirectory(context.environment), "adapters", specification.id, specification.adapterVersion),
-            specification,
-        );
-    } catch {
-        return null;
-    }
-    return managed;
 }
 
 async function resolveSpecificationExecutables(
@@ -106,16 +87,7 @@ export async function resolveAdapterExecutables(
     if (specification instanceof DirectAcpAgentDefinition || specification instanceof InProcessAcpAgentDefinition) {
         return await resolveAgentExecutables(specification, context);
     }
-    if (!(specification instanceof BridgedAcpAgentDefinition)) {
-        throw new Error("Unsupported local Agent execution topology");
-    }
-    return await resolveSpecificationExecutables(
-        specification.adapterExecutable,
-        specification.adapterOverrideVariable,
-        () => Promise.resolve([]),
-        async () => await resolveManagedAdapterExecutable(specification, context),
-        context,
-    );
+    throw new Error("Unsupported local Agent execution topology");
 }
 
 export async function resolveAgentExecutable(

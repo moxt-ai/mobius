@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -199,98 +199,6 @@ async function readAgentSettings(frames: ClientFrames, requestId: string) {
 }
 
 describe("daemon session configuration boundary", () => {
-    it("Given OpenCode's ACP catalog omits a locally configured model, When Agent settings are discovered, Then the CLI model is available", async () => {
-        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-opencode-provider-settlement-"));
-        const workspace = join(stateDirectory, "workspace");
-        const nativeStateDirectory = join(stateDirectory, "native");
-        const auditDatabasePath = join(stateDirectory, "audit", "channel_alpha.sqlite");
-        await Promise.all([mkdir(workspace), mkdir(nativeStateDirectory)]);
-
-        const socketReady = Promise.withResolvers<Duplex>();
-        const relaySockets = new Set<Duplex>();
-        const relay = createServer((request, response) => {
-            if (request.method === "PUT" && request.url?.includes("/catalog") === true) {
-                request.resume();
-                response.writeHead(204);
-                response.end();
-                return;
-            }
-            response.writeHead(404);
-            response.end();
-        });
-        relay.on("connection", (socket) => {
-            relaySockets.add(socket);
-            socket.once("close", () => relaySockets.delete(socket));
-            socket.on("error", () => undefined);
-        });
-        relay.on("upgrade", (request, socket) => {
-            const key = request.headers["sec-websocket-key"];
-            const accept = createHash("sha1")
-                .update(`${key ?? ""}${websocketGuid}`)
-                .digest("base64");
-            socket.write(
-                "HTTP/1.1 101 Switching Protocols\r\n" +
-                    "Connection: Upgrade\r\n" +
-                    "Upgrade: websocket\r\n" +
-                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
-            );
-            sendText(socket, JSON.stringify({ kind: "runtime.liveness.ready" }));
-            socketReady.resolve(socket);
-        });
-        await listen(relay);
-
-        const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
-        relayUrl.searchParams.set("token", "d".repeat(43));
-        const agent = new LocalAgentDefinition(
-            "opencode",
-            "OpenCode",
-            process.execPath,
-            [fakeAgentPath, "acp", "--acp-omits-custom-model"],
-            { MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory },
-        );
-        const config = createDaemonConfig(
-            {
-                channelId: "channel_alpha",
-                defaultWorkspace: workspace,
-                relayUrl,
-            },
-            [agent],
-            [],
-            new DaemonLocalContext(stateDirectory),
-        );
-        const cancellation = new AbortController();
-        const audit = new AuditStore();
-        const daemon = runDaemon(config, audit, cancellation.signal);
-
-        try {
-            const frames = new ClientFrames(await socketReady.promise);
-            const requestId = "opencode-custom-provider-settings";
-            sendText(
-                await socketReady.promise,
-                encodeAgentSettingsDiscoverCommand({
-                    agentId: agent.id,
-                    kind: AGENT_SETTINGS_DISCOVER_KIND,
-                    requestId,
-                }),
-            );
-            const discovered = await readAgentSettings(frames, requestId);
-            const model = discovered.settings.find((setting) => setting.id === "model");
-            expect(model?.values).toEqual(
-                expect.arrayContaining([expect.objectContaining({ value: "custom-provider/custom-model" })]),
-            );
-            await expect(stat(auditDatabasePath)).rejects.toMatchObject({ code: "ENOENT" });
-        } finally {
-            cancellation.abort();
-            for (const socket of relaySockets) {
-                socket.destroy();
-            }
-            relay.close();
-            audit.close();
-            await daemon;
-            await rm(stateDirectory, { force: true, recursive: true });
-        }
-    });
-
     it("Given Codex removes a model between capability probes, When settings are discovered, Then the daemon returns supported settings and records the unavailable value", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-changing-model-catalog-"));
         const workspace = join(stateDirectory, "workspace");
@@ -429,10 +337,10 @@ describe("daemon session configuration boundary", () => {
         // session that never switches models must still learn that model's
         // capability instead of offering no effort control at all.
         const agent = new LocalAgentDefinition(
-            "deepseek-harness",
-            "DeepSeek Harness",
+            "controlled-acp",
+            "Controlled ACP",
             process.execPath,
-            [fakeAgentPath, "--agent-name", "DeepSeek Harness", "--without-reasoning-effort"],
+            [fakeAgentPath, "--agent-name", "Controlled ACP", "--without-reasoning-effort"],
             {
                 MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory,
             },
@@ -453,7 +361,7 @@ describe("daemon session configuration boundary", () => {
 
         try {
             const frames = new ClientFrames(await socketReady.promise);
-            const noEffortRequestId = "deepseek-settings-without-effort";
+            const noEffortRequestId = "controlled-settings-without-effort";
             sendText(
                 await socketReady.promise,
                 encodeAgentSettingsDiscoverCommand({
@@ -527,10 +435,10 @@ describe("daemon session configuration boundary", () => {
         const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
         relayUrl.searchParams.set("token", "d".repeat(43));
         const agent = new LocalAgentDefinition(
-            "deepseek-harness",
-            "DeepSeek Harness",
+            "controlled-acp",
+            "Controlled ACP",
             process.execPath,
-            [fakeAgentPath, "--agent-name", "DeepSeek Harness"],
+            [fakeAgentPath, "--agent-name", "Controlled ACP"],
             {
                 MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory,
             },
@@ -551,7 +459,7 @@ describe("daemon session configuration boundary", () => {
 
         try {
             const frames = new ClientFrames(await socketReady.promise);
-            const requestId = "deepseek-default-model-effort";
+            const requestId = "controlled-default-model-effort";
             sendText(
                 await socketReady.promise,
                 encodeAgentSettingsDiscoverCommand({
@@ -630,10 +538,10 @@ describe("daemon session configuration boundary", () => {
         // The Agent reveals reasoning effort only for test-large, so the settings
         // snapshot that names it cannot match a Session parked on test-small.
         const agent = new LocalAgentDefinition(
-            "deepseek-harness",
-            "DeepSeek Harness",
+            "controlled-acp",
+            "Controlled ACP",
             process.execPath,
-            [fakeAgentPath, "--agent-name", "DeepSeek Harness", "--reasoning-effort-for-test-large-only"],
+            [fakeAgentPath, "--agent-name", "Controlled ACP", "--reasoning-effort-for-test-large-only"],
             { MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory },
         );
         const config = createDaemonConfig(
@@ -667,7 +575,7 @@ describe("daemon session configuration boundary", () => {
                 prompt: "wait for steering",
                 resources: [],
                 sessionConfigurations: [
-                    { booleanValue: false, configId: "dsh_access_mode", value: "read-only", valueType: "select" },
+                    { booleanValue: false, configId: "removed_access_mode", value: "read-only", valueType: "select" },
                     { booleanValue: false, configId: "model", value: "test-small", valueType: "select" },
                     { booleanValue: false, configId: "reasoning_effort", value: "high", valueType: "select" },
                     { booleanValue: true, configId: "fast_mode", value: "", valueType: "boolean" },

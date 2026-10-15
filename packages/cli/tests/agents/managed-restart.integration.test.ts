@@ -134,7 +134,7 @@ test("Given a managed real Codex session, When the user quits and starts Mobius,
 
 test("Given a managed real Claude Code session, When the user quits and starts Mobius, Then history is restored and another turn completes", async () => {
     await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-6", "MANAGED_CLAUDE_REPLY");
-    await using agent = await ClaudeFixture.create(provider, { requireAdapter: false });
+    await using agent = await ClaudeFixture.create(provider);
     await withRealDaemon(
         new ClaudeCodeAgentSpecification(),
         agent.environment,

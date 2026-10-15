@@ -17,7 +17,6 @@ import {
     type AgentRuntimeManager,
 } from "../acp/agent-runtime-manager.ts";
 import { agentSettingsAdapterForAgent } from "../agent-catalog/agent-settings-adapter.ts";
-import { discoverOpenCodeModelOptions } from "../agent-catalog/agents/opencode-agent.ts";
 import type { AcpAgentDefinition } from "../agent-catalog/local-agent.ts";
 import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
 import type { DaemonConfig } from "../config.ts";
@@ -62,7 +61,7 @@ export async function discoverAgentSettings(
     const baseSnapshot = {
         agentName: inspectedBaseSnapshot.agentName,
         agentVersion: inspectedBaseSnapshot.agentVersion,
-        configOptions: await discoverOpenCodeModelOptions(agent, cwd, inspectedBaseSnapshot.configOptions, signal),
+        configOptions: inspectedBaseSnapshot.configOptions,
         modelEffort: inspectedBaseSnapshot.modelEffort,
     };
     const baseModel = modelOption(baseSnapshot.configOptions);

@@ -13,12 +13,9 @@ const PACKAGE_METADATA_LIMIT_BYTES = 64 * 1024;
 const PACKAGE_LOCK_LIMIT_BYTES = 8 * 1024 * 1024;
 
 export class ManagedNpmPackageDefinition {
-    readonly dependencyResolutionArguments: readonly string[] = Object.freeze([]);
     readonly executableName: string;
-    readonly includeOptionalDependencies: boolean = false;
     readonly packageName: string;
     readonly version: string;
-    readonly verifyDependencyClosure: boolean = false;
 
     constructor(packageName: string, version: string, executableName: string) {
         this.executableName = executableName;
@@ -29,27 +26,12 @@ export class ManagedNpmPackageDefinition {
 
 export class SriManagedNpmPackageDefinition extends ManagedNpmPackageDefinition {
     readonly integrity: string;
-    readonly requiredDependencies: readonly SriManagedNpmDependencyDefinition[] = Object.freeze([]);
     readonly tarballUrl: string;
 
     constructor(packageName: string, version: string, executableName: string, integrity: string, tarballUrl: string) {
         super(packageName, version, executableName);
         this.integrity = integrity;
         this.tarballUrl = tarballUrl;
-    }
-}
-
-export class SriManagedNpmDependencyDefinition {
-    readonly integrity: string;
-    readonly packageName: string;
-    readonly tarballUrl: string;
-    readonly version: string;
-
-    constructor(packageName: string, version: string, integrity: string, tarballUrl: string) {
-        this.integrity = integrity;
-        this.packageName = packageName;
-        this.tarballUrl = tarballUrl;
-        this.version = version;
     }
 }
 
@@ -133,11 +115,7 @@ interface PinnedNpmArtifact {
     readonly version: string;
 }
 
-function verifyPackageLockEntry(
-    lock: Readonly<Record<string, unknown>>,
-    definition: PinnedNpmArtifact,
-    verifyDependencyClosure: boolean,
-): void {
+function verifyPackageLockEntry(lock: Readonly<Record<string, unknown>>, definition: PinnedNpmArtifact): void {
     if (lock["lockfileVersion"] !== 3) {
         throw new ManagedNpmPackageError(
             "managed_package_verification_failed",
@@ -156,41 +134,6 @@ function verifyPackageLockEntry(
     let matches = 0;
     for (const [key, candidate] of Object.entries(packages)) {
         const normalizedKey = key.replaceAll("\\", "/");
-        if (verifyDependencyClosure && normalizedKey.length > 0) {
-            let resolved: URL;
-            try {
-                if (
-                    !normalizedKey.split("/").includes("node_modules") ||
-                    !isRecord(candidate) ||
-                    typeof candidate["version"] !== "string" ||
-                    candidate["version"].length === 0 ||
-                    typeof candidate["integrity"] !== "string" ||
-                    !/^sha512-[A-Za-z0-9+/]{86}==$/.test(candidate["integrity"]) ||
-                    typeof candidate["resolved"] !== "string"
-                ) {
-                    throw new Error("Invalid locked dependency");
-                }
-                resolved = new URL(candidate["resolved"]);
-            } catch (error) {
-                throw new ManagedNpmPackageError(
-                    "managed_package_verification_failed",
-                    "The managed npm dependency closure is invalid",
-                    { cause: error },
-                );
-            }
-            if (
-                resolved.protocol !== "https:" ||
-                resolved.hostname !== "registry.npmjs.org" ||
-                resolved.port.length > 0 ||
-                resolved.username.length > 0 ||
-                resolved.password.length > 0
-            ) {
-                throw new ManagedNpmPackageError(
-                    "managed_package_verification_failed",
-                    "The managed npm dependency closure is invalid",
-                );
-            }
-        }
         if (normalizedKey === suffix || normalizedKey.endsWith(`/${suffix}`)) {
             entry = candidate;
             matches += 1;
@@ -208,28 +151,6 @@ function verifyPackageLockEntry(
             "The managed npm package lockfile does not match the pinned artifact",
         );
     }
-}
-
-async function verifyRequiredDependency(
-    rootPath: string,
-    lock: Readonly<Record<string, unknown>>,
-    definition: SriManagedNpmDependencyDefinition,
-): Promise<void> {
-    const dependencyRoot = await realpath(packagePath(rootPath, definition.packageName));
-    if (!isContainedPath(rootPath, dependencyRoot)) {
-        throw new ManagedNpmPackageError(
-            "managed_package_verification_failed",
-            "The required managed npm dependency escaped its private cache",
-        );
-    }
-    const metadata = await readJsonRecord(join(dependencyRoot, "package.json"), PACKAGE_METADATA_LIMIT_BYTES);
-    if (metadata["name"] !== definition.packageName || metadata["version"] !== definition.version) {
-        throw new ManagedNpmPackageError(
-            "managed_package_verification_failed",
-            "The required managed npm dependency identity is invalid",
-        );
-    }
-    verifyPackageLockEntry(lock, definition, false);
 }
 
 export async function validateManagedNpmPackage(
@@ -269,10 +190,7 @@ async function validateManagedNpmPackageContents(
     }
     if (definition instanceof SriManagedNpmPackageDefinition) {
         const lock = await readJsonRecord(join(rootPath, "package-lock.json"), PACKAGE_LOCK_LIMIT_BYTES);
-        verifyPackageLockEntry(lock, definition, definition.verifyDependencyClosure);
-        for (const dependency of definition.requiredDependencies) {
-            await verifyRequiredDependency(rootPath, lock, dependency);
-        }
+        verifyPackageLockEntry(lock, definition);
     }
     const declaredBin = readBinPath(metadata, definition.executableName);
     const executable = await resolveExecutablePath(join(packageRoot, declaredBin));
@@ -325,13 +243,8 @@ export class ManagedNpmPackageInstaller implements ManagedNpmPackageInstallation
                 );
             }
             const installArguments = ["install", "--prefix", staging];
-            installArguments.push(...definition.dependencyResolutionArguments);
-            if (definition.includeOptionalDependencies) {
-                installArguments.push("--include=optional");
-            } else {
-                installArguments.push("--omit=optional");
-            }
             installArguments.push(
+                "--omit=optional",
                 "--ignore-scripts",
                 "--no-audit",
                 "--no-fund",
@@ -349,12 +262,8 @@ export class ManagedNpmPackageInstaller implements ManagedNpmPackageInstallation
                 NPM_CONFIG_PACKAGE_LOCK: "true",
                 NPM_CONFIG_REGISTRY: "https://registry.npmjs.org/",
                 PATH: `${dirname(process.execPath)}${delimiter}/usr/bin${delimiter}/bin`,
+                NPM_CONFIG_OMIT: "optional",
             };
-            if (definition.includeOptionalDependencies) {
-                installEnvironment["NPM_CONFIG_INCLUDE"] = "optional";
-            } else {
-                installEnvironment["NPM_CONFIG_OMIT"] = "optional";
-            }
             await runBoundedProcess({
                 arguments: installArguments,
                 command: npm.path,

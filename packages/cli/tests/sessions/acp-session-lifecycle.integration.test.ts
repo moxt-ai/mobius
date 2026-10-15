@@ -664,12 +664,12 @@ child.once("exit", (code) => process.exit(code ?? 84));
         }
     });
 
-    it("Given OpenCode emits untagged messages before a tool call, When they arrive, Then Mobius streams them without waiting for the tool boundary", async () => {
+    it("Given Controlled ACP emits untagged messages before a tool call, When they arrive, Then Mobius streams them without waiting for the tool boundary", async () => {
         const manager = new AgentRuntimeManager();
-        const agent = new LocalAgentDefinition("opencode", "OpenCode", process.execPath, [
+        const agent = new LocalAgentDefinition("controlled-acp", "Controlled ACP", process.execPath, [
             fakeAgentPath,
             "--agent-name",
-            "OpenCode",
+            "Controlled ACP",
         ]);
         const activityUpdates: Array<{
             readonly activityId: string;
@@ -683,7 +683,7 @@ child.once("exit", (code) => process.exit(code ?? 84));
             await manager.runPrompt({
                 additionalDirectories: [],
                 agent,
-                commandId: "opencode-interleaved-command",
+                commandId: "controlled-acp-interleaved-command",
                 cwd: process.cwd(),
                 images: [],
                 onActivity: (activity) => {
@@ -696,7 +696,7 @@ child.once("exit", (code) => process.exit(code ?? 84));
                 },
                 prompt: "interleave untagged progress",
                 resources: [],
-                sessionId: "opencode-interleaved-conversation",
+                sessionId: "controlled-acp-interleaved-conversation",
                 signal: new AbortController().signal,
             });
         } finally {
@@ -715,7 +715,7 @@ child.once("exit", (code) => process.exit(code ?? 84));
         expect(responseChunks).toEqual([
             "Checking the workspace",
             "Preparing the next tool call",
-            "OpenCode turn 1: ",
+            "Controlled ACP turn 1: ",
             "interleave untagged progress",
         ]);
     });
@@ -798,10 +798,10 @@ child.once("exit", (code) => process.exit(code ?? 84));
 
     it("Given an ACP agent announces a different session while creating one, When Mobius receives the created session, Then the local boundary rejects the queued update", async () => {
         const manager = new AgentRuntimeManager();
-        const agent = new LocalAgentDefinition("deepseek", "DeepSeek Harness", process.execPath, [
+        const agent = new LocalAgentDefinition("controlled-acp", "Controlled ACP", process.execPath, [
             fakeAgentPath,
             "--agent-name",
-            "DeepSeek Harness",
+            "Controlled ACP",
             "--announce-config-while-creating",
             "--announce-wrong-session-while-creating",
         ]);
@@ -812,7 +812,7 @@ child.once("exit", (code) => process.exit(code ?? 84));
                     additionalDirectories: [],
                     agent,
                     cwd: process.cwd(),
-                    sessionId: "deepseek-wrong-session-notification",
+                    sessionId: "controlled-acp-wrong-session-notification",
                     signal: new AbortController().signal,
                 }),
             ).rejects.toMatchObject({ code: "invalid_agent_session" });
@@ -823,7 +823,7 @@ child.once("exit", (code) => process.exit(code ?? 84));
 
     it("Given an ACP agent returns the standard authentication error, When Mobius starts its session, Then the local boundary preserves an authentication-required code", async () => {
         const manager = new AgentRuntimeManager();
-        const agent = new LocalAgentDefinition("opencode", "OpenCode", process.execPath, [
+        const agent = new LocalAgentDefinition("controlled-acp", "Controlled ACP", process.execPath, [
             fakeAgentPath,
             "--authentication-required",
         ]);
@@ -845,10 +845,10 @@ child.once("exit", (code) => process.exit(code ?? 84));
 
     it("Given an ACP agent rejects a prompt with a non-authentication error, When Mobius runs that turn, Then the local boundary preserves the agent's real failure reason", async () => {
         const manager = new AgentRuntimeManager();
-        const agent = new LocalAgentDefinition("opencode", "OpenCode", process.execPath, [
+        const agent = new LocalAgentDefinition("controlled-acp", "Controlled ACP", process.execPath, [
             fakeAgentPath,
             "--agent-name",
-            "OpenCode",
+            "Controlled ACP",
         ]);
 
         try {
@@ -868,7 +868,7 @@ child.once("exit", (code) => process.exit(code ?? 84));
                 }),
             ).rejects.toMatchObject({
                 code: "acp_agent_error",
-                message: "Internal error: Model unavailable: opencode/jev-1.13-free",
+                message: "Internal error: Model unavailable: controlled/test-model",
             });
         } finally {
             await manager.close();

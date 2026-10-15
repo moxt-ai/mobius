@@ -26,7 +26,7 @@ import type {
     InProcessAcpEndpointFactory,
 } from "../../src/acp/in-process/acp-endpoint.ts";
 import { InProcessAcpAgentDefinition } from "../../src/agent-catalog/agent-specification.ts";
-import { DeepSeekHarnessAgentSpecification } from "../../src/agent-catalog/discover-local-agents.ts";
+import { ControlledAcpAgentSpecification } from "../support/agents/controlled-acp.ts";
 import { prepareNewRealSession, withRealDaemon } from "../support/agents/real-daemon.ts";
 
 const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
@@ -130,26 +130,26 @@ test("Given retained Agent teardown does not finish, When the Session close dead
 test("Given an active Agent session holding an exclusive writer lock, When a public close command reaches the daemon, Then the process stops and releases the writer lock", async () => {
     const directory = await mkdtemp(join(tmpdir(), "mobius-session-close-"));
     const executableDirectory = join(directory, "bin");
-    const executable = join(executableDirectory, "dsh");
+    const executable = join(executableDirectory, "controlled-acp");
     const nativeStateDirectory = join(directory, "native");
     await Promise.all([mkdir(executableDirectory), mkdir(nativeStateDirectory)]);
     await writeFile(
         executable,
-        `#!${process.execPath}\nif (process.argv.includes("--version")) {\n  process.stdout.write("0.1.5-rc.3\\n");\n} else {\n  process.argv.push(\n    "--agent-name", "DeepSeek Harness",\n    "--agent-version", "0.1.5-rc.3",\n    "--exclusive-writer",\n    "--no-load-session",\n    "--http-mcp",\n    "--no-additional-directories",\n    "--no-delete-session",\n    "--no-fork-session",\n    "--no-embedded-context",\n  );\n  await import(${JSON.stringify(new URL(`file://${fakeAgentPath}`).toString())});\n}\n`,
+        `#!${process.execPath}\nif (process.argv.includes("--version")) {\n  process.stdout.write("1.0.0\\n");\n} else {\n  process.argv.push(\n    "--agent-name", "Controlled ACP",\n    "--agent-version", "1.0.0",\n    "--exclusive-writer",\n    "--no-load-session",\n    "--http-mcp",\n    "--no-additional-directories",\n    "--no-delete-session",\n    "--no-fork-session",\n    "--no-embedded-context",\n  );\n  await import(${JSON.stringify(new URL(`file://${fakeAgentPath}`).toString())});\n}\n`,
         { mode: 0o700 },
     );
     await chmod(executable, 0o700);
     try {
         await withRealDaemon(
-            new DeepSeekHarnessAgentSpecification(),
+            new ControlledAcpAgentSpecification(),
             { MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory, PATH: executableDirectory },
             async (peer) => {
-                const sessionId = await prepareNewRealSession(peer, "deepseek-harness");
+                const sessionId = await prepareNewRealSession(peer, "controlled-acp");
                 const promptCommandId = crypto.randomUUID();
                 peer.send(
                     encodeSessionPromptCommand({
                         additionalDirectoryIds: [],
-                        agentId: "deepseek-harness",
+                        agentId: "controlled-acp",
                         bindingId: peer.bindingId,
                         commandId: promptCommandId,
                         directoryId: "default",

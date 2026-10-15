@@ -143,10 +143,10 @@ describe("daemon narration delivery", () => {
         const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/channel_beta/daemon`);
         relayUrl.searchParams.set("token", "e".repeat(43));
         const agent = new LocalAgentDefinition(
-            "deepseek-harness",
-            "DeepSeek Harness",
+            "controlled-acp",
+            "Controlled ACP",
             process.execPath,
-            [fakeAgentPath, "--agent-name", "DeepSeek Harness"],
+            [fakeAgentPath, "--agent-name", "Controlled ACP"],
             { MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory },
         );
         const config = createDaemonConfig(

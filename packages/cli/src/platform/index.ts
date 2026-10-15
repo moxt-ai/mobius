@@ -11,9 +11,6 @@ const fallbackPlatform: PlatformSupport = {
     readProcessTableSynchronously: () => [],
     processExists,
     claudeCodeExecutablePaths: () => [],
-    workBuddyExecutablePaths: () => [],
-    openCodeArchives: {},
-    grokDependencies: {},
 };
 const platforms: ReadonlyMap<NodeJS.Platform, PlatformSupport> = new Map([
     ["linux", linuxPlatform],

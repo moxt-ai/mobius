@@ -21,9 +21,7 @@ export function registerNativeSessions(agent: ReturnType<typeof acp.agent>) {
             if (process.argv.includes("--authentication-required")) {
                 throw acp.RequestError.authRequired();
             }
-            const sessionId = process.argv.includes("--opencode-native-id")
-                ? `ses_${crypto.randomUUID().replaceAll("-", "")}`
-                : crypto.randomUUID();
+            const sessionId = crypto.randomUUID();
             acquireWriter(sessionId);
             const state = new ControlledSessionState(0);
             nativeMetadata.set(sessionId, {

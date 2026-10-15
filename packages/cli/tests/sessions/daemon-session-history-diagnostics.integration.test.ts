@@ -19,7 +19,7 @@ import {
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { expect, test } from "vitest";
-import { OpenCodeAgentSpecification } from "../../src/agent-catalog/agents/opencode-agent.ts";
+import { ControlledAcpAgentSpecification } from "../support/agents/controlled-acp.ts";
 import { withRealDaemon } from "../support/agents/real-daemon.ts";
 
 const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
@@ -27,17 +27,17 @@ const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.met
 test("Given native history contains oversized and embedded ACP media, When Chat loads V2 history, Then it receives retrievable keys instead of embedded bodies", async () => {
     const directory = await mkdtemp(join(tmpdir(), "mobius-external-history-image-"));
     const executableDirectory = join(directory, "bin");
-    const executable = join(executableDirectory, "opencode");
+    const executable = join(executableDirectory, "controlled-acp");
     await mkdir(executableDirectory);
     await writeFile(
         executable,
         `#!${process.execPath}
 if (process.argv.includes("--version")) {
-  process.stdout.write("1.18.29\\n");
+  process.stdout.write("1.0.0\\n");
 } else {
   process.argv.push(
-    "--agent-name", "OpenCode",
-    "--agent-version", "1.18.29",
+    "--agent-name", "Controlled ACP",
+    "--agent-version", "1.0.0",
     "--http-mcp",
     "--no-additional-directories",
     "--no-delete-session",
@@ -52,7 +52,7 @@ if (process.argv.includes("--version")) {
     await chmod(executable, 0o700);
     try {
         await withRealDaemon(
-            new OpenCodeAgentSpecification(),
+            new ControlledAcpAgentSpecification(),
             {
                 MOBIUS_FAKE_ACP_OVERSIZED_HISTORY_IMAGE: "1",
                 MOBIUS_FAKE_ACP_STATE_DIRECTORY: join(directory, "state"),
@@ -62,7 +62,7 @@ if (process.argv.includes("--version")) {
                 peer.send(
                     encodeSessionPrepareCommand({
                         additionalDirectoryIds: [],
-                        agentId: "opencode",
+                        agentId: "controlled-acp",
                         bindingId: peer.bindingId,
                         directoryId: "default",
                         kind: "session.prepare",
@@ -78,7 +78,7 @@ if (process.argv.includes("--version")) {
                 peer.send(
                     encodeSessionPromptCommand({
                         additionalDirectoryIds: [],
-                        agentId: "opencode",
+                        agentId: "controlled-acp",
                         bindingId: peer.bindingId,
                         commandId: "external-image-seed-turn",
                         directoryId: "default",

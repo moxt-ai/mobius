@@ -4,23 +4,14 @@ import { resolve } from "node:path";
 import type { AgentInstallationStage } from "@moxt-ai/mobius-protocol";
 
 import { AvailableAgent, MissingAgent } from "../agent-catalog/agent-discovery.ts";
-import {
-    BridgedAcpAgentDefinition,
-    DirectAcpAgentDefinition,
-    type LocalAgentSpecification,
-} from "../agent-catalog/agent-specification.ts";
+import type { LocalAgentSpecification } from "../agent-catalog/agent-specification.ts";
 import { supportedLocalAgentSpecifications } from "../agent-catalog/agents/supported-agent-specifications.ts";
 import { discoverLocalAgentInventory } from "../agent-catalog/discover-local-agents.ts";
-import { findVerifiedAgentExecutable, resolveAdapterExecutable } from "../agent-catalog/executable-discovery.ts";
+import { findVerifiedAgentExecutable } from "../agent-catalog/executable-discovery.ts";
 import type { LocalAgentCatalog } from "../agent-catalog/local-agent.ts";
 import { withDaemonEnvironment } from "../config.ts";
 import type { InstallationAudit, InstallationExecutor } from "./agent-installation-manager.ts";
 import { InstallationManagerError } from "./agent-installation-manager.ts";
-import {
-    type AdapterInstallationPort,
-    ManagedAdapterInstallError,
-    ManagedAdapterInstaller,
-} from "./managed-adapter-installer.ts";
 
 export interface FixedInstallationExecutorOptions {
     readonly defaultWorkspace: string;
@@ -28,7 +19,6 @@ export interface FixedInstallationExecutorOptions {
     readonly catalog: LocalAgentCatalog;
     readonly environment: Readonly<NodeJS.ProcessEnv>;
     readonly publishCatalog: (signal: AbortSignal) => Promise<void>;
-    readonly stateDirectory: string;
 }
 
 function findSpecification(
@@ -59,48 +49,16 @@ function resolveDefaultWorkspace(path: string): string {
     }
 }
 
-function resolveIntegrationStateDirectory(path: string): string {
-    try {
-        const directory = realpathSync(resolve(path));
-        const metadata = statSync(directory);
-        if (!metadata.isDirectory() || (typeof process.getuid === "function" && metadata.uid !== process.getuid())) {
-            throw new Error("Installation directory is not user-owned");
-        }
-        return directory;
-    } catch (error) {
-        throw new InstallationManagerError(
-            "unsafe_installation_root",
-            "The local integration state directory is unavailable or unsafe",
-            { cause: error },
-        );
-    }
-}
-
 function translateExecutionError(error: unknown): InstallationManagerError {
     if (error instanceof InstallationManagerError) {
         return error;
-    }
-    if (error instanceof ManagedAdapterInstallError) {
-        return new InstallationManagerError(error.code, error.message, {
-            cause: error,
-        });
     }
     return new InstallationManagerError("installation_failed", "The local Agent integration installation failed", {
         cause: error,
     });
 }
 
-function requiresAdapterReplacement(code: string): boolean {
-    return (
-        code === "adapter_not_found" ||
-        code === "adapter_probe_failed" ||
-        code === "adapter_probe_timeout" ||
-        code === "acp_incompatible"
-    );
-}
-
 export class FixedInstallationExecutor implements InstallationExecutor {
-    readonly #adapterInstaller: AdapterInstallationPort;
     readonly #defaultWorkspace: string;
     readonly #audit: InstallationAudit;
     readonly #catalog: LocalAgentCatalog;
@@ -111,22 +69,14 @@ export class FixedInstallationExecutor implements InstallationExecutor {
     constructor(
         options: FixedInstallationExecutorOptions,
         specifications: readonly LocalAgentSpecification[] = supportedLocalAgentSpecifications(),
-        adapterInstaller?: AdapterInstallationPort,
     ) {
         const defaultWorkspace = resolveDefaultWorkspace(options.defaultWorkspace);
-        const stateDirectory = resolveIntegrationStateDirectory(options.stateDirectory);
         this.#defaultWorkspace = defaultWorkspace;
         this.#audit = options.audit;
         this.#catalog = options.catalog;
         this.#environment = Object.freeze({ ...options.environment });
         this.#publishCatalog = options.publishCatalog;
         this.#specifications = Object.freeze([...specifications]);
-        this.#adapterInstaller =
-            adapterInstaller ??
-            new ManagedAdapterInstaller({
-                environment: this.#environment,
-                stateDirectory,
-            });
     }
 
     readonly execute = async (
@@ -169,80 +119,38 @@ export class FixedInstallationExecutor implements InstallationExecutor {
                 );
             }
             const agent = verifiedAgent.executable;
-            let adapter =
-                specification instanceof DirectAcpAgentDefinition
-                    ? agent
-                    : await resolveAdapterExecutable(specification, discoveryOptions);
-            let installedAdapter = false;
-            if (adapter === null) {
-                if (!(specification instanceof BridgedAcpAgentDefinition)) {
-                    throw new InstallationManagerError(
-                        "agent_verification_failed",
-                        "The direct Agent executable is unavailable",
-                    );
-                }
-                if (this.#environment[specification.adapterOverrideVariable] !== undefined) {
-                    throw new InstallationManagerError(
-                        "adapter_not_found",
-                        "The configured ACP adapter is unavailable",
-                    );
-                }
-                await report("installing_adapter");
-                adapter = await this.#adapterInstaller.install(specification, signal);
-                installedAdapter = true;
-                this.#audit.record("agent_adapter_verified", requestId, agentId, {
-                    version: specification.adapterVersion,
+            await report("checking_acp");
+            const environment: NodeJS.ProcessEnv = { ...this.#environment };
+            environment[specification.agentOverrideVariable] = agent.identity.requestedPath;
+            environment[specification.adapterOverrideVariable] = agent.identity.requestedPath;
+            const inventory = await discoverLocalAgentInventory({
+                defaultWorkspace: this.#defaultWorkspace,
+                environment,
+                signal,
+                specifications: [specification],
+            });
+            const verified = inventory.available.find((candidate) => candidate.specification.id === agentId);
+            if (verified instanceof AvailableAgent) {
+                this.#audit.record("agent_installation_acp_verified", requestId, agentId, {
+                    adapterVersion:
+                        verified.agent.kind === "acp-adapter-process"
+                            ? verified.agent.adapterVersion
+                            : verified.agent.agentVersion,
+                    agentVersion: verified.agent.agentVersion,
                 });
+
+                await this.#publishDiscoveredAgent(agentId, inventory, environment, signal);
+                return;
             }
 
-            while (true) {
-                await report("checking_acp");
-                const environment: NodeJS.ProcessEnv = { ...this.#environment };
-                environment[specification.agentOverrideVariable] = agent.identity.requestedPath;
-                environment[specification.adapterOverrideVariable] = adapter.identity.requestedPath;
-                const inventory = await discoverLocalAgentInventory({
-                    defaultWorkspace: this.#defaultWorkspace,
-                    environment,
-                    signal,
-                    specifications: [specification],
-                });
-                const verified = inventory.available.find((candidate) => candidate.specification.id === agentId);
-                if (verified instanceof AvailableAgent) {
-                    this.#audit.record("agent_installation_acp_verified", requestId, agentId, {
-                        adapterVersion:
-                            verified.agent.kind === "acp-adapter-process"
-                                ? verified.agent.adapterVersion
-                                : verified.agent.agentVersion,
-                        agentVersion: verified.agent.agentVersion,
-                    });
-
-                    await this.#publishDiscoveredAgent(agentId, inventory, environment, signal);
-                    return;
-                }
-
-                const unavailable = inventory.unavailable.find((candidate) => candidate.specification.id === agentId);
-                if (unavailable === undefined) {
-                    throw new InstallationManagerError(
-                        "agent_verification_failed",
-                        "The complete Agent ACP path did not pass verification",
-                    );
-                }
-                if (
-                    !installedAdapter &&
-                    specification instanceof BridgedAcpAgentDefinition &&
-                    this.#environment[specification.adapterOverrideVariable] === undefined &&
-                    requiresAdapterReplacement(unavailable.code)
-                ) {
-                    await report("installing_adapter");
-                    adapter = await this.#adapterInstaller.install(specification, signal);
-                    installedAdapter = true;
-                    this.#audit.record("agent_adapter_verified", requestId, agentId, {
-                        version: specification.adapterVersion,
-                    });
-                    continue;
-                }
-                throw new InstallationManagerError(unavailable.code, unavailable.message);
+            const unavailable = inventory.unavailable.find((candidate) => candidate.specification.id === agentId);
+            if (unavailable === undefined) {
+                throw new InstallationManagerError(
+                    "agent_verification_failed",
+                    "The complete Agent ACP path did not pass verification",
+                );
             }
+            throw new InstallationManagerError(unavailable.code, unavailable.message);
         } catch (error) {
             if (signal.aborted) {
                 signal.throwIfAborted();

@@ -11,7 +11,7 @@ test.runIf(process.platform === "win32")(
     "Given real Claude is installed in the Windows native location outside PATH, When the user lists Agents, Then Claude is ready",
     async () => {
         await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-6", "WINDOWS_DISCOVERY_REPLY");
-        await using claude = await ClaudeFixture.create(provider, { requireAdapter: false });
+        await using claude = await ClaudeFixture.create(provider);
         const directory = await mkdtemp(join(tmpdir(), "mobius-windows-claude-"));
         const workspace = join(directory, "workspace");
         const userProfile = join(directory, "user");

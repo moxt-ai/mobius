@@ -166,8 +166,7 @@ describe("native session identity", () => {
         },
     );
 
-    // Keep distinct native identity/history paths; Pi uses the same ACP fixture path as Claude.
-    it.each(["Claude Code", "OpenCode"])(
+    it.each(["Claude Code", "Pi"] as const)(
         "Given a new %s chat, When the Runtime restarts, Then its native ID resumes the saved thread and history",
         async (agentName) => {
             const f = await fixture(agentName, "supported", "native");

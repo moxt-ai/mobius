@@ -20,7 +20,6 @@ import {
     SucceededInstallation,
 } from "../../src/agent-installation/agent-installation-manager.ts";
 import { FixedInstallationExecutor } from "../../src/agent-installation/fixed-installation-executor.ts";
-import type { AdapterInstallationPort } from "../../src/agent-installation/managed-adapter-installer.ts";
 import { CodexFixture } from "../support/agents/codex.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 
@@ -54,7 +53,6 @@ function createManager(
     stateDirectory: string,
     executableDirectory: string,
     catalog: LocalAgentCatalog,
-    adapterInstaller: AdapterInstallationPort,
     observer: RecordingInstallationObserver,
     audit: RecordingInstallationAudit,
     environment: Readonly<Record<string, string>>,
@@ -77,10 +75,8 @@ function createManager(
                     signal.throwIfAborted();
                     return Promise.resolve();
                 },
-                stateDirectory,
             },
             [specification],
-            adapterInstaller,
         ),
         observer,
         audit,
@@ -97,22 +93,9 @@ it("Given the daemon did not detect Codex at startup, When the user installs Cod
         [new LocalAgentDefinition("refreshed-agent", "Refreshed Agent", process.execPath, [])],
         [new MissingAgentDefinition("codex", "Codex")],
     );
-    const adapterInstaller: AdapterInstallationPort = {
-        install: async () => {
-            throw new Error("Codex must not install an ACP adapter");
-        },
-    };
     const observer = new RecordingInstallationObserver();
     const audit = new RecordingInstallationAudit();
-    const manager = createManager(
-        stateDirectory,
-        executableDirectory,
-        catalog,
-        adapterInstaller,
-        observer,
-        audit,
-        codex.environment,
-    );
+    const manager = createManager(stateDirectory, executableDirectory, catalog, observer, audit, codex.environment);
 
     try {
         const missing = await manager.request(request("integration-before-agent"), AbortSignal.timeout(30_000));
