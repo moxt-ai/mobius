@@ -28,9 +28,4 @@ if [ -f .env ]; then
   success "Removed .env"
 fi
 
-if [ -f packages/relay-cloudflare-standalone/.dev.vars ]; then
-  rm packages/relay-cloudflare-standalone/.dev.vars
-  success "Removed packages/relay-cloudflare-standalone/.dev.vars"
-fi
-
 success "Worktree cleanup finished"
