@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import {
-    validateAgentCatalog,
     validateAgents,
     validateDisplayName,
     validateLegacyInstallableAgents,
@@ -29,7 +28,6 @@ export function createPairingClaimRoutes() {
                 const { agents: agentsValue, machineName, pairingCode, workspaceName } = body;
                 const agents = validateAgents(agentsValue);
                 validateLegacyInstallableAgents(body["installableAgents"]);
-                validateAgentCatalog(agents);
                 return context.json(
                     await pairings.claimPairing(
                         validatePairingCode(pairingCode),

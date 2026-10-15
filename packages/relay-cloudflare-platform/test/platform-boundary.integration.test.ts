@@ -1490,6 +1490,128 @@ describe.sequential("Platform Session-only boundary", () => {
             host.close(1000, "Test complete");
         }
     }, 180_000);
+
+    it("Given a machine with no discovered local Agent, When it redeems a Runtime pairing and publishes its catalog, Then pairing succeeds and the Runtime advertises an empty Agent directory", async () => {
+        const worker = createTestMobiusPlatformApp(
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
+            createPlatformGateways,
+        );
+        const environment = bindings();
+        const tenants = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/platform/tenants`, {
+                    headers: developerHeaders(),
+                }),
+                environment,
+            ),
+            200,
+        );
+        const tenantValues = tenants["tenants"];
+        if (!Array.isArray(tenantValues) || tenantValues.length === 0) {
+            throw new Error("Expected a Platform tenant");
+        }
+        const app = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps`, {
+                    body: JSON.stringify({
+                        displayName: "Unattended Runtime",
+                        tenantId: text(record(tenantValues[0]), "tenantId"),
+                    }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const appCredential = text(record(app["defaultCredential"]), "credential");
+        const projectId = text(
+            await responseJson(
+                await worker.fetch(
+                    new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${text(app, "appId")}/projects`, {
+                        body: JSON.stringify({
+                            displayName: "Unattended Project",
+                            idempotencyKey: "unattended-project",
+                            locationHint: "apac",
+                        }),
+                        headers: developerHeaders(),
+                        method: "POST",
+                    }),
+                    environment,
+                ),
+                201,
+            ),
+            "projectId",
+        );
+        const pairing = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtime-pairings`, {
+                    body: JSON.stringify({ idempotencyKey: "unattended-runtime" }),
+                    headers: credentialHeaders(appCredential),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const claimed = await responseJson(
+            await worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtime-pairings/${text(pairing, "pairingId")}/redeem`,
+                    {
+                        body: JSON.stringify({
+                            agents: [],
+                            installableAgents: [],
+                            machineName: "Unattended Runtime",
+                            pairingCode: text(pairing, "pairingCode"),
+                            workspaceName: "unattended-workspace",
+                        }),
+                        headers: { "content-type": "application/json" },
+                        method: "POST",
+                    },
+                ),
+                environment,
+            ),
+            200,
+        );
+        const runtimeId = text(claimed, "runtimeId");
+        const runtimeCredential = text(claimed, "runtimeCredential");
+
+        expect(
+            await responseJson(
+                await worker.fetch(
+                    new Request(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtimes/${runtimeId}/agents`,
+                        { headers: credentialHeaders(appCredential) },
+                    ),
+                    environment,
+                ),
+                200,
+            ),
+        ).toMatchObject({ agents: [], installableAgents: [], runtimeId });
+
+        const catalogUpdate = await worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/channels/${text(claimed, "channelId")}/catalog`, {
+                body: JSON.stringify({ agents: [], installableAgents: [] }),
+                headers: { authorization: `Bearer ${runtimeCredential}`, "content-type": "application/json" },
+                method: "PUT",
+            }),
+            environment,
+        );
+        expect(catalogUpdate.status).toBe(204);
+        expect(
+            await responseJson(
+                await worker.fetch(
+                    new Request(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtimes/${runtimeId}/agents`,
+                        { headers: credentialHeaders(appCredential) },
+                    ),
+                    environment,
+                ),
+                200,
+            ),
+        ).toMatchObject({ agents: [], installableAgents: [], runtimeId });
+    });
 });
 
 describe.sequential("Platform Recording policy configuration", () => {

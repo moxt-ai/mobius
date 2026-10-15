@@ -35,7 +35,6 @@ export {
     RevokedPairingStatus,
     RevokedProjectRuntime,
     VerifiedChannelAccess,
-    validateAgentCatalog,
     validateAgents,
     validateDisplayName,
     validateIdentifier,

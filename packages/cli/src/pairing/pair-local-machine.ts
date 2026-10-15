@@ -290,12 +290,6 @@ async function claimPairing(
         : decodePairingResponse(value, "daemonToken", CLAIM_RESPONSE_KEYS);
 }
 
-function assertInventoryUsable(inventory: LocalAgentInventory): void {
-    if (inventory.available.length === 0) {
-        throw new PairingClientError("no_supported_agent", "No supported Agent is available for local discovery");
-    }
-}
-
 function buildPairedDaemon(
     installation: RuntimeInstallationStore,
     connection: VerifiedRuntimeConnection,
@@ -348,9 +342,7 @@ async function pairRuntime(
         environment: localContext.environment,
         signal,
     });
-    assertInventoryUsable(inventory);
-    const agents = inventory.readyAgents();
-    const claim = await claimPairing(options, defaultWorkspace, agents, signal);
+    const claim = await claimPairing(options, defaultWorkspace, inventory.readyAgents(), signal);
     const connection = await installation.saveConnection(
         {
             appId: claim.appId,
