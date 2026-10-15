@@ -14,6 +14,7 @@ import { createDaemonCommandHandler } from "../daemon-command-handler.ts";
 import { send } from "../daemon-command-results.ts";
 import type { DaemonInstallationObserver } from "../daemon-observers.ts";
 import type { DaemonTurnRegistry } from "../daemon-turn-registry.ts";
+import { reportDaemonUpgrade } from "../daemon-upgrade.ts";
 import type { ExternalContentStore } from "../external-content/local-external-content-store.ts";
 import type { NativeSessionService } from "../native-sessions/service.ts";
 import type { DaemonSessionEventProjectionV2 } from "../session-event-projection-v2.ts";
@@ -101,6 +102,19 @@ export async function runRelayConnection({
     });
     installationObserver.connect(socket);
     onConnected();
+    void reportDaemonUpgrade(
+        config.relayUrl,
+        (result) => {
+            if (socket.readyState === WebSocket.OPEN) {
+                send(socket, result);
+            }
+        },
+        signal,
+    ).catch((cause: unknown) => {
+        if (!signal.aborted) {
+            console.error("Could not report daemon upgrade", cause);
+        }
+    });
 
     try {
         await new Promise<void>((resolve, reject) => {

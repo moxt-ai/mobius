@@ -30,6 +30,14 @@ export async function decodeWorkerLaunch(value: unknown): Promise<WorkerLaunch> 
     return { entry: resolvedEntry, executable: resolvedExecutable, version };
 }
 
+export class WorkerStartupError extends Error {
+    readonly code: string;
+    constructor(code: string, message: string, options?: ErrorOptions) {
+        super(message, options);
+        this.code = code;
+    }
+}
+
 export class WorkerProcess {
     readonly #child: ChildProcess;
     readonly #started = Promise.withResolvers<unknown>();
@@ -49,7 +57,12 @@ export class WorkerProcess {
         this.#child.on("message", (value: unknown) => {
             if (isRecord(value) && value["kind"] === "worker-ready") {
                 if (value["version"] !== launch.version) {
-                    this.#started.reject(new Error("The working daemon version does not match the requested version"));
+                    this.#started.reject(
+                        new WorkerStartupError(
+                            "worker_version_mismatch",
+                            "The new daemon reported a different version",
+                        ),
+                    );
                 } else {
                     this.#started.resolve(value);
                 }
@@ -57,13 +70,19 @@ export class WorkerProcess {
             }
         });
         this.#child.once("error", (cause) => {
-            this.#started.reject(cause);
+            this.#started.reject(
+                new WorkerStartupError("worker_spawn_failed", "The new daemon process could not be launched", {
+                    cause,
+                }),
+            );
             if (this.#child.pid === undefined) {
                 this.#closed.resolve();
             }
         });
         this.#child.once("exit", () => {
-            this.#started.reject(new Error("The working daemon exited"));
+            this.#started.reject(
+                new WorkerStartupError("worker_exited", "The new daemon exited before becoming ready"),
+            );
             this.#closed.resolve();
         });
         this.ready = this.#waitForStart(signal);
@@ -95,7 +114,16 @@ export class WorkerProcess {
 
     async #waitForStart(signal: AbortSignal): Promise<unknown> {
         const deadline = AbortSignal.any([signal, AbortSignal.timeout(120_000)]);
-        const abort = (): void => this.#started.reject(deadline.reason);
+        const abort = (): void =>
+            this.#started.reject(
+                signal.aborted
+                    ? signal.reason
+                    : new WorkerStartupError(
+                          "worker_start_timeout",
+                          "The new daemon did not become ready within 120 seconds",
+                          { cause: deadline.reason },
+                      ),
+            );
         deadline.addEventListener("abort", abort, { once: true });
         try {
             return await this.#started.promise;

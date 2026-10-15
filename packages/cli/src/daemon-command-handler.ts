@@ -50,6 +50,7 @@ import {
     executeWorkspaceList,
 } from "./daemon-session-commands.ts";
 import type { DaemonTurnRegistry } from "./daemon-turn-registry.ts";
+import { requestDaemonUpgrade } from "./daemon-upgrade.ts";
 import type { ExternalContentStore } from "./external-content/local-external-content-store.ts";
 import { createNativeSessionRequestHandler } from "./native-sessions/handle-native-requests.ts";
 import type { NativeSessionService } from "./native-sessions/service.ts";
@@ -95,6 +96,7 @@ export function createDaemonCommandHandler({
     readonly handle: (message: ServiceToDaemonMessage) => void;
     readonly settle: () => Promise<void>;
 } {
+    const upgrades = new Set<Promise<void>>();
     const handleSettingsDiscovery = createAgentSettingsDiscoveryHandler({
         config,
         directories,
@@ -122,6 +124,26 @@ export function createDaemonCommandHandler({
     return {
         handle: (message: ServiceToDaemonMessage): void => {
             const kind = message.kind;
+            if (kind === "runtime.upgrade.request") {
+                const pending = requestDaemonUpgrade(
+                    message,
+                    config.relayUrl,
+                    audit,
+                    (result) => {
+                        if (socket.readyState === WebSocket.OPEN) {
+                            send(socket, result);
+                        }
+                    },
+                    signal,
+                ).catch((cause: unknown) => {
+                    if (!signal.aborted) {
+                        console.error("Daemon upgrade failed", cause);
+                    }
+                });
+                upgrades.add(pending);
+                void pending.finally(() => upgrades.delete(pending));
+                return;
+            }
             if (kind === "runtime.diagnostics.read") {
                 // This fixed capability cannot select files, paths or arbitrary local state.
                 audit.record({
@@ -437,7 +459,7 @@ export function createDaemonCommandHandler({
                 });
         },
         settle: async (): Promise<void> => {
-            await Promise.all([nativeRequestHandler.settle(), handleSettingsDiscovery.settle()]);
+            await Promise.all([nativeRequestHandler.settle(), handleSettingsDiscovery.settle(), ...upgrades]);
         },
     };
 }

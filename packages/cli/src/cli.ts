@@ -12,7 +12,11 @@ import { DaemonLocalContext, loadDefaultWorkspace } from "./config.ts";
 import { runManager } from "./daemon-manager.ts";
 import { ensureWorkingProcess, stopManager } from "./daemon-manager-client.ts";
 import { reloadDaemon, runWorker } from "./daemon-worker.ts";
-import { openMobiusCliInstallation, pairLocalMachine } from "./pairing/pair-local-machine.ts";
+import {
+    openMobiusCliInstallation,
+    openMobiusControlInstallation,
+    pairLocalMachine,
+} from "./pairing/pair-local-machine.ts";
 import type { VerifiedRuntimeConnection } from "./storage/runtime-installation-store.ts";
 
 type SavedPairSummary = {
@@ -176,7 +180,7 @@ function createProgram(): Command {
         });
 
     program.command("__manager", { hidden: true }).action(async () => {
-        const installation = await openMobiusCliInstallation(shutdown.signal, process.env);
+        const installation = await openMobiusControlInstallation(shutdown.signal, process.env);
         await runManager(installation.stateDirectory, shutdown.signal);
     });
 
@@ -202,8 +206,9 @@ function createProgram(): Command {
                 "active",
                 shutdown.signal,
             );
-            await ensureWorkingProcess(installation.stateDirectory, packageMetadata.version, shutdown.signal);
-            await reloadDaemon(installation.stateDirectory, shutdown.signal);
+            const control = await openMobiusControlInstallation(shutdown.signal, process.env);
+            await ensureWorkingProcess(control.stateDirectory, packageMetadata.version, shutdown.signal);
+            await reloadDaemon(control.stateDirectory, shutdown.signal);
             process.stdout.write(
                 `\nLocal machine paired.\nApp ID: ${connection.appId}\nConnection ID: ${connection.connectionId}\n`,
             );
@@ -240,7 +245,10 @@ function createProgram(): Command {
                 } else {
                     await installation.setConnectionActivation(options.connection, "stopped", shutdown.signal);
                 }
-                await reloadDaemon(installation.stateDirectory, shutdown.signal);
+                await reloadDaemon(
+                    (await openMobiusControlInstallation(shutdown.signal, process.env)).stateDirectory,
+                    shutdown.signal,
+                );
                 process.stdout.write(`Pairing ${name === "remove" ? "removed" : "stopped"}: ${options.connection}\n`);
             });
     };
@@ -256,8 +264,9 @@ function createProgram(): Command {
             if (options.connection !== undefined) {
                 await installation.setConnectionActivation(options.connection, "active", shutdown.signal);
             }
-            await ensureWorkingProcess(installation.stateDirectory, packageMetadata.version, shutdown.signal);
-            await reloadDaemon(installation.stateDirectory, shutdown.signal);
+            const control = await openMobiusControlInstallation(shutdown.signal, process.env);
+            await ensureWorkingProcess(control.stateDirectory, packageMetadata.version, shutdown.signal);
+            await reloadDaemon(control.stateDirectory, shutdown.signal);
             process.stdout.write("Mobius daemon is running.\n");
         });
 
@@ -265,7 +274,7 @@ function createProgram(): Command {
         .command("quit")
         .description("stop the manager and every active Runtime")
         .action(async () => {
-            const installation = await openMobiusCliInstallation(shutdown.signal, process.env);
+            const installation = await openMobiusControlInstallation(shutdown.signal, process.env);
             await stopManager(installation.stateDirectory, shutdown.signal);
             process.stdout.write("Mobius daemon stopped.\n");
         });

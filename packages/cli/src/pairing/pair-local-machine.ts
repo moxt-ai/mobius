@@ -1,9 +1,9 @@
 import { mkdir, realpath, stat } from "node:fs/promises";
 import { hostname } from "node:os";
-import { basename, resolve } from "node:path";
-
+import { basename, join, resolve } from "node:path";
 import { isIdentifier, mobiusApiUrl } from "@moxt-ai/mobius-protocol";
 import { fetch, type Response } from "undici";
+import packageMetadata from "../../package.json" with { type: "json" };
 import { discoverLocalAgentInventory, type LocalAgentInventory } from "../agent-catalog/discover-local-agents.ts";
 import type { InstallableAgentDefinition } from "../agent-catalog/local-agent.ts";
 import { publishAgentCatalog } from "../agent-catalog/publish-agent-catalog.ts";
@@ -414,7 +414,7 @@ export async function resumeMobiusRuntime(
     return await resumeRuntimeConnection(installation, connection, signal, environment);
 }
 
-export async function openMobiusCliInstallation(
+export async function openMobiusControlInstallation(
     signal: AbortSignal,
     environment: Readonly<NodeJS.ProcessEnv>,
 ): Promise<RuntimeInstallationStore> {
@@ -422,6 +422,19 @@ export async function openMobiusCliInstallation(
         {
             applicationId: MOBIUS_CLI_APPLICATION_ID,
             stateDirectory: readStateDirectory(environment),
+        },
+        signal,
+    );
+}
+
+export async function openMobiusCliInstallation(
+    signal: AbortSignal,
+    environment: Readonly<NodeJS.ProcessEnv>,
+): Promise<RuntimeInstallationStore> {
+    return await openRuntimeInstallationStore(
+        {
+            applicationId: MOBIUS_CLI_APPLICATION_ID,
+            stateDirectory: join(readStateDirectory(environment), "versions", packageMetadata.version),
         },
         signal,
     );

@@ -1,0 +1,71 @@
+import { mkdir, readFile, realpath } from "node:fs/promises";
+import { isAbsolute, join, relative } from "node:path";
+import { runtimeUpgradeVersionSchema } from "@moxt-ai/mobius-protocol";
+import { z } from "zod";
+import type { WorkerLaunch } from "./daemon-lifecycle-protocol.ts";
+import { decodeWorkerLaunch } from "./daemon-worker-process.ts";
+import { validateLocalPath } from "./filesystem/private-path.ts";
+import { findExecutableOnPath, runBoundedProcess } from "./process/executable.ts";
+import { readStateDirectory } from "./storage/state-directory.ts";
+
+export class DaemonUpgradeError extends Error {
+    readonly code: string;
+    constructor(code: string, message: string, options?: ErrorOptions) {
+        super(message, options);
+        this.code = code;
+    }
+}
+
+export async function installDaemonRelease(version: string, signal: AbortSignal): Promise<WorkerLaunch> {
+    runtimeUpgradeVersionSchema.parse(version);
+    const npm = await findExecutableOnPath("npm", process.env);
+    if (npm === null) {
+        throw new DaemonUpgradeError("npm_unavailable", "npm is required to download the new daemon");
+    }
+    // npm owns the package installation; never overwrite the running release.
+    const prefix = join(readStateDirectory(), "npm", version);
+    await mkdir(prefix, { recursive: true, mode: 0o700 });
+    try {
+        await validateLocalPath(prefix, true, true, signal);
+        await runBoundedProcess({
+            command: npm.path,
+            arguments: [
+                "install",
+                "--prefix",
+                prefix,
+                "--ignore-scripts",
+                "--no-audit",
+                "--no-fund",
+                "--save-exact",
+                "--",
+                `@moxt-ai/mobius@${version}`,
+            ],
+            cwd: prefix,
+            environment: process.env,
+            signal,
+            timeoutMilliseconds: 300_000,
+            outputLimitBytes: 64 * 1024,
+        });
+        const packageRoot = await realpath(join(prefix, "node_modules", "@moxt-ai", "mobius"));
+        const metadata = z
+            .object({
+                name: z.literal("@moxt-ai/mobius"),
+                version: z.literal(version),
+                bin: z.object({ mobius: z.literal("dist/cli.js") }),
+            })
+            .parse(JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8")));
+        const entry = await realpath(join(packageRoot, metadata.bin.mobius));
+        const resolved = relative(await realpath(prefix), entry);
+        if (resolved.startsWith("..") || isAbsolute(resolved)) {
+            throw new Error("Installed entry escaped npm prefix");
+        }
+        return await decodeWorkerLaunch({ executable: process.execPath, entry, version });
+    } catch (cause) {
+        signal.throwIfAborted();
+        throw new DaemonUpgradeError(
+            "npm_install_failed",
+            "npm could not install and verify the requested Mobius version",
+            { cause },
+        );
+    }
+}

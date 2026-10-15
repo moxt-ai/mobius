@@ -40,6 +40,13 @@ async function resolveExecutableTarget(path: string): Promise<string> {
         // npm cmd-shim entrypoints are Node scripts. Resolve the script instead of
         // handing untrusted arguments to cmd.exe's command language.
         const shim = await readFile(resolvedPath, "utf8");
+        // Node's bundled npm uses its own shim format, not npm cmd-shim.
+        if (
+            shim.includes('SET "NPM_CLI_JS=%~dp0\\node_modules\\npm\\bin\\npm-cli.js"') &&
+            shim.includes('"%NODE_EXE%" "%NPM_CLI_JS%" %*')
+        ) {
+            return await realpath(resolve(dirname(resolvedPath), "node_modules/npm/bin/npm-cli.js"));
+        }
         const script = /"%_prog%"\s+"%dp0%[\\/]([^"\r\n]+\.(?:js|mjs|cjs))"\s+%\*/iu.exec(shim)?.[1];
         if (script !== undefined && shim.includes("SET dp0=%~dp0")) {
             resolvedPath = await realpath(resolve(dirname(resolvedPath), script));
