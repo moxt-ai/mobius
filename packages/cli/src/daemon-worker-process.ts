@@ -32,14 +32,20 @@ export async function decodeWorkerLaunch(value: unknown): Promise<WorkerLaunch> 
 
 export class WorkerStartupError extends Error {
     readonly code: string;
-    constructor(code: string, message: string, options?: ErrorOptions) {
+    readonly stdout: string;
+    readonly stderr: string;
+    constructor(code: string, message: string, options?: ErrorOptions, stdout = "", stderr = "") {
         super(message, options);
         this.code = code;
+        this.stdout = stdout;
+        this.stderr = stderr;
     }
 }
 
 export class WorkerProcess {
     readonly #child: ChildProcess;
+    #stdout = "";
+    #stderr = "";
     readonly #started = Promise.withResolvers<unknown>();
     readonly #closed = Promise.withResolvers<void>();
     readonly exited = this.#closed.promise;
@@ -52,7 +58,15 @@ export class WorkerProcess {
         this.#child = spawn(launch.executable, [launch.entry, "__worker"], {
             env: environment,
             windowsHide: true,
-            stdio: ["ignore", "inherit", "inherit", "ipc"],
+            stdio: ["ignore", "pipe", "pipe", "ipc"],
+        });
+        this.#child.stdout?.setEncoding("utf8").on("data", (chunk: string) => {
+            this.#stdout = (this.#stdout + chunk).slice(-4096);
+            process.stdout.write(chunk);
+        });
+        this.#child.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
+            this.#stderr = (this.#stderr + chunk).slice(-4096);
+            process.stderr.write(chunk);
         });
         this.#child.on("message", (value: unknown) => {
             if (isRecord(value) && value["kind"] === "worker-ready") {
@@ -81,7 +95,13 @@ export class WorkerProcess {
         });
         this.#child.once("exit", () => {
             this.#started.reject(
-                new WorkerStartupError("worker_exited", "The new daemon exited before becoming ready"),
+                new WorkerStartupError(
+                    "worker_exited",
+                    "The new daemon exited before becoming ready",
+                    undefined,
+                    this.#stdout,
+                    this.#stderr,
+                ),
             );
             this.#closed.resolve();
         });
@@ -122,6 +142,8 @@ export class WorkerProcess {
                           "worker_start_timeout",
                           "The new daemon did not become ready within 120 seconds",
                           { cause: deadline.reason },
+                          this.#stdout,
+                          this.#stderr,
                       ),
             );
         deadline.addEventListener("abort", abort, { once: true });

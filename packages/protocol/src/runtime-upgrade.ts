@@ -25,6 +25,8 @@ export const runtimeUpgradeResultSchema = z
                 z.strictObject({ status: z.literal("succeeded") }),
                 z.strictObject({
                     status: z.literal("failed"),
+                    stdout: z.string().max(4096).optional(),
+                    stderr: z.string().max(4096).optional(),
                     code: z.string().min(1).max(64),
                     message: z.string().max(256),
                     retryAfter: z.number().int().nonnegative(),

@@ -34,7 +34,10 @@ async function packedRelease(
             `import ${JSON.stringify(pathToFileURL(join(source, "src/cli.ts")).href)};`,
         );
     } else {
-        await writeFile(join(root, "dist/cli.js"), 'throw new Error("Controlled startup failure");');
+        await writeFile(
+            join(root, "dist/cli.js"),
+            'console.log("Starting controlled release"); throw new Error("Controlled startup failure");',
+        );
     }
     await writeFile(
         join(root, "package.json"),
@@ -274,17 +277,26 @@ describe("Daemon server-requested upgrade", () => {
             expect(await readFile(join(stateRoot, "versions", cliPackage.version, "retained-data"), "utf8")).toBe(
                 "original-data",
             );
+            if (failed.outcome.status === "failed") {
+                expect(failed.outcome.stderr).toContain("Controlled startup failure");
+                expect(failed.outcome.stdout).toContain("Starting controlled release");
+            }
+            await expect(readFile(join(control.stateDirectory, "worker-switch.json"))).rejects.toMatchObject({
+                code: "ENOENT",
+            });
+            await expect(readFile(join(control.stateDirectory, "upgrade-request.json"))).rejects.toMatchObject({
+                code: "ENOENT",
+            });
             await cli(["quit"]);
             await cli(["start"], signal, join(directory, `source-${reuse}`, "src/cli.ts"));
-            expect(await next()).toMatchObject({
-                requestId: "upgrade_broken",
-                outcome: { status: "failed", retryAfter: failed.outcome.retryAfter },
-            });
-            request("upgrade_after_restart", bad);
-            expect(await next()).toMatchObject({
-                requestId: "upgrade_after_restart",
-                outcome: { status: "rejected", code: "upgrade_cooldown", retryAfter: failed.outcome.retryAfter },
-            });
+            expect(
+                await sendLocalRequest(
+                    control.stateDirectory,
+                    "manager",
+                    { kind: "switch-status", wait: false },
+                    signal,
+                ),
+            ).toEqual({ kind: "switch-status", state: null });
         } finally {
             await cli(["quit"], AbortSignal.timeout(20_000)).catch(() => undefined);
             signal.removeEventListener("abort", aborted);

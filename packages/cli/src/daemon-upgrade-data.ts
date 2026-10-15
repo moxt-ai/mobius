@@ -2,7 +2,7 @@ import { cp, mkdir, mkdtemp, rename, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { runtimeUpgradeVersionSchema } from "@moxt-ai/mobius-protocol";
 import { isNodeError } from "./daemon-local-control.ts";
-import { readSwitchState } from "./daemon-switch-state.ts";
+import { readSwitchStatus } from "./daemon-switch-status.ts";
 import { readStateDirectory } from "./storage/state-directory.ts";
 
 export async function prepareUpgradeData(
@@ -10,7 +10,7 @@ export async function prepareUpgradeData(
     version: string,
     signal: AbortSignal,
 ): Promise<void> {
-    const transition = await readSwitchState(controlDirectory);
+    const transition = await readSwitchStatus(controlDirectory, signal);
     if (transition?.kind !== "switching" || transition.next.version !== version) {
         return;
     }

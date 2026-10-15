@@ -1,24 +1,20 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import {
     type RuntimeUpgradeRequest,
     type RuntimeUpgradeResult,
     runtimeUpgradeRequestSchema,
 } from "@moxt-ai/mobius-protocol";
-import { z } from "zod";
 import packageMetadata from "../package.json" with { type: "json" };
 import type { AuditStore } from "./audit/audit-store.ts";
 import { lifecycleResponse } from "./daemon-lifecycle-protocol.ts";
-import { isNodeError, sendLocalRequest } from "./daemon-local-control.ts";
-import { readSwitchState, waitForSwitchResult, writePrivateJson } from "./daemon-switch-state.ts";
+import { sendLocalRequest } from "./daemon-local-control.ts";
+import { readSwitchStatus } from "./daemon-switch-status.ts";
 import { DaemonUpgradeError, installDaemonRelease } from "./daemon-upgrade-package.ts";
 import { openMobiusControlInstallation } from "./pairing/pair-local-machine.ts";
 
 // Shared by every Relay connection in this working process.
 let upgradeInProgress = false;
 
-const pendingUpgrade = z.object({ request: runtimeUpgradeRequestSchema, relayKey: z.string() }).readonly();
 const relayKey = (url: URL): string => createHash("sha256").update(url.href).digest("hex");
 
 export async function reportDaemonUpgrade(
@@ -30,29 +26,20 @@ export async function reportDaemonUpgrade(
         return;
     }
     const control = await openMobiusControlInstallation(signal, process.env);
-    const transition = await waitForSwitchResult(control.stateDirectory, signal);
-    if (transition === null) {
+    const transition = await readSwitchStatus(control.stateDirectory, signal, true);
+    if (transition === null || transition.context !== relayKey(relayUrl)) {
         return;
     }
-    let pending: z.infer<typeof pendingUpgrade>;
-    try {
-        pending = pendingUpgrade.parse(
-            JSON.parse(await readFile(join(control.stateDirectory, "upgrade-request.json"), "utf8")),
-        );
-    } catch (cause) {
-        if (isNodeError(cause, "ENOENT")) {
-            return;
-        }
-        throw cause;
-    }
-    if (pending.request.requestId !== transition.id || pending.relayKey !== relayKey(relayUrl)) {
-        return;
-    }
+    const request = runtimeUpgradeRequestSchema.parse({
+        kind: "runtime.upgrade.request",
+        requestId: transition.id,
+        version: transition.next.version,
+    });
     const base = {
         kind: "runtime.upgrade.result",
-        requestId: pending.request.requestId,
+        requestId: request.requestId,
         version: packageMetadata.version,
-        targetVersion: pending.request.version,
+        targetVersion: request.version,
     };
     if (transition.kind === "rolled-back" && transition.previous.version === packageMetadata.version) {
         send({
@@ -63,6 +50,8 @@ export async function reportDaemonUpgrade(
                 code: transition.code,
                 message: transition.message,
                 retryAfter: transition.retryAfter,
+                stdout: transition.stdout,
+                stderr: transition.stderr,
             },
         });
     } else if (transition.next.version === packageMetadata.version) {
@@ -101,7 +90,7 @@ export async function requestDaemonUpgrade(
     upgradeInProgress = true;
     try {
         const control = await openMobiusControlInstallation(signal, process.env);
-        const transition = await readSwitchState(control.stateDirectory);
+        const transition = await readSwitchStatus(control.stateDirectory, signal);
         if (transition?.kind === "rolled-back" && transition.retryAfter > Date.now()) {
             reject("upgrade_cooldown", "Upgrades are blocked for one hour after a failed start", transition.retryAfter);
             return;
@@ -122,15 +111,11 @@ export async function requestDaemonUpgrade(
         });
         reply({ status: "accepted" });
         const launch = await installDaemonRelease(request.version, signal);
-        await writePrivateJson(control.stateDirectory, "upgrade-request.json", {
-            request,
-            relayKey: relayKey(relayUrl),
-        });
         const response = lifecycleResponse.parse(
             await sendLocalRequest(
                 control.stateDirectory,
                 "manager",
-                { kind: "switch", id: request.requestId, launch },
+                { kind: "switch", id: request.requestId, context: relayKey(relayUrl), launch },
                 signal,
             ),
         );
