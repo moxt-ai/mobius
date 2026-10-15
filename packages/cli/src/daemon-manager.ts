@@ -1,12 +1,12 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { readFile, unlink, writeFile } from "node:fs/promises";
-import { createConnection, createServer, type Socket } from "node:net";
-import { join } from "node:path";
-import type { PairedDaemon } from "./pairing/pair-local-machine.ts";
+import { createConnection, createServer, type Server, type Socket } from "node:net";
+import { extname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { DaemonWorkerError, decodeWorkerEvent } from "./daemon-worker-protocol.ts";
 import { pairLocalMachine, resumeLocalMachine } from "./pairing/pair-local-machine.ts";
 import { platformSupportFor } from "./platform/index.ts";
-import { MobiusRuntimeEngine } from "./runtime.ts";
 import type { RuntimeInstallationStore, VerifiedRuntimeConnection } from "./storage/runtime-installation-store.ts";
 
 const CONTROL_TIMEOUT_MILLISECONDS = 130_000;
@@ -48,6 +48,7 @@ interface ActiveRuntime {
     readonly connection: VerifiedRuntimeConnection;
     readonly controller: AbortController;
     readonly completion: Promise<void>;
+    readonly started: Promise<void>;
     readonly ready: Promise<void>;
     readonly resolveReady: () => void;
     status: ManagedRuntimeStatus;
@@ -205,6 +206,7 @@ function summary(connection: VerifiedRuntimeConnection, status: ManagedRuntimeSt
 class RuntimeSupervisor {
     readonly #failed = new Map<string, VerifiedRuntimeConnection>();
     readonly #installation: RuntimeInstallationStore;
+    readonly #signal: AbortSignal;
     readonly #pairingRequests = new Map<
         string,
         Promise<{ readonly alreadyOnline: boolean; readonly pair: ManagedRuntimeSummary }>
@@ -213,8 +215,9 @@ class RuntimeSupervisor {
     readonly #runtimes = new Map<string, ActiveRuntime>();
     readonly #stopped = new Map<string, VerifiedRuntimeConnection>();
 
-    constructor(installation: RuntimeInstallationStore) {
+    constructor(installation: RuntimeInstallationStore, signal: AbortSignal) {
         this.#installation = installation;
+        this.#signal = signal;
     }
 
     readonly restore = async (signal: AbortSignal): Promise<void> => {
@@ -231,8 +234,8 @@ class RuntimeSupervisor {
                 .filter((connection) => connection.activation === "active")
                 .map(async (connection) => {
                     try {
-                        const paired = await resumeLocalMachine(["--connection", connection.connectionId], signal);
-                        this.#activate(connection, paired);
+                        const active = this.#activate(connection);
+                        await active.started;
                     } catch (cause) {
                         this.#restoring.delete(connection.connectionId);
                         this.#failed.set(connection.connectionId, connection);
@@ -272,7 +275,7 @@ class RuntimeSupervisor {
         const paired = await pairLocalMachine(arguments_, signal);
         const connection = await this.#installation.setConnectionActivation(paired.connectionId, "active", signal);
         const alreadyOnline = this.#runtimes.get(connection.connectionId)?.status === "online";
-        const active = this.#activate(connection, paired);
+        const active = this.#activate(connection);
         await waitForReady(active, signal);
         return { alreadyOnline, pair: summary(connection, active.status) };
     };
@@ -280,7 +283,7 @@ class RuntimeSupervisor {
     readonly start = async (arguments_: readonly string[], signal: AbortSignal): Promise<ManagedRuntimeSummary> => {
         const paired = await resumeLocalMachine(arguments_, signal);
         const connection = await this.#installation.setConnectionActivation(paired.connectionId, "active", signal);
-        const active = this.#activate(connection, paired);
+        const active = this.#activate(connection);
         await waitForReady(active, signal);
         return summary(connection, active.status);
     };
@@ -325,46 +328,103 @@ class RuntimeSupervisor {
         await Promise.all(runtimes.map(async (runtime) => await runtime.completion));
     };
 
-    #activate(connection: VerifiedRuntimeConnection, paired: PairedDaemon): ActiveRuntime {
+    #activate(connection: VerifiedRuntimeConnection): ActiveRuntime {
+        this.#signal.throwIfAborted();
         const existing = this.#runtimes.get(connection.connectionId);
         if (existing !== undefined) {
             return existing;
         }
         const controller = new AbortController();
+        const stopForManager = (): void => controller.abort();
+        this.#signal.addEventListener("abort", stopForManager, { once: true });
         const readiness = Promise.withResolvers<void>();
+        void readiness.promise.catch(() => undefined);
+        const started = Promise.withResolvers<void>();
         const completion = Promise.withResolvers<void>();
         const active: ActiveRuntime = {
             connection,
             controller,
             completion: completion.promise,
+            started: started.promise,
             ready: readiness.promise,
             resolveReady: readiness.resolve,
             status: "starting",
         };
-        const engine = new MobiusRuntimeEngine(paired.config, {
-            onConnectionStatus: (status) => {
-                active.status = status;
-                if (status === "online") {
-                    active.resolveReady();
-                }
-            },
-        });
-        void engine
-            .run(controller.signal)
-            .catch((cause: unknown) => {
-                if (!controller.signal.aborted) {
-                    active.status = "failed";
-                    this.#runtimes.delete(connection.connectionId);
-                    this.#failed.set(connection.connectionId, connection);
-                    active.resolveReady();
-                    process.stderr.write(`Runtime ${connection.connectionId} failed: ${errorMessage(cause)}\n`);
-                }
-            })
-            .finally(completion.resolve);
         this.#runtimes.set(connection.connectionId, active);
         this.#restoring.delete(connection.connectionId);
         this.#failed.delete(connection.connectionId);
         this.#stopped.delete(connection.connectionId);
+        const cli = fileURLToPath(new URL(`./cli${extname(import.meta.url)}`, import.meta.url));
+        const child = spawn(process.execPath, [cli, "__worker", "--connection", connection.connectionId], {
+            env: process.env,
+            windowsHide: true,
+            stdio: ["ignore", "inherit", "inherit", "ipc"],
+        });
+        let failure: Error | undefined;
+        const stop = (): void => {
+            if (child.connected) {
+                child.send({ kind: "stop" }, (error) => {
+                    if (error !== null && child.connected) {
+                        child.disconnect();
+                    }
+                });
+            }
+        };
+        controller.signal.addEventListener("abort", stop, { once: true });
+        const startupTimeout = setTimeout(() => {
+            failure = new DaemonWorkerError("worker_start_timeout", "Daemon worker startup timed out");
+            stop();
+        }, START_TIMEOUT_MILLISECONDS);
+        child.on("message", (value: unknown) => {
+            try {
+                const event = decodeWorkerEvent(value);
+                if (event.kind === "failed") {
+                    failure = new DaemonWorkerError(event.code, event.message);
+                    return;
+                }
+                clearTimeout(startupTimeout);
+                active.status = event.status;
+                started.resolve();
+                if (event.status === "online") {
+                    active.resolveReady();
+                }
+            } catch (cause) {
+                failure =
+                    cause instanceof Error
+                        ? cause
+                        : new DaemonWorkerError("worker_protocol_invalid", "Invalid daemon worker event");
+                stop();
+            }
+        });
+        child.once("error", (cause) => {
+            failure = cause;
+        });
+        child.once("close", (code, exitSignal) => {
+            clearTimeout(startupTimeout);
+            this.#signal.removeEventListener("abort", stopForManager);
+            controller.signal.removeEventListener("abort", stop);
+            this.#runtimes.delete(connection.connectionId);
+            if (!controller.signal.aborted) {
+                active.status = "failed";
+                this.#failed.set(connection.connectionId, connection);
+                process.stderr.write(
+                    `Runtime ${connection.connectionId} failed: ${failure?.message ?? `Worker exited (${code ?? exitSignal})`}\n`,
+                );
+            } else {
+                active.status = "stopped";
+            }
+            started.resolve();
+            readiness.reject(
+                failure ??
+                    new DaemonWorkerError(
+                        controller.signal.aborted ? "worker_stopped" : "worker_exited",
+                        controller.signal.aborted
+                            ? "The daemon worker stopped"
+                            : "The daemon worker exited before connecting",
+                    ),
+            );
+            completion.resolve();
+        });
         return active;
     }
 }
@@ -388,8 +448,8 @@ async function waitForReady(active: ActiveRuntime, signal: AbortSignal): Promise
         active.ready.then(resolve, reject).finally(() => deadline.removeEventListener("abort", abort));
         deadline.addEventListener("abort", abort, { once: true });
     });
-    if (active.status === "failed") {
-        throw new Error("The Runtime failed before connecting");
+    if (active.status === "failed" || active.status === "stopped") {
+        throw new DaemonWorkerError("worker_not_online", "The Runtime stopped or failed before connecting");
     }
 }
 
@@ -604,74 +664,87 @@ export async function runManager(
     if (releaseLock === null) {
         return;
     }
-    const token = await readOrCreateControlToken(installation.stateDirectory);
     const socketPath = controlSocketPath(installation.stateDirectory);
     const shutdown = new AbortController();
     const combined = AbortSignal.any([signal, shutdown.signal]);
-    const supervisor = new RuntimeSupervisor(installation);
+    const supervisor = new RuntimeSupervisor(installation, combined);
     const sockets = new Set<Socket>();
+    let server: Server | undefined;
     try {
-        await supervisor.restore(combined);
-    } catch (cause) {
-        combined.throwIfAborted();
-        process.stderr.write(`Could not restore saved Runtime connections: ${errorMessage(cause)}\n`);
-    }
-    const server = createServer((socket) => {
-        sockets.add(socket);
-        socket.once("close", () => sockets.delete(socket));
-        void (async () => {
-            try {
-                const request = decodeCommand(await readSocketMessage(socket, combined), token);
-                let response: ManagerResponse;
-                if (request.kind === "list") {
-                    response = { kind: "listed", managerVersion, pairs: supervisor.list() };
-                } else if (request.kind === "pair") {
-                    const paired = await supervisor.pair(request.arguments, combined);
-                    response = { alreadyOnline: paired.alreadyOnline, kind: "ready", pair: paired.pair };
-                } else if (request.kind === "start") {
-                    response = {
-                        alreadyOnline: false,
-                        kind: "ready",
-                        pair: await supervisor.start(request.arguments, combined),
-                    };
-                } else if (request.kind === "stop-pair") {
-                    response = { kind: "pair-stopped", pair: await supervisor.stop(request.connectionId, combined) };
-                } else if (request.kind === "remove-pair") {
-                    response = {
-                        connectionId: await supervisor.remove(request.connectionId, combined),
-                        kind: "pair-removed",
-                    };
-                } else {
-                    const beginShutdown = (): void => shutdown.abort();
-                    socket.once("close", beginShutdown);
-                    socket.once("error", beginShutdown);
-                    socket.end(`${JSON.stringify({ kind: "stopped" })}\n`, beginShutdown);
-                    return;
+        const token = await readOrCreateControlToken(installation.stateDirectory);
+        try {
+            await supervisor.restore(combined);
+        } catch (cause) {
+            combined.throwIfAborted();
+            process.stderr.write(`Could not restore saved Runtime connections: ${errorMessage(cause)}\n`);
+        }
+        if (combined.aborted) {
+            return;
+        }
+        server = createServer((socket) => {
+            sockets.add(socket);
+            socket.once("close", () => sockets.delete(socket));
+            void (async () => {
+                try {
+                    const request = decodeCommand(await readSocketMessage(socket, combined), token);
+                    let response: ManagerResponse;
+                    if (request.kind === "list") {
+                        response = { kind: "listed", managerVersion, pairs: supervisor.list() };
+                    } else if (request.kind === "pair") {
+                        const paired = await supervisor.pair(request.arguments, combined);
+                        response = { alreadyOnline: paired.alreadyOnline, kind: "ready", pair: paired.pair };
+                    } else if (request.kind === "start") {
+                        response = {
+                            alreadyOnline: false,
+                            kind: "ready",
+                            pair: await supervisor.start(request.arguments, combined),
+                        };
+                    } else if (request.kind === "stop-pair") {
+                        response = {
+                            kind: "pair-stopped",
+                            pair: await supervisor.stop(request.connectionId, combined),
+                        };
+                    } else if (request.kind === "remove-pair") {
+                        response = {
+                            connectionId: await supervisor.remove(request.connectionId, combined),
+                            kind: "pair-removed",
+                        };
+                    } else {
+                        const beginShutdown = (): void => shutdown.abort();
+                        socket.once("close", beginShutdown);
+                        socket.once("error", beginShutdown);
+                        socket.end(`${JSON.stringify({ kind: "stopped" })}\n`, beginShutdown);
+                        return;
+                    }
+                    socket.end(`${JSON.stringify(response)}\n`);
+                } catch (cause) {
+                    socket.end(
+                        `${JSON.stringify({ kind: "error", code: cause instanceof DaemonWorkerError ? cause.code : "manager_command_failed", message: errorMessage(cause) })}\n`,
+                    );
                 }
-                socket.end(`${JSON.stringify(response)}\n`);
-            } catch (cause) {
-                socket.end(
-                    `${JSON.stringify({ kind: "error", code: "manager_command_failed", message: errorMessage(cause) })}\n`,
-                );
-            }
-        })();
-    });
-    await managerPlatform.prepareControlSocket(socketPath);
-    server.listen(socketPath);
-    await new Promise<void>((resolve, reject) => {
-        server.once("listening", resolve);
-        server.once("error", reject);
-    });
-    await managerPlatform.secureControlSocket(socketPath);
-    try {
-        await new Promise<void>((resolve) => combined.addEventListener("abort", () => resolve(), { once: true }));
-        const serverClosed = new Promise<void>((resolve) => server.close(() => resolve()));
+            })();
+        });
+        await managerPlatform.prepareControlSocket(socketPath);
+        const listeningServer = server;
+        await new Promise<void>((resolve, reject) => {
+            listeningServer.once("listening", resolve);
+            listeningServer.once("error", reject);
+            listeningServer.listen(socketPath);
+        });
+        await managerPlatform.secureControlSocket(socketPath);
+        if (!combined.aborted) {
+            await new Promise<void>((resolve) => combined.addEventListener("abort", () => resolve(), { once: true }));
+        }
+    } finally {
+        shutdown.abort();
         for (const socket of sockets) {
             socket.destroy();
         }
-        await serverClosed;
+        const closingServer = server;
+        if (closingServer?.listening) {
+            await new Promise<void>((resolve) => closingServer.close(() => resolve()));
+        }
         await supervisor.close();
-    } finally {
         await managerPlatform.removeControlSocket(socketPath).catch(() => undefined);
         await releaseLock();
     }

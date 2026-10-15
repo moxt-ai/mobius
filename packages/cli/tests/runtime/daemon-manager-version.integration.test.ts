@@ -5,12 +5,14 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createConnection, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import cliPackage from "../../package.json" with { type: "json" };
 import { runManager } from "../../src/daemon-manager.ts";
 import { openMobiusCliInstallation } from "../../src/pairing/pair-local-machine.ts";
+import { platformSupportFor } from "../../src/platform/index.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -141,6 +143,19 @@ describe("Mobius pairing lifecycle", () => {
             expect(initiallyListed.stdout).toContain(connection.connectionId);
             expect(initiallyListed.stdout).toContain("app_test");
 
+            const managerPid = Number(
+                (await readFile(join(installation.stateDirectory, "manager.lock"), "utf8")).trim(),
+            );
+            const workers = (await platformSupportFor(process.platform).readProcessTable()).filter(
+                (entry) => entry.parentProcessId === managerPid,
+            );
+            expect(workers).toHaveLength(1);
+            const worker = workers[0];
+            if (worker === undefined) {
+                throw new Error("Missing daemon worker");
+            }
+            expect(worker.processId).not.toBe(managerPid);
+
             const outputPath = join(stateRoot, "pairings.json");
             await writeFile(outputPath, "", { mode: 0o600 });
             const listedAsJson = await runCli(["pair", "list", `--output-json=${outputPath}`], environment, deadline);
@@ -169,6 +184,7 @@ describe("Mobius pairing lifecycle", () => {
                 deadline,
             );
             expect(stopped.code).toBe(0);
+            expect(platformSupportFor(process.platform).processExists(worker.processId)).toBe(false);
             expect(stopped.stdout).toContain(`Pairing stopped: ${connection.connectionId}\n`);
 
             const listedStopped = await runCli(["pair", "list"], environment, deadline);
@@ -195,6 +211,142 @@ describe("Mobius pairing lifecycle", () => {
             await runCli(["quit"], environment, AbortSignal.timeout(10_000)).catch(() => undefined);
         }
     }, 75_000);
+});
+
+describe("Managed worker process isolation", () => {
+    it("Given two saved Runtime connections, When a worker fails and the manager is killed, Then other work stays isolated and CLI start recovers without duplicate workers", async () => {
+        const stateRoot = await mkdtemp(join(tmpdir(), "mobius-worker-isolation-"));
+        temporaryDirectories.push(stateRoot);
+        const emptyPath = join(stateRoot, "empty");
+        await mkdir(emptyPath);
+        const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: stateRoot, PATH: emptyPath };
+        const signal = AbortSignal.timeout(60_000);
+        const installation = await openMobiusCliInstallation(signal, environment);
+        const connections = [];
+        for (const name of ["one", "two"]) {
+            connections.push(
+                await installation.saveConnection(
+                    {
+                        appId: `app_${name}`,
+                        channelId: `channel_${name}`,
+                        defaultWorkspace: stateRoot,
+                        pairingId: "",
+                        relayOrigin: new URL("http://127.0.0.1:1"),
+                        runtimeCredential: name.repeat(43),
+                        runtimeId: `runtime_${name}`,
+                    },
+                    signal,
+                ),
+            );
+        }
+        try {
+            expect((await runCli(["start"], environment, signal)).code).toBe(0);
+            const managerPid = Number(await readFile(join(installation.stateDirectory, "manager.lock"), "utf8"));
+            const workers = (await platformSupportFor(process.platform).readProcessTable()).filter(
+                (entry) => entry.parentProcessId === managerPid,
+            );
+            expect(workers).toHaveLength(2);
+            const failed = workers[0];
+            const surviving = workers[1];
+            if (failed === undefined || surviving === undefined) {
+                throw new Error("Expected two workers");
+            }
+            process.kill(failed.processId, "SIGKILL");
+            const listed = await runCli(["pair", "list"], environment, signal);
+            expect(listed.stdout).toContain("failed");
+            expect(listed.stdout).toContain("reconnecting");
+            expect(platformSupportFor(process.platform).processExists(surviving.processId)).toBe(true);
+            process.kill(managerPid, "SIGKILL");
+            expect((await runCli(["start"], environment, signal)).code).toBe(0);
+            const replacementPid = Number(await readFile(join(installation.stateDirectory, "manager.lock"), "utf8"));
+            expect(replacementPid).not.toBe(managerPid);
+            expect(platformSupportFor(process.platform).processExists(surviving.processId)).toBe(false);
+            expect(
+                (await platformSupportFor(process.platform).readProcessTable()).filter(
+                    (entry) => entry.parentProcessId === replacementPid,
+                ),
+            ).toHaveLength(2);
+        } finally {
+            await runCli(["quit"], environment, AbortSignal.timeout(15_000));
+        }
+    }, 75_000);
+
+    it.skipIf(process.platform === "win32")(
+        "Given an older manager with a running worker, When the installed CLI checks its version, Then both old processes exit and the saved Runtime runs under the replacement manager",
+        async () => {
+            const stateRoot = await mkdtemp(join(tmpdir(), "mobius-worker-upgrade-"));
+            temporaryDirectories.push(stateRoot);
+            const emptyPath = join(stateRoot, "empty");
+            await mkdir(emptyPath);
+            const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: stateRoot, PATH: emptyPath };
+            const signal = AbortSignal.timeout(60_000);
+            const installation = await openMobiusCliInstallation(signal, environment);
+            const connection = await installation.saveConnection(
+                {
+                    appId: "app_upgrade",
+                    channelId: "channel_upgrade",
+                    defaultWorkspace: stateRoot,
+                    pairingId: "",
+                    relayOrigin: new URL("http://127.0.0.1:1"),
+                    runtimeCredential: "r".repeat(43),
+                    runtimeId: "runtime_upgrade",
+                },
+                signal,
+            );
+            const entry = join(stateRoot, "old-manager.mjs");
+            const managerModule = pathToFileURL(resolve(import.meta.dirname, "../../src/daemon-manager.ts")).href;
+            const pairingModule = pathToFileURL(
+                resolve(import.meta.dirname, "../../src/pairing/pair-local-machine.ts"),
+            ).href;
+            await writeFile(
+                entry,
+                `import {runManager} from ${JSON.stringify(managerModule)};
+import {openMobiusCliInstallation} from ${JSON.stringify(pairingModule)};
+const shutdown = new AbortController();
+process.once('SIGTERM', () => shutdown.abort());
+await runManager(await openMobiusCliInstallation(shutdown.signal, process.env), '0.0.1-test', shutdown.signal);
+`,
+            );
+            const workerReady = waitForDirectoryEntry(
+                tmpdir(),
+                basename(controlSocketPath(installation.stateDirectory)),
+                signal,
+            );
+            const old = spawn(process.execPath, [entry], { env: environment, stdio: "ignore", windowsHide: true });
+            const exited = new Promise<void>((resolve_, reject) => {
+                old.once("error", reject);
+                old.once("exit", () => resolve_());
+            });
+            try {
+                await workerReady;
+                await holdControlConnection(installation.stateDirectory, signal).then((socket) => socket.destroy());
+                const workers = (await platformSupportFor(process.platform).readProcessTable()).filter(
+                    (entry) => entry.parentProcessId === old.pid,
+                );
+                expect(workers).toHaveLength(1);
+                const listed = await runCli(["pair", "list"], environment, signal);
+                expect(listed.code).toBe(0);
+                expect(listed.stdout).toContain(`Starting mobius daemon ${cliPackage.version}`);
+                expect(listed.stdout).toContain(connection.connectionId);
+                await exited;
+                for (const worker of workers) {
+                    expect(platformSupportFor(process.platform).processExists(worker.processId)).toBe(false);
+                }
+                const pid = Number(await readFile(join(installation.stateDirectory, "manager.lock"), "utf8"));
+                expect(pid).not.toBe(old.pid);
+                expect(
+                    (await platformSupportFor(process.platform).readProcessTable()).filter(
+                        (entry) => entry.parentProcessId === pid,
+                    ),
+                ).toHaveLength(1);
+            } finally {
+                old.kill();
+                await runCli(["quit"], environment, AbortSignal.timeout(15_000));
+                await exited;
+            }
+        },
+        75_000,
+    );
 });
 
 function controlSocketPath(stateDirectory: string): string {

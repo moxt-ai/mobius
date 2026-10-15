@@ -10,6 +10,7 @@ import { formatAgentDiagnostics } from "./agent-catalog/agent-diagnostics.ts";
 import { discoverLocalAgentInventory } from "./agent-catalog/discover-local-agents.ts";
 import { DaemonLocalContext, loadDefaultWorkspace } from "./config.ts";
 import { type ManagedRuntimeSummary, requestManager, runManager } from "./daemon-manager.ts";
+import { runDaemonWorker } from "./daemon-worker.ts";
 import { openMobiusCliInstallation } from "./pairing/pair-local-machine.ts";
 
 const shutdown = new AbortController();
@@ -159,6 +160,13 @@ function createProgram(): Command {
         const installation = await openMobiusCliInstallation(shutdown.signal, process.env);
         await runManager(installation, packageMetadata.version, shutdown.signal);
     });
+
+    program
+        .command("__worker", { hidden: true })
+        .requiredOption("--connection <id>")
+        .action(async (options: ConnectionOptions) => {
+            await runDaemonWorker(options.connection, shutdown.signal);
+        });
 
     const pair = program.command("pair").description("pair this machine or manage saved pairings");
     pair.addOption(valueOption("--url <relay-url>", "relay HTTP or HTTPS URL"))
