@@ -74,10 +74,10 @@ import {
 
 export class AgentRuntimeManager {
     readonly #operations = new RuntimeOperations();
-    readonly #processes = new AgentProcessPool();
+    readonly #processes: AgentProcessPool;
     readonly #executionProcesses = new RetainedAgentProcesses({
-        touch: this.#processes.touch,
-        changed: this.#processes.notifyChanged,
+        touch: (runtime) => this.#processes.touch(runtime),
+        changed: () => this.#processes.notifyChanged(),
     });
     readonly #queryProcesses: AgentQueryProcesses;
     readonly #executions = new ActiveExecutions();
@@ -100,8 +100,10 @@ export class AgentRuntimeManager {
         onSessionStatusChanged: (event: SessionStatusChangedEvent) => void = () => undefined,
         contentExternalizer: AcpContentExternalizer = new AcpContentExternalizer(new UnretainedExternalContentStore()),
         timer: DaemonTimer = systemDaemonTimer,
+        maxProcesses?: number,
     ) {
         this.#observer = observer;
+        this.#processes = new AgentProcessPool(maxProcesses);
         this.#store = store;
         this.#nativeHistoryReader = nativeHistoryReader;
         this.#sessionIdentity = sessionIdentity;
