@@ -857,23 +857,6 @@ export class AgentRuntimeManager {
             }
         });
 
-    readonly loadSessionHistory = async (options: AcpPrepareOptions): Promise<NativeSessionHistory> =>
-        this.#operations.run(options, async (options) => {
-            return await this.#executionProcesses.use(options.sessionId, async () => {
-                const runtime = await this.ensureSession(options);
-                const stored = this.#store.read(options.sessionId);
-                if (stored instanceof FoundAcpStoredSession) {
-                    return await this.#adapters.forAgent(options.agent.id).readHistory({
-                        nativeSessionId: stored.session.nativeSessionId,
-                        nativeTurn: runtime.nativeHistoryTurn,
-                        options,
-                        readFromHarness: async () => await runtime.loadHistory(options.signal),
-                    });
-                }
-                return await runtime.loadHistory(options.signal);
-            });
-        });
-
     readonly loadSessionEventsV2 = async (
         options: AcpPrepareOptions,
         eventLimit: number,

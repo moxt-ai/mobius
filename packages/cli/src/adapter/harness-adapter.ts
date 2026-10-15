@@ -6,10 +6,7 @@ export type HarnessNativeHistoryAccess =
     | { readonly kind: "acp" }
     | {
           readonly kind: "direct";
-          readonly read: (
-              nativeSessionId: string,
-              nativeTurn: () => { readonly commandId: string; readonly nativeTurnId: string } | null,
-          ) => Promise<NativeSessionHistory>;
+          readonly read: (nativeSessionId: string) => Promise<NativeSessionHistory>;
       };
 
 export interface HarnessNativeHistoryReader {
@@ -25,13 +22,6 @@ export interface HarnessHistoryPageRequest {
     readonly eventLimit: number;
     readonly options: AcpPrepareOptions;
     readonly readFromHarness: () => Promise<AcpNativeEventReplayV2>;
-}
-
-export interface HarnessHistoryRequest {
-    readonly nativeSessionId: string;
-    readonly nativeTurn: () => { readonly commandId: string; readonly nativeTurnId: string } | null;
-    readonly options: AcpPrepareOptions;
-    readonly readFromHarness: () => Promise<NativeSessionHistory>;
 }
 
 export interface HarnessHistoryPreviewRequest extends HarnessHistoryPageRequest {
@@ -56,7 +46,6 @@ export interface HarnessAdapter extends HarnessSessionAdapter {
     readonly id: string;
     readonly previewPageHistoryEvents: (request: HarnessHistoryPreviewRequest) => Promise<AcpNativeEventReplayV2>;
     readonly readPageHistoryEvents: (request: HarnessHistoryPageRequest) => Promise<AcpNativeEventReplayV2>;
-    readonly readHistory: (request: HarnessHistoryRequest) => Promise<NativeSessionHistory>;
     readonly subscribeLiveEvents: (subscriber: HarnessLiveEventSubscriber) => HarnessLiveEventSubscription;
 }
 

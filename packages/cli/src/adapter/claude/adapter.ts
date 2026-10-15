@@ -6,7 +6,6 @@ import type {
     HarnessAdapter,
     HarnessHistoryPageRequest,
     HarnessHistoryPreviewRequest,
-    HarnessHistoryRequest,
     HarnessLiveEventSubscriber,
     HarnessLiveEventSubscription,
 } from "../harness-adapter.ts";
@@ -18,8 +17,6 @@ export class ClaudeHarnessAdapter implements HarnessAdapter {
     constructor(events: AcpSessionEventStoreV2) {
         this.#eventCache = new AdapterEventCache(events);
     }
-
-    readonly readHistory = async (request: HarnessHistoryRequest) => await request.readFromHarness();
 
     readonly readPageHistoryEvents = async (request: HarnessHistoryPageRequest) => await request.readFromHarness();
 

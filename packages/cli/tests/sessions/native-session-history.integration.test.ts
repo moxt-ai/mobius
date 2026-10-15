@@ -337,18 +337,27 @@ describe("native session history", () => {
                 signal,
             );
 
-            const history = await f.sessions.loadSessionHistory({
-                additionalDirectories: [],
-                agent: f.agent,
-                cwd: f.workspace,
-                sessionId,
-                signal,
-            });
+            const history = await f.sessions.loadSessionEventsV2(
+                {
+                    additionalDirectories: [],
+                    agent: f.agent,
+                    cwd: f.workspace,
+                    sessionId,
+                    signal,
+                },
+                50,
+                null,
+            );
 
-            expect(history).toMatchObject({
-                status: "available",
-                messages: expect.arrayContaining([{ role: "user", text: "Persisted OpenCode message" }]),
-            });
+            expect(
+                history.events.flatMap((event) =>
+                    event.type === "acp" &&
+                    event.payload.sessionUpdate === "user_message_chunk" &&
+                    event.payload.content.type === "text"
+                        ? [event.payload.content.text]
+                        : [],
+                ),
+            ).toContain("Persisted OpenCode message");
         } finally {
             await f.close();
         }
@@ -374,16 +383,21 @@ describe("native session history", () => {
                 sessionId,
                 signal,
             };
-            const first = f.sessions.loadSessionHistory(options);
+            const first = f.sessions.loadSessionEventsV2(options, 50, null);
             await paused.promise;
-            const second = f.sessions.loadSessionHistory(options);
+            const second = f.sessions.loadSessionEventsV2(options, 50, null);
             await rm(join(f.native, "pause-load"));
 
             for (const history of await Promise.all([first, second])) {
-                expect(history).toMatchObject({
-                    status: "available",
-                    messages: expect.arrayContaining([{ role: "user", text: "Shared OpenCode history" }]),
-                });
+                expect(
+                    history.events.flatMap((event) =>
+                        event.type === "acp" &&
+                        event.payload.sessionUpdate === "user_message_chunk" &&
+                        event.payload.content.type === "text"
+                            ? [event.payload.content.text]
+                            : [],
+                    ),
+                ).toContain("Shared OpenCode history");
             }
         } finally {
             await rm(join(f.native, "pause-load"), { force: true });

@@ -7,7 +7,6 @@ import type {
     HarnessAdapter,
     HarnessHistoryPageRequest,
     HarnessHistoryPreviewRequest,
-    HarnessHistoryRequest,
     HarnessLiveEventSubscriber,
     HarnessLiveEventSubscription,
     HarnessNativeHistoryReader,
@@ -24,29 +23,14 @@ export class CodexHarnessAdapter implements HarnessAdapter {
         nativeHistory: HarnessNativeHistoryReader = {
             access: (options) => ({
                 kind: "direct",
-                read: async (nativeSessionId, nativeTurn) =>
-                    (
-                        await readCodexFullHistory(
-                            options.agent,
-                            options.cwd,
-                            nativeSessionId,
-                            options.signal,
-                            nativeTurn,
-                        )
-                    ).history,
+                read: async (nativeSessionId) =>
+                    (await readCodexFullHistory(options.agent, options.cwd, nativeSessionId, options.signal)).history,
             }),
         },
     ) {
         this.#eventCache = new AdapterEventCache(events);
         this.#nativeHistory = nativeHistory;
     }
-
-    readonly readHistory = async (request: HarnessHistoryRequest) => {
-        const access = this.#nativeHistory.access(request.options);
-        return access.kind === "direct"
-            ? await access.read(request.nativeSessionId, request.nativeTurn)
-            : await request.readFromHarness();
-    };
 
     readonly readPageHistoryEvents = async (request: HarnessHistoryPageRequest) => await request.readFromHarness();
 
@@ -60,7 +44,7 @@ export class CodexHarnessAdapter implements HarnessAdapter {
             if (access.kind === "acp") {
                 return await request.readFromHarness();
             }
-            const history = await access.read(request.nativeSessionId, () => null);
+            const history = await access.read(request.nativeSessionId);
             if (history.status === "unavailable") {
                 throw new AcpExecutionError(history.cause.message, {}, history.cause.code);
             }
