@@ -22,17 +22,7 @@ import { maybeAuthRequiredError } from "./auth-required.js";
 import type { PiAcpClient } from "./client.js";
 import { SessionStore } from "./session-store.js";
 import { expandSlashCommand, type FileSlashCommand } from "./slash-commands.js";
-import {
-    bashCommand,
-    bashExitCode,
-    bashOutputDelta,
-    bashResultText,
-    bashTerminalContent,
-    bashTerminalExitMeta,
-    bashTerminalInfoMeta,
-    bashTerminalOutputMeta,
-    isBashTool,
-} from "./translate/bash.js";
+import { bashCommand, bashResultText, isBashTool } from "./translate/bash.js";
 import { toolResultToText } from "./translate/pi-tools.js";
 
 type SessionCreateParams = {
@@ -346,7 +336,6 @@ export class PiAcpSession {
     private fileSnapshots = new Map<string, { path: string; oldText: string | null }>();
     private fileMutationToolCallIds = new Set<string>();
     private bashToolCallIds = new Set<string>();
-    private bashOutputSnapshots = new Map<string, string>();
 
     // Ensure `session/update` notifications are sent in order and can be awaited
     // before completing a `session/prompt` request.
@@ -530,7 +519,6 @@ export class PiAcpSession {
         args: unknown;
         status: "pending" | "in_progress";
         locations?: ToolCallLocation[];
-        includeTerminal: boolean;
     }): void {
         this.bashToolCallIds.add(params.toolCallId);
         this.emit({
@@ -540,8 +528,7 @@ export class PiAcpSession {
             kind: "execute",
             status: params.status,
             locations: params.locations,
-            ...(params.includeTerminal ? { content: bashTerminalContent(params.toolCallId) } : {}),
-            ...(params.includeTerminal ? { _meta: bashTerminalInfoMeta(params.toolCallId, this.cwd) } : {}),
+            rawInput: params.args,
         });
     }
 
@@ -549,23 +536,17 @@ export class PiAcpSession {
         toolCallId: string;
         status: "in_progress" | "completed" | "failed";
         result: unknown;
-        isError?: boolean;
     }): void {
         const text = bashResultText(params.result);
-        const previous = this.bashOutputSnapshots.get(params.toolCallId) ?? "";
-        const delta = bashOutputDelta(previous, text);
-        this.bashOutputSnapshots.set(params.toolCallId, text);
-
+        const isSettled = params.status === "completed" || params.status === "failed";
         this.emit({
             sessionUpdate: "tool_call_update",
             toolCallId: params.toolCallId,
             status: params.status,
-            _meta: {
-                ...(delta ? bashTerminalOutputMeta(params.toolCallId, delta) : {}),
-                ...(params.status === "completed" || params.status === "failed"
-                    ? bashTerminalExitMeta(params.toolCallId, bashExitCode(params.result, Boolean(params.isError)))
-                    : {}),
-            },
+            content: text
+                ? ([{ type: "content", content: { type: "text", text } }] satisfies ToolCallContent[])
+                : undefined,
+            ...(isSettled ? { rawOutput: params.result } : {}),
         });
     }
 
@@ -574,7 +555,6 @@ export class PiAcpSession {
         this.fileSnapshots.delete(toolCallId);
         this.fileMutationToolCallIds.delete(toolCallId);
         this.bashToolCallIds.delete(toolCallId);
-        this.bashOutputSnapshots.delete(toolCallId);
     }
 
     private startTurn(t: QueuedTurn): void {
@@ -685,7 +665,6 @@ export class PiAcpSession {
                                 args: rawInput,
                                 status,
                                 locations,
-                                includeTerminal: !existingStatus,
                             });
                         } else if (!existingStatus) {
                             this.currentToolCalls.set(toolCallId, "pending");
@@ -735,7 +714,6 @@ export class PiAcpSession {
                         args,
                         status: "in_progress",
                         locations,
-                        includeTerminal: !existingStatus,
                     });
                     break;
                 }
@@ -834,7 +812,6 @@ export class PiAcpSession {
                         toolCallId,
                         status: isError ? "failed" : "completed",
                         result,
-                        isError,
                     });
                     this.cleanupToolCall(toolCallId);
                     break;

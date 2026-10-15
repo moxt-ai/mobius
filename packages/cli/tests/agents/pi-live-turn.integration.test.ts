@@ -12,7 +12,7 @@ import { withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 import { fakeProviderPrompts } from "../support/llm/scenarios.ts";
 
-test("Given real Pi without an external ACP adapter, When two prompts execute through the daemon, Then the in-process adapter streams the tool result and both replies", async () => {
+test("Given real Pi without an external ACP adapter, When Bash executes through the daemon, Then the command and result are observable with both replies", async () => {
     await using provider = await FakeOpenAiProvider.start("gpt-4.1", "REAL_PI_REPLY");
     await using agent = await PiFixture.create(provider);
     await withRealDaemon(new PiAgentSpecification(), agent.environment, async (peer) => {
@@ -38,6 +38,8 @@ test("Given real Pi without an external ACP adapter, When two prompts execute th
             );
             let text = "";
             let toolSucceeded = false;
+            let toolInput: unknown;
+            let toolOutput: unknown;
             const toolContent = new Map<string, readonly unknown[]>();
             for (;;) {
                 const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
@@ -65,15 +67,19 @@ test("Given real Pi without an external ACP adapter, When two prompts execute th
                     event.type === "acp" &&
                     (event.payload.sessionUpdate === "tool_call" || event.payload.sessionUpdate === "tool_call_update")
                 ) {
+                    if (event.payload.rawInput !== undefined) {
+                        toolInput = event.payload.rawInput;
+                    }
+                    if (event.payload.rawOutput !== undefined) {
+                        toolOutput = event.payload.rawOutput;
+                    }
                     if (event.payload.content != null) {
                         toolContent.set(event.payload.toolCallId, event.payload.content);
                     }
                     if (event.payload.status === "completed") {
-                        expect(toolContent.get(event.payload.toolCallId)).toEqual(
-                            expect.arrayContaining([
-                                expect.objectContaining({ type: "terminal", terminalId: expect.any(String) }),
-                            ]),
-                        );
+                        expect(toolInput).toEqual(expect.objectContaining({ command: "pwd" }));
+                        expect(JSON.stringify(toolContent.get(event.payload.toolCallId))).toContain(peer.workspace);
+                        expect(JSON.stringify(toolOutput)).toContain(peer.workspace);
                         toolSucceeded = true;
                     }
                 } else if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.failed") {
