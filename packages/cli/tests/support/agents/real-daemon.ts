@@ -1,8 +1,9 @@
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
     decodeMessageKind,
     decodeRuntimeHeartbeatEvent,
@@ -22,9 +23,11 @@ import type { LocalAgentSpecification } from "../../../src/agent-catalog/agent-s
 import { discoverLocalAgentInventory } from "../../../src/agent-catalog/discover-local-agents.ts";
 import { AuditStore } from "../../../src/audit/audit-store.ts";
 import { createDaemonConfig, DaemonLocalContext } from "../../../src/config.ts";
+import { openMobiusCliInstallation } from "../../../src/pairing/pair-local-machine.ts";
 import { runDaemon } from "../../../src/run-daemon.ts";
 
 export interface RealDaemonPeer {
+    readonly restart: () => Promise<void>;
     readonly send: (message: string) => void;
     readonly sessionId: string;
     readonly workspace: string;
@@ -40,14 +43,56 @@ export async function withRealDaemon(
     specification: LocalAgentSpecification,
     environment: Readonly<Record<string, string>>,
     scenario: (peer: RealDaemonPeer) => Promise<void>,
+    launch: "embedded" | "managed" = "embedded",
 ): Promise<void> {
     const directory = await mkdtemp(join(tmpdir(), `mobius-real-${specification.id}-`));
     const workspace = join(directory, "workspace");
     const controller = new AbortController();
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(90_000)]);
-    const relay = createServer((_request, response) => response.writeHead(404).end());
+    const catalogs = new Map<string, string>();
+    const relay = createServer((request, response) => {
+        if (request.method === "PUT" && request.url?.endsWith("/catalog")) {
+            const path = request.url;
+            let body = "";
+            request.setEncoding("utf8");
+            request.on("data", (chunk: string) => {
+                body += chunk;
+            });
+            request.on("end", () => {
+                catalogs.set(path, body);
+                response.writeHead(204).end();
+            });
+        } else if (request.method === "GET" && request.url !== undefined && catalogs.has(request.url)) {
+            response.writeHead(200, { "content-type": "application/json" }).end(catalogs.get(request.url));
+        } else {
+            response.writeHead(404).end();
+        }
+    });
     const server = new WebSocketServer({ server: relay });
     let daemon: Promise<void> | undefined;
+    let execution = new AbortController();
+    const cliEnvironment = { ...process.env, ...environment, MOBIUS_STATE_DIRECTORY: directory };
+    const cli = async (args: readonly string[], deadline = signal): Promise<void> => {
+        const child = spawn(process.execPath, [resolve(import.meta.dirname, "../../../src/cli.ts"), ...args], {
+            env: cliEnvironment,
+            signal: deadline,
+            stdio: ["ignore", "pipe", "pipe"],
+            windowsHide: true,
+        });
+        let output = "";
+        child.stdout.on("data", (chunk: Buffer) => {
+            output += chunk.toString();
+        });
+        child.stderr.on("data", (chunk: Buffer) => {
+            output += chunk.toString();
+        });
+        await new Promise<void>((resolve_, reject) => {
+            child.once("error", reject);
+            child.once("close", (code) =>
+                code === 0 ? resolve_() : reject(new Error(`CLI ${args.join(" ")} failed: ${output}`)),
+            );
+        });
+    };
     let socket: WebSocket | undefined;
     const messages: string[] = [];
     let waiter: PromiseWithResolvers<string> | undefined;
@@ -66,7 +111,7 @@ export async function withRealDaemon(
             throw new Error(`Real ${specification.label} unavailable: ${JSON.stringify(inventory.unavailable)}`);
         }
         await listen(relay);
-        const connected = Promise.withResolvers<void>();
+        let connected = Promise.withResolvers<void>();
         const abortConnection = (): void => connected.reject(signal.reason);
         signal.addEventListener("abort", abortConnection, { once: true });
         server.on("connection", (connection) => {
@@ -103,11 +148,34 @@ export async function withRealDaemon(
             [],
             new DaemonLocalContext(directory, { ...process.env, ...environment }),
         );
-        daemon = runDaemon(config, new AuditStore(), signal);
-        void daemon.catch((error: unknown) => {
-            connected.reject(error);
-            waiter?.reject(error);
-        });
+        if (launch === "managed") {
+            const installation = await openMobiusCliInstallation(signal, cliEnvironment);
+            await installation.saveConnection(
+                {
+                    appId: "app_real",
+                    channelId: "real-agent",
+                    defaultWorkspace: workspace,
+                    pairingId: "",
+                    relayOrigin: new URL(`http://127.0.0.1:${port(relay)}`),
+                    runtimeCredential: "r".repeat(43),
+                    runtimeId: "runtime_real",
+                },
+                signal,
+            );
+        }
+        const start = async (): Promise<void> => {
+            if (launch === "managed") {
+                await cli(["start"]);
+            } else {
+                execution = new AbortController();
+                daemon = runDaemon(config, new AuditStore(), AbortSignal.any([signal, execution.signal]));
+                void daemon.catch((error: unknown) => {
+                    connected.reject(error);
+                    waiter?.reject(error);
+                });
+            }
+        };
+        await start();
         try {
             await connected.promise;
         } finally {
@@ -125,6 +193,19 @@ export async function withRealDaemon(
         const pendingEvents: string[] = [];
         const sessionId = `real_${specification.id}_${randomUUID()}`;
         await scenario({
+            restart: async () => {
+                if (launch === "managed") {
+                    await cli(["quit"]);
+                } else {
+                    execution.abort();
+                    await daemon;
+                }
+                messages.length = 0;
+                pendingEvents.length = 0;
+                connected = Promise.withResolvers<void>();
+                await start();
+                await connected.promise;
+            },
             bindingId: config.bindingId,
             readDiagnostics: async () => await readFile(join(directory, "logs", "daemon.log"), "utf8"),
             signal,
@@ -157,6 +238,9 @@ export async function withRealDaemon(
             },
         });
     } finally {
+        if (launch === "managed") {
+            await cli(["quit"], AbortSignal.timeout(15_000));
+        }
         controller.abort();
         signal.removeEventListener("abort", stopWaiting);
         await daemon?.catch(() => {});

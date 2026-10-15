@@ -9,7 +9,10 @@ import packageMetadata from "../package.json" with { type: "json" };
 import { formatAgentDiagnostics } from "./agent-catalog/agent-diagnostics.ts";
 import { discoverLocalAgentInventory } from "./agent-catalog/discover-local-agents.ts";
 import { DaemonLocalContext, loadDefaultWorkspace } from "./config.ts";
-import { type ManagedRuntimeSummary, requestManager, runManager } from "./daemon-manager.ts";
+import { requestDaemon } from "./daemon-client.ts";
+import { runManager } from "./daemon-manager.ts";
+import { runWorker } from "./daemon-worker.ts";
+import type { ManagedRuntimeSummary } from "./daemon-worker-protocol.ts";
 import { openMobiusCliInstallation } from "./pairing/pair-local-machine.ts";
 
 const shutdown = new AbortController();
@@ -157,7 +160,11 @@ function createProgram(): Command {
 
     program.command("__manager", { hidden: true }).action(async () => {
         const installation = await openMobiusCliInstallation(shutdown.signal, process.env);
-        await runManager(installation, packageMetadata.version, shutdown.signal);
+        await runManager(installation.stateDirectory, shutdown.signal);
+    });
+
+    program.command("__worker", { hidden: true }).action(async () => {
+        await runWorker(packageMetadata.version, shutdown.signal);
     });
 
     const pair = program.command("pair").description("pair this machine or manage saved pairings");
@@ -173,7 +180,7 @@ function createProgram(): Command {
             };
             const installation = await openMobiusCliInstallation(shutdown.signal, process.env);
             process.stdout.write(`mobius version: ${packageMetadata.version}\n`);
-            const response = await requestManager(
+            const response = await requestDaemon(
                 installation,
                 packageMetadata.version,
                 { arguments: pairArguments(requested), kind: "pair" },
@@ -200,7 +207,7 @@ function createProgram(): Command {
         .action(async (options: PairListOptions) => {
             const installation = await openMobiusCliInstallation(shutdown.signal, process.env);
             const outputPath = options.outputJson === undefined ? null : resolve(options.outputJson);
-            const response = await requestManager(
+            const response = await requestDaemon(
                 installation,
                 packageMetadata.version,
                 { kind: "list" },
@@ -225,7 +232,7 @@ function createProgram(): Command {
             .addOption(valueOption("--connection <connection-id>", "saved Runtime connection identifier", true))
             .action(async (options: ConnectionOptions) => {
                 const installation = await openMobiusCliInstallation(shutdown.signal, process.env);
-                const response = await requestManager(
+                const response = await requestDaemon(
                     installation,
                     packageMetadata.version,
                     {
@@ -257,7 +264,7 @@ function createProgram(): Command {
         .addOption(valueOption("--connection <connection-id>", "saved Runtime connection identifier"))
         .action(async (options: StartOptions) => {
             const installation = await openMobiusCliInstallation(shutdown.signal, process.env);
-            const response = await requestManager(
+            const response = await requestDaemon(
                 installation,
                 packageMetadata.version,
                 options.connection === undefined
@@ -286,7 +293,7 @@ function createProgram(): Command {
         .description("stop the manager and every active Runtime")
         .action(async () => {
             const installation = await openMobiusCliInstallation(shutdown.signal, process.env);
-            const response = await requestManager(
+            const response = await requestDaemon(
                 installation,
                 packageMetadata.version,
                 { kind: "stop" },
