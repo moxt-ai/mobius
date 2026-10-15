@@ -15,6 +15,7 @@ import {
     loadDefaultWorkspace,
     OpaqueDaemonReconnectTarget,
 } from "../config.ts";
+import { prepareVersionData } from "../daemon-upgrade-data.ts";
 import {
     openRuntimeInstallationStore,
     type RuntimeInstallationStore,
@@ -427,6 +428,7 @@ export async function openMobiusCliInstallation(
     signal: AbortSignal,
     environment: Readonly<NodeJS.ProcessEnv>,
 ): Promise<RuntimeInstallationStore> {
+    await prepareVersionData(packageMetadata.version, signal, environment);
     return await openRuntimeInstallationStore(
         {
             applicationId: MOBIUS_CLI_APPLICATION_ID,

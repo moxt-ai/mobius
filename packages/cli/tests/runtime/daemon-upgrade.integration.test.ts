@@ -267,6 +267,7 @@ describe("Daemon hourly npm upgrade", () => {
             if (failed.outcome.status !== "failed") {
                 throw new Error("Expected rollback feedback");
             }
+            expect((await readFile(join(stateRoot, "current-data.txt"), "utf8")).trim()).toBe(`versions/${reuse}`);
             expect(failed.outcome.retryAfter).toBe(Date.parse("2030-01-01T00:00:00Z") + 2_000 + 8 * 3_600_000);
             expect(await sendLocalRequest(control.stateDirectory, "manager", { kind: "status" }, signal)).toMatchObject(
                 { worker: { version: reuse } },

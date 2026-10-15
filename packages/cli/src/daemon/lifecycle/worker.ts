@@ -2,7 +2,7 @@ import { setTimeout } from "node:timers/promises";
 import { acquireManagerLock, isNodeError, sendLocalRequest } from "../../daemon-local-control.ts";
 import { serveLocalControl } from "../../daemon-local-server.ts";
 import { runDaemonUpgrades } from "../../daemon-upgrade.ts";
-import { prepareUpgradeData } from "../../daemon-upgrade-data.ts";
+import { prepareUpgradeData, recordCurrentData } from "../../daemon-upgrade-data.ts";
 import {
     openMobiusCliInstallation,
     openMobiusControlInstallation,
@@ -109,7 +109,8 @@ export async function runWorker(version: string, signal: AbortSignal): Promise<v
                 await pending;
                 return { kind: "reloaded" };
             },
-            () => {
+            async () => {
+                await recordCurrentData(version, combined);
                 upgrades = runDaemonUpgrades(combined);
                 if (process.connected) {
                     process.send?.({ kind: "worker-ready", version }, () => undefined);
