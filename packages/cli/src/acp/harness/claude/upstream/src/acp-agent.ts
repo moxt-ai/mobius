@@ -267,6 +267,13 @@ const TURN_NO_RESULT_MESSAGE =
     "The turn ended without a result: the agent went idle while this prompt was still in flight " +
     "(e.g. the model stream dropped mid-turn). Any partial output may be incomplete; please retry.";
 
+/** Grace period after a top-level assistant message with a terminal stop_reason
+ *  before the watchdog settles the turn. The SDK normally follows with `result`
+ *  (or `idle`) within milliseconds; a 30-second window is generous enough to
+ *  absorb any legitimate lag (background task flushes, slow gateways) while
+ *  still rescuing a turn the SDK silently abandoned. */
+const RESULT_WATCHDOG_TIMEOUT_MS = 30_000;
+
 /** Custom (extension) request method a client uses to steer the turn that is
  *  currently running: the message is injected into the in-flight turn rather
  *  than queued as a separate `session/prompt`. Named `_session/steering` per the
@@ -2329,6 +2336,42 @@ export class ClaudeAcpAgent {
         // Stop reason accumulated for the active turn (result subtype, refusal,
         // max_tokens, …). Reset per turn; read when the turn settles at idle.
         let stopReason: StopReason = "end_turn";
+        // Watchdog: when a top-level assistant message carries a terminal
+        // stop_reason (end_turn, max_tokens, refusal) but the SDK never follows
+        // with `result` or `idle`, the turn hangs forever. This timer settles it
+        // with the captured stop reason after RESULT_WATCHDOG_TIMEOUT_MS.
+        // Disarmed by: result, idle, settleActive, failActive, activation.
+        let resultWatchdog: ReturnType<typeof setTimeout> | null = null;
+        let resultWatchdogStopReason: StopReason | null = null;
+        const disarmResultWatchdog = (): void => {
+            if (resultWatchdog !== null) {
+                clearTimeout(resultWatchdog);
+                resultWatchdog = null;
+            }
+            resultWatchdogStopReason = null;
+        };
+        const armResultWatchdog = (reason: StopReason): void => {
+            disarmResultWatchdog();
+            resultWatchdogStopReason = reason;
+            resultWatchdog = setTimeout(() => {
+                resultWatchdog = null;
+                const capturedReason = resultWatchdogStopReason;
+                resultWatchdogStopReason = null;
+                if (capturedReason === null) {
+                    return;
+                }
+                const turn = session.activeTurn;
+                if (!turn || turn.settled) {
+                    return;
+                }
+                this.logger.error(
+                    `Session ${params.sessionId}: SDK emitted a terminal assistant message ` +
+                        `(stop_reason=${capturedReason}) but never followed with result or idle; ` +
+                        `settling the turn via watchdog after ${RESULT_WATCHDOG_TIMEOUT_MS}ms`,
+                );
+                settleOrDefer(turnOutcome(session, capturedReason));
+            }, RESULT_WATCHDOG_TIMEOUT_MS);
+        };
         /** The consumer's single send chokepoint: every `sessionUpdate` in this
          *  loop goes through here (never `this.client.sessionUpdate` directly) so
          *  answer-delivery tracking is a property of sending, not something each
@@ -2391,6 +2434,7 @@ export class ClaudeAcpAgent {
             session.cancelled = false;
             session.pendingOrphanResults = 0;
             session.orphanCommands?.clear();
+            disarmResultWatchdog();
             // Two-phase sweep of registry entries the level signal ended (see
             // the endedPerLevel field doc): armed at the first activation,
             // deleted at the second — the same activation-time self-heal as the
@@ -2640,6 +2684,7 @@ export class ClaudeAcpAgent {
             if (!turn || turn.settled) {
                 return;
             }
+            disarmResultWatchdog();
             // Captured before the settled flip below (isHeldOpen tests !settled).
             const wasHeld = isHeldOpen(turn);
             turn.settled = true;
@@ -2669,6 +2714,7 @@ export class ClaudeAcpAgent {
          *  down the consumer: the stream continues to idle and later turns proceed. */
         const failActive = (error: unknown) => {
             disarmForceCancel(session);
+            disarmResultWatchdog();
             const turn = session.activeTurn;
             if (!turn || turn.settled) {
                 return;
@@ -3085,6 +3131,7 @@ export class ClaudeAcpAgent {
                             case "session_state_changed": {
                                 session.lastSessionState = message.state;
                                 if (message.state === "idle") {
+                                    disarmResultWatchdog();
                                     // A non-cancelled turn normally settled at its terminal
                                     // `result` already (issue #773), and that result recorded an
                                     // owed trailing idle — absorbed here via the decrement. We
@@ -3546,6 +3593,7 @@ export class ClaudeAcpAgent {
                         }
                         break;
                     case "result": {
+                        disarmResultWatchdog();
                         // A result from an autonomous cycle — a task-notification
                         // followup, or a peer/coordinator/observer message the model
                         // handled on its own (see AUTONOMOUS_RESULT_ORIGINS) — is not
@@ -4243,6 +4291,16 @@ export class ClaudeAcpAgent {
                                 // not clobber the seed back to null.
                                 lastRefusalExplanation =
                                     message.message.stop_details?.explanation ?? lastRefusalExplanation;
+                            }
+                            // Arm the watchdog for terminal stop reasons: the SDK
+                            // should follow with `result` (or `idle`) shortly. If it
+                            // never does, the watchdog settles the turn so the
+                            // session/prompt doesn't hang forever.
+                            const sr = message.message.stop_reason;
+                            if (sr === "end_turn" || sr === "max_tokens" || sr === "refusal") {
+                                armResultWatchdog(
+                                    sr === "refusal" ? "refusal" : sr === "max_tokens" ? "max_tokens" : "end_turn",
+                                );
                             }
                         }
 
