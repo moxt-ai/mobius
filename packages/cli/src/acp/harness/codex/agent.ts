@@ -264,8 +264,9 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                         AbortSignal.any([signal, AbortSignal.timeout(APPROVAL_TIMEOUT_MILLISECONDS)]),
                     ),
                 );
-            } catch {
+            } catch (cause: unknown) {
                 signal.throwIfAborted();
+                console.warn("Codex thread resume failed; attempting borrowed queue access", { threadId }, cause);
                 return null;
             }
         })();
