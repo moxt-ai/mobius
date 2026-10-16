@@ -504,7 +504,8 @@ describe("daemon V2 live delivery", () => {
                 ),
             ).toHaveLength(1);
             const active = await activeTurn(fixture, command);
-            expect(active?.messages.some((message) => message.text.includes("Controlled ACP turn 1:"))).toBe(true);
+            expect(active?.state).toBe("running");
+            expect(active?.commandId).toBe(command.commandId);
             await cancel(fixture, command);
         } finally {
             await fixture.close();

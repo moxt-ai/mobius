@@ -6,9 +6,9 @@ interface RunAcpPromptOptions {
     readonly agentArguments: readonly string[];
     readonly agentCommand: string;
     readonly cwd: string;
-    readonly onActivity: (activity: AcpActivity) => Promise<void>;
+    readonly onActivity?: (activity: AcpActivity) => Promise<void>;
     readonly onNarration?: (narration: AcpActivityNarration) => Promise<void>;
-    readonly onText: (text: string) => Promise<void>;
+    readonly onText?: (text: string) => Promise<void>;
     readonly prompt: string;
     readonly signal: AbortSignal;
 }
@@ -30,9 +30,9 @@ export async function runAcpPrompt(options: RunAcpPromptOptions): Promise<AcpPro
                 content: [{ text: options.prompt, type: "text" }],
                 epoch: crypto.randomUUID(),
             },
-            onActivity: options.onActivity,
+            ...(options.onActivity === undefined ? {} : { onActivity: options.onActivity }),
             ...(options.onNarration === undefined ? {} : { onNarration: options.onNarration }),
-            onText: options.onText,
+            ...(options.onText === undefined ? {} : { onText: options.onText }),
             prompt: options.prompt,
             resources: [],
             sessionId: crypto.randomUUID(),

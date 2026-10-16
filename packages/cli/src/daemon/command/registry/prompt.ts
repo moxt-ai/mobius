@@ -51,9 +51,6 @@ export const sessionPromptCommand: DaemonCommand = {
                     queueChanged();
                 }),
             signal: turn.signal,
-            recordTurnActivity: turn.recordActivity,
-            recordTurnNarration: turn.recordNarration,
-            recordTurnText: turn.recordText,
             recordSteeringPrompt: () => context.activeTurns.recordSteeringPrompt(message),
             cancellationRequested: turn.cancellationRequested,
         })

@@ -94,13 +94,18 @@ export interface AcpTurnOptions extends AcpPrepareOptions, AcpPromptContentOptio
     readonly cancellationRequested?: () => boolean;
     readonly commandId: string;
     readonly disposition?: string;
-    readonly onActivity: (activity: AcpActivity) => Promise<void>;
+    /**
+     * Optional observation sinks for the folded activity view. Without a sink the
+     * same information still flows through the Session Event V2 stream; these hooks
+     * exist for in-process observers such as the supported test API.
+     */
+    readonly onActivity?: (activity: AcpActivity) => Promise<void>;
     /**
      * Receives streamed narration increments. Optional: without a sink the same text
      * still arrives once on the completed activity snapshot, just without live updates.
      */
     readonly onNarration?: (narration: AcpActivityNarration) => Promise<void>;
-    readonly onText: (text: string, messageId: string) => Promise<void>;
+    readonly onText?: (text: string, messageId: string) => Promise<void>;
     readonly targetCommandId?: string;
 }
 
