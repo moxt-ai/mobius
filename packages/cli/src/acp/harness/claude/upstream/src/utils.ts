@@ -93,3 +93,60 @@ export function unreachable(value: never, logger: Logger = console) {
 export function sleep(time: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, time));
 }
+
+/** Run `operation` bounded by `timeoutMilliseconds`, and by `signal` when it aborts
+ *  first. The underlying SDK reads cannot be cancelled, so a deadline only stops
+ *  waiting on them: a late result is discarded rather than delivered. */
+export async function withDeadline<T>(
+    signal: AbortSignal,
+    timeoutMilliseconds: number,
+    operation: () => Promise<T>,
+): Promise<T> {
+    const deadline = AbortSignal.any([signal, AbortSignal.timeout(timeoutMilliseconds)]);
+    deadline.throwIfAborted();
+    return await new Promise<T>((resolve, reject) => {
+        const settle = (callback: () => void): void => {
+            deadline.removeEventListener("abort", onAbort);
+            callback();
+        };
+        const onAbort = (): void => settle(() => reject(deadline.reason));
+        deadline.addEventListener("abort", onAbort, { once: true });
+
+        operation().then(
+            (value) => settle(() => resolve(value)),
+            (error: unknown) => settle(() => reject(error)),
+        );
+    });
+}
+
+/** Serialises {@link withEnvironment} so two calls cannot interleave on the single
+ *  `process.env` binding they share. */
+let environmentChain: Promise<unknown> = Promise.resolve();
+
+/** Run `operation` with `environment` installed as the process environment, then
+ *  restore the previous one.
+ *
+ *  The Claude Agent SDK resolves sessions from `CLAUDE_CONFIG_DIR` and related
+ *  variables it reads off `process.env`, so an Agent hosted for a workspace whose
+ *  environment differs from the daemon's own still has to see that environment.
+ *  This used to be done by loading the SDK inside a worker with `env` set; that
+ *  worker resolved the SDK through `import.meta.resolve`, which is not shimmed
+ *  when this Agent is bundled to CJS, and the SDK is inlined into that bundle so
+ *  there is no module on disk for a worker to import anyway. */
+export function withEnvironment<T>(environment: Readonly<NodeJS.ProcessEnv>, operation: () => Promise<T>): Promise<T> {
+    const run = async (): Promise<T> => {
+        const previous = process.env;
+        process.env = { ...environment } as NodeJS.ProcessEnv;
+        try {
+            return await operation();
+        } finally {
+            process.env = previous;
+        }
+    };
+    const result = environmentChain.then(run, run);
+    environmentChain = result.then(
+        () => undefined,
+        () => undefined,
+    );
+    return result;
+}

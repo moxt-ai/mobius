@@ -1169,8 +1169,10 @@ export async function claudeCliPath(): Promise<string> {
     // The SDK's CLI is a native binary shipped as a platform-specific optional
     // dependency of @anthropic-ai/claude-agent-sdk. Resolve via a require bound
     // to the SDK so nested installs are found even when npm doesn't hoist.
+    // `import.meta.url` is used rather than `import.meta.resolve`: the latter is
+    // not shimmed when this Agent is bundled to CJS, while `import.meta.url` is.
     const { createRequire } = await import("node:module");
-    const req = createRequire(import.meta.resolve("@anthropic-ai/claude-agent-sdk"));
+    const req = createRequire(createRequire(import.meta.url).resolve("@anthropic-ai/claude-agent-sdk"));
     const ext = process.platform === "win32" ? ".exe" : "";
     // On linux, both glibc and musl variants may be installed side-by-side
     // (e.g. bunx hydrates every optional dep), so picking one by trial is
