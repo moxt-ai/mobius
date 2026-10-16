@@ -65,7 +65,6 @@ import {
     SESSION_PROMPT_KIND,
     SESSION_QUERIED_KIND,
     SESSION_QUERY_KIND,
-    SESSION_QUEUED_KIND,
     SESSION_READY_KIND,
     SESSION_RENAME_KIND,
     SESSION_RENAMED_KIND,
@@ -333,8 +332,6 @@ export class ChannelActor {
             case SESSION_RENAMED_KIND:
                 return;
             case SESSION_STATUS_CHANGED_KIND:
-                return;
-            case SESSION_QUEUED_KIND:
                 return;
             case NATIVE_SESSION_RESULT_KIND:
                 return;

@@ -156,11 +156,20 @@ test("Given real Codex starts a tool, When clients watch and reopen the complete
             } | null = null;
             let snapshotVerified = false;
             let queuedCancelled = false;
+            let queuedAdmitted = false;
             let text = "";
 
             while (!completed) {
                 const message = await messages.next();
-                if (decodeMessageKind(message) === "session.queued") {
+                if (
+                    decodeMessageKind(message) === SESSION_EVENT_V2_KIND &&
+                    decodeSessionEventEnvelopeV2(message).events.some(
+                        (event) =>
+                            event.type === "lifecycle-metadata" && event.payload.kind === "session.queue.changed",
+                    ) === true &&
+                    queuedAdmitted === false
+                ) {
+                    queuedAdmitted = true;
                     socket.send(
                         encodeNativeSessionCommand({
                             action: "active-turn",

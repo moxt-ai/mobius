@@ -20,7 +20,6 @@ import {
     decodeSessionOperationFailedEvent,
     decodeSessionPermissionResolvedEvent,
     decodeSessionPreviewHistoryPageLoaded,
-    decodeSessionQueuedEvent,
     decodeSessionReadyEvent,
     decodeSessionRenamedEvent,
     decodeSessionRestoredEvent,
@@ -42,7 +41,6 @@ import {
     type RuntimePingCommand,
     type RuntimePongEvent,
     SESSION_EVENT_V2_KIND,
-    SESSION_QUEUED_KIND,
     type SessionCancelCommand,
     type SessionCloseCommand,
     type SessionClosedEvent,
@@ -180,10 +178,21 @@ function lifecycleReply(
         return { kind: "reject", error: new SessionRuntimeError(payload.code, payload.message) };
     }
     if (command.kind === "session.prompt" && payload.kind === "session.queue.changed") {
-        // The queue update precedes the queued Turn's start; keep waiting for
-        // its own prompt.started unless the daemon reports the queued receipt
-        // directly (V1 bridging, retired once the daemon stops sending it).
-        return { kind: "ignore" };
+        // A queue change on the submitted Session acknowledges a queue-disposition
+        // Turn: the daemon records it as the prompt enters its queue. The event is
+        // Session-scoped, so this resolves submissions that asked to be queued;
+        // every other disposition keeps waiting for its own prompt.started.
+        if (command.disposition !== "queue") {
+            return { kind: "ignore" };
+        }
+        return {
+            kind: "resolve",
+            result: {
+                commandId: requestId,
+                kind: "turn.queued",
+                sessionId,
+            },
+        };
     }
     if (!expectation.resolveOn.includes(payload.kind)) {
         return { kind: "ignore" };
@@ -518,19 +527,6 @@ export async function requestRuntimeControl(
                     if (kind === "runtime.status") {
                         if (!decodeRuntimeStatusEvent(event.data).online) {
                             reject(new SessionRuntimeError("runtime_offline", "The Runtime connection closed"));
-                        }
-                        return;
-                    }
-                    if (kind === SESSION_QUEUED_KIND) {
-                        // Bridged queue receipt from the daemon; retired once the
-                        // daemon stops sending V1 lifecycle frames.
-                        const queued = decodeSessionQueuedEvent(event.data);
-                        if (command.kind === "session.prompt" && queued.commandId === requestId) {
-                            resolve({
-                                commandId: queued.commandId,
-                                kind: "turn.queued",
-                                sessionId: queued.sessionId,
-                            });
                         }
                         return;
                     }

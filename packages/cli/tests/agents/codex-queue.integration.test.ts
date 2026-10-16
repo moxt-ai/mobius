@@ -4,11 +4,11 @@ import {
     decodeSessionEventEnvelopeV2,
     decodeSessionEventV2,
     decodeSessionLiveHistoryV2PageLoaded,
-    decodeSessionQueuedEvent,
     encodeSessionCancelCommand,
     encodeSessionLiveHistoryV2PageLoad,
     encodeSessionPromptCommand,
     encodeSessionPromptDispositionCommand,
+    SESSION_EVENT_V2_KIND,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { expect, test } from "vitest";
@@ -68,8 +68,11 @@ test("Given real Codex has accepted a steering prompt, When V2 recovery reloads 
             for (;;) {
                 const message = await peer.nextMessage();
                 if (
-                    decodeMessageKind(message) === "session.queued" &&
-                    decodeSessionQueuedEvent(message).commandId === steeringCommandId
+                    decodeMessageKind(message) === SESSION_EVENT_V2_KIND &&
+                    decodeSessionEventEnvelopeV2(message).events.some(
+                        (event) =>
+                            event.type === "lifecycle-metadata" && event.payload.kind === "session.queue.changed",
+                    )
                 ) {
                     break;
                 }
@@ -189,8 +192,13 @@ test("Given real Codex advances between repeated prompts, When V2 recovery pagin
             prompt(queued, SessionPromptDisposition.Queue, active, repeatedPrompt);
             for (;;) {
                 const message = await peer.nextMessage();
-                if (decodeMessageKind(message) === "session.queued") {
-                    expect(decodeSessionQueuedEvent(message).commandId).toBe(queued);
+                if (
+                    decodeMessageKind(message) === SESSION_EVENT_V2_KIND &&
+                    decodeSessionEventEnvelopeV2(message).events.some(
+                        (event) =>
+                            event.type === "lifecycle-metadata" && event.payload.kind === "session.queue.changed",
+                    )
+                ) {
                     break;
                 }
             }
@@ -346,15 +354,20 @@ test("Given real Codex with an active turn, When three follow-ups are accepted a
             for (const id of [first, cancelled, last]) {
                 sendPrompt(id, true);
             }
-            const accepted: string[] = [];
-            while (accepted.length < 3) {
+            const admitted: string[] = [];
+            while (admitted.length < 3) {
                 const message = await peer.nextMessage();
-                if (decodeMessageKind(message) === "session.queued") {
-                    accepted.push(decodeSessionQueuedEvent(message).commandId);
+                if (decodeMessageKind(message) !== SESSION_EVENT_V2_KIND) {
+                    continue;
+                }
+                for (const event of decodeSessionEventEnvelopeV2(message).events) {
+                    if (event.type === "lifecycle-metadata" && event.payload.kind === "session.queue.changed") {
+                        admitted.push(event.eventId);
+                    }
                 }
             }
             // Authorization completes independently; acknowledgments need not arrive in execution order.
-            expect(accepted).toEqual(expect.arrayContaining([first, cancelled, last]));
+            expect(admitted).toHaveLength(3);
             peer.send(
                 encodeSessionLiveHistoryV2PageLoad({
                     cursor: null,
@@ -430,9 +443,6 @@ test("Given real Codex with an active turn, When three follow-ups are accepted a
             sendPrompt(invalid, true, invalid);
             for (;;) {
                 const message = await peer.nextMessage();
-                if (decodeMessageKind(message) === "session.queued") {
-                    expect(decodeSessionQueuedEvent(message).commandId).not.toBe(invalid);
-                }
                 if (decodeMessageKind(message) !== "session.event.v2") {
                     continue;
                 }
@@ -455,9 +465,12 @@ test("Given real Codex with an active turn, When three follow-ups are accepted a
             let acknowledged = false;
             for (;;) {
                 const message = await peer.nextMessage();
-                if (decodeMessageKind(message) === "session.queued") {
-                    expect(decodeSessionQueuedEvent(message).commandId).toBe(late);
-                    acknowledged = true;
+                if (decodeMessageKind(message) === "session.event.v2") {
+                    for (const event of decodeSessionEventEnvelopeV2(message).events) {
+                        if (event.type === "lifecycle-metadata" && event.payload.kind === "session.queue.changed") {
+                            acknowledged = true;
+                        }
+                    }
                 }
                 if (decodeMessageKind(message) !== "session.event.v2") {
                     continue;

@@ -3,12 +3,12 @@ import {
     decodeMessageKind,
     decodeSessionEventEnvelopeV2,
     decodeSessionEventV2,
-    decodeSessionQueuedEvent,
     decodeSessionReadyEvent,
     encodeSessionPermissionRespondCommand,
     encodeSessionPrepareCommand,
     encodeSessionPromptCommand,
     encodeSessionPromptDispositionCommand,
+    SESSION_EVENT_V2_KIND,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { expect, test } from "vitest";
@@ -76,8 +76,11 @@ test("Given real Pi has an active SDK turn, When the user steers it, Then Pi con
             for (;;) {
                 const message = await peer.nextMessage();
                 if (
-                    decodeMessageKind(message) === "session.queued" &&
-                    decodeSessionQueuedEvent(message).commandId === steeringCommandId
+                    decodeMessageKind(message) === SESSION_EVENT_V2_KIND &&
+                    decodeSessionEventEnvelopeV2(message).events.some(
+                        (event) =>
+                            event.type === "lifecycle-metadata" && event.payload.kind === "session.queue.changed",
+                    )
                 ) {
                     break;
                 }

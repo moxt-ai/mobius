@@ -2071,6 +2071,49 @@ describe.sequential("Platform Turn submission", () => {
                 turnId: "long-first-turn",
             });
 
+            // A queue-disposition Turn is acknowledged by the V2 queue change
+            // the daemon records as the prompt enters its queue.
+            const queuedTurn = worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/turns`, {
+                    body: JSON.stringify({
+                        additionalDirectoryIds: [],
+                        agentId: "codex",
+                        content: "queue this follow-up",
+                        directoryId: "root",
+                        disposition: "queue",
+                        idempotencyKey: "queued-follow-up",
+                        images: [],
+                        resources: [],
+                        targetCommandId: "long-first-turn",
+                    }),
+                    headers: credentialHeaders(text(sessionAccess, "credential")),
+                    method: "POST",
+                }),
+                environment,
+            );
+            expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("session.prompt");
+            daemon.send(
+                encodeSessionEventEnvelopeV2({
+                    kind: "session.event.v2",
+                    events: [
+                        {
+                            eventId: "queued-follow-up-admitted",
+                            position: "4",
+                            provenance: { kind: "original" },
+                            recordedAt: "2026-09-18T00:00:03.000Z",
+                            sessionGenerationId: "session-generation-1",
+                            sessionId,
+                            type: "lifecycle-metadata",
+                            payload: { kind: "session.queue.changed" },
+                        },
+                    ],
+                }),
+            );
+            expect(await responseJson(await queuedTurn, 200)).toMatchObject({
+                state: { kind: "queued" },
+                turnId: "queued-follow-up",
+            });
+
             expect(
                 await responseJson(await submitTurn("invalid-image-turn", "describe this", [{ type: "image" }]), 400),
             ).toMatchObject({ error: { code: "invalid_request" } });
