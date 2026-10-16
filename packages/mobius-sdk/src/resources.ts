@@ -7,13 +7,15 @@ import {
     type PromptResource,
     type SessionCapabilities,
     type SessionConfigurationSelection,
-    sessionCapabilitiesSchema,
     type TurnRequest,
 } from "@moxt-ai/mobius-protocol";
 
 import { MobiusProtocolError, MobiusValidationError } from "./errors.ts";
 
-const SESSION_CAPABILITY_FIELDS: readonly string[] = [
+// The capabilities this SDK build understands. A newer service may advertise
+// additional capabilities; unknown fields are ignored and missing fields default
+// to unsupported, so the SDK never rejects a service for evolving the protocol.
+const KNOWN_SESSION_CAPABILITY_FIELDS: readonly (keyof SessionCapabilities)[] = [
     "additionalDirectories",
     "audioPrompt",
     "closeSession",
@@ -28,6 +30,24 @@ const SESSION_CAPABILITY_FIELDS: readonly string[] = [
     "steering",
     "unstableForkSession",
 ];
+
+function unsupportedSessionCapabilities(): SessionCapabilities {
+    return Object.freeze({
+        additionalDirectories: false,
+        audioPrompt: false,
+        closeSession: false,
+        deleteSession: false,
+        embeddedContextPrompt: false,
+        imagePrompt: false,
+        listSessions: false,
+        loadSession: false,
+        promptQueueing: false,
+        renameSession: false,
+        resumeSession: false,
+        steering: false,
+        unstableForkSession: false,
+    });
+}
 
 function invalidResponse(message: string): MobiusProtocolError {
     return new MobiusProtocolError(message);
@@ -381,19 +401,24 @@ export class MobiusAgentDescriptor {
     }
 }
 
+// Decodes capabilities without depending on zod's strip/default semantics: the
+// shape is validated explicitly into a fresh object, unknown fields are ignored,
+// and missing known fields default to unsupported. This keeps an older SDK
+// compatible with a newer service that advertises capabilities it does not know.
 export function decodeMobiusAgentCapabilities(value: unknown): SessionCapabilities {
     const capabilities = record(value, "Agent capabilities");
-    if (
-        Object.keys(capabilities).length !== SESSION_CAPABILITY_FIELDS.length ||
-        SESSION_CAPABILITY_FIELDS.some((field) => !Object.hasOwn(capabilities, field))
-    ) {
-        throw invalidResponse("The service returned invalid Agent capabilities");
+    const decoded: Record<keyof SessionCapabilities, boolean> = { ...unsupportedSessionCapabilities() };
+    for (const field of KNOWN_SESSION_CAPABILITY_FIELDS) {
+        if (!Object.hasOwn(capabilities, field)) {
+            continue;
+        }
+        const advertised = capabilities[field];
+        if (advertised !== undefined && typeof advertised !== "boolean") {
+            throw invalidResponse("The service returned invalid Agent capabilities");
+        }
+        decoded[field] = advertised === true;
     }
-    const parsed = sessionCapabilitiesSchema.safeParse(capabilities);
-    if (!parsed.success) {
-        throw invalidResponse("The service returned invalid Agent capabilities");
-    }
-    return parsed.data;
+    return Object.freeze(decoded);
 }
 
 function decodeAgentDescriptor(value: unknown): MobiusAgentDescriptor {
