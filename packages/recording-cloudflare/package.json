@@ -22,6 +22,7 @@
     },
     "devDependencies": {
         "@cloudflare/vitest-plugin": "^1.1.12",
+        "vitest": "^4.1.11",
         "@cloudflare/workers-types": "^5.20260918.1",
         "wrangler": "^4.134.0"
     }
