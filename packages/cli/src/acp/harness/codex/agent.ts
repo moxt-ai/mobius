@@ -10,7 +10,6 @@ import {
     type SessionNotification,
 } from "@agentclientprotocol/sdk";
 import { z } from "zod";
-import { codexWriterLocked } from "../../../platform/codex-writer-lock.ts";
 import { captureProcessTree, type ProcessTreeIdentity, stopProcessTree } from "../../../util/process/executable.ts";
 import { AcpExecutionError } from "../../acp-error.ts";
 import {
@@ -225,8 +224,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
     #connection: AgentConnection | null = null;
     readonly #settings: CodexSettings;
     #nativeSessionId = "";
-    readonly #environment: Readonly<NodeJS.ProcessEnv>;
-    readonly #cwd: string;
+    readonly #resumeMode: "owned" | "queued";
     #execution: { readonly kind: "owned" } | { readonly kind: "queued"; readonly session: CodexQueuedSession } = {
         kind: "owned",
     };
@@ -241,8 +239,10 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
     #updateTail: Promise<void> = Promise.resolve();
 
     constructor(options: InProcessAcpEndpointOptions) {
-        this.#environment = options.environment;
-        this.#cwd = options.cwd;
+        this.#resumeMode = z
+            .enum(["owned", "queued"])
+            .default("owned")
+            .parse(options.environment["MOBIUS_CODEX_RESUME_MODE"]);
         this.#appServer = new CodexAppServerClient({
             command: options.command,
             cwd: options.cwd,
@@ -410,8 +410,8 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
     };
 
     readonly #resume = async (threadId: string, cwd: string, signal: AbortSignal): Promise<void> => {
-        // Select execution before resuming. A lock acquired after this probe is a resume failure.
-        if (await codexWriterLocked(threadId, this.#environment, this.#cwd, signal)) {
+        // Queued attachment is an explicit daemon policy, independent of resume failures.
+        if (this.#resumeMode === "queued") {
             const saved = z
                 .object({
                     thread: z.object({
