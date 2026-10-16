@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import {
     AGENT_CONTENT_KIND,
+    type AgentContentEvent,
     type AgentDisplayContent,
     decodeIdentifier,
     type NativeMessageActivity,
     type NativeSessionResult,
-    type RecordedSessionEvent,
     SESSION_ELICITATION_REQUESTED_KIND,
     SESSION_ELICITATION_RESOLVED_KIND,
     SESSION_HISTORY_CHARACTER_LIMIT,
@@ -13,14 +13,42 @@ import {
     SESSION_PERMISSION_REQUESTED_KIND,
     SESSION_PERMISSION_RESOLVED_KIND,
     type SessionCancelCommand,
+    type SessionCommandsUpdatedEvent,
+    type SessionCompletedEvent,
+    type SessionConfigUpdatedEvent,
+    type SessionElicitationRequestedEvent,
+    type SessionElicitationResolvedEvent,
+    type SessionFailedEvent,
+    type SessionInfoUpdatedEvent,
+    type SessionPermissionRequestedEvent,
+    type SessionPermissionResolvedEvent,
     type SessionPromptCommand,
     SessionPromptDisposition,
     type SessionPromptDispositionCommand,
+    type SessionReadyEvent,
+    type SessionStartedEvent,
+    type SessionUsageUpdatedEvent,
 } from "@moxt-ai/mobius-protocol";
 import type { AcpActivity, AcpActivityNarration } from "../acp/activity.ts";
 
 type ActiveTurnSnapshot = Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"];
 type ActiveTurnMessage = NonNullable<ActiveTurnSnapshot>["messages"][number];
+
+/** Session event kinds the daemon folds into an in-flight prompt Turn. */
+export type RecordedSessionEvent =
+    | AgentContentEvent
+    | SessionCommandsUpdatedEvent
+    | SessionCompletedEvent
+    | SessionConfigUpdatedEvent
+    | SessionElicitationRequestedEvent
+    | SessionElicitationResolvedEvent
+    | SessionFailedEvent
+    | SessionInfoUpdatedEvent
+    | SessionPermissionRequestedEvent
+    | SessionPermissionResolvedEvent
+    | SessionReadyEvent
+    | SessionStartedEvent
+    | SessionUsageUpdatedEvent;
 interface TurnRecovery {
     readonly sequence: number;
     readonly commandId: string;

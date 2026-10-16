@@ -1,6 +1,5 @@
 import {
     type NativeSessionResult,
-    type RecordedSessionEvent,
     SESSION_ELICITATION_RESOLVED_KIND,
     SESSION_PERMISSION_RESOLVED_KIND,
     type SessionLiveEventV2,
@@ -8,7 +7,7 @@ import {
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import type { DaemonOperationState } from "../relay-connection/daemon-operation-state.ts";
-import { ActiveDaemonTurn, type ActiveTurnRecovery } from "./active-turn.ts";
+import { ActiveDaemonTurn, type ActiveTurnRecovery, type RecordedSessionEvent } from "./active-turn.ts";
 
 type ActiveTurnSnapshot = Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"];
 
