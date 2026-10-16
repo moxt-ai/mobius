@@ -4,7 +4,6 @@ import {
     type AgentContentEvent,
     type AgentDisplayContent,
     decodeIdentifier,
-    type NativeMessageActivity,
     type NativeSessionResult,
     SESSION_ELICITATION_REQUESTED_KIND,
     SESSION_ELICITATION_RESOLVED_KIND,
@@ -32,6 +31,7 @@ import type { AcpActivity, AcpActivityNarration } from "../acp/activity.ts";
 
 type ActiveTurnSnapshot = Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"];
 type ActiveTurnMessage = NonNullable<ActiveTurnSnapshot>["messages"][number];
+type NativeMessageActivity = Extract<ActiveTurnMessage, { readonly role: "assistant" }>["activities"][number];
 
 /** Session event kinds the daemon folds into an in-flight prompt Turn. */
 export type RecordedSessionEvent =

@@ -1,4 +1,3 @@
-import type { NativeSessionHistory } from "@moxt-ai/mobius-protocol";
 import type { AcpContentExternalizer } from "../external-content/acp-content-externalizer.ts";
 import { AcpExecutionError } from "./acp-error.ts";
 import type { AgentProcessPool } from "./agent-process-pool.ts";
@@ -129,24 +128,6 @@ export class AgentQueryProcesses {
         operation: (runtime: AgentSession) => Promise<T>,
     ): Promise<T> =>
         await this.#processesByQuery.use(options.sessionId, async () => await operation(await this.#ensure(options)));
-
-    readonly preview = async (options: AcpPrepareOptions, nativeSessionId: string): Promise<NativeSessionHistory> => {
-        return await this.#processes.runTransient(
-            options.signal,
-            async () =>
-                await AgentSession.startNativeSessionBrowser(
-                    options,
-                    () => this.#observer,
-                    new MemoryAcpSessionStore(),
-                    this.#contentExternalizer,
-                ),
-            async (runtime) => {
-                runtime.selectNativeSession(nativeSessionId);
-                return await runtime.loadHistory(options.signal);
-            },
-            async (runtime) => await runtime.closeProcess(),
-        );
-    };
 
     readonly previewEventsV2 = async (
         options: AcpPrepareOptions,
