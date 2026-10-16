@@ -2064,6 +2064,116 @@ describe.sequential("Platform Turn submission", () => {
                 turnId: "long-first-turn",
             });
 
+            // A queue-disposition Turn is acknowledged by the V2 queue change
+            // the daemon records as the prompt enters its queue.
+            const queuedTurn = worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/turns`, {
+                    body: JSON.stringify({
+                        additionalDirectoryIds: [],
+                        agentId: "codex",
+                        content: "queue this follow-up",
+                        directoryId: "root",
+                        disposition: "queue",
+                        idempotencyKey: "queued-follow-up",
+                        images: [],
+                        resources: [],
+                        targetCommandId: "long-first-turn",
+                    }),
+                    headers: credentialHeaders(text(sessionAccess, "credential")),
+                    method: "POST",
+                }),
+                environment,
+            );
+            expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("session.prompt");
+            daemon.send(
+                encodeSessionEventEnvelopeV2({
+                    kind: "session.event.v2",
+                    events: [
+                        {
+                            eventId: "queued-follow-up-admitted",
+                            position: "4",
+                            provenance: { kind: "original" },
+                            recordedAt: "2026-09-18T00:00:03.000Z",
+                            sessionGenerationId: "session-generation-1",
+                            sessionId,
+                            type: "lifecycle-metadata",
+                            payload: { kind: "session.queue.changed" },
+                        },
+                    ],
+                }),
+            );
+            expect(await responseJson(await queuedTurn, 200)).toMatchObject({
+                state: { kind: "queued" },
+                turnId: "queued-follow-up",
+            });
+
+            // A queue change on another Session of the same Runtime must not
+            // acknowledge the submission: without Session scoping this Turn
+            // would settle as queued from the foreign event instead of waiting
+            // for its own prompt.started.
+            const crossSessionTurn = worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/turns`, {
+                    body: JSON.stringify({
+                        additionalDirectoryIds: [],
+                        agentId: "codex",
+                        content: "queue behind the foreign queue change",
+                        directoryId: "root",
+                        disposition: "queue",
+                        idempotencyKey: "cross-session-queued",
+                        images: [],
+                        resources: [],
+                        targetCommandId: "long-first-turn",
+                    }),
+                    headers: credentialHeaders(text(sessionAccess, "credential")),
+                    method: "POST",
+                }),
+                environment,
+            );
+            expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("session.prompt");
+            daemon.send(
+                encodeSessionEventEnvelopeV2({
+                    kind: "session.event.v2",
+                    events: [
+                        {
+                            eventId: "foreign-session-queue-change",
+                            position: "1",
+                            provenance: { kind: "original" },
+                            recordedAt: "2026-09-18T00:00:04.000Z",
+                            sessionGenerationId: "session-generation-1",
+                            sessionId: "another-session",
+                            type: "lifecycle-metadata",
+                            payload: { kind: "session.queue.changed" },
+                        },
+                    ],
+                }),
+            );
+            daemon.send(
+                encodeSessionEventEnvelopeV2({
+                    kind: "session.event.v2",
+                    events: [
+                        {
+                            eventId: "cross-session-queued-started",
+                            position: "5",
+                            provenance: { kind: "original" },
+                            recordedAt: "2026-09-18T00:00:05.000Z",
+                            sessionGenerationId: "session-generation-1",
+                            sessionId,
+                            type: "lifecycle-metadata",
+                            payload: {
+                                attemptId: "cross-session-attempt",
+                                commandId: "cross-session-queued",
+                                epoch: "cross-session-epoch",
+                                kind: "prompt.started",
+                            },
+                        },
+                    ],
+                }),
+            );
+            expect(await responseJson(await crossSessionTurn, 200)).toMatchObject({
+                state: { kind: "running" },
+                turnId: "cross-session-queued",
+            });
+
             expect(
                 await responseJson(await submitTurn("invalid-image-turn", "describe this", [{ type: "image" }]), 400),
             ).toMatchObject({ error: { code: "invalid_request" } });

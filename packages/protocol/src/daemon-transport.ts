@@ -8,7 +8,6 @@ import {
     decodeSessionCancelCommand,
     decodeSessionPromptCommand,
     decodeSessionPromptDispositionCommand,
-    decodeSessionQueuedEvent,
     encodeRuntimeHeartbeatAckEvent,
     encodeRuntimeHeartbeatEvent,
     encodeRuntimeLivenessReadyEvent,
@@ -17,7 +16,6 @@ import {
     encodeSessionCancelCommand,
     encodeSessionPromptCommand,
     encodeSessionPromptDispositionCommand,
-    encodeSessionQueuedEvent,
     UnsupportedProtocolMessageKindError,
 } from "./codecs/messages.ts";
 import {
@@ -118,7 +116,6 @@ import {
     SESSION_CANCEL_KIND,
     SESSION_PROMPT_DISPOSITION_KIND,
     SESSION_PROMPT_KIND,
-    SESSION_QUEUED_KIND,
 } from "./messages.ts";
 import {
     decodeNativeSessionCancel,
@@ -364,11 +361,6 @@ const daemonToServiceSignatures = {
         SESSION_INFO_UPDATED_KIND,
         encodeSessionInfoUpdatedEvent,
         decodeSessionInfoUpdatedEvent,
-    ),
-    [SESSION_QUEUED_KIND]: defineMessageSignature(
-        SESSION_QUEUED_KIND,
-        encodeSessionQueuedEvent,
-        decodeSessionQueuedEvent,
     ),
     [NATIVE_SESSION_RESULT_KIND]: defineMessageSignature(
         NATIVE_SESSION_RESULT_KIND,

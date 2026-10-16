@@ -13,11 +13,9 @@ import {
     SESSION_PERMISSION_RESOLVED_KIND,
     type SessionCancelCommand,
     type SessionCommandsUpdatedEvent,
-    type SessionCompletedEvent,
     type SessionConfigUpdatedEvent,
     type SessionElicitationRequestedEvent,
     type SessionElicitationResolvedEvent,
-    type SessionFailedEvent,
     type SessionInfoUpdatedEvent,
     type SessionPermissionRequestedEvent,
     type SessionPermissionResolvedEvent,
@@ -25,7 +23,6 @@ import {
     SessionPromptDisposition,
     type SessionPromptDispositionCommand,
     type SessionReadyEvent,
-    type SessionStartedEvent,
 } from "@moxt-ai/mobius-protocol";
 import type { AcpActivity, AcpActivityNarration } from "../acp/activity.ts";
 
@@ -37,16 +34,13 @@ type NativeMessageActivity = Extract<ActiveTurnMessage, { readonly role: "assist
 export type RecordedSessionEvent =
     | AgentContentEvent
     | SessionCommandsUpdatedEvent
-    | SessionCompletedEvent
     | SessionConfigUpdatedEvent
     | SessionElicitationRequestedEvent
     | SessionElicitationResolvedEvent
-    | SessionFailedEvent
     | SessionInfoUpdatedEvent
     | SessionPermissionRequestedEvent
     | SessionPermissionResolvedEvent
-    | SessionReadyEvent
-    | SessionStartedEvent;
+    | SessionReadyEvent;
 interface TurnRecovery {
     readonly sequence: number;
     readonly commandId: string;

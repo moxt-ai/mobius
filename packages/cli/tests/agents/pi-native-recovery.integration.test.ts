@@ -2,16 +2,17 @@ import { randomUUID } from "node:crypto";
 import {
     decodeMessageKind,
     decodeNativeSessionResult,
+    decodeSessionEventEnvelopeV2,
     decodeSessionEventV2,
     decodeSessionLiveHistoryV2PageLoaded,
     decodeSessionOperationFailedEvent,
     decodeSessionPreviewHistoryPageLoaded,
-    decodeSessionQueuedEvent,
     encodeNativeSessionCommand,
     encodeSessionCancelCommand,
     encodeSessionLiveHistoryV2PageLoad,
     encodeSessionPreviewHistoryPageLoad,
     encodeSessionPromptCommand,
+    SESSION_EVENT_V2_KIND,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { expect, test } from "vitest";
@@ -105,8 +106,13 @@ test("Given a real pi native Session, When the active prompt is cancelled with a
             sendPrompt(queued, active);
             for (;;) {
                 const message = await peer.nextMessage();
-                if (decodeMessageKind(message) === "session.queued") {
-                    expect(decodeSessionQueuedEvent(message).commandId).toBe(queued);
+                if (
+                    decodeMessageKind(message) === SESSION_EVENT_V2_KIND &&
+                    decodeSessionEventEnvelopeV2(message).events.some(
+                        (event) =>
+                            event.type === "lifecycle-metadata" && event.payload.kind === "session.queue.changed",
+                    )
+                ) {
                     break;
                 }
             }

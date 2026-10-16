@@ -18,20 +18,12 @@ import {
     type RuntimePongEvent,
     type RuntimeStatusEvent,
     SESSION_CANCEL_KIND,
-    SESSION_COMPLETED_KIND,
-    SESSION_FAILED_KIND,
     SESSION_PROMPT_DISPOSITION_KIND,
     SESSION_PROMPT_KIND,
-    SESSION_QUEUED_KIND,
-    SESSION_STARTED_KIND,
     type SessionCancelCommand,
-    type SessionCompletedEvent,
-    type SessionFailedEvent,
     type SessionPromptCommand,
     SessionPromptDisposition,
     type SessionPromptDispositionCommand,
-    type SessionQueuedEvent,
-    type SessionStartedEvent,
 } from "../messages.ts";
 
 const DIRECTORY_IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/;
@@ -109,14 +101,6 @@ function readPromptDisposition(value: Readonly<Record<string, unknown>>): string
         return SessionPromptDisposition.Steer;
     }
     throw new ProtocolMessageError("Invalid value field: disposition");
-}
-
-function readSequence(value: Readonly<Record<string, unknown>>, key: string): number {
-    const field = value[key];
-    if (typeof field !== "number" || !Number.isSafeInteger(field) || field < 0) {
-        throw new ProtocolMessageError(`Invalid integer field: ${key}`);
-    }
-    return field;
 }
 
 function readDirectoryIdentifiers(
@@ -251,16 +235,6 @@ export function decodeSessionPromptDispositionCommand(encoded: string): SessionP
     };
 }
 
-export function decodeSessionQueuedEvent(encoded: string): SessionQueuedEvent {
-    const value = parseJson(encoded);
-    assertKind(value, SESSION_QUEUED_KIND);
-    return {
-        commandId: readIdentifier(value, "commandId"),
-        kind: SESSION_QUEUED_KIND,
-        sessionId: readIdentifier(value, "sessionId"),
-    };
-}
-
 export function decodeRuntimeStatusEvent(encoded: string): RuntimeStatusEvent {
     const value = parseJson(encoded);
     assertKind(value, RUNTIME_STATUS_KIND);
@@ -310,51 +284,6 @@ export function decodeRuntimePongEvent(encoded: string): RuntimePongEvent {
     return { kind: RUNTIME_PONG_KIND, requestId: readIdentifier(value, "requestId") };
 }
 
-export function decodeSessionStartedEvent(encoded: string): SessionStartedEvent {
-    const value = parseJson(encoded);
-    assertKind(value, SESSION_STARTED_KIND);
-
-    const sequence = readSequence(value, "sequence");
-    if (sequence !== 0) {
-        throw new ProtocolMessageError("Invalid live start sequence");
-    }
-
-    return {
-        commandId: readIdentifier(value, "commandId"),
-        epoch: readIdentifier(value, "epoch"),
-        kind: SESSION_STARTED_KIND,
-        attemptId: readIdentifier(value, "attemptId"),
-        prompt: readText(value, "prompt", MAX_PROMPT_LENGTH),
-        sequence,
-        sessionId: readIdentifier(value, "sessionId"),
-    };
-}
-
-export function decodeSessionCompletedEvent(encoded: string): SessionCompletedEvent {
-    const value = parseJson(encoded);
-    assertKind(value, SESSION_COMPLETED_KIND);
-
-    return {
-        commandId: readIdentifier(value, "commandId"),
-        kind: SESSION_COMPLETED_KIND,
-        sessionId: readIdentifier(value, "sessionId"),
-        stopReason: readString(value, "stopReason", 64),
-    };
-}
-
-export function decodeSessionFailedEvent(encoded: string): SessionFailedEvent {
-    const value = parseJson(encoded);
-    assertKind(value, SESSION_FAILED_KIND);
-
-    return {
-        code: readIdentifier(value, "code"),
-        commandId: readIdentifier(value, "commandId"),
-        kind: SESSION_FAILED_KIND,
-        message: readString(value, "message", 500),
-        sessionId: readIdentifier(value, "sessionId"),
-    };
-}
-
 export function encodeSessionPromptCommand(message: SessionPromptCommand): string {
     return JSON.stringify(decodeSessionPromptCommand(JSON.stringify(message)));
 }
@@ -365,10 +294,6 @@ export function encodeSessionCancelCommand(message: SessionCancelCommand): strin
 
 export function encodeSessionPromptDispositionCommand(message: SessionPromptDispositionCommand): string {
     return JSON.stringify(decodeSessionPromptDispositionCommand(JSON.stringify(message)));
-}
-
-export function encodeSessionQueuedEvent(message: SessionQueuedEvent): string {
-    return JSON.stringify(decodeSessionQueuedEvent(JSON.stringify(message)));
 }
 
 export function encodeRuntimeStatusEvent(message: RuntimeStatusEvent): string {
@@ -393,16 +318,4 @@ export function encodeRuntimePingCommand(message: RuntimePingCommand): string {
 
 export function encodeRuntimePongEvent(message: RuntimePongEvent): string {
     return JSON.stringify(decodeRuntimePongEvent(JSON.stringify(message)));
-}
-
-export function encodeSessionStartedEvent(message: SessionStartedEvent): string {
-    return JSON.stringify(decodeSessionStartedEvent(JSON.stringify(message)));
-}
-
-export function encodeSessionCompletedEvent(message: SessionCompletedEvent): string {
-    return JSON.stringify(decodeSessionCompletedEvent(JSON.stringify(message)));
-}
-
-export function encodeSessionFailedEvent(message: SessionFailedEvent): string {
-    return JSON.stringify(decodeSessionFailedEvent(JSON.stringify(message)));
 }

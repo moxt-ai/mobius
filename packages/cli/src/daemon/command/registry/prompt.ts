@@ -1,9 +1,4 @@
-import {
-    encodeSessionPromptCommand,
-    SESSION_PROMPT_KIND,
-    SESSION_QUEUED_KIND,
-    SessionPromptDisposition,
-} from "@moxt-ai/mobius-protocol";
+import { encodeSessionPromptCommand, SESSION_PROMPT_KIND, SessionPromptDisposition } from "@moxt-ai/mobius-protocol";
 import { send } from "../../command-dispatcher.ts";
 import type { DaemonCommand } from "../definition.ts";
 import { executePrompt } from "./prompt-executor.ts";
@@ -34,6 +29,9 @@ export const sessionPromptCommand: DaemonCommand = {
         }
         const turn = context.activeTurns.start(message, receipt.attemptId);
         context.eventProjectionV2.requested(message);
+        // Queue admission is acknowledged by the V2 session.queue.changed lifecycle
+        // event; the relay resolves the pending Turn submission from it, so the
+        // daemon sends no separate acknowledgment frame.
         const queueChanged = (): void => {
             void context.eventProjectionV2.queueChanged(message.sessionId).catch((error: unknown) => {
                 console.error("Could not record queue change", error);
@@ -51,11 +49,6 @@ export const sessionPromptCommand: DaemonCommand = {
             waitForSessionAvailability: (signal) =>
                 context.activeTurns.admitAndWait(turn, signal, () => {
                     queueChanged();
-                    send(context.socket, {
-                        commandId: message.commandId,
-                        kind: SESSION_QUEUED_KIND,
-                        sessionId: message.sessionId,
-                    });
                 }),
             signal: turn.signal,
             recordTurnActivity: turn.recordActivity,
