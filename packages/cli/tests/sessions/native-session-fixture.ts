@@ -10,7 +10,7 @@ import {
 } from "../../src/acp/agent-runtime-manager.ts";
 import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
 import { WorkspaceDirectoryService } from "../../src/authorization/workspace-directory.ts";
-import { createDaemonConfig, LocalAgentDefinition } from "../../src/config.ts";
+import { createDaemonConfig, LocalAgentDefinition } from "../../src/daemon/config.ts";
 import { NativeSessionService } from "../../src/native-sessions/service.ts";
 
 const acpUrl = new URL("./fixtures/acp-peer.ts", import.meta.url).toString();

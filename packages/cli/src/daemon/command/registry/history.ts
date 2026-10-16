@@ -14,11 +14,11 @@ import { AcpExecutionError, type AgentRuntimeManager } from "../../../acp/agent-
 import type { AcpSessionEventPageV2 } from "../../../acp/session-event-store-v2.ts";
 import { resolveSessionDirectories } from "../../../authorization/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "../../../authorization/workspace-directory.ts";
-import type { DaemonConfig } from "../../../config.ts";
 import type { NativeSessionService } from "../../../native-sessions/service.ts";
-import type { RelayConnectionDiagnostics } from "../../../relay-connection/diagnostics.ts";
 import type { DaemonSessionEventProjectionV2 } from "../../../session-event-projection-v2.ts";
 import { operationErrorCode, reportOperationFailure, send } from "../../command-dispatcher.ts";
+import type { DaemonConfig } from "../../config.ts";
+import type { RelayConnectionDiagnostics } from "../../relay/diagnostics.ts";
 import type { DaemonCommand } from "../definition.ts";
 import { resolveCatalogAgent } from "./session.ts";
 

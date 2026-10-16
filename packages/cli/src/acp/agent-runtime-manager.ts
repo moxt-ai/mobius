@@ -12,12 +12,12 @@ import type {
     SessionStatus,
     SessionStatusChangedEvent,
 } from "@moxt-ai/mobius-protocol";
+import { type DaemonTimer, systemDaemonTimer } from "../daemon/relay/timer.ts";
 import { AcpContentExternalizer } from "../external-content/acp-content-externalizer.ts";
 import { UnretainedExternalContentStore } from "../external-content/local-external-content-store.ts";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
 import { isNativeChatSessionId } from "../native-sessions/chat-agent.ts";
 import { nativeHistoryEventsV2 } from "../native-sessions/native-history-events-v2.ts";
-import { type DaemonTimer, systemDaemonTimer } from "../relay-connection/timer.ts";
 import { AcpExecutionError } from "./acp-error.ts";
 import { AgentProcessPool, type AgentProcessRetention } from "./agent-process-pool.ts";
 import type { NativeSessionOrigin, NativeSessionPage } from "./native-session.ts";

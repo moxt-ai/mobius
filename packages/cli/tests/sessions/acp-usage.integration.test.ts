@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AgentRuntimeManager } from "../../src/acp/agent-runtime-manager.ts";
-import { LocalAgentDefinition } from "../../src/config.ts";
+import { LocalAgentDefinition } from "../../src/daemon/config.ts";
 import { fakeAgentPath, RecordingObserver } from "./acp-feature-fixture.ts";
 
 const usage = { cachedReadTokens: 200, inputTokens: 600, outputTokens: 200, thoughtTokens: 50, totalTokens: 1_000 };

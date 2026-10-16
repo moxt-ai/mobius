@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { AgentRuntimeManager } from "../../src/acp/agent-runtime-manager.ts";
-import { createDaemonConfig, DaemonLocalContext, LocalAgentDefinition } from "../../src/config.ts";
+import { createDaemonConfig, DaemonLocalContext, LocalAgentDefinition } from "../../src/daemon/config.ts";
 
 import { fakeAgent, fakeAgentPath, RecordingObserver } from "./acp-feature-fixture.ts";
 

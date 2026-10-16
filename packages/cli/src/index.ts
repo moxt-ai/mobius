@@ -6,7 +6,7 @@ export {
     DaemonReconnectTarget,
     loadDaemonConfig,
     OpaqueDaemonReconnectTarget,
-} from "./config.ts";
+} from "./daemon/config.ts";
 export {
     type MobiusRuntimePairingOptions,
     type PairedDaemon,
@@ -16,6 +16,7 @@ export {
     resumeLocalMachine,
     resumeMobiusRuntime,
 } from "./daemon/pairing/pair-local-machine.ts";
+export { RuntimeRelayRevokedError } from "./daemon/relay/runtime-revocation.ts";
 export { runDaemon } from "./daemon/run.ts";
 export {
     createMobiusRuntimeEngine,
@@ -24,7 +25,6 @@ export {
     MobiusRuntimeEngine,
     type MobiusRuntimeEngineOptions,
 } from "./daemon/runtime.ts";
-export { RuntimeRelayRevokedError } from "./relay-connection/runtime-revocation.ts";
 export {
     openRuntimeInstallationStore,
     type RuntimeConnectionInput,

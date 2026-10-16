@@ -8,8 +8,8 @@ import {
 } from "../agent-catalog/discover-local-agents.ts";
 import { publishAgentCatalog } from "../agent-catalog/publish-agent-catalog.ts";
 import { createCatalogAgentResolver } from "../agent-catalog/resolve-catalog-agent.ts";
-import { createDaemonConfig, type DaemonConfig, DaemonLocalContext, loadDefaultWorkspace } from "../config.ts";
 import { readStateDirectory } from "../storage/state-directory.ts";
+import { createDaemonConfig, type DaemonConfig, DaemonLocalContext, loadDefaultWorkspace } from "./config.ts";
 import { runDaemon } from "./run.ts";
 
 const RUNTIME_CREDENTIAL_PATTERN = /^[a-zA-Z0-9_-]{32,256}$/;
@@ -184,14 +184,6 @@ export type {
     InProcessAcpEndpointFactory,
     InProcessAcpEndpointOptions,
 } from "../acp/in-process/acp-endpoint.ts";
-export type { DaemonConfig, DaemonConnectionConfig } from "../config.ts";
-export {
-    createDaemonConfig,
-    DaemonLocalContext,
-    DaemonReconnectTarget,
-    InProcessAcpAgentDefinition,
-    OpaqueDaemonReconnectTarget,
-} from "../config.ts";
 export {
     openRuntimeInstallationStore,
     type RuntimeConnectionInput,
@@ -200,6 +192,14 @@ export {
     type RuntimeInstallationStoreOptions,
     VerifiedRuntimeConnection,
 } from "../storage/runtime-installation-store.ts";
+export type { DaemonConfig, DaemonConnectionConfig } from "./config.ts";
+export {
+    createDaemonConfig,
+    DaemonLocalContext,
+    DaemonReconnectTarget,
+    InProcessAcpAgentDefinition,
+    OpaqueDaemonReconnectTarget,
+} from "./config.ts";
 export {
     type MobiusRuntimePairingOptions,
     type PairedDaemon,

@@ -1,6 +1,6 @@
 import { WebSocket } from "undici";
 
-import { environmentProxyDispatcher } from "../util/network/environment-proxy.ts";
+import { environmentProxyDispatcher } from "../../util/network/environment-proxy.ts";
 import { runtimeAuthorization } from "./runtime-authentication.ts";
 import { isRuntimeRelayRevocation, RuntimeRelayRevokedError } from "./runtime-revocation.ts";
 

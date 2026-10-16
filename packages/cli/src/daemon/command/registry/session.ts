@@ -18,11 +18,11 @@ import { AcpExecutionError } from "../../../acp/acp-error.ts";
 import type { AcpSessionRecovery, AgentRuntimeManager } from "../../../acp/agent-runtime-manager.ts";
 import { resolveSessionDirectories } from "../../../authorization/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "../../../authorization/workspace-directory.ts";
-import type { AcpAgentDefinition, DaemonConfig } from "../../../config.ts";
 import { AccumulatingOperationMetrics } from "../../../infra/operation-metrics.ts";
 import type { NativeSessionService } from "../../../native-sessions/service.ts";
-import type { RelayConnectionDiagnostics } from "../../../relay-connection/diagnostics.ts";
 import { operationErrorCode, reportOperationFailure, send } from "../../command-dispatcher.ts";
+import type { AcpAgentDefinition, DaemonConfig } from "../../config.ts";
+import type { RelayConnectionDiagnostics } from "../../relay/diagnostics.ts";
 import type { DaemonCommand } from "../definition.ts";
 
 export async function resolveCatalogAgent(

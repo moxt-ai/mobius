@@ -164,7 +164,7 @@ describe("daemon environment proxy", () => {
 
         try {
             const { openRuntimeInstallationStore, pairMobiusRuntime } = await import("../../src/daemon/runtime.ts");
-            const { connectRelay } = await import("../../src/relay-connection/connect.ts");
+            const { connectRelay } = await import("../../src/daemon/relay/connect.ts");
             const { describeEnvironmentProxyRoute, environmentProxyDispatcher } = await import(
                 "../../src/util/network/environment-proxy.ts"
             );

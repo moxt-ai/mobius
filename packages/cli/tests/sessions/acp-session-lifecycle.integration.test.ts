@@ -15,7 +15,7 @@ import {
 } from "../../src/acp/agent-runtime-manager.ts";
 import { CachedAcpSessionEventStoreV2 } from "../../src/acp/session-event-store-v2.ts";
 import { FoundAcpStoredSession, MemoryAcpSessionStore, SqliteAcpSessionStore } from "../../src/acp/session-store.ts";
-import { LocalAgentDefinition } from "../../src/config.ts";
+import { LocalAgentDefinition } from "../../src/daemon/config.ts";
 import { acpSessionStoreMigrations } from "../../src/generated/acp-session-store-migrations.ts";
 import { AccumulatingOperationMetrics } from "../../src/infra/operation-metrics.ts";
 import { openAcpSessionDatabase, openSessionEventCacheV2Database } from "../../src/local-databases.ts";

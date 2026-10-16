@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { AgentRuntimeManager } from "../../src/acp/agent-runtime-manager.ts";
-import { LocalAgentDefinition } from "../../src/config.ts";
+import { LocalAgentDefinition } from "../../src/daemon/config.ts";
 
 import { createControlledSession } from "./acp-controls-fixture.ts";
 
