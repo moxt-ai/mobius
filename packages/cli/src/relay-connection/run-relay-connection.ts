@@ -87,7 +87,6 @@ export async function runRelayConnection({
         signal: connectionController.signal,
         timer,
     });
-    onConnected();
     void reportDaemonUpgrade((result) => {
         if (socket.readyState === WebSocket.OPEN) {
             send(socket, result);
@@ -101,6 +100,7 @@ export async function runRelayConnection({
     try {
         await new Promise<void>((resolve, reject) => {
             let finished = false;
+            let ready = false;
 
             const cleanup = (): void => {
                 connectionLiveness.close();
@@ -202,8 +202,13 @@ export async function runRelayConnection({
                     const message = decodeServiceToDaemonMessage(encoded);
                     const kind = message.kind;
                     if (kind === RUNTIME_LIVENESS_READY_KIND) {
+                        if (ready) {
+                            return;
+                        }
+                        ready = true;
                         publisher.connect(socket);
                         connectionLiveness.start();
+                        onConnected();
                         return;
                     }
                     if (kind === RUNTIME_HEARTBEAT_ACK_KIND) {
