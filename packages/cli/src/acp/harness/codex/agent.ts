@@ -439,7 +439,13 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                         turns: z.array(z.unknown()),
                     }),
                 })
-                .parse(await this.#appServer.request("thread/read", { threadId, includeTurns: false }, signal));
+                .parse(
+                    await this.#appServer.request(
+                        "thread/read",
+                        { threadId, includeTurns: false },
+                        AbortSignal.any([signal, AbortSignal.timeout(APPROVAL_TIMEOUT_MILLISECONDS)]),
+                    ),
+                );
             const queued = new CodexQueuedSession(this.#appServer, threadId, this.#emit);
             await queued.initialize(signal);
             this.#nativeSessionId = threadId;

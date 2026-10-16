@@ -155,7 +155,9 @@ export class CodexQueuedSession {
                         if (text.length > 0) {
                             await this.#emit({
                                 sessionUpdate:
-                                    item.type === "agentMessage" && item.phase !== "commentary" ? "agent_message_chunk" : "agent_thought_chunk",
+                                    item.type === "agentMessage" && item.phase !== "commentary"
+                                        ? "agent_message_chunk"
+                                        : "agent_thought_chunk",
                                 messageId: key,
                                 content: { type: "text", text },
                             });
