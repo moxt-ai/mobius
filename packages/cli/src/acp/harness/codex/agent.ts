@@ -224,7 +224,6 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
     #connection: AgentConnection | null = null;
     readonly #settings: CodexSettings;
     #nativeSessionId = "";
-    readonly #resumeMode: "owned" | "queued";
     #execution: { readonly kind: "owned" } | { readonly kind: "queued"; readonly session: CodexQueuedSession } = {
         kind: "owned",
     };
@@ -239,10 +238,6 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
     #updateTail: Promise<void> = Promise.resolve();
 
     constructor(options: InProcessAcpEndpointOptions) {
-        this.#resumeMode = z
-            .enum(["owned", "queued"])
-            .default("owned")
-            .parse(options.environment["MOBIUS_CODEX_RESUME_MODE"]);
         this.#appServer = new CodexAppServerClient({
             command: options.command,
             cwd: options.cwd,
@@ -410,8 +405,21 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
     };
 
     readonly #resume = async (threadId: string, cwd: string, signal: AbortSignal): Promise<void> => {
-        // Queued attachment is an explicit daemon policy, independent of resume failures.
-        if (this.#resumeMode === "queued") {
+        const resumed = await (async () => {
+            try {
+                return threadResumeResponseSchema.parse(
+                    await this.#appServer.request(
+                        "thread/resume",
+                        { cwd, excludeTurns: true, threadId },
+                        AbortSignal.any([signal, AbortSignal.timeout(APPROVAL_TIMEOUT_MILLISECONDS)]),
+                    ),
+                );
+            } catch {
+                signal.throwIfAborted();
+                return null;
+            }
+        })();
+        if (resumed === null) {
             const saved = z
                 .object({
                     thread: z.object({
@@ -439,13 +447,6 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
             this.#execution = { kind: "queued", session: queued };
             return;
         }
-        const resumed = threadResumeResponseSchema.parse(
-            await this.#appServer.request(
-                "thread/resume",
-                { cwd, excludeTurns: true, threadId },
-                AbortSignal.any([signal, AbortSignal.timeout(APPROVAL_TIMEOUT_MILLISECONDS)]),
-            ),
-        );
         this.#nativeSessionId = resumed.thread.id;
         this.#settings.selectRestoredThread(resumed);
         await this.#settings.probeCollaborationMode(this.#nativeSessionId, signal);
