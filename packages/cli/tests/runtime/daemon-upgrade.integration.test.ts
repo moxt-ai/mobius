@@ -318,4 +318,180 @@ describe("Daemon hourly npm upgrade", () => {
             await rm(directory, { recursive: true, force: true });
         }
     }, 270_000);
+    it("Given an outdated daemon starts for the first time, When the Relay requires an upgrade, Then the worker installs it and the manager waits for the healthy replacement", async () => {
+        const directory = await mkdtemp(join(tmpdir(), "mobius-upgrade-journey-"));
+        const signal = AbortSignal.timeout(240_000);
+        const stateRoot = join(directory, "state");
+        const environment = {
+            ...process.env,
+            MOBIUS_STATE_DIRECTORY: stateRoot,
+            MOBIUS_TEST_CLOCK_DIRECTORY: directory,
+            NODE_OPTIONS: `${process.env["NODE_OPTIONS"] ?? ""} --import=${pathToFileURL(resolve(import.meta.dirname, "../support/daemon-upgrade-clock.ts")).href}`,
+            NPM_CONFIG_CACHE: join(directory, "npm-cache"),
+        };
+        const cli = async (
+            args: readonly string[],
+            deadline = signal,
+            entry = resolve(import.meta.dirname, "../../src/entrypoint/cli.ts"),
+        ): Promise<void> => {
+            const child = spawn(process.execPath, [entry, ...args], {
+                cwd: directory,
+                env: environment,
+                signal: deadline,
+                windowsHide: true,
+                stdio: ["ignore", "pipe", "pipe"],
+            });
+            let output = "";
+            child.stdout.on("data", (chunk: Buffer) => {
+                output += chunk.toString();
+            });
+            child.stderr.on("data", (chunk: Buffer) => {
+                output += chunk.toString();
+            });
+            await new Promise<void>((resolve_, reject) => {
+                child.once("error", reject);
+                child.once("close", (code) => (code === 0 ? resolve_() : reject(new Error(`CLI failed: ${output}`))));
+            });
+        };
+        const good = "99.0.1";
+        const bad = "99.0.3";
+        const latest = good;
+        let queries = 0;
+        let downloads = 0;
+        let queryWaiter: PromiseWithResolvers<void> | undefined;
+        const packages = new Map<string, Buffer>();
+        const catalogs = new Map<string, string>();
+        let registryUrl = "";
+        const server = createServer((request, response) => {
+            const path = decodeURIComponent(request.url ?? "");
+            if (path.startsWith("/@moxt-ai/mobius") && !path.endsWith(".tgz")) {
+                queries++;
+                const versions = Object.fromEntries(
+                    [...packages].map(([version, bytes]) => [
+                        version,
+                        {
+                            name: cliPackage.name,
+                            version,
+                            bin: { mobius: "dist/cli.js" },
+                            dist: {
+                                tarball: `${registryUrl}/${version}.tgz`,
+                                integrity: `sha512-${createHash("sha512").update(bytes).digest("base64")}`,
+                            },
+                        },
+                    ]),
+                );
+                response
+                    .writeHead(200, { "content-type": "application/json" })
+                    .end(JSON.stringify({ name: cliPackage.name, versions, "dist-tags": { latest } }));
+                queryWaiter?.resolve();
+                queryWaiter = undefined;
+            } else if (path.endsWith(".tgz")) {
+                downloads++;
+                const bytes = packages.get(path.slice(1, -4));
+                response.writeHead(bytes === undefined ? 404 : 200).end(bytes);
+            } else if (request.method === "PUT" && path.endsWith("/catalog")) {
+                let body = "";
+                request.setEncoding("utf8");
+                request.on("data", (chunk: string) => {
+                    body += chunk;
+                });
+                request.on("end", () => {
+                    catalogs.set(path, body);
+                    response.writeHead(204).end();
+                });
+            } else if (request.method === "GET" && catalogs.has(path)) {
+                response.writeHead(200, { "content-type": "application/json" }).end(catalogs.get(path));
+            } else {
+                response.writeHead(404).end();
+            }
+        });
+        const sockets = new WebSocketServer({ server });
+        const connected = Promise.withResolvers<void>();
+        const results: RuntimeUpgradeResult[] = [];
+        let waiter: PromiseWithResolvers<RuntimeUpgradeResult> | undefined;
+        const aborted = (): void => {
+            connected.reject(signal.reason);
+            waiter?.reject(signal.reason);
+            queryWaiter?.reject(signal.reason);
+        };
+        signal.addEventListener("abort", aborted, { once: true });
+        sockets.on("connection", (socket, request) => {
+            socket.on("message", (data) => {
+                const message = decodeDaemonToServiceMessage(data.toString());
+                if (message.kind === "runtime.heartbeat") {
+                    socket.send(JSON.stringify({ kind: "runtime.heartbeat.ack", heartbeatId: message.heartbeatId }));
+                } else if (message.kind === "runtime.upgrade.result") {
+                    if (waiter === undefined) {
+                        results.push(message);
+                    } else {
+                        const pending = waiter;
+                        waiter = undefined;
+                        pending.resolve(message);
+                    }
+                }
+            });
+            const version = new URL(request.url ?? "/", "http://localhost").searchParams.get("daemonVersion");
+            socket.send(
+                JSON.stringify({
+                    kind: version === cliPackage.version ? "runtime.liveness.must-upgrade" : "runtime.liveness.ready",
+                }),
+            );
+            connected.resolve();
+        });
+        const next = async (): Promise<RuntimeUpgradeResult> => {
+            signal.throwIfAborted();
+            const result = results.shift();
+            if (result !== undefined) {
+                return result;
+            }
+            waiter = Promise.withResolvers<RuntimeUpgradeResult>();
+            return await waiter.promise;
+        };
+        try {
+            packages.set(cliPackage.version, Buffer.from("not downloaded"));
+            packages.set(good, await packedRelease(directory, good, false, signal));
+            packages.set(bad, await packedRelease(directory, bad, true, signal));
+            await listen(server);
+            registryUrl = `http://127.0.0.1:${port(server)}`;
+            Object.assign(environment, { NPM_CONFIG_REGISTRY: registryUrl });
+            const installation = await openMobiusCliInstallation(signal, environment);
+            await installation.saveConnection(
+                {
+                    appId: "app_upgrade",
+                    channelId: "upgrade-channel",
+                    runtimeId: "runtime_upgrade",
+                    pairingId: "",
+                    defaultWorkspace: directory,
+                    relayOrigin: new URL(registryUrl),
+                    runtimeCredential: "r".repeat(43),
+                },
+                signal,
+            );
+            await writeFile(join(stateRoot, "versions", cliPackage.version, "retained-data"), "original-data");
+            await cli(["start"]);
+            await connected.promise;
+            const control = await openMobiusControlInstallation(signal, environment);
+            const manager = await readFile(join(control.stateDirectory, "manager.lock"), "utf8");
+            expect(queries).toBeGreaterThan(0);
+            expect(downloads).toBe(1);
+            expect(await sendLocalRequest(control.stateDirectory, "manager", { kind: "status" }, signal)).toMatchObject(
+                {
+                    worker: { version: good },
+                },
+            );
+            expect(await next()).toMatchObject({ version: good, outcome: { status: "succeeded" } });
+            expect(await readFile(join(control.stateDirectory, "manager.lock"), "utf8")).toBe(manager);
+            expect(await readFile(join(stateRoot, "versions", good, "retained-data"), "utf8")).toBe("original-data");
+        } finally {
+            await cli(["quit"], AbortSignal.timeout(20_000)).catch(() => undefined);
+            signal.removeEventListener("abort", aborted);
+            for (const socket of sockets.clients) {
+                socket.terminate();
+            }
+            await new Promise<void>((done) => sockets.close(() => done()));
+            server.closeAllConnections();
+            await new Promise<void>((done) => server.close(() => done()));
+            await rm(directory, { recursive: true, force: true });
+        }
+    }, 270_000);
 });

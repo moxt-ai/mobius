@@ -2,6 +2,7 @@ import {
     decodeMessageKind,
     decodeRuntimeHeartbeatAckEvent,
     decodeRuntimeHeartbeatEvent,
+    decodeRuntimeLivenessMustUpgradeEvent,
     decodeRuntimeLivenessReadyEvent,
     decodeRuntimePingCommand,
     decodeRuntimePongEvent,
@@ -11,6 +12,7 @@ import {
     decodeSessionQueuedEvent,
     encodeRuntimeHeartbeatAckEvent,
     encodeRuntimeHeartbeatEvent,
+    encodeRuntimeLivenessMustUpgradeEvent,
     encodeRuntimeLivenessReadyEvent,
     encodeRuntimePingCommand,
     encodeRuntimePongEvent,
@@ -112,6 +114,7 @@ import {
 import {
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_HEARTBEAT_KIND,
+    RUNTIME_LIVENESS_MUST_UPGRADE_KIND,
     RUNTIME_LIVENESS_READY_KIND,
     RUNTIME_PING_KIND,
     RUNTIME_PONG_KIND,
@@ -221,6 +224,11 @@ const serviceToDaemonSignatures = {
         RUNTIME_HEARTBEAT_ACK_KIND,
         encodeRuntimeHeartbeatAckEvent,
         decodeRuntimeHeartbeatAckEvent,
+    ),
+    [RUNTIME_LIVENESS_MUST_UPGRADE_KIND]: defineMessageSignature(
+        RUNTIME_LIVENESS_MUST_UPGRADE_KIND,
+        encodeRuntimeLivenessMustUpgradeEvent,
+        decodeRuntimeLivenessMustUpgradeEvent,
     ),
     [RUNTIME_LIVENESS_READY_KIND]: defineMessageSignature(
         RUNTIME_LIVENESS_READY_KIND,

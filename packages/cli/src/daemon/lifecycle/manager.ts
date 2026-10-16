@@ -1,4 +1,5 @@
 import { setTimeout } from "node:timers/promises";
+import { gt } from "semver";
 import { acquireManagerLock } from "../control/local-client.ts";
 import { serveLocalControl } from "../control/local-server.ts";
 import {
@@ -7,7 +8,7 @@ import {
     lifecycleCommand,
     type WorkerLaunch,
 } from "../control/protocol.ts";
-import { decodeWorkerLaunch, WorkerProcess, WorkerStartupError } from "./worker-process.ts";
+import { decodeWorkerLaunch, WorkerProcess, WorkerStartupError, WorkerUpgradeRequested } from "./worker-process.ts";
 
 export async function runManager(stateDirectory: string, signal: AbortSignal): Promise<void> {
     const release = await acquireManagerLock(stateDirectory);
@@ -24,7 +25,7 @@ export async function runManager(stateDirectory: string, signal: AbortSignal): P
         protocolVersion: 2,
         worker: worker?.running ? { pid: worker.pid, version: worker.launch.version } : null,
     });
-    const start = async (launch: WorkerLaunch): Promise<void> => {
+    const start = async (launch: WorkerLaunch, requiredUpgrade = false): Promise<void> => {
         combined.throwIfAborted();
         await worker?.close();
         const replacement = new WorkerProcess(launch, combined, process.env);
@@ -33,6 +34,23 @@ export async function runManager(stateDirectory: string, signal: AbortSignal): P
             await replacement.ready;
         } catch (cause) {
             await replacement.close();
+            if (
+                cause instanceof WorkerUpgradeRequested &&
+                !requiredUpgrade &&
+                gt(cause.launch.version, launch.version)
+            ) {
+                const next = await decodeWorkerLaunch(cause.launch);
+                switchState = {
+                    kind: "switching",
+                    id: crypto.randomUUID(),
+                    context: "required-upgrade",
+                    previous: launch,
+                    next,
+                };
+                await start(next, true);
+                switchState = { ...switchState, kind: "switched" };
+                return;
+            }
             throw cause;
         }
         void replacement.exited.then(async () => {

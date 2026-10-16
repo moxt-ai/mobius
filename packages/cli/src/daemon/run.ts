@@ -18,6 +18,7 @@ import { DaemonOperationState } from "../relay-connection/daemon-operation-state
 import { RelayConnectionDiagnostics } from "../relay-connection/diagnostics.ts";
 import { runRelayConnection } from "../relay-connection/run-relay-connection.ts";
 import { RuntimeRelayRevokedError } from "../relay-connection/runtime-revocation.ts";
+import { RuntimeUpgradeRequiredError } from "../relay-connection/runtime-upgrade-required.ts";
 import { DaemonSessionEventPublisher } from "../relay-connection/session-event-publisher.ts";
 import { type DaemonTimer, systemDaemonTimer } from "../relay-connection/timer.ts";
 import { DaemonSessionEventProjectionV2 } from "../session-event-projection-v2.ts";
@@ -228,7 +229,7 @@ export async function runDaemon(
                 if (signal.aborted) {
                     return;
                 }
-                if (error instanceof RuntimeRelayRevokedError) {
+                if (error instanceof RuntimeRelayRevokedError || error instanceof RuntimeUpgradeRequiredError) {
                     throw error;
                 }
                 diagnostics.connectionFailed(connectionEpoch, error, "connection");

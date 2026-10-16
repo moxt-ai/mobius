@@ -12,12 +12,14 @@ import {
     decodeRuntimeHeartbeatEvent,
     decodeSessionEventEnvelopeV2,
     encodeRuntimeHeartbeatAckEvent,
+    encodeRuntimeLivenessMustUpgradeEvent,
     encodeRuntimeLivenessReadyEvent,
     encodeSessionPromptCommand,
     encodeWorkspaceListCommand,
     MOBIUS_API_PREFIX,
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_HEARTBEAT_KIND,
+    RUNTIME_LIVENESS_MUST_UPGRADE_KIND,
     RUNTIME_LIVENESS_READY_KIND,
     SESSION_EVENT_V2_KIND,
     SESSION_PROMPT_KIND,
@@ -25,6 +27,7 @@ import {
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
 } from "../../../protocol/src/index.ts";
+import packageMetadata from "../../package.json" with { type: "json" };
 import { createDaemonConfig, LocalAgentDefinition } from "../../src/config.ts";
 import { runDaemon } from "../../src/daemon/run.ts";
 import { RuntimeRelayRevokedError } from "../../src/relay-connection/runtime-revocation.ts";
@@ -246,6 +249,7 @@ describe("daemon relay connection liveness", () => {
         const clientFrames: Array<Promise<ClientWebSocketFrame>> = [];
         const daemonSockets: Duplex[] = [];
         let livenessRequested = false;
+        let daemonVersion: string | null = null;
         const waitForUpgrade = (): Promise<void> => new Promise((resolve) => upgradeWaiters.push(resolve));
         relay.on("connection", (socket) => {
             sockets.add(socket);
@@ -267,6 +271,7 @@ describe("daemon relay connection liveness", () => {
             );
             const requestUrl = new URL(request.url ?? "/", "http://127.0.0.1");
             livenessRequested = requestUrl.searchParams.get("liveness") === "1";
+            daemonVersion = requestUrl.searchParams.get("daemonVersion");
             daemonSockets.push(socket);
             clientFrames.push(readClientFrame(socket));
             respondToClientClose(socket);
@@ -313,6 +318,7 @@ describe("daemon relay connection liveness", () => {
             }
             const heartbeatFrame = await firstFrame;
             expect(livenessRequested).toBe(true);
+            expect(daemonVersion).toBe(packageMetadata.version);
             expect(heartbeatFrame.opcode).toBe(1);
             const firstHeartbeat = decodeRuntimeHeartbeatEvent(heartbeatFrame.text);
             expect(firstHeartbeat.kind).toBe(RUNTIME_HEARTBEAT_KIND);
@@ -509,6 +515,129 @@ describe("daemon relay connection liveness", () => {
         }
     });
 
+    it("Given the Relay requires a daemon upgrade, When it refuses readiness, Then the daemon fails without becoming online or reconnecting", async () => {
+        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-runtime-revoked-"));
+        const defaultWorkspace = join(stateDirectory, "workspace");
+        await mkdir(defaultWorkspace);
+        const relay = createServer((request, response) => {
+            if (
+                request.method === "PUT" &&
+                request.url === `${MOBIUS_API_PREFIX}/channels/runtime-revoked-channel/catalog`
+            ) {
+                request.resume();
+                response.writeHead(204);
+                response.end();
+                return;
+            }
+            response.writeHead(426);
+            response.end();
+        });
+        const sockets = new Set<Duplex>();
+        let resolveUpgrade = (_socket: Duplex): void => undefined;
+        const upgraded = new Promise<Duplex>((resolve) => {
+            resolveUpgrade = resolve;
+        });
+        let upgradeCount = 0;
+        relay.on("connection", (socket) => {
+            sockets.add(socket);
+            socket.once("close", () => sockets.delete(socket));
+            socket.on("error", () => undefined);
+        });
+        relay.on("upgrade", (request, socket) => {
+            const key = request.headers["sec-websocket-key"];
+            if (typeof key !== "string") {
+                socket.destroy();
+                return;
+            }
+            const accept = createHash("sha1").update(`${key}${WEBSOCKET_GUID}`).digest("base64");
+            socket.write(
+                "HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+            );
+            upgradeCount += 1;
+            respondToClientClose(socket);
+            resolveUpgrade(socket);
+        });
+        await listen(relay);
+        const cancellation = new AbortController();
+        const previousCodexPath = process.env["MOBIUS_CODEX_PATH"];
+        const previousClaudePath = process.env["MOBIUS_CLAUDE_PATH"];
+        const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
+        const previousNoProxy = process.env["NO_PROXY"];
+        const previousLowerNoProxy = process.env["no_proxy"];
+        const previousPath = process.env["PATH"];
+        process.env["MOBIUS_CODEX_PATH"] = join(stateDirectory, "missing-codex");
+        process.env["MOBIUS_CLAUDE_PATH"] = join(stateDirectory, "missing-claude");
+        process.env["MOBIUS_STATE_DIRECTORY"] = stateDirectory;
+        process.env["NO_PROXY"] = "127.0.0.1,localhost";
+        process.env["no_proxy"] = "127.0.0.1,localhost";
+        process.env["PATH"] = "";
+        const config = createDaemonConfig({
+            defaultWorkspace,
+            channelId: "runtime-revoked-channel",
+            relayUrl: new URL(
+                `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/runtime-revoked-channel/daemon`,
+            ),
+        });
+        const online = Promise.withResolvers<void>();
+        const statuses: string[] = [];
+        const daemon = runDaemon(config, cancellation.signal, undefined, {
+            onConnectionStatus: (status) => {
+                statuses.push(status);
+                if (status === "online") {
+                    online.resolve();
+                }
+            },
+        });
+
+        try {
+            const socket = await upgraded;
+            const barrier = readClientFrame(socket);
+            writeServerTextFrame(
+                socket,
+                encodeWorkspaceListCommand({
+                    bindingId: "workspace",
+                    directoryId: "default",
+                    kind: WORKSPACE_LIST_KIND,
+                    requestId: "before-relay-ready",
+                }),
+            );
+            expect(decodeMessageKind((await barrier).text)).toBe(WORKSPACE_ENTRIES_KIND);
+            expect(statuses).not.toContain("online");
+            writeServerTextFrame(
+                socket,
+                encodeRuntimeLivenessMustUpgradeEvent({ kind: RUNTIME_LIVENESS_MUST_UPGRADE_KIND }),
+            );
+            await expect(daemon).rejects.toMatchObject({ code: "runtime_upgrade_required" });
+            expect(statuses).not.toContain("online");
+            expect(upgradeCount).toBe(1);
+        } finally {
+            cancellation.abort();
+            await daemon.catch(() => undefined);
+            for (const socket of sockets) {
+                socket.destroy();
+            }
+            await new Promise<void>((resolve, reject) => {
+                relay.close((error) => {
+                    if (error === undefined) {
+                        resolve();
+                        return;
+                    }
+                    reject(error);
+                });
+            });
+            restoreEnvironmentVariable("MOBIUS_CODEX_PATH", previousCodexPath);
+            restoreEnvironmentVariable("MOBIUS_CLAUDE_PATH", previousClaudePath);
+            restoreEnvironmentVariable("MOBIUS_STATE_DIRECTORY", previousStateDirectory);
+            restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
+            restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
+            restoreEnvironmentVariable("PATH", previousPath);
+            await rm(stateDirectory, { force: true, recursive: true });
+        }
+    });
+
     it("Given a healthy idle daemon connection, When the Relay sends a future event and twenty minutes pass, Then the same connection remains available", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-liveness-"));
         const defaultWorkspace = join(stateDirectory, "workspace");
@@ -630,7 +759,9 @@ describe("daemon relay connection liveness", () => {
             expect({ catalogRequestCount, connectionCount, requestedUrls }).toEqual({
                 catalogRequestCount: 2,
                 connectionCount: 1,
-                requestedUrls: [`${MOBIUS_API_PREFIX}/channels/liveness-channel/daemon?liveness=1`],
+                requestedUrls: [
+                    `${MOBIUS_API_PREFIX}/channels/liveness-channel/daemon?liveness=1&daemonVersion=${packageMetadata.version}`,
+                ],
             });
         } finally {
             cancellation.abort();

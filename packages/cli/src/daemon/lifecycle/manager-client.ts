@@ -1,6 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { gte } from "semver";
 import { CONTROL_TIMEOUT_MILLISECONDS, isNodeError, sendLocalRequest } from "../control/local-client.ts";
 import { type LifecycleResponse, lifecycleResponse } from "../control/protocol.ts";
 import { currentWorkerLaunch } from "./worker-process.ts";
@@ -64,7 +65,7 @@ export async function ensureWorkingProcess(
     if (response.kind === "error") {
         throw new Error(response.message);
     }
-    if (response.kind !== "status" || response.worker?.version !== version) {
+    if (response.kind !== "status" || !response.worker || !gte(response.worker.version, version)) {
         throw new Error("The working daemon did not start");
     }
 }

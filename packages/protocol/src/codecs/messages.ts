@@ -7,12 +7,14 @@ import { decodeIdentifier, type Identifier, isIdentifier } from "../identifier.t
 import {
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_HEARTBEAT_KIND,
+    RUNTIME_LIVENESS_MUST_UPGRADE_KIND,
     RUNTIME_LIVENESS_READY_KIND,
     RUNTIME_PING_KIND,
     RUNTIME_PONG_KIND,
     RUNTIME_STATUS_KIND,
     type RuntimeHeartbeatAckEvent,
     type RuntimeHeartbeatEvent,
+    type RuntimeLivenessMustUpgradeEvent,
     type RuntimeLivenessReadyEvent,
     type RuntimePingCommand,
     type RuntimePongEvent,
@@ -272,6 +274,12 @@ export function decodeRuntimeStatusEvent(encoded: string): RuntimeStatusEvent {
     };
 }
 
+export function decodeRuntimeLivenessMustUpgradeEvent(encoded: string): RuntimeLivenessMustUpgradeEvent {
+    const value = parseJson(encoded);
+    assertKind(value, RUNTIME_LIVENESS_MUST_UPGRADE_KIND);
+    return { kind: RUNTIME_LIVENESS_MUST_UPGRADE_KIND };
+}
+
 export function decodeRuntimeLivenessReadyEvent(encoded: string): RuntimeLivenessReadyEvent {
     const value = parseJson(encoded);
     assertKind(value, RUNTIME_LIVENESS_READY_KIND);
@@ -373,6 +381,10 @@ export function encodeSessionQueuedEvent(message: SessionQueuedEvent): string {
 
 export function encodeRuntimeStatusEvent(message: RuntimeStatusEvent): string {
     return JSON.stringify(decodeRuntimeStatusEvent(JSON.stringify(message)));
+}
+
+export function encodeRuntimeLivenessMustUpgradeEvent(message: RuntimeLivenessMustUpgradeEvent): string {
+    return JSON.stringify(decodeRuntimeLivenessMustUpgradeEvent(JSON.stringify(message)));
 }
 
 export function encodeRuntimeLivenessReadyEvent(message: RuntimeLivenessReadyEvent): string {

@@ -1,10 +1,12 @@
 import {
     decodeServiceToDaemonMessage,
     RUNTIME_HEARTBEAT_ACK_KIND,
+    RUNTIME_LIVENESS_MUST_UPGRADE_KIND,
     RUNTIME_LIVENESS_READY_KIND,
     UnsupportedProtocolMessageKindError,
 } from "@moxt-ai/mobius-protocol";
 import { type MessageEvent, WebSocket } from "undici";
+import packageMetadata from "../../package.json" with { type: "json" };
 import type { AgentRuntimeManager } from "../acp/agent-runtime-manager.ts";
 import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
 import type { DaemonConfig } from "../config.ts";
@@ -19,6 +21,7 @@ import type { DaemonOperationState } from "./daemon-operation-state.ts";
 import type { RelayConnectionDiagnostics } from "./diagnostics.ts";
 import { RelayConnectionLiveness } from "./liveness.ts";
 import { isRuntimeRelayRevocation, RuntimeRelayRevokedError } from "./runtime-revocation.ts";
+import { RuntimeUpgradeRequiredError } from "./runtime-upgrade-required.ts";
 import type { DaemonSessionEventPublisher } from "./session-event-publisher.ts";
 import type { DaemonTimer } from "./timer.ts";
 
@@ -70,6 +73,7 @@ export async function runRelayConnection({
 }: RelayConnectionOptions): Promise<void> {
     const relayUrl = new URL(config.relayUrl);
     relayUrl.searchParams.set("liveness", "1");
+    relayUrl.searchParams.set("daemonVersion", packageMetadata.version);
     const socket = await connectRelay(relayUrl, signal);
     diagnostics.connectionOpened(connectionEpoch);
     const connectionController = new AbortController();
@@ -201,6 +205,10 @@ export async function runRelayConnection({
                 try {
                     const message = decodeServiceToDaemonMessage(encoded);
                     const kind = message.kind;
+                    if (kind === RUNTIME_LIVENESS_MUST_UPGRADE_KIND) {
+                        rejectConnection(new RuntimeUpgradeRequiredError());
+                        return;
+                    }
                     if (kind === RUNTIME_LIVENESS_READY_KIND) {
                         if (ready) {
                             return;

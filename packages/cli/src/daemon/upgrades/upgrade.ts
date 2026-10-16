@@ -63,7 +63,7 @@ export async function runDaemonUpgrades(signal: AbortSignal): Promise<void> {
     }
 }
 
-async function checkDaemonUpgrade(signal: AbortSignal): Promise<void> {
+export async function checkDaemonUpgrade(signal: AbortSignal, required = false): Promise<void> {
     const control = await openMobiusControlInstallation(signal, process.env);
     const transition = await readSwitchStatus(control.stateDirectory, signal);
     if (
@@ -74,6 +74,12 @@ async function checkDaemonUpgrade(signal: AbortSignal): Promise<void> {
     }
     const version = await findNewDaemonRelease(packageMetadata.version, signal);
     if (version === null) {
+        if (required) {
+            throw new DaemonUpgradeError(
+                "required_upgrade_unavailable",
+                "The Relay requires an upgrade but npm has no newer release",
+            );
+        }
         return;
     }
     const launch = await installDaemonRelease(version, signal);

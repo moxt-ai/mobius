@@ -5,6 +5,7 @@ export const SESSION_PROMPT_DISPOSITION_KIND = "session.prompt.disposition";
 export const RUNTIME_WORKSPACE_BINDING_ID = "workspace";
 export const SESSION_CANCEL_KIND = "session.cancel";
 export const RUNTIME_STATUS_KIND = "runtime.status";
+export const RUNTIME_LIVENESS_MUST_UPGRADE_KIND = "runtime.liveness.must-upgrade";
 export const RUNTIME_LIVENESS_READY_KIND = "runtime.liveness.ready";
 export const RUNTIME_HEARTBEAT_KIND = "runtime.heartbeat";
 export const RUNTIME_HEARTBEAT_ACK_KIND = "runtime.heartbeat.ack";
@@ -65,6 +66,10 @@ export interface RuntimeStatusEvent {
     readonly kind: typeof RUNTIME_STATUS_KIND;
     readonly online: boolean;
     readonly runtimeId: string;
+}
+
+export interface RuntimeLivenessMustUpgradeEvent {
+    readonly kind: typeof RUNTIME_LIVENESS_MUST_UPGRADE_KIND;
 }
 
 export interface RuntimeLivenessReadyEvent {

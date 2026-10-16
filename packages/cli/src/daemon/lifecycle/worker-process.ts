@@ -46,6 +46,14 @@ export class WorkerStartupError extends Error {
     }
 }
 
+export class WorkerUpgradeRequested extends Error {
+    readonly launch: WorkerLaunch;
+    constructor(launch: WorkerLaunch) {
+        super("The worker installed a required daemon upgrade");
+        this.launch = launch;
+    }
+}
+
 export class WorkerProcess {
     readonly #child: ChildProcess;
     #stdout = "";
@@ -78,6 +86,15 @@ export class WorkerProcess {
             process.stderr.write(chunk);
         });
         this.#child.on("message", (value: unknown) => {
+            if (isRecord(value) && value["kind"] === "worker-upgrade") {
+                const parsed = workerLaunch.safeParse(value["launch"]);
+                if (parsed.success) {
+                    this.#started.reject(new WorkerUpgradeRequested(parsed.data));
+                } else {
+                    this.#started.reject(new WorkerStartupError("invalid_worker_upgrade", "Invalid upgrade launch"));
+                }
+                return;
+            }
             if (isRecord(value) && value["kind"] === "worker-ready") {
                 if (value["version"] !== launch.version) {
                     this.#started.reject(
