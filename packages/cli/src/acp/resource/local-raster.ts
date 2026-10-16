@@ -113,7 +113,7 @@ function parseLocalImageUri(uri: string): string | null {
             return null;
         }
     }
-    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed)) {
+    if (!isAbsolute(trimmed) && /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed)) {
         return null;
     }
     return trimmed;
