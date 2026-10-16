@@ -5,7 +5,7 @@ import {
     parseNativeHistoryText,
     SESSION_HISTORY_IMAGE_CHARACTER_LIMIT,
 } from "@moxt-ai/mobius-protocol";
-import { readLocalRaster } from "../authorization/local-raster.ts";
+import { readLocalRaster } from "../acp/resource/local-raster.ts";
 
 const IMAGE_MARKER = /\[@image\]\(([^)\r\n]*)(?:\)|$)/g;
 
