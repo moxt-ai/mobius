@@ -46,6 +46,7 @@ export type {
     SessionRecordingTurnItemPage,
     SessionRecordingTurnPage,
     SessionRecordingTurnPrompt,
+    SessionRenamedEvent,
     SessionStatus,
     SessionStatusChangedEvent,
     TurnRequest,

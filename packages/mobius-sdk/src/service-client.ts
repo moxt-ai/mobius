@@ -9,6 +9,7 @@ import {
     decodeSessionEventLogPageV2,
     decodeSessionLiveEventBatchV2,
     decodeSessionReadyEvent,
+    decodeSessionRenamedEvent,
     decodeSessionRestoredEvent,
     decodeSessionsListedEvent,
     decodeSessionsQueriedEvent,
@@ -1101,6 +1102,29 @@ export class MobiusSessionResources {
                       operation[3],
                   );
         return decodeSessionConfigUpdatedEvent(JSON.stringify(result));
+    };
+
+    readonly rename = async (
+        ...operation:
+            | readonly [runtimeId: string, sessionId: string, title: string, signal: AbortSignal]
+            | readonly [sessionId: string, title: string, signal: AbortSignal]
+    ) => {
+        const result =
+            operation.length === 3
+                ? await this.#executor.post(
+                      sessionPath(this.#projectId, operation[0], "rename"),
+                      { title: operation[1] },
+                      operation[2],
+                  )
+                : await this.#executor.post(
+                      projectPath(
+                          this.#projectId,
+                          `runtimes/${encodeURIComponent(operation[0])}/sessions/${encodeURIComponent(operation[1])}/rename`,
+                      ),
+                      { title: operation[2] },
+                      operation[3],
+                  );
+        return decodeSessionRenamedEvent(JSON.stringify(result));
     };
 
     readonly exportV2 = async (sessionId: string, signal: AbortSignal): Promise<MobiusSessionExportV2> =>

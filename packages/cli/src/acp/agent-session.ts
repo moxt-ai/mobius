@@ -297,6 +297,53 @@ export class AgentSession implements AcpClientHandler {
         );
     };
 
+    /**
+     * Applies a client-requested title change. Agents that advertise the
+     * `_session/rename` extension receive the new title first so their own
+     * session state follows; the daemon then records the rename in the Session
+     * event log as an ACP `session_info_update` so every projection and recorded
+     * directory observes the same title transition.
+     */
+    readonly renameSession = async (
+        title: string,
+        signal: AbortSignal,
+    ): Promise<{ readonly title: string; readonly updatedAt: string }> => {
+        const normalized = truncate(title, 500);
+        if (normalized.length === 0) {
+            throw new AcpExecutionError("The Session title cannot be empty", {}, "invalid_session_title");
+        }
+        const nativeSessionId = this.#updates.sessionId();
+        if (this.#capabilities.renameSession && nativeSessionId.length > 0) {
+            try {
+                await this.race(
+                    this.#connection.connection.agent.request(
+                        "_session/rename",
+                        { sessionId: nativeSessionId, title: normalized },
+                        { cancellationSignal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]) },
+                    ),
+                    "ACP agent exited while renaming the Session",
+                    signal,
+                );
+            } catch (error) {
+                signal.throwIfAborted();
+                if (error instanceof AcpExecutionError) {
+                    throw error;
+                }
+                throw new AcpExecutionError(
+                    "The Agent could not rename the Session",
+                    { cause: error },
+                    "session_rename_failed",
+                );
+            }
+        }
+        const updatedAt = new Date().toISOString();
+        await this.#processUpdate({
+            sessionId: nativeSessionId,
+            update: { sessionUpdate: "session_info_update", title: normalized, updatedAt },
+        });
+        return { title: this.#sessionTitle ?? normalized, updatedAt };
+    };
+
     readonly #captureSelectedConfigurationValues = (): void => {
         this.#sessionConfigurations.capture(this.#configOptions);
         if (this.#updates.sessionId().length > 0) {

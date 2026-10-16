@@ -23,6 +23,7 @@ const SESSION_CAPABILITY_FIELDS: readonly string[] = [
     "listSessions",
     "loadSession",
     "promptQueueing",
+    "renameSession",
     "resumeSession",
     "steering",
     "unstableForkSession",

@@ -21,6 +21,7 @@ export const fakeHarnessCapabilities: SessionCapabilities = {
     listSessions: true,
     loadSession: true,
     promptQueueing: true,
+    renameSession: true,
     resumeSession: true,
     steering: true,
     unstableForkSession: false,
@@ -65,6 +66,7 @@ class ControlledAgentState {
     readonly #models = new Map<string, string>();
     readonly #options: FakeAgentHarnessOptions;
     readonly #sessions = new Map<string, number>();
+    readonly #titles = new Map<string, string>();
 
     constructor(options: FakeAgentHarnessOptions) {
         this.#options = options;
@@ -74,6 +76,13 @@ class ControlledAgentState {
     }
 
     readonly turnCount = (sessionId: string): number => this.#sessions.get(sessionId) ?? 0;
+    readonly title = (sessionId: string): string | null => this.#titles.get(sessionId) ?? null;
+    readonly rename = (sessionId: string, title: string): void => {
+        if (!this.#sessions.has(sessionId)) {
+            throw new Error(`The controlled Agent session is unknown: ${sessionId}`);
+        }
+        this.#titles.set(sessionId, title);
+    };
     readonly rememberSession = (sessionId: string, turnCount = 0): void => {
         this.#sessions.set(sessionId, turnCount);
         if (!this.#history.has(sessionId)) {
@@ -318,7 +327,7 @@ class ControlledAgentEndpoint implements FakeHarnessEndpoint {
         this.#app = acp
             .agent({ name: "morty-controlled-agent" })
             .onRequest(acp.methods.agent.initialize, () => ({
-                _meta: { steering: { supported: true } },
+                _meta: { renameSession: { supported: true }, steering: { supported: true } },
                 agentCapabilities: {
                     _meta: { claudeCode: { promptQueueing: true } },
                     loadSession: true,
@@ -364,10 +373,30 @@ class ControlledAgentEndpoint implements FakeHarnessEndpoint {
                         additionalDirectories: [],
                         cwd: context.params.cwd ?? "/",
                         sessionId: session.sessionId,
-                        title: `Native ${session.sessionId}`,
+                        title: this.#state.title(session.sessionId) ?? `Native ${session.sessionId}`,
                         updatedAt: "2026-01-01T00:00:00Z",
                     })),
             }))
+            .onRequest(
+                "_session/rename",
+                (params: unknown) => params,
+                (context) => {
+                    const params = context.params;
+                    if (
+                        typeof params !== "object" ||
+                        params === null ||
+                        !("sessionId" in params) ||
+                        typeof params.sessionId !== "string" ||
+                        !("title" in params) ||
+                        typeof params.title !== "string" ||
+                        params.title.trim().length === 0
+                    ) {
+                        throw new Error("Invalid controlled Agent rename request");
+                    }
+                    this.#state.rename(params.sessionId, params.title);
+                    return {};
+                },
+            )
             .onRequest(acp.methods.agent.session.prompt, async (context) => {
                 return await this.#state.start(
                     context.params.sessionId,

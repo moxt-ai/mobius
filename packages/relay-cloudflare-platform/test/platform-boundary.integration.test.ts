@@ -98,6 +98,7 @@ const readyAgents = [
             listSessions: true,
             loadSession: true,
             promptQueueing: false,
+            renameSession: false,
             resumeSession: true,
             steering: false,
             unstableForkSession: false,

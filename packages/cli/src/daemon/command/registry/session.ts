@@ -2,12 +2,14 @@ import type {
     SessionConfigureCommand,
     SessionPrepareCommand,
     SessionReadyEvent,
+    SessionRenameCommand,
     SessionRestoreCommand,
     WorkspaceListCommand,
 } from "@moxt-ai/mobius-protocol";
 import {
     SESSION_CONFIGURE_KIND,
     SESSION_PREPARE_KIND,
+    SESSION_RENAME_KIND,
     SESSION_RESTORE_KIND,
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-protocol";
@@ -223,6 +225,29 @@ export async function executeSessionRestore(
     }
 }
 
+export async function executeSessionRename(
+    socket: WebSocket,
+    command: SessionRenameCommand,
+    sessions: AgentRuntimeManager,
+    signal: AbortSignal,
+): Promise<void> {
+    try {
+        const renamed = await sessions.renameSession(command.sessionId, command.title, signal);
+        send(socket, {
+            kind: "session.renamed",
+            requestId: command.requestId,
+            sessionId: command.sessionId,
+            title: renamed.title,
+            updatedAt: renamed.updatedAt,
+        });
+    } catch (error) {
+        if (signal.aborted) {
+            signal.throwIfAborted();
+        }
+        reportOperationFailure(socket, command.requestId, command.sessionId, error);
+    }
+}
+
 export async function executeSessionConfigure(
     socket: WebSocket,
     command: SessionConfigureCommand,
@@ -326,5 +351,15 @@ export const sessionRestoreCommand: DaemonCommand = {
             context.diagnostics,
             context.signal,
         );
+    },
+};
+
+export const sessionRenameCommand: DaemonCommand = {
+    kind: SESSION_RENAME_KIND,
+    handle: (context, message): void => {
+        if (message.kind !== SESSION_RENAME_KIND) {
+            throw new Error("Command kind mismatch");
+        }
+        void executeSessionRename(context.socket, message, context.sessions, context.signal);
     },
 };

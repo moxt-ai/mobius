@@ -39,6 +39,7 @@ export function registerInitialization(agent: ReturnType<typeof acp.agent>) {
         failFirstRuntimeInitialization(context.params.clientCapabilities, agentName);
         return {
             _meta: {
+                renameSession: { supported: !process.argv.includes("--no-rename-session") },
                 steering: { supported: !process.argv.includes("--no-steering") },
             },
             agentCapabilities: {

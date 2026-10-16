@@ -16,6 +16,8 @@ export const SESSION_RESTORED_KIND = "session.restored";
 export const SESSION_CLOSE_KIND = "session.close";
 export const SESSION_CLOSED_KIND = "session.closed";
 export const SESSION_STATUS_CHANGED_KIND = "session.status.changed";
+export const SESSION_RENAME_KIND = "session.rename";
+export const SESSION_RENAMED_KIND = "session.renamed";
 export const SESSION_CONFIGURE_KIND = "session.configure";
 export const SESSION_CONFIG_UPDATED_KIND = "session.config.updated";
 export const SESSION_COMMANDS_UPDATED_KIND = "session.commands.updated";
@@ -425,6 +427,7 @@ export const sessionCapabilitiesSchema = z
         listSessions: z.boolean(),
         loadSession: z.boolean(),
         promptQueueing: z.boolean().default(false),
+        renameSession: z.boolean().default(false),
         resumeSession: z.boolean(),
         steering: z.boolean().default(false),
         unstableForkSession: z.boolean().default(false),
@@ -657,6 +660,29 @@ const sessionConfigureCommandSchema = z
     .readonly();
 
 export type SessionConfigureCommand = z.infer<typeof sessionConfigureCommandSchema>;
+
+const sessionRenameCommandSchema = z
+    .object({
+        kind: z.literal(SESSION_RENAME_KIND),
+        requestId: IDENTIFIER,
+        sessionId: IDENTIFIER,
+        title: z.string().min(1).max(500),
+    })
+    .readonly();
+
+export type SessionRenameCommand = z.infer<typeof sessionRenameCommandSchema>;
+
+const sessionRenamedEventSchema = z
+    .object({
+        kind: z.literal(SESSION_RENAMED_KIND),
+        requestId: IDENTIFIER,
+        sessionId: IDENTIFIER,
+        title: z.string().min(1).max(500),
+        updatedAt: z.string().max(128),
+    })
+    .readonly();
+
+export type SessionRenamedEvent = z.infer<typeof sessionRenamedEventSchema>;
 
 const sessionConfigUpdatedEventSchema = z
     .object({
@@ -927,6 +953,14 @@ export const decodeSessionConfigUpdatedEvent = (encoded: string): SessionConfigU
     decode(encoded, sessionConfigUpdatedEventSchema);
 export const encodeSessionConfigUpdatedEvent = (message: SessionConfigUpdatedEvent): string =>
     encode(message, sessionConfigUpdatedEventSchema);
+export const decodeSessionRenameCommand = (encoded: string): SessionRenameCommand =>
+    decode(encoded, sessionRenameCommandSchema);
+export const encodeSessionRenameCommand = (message: SessionRenameCommand): string =>
+    encode(message, sessionRenameCommandSchema);
+export const decodeSessionRenamedEvent = (encoded: string): SessionRenamedEvent =>
+    decode(encoded, sessionRenamedEventSchema);
+export const encodeSessionRenamedEvent = (message: SessionRenamedEvent): string =>
+    encode(message, sessionRenamedEventSchema);
 export const decodeSessionCommandsUpdatedEvent = (encoded: string): SessionCommandsUpdatedEvent =>
     decode(encoded, sessionCommandsUpdatedEventSchema);
 export const encodeSessionCommandsUpdatedEvent = (message: SessionCommandsUpdatedEvent): string =>
