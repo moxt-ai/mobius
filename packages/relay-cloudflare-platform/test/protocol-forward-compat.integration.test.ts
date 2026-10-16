@@ -413,4 +413,159 @@ describe.sequential("Platform protocol forward compatibility", () => {
             host.close(1000, "done");
         }
     });
+
+    it("Given a connected daemon that emits live events with an unknown session update, tool kind, tool status, tool content type, config option type, plan block type, lifecycle kind and payload type, When the events cross the Relay, Then the stream stays open and every event still reaches the viewer", async () => {
+        const clerk = new FakeClerk();
+        const application = createPlatformApplication(
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
+            createPlatformGateways,
+            () => clerk.organizationGateway,
+        );
+        const environment = bindings();
+        const paired = await pairRuntime(application, environment, clerk, [futureAgent]);
+
+        const daemonResponse = await application.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect?liveness=1`, {
+                headers: { authorization: `Bearer ${paired.runtimeCredential}`, Upgrade: "websocket" },
+            }),
+            environment,
+        );
+        const hostResponse = await application.fetch(
+            new Request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${paired.projectId}/runtimes/${paired.runtimeId}/host?token=${paired.appCredential}`,
+                { headers: { Upgrade: "websocket" } },
+            ),
+            environment,
+        );
+        expect(daemonResponse.status).toBe(101);
+        expect(hostResponse.status).toBe(101);
+        if (daemonResponse.webSocket === null || hostResponse.webSocket === null) {
+            throw new Error("Expected both channel sockets");
+        }
+        const daemon = daemonResponse.webSocket;
+        const host = hostResponse.webSocket;
+        const daemonMessages = new SocketMessages(daemon);
+        const hostMessages = new SocketMessages(host);
+        daemon.accept();
+        host.accept();
+        try {
+            await daemonMessages.next();
+            await hostMessages.next();
+
+            const sessionId = "forward-compat-session";
+            const sharedEvent = {
+                eventId: "event-1",
+                position: "1",
+                provenance: { kind: "original" },
+                recordedAt: "2026-10-16T00:00:00.000Z",
+                sessionGenerationId: "session-generation-1",
+                sessionId,
+            };
+            const sendEvents = (events: Array<Record<string, unknown>>) =>
+                daemon.send(JSON.stringify({ kind: "session.event.v2", events }));
+            const acpEvent = (eventId: string, position: string, payload: Record<string, unknown>) => ({
+                ...sharedEvent,
+                eventId,
+                position,
+                type: "acp",
+                payload,
+            });
+            // Host attach emits a runtime status frame before event batches;
+            // drain frames until the event envelope arrives.
+            const nextEventEnvelope = async () => {
+                for (;;) {
+                    const frame = await hostMessages.next();
+                    if (JSON.parse(frame).kind === "session.event.v2") {
+                        return decodeSessionEventEnvelopeV2(frame);
+                    }
+                }
+            };
+
+            // A newer daemon emits payload variants this Relay does not know.
+            sendEvents([
+                acpEvent("event-1", "1", { sessionUpdate: "agent_prediction_chunk", text: "predicting" }),
+                acpEvent("event-2", "2", {
+                    kind: "subagent_invoke",
+                    sessionUpdate: "tool_call",
+                    title: "Future tool call",
+                    toolCallId: "tool-future",
+                }),
+                acpEvent("event-3", "3", {
+                    kind: "container",
+                    sessionUpdate: "tool_call",
+                    title: "Unknown kind",
+                    toolCallId: "tool-kind",
+                }),
+                acpEvent("event-4", "4", {
+                    sessionUpdate: "tool_call",
+                    status: "paused",
+                    title: "Unknown status",
+                    toolCallId: "tool-status",
+                }),
+                acpEvent("event-5", "5", {
+                    content: [
+                        { content: { type: "text", text: "before" }, type: "content" },
+                        { type: "annotation", annotationId: "note-1" },
+                        { content: { type: "text", text: "after" }, type: "content" },
+                    ],
+                    sessionUpdate: "tool_call",
+                    title: "Unknown tool content",
+                    toolCallId: "tool-content",
+                }),
+                acpEvent("event-6", "6", {
+                    sessionUpdate: "config_option_update",
+                    configOptions: [{ currentValue: "0.7", id: "temperature", name: "Temperature", type: "slider" }],
+                }),
+                acpEvent("event-7", "7", {
+                    plan: { planId: "plan-future", type: "canvas", uri: "mobius-plan://canvas/1" },
+                    sessionUpdate: "plan_update",
+                }),
+                // Unknown lifecycle metadata kind and unknown top-level payload
+                // type travel in the same batch as known events.
+                {
+                    ...sharedEvent,
+                    eventId: "event-8",
+                    position: "8",
+                    type: "lifecycle-metadata",
+                    payload: { commandId: "command-1", kind: "prompt.compacted" },
+                },
+                {
+                    ...sharedEvent,
+                    eventId: "event-9",
+                    position: "9",
+                    type: "telemetry",
+                    payload: { counters: { tokens: 42 } },
+                },
+                acpEvent("event-10", "10", {
+                    sessionUpdate: "agent_message_chunk",
+                    content: { type: "text", text: "still streaming" },
+                }),
+            ]);
+
+            // Wrapped unknown discriminators keep their original value inside the
+            // unsupported envelope; unknown enum values degrade to their designed
+            // fallbacks; every event still arrives in order.
+            const batch = await nextEventEnvelope();
+            const encoded = JSON.stringify(batch.events);
+            for (const expected of [
+                "agent_prediction_chunk",
+                "Future tool call",
+                "Unknown kind",
+                "Unknown status",
+                "annotation",
+                "slider",
+                "canvas",
+                "prompt.compacted",
+                "telemetry",
+            ]) {
+                expect(encoded).toContain(expected);
+            }
+            expect(encoded).toContain("still streaming");
+            expect(batch.events).toHaveLength(10);
+            expect(daemon.readyState).toBe(WebSocket.OPEN);
+        } finally {
+            daemon.close(1000, "done");
+            host.close(1000, "done");
+        }
+    });
 });

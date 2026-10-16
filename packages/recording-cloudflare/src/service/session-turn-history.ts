@@ -173,6 +173,9 @@ class ProjectionFold {
             this.#state = { ...this.#state, generationId: event.sessionGenerationId };
             if (event.type === "lifecycle-metadata") {
                 this.#foldLifecycle(event, event.payload);
+            } else if (event.type === "unsupported") {
+                // An event type this build does not know cannot be folded; the
+                // projection simply ignores it rather than dropping the batch.
             } else {
                 this.#foldAcp(event, event.payload);
             }

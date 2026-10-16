@@ -74,9 +74,11 @@ export class RecordingObserver implements AcpSessionObserver {
 
     readonly onSessionEventV2 = (liveEvent: SessionLiveEventV2): Promise<void> => {
         const event: SessionEventPayloadV2 =
-            liveEvent.type === "acp"
-                ? { payload: liveEvent.payload, type: "acp" }
-                : { payload: liveEvent.payload, type: "lifecycle-metadata" };
+            liveEvent.type === "unsupported"
+                ? { originalType: liveEvent.originalType, payload: liveEvent.payload, type: "unsupported" }
+                : liveEvent.type === "acp"
+                  ? { payload: liveEvent.payload, type: "acp" }
+                  : { payload: liveEvent.payload, type: "lifecycle-metadata" };
         this.eventsV2.push({
             event,
             position: Number(liveEvent.position),

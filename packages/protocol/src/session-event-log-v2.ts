@@ -218,7 +218,38 @@ export type ExternalImageContentBlockV2 = z.infer<typeof externalImageContentSch
 export type ExternalAudioContentBlockV2 = z.infer<typeof externalAudioContentSchema>;
 export type ExternalResourceContentBlockV2 = z.infer<typeof externalResourceContentSchema>;
 
-export const toolCallContentSchema = z.discriminatedUnion("type", [
+// Wraps a payload whose discriminator value this build does not know into an
+// unsupported envelope: the discriminator becomes the `unsupported` literal and
+// the original discriminator plus raw payload are retained, bounded. The
+// original object is spread first so sibling fields survive wrapping.
+// Idempotency comes from each call site listing `unsupported` in its known set.
+function foreignVariantWrapper(discriminator: string, known: readonly string[]) {
+    const knownDiscriminators = new Set(known);
+    return (value: unknown): unknown => {
+        if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+            const discriminatorValue = (value as Record<string, unknown>)[discriminator];
+            if (typeof discriminatorValue === "string" && !knownDiscriminators.has(discriminatorValue)) {
+                return {
+                    ...value,
+                    [discriminator]: "unsupported",
+                    originalType: discriminatorValue,
+                    raw: value,
+                };
+            }
+        }
+        return value;
+    };
+}
+
+const unsupportedToolCallContentSchema = z
+    .object({
+        originalType: z.string().min(1).max(128),
+        raw: boundedJsonSchema,
+        type: z.literal("unsupported"),
+    })
+    .readonly();
+const foreignToolCallContent = foreignVariantWrapper("type", ["content", "diff", "terminal", "unsupported"]);
+export const toolCallContentSchema = z.union([
     z.object({ content: contentBlockV2Schema, type: z.literal("content") }).readonly(),
     z
         .object({
@@ -229,6 +260,8 @@ export const toolCallContentSchema = z.discriminatedUnion("type", [
         })
         .readonly(),
     z.object({ terminalId: shortString, type: z.literal("terminal") }).readonly(),
+    unsupportedToolCallContentSchema,
+    z.preprocess(foreignToolCallContent, unsupportedToolCallContentSchema),
 ]);
 export const toolCallLocationSchema = z
     .object({
@@ -236,7 +269,7 @@ export const toolCallLocationSchema = z
         path: boundedString,
     })
     .readonly();
-export const toolKindSchema = z.enum([
+const toolKindVariantsSchema = z.enum([
     "read",
     "edit",
     "delete",
@@ -248,7 +281,20 @@ export const toolKindSchema = z.enum([
     "switch_mode",
     "other",
 ]);
-export const toolStatusSchema = z.enum(["pending", "in_progress", "completed", "failed"]);
+// A newer daemon may report a tool kind or status this build does not know.
+// Degrade the kind to the existing `other` bucket and the status to unknown,
+// so the surrounding tool call event survives protocol evolution.
+const KNOWN_TOOL_KINDS: ReadonlySet<string> = new Set(toolKindVariantsSchema.options);
+export const toolKindSchema = z.preprocess(
+    (value) => (typeof value === "string" && !KNOWN_TOOL_KINDS.has(value) ? "other" : value),
+    toolKindVariantsSchema,
+);
+const toolStatusVariantsSchema = z.enum(["pending", "in_progress", "completed", "failed"]);
+const KNOWN_TOOL_STATUSES: ReadonlySet<string> = new Set(toolStatusVariantsSchema.options);
+export const toolStatusSchema = z.preprocess(
+    (value) => (typeof value === "string" && !KNOWN_TOOL_STATUSES.has(value) ? undefined : value),
+    toolStatusVariantsSchema.optional(),
+);
 const toolPatchFields = {
     content: z.array(toolCallContentSchema).max(MAX_COLLECTION_SIZE).readonly().nullable().optional(),
     kind: toolKindSchema.nullable().optional(),
@@ -266,7 +312,15 @@ const planEntrySchema = z
         status: z.enum(["pending", "in_progress", "completed"]),
     })
     .readonly();
-const planContentSchema = z.discriminatedUnion("type", [
+const unsupportedPlanContentSchema = z
+    .object({
+        originalType: z.string().min(1).max(128),
+        raw: boundedJsonSchema,
+        type: z.literal("unsupported"),
+    })
+    .readonly();
+const foreignPlanContent = foreignVariantWrapper("type", ["items", "file", "markdown", "unsupported"]);
+const planContentSchema = z.union([
     z
         .object({
             entries: z.array(planEntrySchema).max(MAX_COLLECTION_SIZE).readonly(),
@@ -282,6 +336,8 @@ const planContentSchema = z.discriminatedUnion("type", [
             type: z.literal("markdown"),
         })
         .readonly(),
+    unsupportedPlanContentSchema,
+    z.preprocess(foreignPlanContent, unsupportedPlanContentSchema),
 ]);
 const commandSchema = z
     .object({
@@ -310,7 +366,15 @@ const configBaseFields = {
     id: shortString,
     name: shortString,
 };
-const sessionConfigOptionSchema = z.discriminatedUnion("type", [
+const unsupportedSessionConfigOptionSchema = z
+    .object({
+        originalType: z.string().min(1).max(128),
+        raw: boundedJsonSchema,
+        type: z.literal("unsupported"),
+    })
+    .readonly();
+const foreignSessionConfigOption = foreignVariantWrapper("type", ["select", "boolean", "unsupported"]);
+const sessionConfigOptionSchema = z.union([
     z
         .object({
             ...configBaseFields,
@@ -323,13 +387,15 @@ const sessionConfigOptionSchema = z.discriminatedUnion("type", [
         })
         .readonly(),
     z.object({ ...configBaseFields, currentValue: z.boolean(), type: z.literal("boolean") }).readonly(),
+    unsupportedSessionConfigOptionSchema,
+    z.preprocess(foreignSessionConfigOption, unsupportedSessionConfigOptionSchema),
 ]);
 const contentChunkFields = {
     content: contentBlockV2Schema,
     messageId: shortString.nullable().optional(),
 };
 
-export const acpSessionUpdateV2Schema = z.discriminatedUnion("sessionUpdate", [
+const acpSessionUpdateV2KnownSchema = z.discriminatedUnion("sessionUpdate", [
     z.object({ ...contentChunkFields, sessionUpdate: z.literal("user_message_chunk") }).readonly(),
     z.object({ ...contentChunkFields, sessionUpdate: z.literal("agent_message_chunk") }).readonly(),
     z.object({ ...contentChunkFields, sessionUpdate: z.literal("agent_thought_chunk") }).readonly(),
@@ -410,6 +476,36 @@ export const acpSessionUpdateV2Schema = z.discriminatedUnion("sessionUpdate", [
         })
         .readonly(),
 ]);
+const unsupportedSessionUpdateSchema = z
+    .object({
+        originalType: z.string().min(1).max(128),
+        raw: boundedJsonSchema,
+        sessionUpdate: z.literal("unsupported"),
+    })
+    .readonly();
+const foreignSessionUpdate = foreignVariantWrapper("sessionUpdate", [
+    "user_message_chunk",
+    "agent_message_chunk",
+    "agent_thought_chunk",
+    "tool_call",
+    "tool_call_update",
+    "plan",
+    "plan_update",
+    "plan_removed",
+    "available_commands_update",
+    "current_mode_update",
+    "config_option_update",
+    "session_info_update",
+    "usage_update",
+    "compaction_update",
+    "compaction_summary_chunk",
+    "unsupported",
+]);
+export const acpSessionUpdateV2Schema = z.union([
+    acpSessionUpdateV2KnownSchema,
+    unsupportedSessionUpdateSchema,
+    z.preprocess(foreignSessionUpdate, unsupportedSessionUpdateSchema),
+]);
 export type AcpSessionUpdateV2 = z.infer<typeof acpSessionUpdateV2Schema>;
 
 const lifecycleBase = { commandId: identifier };
@@ -426,7 +522,7 @@ const promptExecutionContextV2Schema: z.ZodType<PromptExecutionContextV2> = z
     })
     .readonly();
 
-export const lifecycleMetadataV2Schema = z.discriminatedUnion("kind", [
+const lifecycleMetadataV2KnownSchema = z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("session.queue.changed") }).readonly(),
     z
         .object({ event: sessionPermissionRequestedEventSchema, kind: z.literal("session.permission.requested") })
@@ -472,10 +568,45 @@ export const lifecycleMetadataV2Schema = z.discriminatedUnion("kind", [
         })
         .readonly(),
 ]);
+const unsupportedLifecycleMetadataSchema = z
+    .object({
+        kind: z.literal("unsupported"),
+        originalType: z.string().min(1).max(128),
+        raw: boundedJsonSchema,
+    })
+    .readonly();
+const foreignLifecycleMetadata = foreignVariantWrapper("kind", [
+    "session.queue.changed",
+    "session.permission.requested",
+    "session.permission.resolved",
+    "session.elicitation.requested",
+    "session.elicitation.resolved",
+    "prompt.requested",
+    "prompt.started",
+    "prompt.completed",
+    "prompt.failed-before-start",
+    "prompt.failed",
+    "unsupported",
+]);
+export const lifecycleMetadataV2Schema = z.union([
+    lifecycleMetadataV2KnownSchema,
+    unsupportedLifecycleMetadataSchema,
+    z.preprocess(foreignLifecycleMetadata, unsupportedLifecycleMetadataSchema),
+]);
 export type LifecycleMetadataV2 = z.infer<typeof lifecycleMetadataV2Schema>;
-export const sessionEventPayloadV2Schema = z.discriminatedUnion("type", [
+const unsupportedEventPayloadSchema = z
+    .object({
+        originalType: z.string().min(1).max(128),
+        payload: boundedJsonSchema,
+        type: z.literal("unsupported"),
+    })
+    .readonly();
+const foreignEventPayload = foreignVariantWrapper("type", ["acp", "lifecycle-metadata", "unsupported"]);
+export const sessionEventPayloadV2Schema = z.union([
     z.object({ payload: acpSessionUpdateV2Schema, type: z.literal("acp") }).readonly(),
     z.object({ payload: lifecycleMetadataV2Schema, type: z.literal("lifecycle-metadata") }).readonly(),
+    unsupportedEventPayloadSchema,
+    z.preprocess(foreignEventPayload, unsupportedEventPayloadSchema),
 ]);
 export type SessionEventPayloadV2 = z.infer<typeof sessionEventPayloadV2Schema>;
 const positionSchema = z.string().regex(/^(0|[1-9][0-9]*)$/);
@@ -510,7 +641,16 @@ const sharedSessionEventFieldsV2 = {
     sessionId: identifier,
 };
 const sessionLiveEventFieldsV2 = { ...sharedSessionEventFieldsV2, position: positionSchema };
-export const sessionEventV2Schema = z.discriminatedUnion("type", [
+const unsupportedSessionEventSchema = z
+    .object({
+        ...sharedSessionEventFieldsV2,
+        originalType: z.string().min(1).max(128),
+        payload: boundedJsonSchema,
+        type: z.literal("unsupported"),
+    })
+    .readonly();
+const foreignSessionEvent = foreignVariantWrapper("type", ["acp", "lifecycle-metadata", "unsupported"]);
+export const sessionEventV2Schema = z.union([
     z.object({ ...sharedSessionEventFieldsV2, payload: acpSessionUpdateV2Schema, type: z.literal("acp") }).readonly(),
     z
         .object({
@@ -519,9 +659,20 @@ export const sessionEventV2Schema = z.discriminatedUnion("type", [
             type: z.literal("lifecycle-metadata"),
         })
         .readonly(),
+    unsupportedSessionEventSchema,
+    z.preprocess(foreignSessionEvent, unsupportedSessionEventSchema),
 ]);
 export type SessionEventV2 = z.infer<typeof sessionEventV2Schema>;
-export const sessionLiveEventV2Schema = z.discriminatedUnion("type", [
+const unsupportedSessionLiveEventSchema = z
+    .object({
+        ...sessionLiveEventFieldsV2,
+        originalType: z.string().min(1).max(128),
+        payload: boundedJsonSchema,
+        type: z.literal("unsupported"),
+    })
+    .readonly();
+const foreignSessionLiveEvent = foreignVariantWrapper("type", ["acp", "lifecycle-metadata", "unsupported"]);
+export const sessionLiveEventV2Schema = z.union([
     z.object({ ...sessionLiveEventFieldsV2, payload: acpSessionUpdateV2Schema, type: z.literal("acp") }).readonly(),
     z
         .object({
@@ -530,6 +681,8 @@ export const sessionLiveEventV2Schema = z.discriminatedUnion("type", [
             type: z.literal("lifecycle-metadata"),
         })
         .readonly(),
+    unsupportedSessionLiveEventSchema,
+    z.preprocess(foreignSessionLiveEvent, unsupportedSessionLiveEventSchema),
 ]);
 export type SessionLiveEventV2 = z.infer<typeof sessionLiveEventV2Schema>;
 export const sessionEventBatchV2Schema = z

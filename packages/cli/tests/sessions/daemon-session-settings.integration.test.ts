@@ -148,6 +148,9 @@ async function readTerminalSessionResult(
                 }
                 continue;
             }
+            if (event.type === "unsupported") {
+                continue;
+            }
             const payload = event.payload;
             if (!("commandId" in payload) || (commandId !== "" && payload.commandId !== commandId)) {
                 continue;
