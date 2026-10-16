@@ -11,7 +11,6 @@ import type {
     SessionLiveEventV2,
     SessionPermissionRequestedEvent,
     SessionPermissionResolvedEvent,
-    SessionUsageUpdatedEvent,
 } from "@moxt-ai/mobius-protocol";
 import type { AcpSessionObserver } from "../../src/acp/agent-runtime-manager.ts";
 import { LocalAgentDefinition } from "../../src/config.ts";
@@ -27,7 +26,6 @@ export class RecordingObserver implements AcpSessionObserver {
     readonly permissions: SessionPermissionRequestedEvent[] = [];
     readonly permissionResolutions: SessionPermissionResolvedEvent[] = [];
     readonly elicitationResolutions: SessionElicitationResolvedEvent[] = [];
-    readonly usage: SessionUsageUpdatedEvent[] = [];
     readonly eventsV2: { readonly event: SessionEventPayloadV2; readonly position: number }[] = [];
     readonly permissionArrived = Promise.withResolvers<SessionPermissionRequestedEvent>();
     readonly elicitationArrived = Promise.withResolvers<SessionElicitationRequestedEvent>();
@@ -71,11 +69,6 @@ export class RecordingObserver implements AcpSessionObserver {
 
     readonly onElicitationResolved = (event: SessionElicitationResolvedEvent): Promise<void> => {
         this.elicitationResolutions.push(event);
-        return Promise.resolve();
-    };
-
-    readonly onUsage = (event: SessionUsageUpdatedEvent): Promise<void> => {
-        this.usage.push(event);
         return Promise.resolve();
     };
 

@@ -17,7 +17,6 @@ import {
     SESSION_COMMANDS_UPDATED_KIND,
     SESSION_CONFIG_UPDATED_KIND,
     SESSION_INFO_UPDATED_KIND,
-    SESSION_USAGE_UPDATED_KIND,
     type SessionCapabilities,
     type SessionCommand,
     type SessionConfigOption,
@@ -1012,16 +1011,6 @@ export class AgentSession implements AcpClientHandler {
             if (failure !== null) {
                 await running.activities.recordNotice(failure.id, failure.revision, failure.severity, failure.title);
             }
-            if (result.usage != null || result._meta?.quota !== undefined) {
-                await this.#getObserver().onUsage({
-                    _meta: result._meta ?? null,
-                    commandId: options.commandId,
-                    kind: SESSION_USAGE_UPDATED_KIND,
-                    sessionId: this.#mobiusSessionId,
-                    source: "prompt",
-                    usage: result.usage ?? null,
-                });
-            }
             this.#writeStoredSession(new Date().toISOString());
             if (lifecycleV2 !== undefined) {
                 await this.recordLifecycleEventV2({
@@ -1356,18 +1345,6 @@ export class AgentSession implements AcpClientHandler {
                 updatedAt: this.#sessionUpdatedAt,
             });
             return;
-        }
-        if (update.sessionUpdate === "usage_update") {
-            await this.#getObserver().onUsage({
-                costAmount: update.cost?.amount ?? 0,
-                costCurrency: truncate(update.cost?.currency ?? "", 16),
-                hasCost: update.cost !== undefined && update.cost !== null,
-                kind: SESSION_USAGE_UPDATED_KIND,
-                sessionId: this.#mobiusSessionId,
-                size: Math.max(0, Math.trunc(update.size)),
-                source: "context",
-                used: Math.max(0, Math.trunc(update.used)),
-            });
         }
     };
 

@@ -19,7 +19,6 @@ import type {
     SessionLiveEventV2,
     SessionPermissionRequestedEvent,
     SessionPermissionResolvedEvent,
-    SessionUsageUpdatedEvent,
 } from "@moxt-ai/mobius-protocol";
 import type { AcpAgentDefinition } from "../config.ts";
 import type { AcpActivity, AcpActivityNarration } from "./activity.ts";
@@ -136,7 +135,6 @@ export interface AcpSessionObserver {
     readonly onInfo: (event: SessionInfoUpdatedEvent) => Promise<void>;
     readonly onPermission: (event: SessionPermissionRequestedEvent) => Promise<void>;
     readonly onPermissionResolved: (event: SessionPermissionResolvedEvent) => Promise<void>;
-    readonly onUsage: (event: SessionUsageUpdatedEvent) => Promise<void>;
 }
 
 export class NullAcpSessionObserver implements AcpSessionObserver {
@@ -149,7 +147,6 @@ export class NullAcpSessionObserver implements AcpSessionObserver {
     readonly onInfo = (_event: SessionInfoUpdatedEvent): Promise<void> => Promise.resolve();
     readonly onPermission = (): Promise<void> => Promise.resolve();
     readonly onPermissionResolved = (): Promise<void> => Promise.resolve();
-    readonly onUsage = (): Promise<void> => Promise.resolve();
 }
 
 export class AcpPreparedSession {

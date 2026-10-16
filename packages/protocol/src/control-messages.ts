@@ -2,7 +2,6 @@ import { z } from "zod";
 
 import { ProtocolMessageError } from "./codecs/messages.ts";
 import { identifierStringSchema as IDENTIFIER } from "./identifier.ts";
-import { promptMetadataSchema, promptUsageSchema } from "./prompt-usage.ts";
 
 export const WORKSPACE_LIST_KIND = "workspace.list";
 export const WORKSPACE_ENTRIES_KIND = "workspace.entries";
@@ -19,7 +18,6 @@ export const SESSION_CLOSED_KIND = "session.closed";
 export const SESSION_STATUS_CHANGED_KIND = "session.status.changed";
 export const SESSION_CONFIGURE_KIND = "session.configure";
 export const SESSION_CONFIG_UPDATED_KIND = "session.config.updated";
-export const SESSION_USAGE_UPDATED_KIND = "session.usage.updated";
 export const SESSION_COMMANDS_UPDATED_KIND = "session.commands.updated";
 export const SESSION_INFO_UPDATED_KIND = "session.info.updated";
 export const SESSION_PERMISSION_REQUESTED_KIND = "session.permission.requested";
@@ -671,43 +669,6 @@ const sessionConfigUpdatedEventSchema = z
 
 export type SessionConfigUpdatedEvent = z.infer<typeof sessionConfigUpdatedEventSchema>;
 
-const sessionContextUsageUpdatedEventSchema = z
-    .object({
-        costAmount: z.number().finite().nonnegative(),
-        costCurrency: z.string().max(16),
-        hasCost: z.boolean(),
-        kind: z.literal(SESSION_USAGE_UPDATED_KIND),
-        sessionId: IDENTIFIER,
-        size: z.number().int().nonnegative(),
-        source: z.literal("context").default("context"),
-        used: z.number().int().nonnegative(),
-    })
-    .readonly();
-
-export type SessionContextUsageUpdatedEvent = z.infer<typeof sessionContextUsageUpdatedEventSchema>;
-
-const sessionPromptUsageUpdatedEventSchema = z
-    .object({
-        _meta: promptMetadataSchema.nullable(),
-        commandId: IDENTIFIER,
-        kind: z.literal(SESSION_USAGE_UPDATED_KIND),
-        sessionId: IDENTIFIER,
-        source: z.literal("prompt"),
-        usage: promptUsageSchema.nullable(),
-    })
-    .refine((event) => event.usage !== null || event._meta?.quota !== undefined)
-    .readonly();
-
-export type SessionPromptUsageUpdatedEvent = z.infer<typeof sessionPromptUsageUpdatedEventSchema>;
-
-// The context branch accepts pre-P0 history without a source discriminator.
-const sessionUsageUpdatedEventSchema = z.union([
-    sessionContextUsageUpdatedEventSchema,
-    sessionPromptUsageUpdatedEventSchema,
-]);
-
-export type SessionUsageUpdatedEvent = z.infer<typeof sessionUsageUpdatedEventSchema>;
-
 const sessionCommandsUpdatedEventSchema = z
     .object({
         commands: z.array(sessionCommandSchema).max(500).readonly(),
@@ -966,10 +927,6 @@ export const decodeSessionConfigUpdatedEvent = (encoded: string): SessionConfigU
     decode(encoded, sessionConfigUpdatedEventSchema);
 export const encodeSessionConfigUpdatedEvent = (message: SessionConfigUpdatedEvent): string =>
     encode(message, sessionConfigUpdatedEventSchema);
-export const decodeSessionUsageUpdatedEvent = (encoded: string): SessionUsageUpdatedEvent =>
-    decode(encoded, sessionUsageUpdatedEventSchema);
-export const encodeSessionUsageUpdatedEvent = (message: SessionUsageUpdatedEvent): string =>
-    encode(message, sessionUsageUpdatedEventSchema);
 export const decodeSessionCommandsUpdatedEvent = (encoded: string): SessionCommandsUpdatedEvent =>
     decode(encoded, sessionCommandsUpdatedEventSchema);
 export const encodeSessionCommandsUpdatedEvent = (message: SessionCommandsUpdatedEvent): string =>

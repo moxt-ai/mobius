@@ -27,7 +27,6 @@ import {
     type SessionPromptDispositionCommand,
     type SessionReadyEvent,
     type SessionStartedEvent,
-    type SessionUsageUpdatedEvent,
 } from "@moxt-ai/mobius-protocol";
 import type { AcpActivity, AcpActivityNarration } from "../acp/activity.ts";
 
@@ -47,8 +46,7 @@ export type RecordedSessionEvent =
     | SessionPermissionRequestedEvent
     | SessionPermissionResolvedEvent
     | SessionReadyEvent
-    | SessionStartedEvent
-    | SessionUsageUpdatedEvent;
+    | SessionStartedEvent;
 interface TurnRecovery {
     readonly sequence: number;
     readonly commandId: string;
