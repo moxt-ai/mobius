@@ -1,5 +1,4 @@
 import { setTimeout } from "node:timers/promises";
-import { gt } from "semver";
 import { acquireManagerLock } from "../control/local-client.ts";
 import { serveLocalControl } from "../control/local-server.ts";
 import {
@@ -8,7 +7,7 @@ import {
     lifecycleCommand,
     type WorkerLaunch,
 } from "../control/protocol.ts";
-import { decodeWorkerLaunch, WorkerProcess, WorkerStartupError, WorkerUpgradeRequested } from "./worker-process.ts";
+import { decodeWorkerLaunch, WorkerProcess, WorkerStartupError } from "./worker-process.ts";
 
 export async function runManager(stateDirectory: string, signal: AbortSignal): Promise<void> {
     const release = await acquireManagerLock(stateDirectory);
@@ -25,50 +24,69 @@ export async function runManager(stateDirectory: string, signal: AbortSignal): P
         protocolVersion: 2,
         worker: worker?.running ? { pid: worker.pid, version: worker.launch.version } : null,
     });
-    const start = async (launch: WorkerLaunch, requiredUpgrade = false): Promise<void> => {
+    const serialize = <T>(operation: () => Promise<T>): Promise<T> => {
+        const result = queue.then(operation);
+        queue = result.catch(() => undefined);
+        return result;
+    };
+    let switching: Promise<void> = Promise.resolve();
+    // Serialize process mutations, but never hold the queue while waiting for health.
+    // A starting worker must still be able to request an ordinary process switch.
+    const waitForHealthyWorker = async (): Promise<void> => {
+        while (worker !== undefined) {
+            const current = worker;
+            try {
+                await current.ready;
+            } catch (cause) {
+                const superseded = await serialize(async () => {
+                    if (worker !== current) {
+                        return true;
+                    }
+                    await current.close();
+                    return false;
+                });
+                if (superseded) {
+                    continue;
+                }
+                throw cause;
+            }
+            if (await serialize(async () => worker === current)) {
+                return;
+            }
+        }
+    };
+    const launchWorker = async (launch: WorkerLaunch): Promise<void> => {
         combined.throwIfAborted();
         await worker?.close();
         const replacement = new WorkerProcess(launch, combined, process.env);
         worker = replacement;
-        try {
-            await replacement.ready;
-        } catch (cause) {
-            await replacement.close();
-            if (
-                cause instanceof WorkerUpgradeRequested &&
-                !requiredUpgrade &&
-                gt(cause.launch.version, launch.version)
-            ) {
-                const next = await decodeWorkerLaunch(cause.launch);
-                switchState = {
-                    kind: "switching",
-                    id: crypto.randomUUID(),
-                    context: "required-upgrade",
-                    previous: launch,
-                    next,
-                };
-                await start(next, true);
-                switchState = { ...switchState, kind: "switched" };
-                return;
-            }
-            throw cause;
-        }
-        void replacement.exited.then(async () => {
-            try {
-                await setTimeout(1000, undefined, { signal: combined });
-                const restart = queue.then(async () => {
-                    if (worker === replacement && !combined.aborted) {
-                        await start(replacement.launch);
+        void replacement.ready.then(
+            async () => {
+                await replacement.exited;
+                try {
+                    await setTimeout(1000, undefined, { signal: combined });
+                    const restarted = await serialize(async () => {
+                        if (worker !== replacement || combined.aborted) {
+                            return false;
+                        }
+                        await launchWorker(replacement.launch);
+                        return true;
+                    });
+                    if (restarted) {
+                        await waitForHealthyWorker();
                     }
-                });
-                queue = restart.catch(() => undefined);
-                await restart;
-            } catch {
-                if (!combined.aborted) {
-                    process.stderr.write("The working daemon could not be restarted; run mobius start to retry.\n");
+                } catch {
+                    if (!combined.aborted) {
+                        process.stderr.write("The working daemon could not be restarted; run mobius start to retry.\n");
+                    }
                 }
-            }
-        });
+            },
+            () => undefined,
+        );
+    };
+    const start = async (launch: WorkerLaunch): Promise<void> => {
+        await serialize(async () => launchWorker(launch));
+        await waitForHealthyWorker();
     };
     const switchWorker = async (transition: Extract<DaemonSwitchState, { kind: "switching" }>): Promise<void> => {
         try {
@@ -105,7 +123,21 @@ export async function runManager(stateDirectory: string, signal: AbortSignal): P
         if (command.kind === "switch-status" && !command.wait) {
             return { kind: "switch-status", state: switchState };
         }
-        const result = queue.then(async (): Promise<LifecycleResponse> => {
+        if (command.kind === "ensure") {
+            await serialize(async () => {
+                requestSignal.throwIfAborted();
+                const launch = await decodeWorkerLaunch(command.launch);
+                if (!worker?.running || worker.launch.version !== launch.version) {
+                    await launchWorker(launch);
+                }
+            });
+            await waitForHealthyWorker();
+            return status();
+        }
+        if (command.kind === "switch-status" && command.wait) {
+            await switching;
+        }
+        return await serialize(async (): Promise<LifecycleResponse> => {
             requestSignal.throwIfAborted();
             switch (command.kind) {
                 case "switch-status":
@@ -150,18 +182,8 @@ export async function runManager(stateDirectory: string, signal: AbortSignal): P
                     };
                     return { kind: "switching" };
                 }
-                case "ensure": {
-                    const launch = await decodeWorkerLaunch(command.launch);
-                    if (!worker?.running || worker.launch.version !== launch.version) {
-                        await start(launch);
-                    }
-                    await worker?.ready;
-                    return status();
-                }
             }
         });
-        queue = result.catch(() => undefined);
-        return await result;
     };
     try {
         await serveLocalControl(stateDirectory, "manager", combined, handle, undefined, (response) => {
@@ -171,13 +193,11 @@ export async function runManager(stateDirectory: string, signal: AbortSignal): P
                 "kind" in response &&
                 response.kind === "switching"
             ) {
-                const pending = queue.then(async () => {
-                    const state = switchState;
-                    if (state?.kind === "switching") {
-                        await switchWorker(state);
-                    }
-                });
-                queue = pending.catch(() => {
+                const state = switchState;
+                if (state?.kind !== "switching") {
+                    return;
+                }
+                switching = switchWorker(state).catch(() => {
                     if (!combined.aborted) {
                         process.stderr.write("Daemon switch or rollback failed; run mobius start to retry.\n");
                     }
@@ -194,6 +214,7 @@ export async function runManager(stateDirectory: string, signal: AbortSignal): P
         });
     } finally {
         shutdown.abort();
+        await switching;
         await queue;
         await worker?.close();
         await release();

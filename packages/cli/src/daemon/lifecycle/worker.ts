@@ -1,5 +1,4 @@
 import { setTimeout } from "node:timers/promises";
-import packageMetadata from "../../../package.json" with { type: "json" };
 import { RuntimeUpgradeRequiredError } from "../../relay-connection/runtime-upgrade-required.ts";
 import { acquireManagerLock, isNodeError, sendLocalRequest } from "../control/local-client.ts";
 import { serveLocalControl } from "../control/local-server.ts";
@@ -10,7 +9,6 @@ import {
 } from "../pairing/pair-local-machine.ts";
 import { MobiusRuntimeEngine } from "../runtime.ts";
 import { prepareUpgradeData, recordCurrentData } from "../upgrades/data.ts";
-import { DaemonUpgradeError, findNewDaemonRelease, installDaemonRelease } from "../upgrades/package.ts";
 import { checkDaemonUpgrade, runDaemonUpgrades } from "../upgrades/upgrade.ts";
 
 class WorkerRuntimeError extends Error {
@@ -82,7 +80,6 @@ async function runWorkerRuntime(version: string, combined: AbortSignal, shutdown
         console.error(`Runtime ${connectionId} failed; stopping the daemon`, cause);
         shutdown.abort(new WorkerRuntimeError(connectionId, cause));
     };
-    let announcedReady = false;
     let requiredUpgrade: Promise<void> | null = null;
     const reconcile = async (): Promise<void> => {
         const connections = await installation.listConnections(combined);
@@ -129,31 +126,7 @@ async function runWorkerRuntime(version: string, combined: AbortSignal, shutdown
                                 !controller.signal.aborted
                             ) {
                                 try {
-                                    requiredUpgrade ??= (async () => {
-                                        if (announcedReady) {
-                                            await checkDaemonUpgrade(combined, true);
-                                            return;
-                                        }
-                                        const next = await findNewDaemonRelease(packageMetadata.version, combined);
-                                        if (next === null) {
-                                            throw new DaemonUpgradeError(
-                                                "required_upgrade_unavailable",
-                                                "The Relay requires an upgrade but npm has no newer release",
-                                            );
-                                        }
-                                        const launch = await installDaemonRelease(next, combined);
-                                        if (!process.send) {
-                                            throw new DaemonUpgradeError(
-                                                "manager_unavailable",
-                                                "A manager is required for daemon switching",
-                                            );
-                                        }
-                                        await new Promise<void>((resolve, reject) => {
-                                            process.send?.({ kind: "worker-upgrade", launch }, (error) =>
-                                                error ? reject(error) : resolve(),
-                                            );
-                                        });
-                                    })();
+                                    requiredUpgrade ??= checkDaemonUpgrade(combined, true);
                                     await requiredUpgrade;
                                     return;
                                 } catch (upgradeError) {
@@ -214,7 +187,6 @@ async function runWorkerRuntime(version: string, combined: AbortSignal, shutdown
                     combined.removeEventListener("abort", abort);
                 }
                 await recordCurrentData(version, combined);
-                announcedReady = true;
                 upgrades = runDaemonUpgrades(combined);
                 if (process.connected) {
                     process.send?.({ kind: "worker-ready", version }, () => undefined);

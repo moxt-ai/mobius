@@ -70,6 +70,12 @@ export async function checkDaemonUpgrade(signal: AbortSignal, required = false):
         transition?.kind === "switching" ||
         (transition?.kind === "rolled-back" && transition.retryAfter > Date.now())
     ) {
+        if (required) {
+            throw new DaemonUpgradeError(
+                "required_upgrade_blocked",
+                "The required daemon upgrade is blocked by an ongoing switch or rollback cooldown",
+            );
+        }
         return;
     }
     const version = await findNewDaemonRelease(packageMetadata.version, signal);
