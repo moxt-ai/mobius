@@ -2007,6 +2007,65 @@ describe.sequential("Platform Turn submission", () => {
                 turnId: "long-first-turn",
             });
 
+            // A pending cancellation waits for the whole Turn, so an unrelated
+            // Turn's failure broadcast must not disturb it.
+            const cancelTurn = worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/turns/long-first-turn/cancel`,
+                    {
+                        body: JSON.stringify({ idempotencyKey: "cancel-long-first" }),
+                        headers: credentialHeaders(text(sessionAccess, "credential")),
+                        method: "POST",
+                    },
+                ),
+                environment,
+            );
+            expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("session.cancel");
+            daemon.send(
+                encodeSessionEventEnvelopeV2({
+                    kind: "session.event.v2",
+                    events: [
+                        {
+                            eventId: "unrelated-turn-failed",
+                            position: "2",
+                            provenance: { kind: "original" },
+                            recordedAt: "2026-09-18T00:00:01.000Z",
+                            sessionGenerationId: "session-generation-1",
+                            sessionId,
+                            type: "lifecycle-metadata",
+                            payload: {
+                                attemptId: "unrelated-attempt",
+                                code: "agent_execution_failed",
+                                commandId: "unrelated-turn",
+                                kind: "prompt.failed",
+                                message: "The local agent could not complete the request",
+                            },
+                        },
+                    ],
+                }),
+            );
+            daemon.send(
+                encodeSessionEventEnvelopeV2({
+                    kind: "session.event.v2",
+                    events: [
+                        {
+                            eventId: "long-first-completed",
+                            position: "3",
+                            provenance: { kind: "original" },
+                            recordedAt: "2026-09-18T00:00:02.000Z",
+                            sessionGenerationId: "session-generation-1",
+                            sessionId,
+                            type: "lifecycle-metadata",
+                            payload: { commandId: "long-first-turn", kind: "prompt.completed", stopReason: "cancelled" },
+                        },
+                    ],
+                }),
+            );
+            expect(await responseJson(await cancelTurn, 200)).toMatchObject({
+                state: { kind: "cancelled" },
+                turnId: "long-first-turn",
+            });
+
             expect(
                 await responseJson(await submitTurn("invalid-image-turn", "describe this", [{ type: "image" }]), 400),
             ).toMatchObject({ error: { code: "invalid_request" } });

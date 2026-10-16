@@ -161,14 +161,18 @@ type LifecycleReply =
 function lifecycleReply(
     command: RuntimeControlCommand,
     expectation: LifecycleExpectation,
+    requestId: string,
     sessionId: string,
     payload: LifecycleMetadataV2,
 ): LifecycleReply {
+    // V2 envelopes are broadcast to every host socket, so only events carrying
+    // this command's own identifiers answer it; other Turns' failures and
+    // starts must leave the pending request waiting.
     if (payload.kind === "prompt.failed" || payload.kind === "prompt.failed-before-start") {
-        return {
-            kind: "reject",
-            error: new SessionRuntimeError(payload.code, payload.message),
-        };
+        if (payload.commandId !== requestId) {
+            return { kind: "ignore" };
+        }
+        return { kind: "reject", error: new SessionRuntimeError(payload.code, payload.message) };
     }
     if (command.kind === "session.prompt" && payload.kind === "session.queue.changed") {
         // The queue update precedes the queued Turn's start; keep waiting for
@@ -180,6 +184,9 @@ function lifecycleReply(
         return { kind: "ignore" };
     }
     if (payload.kind === "prompt.started") {
+        if (payload.commandId !== requestId) {
+            return { kind: "ignore" };
+        }
         return {
             kind: "resolve",
             result: {
@@ -192,6 +199,9 @@ function lifecycleReply(
         };
     }
     if (payload.kind === "prompt.completed") {
+        if (payload.commandId !== requestId) {
+            return { kind: "ignore" };
+        }
         return {
             kind: "resolve",
             result: {
@@ -203,10 +213,14 @@ function lifecycleReply(
         };
     }
     if (payload.kind === "session.permission.resolved") {
-        return { kind: "resolve", result: payload.event };
+        return payload.event.interactionId === requestId
+            ? { kind: "resolve", result: payload.event }
+            : { kind: "ignore" };
     }
     if (payload.kind === "session.elicitation.resolved") {
-        return { kind: "resolve", result: payload.event };
+        return payload.event.interactionId === requestId
+            ? { kind: "resolve", result: payload.event }
+            : { kind: "ignore" };
     }
     return { kind: "ignore" };
 }
@@ -480,6 +494,7 @@ export async function requestRuntimeControl(
                             const reply = lifecycleReply(
                                 command,
                                 expectation,
+                                requestId,
                                 lifecycleEvent.sessionId,
                                 lifecycleEvent.payload,
                             );
@@ -488,15 +503,7 @@ export async function requestRuntimeControl(
                                 return;
                             }
                             if (reply.kind === "resolve") {
-                                if (
-                                    "requestId" in reply.result
-                                        ? reply.result.requestId === requestId
-                                        : "interactionId" in reply.result
-                                          ? reply.result.interactionId === requestId
-                                          : reply.result.commandId === requestId
-                                ) {
-                                    resolve(reply.result);
-                                }
+                                resolve(reply.result);
                                 return;
                             }
                         }
