@@ -246,6 +246,7 @@ class ProjectionFold {
             openAnswer: null,
             openThought: null,
             order: this.#turnCount,
+            preceding: null,
             prompt: null,
         });
     }
@@ -395,8 +396,15 @@ class ProjectionFold {
                 return;
             case "prompt.requested": {
                 const turn = this.#ensureTurn(payload.commandId, event);
+                const precedingCommandId = this.#state.activeCommands?.commandIds.at(-1);
+                const preceding =
+                    precedingCommandId === undefined || precedingCommandId === payload.commandId
+                        ? null
+                        : this.#turn(precedingCommandId);
                 this.#putTurn({
                     ...turn,
+                    preceding:
+                        preceding === null ? null : { commandId: preceding.commandId, itemCount: preceding.itemCount },
                     createdAt: event.recordedAt,
                     generationId: event.sessionGenerationId,
                     prompt: {
@@ -790,6 +798,7 @@ export class SessionTurnHistory {
                     itemsCursor: listed.cursor,
                     messageId: turn.messageId,
                     order: turn.order,
+                    preceding: turn.preceding,
                     prompt: turn.prompt,
                 });
                 cursor = turn.order;
