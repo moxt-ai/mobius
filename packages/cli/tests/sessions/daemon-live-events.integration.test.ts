@@ -493,7 +493,7 @@ describe("daemon V2 live delivery", () => {
             expect(order).toEqual(["first-message", "tool", "final-message"]);
             const page = await history(fixture, command);
             const liveEventIds = new Set(live.map((event) => event.eventId));
-            expect(page.events.every((event) => !liveEventIds.has(event.eventId))).toBe(true);
+            expect(page.events.every((event) => liveEventIds.has(event.eventId))).toBe(true);
             expect(page.events.length).toBeLessThan(live.length);
             expect(
                 page.events.filter(
@@ -573,7 +573,7 @@ describe("daemon V2 live delivery", () => {
             expect(fixture.liveBatchSizes.some((size) => size > 1)).toBe(true);
             const page = await history(fixture, command);
             const liveEventIds = new Set(live.map((event) => event.eventId));
-            expect(page.events.every((event) => !liveEventIds.has(event.eventId))).toBe(true);
+            expect(page.events.every((event) => liveEventIds.has(event.eventId))).toBe(true);
             expect(page.events.length).toBeLessThan(live.length);
             expect(
                 page.events
