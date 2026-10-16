@@ -23,9 +23,9 @@ import {
     type SessionConfigOption,
     type SessionEventPayloadV2,
 } from "@moxt-ai/mobius-protocol";
-import type { LocalRasterImage } from "../authorization/local-raster.ts";
-import { readInlineRaster, readLocalRaster } from "../authorization/local-raster.ts";
-import { type LocalVideo, readInlineVideo } from "../authorization/local-video.ts";
+import type { LocalRasterImage } from "../acp/resource/local-raster.ts";
+import { readInlineRaster, readLocalRaster } from "../acp/resource/local-raster.ts";
+import { type LocalVideo, readInlineVideo } from "../acp/resource/local-video.ts";
 import type { AcpAgentDefinition } from "../config.ts";
 import type { AcpContentExternalizer } from "../external-content/acp-content-externalizer.ts";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";

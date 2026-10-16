@@ -2,7 +2,7 @@ import type { ServiceToDaemonMessage } from "@moxt-ai/mobius-protocol";
 import type { CommandContext } from "../context.ts";
 import type { DaemonCommand } from "../definition.ts";
 import { createAgentSettingsCommands } from "./agent-settings.ts";
-import { fileReadCommand } from "./file-read.ts";
+import { fileReadCommand } from "./file-read/index.ts";
 import { liveHistoryPageLoadCommand, previewHistoryPageLoadCommand } from "./history.ts";
 import {
     elicitationRespondCommand,
