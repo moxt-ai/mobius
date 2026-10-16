@@ -13,11 +13,9 @@ import {
     decodeRuntimePongEvent,
     decodeRuntimeStatusEvent,
     decodeSessionClosedEvent,
-    decodeSessionCompletedEvent,
     decodeSessionConfigUpdatedEvent,
     decodeSessionElicitationResolvedEvent,
     decodeSessionEventEnvelopeV2,
-    decodeSessionFailedEvent,
     decodeSessionLiveHistoryV2PageLoaded,
     decodeSessionOperationFailedEvent,
     decodeSessionPermissionResolvedEvent,
@@ -25,7 +23,6 @@ import {
     decodeSessionQueuedEvent,
     decodeSessionReadyEvent,
     decodeSessionRestoredEvent,
-    decodeSessionStartedEvent,
     decodeSessionsListedEvent,
     decodeSessionsQueriedEvent,
     decodeWorkspaceEntriesEvent,
@@ -43,10 +40,11 @@ import {
     type RuntimeDiagnosticsResult,
     type RuntimePingCommand,
     type RuntimePongEvent,
+    SESSION_EVENT_V2_KIND,
+    SESSION_QUEUED_KIND,
     type SessionCancelCommand,
     type SessionCloseCommand,
     type SessionClosedEvent,
-    type SessionCompletedEvent,
     type SessionConfigUpdatedEvent,
     type SessionConfigureCommand,
     type SessionElicitationResolvedEvent,
@@ -62,78 +60,15 @@ import {
     type SessionPromptCommand,
     type SessionPromptDispositionCommand,
     type SessionQueryCommand,
-    type SessionQueuedEvent,
     type SessionReadyEvent,
     type SessionRestoreCommand,
     type SessionRestoredEvent,
-    type SessionStartedEvent,
     type SessionsListedEvent,
     type SessionsQueriedEvent,
     type WorkspaceEntriesEvent,
     type WorkspaceListCommand,
 } from "@moxt-ai/mobius-protocol";
 import { SessionRuntimeError } from "../../entity/do/session.ts";
-
-function commandReply(
-    encoded: string,
-    prompt = "",
-    expectedLifecycleKinds: readonly LifecycleMetadataV2["kind"][] = [],
-): string | null {
-    if (decodeMessageKind(encoded) !== "session.event.v2") {
-        return encoded;
-    }
-    const lifecycleEvents = decodeSessionEventEnvelopeV2(encoded).events.filter(
-        (event) => event.type === "lifecycle-metadata",
-    );
-    const event =
-        lifecycleEvents.find(
-            ({ payload }) => payload.kind === "prompt.failed" || payload.kind === "prompt.failed-before-start",
-        ) ?? lifecycleEvents.find(({ payload }) => expectedLifecycleKinds.includes(payload.kind));
-    if (event === undefined) {
-        return null;
-    }
-    const payload = event.payload;
-    switch (payload.kind) {
-        case "prompt.started":
-            return JSON.stringify({
-                kind: "session.started",
-                sessionId: event.sessionId,
-                commandId: payload.commandId,
-                attemptId: payload.attemptId,
-                epoch: payload.epoch,
-                sequence: 0,
-                prompt,
-            });
-        case "prompt.completed":
-            return JSON.stringify({
-                kind: "session.completed",
-                sessionId: event.sessionId,
-                commandId: payload.commandId,
-                stopReason: payload.stopReason,
-            });
-        case "prompt.failed":
-        case "prompt.failed-before-start":
-            return JSON.stringify({
-                kind: "session.failed",
-                sessionId: event.sessionId,
-                commandId: payload.commandId,
-                code: payload.code,
-                message: payload.message,
-            });
-        case "session.permission.requested":
-        case "session.permission.resolved":
-        case "session.elicitation.requested":
-        case "session.elicitation.resolved":
-            return JSON.stringify(payload.event);
-        case "prompt.requested":
-        case "session.queue.changed":
-            return null;
-        default: {
-            const unsupported: never = payload;
-            return unsupported;
-        }
-    }
-}
 
 export type RuntimeControlCommand =
     | RuntimeDiagnosticsRequest
@@ -152,6 +87,31 @@ export type RuntimeControlCommand =
     | SessionListCommand
     | SessionQueryCommand
     | SessionRestoreCommand;
+
+/** A Turn attempt started executing on the Runtime. */
+export interface TurnStarted {
+    readonly attemptId: string;
+    readonly commandId: string;
+    readonly epoch: string;
+    readonly kind: "turn.started";
+    readonly sessionId: string;
+}
+
+/** A Turn was admitted to the Runtime queue without starting yet. */
+export interface TurnQueued {
+    readonly commandId: string;
+    readonly kind: "turn.queued";
+    readonly sessionId: string;
+}
+
+/** A Turn attempt finished executing on the Runtime. */
+export interface TurnCompleted {
+    readonly commandId: string;
+    readonly kind: "turn.completed";
+    readonly sessionId: string;
+    readonly stopReason: string;
+}
+
 export type RuntimeControlResult =
     | RuntimeDiagnosticsResult
     | RuntimePongEvent
@@ -159,9 +119,9 @@ export type RuntimeControlResult =
     | SessionReadyEvent
     | SessionConfigUpdatedEvent
     | SessionClosedEvent
-    | SessionCompletedEvent
-    | SessionStartedEvent
-    | SessionQueuedEvent
+    | TurnCompleted
+    | TurnStarted
+    | TurnQueued
     | SessionPreviewHistoryPageLoaded
     | SessionLiveHistoryV2PageLoaded
     | SessionElicitationResolvedEvent
@@ -169,6 +129,101 @@ export type RuntimeControlResult =
     | SessionsListedEvent
     | SessionsQueriedEvent
     | SessionRestoredEvent;
+
+interface LifecycleExpectation {
+    /** Resolve as soon as any of these V2 lifecycle kinds appears. */
+    readonly resolveOn: readonly LifecycleMetadataV2["kind"][];
+}
+
+/** V2 lifecycle kinds that answer each Turn-shaped control command. */
+function lifecycleExpectation(command: RuntimeControlCommand): LifecycleExpectation | null {
+    if (command.kind === "session.prompt" || command.kind === "session.prompt.disposition") {
+        return { resolveOn: ["prompt.started"] };
+    }
+    if (command.kind === "session.cancel") {
+        return { resolveOn: ["prompt.completed"] };
+    }
+    if (command.kind === "session.permission.respond") {
+        return { resolveOn: ["session.permission.resolved"] };
+    }
+    if (command.kind === "session.elicitation.respond") {
+        return { resolveOn: ["session.elicitation.resolved"] };
+    }
+    return null;
+}
+
+type LifecycleReply =
+    | { readonly kind: "resolve"; readonly result: RuntimeControlResult }
+    | { readonly kind: "reject"; readonly error: SessionRuntimeError }
+    | { readonly kind: "ignore" };
+
+/** Maps one V2 lifecycle payload to the reply for the pending control command. */
+function lifecycleReply(
+    command: RuntimeControlCommand,
+    expectation: LifecycleExpectation,
+    requestId: string,
+    sessionId: string,
+    payload: LifecycleMetadataV2,
+): LifecycleReply {
+    // V2 envelopes are broadcast to every host socket, so only events carrying
+    // this command's own identifiers answer it; other Turns' failures and
+    // starts must leave the pending request waiting.
+    if (payload.kind === "prompt.failed" || payload.kind === "prompt.failed-before-start") {
+        if (payload.commandId !== requestId) {
+            return { kind: "ignore" };
+        }
+        return { kind: "reject", error: new SessionRuntimeError(payload.code, payload.message) };
+    }
+    if (command.kind === "session.prompt" && payload.kind === "session.queue.changed") {
+        // The queue update precedes the queued Turn's start; keep waiting for
+        // its own prompt.started unless the daemon reports the queued receipt
+        // directly (V1 bridging, retired once the daemon stops sending it).
+        return { kind: "ignore" };
+    }
+    if (!expectation.resolveOn.includes(payload.kind)) {
+        return { kind: "ignore" };
+    }
+    if (payload.kind === "prompt.started") {
+        if (payload.commandId !== requestId) {
+            return { kind: "ignore" };
+        }
+        return {
+            kind: "resolve",
+            result: {
+                attemptId: payload.attemptId,
+                commandId: payload.commandId,
+                epoch: payload.epoch,
+                kind: "turn.started",
+                sessionId,
+            },
+        };
+    }
+    if (payload.kind === "prompt.completed") {
+        if (payload.commandId !== requestId) {
+            return { kind: "ignore" };
+        }
+        return {
+            kind: "resolve",
+            result: {
+                commandId: payload.commandId,
+                kind: "turn.completed",
+                sessionId,
+                stopReason: payload.stopReason,
+            },
+        };
+    }
+    if (payload.kind === "session.permission.resolved") {
+        return payload.event.interactionId === requestId
+            ? { kind: "resolve", result: payload.event }
+            : { kind: "ignore" };
+    }
+    if (payload.kind === "session.elicitation.resolved") {
+        return payload.event.interactionId === requestId
+            ? { kind: "resolve", result: payload.event }
+            : { kind: "ignore" };
+    }
+    return { kind: "ignore" };
+}
 
 export interface RuntimeFileStream {
     readonly finished: Promise<void>;
@@ -343,19 +398,15 @@ export async function requestRuntimeAgentSettings(
                     if (typeof event.data !== "string") {
                         return;
                     }
-                    const raw = commandReply(event.data);
-                    if (raw === null) {
-                        return;
-                    }
-                    const kind = decodeMessageKind(raw);
+                    const kind = decodeMessageKind(event.data);
                     if (kind === "runtime.status") {
-                        if (!decodeRuntimeStatusEvent(raw).online) {
+                        if (!decodeRuntimeStatusEvent(event.data).online) {
                             reject(new SessionRuntimeError("runtime_offline", "The Runtime connection closed"));
                         }
                         return;
                     }
                     if (kind === "agent.settings.discovery.failed") {
-                        const failed = decodeAgentSettingsDiscoveryFailedEvent(raw);
+                        const failed = decodeAgentSettingsDiscoveryFailedEvent(event.data);
                         if (failed.requestId === command.requestId) {
                             reject(new SessionRuntimeError(failed.code, failed.message));
                         }
@@ -364,7 +415,7 @@ export async function requestRuntimeAgentSettings(
                     if (kind !== "agent.settings.discovered") {
                         return;
                     }
-                    const result = decodeAgentSettingsDiscoveredEvent(raw);
+                    const result = decodeAgentSettingsDiscoveredEvent(event.data);
                     if (result.requestId === command.requestId) {
                         resolve(result);
                     }
@@ -431,40 +482,55 @@ export async function requestRuntimeControl(
                     if (typeof event.data !== "string") {
                         return;
                     }
-                    const expectedLifecycleKinds: readonly LifecycleMetadataV2["kind"][] =
-                        command.kind === "session.prompt" || command.kind === "session.prompt.disposition"
-                            ? ["prompt.started"]
-                            : command.kind === "session.cancel"
-                              ? ["prompt.completed"]
-                              : command.kind === "session.permission.respond"
-                                ? ["session.permission.resolved"]
-                                : command.kind === "session.elicitation.respond"
-                                  ? ["session.elicitation.resolved"]
-                                  : [];
-                    const raw = commandReply(
-                        event.data,
-                        command.kind === "session.prompt" ? command.prompt : "",
-                        expectedLifecycleKinds,
-                    );
-                    if (raw === null) {
+                    if (decodeMessageKind(event.data) === SESSION_EVENT_V2_KIND) {
+                        const expectation = lifecycleExpectation(command);
+                        if (expectation === null) {
+                            return;
+                        }
+                        for (const lifecycleEvent of decodeSessionEventEnvelopeV2(event.data).events) {
+                            if (lifecycleEvent.type !== "lifecycle-metadata") {
+                                continue;
+                            }
+                            const reply = lifecycleReply(
+                                command,
+                                expectation,
+                                requestId,
+                                lifecycleEvent.sessionId,
+                                lifecycleEvent.payload,
+                            );
+                            if (reply.kind === "reject") {
+                                reject(reply.error);
+                                return;
+                            }
+                            if (reply.kind === "resolve") {
+                                resolve(reply.result);
+                                return;
+                            }
+                        }
                         return;
                     }
-                    const kind = decodeMessageKind(raw);
+                    const kind = decodeMessageKind(event.data);
                     if (kind === "runtime.status") {
-                        if (!decodeRuntimeStatusEvent(raw).online) {
+                        if (!decodeRuntimeStatusEvent(event.data).online) {
                             reject(new SessionRuntimeError("runtime_offline", "The Runtime connection closed"));
                         }
                         return;
                     }
-                    if (kind === "session.failed") {
-                        const failed = decodeSessionFailedEvent(raw);
-                        if (failed.commandId === requestId) {
-                            reject(new SessionRuntimeError(failed.code, failed.message));
+                    if (kind === SESSION_QUEUED_KIND) {
+                        // Bridged queue receipt from the daemon; retired once the
+                        // daemon stops sending V1 lifecycle frames.
+                        const queued = decodeSessionQueuedEvent(event.data);
+                        if (command.kind === "session.prompt" && queued.commandId === requestId) {
+                            resolve({
+                                commandId: queued.commandId,
+                                kind: "turn.queued",
+                                sessionId: queued.sessionId,
+                            });
                         }
                         return;
                     }
                     if (kind === "session.operation.failed") {
-                        const failed = decodeSessionOperationFailedEvent(raw);
+                        const failed = decodeSessionOperationFailedEvent(event.data);
                         if (failed.requestId === requestId) {
                             reject(
                                 new SessionRuntimeError(failed.code, failed.message, {
@@ -476,54 +542,43 @@ export async function requestRuntimeControl(
                     }
                     const result =
                         command.kind === "runtime.diagnostics.read" && kind === "runtime.diagnostics.result"
-                            ? decodeRuntimeDiagnosticsResult(raw)
+                            ? decodeRuntimeDiagnosticsResult(event.data)
                             : command.kind === "runtime.ping" && kind === "runtime.pong"
-                              ? decodeRuntimePongEvent(raw)
+                              ? decodeRuntimePongEvent(event.data)
                               : command.kind === "native.session.request" && kind === "native.session.result"
-                                ? decodeNativeSessionResult(raw)
+                                ? decodeNativeSessionResult(event.data)
                                 : command.kind === "session.list" && kind === "session.listed"
-                                  ? decodeSessionsListedEvent(raw)
+                                  ? decodeSessionsListedEvent(event.data)
                                   : command.kind === "session.query" && kind === "session.queried"
-                                    ? decodeSessionsQueriedEvent(raw)
+                                    ? decodeSessionsQueriedEvent(event.data)
                                     : command.kind === "session.restore" && kind === "session.restored"
-                                      ? decodeSessionRestoredEvent(raw)
+                                      ? decodeSessionRestoredEvent(event.data)
                                       : command.kind === "session.close" && kind === "session.closed"
-                                        ? decodeSessionClosedEvent(raw)
+                                        ? decodeSessionClosedEvent(event.data)
                                         : command.kind === "session.prepare" && kind === "session.ready"
-                                          ? decodeSessionReadyEvent(raw)
+                                          ? decodeSessionReadyEvent(event.data)
                                           : command.kind === "session.configure" && kind === "session.config.updated"
-                                            ? decodeSessionConfigUpdatedEvent(raw)
+                                            ? decodeSessionConfigUpdatedEvent(event.data)
                                             : null;
                     const resolved =
                         result ??
                         (command.kind === "session.preview-history.page.load" &&
                         kind === "session.preview-history.page.loaded"
-                            ? decodeSessionPreviewHistoryPageLoaded(raw)
+                            ? decodeSessionPreviewHistoryPageLoaded(event.data)
                             : command.kind === "session.live-history.v2.page.load" &&
                                 kind === "session.live-history.v2.page.loaded"
-                              ? decodeSessionLiveHistoryV2PageLoaded(raw)
-                              : command.kind === "session.prompt" && kind === "session.queued"
-                                ? decodeSessionQueuedEvent(raw)
-                                : (command.kind === "session.prompt" ||
-                                        command.kind === "session.prompt.disposition") &&
-                                    kind === "session.started"
-                                  ? decodeSessionStartedEvent(raw)
-                                  : command.kind === "session.cancel" && kind === "session.completed"
-                                    ? decodeSessionCompletedEvent(raw)
-                                    : command.kind === "session.permission.respond" &&
-                                        kind === "session.permission.resolved"
-                                      ? decodeSessionPermissionResolvedEvent(raw)
-                                      : command.kind === "session.elicitation.respond" &&
-                                          kind === "session.elicitation.resolved"
-                                        ? decodeSessionElicitationResolvedEvent(raw)
-                                        : null);
-                    const resolvedRequestId =
-                        resolved !== null && "requestId" in resolved
-                            ? resolved.requestId
-                            : resolved !== null && "interactionId" in resolved
-                              ? resolved.interactionId
-                              : resolved?.commandId;
-                    if (resolved !== null && resolvedRequestId === requestId) {
+                              ? decodeSessionLiveHistoryV2PageLoaded(event.data)
+                              : command.kind === "session.permission.respond" && kind === "session.permission.resolved"
+                                ? decodeSessionPermissionResolvedEvent(event.data)
+                                : command.kind === "session.elicitation.respond" &&
+                                    kind === "session.elicitation.resolved"
+                                  ? decodeSessionElicitationResolvedEvent(event.data)
+                                  : null);
+                    if (
+                        resolved !== null &&
+                        (("requestId" in resolved && resolved.requestId === requestId) ||
+                            ("interactionId" in resolved && resolved.interactionId === requestId))
+                    ) {
                         resolve(resolved);
                     }
                 } catch (cause) {
@@ -574,20 +629,9 @@ export async function requestRuntimeWorkspace(
                     if (typeof event.data !== "string") {
                         return;
                     }
-                    const raw = commandReply(event.data);
-                    if (raw === null) {
-                        return;
-                    }
-                    const kind = decodeMessageKind(raw);
-                    if (kind === "session.failed") {
-                        const failed = decodeSessionFailedEvent(raw);
-                        if (failed.commandId === command.requestId) {
-                            reject(new SessionRuntimeError(failed.code, failed.message));
-                        }
-                        return;
-                    }
+                    const kind = decodeMessageKind(event.data);
                     if (kind === "session.operation.failed") {
-                        const failed = decodeSessionOperationFailedEvent(raw);
+                        const failed = decodeSessionOperationFailedEvent(event.data);
                         if (failed.requestId === command.requestId) {
                             reject(
                                 new SessionRuntimeError(failed.code, failed.message, {
@@ -600,7 +644,7 @@ export async function requestRuntimeWorkspace(
                     if (kind !== "workspace.entries") {
                         return;
                     }
-                    const result = decodeWorkspaceEntriesEvent(raw);
+                    const result = decodeWorkspaceEntriesEvent(event.data);
                     if (result.requestId === command.requestId) {
                         resolve(result);
                     }

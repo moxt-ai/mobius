@@ -453,7 +453,7 @@ export function createPlatformApplication(
                 command,
                 context.req.raw.signal,
             );
-            if (accepted.kind !== "session.started" && accepted.kind !== "session.queued") {
+            if (accepted.kind !== "turn.started" && accepted.kind !== "turn.queued") {
                 throw new PairingDirectoryError("invalid_request", "The Runtime returned an invalid Turn");
             }
             const acceptedAt = new Date().toISOString();
@@ -469,7 +469,7 @@ export function createPlatformApplication(
                 },
                 sessionId,
                 state:
-                    accepted.kind === "session.queued"
+                    accepted.kind === "turn.queued"
                         ? { kind: "queued" as const }
                         : { kind: "running" as const, startedAt: acceptedAt },
                 turnId: accepted.commandId,
@@ -505,7 +505,7 @@ export function createPlatformApplication(
                 ),
                 context.req.raw.signal,
             );
-            if (started.kind !== "session.started" || started.commandId !== turnId) {
+            if (started.kind !== "turn.started" || started.commandId !== turnId) {
                 throw new PairingDirectoryError("invalid_request", "The Runtime returned an invalid steered Turn");
             }
             context.header("Cache-Control", "no-store");
@@ -597,7 +597,7 @@ export function createPlatformApplication(
                 decodeSessionCancelCommand(JSON.stringify({ commandId: turnId, kind: "session.cancel", sessionId })),
                 context.req.raw.signal,
             );
-            if (completed.kind !== "session.completed") {
+            if (completed.kind !== "turn.completed") {
                 throw new PairingDirectoryError("invalid_request", "The Runtime returned an invalid cancellation");
             }
             const cancelledAt = new Date().toISOString();
