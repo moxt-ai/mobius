@@ -2,6 +2,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { realpath, stat } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 
+import { type DaemonTimer, systemDaemonTimer } from "../../relay-connection/timer.ts";
 import { type WorkerLaunch, workerLaunch } from "../control/protocol.ts";
 
 export function currentWorkerLaunch(version: string): WorkerLaunch {
@@ -55,7 +56,12 @@ export class WorkerProcess {
     readonly launch: WorkerLaunch;
     readonly ready: Promise<unknown>;
 
-    constructor(launch: WorkerLaunch, signal: AbortSignal, environment: NodeJS.ProcessEnv) {
+    constructor(
+        launch: WorkerLaunch,
+        signal: AbortSignal,
+        environment: NodeJS.ProcessEnv,
+        timer: DaemonTimer = systemDaemonTimer,
+    ) {
         signal.throwIfAborted();
         this.launch = launch;
         this.#child = spawn(launch.executable, [launch.entry, "__worker"], {
@@ -108,7 +114,7 @@ export class WorkerProcess {
             );
             this.#closed.resolve();
         });
-        this.ready = this.#waitForStart(signal);
+        this.ready = this.#waitForStart(signal, timer);
     }
 
     get running(): boolean {
@@ -135,7 +141,7 @@ export class WorkerProcess {
         }
     };
 
-    async #waitForStart(signal: AbortSignal): Promise<unknown> {
+    async #waitForStart(signal: AbortSignal, timer: DaemonTimer): Promise<unknown> {
         const deadline = AbortSignal.any([signal, AbortSignal.timeout(120_000)]);
         const abort = (): void =>
             this.#started.reject(
@@ -150,8 +156,53 @@ export class WorkerProcess {
                       ),
             );
         deadline.addEventListener("abort", abort, { once: true });
+        if (deadline.aborted) {
+            abort();
+        }
         try {
-            return await this.#started.promise;
+            const started = await this.#started.promise;
+            const observed = Promise.withResolvers<void>();
+            const exited = (): void =>
+                observed.reject(
+                    new WorkerStartupError(
+                        "worker_exited",
+                        "The new daemon exited during its startup health observation",
+                        undefined,
+                        this.#stdout,
+                        this.#stderr,
+                    ),
+                );
+            const aborted = (): void =>
+                observed.reject(
+                    signal.aborted
+                        ? signal.reason
+                        : new WorkerStartupError(
+                              "worker_start_timeout",
+                              "The new daemon did not become healthy within 120 seconds",
+                              { cause: deadline.reason },
+                              this.#stdout,
+                              this.#stderr,
+                          ),
+                );
+            const observation = timer.schedule(() => observed.resolve(), 5_000);
+            this.#child.once("exit", exited);
+            this.#child.once("disconnect", exited);
+            deadline.addEventListener("abort", aborted, { once: true });
+            try {
+                if (!this.running) {
+                    exited();
+                }
+                if (deadline.aborted) {
+                    aborted();
+                }
+                await observed.promise;
+            } finally {
+                observation.cancel();
+                this.#child.off("exit", exited);
+                this.#child.off("disconnect", exited);
+                deadline.removeEventListener("abort", aborted);
+            }
+            return started;
         } finally {
             deadline.removeEventListener("abort", abort);
         }

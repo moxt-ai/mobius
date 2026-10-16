@@ -81,10 +81,12 @@ export interface RunDaemonOptions {
 
 export async function runDaemon(
     config: DaemonConfig,
-    signal: AbortSignal,
+    parentSignal: AbortSignal,
     timer: DaemonTimer = systemDaemonTimer,
     options: RunDaemonOptions = {},
 ): Promise<void> {
+    const shutdown = new AbortController();
+    const signal = AbortSignal.any([parentSignal, shutdown.signal]);
     const stateDirectory = config.localContext.stateDirectory;
     const channelHash = createHash("sha256").update(config.channelId).digest("hex");
     const sessionDatabase = openAcpSessionDatabase(join(stateDirectory, "sessions", `${channelHash}.sqlite`));
@@ -236,6 +238,7 @@ export async function runDaemon(
             await waitForRelayRetry(signal, timer);
         }
     } finally {
+        shutdown.abort();
         await activeTurns.close();
         try {
             await catalogPublication;

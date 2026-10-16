@@ -2,11 +2,15 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { watch } from "node:fs";
 import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { createConnection, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
+import { decodeDaemonToServiceMessage } from "@moxt-ai/mobius-protocol";
+import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { afterEach, describe, expect, it } from "vitest";
+import { WebSocketServer } from "ws";
 
 import cliPackage from "../../package.json" with { type: "json" };
 import {
@@ -24,6 +28,51 @@ afterEach(async () => {
 });
 
 describe("Mobius manager version compatibility", () => {
+    it.each(["workspace", "database"])(
+        "Given an enabled Runtime has a broken %s, When the user starts the daemon, Then startup fails and releases the worker instead of claiming success",
+        async (broken) => {
+            const directory = await mkdtemp(join(tmpdir(), "mobius-worker-fail-fast-"));
+            temporaryDirectories.push(directory);
+            const workspace = join(directory, "workspace");
+            await mkdir(workspace);
+            const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: join(directory, "state") };
+            const signal = AbortSignal.timeout(30_000);
+            const installation = await openMobiusCliInstallation(signal, environment);
+            const channelId = "channel_start_failure";
+            await installation.saveConnection(
+                {
+                    appId: "app_failure",
+                    channelId,
+                    defaultWorkspace: workspace,
+                    pairingId: "",
+                    relayOrigin: new URL("http://127.0.0.1:1"),
+                    runtimeCredential: "a".repeat(43),
+                    runtimeId: "runtime_failure",
+                },
+                signal,
+            );
+            if (broken === "workspace") {
+                await rm(workspace, { recursive: true });
+                await writeFile(workspace, "not a directory");
+            } else {
+                const sessions = join(installation.stateDirectory, "sessions");
+                await mkdir(sessions, { recursive: true });
+                const hash = createHash("sha256").update(channelId).digest("hex");
+                await writeFile(join(sessions, `${hash}.sqlite`), "invalid SQLite database");
+            }
+            try {
+                const result = await runCli(["start"], environment, signal);
+                expect(result.code).toBe(1);
+                expect(result.stdout).not.toContain("Mobius daemon is running.");
+                const control = await openMobiusControlInstallation(signal, environment);
+                await expect(readFile(join(control.stateDirectory, "worker.lock"))).rejects.toMatchObject({
+                    code: "ENOENT",
+                });
+            } finally {
+                await runCli(["quit"], environment, AbortSignal.timeout(10_000)).catch(() => undefined);
+            }
+        },
+    );
     it("Given the daemon is stopped, When the user runs mobius start, Then the daemon is running without requiring a connection", async () => {
         const stateRoot = await mkdtemp(join(tmpdir(), "mobius-manager-start-"));
         temporaryDirectories.push(stateRoot);
@@ -283,6 +332,7 @@ describe("Mobius pairing lifecycle", () => {
         await Promise.all([mkdir(executableDirectory), mkdir(workspace)]);
         const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: stateRoot, PATH: executableDirectory };
         const deadline = AbortSignal.timeout(60_000);
+        const relay = await startRelay();
         const installation = await openMobiusCliInstallation(deadline, environment);
         const control = await openMobiusControlInstallation(deadline, environment);
         const connection = await installation.saveConnection(
@@ -291,7 +341,7 @@ describe("Mobius pairing lifecycle", () => {
                 channelId: "channel_test",
                 defaultWorkspace: workspace,
                 pairingId: "",
-                relayOrigin: new URL("http://127.0.0.1:1"),
+                relayOrigin: relay.origin,
                 runtimeCredential: "a".repeat(43),
                 runtimeId: "runtime_test",
             },
@@ -304,7 +354,7 @@ describe("Mobius pairing lifecycle", () => {
                 channelId: "channel_test2",
                 defaultWorkspace: workspace,
                 pairingId: "",
-                relayOrigin: new URL("http://127.0.0.1:1"),
+                relayOrigin: relay.origin,
                 runtimeCredential: "b".repeat(43),
                 runtimeId: "runtime_test2",
             },
@@ -400,10 +450,54 @@ describe("Mobius pairing lifecycle", () => {
             });
         } finally {
             await runCli(["quit"], environment, AbortSignal.timeout(10_000)).catch(() => undefined);
+            await relay.close();
         }
     }, 75_000);
 });
 
+async function startRelay(): Promise<{ readonly origin: URL; readonly close: () => Promise<void> }> {
+    const catalogs = new Map<string, string>();
+    const server = createServer((request, response) => {
+        const path = request.url ?? "/";
+        if (request.method === "PUT" && path.endsWith("/catalog")) {
+            let body = "";
+            request.setEncoding("utf8");
+            request.on("data", (chunk: string) => {
+                body += chunk;
+            });
+            request.on("end", () => {
+                catalogs.set(path, body);
+                response.writeHead(204).end();
+            });
+        } else if (request.method === "GET" && catalogs.has(path)) {
+            response.writeHead(200, { "content-type": "application/json" }).end(catalogs.get(path));
+        } else {
+            response.writeHead(404).end();
+        }
+    });
+    const sockets = new WebSocketServer({ server });
+    sockets.on("connection", (socket) => {
+        socket.on("message", (bytes) => {
+            const message = decodeDaemonToServiceMessage(bytes.toString());
+            if (message.kind === "runtime.heartbeat") {
+                socket.send(JSON.stringify({ kind: "runtime.heartbeat.ack", heartbeatId: message.heartbeatId }));
+            }
+        });
+        socket.send(JSON.stringify({ kind: "runtime.liveness.ready" }));
+    });
+    await listen(server);
+    return {
+        origin: new URL(`http://127.0.0.1:${port(server)}`),
+        close: async () => {
+            for (const socket of sockets.clients) {
+                socket.terminate();
+            }
+            await new Promise<void>((resolve_) => sockets.close(() => resolve_()));
+            server.closeAllConnections();
+            await new Promise<void>((resolve_) => server.close(() => resolve_()));
+        },
+    };
+}
 function controlSocketPath(stateDirectory: string): string {
     const installationHash = createHash("sha256").update(stateDirectory).digest("hex").slice(0, 32);
     return process.platform === "win32"
