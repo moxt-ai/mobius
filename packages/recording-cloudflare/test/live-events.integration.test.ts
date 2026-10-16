@@ -19,7 +19,6 @@ const worker = createRecordingWorker();
 const event = {
     eventId: "live-event-1",
     position: "0",
-    provenance: { kind: "original" },
     recordedAt: "2026-10-09T00:00:00.000Z",
     sessionGenerationId: "session-generation-live",
     sessionId: "live-session",

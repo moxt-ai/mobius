@@ -1,0 +1,1 @@
+ALTER TABLE `pairing_channels` DROP COLUMN `installable_agents_json`;

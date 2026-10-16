@@ -129,7 +129,6 @@ function liveEvent(
     return {
         eventId,
         ...event,
-        provenance: { kind: "original" },
         position: position.toString(),
         recordedAt: new Date().toISOString(),
         sessionGenerationId,

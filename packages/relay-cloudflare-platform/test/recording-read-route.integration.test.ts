@@ -115,7 +115,6 @@ async function recordThroughRelay(projectId: string, sessionId: string, textCont
                         {
                             eventId: `event-${sessionId}`,
                             position: "1",
-                            provenance: { kind: "original" },
                             recordedAt: "2026-09-18T00:00:00.000Z",
                             sessionGenerationId: "session-generation-1",
                             sessionId,
@@ -178,7 +177,6 @@ async function recordSessionEvents(
                     events: events.map((event) => ({
                         eventId: `event-${generationId}-${event.position}`,
                         position: event.position,
-                        provenance: { kind: "original" },
                         recordedAt: "2026-09-18T00:00:00.000Z",
                         sessionGenerationId: generationId,
                         sessionId,
