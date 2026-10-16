@@ -2,30 +2,26 @@ import { Worker } from "node:worker_threads";
 import type { SessionMessage } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { claudeWorkerEnvironment } from "./environment-session-list.js";
+import type { EnvironmentSessionRequest } from "./environment-session-worker.js";
+import { environmentSessionWorkerSource } from "./generated/environment-session-worker-source.js";
 
 const SESSION_MESSAGES_TIMEOUT_MILLISECONDS = 30_000;
-const sessionMessagesSchema = z.array(
+const workerResultSchema = z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("failed"), message: z.string() }),
     z.object({
-        message: z.unknown(),
-        parent_agent_id: z.string().nullable(),
-        parent_tool_use_id: z.string().nullable(),
-        session_id: z.string(),
-        type: z.enum(["user", "assistant", "system"]),
-        uuid: z.string(),
+        kind: z.literal("succeeded"),
+        messages: z.array(
+            z.object({
+                message: z.unknown(),
+                parent_agent_id: z.string().nullable(),
+                parent_tool_use_id: z.string().nullable(),
+                session_id: z.string(),
+                type: z.enum(["user", "assistant", "system"]),
+                uuid: z.string(),
+            }),
+        ),
     }),
-);
-const workerSource = `
-const { parentPort, workerData } = require("node:worker_threads");
-void import(workerData.sdkUrl)
-    .then(async ({ getSessionMessages }) => {
-        parentPort.postMessage(await getSessionMessages(workerData.sessionId));
-    })
-    .catch((error) => {
-        parentPort.postMessage({
-            error: error instanceof Error ? error.message : "Claude session history loading failed",
-        });
-    });
-`;
+]);
 
 export function getEnvironmentSessionMessages(
     environment: Readonly<NodeJS.ProcessEnv>,
@@ -34,10 +30,10 @@ export function getEnvironmentSessionMessages(
 ): Promise<readonly SessionMessage[]> {
     const operationSignal = AbortSignal.any([signal, AbortSignal.timeout(SESSION_MESSAGES_TIMEOUT_MILLISECONDS)]);
     operationSignal.throwIfAborted();
-    const worker = new Worker(workerSource, {
+    const worker = new Worker(environmentSessionWorkerSource, {
         env: claudeWorkerEnvironment(environment),
         eval: true,
-        workerData: { sdkUrl: import.meta.resolve("@anthropic-ai/claude-agent-sdk"), sessionId },
+        workerData: { kind: "messages", sessionId } satisfies EnvironmentSessionRequest,
     });
 
     return new Promise((resolve, reject) => {
@@ -63,16 +59,16 @@ export function getEnvironmentSessionMessages(
         });
         worker.once("message", (value: unknown) => {
             cleanup();
-            if (value !== null && typeof value === "object" && "error" in value && typeof value.error === "string") {
-                reject(new Error(value.error));
-                return;
-            }
-            const decoded = sessionMessagesSchema.safeParse(value);
-            if (!decoded.success) {
+            const result = workerResultSchema.safeParse(value);
+            if (!result.success) {
                 reject(new Error("Claude session history loading returned invalid message data"));
                 return;
             }
-            resolve(decoded.data);
+            if (result.data.kind === "failed") {
+                reject(new Error(result.data.message));
+                return;
+            }
+            resolve(result.data.messages);
         });
     });
 }

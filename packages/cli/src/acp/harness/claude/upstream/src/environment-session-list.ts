@@ -1,20 +1,8 @@
 import { Worker } from "node:worker_threads";
+import type { EnvironmentSessionRequest } from "./environment-session-worker.js";
+import { environmentSessionWorkerSource } from "./generated/environment-session-worker-source.js";
 
 const SESSION_LIST_TIMEOUT_MILLISECONDS = 30_000;
-const workerSource = `
-const { parentPort, workerData } = require("node:worker_threads");
-void import(workerData.sdkUrl)
-    .then(async ({ listSessions }) => {
-        const sessions = await listSessions(workerData.options);
-        parentPort.postMessage({ kind: "succeeded", sessions });
-    })
-    .catch((error) => {
-        parentPort.postMessage({
-            kind: "failed",
-            message: error instanceof Error ? error.message : "Claude session listing failed",
-        });
-    });
-`;
 
 export type EnvironmentSessionInfo = {
     readonly cwd?: string;
@@ -75,13 +63,10 @@ export function listEnvironmentSessions(
 ): Promise<readonly EnvironmentSessionInfo[]> {
     const operationSignal = AbortSignal.any([signal, AbortSignal.timeout(SESSION_LIST_TIMEOUT_MILLISECONDS)]);
     operationSignal.throwIfAborted();
-    const worker = new Worker(workerSource, {
+    const worker = new Worker(environmentSessionWorkerSource, {
         env: claudeWorkerEnvironment(environment),
         eval: true,
-        workerData: {
-            options: { ...(cwd === undefined ? {} : { dir: cwd }) },
-            sdkUrl: import.meta.resolve("@anthropic-ai/claude-agent-sdk"),
-        },
+        workerData: { cwd, kind: "list" } satisfies EnvironmentSessionRequest,
     });
 
     return new Promise((resolve, reject) => {

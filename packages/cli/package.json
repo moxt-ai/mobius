@@ -1,6 +1,6 @@
 {
     "name": "@moxt-ai/mobius",
-    "version": "0.0.241",
+    "version": "0.0.242",
     "description": "Mobius CLI for pairing and running local AI agent services.",
     "type": "module",
     "bin": {
@@ -51,16 +51,16 @@
         "directory": "packages/cli"
     },
     "scripts": {
-        "prebuild": "tsc --project src/acp/harness/claude/upstream/tsconfig.json && tsc --project src/acp/harness/pi/upstream/tsconfig.json",
+        "prebuild": "node scripts/generate-claude-session-worker.ts && tsc --project src/acp/harness/claude/upstream/tsconfig.json && tsc --project src/acp/harness/pi/upstream/tsconfig.json",
         "build": "tsc --project tsconfig.build.json && esbuild cli=src/entrypoint/cli.ts src/index.ts runtime=src/daemon/runtime.ts src/util/process/executable.ts src/filesystem/private-path.ts --bundle --platform=node --format=esm --sourcemap --outdir=dist --external:@agentclientprotocol/sdk --external:undici",
         "dev": "node --watch src/entrypoint/cli.ts",
-        "pretypecheck": "tsc --project src/acp/harness/claude/upstream/tsconfig.json && tsc --project src/acp/harness/pi/upstream/tsconfig.json",
+        "pretypecheck": "node scripts/generate-claude-session-worker.ts && tsc --project src/acp/harness/claude/upstream/tsconfig.json && tsc --project src/acp/harness/pi/upstream/tsconfig.json",
         "prepack": "pnpm build",
         "start": "node dist/cli.js",
         "typecheck": "tsc --project tsconfig.json && tsc --project tests/tsconfig.json",
-        "pretest:controlled": "tsc --project src/acp/harness/claude/upstream/tsconfig.json && tsc --project src/acp/harness/pi/upstream/tsconfig.json",
+        "pretest:controlled": "node scripts/generate-claude-session-worker.ts && tsc --project src/acp/harness/claude/upstream/tsconfig.json && tsc --project src/acp/harness/pi/upstream/tsconfig.json",
         "test:controlled": "vitest run tests/sessions tests/runtime --maxWorkers=4",
-        "pretest:agents": "tsc --project src/acp/harness/claude/upstream/tsconfig.json && tsc --project src/acp/harness/pi/upstream/tsconfig.json",
+        "pretest:agents": "node scripts/generate-claude-session-worker.ts && tsc --project src/acp/harness/claude/upstream/tsconfig.json && tsc --project src/acp/harness/pi/upstream/tsconfig.json",
         "test:agents": "vitest run tests/agents --maxWorkers=2"
     },
     "dependencies": {

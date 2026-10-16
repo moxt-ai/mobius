@@ -143,6 +143,17 @@ test("Given a managed real Claude Code session, When the user quits and starts M
     );
 });
 
+test("Given a real Claude Code session in a host that bundles Mobius into one CommonJS file, When the host restarts Mobius, Then history is restored and another turn completes", async () => {
+    await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-6", "BUNDLED_CLAUDE_REPLY");
+    await using agent = await ClaudeFixture.create(provider);
+    await withRealDaemon(
+        new ClaudeCodeAgentSpecification(),
+        agent.environment,
+        (peer) => journey(peer, "claude", "BUNDLED_CLAUDE_REPLY"),
+        "bundled",
+    );
+});
+
 test("Given a managed real Pi session, When the user quits and starts Mobius, Then history is restored and another turn completes", async () => {
     await using provider = await FakeOpenAiProvider.start("gpt-4.1", "MANAGED_PI_REPLY");
     await using agent = await PiFixture.create(provider);

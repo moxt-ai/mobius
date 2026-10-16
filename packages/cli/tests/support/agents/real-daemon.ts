@@ -1,5 +1,6 @@
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -18,6 +19,7 @@ import {
     RUNTIME_LIVENESS_READY_KIND,
 } from "@moxt-ai/mobius-protocol";
 import { listen, port } from "@moxt-ai/mobius-test/websocket";
+import { build } from "esbuild";
 import { type WebSocket, WebSocketServer } from "ws";
 import type { LocalAgentSpecification } from "../../../src/agent-catalog/agent-specification.ts";
 import { discoverLocalAgentInventory } from "../../../src/agent-catalog/discover-local-agents.ts";
@@ -37,12 +39,33 @@ export interface RealDaemonPeer {
     readonly nextMessage: () => Promise<string>;
 }
 
-/** Production daemon and discovery; the peer only sends and observes the public protocol. */
+/**
+ * Ships Mobius the way an embedding host does: its public Runtime API in one CommonJS file, with no
+ * node_modules beside it. Like tsup's `shims` option, the bundle supplies only `import.meta.url`;
+ * every other `import.meta` property is empty.
+ */
+async function bundleRuntimeHost(outfile: string): Promise<void> {
+    await build({
+        banner: { js: '"use strict";const importMetaUrl = require("node:url").pathToFileURL(__filename).href;' },
+        bundle: true,
+        define: { "import.meta.url": "importMetaUrl" },
+        entryPoints: [resolve(import.meta.dirname, "bundled-runtime-host.ts")],
+        format: "cjs",
+        logLevel: "error",
+        outfile,
+        platform: "node",
+    });
+}
+
+/**
+ * Production daemon and discovery; the peer only sends and observes the public protocol. A bundled
+ * launch runs the daemon inside a single-file CommonJS host built by `bundleRuntimeHost`.
+ */
 export async function withRealDaemon(
     specification: LocalAgentSpecification,
     environment: Readonly<Record<string, string>>,
     scenario: (peer: RealDaemonPeer) => Promise<void>,
-    launch: "embedded" | "managed" = "embedded",
+    launch: "bundled" | "embedded" | "managed" = "embedded",
 ): Promise<void> {
     const directory = await mkdtemp(join(tmpdir(), `mobius-real-${specification.id}-`));
     const workspace = join(directory, "workspace");
@@ -70,6 +93,18 @@ export async function withRealDaemon(
     const server = new WebSocketServer({ server: relay });
     let daemon: Promise<void> | undefined;
     let execution = new AbortController();
+    const hostEntry = join(directory, "mobius-host.cjs");
+    let host: ChildProcess | undefined;
+    const stopHost = async (): Promise<void> => {
+        const running = host;
+        host = undefined;
+        if (running === undefined || running.exitCode !== null || running.signalCode !== null) {
+            return;
+        }
+        const exited = once(running, "exit");
+        running.kill("SIGTERM");
+        await exited;
+    };
     const cliEnvironment = { ...process.env, ...environment, MOBIUS_STATE_DIRECTORY: directory };
     const cli = async (args: readonly string[], deadline = signal): Promise<void> => {
         const child = spawn(
@@ -165,9 +200,42 @@ export async function withRealDaemon(
                 signal,
             );
         }
+        if (launch === "bundled") {
+            await bundleRuntimeHost(hostEntry);
+        }
         const start = async (): Promise<void> => {
             if (launch === "managed") {
                 await cli(["start"]);
+            } else if (launch === "bundled") {
+                let output = "";
+                const started = spawn(process.execPath, [hostEntry], {
+                    env: {
+                        ...cliEnvironment,
+                        MOBIUS_CHANNEL_ID: "real-agent",
+                        MOBIUS_DEFAULT_WORKSPACE: workspace,
+                        MOBIUS_RELAY_TOKEN: "r".repeat(43),
+                        MOBIUS_RELAY_URL: relayUrl.href,
+                    },
+                    stdio: ["ignore", "pipe", "pipe"],
+                    windowsHide: true,
+                });
+                started.stdout.on("data", (chunk: Buffer) => {
+                    output += chunk.toString();
+                });
+                started.stderr.on("data", (chunk: Buffer) => {
+                    output += chunk.toString();
+                });
+                const fail = (error: Error): void => {
+                    if (host === started) {
+                        connected.reject(error);
+                        waiter?.reject(error);
+                    }
+                };
+                started.once("error", fail);
+                started.once("exit", (code, exitSignal) =>
+                    fail(new Error(`Bundled Mobius host exited with ${code ?? exitSignal}: ${output}`)),
+                );
+                host = started;
             } else {
                 execution = new AbortController();
                 daemon = runDaemon(config, AbortSignal.any([signal, execution.signal]));
@@ -198,6 +266,8 @@ export async function withRealDaemon(
             restart: async () => {
                 if (launch === "managed") {
                     await cli(["quit"]);
+                } else if (launch === "bundled") {
+                    await stopHost();
                 } else {
                     execution.abort();
                     await daemon;
@@ -243,6 +313,7 @@ export async function withRealDaemon(
         if (launch === "managed") {
             await cli(["quit"], AbortSignal.timeout(15_000));
         }
+        await stopHost();
         controller.abort();
         signal.removeEventListener("abort", stopWaiting);
         await daemon?.catch(() => {});

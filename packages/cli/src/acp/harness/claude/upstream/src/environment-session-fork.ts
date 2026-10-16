@@ -1,21 +1,9 @@
 import { Worker } from "node:worker_threads";
 import { claudeWorkerEnvironment } from "./environment-session-list.js";
+import type { EnvironmentSessionRequest } from "./environment-session-worker.js";
+import { environmentSessionWorkerSource } from "./generated/environment-session-worker-source.js";
 
 const SESSION_FORK_TIMEOUT_MILLISECONDS = 30_000;
-const workerSource = `
-const { parentPort, workerData } = require("node:worker_threads");
-void import(workerData.sdkUrl)
-    .then(async ({ forkSession }) => {
-        const forked = await forkSession(workerData.sessionId, { dir: workerData.cwd });
-        parentPort.postMessage({ kind: "succeeded", sessionId: forked.sessionId });
-    })
-    .catch((error) => {
-        parentPort.postMessage({
-            kind: "failed",
-            message: error instanceof Error ? error.message : "Claude session fork failed",
-        });
-    });
-`;
 
 type WorkerResult =
     | { readonly kind: "failed"; readonly message: string }
@@ -42,14 +30,10 @@ export function forkEnvironmentSession(
 ): Promise<string> {
     const operationSignal = AbortSignal.any([signal, AbortSignal.timeout(SESSION_FORK_TIMEOUT_MILLISECONDS)]);
     operationSignal.throwIfAborted();
-    const worker = new Worker(workerSource, {
+    const worker = new Worker(environmentSessionWorkerSource, {
         env: claudeWorkerEnvironment(environment),
         eval: true,
-        workerData: {
-            cwd,
-            sdkUrl: import.meta.resolve("@anthropic-ai/claude-agent-sdk"),
-            sessionId,
-        },
+        workerData: { cwd, kind: "fork", sessionId } satisfies EnvironmentSessionRequest,
     });
 
     return new Promise((resolve, reject) => {

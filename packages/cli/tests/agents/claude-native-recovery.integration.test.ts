@@ -14,7 +14,7 @@ import {
 import { expect, test } from "vitest";
 import { ClaudeCodeAgentSpecification } from "../../src/agent-catalog/agents/claude-code-agent.ts";
 import { ClaudeFixture } from "../support/agents/claude.ts";
-import { prepareNewRealSession, withRealDaemon } from "../support/agents/real-daemon.ts";
+import { prepareNewRealSession, type RealDaemonPeer, withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeAnthropicProvider } from "../support/llm/anthropic.ts";
 
 test("Given a real claude native Session, When the active prompt is cancelled with a follow-up queued, Then the queued prompt restores that Session and completes", async () => {
@@ -118,10 +118,10 @@ test("Given a real claude native Session, When the active prompt is cancelled wi
     }
 });
 
-test("Given a completed real Claude Session, When it is forked, Then its history is visible before the first child Turn completes", async () => {
+async function forkJourney(launch: "bundled" | "embedded"): Promise<void> {
     await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-6", "CLAUDE_FORK_REPLY");
     await using agent = await ClaudeFixture.create(provider);
-    await withRealDaemon(new ClaudeCodeAgentSpecification(), agent.environment, async (peer) => {
+    const scenario = async (peer: RealDaemonPeer): Promise<void> => {
         const sendPrompt = (sessionId: string, commandId: string): void =>
             peer.send(
                 encodeSessionPromptCommand({
@@ -275,5 +275,14 @@ test("Given a completed real Claude Session, When it is forked, Then its history
         const childCommandId = randomUUID();
         sendPrompt(childSessionId, childCommandId);
         expect(await finish(childSessionId, childCommandId)).toContain("CLAUDE_FORK_REPLY");
-    });
+    };
+    await withRealDaemon(new ClaudeCodeAgentSpecification(), agent.environment, scenario, launch);
+}
+
+test("Given a completed real Claude Session, When it is forked, Then its history is visible before the first child Turn completes", async () => {
+    await forkJourney("embedded");
+});
+
+test("Given a completed real Claude Session in a host that bundles Mobius into one CommonJS file, When it is listed and forked, Then its history is visible before the first child Turn completes", async () => {
+    await forkJourney("bundled");
 });
