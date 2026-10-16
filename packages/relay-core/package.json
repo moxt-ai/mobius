@@ -17,7 +17,7 @@
         "typecheck": "tsc --project tsconfig.json"
     },
     "devDependencies": {
-        "@cloudflare/workers-types": "^5.20260918.1"
+        "@cloudflare/workers-types": "5.20261007.1"
     },
     "dependencies": {
         "@moxt-ai/mobius-protocol": "workspace:*",
