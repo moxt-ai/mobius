@@ -3,9 +3,11 @@ import { setTimeout } from "node:timers/promises";
 import type { PromptResponse, SessionNotification } from "@agentclientprotocol/sdk";
 import { z } from "zod";
 import { AcpExecutionError } from "../../acp-error.ts";
-import type { CodexAppServerClient } from "./app-server-client.ts";
+import { type AcpEndpointTermination, acpEndpointTerminationError } from "../../in-process/acp-endpoint.ts";
+import type { CodexAppServerClient, CodexAppServerServerRequest } from "./app-server-client.ts";
 import { CODEX_HISTORY_TURN_PAGE_LIMIT, threadTurnsPageSchema } from "./app-server-protocol.ts";
 import { decodeThreadItem, reasoningText, toolCallUpdate } from "./items.ts";
+import type { CodexSessionAgent } from "./session-agent.ts";
 
 const REQUEST_TIMEOUT = 30_000;
 const POLL_INTERVAL = 500;
@@ -18,7 +20,7 @@ const queuePageSchema = z.object({
 });
 
 /** A locked thread remains owned by Codex. This connection only reads it and appends queued input. */
-export class CodexQueuedSession {
+export class CodexBorrowedAcpAgent implements CodexSessionAgent {
     readonly #client: CodexAppServerClient;
     readonly #threadId: string;
     readonly #emit: (update: SessionNotification["update"]) => Promise<void>;
@@ -274,15 +276,35 @@ export class CodexQueuedSession {
         } while (cursor !== null);
     };
 
+    readonly nativeTurnId = (): null => null;
+    readonly steer = async (
+        _params: unknown,
+        signal: AbortSignal,
+    ): Promise<{ readonly outcome: "promptRequired"; readonly reason: string }> => {
+        signal.throwIfAborted();
+        return { outcome: "promptRequired", reason: "noRunningTurn" };
+    };
+    // The reader connection cannot receive or control the owner's live turn.
+    readonly onNotification = async (_method: string, _params: unknown): Promise<void> => {};
+    readonly onServerRequest = async (request: CodexAppServerServerRequest): Promise<void> => {
+        this.#client.respondWithError(request.id, -32_601, "Borrowed sessions cannot handle owner requests");
+    };
+    readonly onTerminated = (termination: AcpEndpointTermination): void => {
+        const error = acpEndpointTerminationError(termination);
+        this.#lifecycle = { kind: "failed", error };
+        this.#pending?.completion.reject(error);
+        this.#closed.abort();
+    };
+
     // A remote Stop must never interrupt another client's owning turn.
-    readonly cancel = (): void => {
+    readonly cancel = async (): Promise<void> => {
         this.#pending?.completion.resolve({ stopReason: "cancelled" });
     };
 
     readonly close = async (): Promise<void> => {
         this.#lifecycle = { kind: "closed" };
         this.#closed.abort();
-        this.cancel();
+        await this.cancel();
         await this.#watch;
     };
 }
