@@ -101,7 +101,21 @@ export class SettingsManager {
     private async loadAllSettings(): Promise<void> {
         try {
             const resolved = await resolveSettings({ cwd: this.cwd });
-            this.effective = filterEscalatingDefaultMode(resolved);
+            // At the home directory, the SDK can load the user file again as
+            // project settings. Preserve its user trust without trusting a
+            // different project file (including a symlink to the user file).
+            const userPaths = new Set(
+                resolved.sources.flatMap((source) =>
+                    source.source === "user" && source.path !== undefined ? [path.resolve(source.path)] : [],
+                ),
+            );
+            const sources = resolved.sources.filter(
+                (source) =>
+                    source.source !== "project" ||
+                    source.path === undefined ||
+                    !userPaths.has(path.resolve(source.path)),
+            );
+            this.effective = filterEscalatingDefaultMode({ ...resolved, sources });
         } catch (error) {
             this.logger.error("Failed to resolve settings:", error);
             this.effective = {};
