@@ -18,7 +18,6 @@ export const pairingChannel = sqliteTable(
         machineName: text("machine_name").notNull().default(""),
         workspaceName: text("workspace_name").notNull().default(""),
         agentsJson: text("agents_json").notNull().default("[]"),
-        installableAgentsJson: text("installable_agents_json").notNull().default("[]"),
         creationIdempotencyKey: text("creation_idempotency_key"),
         createdByOwnerCredentialId: text("created_by_owner_credential_id"),
         runtimeSlot: integer("runtime_slot").notNull(),

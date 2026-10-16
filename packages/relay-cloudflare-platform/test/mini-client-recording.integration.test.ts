@@ -71,7 +71,6 @@ function turnMessage(sessionId: string): string {
             {
                 eventId: `${sessionId}-requested`,
                 position: "0",
-                provenance: { kind: "original" },
                 recordedAt: "2026-10-12T00:00:00.000Z",
                 sessionGenerationId: `${sessionId}-generation`,
                 sessionId,
@@ -86,7 +85,6 @@ function turnMessage(sessionId: string): string {
             {
                 eventId: `${sessionId}-reply`,
                 position: "1",
-                provenance: { kind: "original" },
                 recordedAt: "2026-10-12T00:00:01.000Z",
                 sessionGenerationId: `${sessionId}-generation`,
                 sessionId,
@@ -99,7 +97,6 @@ function turnMessage(sessionId: string): string {
             {
                 eventId: `${sessionId}-completed`,
                 position: "2",
-                provenance: { kind: "original" },
                 recordedAt: "2026-10-12T00:00:02.000Z",
                 sessionGenerationId: `${sessionId}-generation`,
                 sessionId,
@@ -290,7 +287,6 @@ describe.sequential("Mini-client Recording integration", () => {
                     {
                         eventId: `${sessionId}-chunk-${index}`,
                         position: String(index),
-                        provenance: { kind: "original" },
                         recordedAt: "2026-10-12T00:00:00.000Z",
                         sessionGenerationId: `${sessionId}-generation`,
                         sessionId,

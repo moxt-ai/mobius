@@ -19,7 +19,6 @@ function event(sessionId: string, eventId: string): SessionEventV2 {
             messageId: "message-1",
             sessionUpdate: "agent_message_chunk",
         },
-        provenance: { kind: "original" },
         recordedAt,
         sessionGenerationId: "session-generation-1",
         sessionId,

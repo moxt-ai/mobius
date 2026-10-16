@@ -372,7 +372,6 @@ describe("ACP conversation sessions", () => {
                 page.events.map(
                     ({
                         eventId: _eventId,
-                        provenance: _provenance,
                         recordedAt: _recordedAt,
                         sessionGenerationId: _generation,
                         sessionId: _sessionId,

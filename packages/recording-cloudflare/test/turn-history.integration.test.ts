@@ -33,7 +33,6 @@ function event(payload: unknown, type: "acp" | "lifecycle-metadata") {
         eventId: `event-${position}`,
         payload,
         position: String(position),
-        provenance: { kind: "original" },
         recordedAt: new Date(Date.parse("2026-10-15T00:00:00.000Z") + position * 1_000).toISOString(),
         sessionGenerationId: generation,
         sessionId,

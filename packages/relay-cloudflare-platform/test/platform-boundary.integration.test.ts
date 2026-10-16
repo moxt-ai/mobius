@@ -71,7 +71,6 @@ function liveEvent(sessionId: string, text: string): string {
             {
                 eventId: "event-1",
                 position: "1",
-                provenance: { kind: "original" },
                 recordedAt: "2026-09-18T00:00:00.000Z",
                 sessionGenerationId: "session-generation-1",
                 sessionId,
@@ -1182,7 +1181,6 @@ describe.sequential("Platform Session-only boundary", () => {
                     sessionUpdate: "agent_message_chunk" as const,
                 },
                 position: "1",
-                provenance: { kind: "original" as const },
                 recordedAt: "2026-09-18T00:00:00.000Z",
                 sessionGenerationId: "session-generation-1",
                 sessionId,
@@ -1191,7 +1189,6 @@ describe.sequential("Platform Session-only boundary", () => {
             const historicalEvent = {
                 eventId: rawEvent.eventId,
                 payload: rawEvent.payload,
-                provenance: rawEvent.provenance,
                 recordedAt: rawEvent.recordedAt,
                 sessionGenerationId: rawEvent.sessionGenerationId,
                 sessionId: rawEvent.sessionId,
@@ -1709,7 +1706,6 @@ describe.sequential("Platform Recording policy configuration", () => {
                             {
                                 eventId: `event-${sessionId}`,
                                 position: "1",
-                                provenance: { kind: "original" },
                                 recordedAt: "2026-09-18T00:00:00.000Z",
                                 sessionGenerationId: "session-generation-1",
                                 sessionId,
@@ -1988,7 +1984,6 @@ describe.sequential("Platform Turn submission", () => {
                         {
                             eventId: "long-first-started",
                             position: "1",
-                            provenance: { kind: "original" },
                             recordedAt: "2026-09-18T00:00:00.000Z",
                             sessionGenerationId: "session-generation-1",
                             sessionId,
@@ -2029,7 +2024,6 @@ describe.sequential("Platform Turn submission", () => {
                         {
                             eventId: "unrelated-turn-failed",
                             position: "2",
-                            provenance: { kind: "original" },
                             recordedAt: "2026-09-18T00:00:01.000Z",
                             sessionGenerationId: "session-generation-1",
                             sessionId,
@@ -2052,7 +2046,6 @@ describe.sequential("Platform Turn submission", () => {
                         {
                             eventId: "long-first-completed",
                             position: "3",
-                            provenance: { kind: "original" },
                             recordedAt: "2026-09-18T00:00:02.000Z",
                             sessionGenerationId: "session-generation-1",
                             sessionId,
