@@ -10,6 +10,7 @@ import {
     type SessionNotification,
 } from "@agentclientprotocol/sdk";
 import { z } from "zod";
+import { codexWriterLocked } from "../../../platform/codex-writer-lock.ts";
 import { captureProcessTree, type ProcessTreeIdentity, stopProcessTree } from "../../../util/process/executable.ts";
 import { AcpExecutionError } from "../../acp-error.ts";
 import {
@@ -224,6 +225,8 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
     #connection: AgentConnection | null = null;
     readonly #settings: CodexSettings;
     #nativeSessionId = "";
+    readonly #environment: Readonly<NodeJS.ProcessEnv>;
+    readonly #cwd: string;
     #execution: { readonly kind: "owned" } | { readonly kind: "queued"; readonly session: CodexQueuedSession } = {
         kind: "owned",
     };
@@ -238,6 +241,8 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
     #updateTail: Promise<void> = Promise.resolve();
 
     constructor(options: InProcessAcpEndpointOptions) {
+        this.#environment = options.environment;
+        this.#cwd = options.cwd;
         this.#appServer = new CodexAppServerClient({
             command: options.command,
             cwd: options.cwd,
@@ -405,31 +410,8 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
     };
 
     readonly #resume = async (threadId: string, cwd: string, signal: AbortSignal): Promise<void> => {
-        try {
-            const resumed = threadResumeResponseSchema.parse(
-                await this.#appServer.request(
-                    "thread/resume",
-                    { cwd, excludeTurns: true, threadId },
-                    AbortSignal.any([signal, AbortSignal.timeout(APPROVAL_TIMEOUT_MILLISECONDS)]),
-                ),
-            );
-            this.#nativeSessionId = resumed.thread.id;
-            this.#settings.selectRestoredThread(resumed);
-            await this.#settings.probeCollaborationMode(this.#nativeSessionId, signal);
-        } catch (error) {
-            signal.throwIfAborted();
-            // Current Codex reports writer conflicts as InvalidRequest, without a dedicated error
-            // tag. Require that code plus a readable persisted thread and its queue capability.
-            // Never classify localized error prose or turn unrelated failures into a new thread.
-            const failure = z
-                .object({
-                    code: z.literal("codex_app_server_request_failed"),
-                    cause: z.object({ code: z.literal(-32600) }),
-                })
-                .safeParse(error);
-            if (!failure.success) {
-                throw error;
-            }
+        // Select execution before resuming. A lock acquired after this probe is a resume failure.
+        if (await codexWriterLocked(threadId, this.#environment, this.#cwd, signal)) {
             const saved = z
                 .object({
                     thread: z.object({
@@ -455,7 +437,18 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 reasoningEffort: saved.thread.reasoningEffort,
             });
             this.#execution = { kind: "queued", session: queued };
+            return;
         }
+        const resumed = threadResumeResponseSchema.parse(
+            await this.#appServer.request(
+                "thread/resume",
+                { cwd, excludeTurns: true, threadId },
+                AbortSignal.any([signal, AbortSignal.timeout(APPROVAL_TIMEOUT_MILLISECONDS)]),
+            ),
+        );
+        this.#nativeSessionId = resumed.thread.id;
+        this.#settings.selectRestoredThread(resumed);
+        await this.#settings.probeCollaborationMode(this.#nativeSessionId, signal);
     };
 
     // ACP load requires chronological replay. Resume only restores execution;
