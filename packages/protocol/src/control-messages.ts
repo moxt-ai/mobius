@@ -506,22 +506,6 @@ export const displayContentSchema = z
 
 export type AgentDisplayContent = z.infer<typeof displayContentSchema>;
 
-const recordedDisplayContentSchema = z
-    .object({
-        artifactId: z.string().max(128).default(""),
-        data: z.string().max(4_000_000),
-        mimeType: z.string().max(255),
-        name: z.string().max(500),
-        newText: z.string().max(4_000_000),
-        oldText: z.string().max(4_000_000),
-        path: z.string().max(2_048),
-        terminalId: z.string().max(255),
-        text: z.string().max(4_000_000),
-        type: z.enum(["diff", "image", "resource", "resource_link", "terminal", "text", "video"]),
-        uri: z.string().max(4_096),
-    })
-    .readonly();
-
 export const promptImageSchema = z
     .object({
         data: z.string().min(1).max(4_000_000),
@@ -883,9 +867,6 @@ function decodeValue<T>(value: unknown, schema: z.ZodType<T>): T {
 
 export const decodeAgentDisplayContentValue = (value: unknown): AgentDisplayContent =>
     decodeValue(value, displayContentSchema);
-
-export const decodeRecordedAgentContentValue = (value: unknown): AgentDisplayContent =>
-    decodeValue(value, recordedDisplayContentSchema);
 
 export const decodePromptImagesValue = (value: unknown): readonly PromptImage[] =>
     decodeValue(value, z.array(promptImageSchema).max(8).readonly());
