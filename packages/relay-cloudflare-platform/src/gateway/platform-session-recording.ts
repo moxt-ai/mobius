@@ -1,8 +1,10 @@
 import {
     encodeSessionRecordingWrite,
+    encodeSessionStatusWebhookBody,
     isIdentifier,
     type SessionEventEnvelopeV2,
     type SessionEventV2,
+    type SessionStatusWebhookCommand,
 } from "@moxt-ai/mobius-protocol";
 import type {
     SessionRecording,
@@ -23,6 +25,7 @@ export type RecordingProvider =
 export class PlatformSessionRecording implements SessionRecording {
     readonly #policies: RecordingPolicyStorage;
     readonly #provider: RecordingProvider;
+    readonly #transport: typeof fetch;
     readonly #webhooks: AppSessionStatusWebhookStorage;
     readonly #webhookService: AppSessionStatusWebhookService;
 
@@ -31,12 +34,14 @@ export class PlatformSessionRecording implements SessionRecording {
         provider: RecordingProvider,
         webhooks: AppSessionStatusWebhookStorage,
         webhookService: AppSessionStatusWebhookService,
+        transport: typeof fetch = globalThis.fetch.bind(globalThis),
     ) {
         if (provider.kind === "available" && !isIdentifier(provider.providerId)) {
             throw new Error("The Recording provider identifier is invalid");
         }
         this.#policies = policies;
         this.#provider = provider;
+        this.#transport = transport;
         this.#webhooks = webhooks;
         this.#webhookService = webhookService;
     }
@@ -87,15 +92,20 @@ export class PlatformSessionRecording implements SessionRecording {
         envelope: SessionEventEnvelopeV2,
         signal: AbortSignal,
     ): Promise<void> {
-        const status = terminalStatus(envelope.events);
-        const webhook = await this.#webhooks.read(target.projectId);
-        if (status === null || webhook === null || !webhook.enabled || signal.aborted) {
+        const commands = terminatedCommands(envelope.events);
+        if (commands.length === 0) {
             return;
         }
+        const webhook = await this.#webhooks.read(target.projectId);
+        if (webhook === null || !webhook.enabled || signal.aborted) {
+            return;
+        }
+        const status = terminalStatus(envelope.events) ?? "idle";
         const secret = await this.#webhookService.decryptSecret(webhook);
         const timestamp = Math.floor(Date.now() / 1_000).toString();
-        const body = JSON.stringify({
+        const body = encodeSessionStatusWebhookBody({
             appId: webhook.appId,
+            commands,
             projectId: target.projectId,
             runtimeId: target.runtimeId,
             sessionId: target.sessionId,
@@ -103,7 +113,7 @@ export class PlatformSessionRecording implements SessionRecording {
         });
         try {
             const signature = `v1.${await hmacSha256Hex(secret, `${timestamp}.${body}`)}`;
-            const response = await fetch(webhook.endpoint, {
+            const response = await this.#transport(webhook.endpoint, {
                 body,
                 headers: {
                     "content-type": "application/json",
@@ -124,13 +134,17 @@ export class PlatformSessionRecording implements SessionRecording {
         }
     }
 }
-function terminalStatus(events: readonly SessionEventV2[]): "idle" | "failed" | null {
-    let status: "idle" | "failed" | null = null;
+function terminalStatus(events: readonly SessionEventV2[]): "running" | "idle" | "failed" | null {
+    let status: "running" | "idle" | "failed" | null = null;
     for (const event of events) {
         if (event.type !== "lifecycle-metadata") {
             continue;
         }
         switch (event.payload.kind) {
+            case "prompt.requested":
+            case "prompt.started":
+                status = "running";
+                break;
             case "prompt.completed":
                 status = "idle";
                 break;
@@ -141,6 +155,44 @@ function terminalStatus(events: readonly SessionEventV2[]): "idle" | "failed" | 
         }
     }
     return status;
+}
+
+/**
+ * The commands this delivery watched finish, newest terminal outcome per command. The delivery only
+ * observes the events it carries, so a command that ended earlier is absent here and must not be
+ * inferred from these results.
+ */
+function terminatedCommands(events: readonly SessionEventV2[]): SessionStatusWebhookCommand[] {
+    const byCommand = new Map<string, SessionStatusWebhookCommand>();
+    for (const event of events) {
+        if (event.type !== "lifecycle-metadata") {
+            continue;
+        }
+        const payload = event.payload;
+        if (payload.kind === "prompt.completed") {
+            const cancelled = payload.stopReason === "cancelled" || payload.stopReason === "canceled";
+            byCommand.set(
+                payload.commandId,
+                cancelled
+                    ? { cancelledAt: event.recordedAt, commandId: payload.commandId, outcome: "cancelled" }
+                    : {
+                          commandId: payload.commandId,
+                          completedAt: event.recordedAt,
+                          outcome: "succeeded",
+                          stopReason: payload.stopReason,
+                      },
+            );
+        } else if (payload.kind === "prompt.failed" || payload.kind === "prompt.failed-before-start") {
+            byCommand.set(payload.commandId, {
+                code: payload.code,
+                commandId: payload.commandId,
+                failedAt: event.recordedAt,
+                message: payload.message,
+                outcome: "failed",
+            });
+        }
+    }
+    return [...byCommand.values()];
 }
 
 async function hmacSha256Hex(secret: string, value: string): Promise<string> {

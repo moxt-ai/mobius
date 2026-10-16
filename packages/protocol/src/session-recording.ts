@@ -115,6 +115,64 @@ const attemptTiming = {
     startedAt: isoTimestamp.optional(),
 };
 
+// Terminal prompt outcomes, shared so a Turn read model and a status notification cannot disagree
+// on what a finished prompt looks like.
+const promptSucceededOutcome = { completedAt: isoTimestamp, stopReason: shortText };
+const promptCancelledOutcome = { cancelledAt: isoTimestamp };
+const promptFailedOutcome = {
+    code: identifierStringSchema,
+    failedAt: isoTimestamp,
+    message: z.string().min(1).max(500),
+};
+
+/**
+ * The terminal outcome of one command, keyed by the `commandId` the Recording already uses for the
+ * Turn. A Session status notification reports these per command because the delivery that carries it
+ * only observes the commands that ended in it; a session-wide "nothing is running" claim cannot be
+ * derived from one delivery.
+ */
+export const sessionStatusWebhookCommandSchema = z.discriminatedUnion("outcome", [
+    z
+        .object({
+            ...promptSucceededOutcome,
+            commandId: identifierStringSchema,
+            outcome: z.literal("succeeded"),
+        })
+        .readonly(),
+    z
+        .object({
+            ...promptCancelledOutcome,
+            commandId: identifierStringSchema,
+            outcome: z.literal("cancelled"),
+        })
+        .readonly(),
+    z
+        .object({
+            ...promptFailedOutcome,
+            commandId: identifierStringSchema,
+            outcome: z.literal("failed"),
+        })
+        .readonly(),
+]);
+export type SessionStatusWebhookCommand = z.infer<typeof sessionStatusWebhookCommandSchema>;
+
+/**
+ * One App Session status notification. `commands` names exactly the commands this delivery observed
+ * ending, so a consumer resolves those Turns and no others. `status` is the trailing state of the
+ * same delivery and is retained for consumers that have not adopted `commands`.
+ */
+export const sessionStatusWebhookBodySchema = z
+    .object({
+        appId: identifierStringSchema,
+        commands: z.array(sessionStatusWebhookCommandSchema).min(1).readonly(),
+        projectId: identifierStringSchema,
+        runtimeId: identifierStringSchema,
+        sessionId: identifierStringSchema,
+        status: sessionRecordingStatusSchema,
+    })
+    .readonly();
+export type SessionStatusWebhookBody = z.infer<typeof sessionStatusWebhookBodySchema>;
+
 /** Where a Turn's prompt is in its lifecycle, as projected from Recording lifecycle events. */
 export const sessionRecordingTurnAttemptSchema = z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("none") }).readonly(),
@@ -126,19 +184,9 @@ export const sessionRecordingTurnAttemptSchema = z.discriminatedUnion("kind", [
             kind: z.literal("waiting_input"),
         })
         .readonly(),
-    z
-        .object({ ...attemptTiming, completedAt: isoTimestamp, kind: z.literal("succeeded"), stopReason: shortText })
-        .readonly(),
-    z.object({ ...attemptTiming, cancelledAt: isoTimestamp, kind: z.literal("cancelled") }).readonly(),
-    z
-        .object({
-            ...attemptTiming,
-            code: identifierStringSchema,
-            failedAt: isoTimestamp,
-            kind: z.literal("failed"),
-            message: z.string().min(1).max(500),
-        })
-        .readonly(),
+    z.object({ ...attemptTiming, ...promptSucceededOutcome, kind: z.literal("succeeded") }).readonly(),
+    z.object({ ...attemptTiming, ...promptCancelledOutcome, kind: z.literal("cancelled") }).readonly(),
+    z.object({ ...attemptTiming, ...promptFailedOutcome, kind: z.literal("failed") }).readonly(),
     // A Session generation change restarted the local Agent process before this attempt ended.
     z
         .object({
@@ -323,6 +371,12 @@ export const decodeSessionRecordingWrite = (encoded: string): SessionRecordingWr
 
 export const encodeSessionRecordingWrite = (value: SessionRecordingWrite): string =>
     JSON.stringify(sessionRecordingWriteSchema.parse(value));
+
+export const decodeSessionStatusWebhookBody = (encoded: string): SessionStatusWebhookBody =>
+    decode(encoded, sessionStatusWebhookBodySchema);
+
+export const encodeSessionStatusWebhookBody = (value: SessionStatusWebhookBody): string =>
+    JSON.stringify(sessionStatusWebhookBodySchema.parse(value));
 
 export const decodeSessionRecordingHistory = (encoded: string): SessionRecordingHistory =>
     decode(encoded, sessionRecordingHistorySchema);
