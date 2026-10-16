@@ -26,6 +26,7 @@ import {
     RuntimeRelay,
     type SessionRecording,
 } from "@moxt-ai/mobius-relay-core";
+import { MobiusClient, StaticMobiusCredentialProvider } from "@moxt-ai/mobius-sdk/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDurableObjectDependencies } from "../../relay-core/src/di/create-durable-object-dependencies.ts";
 import { createTestMobiusPlatformApp } from "../../test-support/src/app.ts";
@@ -1612,6 +1613,222 @@ describe.sequential("Platform Session-only boundary", () => {
                 200,
             ),
         ).toMatchObject({ agents: [], installableAgents: [], runtimeId });
+    });
+});
+
+describe.sequential("Platform Runtime Agent catalog compatibility", () => {
+    /** Capabilities a Mobius CLI released before renameSession reports, in the exact key set released SDKs decode. */
+    const releasedCapabilities = {
+        additionalDirectories: true,
+        audioPrompt: false,
+        closeSession: true,
+        deleteSession: true,
+        embeddedContextPrompt: true,
+        imagePrompt: true,
+        listSessions: true,
+        loadSession: true,
+        promptQueueing: false,
+        resumeSession: true,
+        steering: true,
+        unstableForkSession: false,
+    };
+    const codexAgent = {
+        agentPath: "/usr/local/bin/codex",
+        agentSettingsDiscovery: true,
+        agentVersion: "codex 1.0.0",
+        id: "codex",
+        label: "Codex",
+        sessionTurnConfiguration: true,
+    };
+    const releasedAgents = [{ ...codexAgent, capabilities: releasedCapabilities }];
+    const currentAgents = [{ ...codexAgent, capabilities: { ...releasedCapabilities, renameSession: true } }];
+    /** Every Project read must publish exactly the released key set: SDKs already in use reject anything else. */
+    const publishedToReleasedSdks = {
+        agents: [releasedCapabilities],
+        list: [[releasedCapabilities]],
+        pairing: [releasedCapabilities],
+    };
+
+    /** Pairs a Runtime through the production boundary as a daemon publishing the given Agent catalog. */
+    async function pairRuntime(agents: readonly unknown[], name: string) {
+        const worker = createTestMobiusPlatformApp(
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
+            createPlatformGateways,
+        );
+        const environment = bindings();
+        const tenants = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/platform/tenants`, {
+                    headers: developerHeaders(),
+                }),
+                environment,
+            ),
+            200,
+        );
+        const tenantValues = tenants["tenants"];
+        if (!Array.isArray(tenantValues) || tenantValues.length === 0) {
+            throw new Error("Expected a Platform tenant");
+        }
+        const app = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps`, {
+                    body: JSON.stringify({
+                        displayName: `${name} App`,
+                        tenantId: text(record(tenantValues[0]), "tenantId"),
+                    }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const appCredential = text(record(app["defaultCredential"]), "credential");
+        const projectId = text(
+            await responseJson(
+                await worker.fetch(
+                    new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${text(app, "appId")}/projects`, {
+                        body: JSON.stringify({
+                            displayName: `${name} Project`,
+                            idempotencyKey: `${name}-project`,
+                            locationHint: "apac",
+                        }),
+                        headers: developerHeaders(),
+                        method: "POST",
+                    }),
+                    environment,
+                ),
+                201,
+            ),
+            "projectId",
+        );
+        const pairing = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtime-pairings`, {
+                    body: JSON.stringify({ idempotencyKey: `${name}-runtime` }),
+                    headers: credentialHeaders(appCredential),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const pairingId = text(pairing, "pairingId");
+        const claimed = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtime-pairings/${pairingId}/redeem`, {
+                    body: JSON.stringify({
+                        agents,
+                        installableAgents: [],
+                        machineName: `${name} Runtime`,
+                        pairingCode: text(pairing, "pairingCode"),
+                        workspaceName: `${name}-workspace`,
+                    }),
+                    headers: { "content-type": "application/json" },
+                    method: "POST",
+                }),
+                environment,
+            ),
+            200,
+        );
+        return {
+            appCredential,
+            channelId: text(claimed, "channelId"),
+            environment,
+            pairingId,
+            projectId,
+            runtimeCredential: text(claimed, "runtimeCredential"),
+            runtimeId: text(claimed, "runtimeId"),
+            worker,
+        };
+    }
+
+    function agentCapabilities(descriptor: Readonly<Record<string, unknown>>): readonly unknown[] {
+        const agents = descriptor["agents"];
+        if (!Array.isArray(agents)) {
+            throw new Error("Expected an Agent directory");
+        }
+        return agents.map((agent) => record(agent)["capabilities"]);
+    }
+
+    /** Reads the Agent capabilities each Project-credential read publishes for the Runtime. */
+    async function publishedCapabilities(runtime: Awaited<ReturnType<typeof pairRuntime>>) {
+        const read = async (path: string) =>
+            await responseJson(
+                await runtime.worker.fetch(
+                    new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${runtime.projectId}${path}`, {
+                        headers: credentialHeaders(runtime.appCredential),
+                    }),
+                    runtime.environment,
+                ),
+                200,
+            );
+        const runtimes = (await read("/runtimes"))["runtimes"];
+        if (!Array.isArray(runtimes)) {
+            throw new Error("Expected a Runtime list");
+        }
+        return {
+            agents: agentCapabilities(await read(`/runtimes/${runtime.runtimeId}/agents`)),
+            list: runtimes.map((listed) => agentCapabilities(record(listed))),
+            pairing: agentCapabilities(await read(`/runtime-pairings/${runtime.pairingId}`)),
+        };
+    }
+
+    it("Given a Runtime catalog stored before renameSession existed, When the Project reads the Runtime over HTTP and through MobiusClient, Then every read succeeds with the capabilities released SDKs decode", async () => {
+        const runtime = await pairRuntime(currentAgents, "stored-released-catalog");
+        // Catalogs persisted before the Platform knew renameSession keep this shape until their daemon republishes.
+        await runInDurableObject(env.PROJECT_RELAY.getByName(runtime.projectId), async (_instance, state) => {
+            state.storage.sql.exec(
+                "UPDATE pairing_channels SET agents_json = ? WHERE runtime_id = ?",
+                JSON.stringify(releasedAgents),
+                runtime.runtimeId,
+            );
+            expect(
+                state.storage.sql
+                    .exec("SELECT agents_json FROM pairing_channels WHERE runtime_id = ?", runtime.runtimeId)
+                    .toArray(),
+            ).toEqual([{ agents_json: JSON.stringify(releasedAgents) }]);
+        });
+
+        expect(await publishedCapabilities(runtime)).toEqual(publishedToReleasedSdks);
+        const client = new MobiusClient({
+            credentialProvider: new StaticMobiusCredentialProvider(runtime.appCredential),
+            endpoint: relayOrigin,
+            projectId: runtime.projectId,
+            transport: {
+                fetch: async (request) =>
+                    await runtime.worker.request(request, undefined, runtime.environment, undefined),
+            },
+        });
+        const signal = new AbortController().signal;
+        const decodedCapabilities = { ...releasedCapabilities, renameSession: false };
+        expect(
+            (await client.runtimes.list(signal)).map(({ agents }) => agents.map(({ capabilities }) => capabilities)),
+        ).toEqual([[decodedCapabilities]]);
+        expect(
+            (await client.runtimes.getAgents(runtime.runtimeId, signal)).map(({ capabilities }) => capabilities),
+        ).toEqual([decodedCapabilities]);
+    });
+
+    it("Given Mobius CLI releases from before and after renameSession, When each pairs or republishes its Agent catalog, Then the Platform accepts it and keeps publishing the capabilities released SDKs decode", async () => {
+        const runtime = await pairRuntime(releasedAgents, "republished-catalog");
+        expect(await publishedCapabilities(runtime)).toEqual(publishedToReleasedSdks);
+
+        for (const agents of [currentAgents, releasedAgents]) {
+            const catalogUpdate = await runtime.worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/channels/${runtime.channelId}/catalog`, {
+                    body: JSON.stringify({ agents, installableAgents: [] }),
+                    headers: {
+                        authorization: `Bearer ${runtime.runtimeCredential}`,
+                        "content-type": "application/json",
+                    },
+                    method: "PUT",
+                }),
+                runtime.environment,
+            );
+            expect(catalogUpdate.status).toBe(204);
+            expect(await publishedCapabilities(runtime)).toEqual(publishedToReleasedSdks);
+        }
     });
 });
 

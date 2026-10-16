@@ -29,6 +29,25 @@ const KNOWN_SESSION_CAPABILITY_FIELDS: readonly (keyof SessionCapabilities)[] = 
     "steering",
     "unstableForkSession",
 ];
+// The capabilities Project and channel reads publish to Mobius SDK clients. Released
+// SDKs decode an exact key set, so a capability this Relay understands but no released
+// SDK decodes yet (renameSession) stays internal until clients upgrade; publishing it
+// would make every read fail for a client pinned to an older SDK. Add a capability here
+// only once the SDK releases in use decode it.
+const PUBLISHED_SESSION_CAPABILITY_FIELDS = [
+    "additionalDirectories",
+    "audioPrompt",
+    "closeSession",
+    "deleteSession",
+    "embeddedContextPrompt",
+    "imagePrompt",
+    "listSessions",
+    "loadSession",
+    "promptQueueing",
+    "resumeSession",
+    "steering",
+    "unstableForkSession",
+] as const satisfies readonly (keyof SessionCapabilities)[];
 
 export interface AgentDescriptor {
     readonly agentPath: string;
@@ -38,6 +57,16 @@ export interface AgentDescriptor {
     readonly id: string;
     readonly label: string;
     readonly sessionTurnConfiguration?: boolean;
+}
+
+export type PublishedSessionCapabilities = Pick<
+    SessionCapabilities,
+    (typeof PUBLISHED_SESSION_CAPABILITY_FIELDS)[number]
+>;
+
+/** An Agent as Project and channel reads publish it to Mobius SDK clients. */
+export interface PublishedAgentDescriptor extends Omit<AgentDescriptor, "capabilities"> {
+    readonly capabilities: PublishedSessionCapabilities;
 }
 
 export class CreatedRuntimePairing {
@@ -123,7 +152,7 @@ export class ChannelHostCredential extends VerifiedChannelAccess {
 }
 
 export class ChannelDescriptor {
-    readonly agents: readonly AgentDescriptor[];
+    readonly agents: readonly PublishedAgentDescriptor[];
     readonly channelId: string;
     readonly installableAgents = EMPTY_INSTALLABLE_AGENTS;
     readonly machineName: string;
@@ -139,7 +168,7 @@ export class ChannelDescriptor {
         projectId: string,
         runtimeId: string,
     ) {
-        this.agents = agents;
+        this.agents = publishedAgents(agents);
         this.channelId = channelId;
         this.machineName = machineName;
         this.projectId = projectId;
@@ -188,7 +217,7 @@ export class ExpiredPairingStatus extends PairingStatus {
 }
 
 export class PairedPairingStatus extends PairingStatus {
-    readonly agents: readonly AgentDescriptor[];
+    readonly agents: readonly PublishedAgentDescriptor[];
     readonly channelId: string;
     readonly installableAgents = EMPTY_INSTALLABLE_AGENTS;
     readonly machineName: string;
@@ -206,7 +235,7 @@ export class PairedPairingStatus extends PairingStatus {
         runtimeId: string,
     ) {
         super();
-        this.agents = agents;
+        this.agents = publishedAgents(agents);
         this.channelId = channelId;
         this.machineName = machineName;
         this.projectId = projectId;
@@ -431,6 +460,32 @@ function validateAgentCapabilities(value: unknown): SessionCapabilities {
         capabilities[field] = advertised === true;
     }
     return Object.freeze(capabilities);
+}
+
+// Projects an Agent's capabilities to the set released SDK clients decode, dropping
+// any capability this Relay understands but no released SDK decodes yet (see
+// PUBLISHED_SESSION_CAPABILITY_FIELDS). The value stays a valid SessionCapabilities
+// subset for internal callers that read the published descriptor.
+function publishedCapabilities(capabilities: SessionCapabilities): PublishedSessionCapabilities {
+    const published: Record<(typeof PUBLISHED_SESSION_CAPABILITY_FIELDS)[number], boolean> = {
+        additionalDirectories: capabilities.additionalDirectories,
+        audioPrompt: capabilities.audioPrompt,
+        closeSession: capabilities.closeSession,
+        deleteSession: capabilities.deleteSession,
+        embeddedContextPrompt: capabilities.embeddedContextPrompt,
+        imagePrompt: capabilities.imagePrompt,
+        listSessions: capabilities.listSessions,
+        loadSession: capabilities.loadSession,
+        promptQueueing: capabilities.promptQueueing,
+        resumeSession: capabilities.resumeSession,
+        steering: capabilities.steering,
+        unstableForkSession: capabilities.unstableForkSession,
+    };
+    return Object.freeze(published);
+}
+
+function publishedAgents(agents: readonly AgentDescriptor[]): readonly PublishedAgentDescriptor[] {
+    return agents.map((agent) => ({ ...agent, capabilities: publishedCapabilities(agent.capabilities) }));
 }
 
 export function validateAgents(value: unknown): readonly AgentDescriptor[] {
