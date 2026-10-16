@@ -7,7 +7,6 @@ import { RuntimeOperations, waitForSharedOperation } from "./runtime-operations.
 export { createWritableAcpStream } from "./agent-connection.ts";
 
 import type {
-    NativeSessionHistory,
     SessionConfigOption,
     SessionEventPayloadV2,
     SessionStatus,
@@ -784,35 +783,6 @@ export class AgentRuntimeManager {
             );
         });
 
-    readonly previewNativeSession = async (
-        options: AcpPrepareOptions,
-        nativeSessionId: string,
-    ): Promise<NativeSessionHistory> =>
-        this.#operations.run(options, async (options) => {
-            const key = `${options.agent.id}:${nativeSessionId}`;
-            const linked = this.#store.findNative(options.agent.id, nativeSessionId);
-            if (
-                this.#nativeOperations.has(key) ||
-                linked.some(
-                    (entry) =>
-                        this.#executions.command(entry.sessionId) !== undefined ||
-                        this.#executionProcesses.pending(entry.sessionId) !== undefined,
-                )
-            ) {
-                throw new AcpExecutionError(
-                    "Wait for the native session's running operation to finish",
-                    {},
-                    "session_busy",
-                );
-            }
-            this.#nativeOperations.add(key);
-            try {
-                return await this.#queryProcesses.preview(options, nativeSessionId);
-            } finally {
-                this.#nativeOperations.delete(key);
-            }
-        });
-
     readonly previewNativeSessionEventsV2 = async (
         options: AcpPrepareOptions,
         nativeSessionId: string,
@@ -851,19 +821,6 @@ export class AgentRuntimeManager {
             } finally {
                 this.#nativeOperations.delete(key);
             }
-        });
-
-    readonly loadSessionHistory = async (options: AcpPrepareOptions): Promise<NativeSessionHistory> =>
-        this.#operations.run(options, async (options) => {
-            return await this.#executionProcesses.use(options.sessionId, async () => {
-                const runtime = await this.ensureSession(options);
-                const stored = this.#store.read(options.sessionId);
-                const historyAccess = this.#nativeHistoryReader.access(options);
-                if (stored instanceof FoundAcpStoredSession && historyAccess.kind === "direct") {
-                    return await historyAccess.read(stored.session.nativeSessionId, runtime.nativeHistoryTurn);
-                }
-                return await runtime.loadHistory(options.signal);
-            });
         });
 
     readonly loadSessionEventsV2 = async (

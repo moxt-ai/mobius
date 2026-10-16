@@ -1,9 +1,6 @@
 import { spawn } from "node:child_process";
 import {
     type AgentDisplayContent,
-    type NativeHistoryMessage,
-    type NativeMessageActivity,
-    type NativeSessionHistory,
     SESSION_HISTORY_CHARACTER_LIMIT,
     SESSION_HISTORY_MESSAGE_LIMIT,
     SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT,
@@ -18,7 +15,12 @@ import {
     revalidateExecutable,
     stopProcessTree,
 } from "../util/process/executable.ts";
-import { embedLocalHistoryImages } from "./history-images.ts";
+import {
+    embedLocalHistoryImages,
+    type NativeHistoryActivity,
+    type NativeHistoryEntry,
+    type NativeHistoryTimelineMessage,
+} from "./history-images.ts";
 
 const responseSchema = z.union([
     z.object({
@@ -117,14 +119,13 @@ const historyItemSchema = z.discriminatedUnion("type", [
 ]);
 
 interface ReadCodexHistoryOptions {
-    readonly detail: "messages" | "rich";
     readonly nativeTurn?: () => { readonly commandId: string; readonly nativeTurnId: string } | null;
 }
 
 interface CodexHistorySnapshot {
     readonly nativeSessionId: string;
     readonly cwd: string;
-    readonly history: NativeSessionHistory;
+    readonly history: NativeHistoryEntry;
 }
 
 class CodexHistoryResponseError extends Error {
@@ -145,8 +146,8 @@ function activity(
     activityId: string,
     activityType: string,
     sequence: number,
-    fields: Pick<NativeMessageActivity, "input" | "locations" | "name" | "output" | "status" | "title" | "toolKind">,
-): NativeMessageActivity {
+    fields: Pick<NativeHistoryActivity, "input" | "locations" | "name" | "output" | "status" | "title" | "toolKind">,
+): NativeHistoryActivity {
     return {
         activityId: bounded(activityId, 128) || `history-${sequence.toString()}`,
         activityType,
@@ -208,7 +209,7 @@ function diffDisplayContent(path: string, newText: string): AgentDisplayContent 
     };
 }
 
-function messageSize(message: NativeHistoryMessage): number {
+function messageSize(message: NativeHistoryTimelineMessage): number {
     return (
         message.text.length +
         (message.role === "assistant"
@@ -219,8 +220,8 @@ function messageSize(message: NativeHistoryMessage): number {
 
 const SESSION_HISTORY_MESSAGE_CHARACTER_LIMIT = Math.floor(SESSION_HISTORY_CHARACTER_LIMIT / 2);
 
-function fitActivity(activity: NativeMessageActivity, maximumCharacters: number): NativeMessageActivity {
-    const truncate = (limit: number): NativeMessageActivity => ({
+function fitActivity(activity: NativeHistoryActivity, maximumCharacters: number): NativeHistoryActivity {
+    const truncate = (limit: number): NativeHistoryActivity => ({
         ...activity,
         input: bounded(activity.input, limit),
         locations: activity.locations.map((location) => bounded(location, Math.max(1, limit))),
@@ -246,9 +247,9 @@ function fitActivity(activity: NativeMessageActivity, maximumCharacters: number)
 }
 
 function fitActivities(
-    activities: readonly NativeMessageActivity[],
+    activities: readonly NativeHistoryActivity[],
     maximumCharacters: number,
-): readonly NativeMessageActivity[] {
+): readonly NativeHistoryActivity[] {
     if (activities.length === 0) {
         return activities;
     }
@@ -258,10 +259,10 @@ function fitActivities(
 }
 
 function fitHistoryMessage(
-    message: NativeHistoryMessage,
+    message: NativeHistoryTimelineMessage,
     maximumCharacters = SESSION_HISTORY_MESSAGE_CHARACTER_LIMIT,
 ): {
-    readonly message: NativeHistoryMessage;
+    readonly message: NativeHistoryTimelineMessage;
     readonly truncated: boolean;
 } {
     const text = message.text.slice(-maximumCharacters);
@@ -274,7 +275,7 @@ function fitHistoryMessage(
 
     let activities = message.activities;
     const content = message.content;
-    let fitted: NativeHistoryMessage = { ...message, activities, content, text };
+    let fitted: NativeHistoryTimelineMessage = { ...message, activities, content, text };
     if (messageSize(fitted) > maximumCharacters && activities.length > 0) {
         const maximumActivityCharacters = maximumCharacters - text.length - JSON.stringify(content).length;
         activities = fitActivities(activities, maximumActivityCharacters);
@@ -298,7 +299,7 @@ function fitHistoryMessage(
 
 function turnOutcome(
     status: z.infer<typeof turnsSchema>["data"][number]["status"],
-): Extract<NativeHistoryMessage, { readonly role: "assistant" }>["outcome"] {
+): Extract<NativeHistoryTimelineMessage, { readonly role: "assistant" }>["outcome"] {
     switch (status) {
         case "completed":
             return "succeeded";
@@ -324,7 +325,7 @@ function decodeHistory(
     const nativeTurn = options.nativeTurn?.();
     const coveredCommandIds =
         nativeTurn != null && page.data[0]?.id === nativeTurn.nativeTurnId ? [nativeTurn.commandId] : [];
-    const messages: NativeHistoryMessage[] = [];
+    const messages: NativeHistoryTimelineMessage[] = [];
     let characters = 0;
     let truncated = page.nextCursor != null;
     for (const turn of page.data.toReversed()) {
@@ -335,7 +336,7 @@ function decodeHistory(
         );
         let sequence = 0;
         let assistantMessageIndex: number | null = null;
-        const append = (message: NativeHistoryMessage): void => {
+        const append = (message: NativeHistoryTimelineMessage): void => {
             const fitted = fitHistoryMessage(message, turnMessageCharacterLimit);
             if (
                 fitted.message.text.length === 0 &&
@@ -377,7 +378,7 @@ function decodeHistory(
                 });
             } else if (historyItem.type === "agentMessage") {
                 if (historyItem.phase === "commentary") {
-                    if (options.detail === "rich" && historyItem.text.length > 0) {
+                    if (historyItem.text.length > 0) {
                         append({
                             activities: [
                                 activity(historyItem.id ?? `reasoning-${sequence.toString()}`, "reasoning", sequence, {
@@ -399,7 +400,7 @@ function decodeHistory(
                     continue;
                 }
                 append({ activities: [], content: [], role: "assistant", text: historyItem.text });
-            } else if (historyItem.type === "reasoning" && options.detail === "rich") {
+            } else if (historyItem.type === "reasoning") {
                 const output = (historyItem.summary.length > 0 ? historyItem.summary : historyItem.content).join(
                     "\n\n",
                 );
@@ -422,7 +423,7 @@ function decodeHistory(
                     });
                     sequence += 1;
                 }
-            } else if (historyItem.type === "commandExecution" && options.detail === "rich") {
+            } else if (historyItem.type === "commandExecution") {
                 const action = historyItem.commandActions[0]?.type ?? "execute";
                 append({
                     activities: [
@@ -444,7 +445,7 @@ function decodeHistory(
                     text: "",
                 });
                 sequence += 1;
-            } else if (historyItem.type === "fileChange" && options.detail === "rich") {
+            } else if (historyItem.type === "fileChange") {
                 const paths = historyItem.changes.map((change) => change.path);
                 const content = historyItem.changes.map(
                     (change): AgentDisplayContent => diffDisplayContent(change.path, change.diff),
@@ -466,7 +467,7 @@ function decodeHistory(
                     text: "",
                 });
                 sequence += 1;
-            } else if (historyItem.type === "mcpToolCall" && options.detail === "rich") {
+            } else if (historyItem.type === "mcpToolCall") {
                 append({
                     activities: [
                         activity(historyItem.id, "tool", sequence, {
@@ -484,7 +485,7 @@ function decodeHistory(
                     text: "",
                 });
                 sequence += 1;
-            } else if (historyItem.type === "dynamicToolCall" && options.detail === "rich") {
+            } else if (historyItem.type === "dynamicToolCall") {
                 append({
                     activities: [
                         activity(historyItem.id, "tool", sequence, {
@@ -505,7 +506,7 @@ function decodeHistory(
                     text: "",
                 });
                 sequence += 1;
-            } else if (historyItem.type === "plan" && options.detail === "rich") {
+            } else if (historyItem.type === "plan") {
                 append({
                     activities: [
                         activity(historyItem.id, "plan", sequence, {
@@ -525,7 +526,7 @@ function decodeHistory(
                 sequence += 1;
             }
         }
-        if (options.detail === "rich" && turn.error != null) {
+        if (turn.error != null) {
             append({
                 activities: [
                     activity(`agent-error-${sequence.toString()}`, "tool", sequence, {
@@ -547,7 +548,7 @@ function decodeHistory(
             const assistant = messages[assistantMessageIndex];
             if (assistant?.role === "assistant") {
                 characters -= messageSize(assistant);
-                const updated: NativeHistoryMessage = {
+                const updated: NativeHistoryTimelineMessage = {
                     ...assistant,
                     ...(outcome === undefined ? {} : { outcome }),
                 };
@@ -557,7 +558,7 @@ function decodeHistory(
                 characters += messageSize(fitted.message);
             }
         } else if (outcome !== undefined) {
-            const message: NativeHistoryMessage = {
+            const message: NativeHistoryTimelineMessage = {
                 activities: [],
                 content: [],
                 role: "assistant",
@@ -569,11 +570,7 @@ function decodeHistory(
             messages.push(fitted.message);
             characters += messageSize(fitted.message);
         }
-        while (
-            messages.length >
-                (options.detail === "rich" ? SESSION_HISTORY_MESSAGE_LIMIT : SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT) ||
-            characters > SESSION_HISTORY_CHARACTER_LIMIT
-        ) {
+        while (messages.length > SESSION_HISTORY_MESSAGE_LIMIT || characters > SESSION_HISTORY_CHARACTER_LIMIT) {
             const removed = messages.shift();
             if (removed !== undefined) {
                 characters -= messageSize(removed);
@@ -711,7 +708,7 @@ async function readCodexHistoryWithOptions(
                                 threadId: nativeSessionId,
                                 limit: SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT,
                                 sortDirection: "desc",
-                                itemsView: options.detail === "rich" ? "full" : "summary",
+                                itemsView: "full",
                             },
                         });
                         break;
@@ -719,10 +716,7 @@ async function readCodexHistoryWithOptions(
                     case "turns": {
                         const page = turnsSchema.parse(message.result);
                         const pages = [...state.pages, ...page.data];
-                        const maxTurns =
-                            options.detail === "rich"
-                                ? SESSION_HISTORY_MESSAGE_LIMIT
-                                : SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT;
+                        const maxTurns = SESSION_HISTORY_MESSAGE_LIMIT;
                         if (page.nextCursor == null || pages.length >= maxTurns) {
                             response.resolve(
                                 decodeHistory(
@@ -753,7 +747,7 @@ async function readCodexHistoryWithOptions(
                                 cursor: page.nextCursor,
                                 limit: Math.min(SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT, maxTurns - pages.length),
                                 sortDirection: "desc",
-                                itemsView: options.detail === "rich" ? "full" : "summary",
+                                itemsView: "full",
                             },
                         });
                         break;
@@ -791,7 +785,7 @@ async function readCodexHistoryWithOptions(
         );
     const timeout = setTimeout(
         () => fail(new AcpExecutionError("Reading saved Codex history timed out.", {}, "native_history_timeout")),
-        options.detail === "rich" ? 60_000 : 15_000,
+        60_000,
     );
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", onData);
@@ -827,15 +821,6 @@ async function readCodexHistoryWithOptions(
     }
 }
 
-/** Reads the compact message transcript used by native-session previews. */
-export const readCodexHistory = async (
-    agent: AcpAgentDefinition,
-    cwd: string,
-    nativeSessionId: string,
-    signal: AbortSignal,
-): Promise<CodexHistorySnapshot> =>
-    await readCodexHistoryWithOptions(agent, cwd, nativeSessionId, signal, { detail: "messages" });
-
 /** Reads the complete Codex turn items used to restore non-retained Chats. */
 export const readCodexFullHistory = async (
     agent: AcpAgentDefinition,
@@ -845,6 +830,5 @@ export const readCodexFullHistory = async (
     nativeTurn?: ReadCodexHistoryOptions["nativeTurn"],
 ): Promise<CodexHistorySnapshot> =>
     await readCodexHistoryWithOptions(agent, cwd, nativeSessionId, signal, {
-        detail: "rich",
         ...(nativeTurn === undefined ? {} : { nativeTurn }),
     });

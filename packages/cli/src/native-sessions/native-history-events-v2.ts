@@ -3,12 +3,11 @@ import type {
     AcpSessionUpdateV2,
     AgentDisplayContent,
     ContentBlockV2,
-    NativeMessageActivity,
-    NativeSessionHistory,
     SessionEventPayloadV2,
 } from "@moxt-ai/mobius-protocol";
 import type { AcpNativeEventReplayV2 } from "../acp/session-contracts.ts";
 import type { AcpSessionEventStoreV2 } from "../acp/session-event-store-v2.ts";
+import type { NativeHistoryActivity, NativeHistoryEntry } from "./history-images.ts";
 
 type ToolCallContent = NonNullable<
     Extract<AcpSessionUpdateV2, { readonly sessionUpdate: "tool_call" }>["content"]
@@ -107,7 +106,7 @@ function toolStatus(value: string): Extract<AcpSessionUpdateV2, { readonly sessi
     }
 }
 
-function activityEvent(activity: NativeMessageActivity): SessionEventPayloadV2 {
+function activityEvent(activity: NativeHistoryActivity): SessionEventPayloadV2 {
     const content = activity.content.flatMap((item) => {
         const converted = toolContent(item);
         return converted === null ? [] : [converted];
@@ -137,9 +136,9 @@ function contentEvent(
     return { payload: { content, messageId, sessionUpdate }, type: "acp" };
 }
 
-type AvailableNativeSessionHistory = Extract<NativeSessionHistory, { readonly status: "available" }>;
+type AvailableNativeHistory = Extract<NativeHistoryEntry, { readonly status: "available" }>;
 
-function historyEvents(history: AvailableNativeSessionHistory): readonly SessionEventPayloadV2[] {
+function historyEvents(history: AvailableNativeHistory): readonly SessionEventPayloadV2[] {
     return history.messages.flatMap((message, index) => {
         const messageId = `native-history-${index.toString()}`;
         const sessionUpdate = message.role === "user" ? "user_message_chunk" : "agent_message_chunk";
@@ -169,7 +168,7 @@ function historyEvents(history: AvailableNativeSessionHistory): readonly Session
 export function nativeHistoryEventsV2(
     sessionId: string,
     nativeSessionId: string,
-    history: AvailableNativeSessionHistory,
+    history: AvailableNativeHistory,
     eventLimit: number,
     cursor: string | null,
     eventStore: AcpSessionEventStoreV2,

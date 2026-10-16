@@ -3,7 +3,6 @@ import type {
     AgentModelEffort,
     AgentPromptResponse,
     ContentBlockV2,
-    NativeSessionHistory,
     PromptExecutionContextV2,
     PromptImage,
     PromptResource,
@@ -21,6 +20,7 @@ import type {
     SessionPermissionResolvedEvent,
 } from "@moxt-ai/mobius-protocol";
 import type { AcpAgentDefinition } from "../config.ts";
+import type { NativeHistoryEntry } from "../native-sessions/history-images.ts";
 import type { AcpActivity, AcpActivityNarration } from "./activity.ts";
 import type { NativeSessionOrigin } from "./native-session.ts";
 
@@ -42,7 +42,7 @@ export type AcpNativeHistoryAccess =
           readonly read: (
               nativeSessionId: string,
               nativeTurn: () => { readonly commandId: string; readonly nativeTurnId: string } | null,
-          ) => Promise<NativeSessionHistory>;
+          ) => Promise<NativeHistoryEntry>;
       };
 
 export interface AcpNativeHistoryReader {

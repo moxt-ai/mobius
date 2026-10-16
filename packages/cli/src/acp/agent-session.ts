@@ -13,7 +13,6 @@ import {
     type AgentDisplayContent,
     decodeAcpSessionUpdateV2,
     decodeAgentPromptResponse,
-    type NativeSessionHistory,
     SESSION_COMMANDS_UPDATED_KIND,
     SESSION_CONFIG_UPDATED_KIND,
     SESSION_INFO_UPDATED_KIND,
@@ -28,7 +27,6 @@ import { type LocalVideo, readInlineVideo } from "../acp/resource/local-video.ts
 import type { AcpAgentDefinition } from "../config.ts";
 import type { AcpContentExternalizer } from "../external-content/acp-content-externalizer.ts";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
-import { embedLocalHistoryImages } from "../native-sessions/history-images.ts";
 import { revalidateExecutable } from "../util/process/executable.ts";
 import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp-error.ts";
 import { imageDisplayContent, isProgressMessage, normalizeContentBlock } from "./activity-content.ts";
@@ -138,7 +136,6 @@ export class AgentSession implements AcpClientHandler {
     #sessionTitle: string | null = null;
     #sessionUpdatedAt = "";
     #turn: AcpTurnState = new IdleAcpTurn();
-    #turnHistory: AcpHistoryReplay | null = null;
 
     private constructor(
         agent: AcpAgentDefinition,
@@ -330,20 +327,6 @@ export class AgentSession implements AcpClientHandler {
             this.#prompted,
             this.#restored,
         );
-
-    readonly loadHistory = async (signal: AbortSignal): Promise<NativeSessionHistory> => {
-        if (!this.#capabilities.loadSession) {
-            return {
-                status: "unavailable",
-                cause: {
-                    code: "native_history_unsupported",
-                    message: "This Agent restores context but does not provide message history.",
-                },
-            };
-        }
-        const history = await this.#completedHistory(signal, "ACP agent exited while loading history");
-        return await embedLocalHistoryImages(await history.snapshot(), signal);
-    };
 
     readonly ensureHistoryLoaded = async (signal: AbortSignal): Promise<void> => {
         if (!this.#capabilities.loadSession) {
@@ -935,11 +918,9 @@ export class AgentSession implements AcpClientHandler {
                 response: {},
             };
         }
-        const completedHistory = this.#capabilities.loadSession
-            ? await this.#completedHistory(options.signal, "ACP agent exited while loading history before a prompt")
-            : this.#sessionLoad.kind === "loaded"
-              ? this.#sessionLoad.history
-              : null;
+        if (this.#capabilities.loadSession) {
+            await this.#completedHistory(options.signal, "ACP agent exited while loading history before a prompt");
+        }
         const prompt = this.buildPrompt(options);
         if (this.#sessionTitle === null || this.#sessionTitle.length === 0) {
             this.#sessionTitle = truncate(options.prompt, 500);
@@ -954,8 +935,6 @@ export class AgentSession implements AcpClientHandler {
             this.prepareAgentContent,
         );
         this.#turn = running;
-        this.#turnHistory =
-            completedHistory === null ? null : new AcpHistoryReplay(this.#store.eventsV2, this.#mobiusSessionId);
         const lifecycleV2 = options.lifecycleV2;
         if (lifecycleV2 !== undefined) {
             await this.recordLifecycleEventV2({
@@ -1045,10 +1024,6 @@ export class AgentSession implements AcpClientHandler {
             }
             throw failure;
         } finally {
-            if (completedHistory !== null && this.#turnHistory !== null) {
-                await completedHistory.append(this.#turnHistory);
-            }
-            this.#turnHistory = null;
             this.#turn = new IdleAcpTurn();
         }
     };
@@ -1189,10 +1164,7 @@ export class AgentSession implements AcpClientHandler {
         if (event.type !== "lifecycle-metadata" || this.#sessionLoad.kind !== "loaded") {
             return;
         }
-        const liveEvent =
-            this.#turnHistory === null
-                ? this.#sessionLoad.history.recordLifecycle(event)
-                : this.#turnHistory.recordLifecycle(event);
+        const liveEvent = this.#sessionLoad.history.recordLifecycle(event);
         await this.#getObserver().onSessionEventV2?.(liveEvent);
     };
 
@@ -1212,17 +1184,11 @@ export class AgentSession implements AcpClientHandler {
         const rawUpdate = decodeAcpSessionUpdateV2(JSON.stringify(externalized.event));
         if (this.#sessionLoad.kind === "capturing") {
             await this.#sessionLoad.history.record(update, rawUpdate);
-        } else {
+        } else if (this.#sessionLoad.kind === "loaded") {
             const onSessionEventV2 = this.#getObserver().onSessionEventV2;
-            if (this.#turnHistory !== null) {
-                await this.#turnHistory.record(update, rawUpdate, async (liveEvent) => {
-                    await onSessionEventV2?.(liveEvent);
-                });
-            } else if (this.#sessionLoad.kind === "loaded") {
-                await this.#sessionLoad.history.record(update, rawUpdate, async (liveEvent) => {
-                    await onSessionEventV2?.(liveEvent);
-                });
-            }
+            await this.#sessionLoad.history.record(update, rawUpdate, async (liveEvent) => {
+                await onSessionEventV2?.(liveEvent);
+            });
         }
         if (
             this.#sessionLoad.kind === "capturing" &&

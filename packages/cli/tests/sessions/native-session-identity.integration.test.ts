@@ -198,17 +198,26 @@ describe("native session identity", () => {
                     onText: async () => {},
                     onActivity: async () => {},
                 });
-                const history = await restarted.loadSessionHistory({
-                    agent: f.agent,
-                    additionalDirectories: [],
-                    cwd: f.workspace,
-                    signal,
-                    sessionId: nativeSessionId,
-                });
-                expect(history).toMatchObject({
-                    status: "available",
-                    messages: expect.arrayContaining([{ role: "user", text: "Continue this chat" }]),
-                });
+                const replay = await restarted.loadSessionEventsV2(
+                    {
+                        agent: f.agent,
+                        additionalDirectories: [],
+                        cwd: f.workspace,
+                        signal,
+                        sessionId: nativeSessionId,
+                    },
+                    50,
+                    null,
+                );
+                expect(
+                    replay.events.flatMap((event) =>
+                        event.type === "acp" &&
+                        event.payload.sessionUpdate === "user_message_chunk" &&
+                        event.payload.content.type === "text"
+                            ? [event.payload.content.text]
+                            : [],
+                    ),
+                ).toContain("Continue this chat");
             } finally {
                 await restarted.close();
                 await f.close();
@@ -249,18 +258,27 @@ describe("native session identity", () => {
                 onActivity: async () => {},
             });
 
-            const history = await f.sessions.loadSessionHistory({
-                agent: f.agent,
-                additionalDirectories: [],
-                cwd: f.workspace,
-                signal,
-                sessionId: targetSessionId,
-            });
+            const replay = await f.sessions.loadSessionEventsV2(
+                {
+                    agent: f.agent,
+                    additionalDirectories: [],
+                    cwd: f.workspace,
+                    signal,
+                    sessionId: targetSessionId,
+                },
+                50,
+                null,
+            );
 
-            expect(history).toMatchObject({
-                status: "available",
-                messages: expect.arrayContaining([{ role: "user", text: "Post-fork turn" }]),
-            });
+            expect(
+                replay.events.flatMap((event) =>
+                    event.type === "acp" &&
+                    event.payload.sessionUpdate === "user_message_chunk" &&
+                    event.payload.content.type === "text"
+                        ? [event.payload.content.text]
+                        : [],
+                ),
+            ).toContain("Post-fork turn");
         } finally {
             await f.close();
         }
