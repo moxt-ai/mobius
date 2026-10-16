@@ -43,9 +43,10 @@ export async function withRealDaemon(
     environment: Readonly<Record<string, string>>,
     scenario: (peer: RealDaemonPeer) => Promise<void>,
     launch: "embedded" | "managed" = "embedded",
+    workspaceDirectory?: string,
 ): Promise<void> {
     const directory = await mkdtemp(join(tmpdir(), `mobius-real-${specification.id}-`));
-    const workspace = join(directory, "workspace");
+    const workspace = workspaceDirectory ?? join(directory, "workspace");
     const controller = new AbortController();
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(90_000)]);
     const catalogs = new Map<string, string>();
@@ -102,7 +103,7 @@ export async function withRealDaemon(
     const stopWaiting = (): void => waiter?.reject(signal.reason);
     signal.addEventListener("abort", stopWaiting, { once: true });
     try {
-        await mkdir(workspace);
+        await mkdir(workspace, { recursive: true });
         const inventory = await discoverLocalAgentInventory({
             defaultWorkspace: workspace,
             environment: { ...process.env, ...environment, MOBIUS_STATE_DIRECTORY: directory },
