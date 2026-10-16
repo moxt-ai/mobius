@@ -444,7 +444,10 @@ export function createProjectRuntimeRoutes() {
                     command,
                     context.req.raw.signal,
                 );
-                if (!("commandId" in result) || result.commandId !== command.commandId) {
+                if (
+                    (result.kind !== "turn.started" && result.kind !== "turn.queued") ||
+                    result.commandId !== command.commandId
+                ) {
                     throw new PairingDirectoryError("invalid_request", "The Runtime returned an invalid Turn");
                 }
                 context.header("Cache-Control", "no-store");

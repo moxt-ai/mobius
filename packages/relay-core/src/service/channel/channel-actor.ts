@@ -29,7 +29,7 @@ import {
     encodeDaemonToServiceMessage,
     encodeRuntimeStatusEvent,
     encodeServiceToDaemonMessage,
-    encodeSessionFailedEvent,
+    encodeSessionOperationFailedEvent,
     FILE_BEGIN_KIND,
     FILE_CHUNK_KIND,
     FILE_END_KIND,
@@ -50,7 +50,6 @@ import {
     SESSION_CONFIGURE_KIND,
     SESSION_ELICITATION_RESPOND_KIND,
     SESSION_EVENT_V2_KIND,
-    SESSION_FAILED_KIND,
     SESSION_INFO_UPDATED_KIND,
     SESSION_LIST_KIND,
     SESSION_LISTED_KIND,
@@ -441,11 +440,11 @@ export class ChannelActor {
     ): void => {
         if (!this.sendToDaemon(message)) {
             socket.send(
-                encodeSessionFailedEvent({
+                encodeSessionOperationFailedEvent({
                     code: "runtime_offline",
-                    commandId: requestId,
-                    kind: SESSION_FAILED_KIND,
+                    kind: SESSION_OPERATION_FAILED_KIND,
                     message: "The local runtime is offline",
+                    requestId,
                     sessionId: sessionId.length === 0 ? "runtime" : sessionId,
                 }),
             );
@@ -457,11 +456,11 @@ export class ChannelActor {
     private readonly forwardPrompt = (socket: ChannelSocket, command: SessionPromptCommand): void => {
         if (!this.sendToDaemon(command)) {
             socket.send(
-                encodeSessionFailedEvent({
+                encodeSessionOperationFailedEvent({
                     code: "runtime_offline",
-                    commandId: command.commandId,
-                    kind: SESSION_FAILED_KIND,
+                    kind: SESSION_OPERATION_FAILED_KIND,
                     message: "The local runtime is offline",
+                    requestId: command.commandId,
                     sessionId: command.sessionId,
                 }),
             );
