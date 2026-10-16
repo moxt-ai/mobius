@@ -82,6 +82,7 @@ import {
     type PermissionResult,
     type Query,
     query,
+    renameSession as renameClaudeSession,
     type SDKActiveGoalMessage,
     type SDKAssistantMessageError,
     type SDKMessage,
@@ -341,6 +342,37 @@ function parseSteerRequest(params: unknown): SteerRequest {
         prompt: prompt as PromptRequest["prompt"],
         _meta: _meta as SteerMeta | null | undefined,
     };
+}
+
+/** Custom (extension) request method a client uses to retitle a session: the
+ *  title is persisted to the session file via the SDK's `renameSession`, which
+ *  is the same field the CLI's own `/rename` command writes. Named
+ *  `_session/rename` per the ACP extension convention; advertised to clients
+ *  via the top-level `InitializeResponse._meta.renameSession.supported`. */
+const RENAME_METHOD = "_session/rename";
+
+/** Params of a {@link RENAME_METHOD} request. */
+export type RenameRequest = {
+    sessionId: string;
+    title: string;
+};
+
+/** Result of a {@link RENAME_METHOD} request. */
+export type RenameResponse = Record<string, never>;
+
+/** Validate raw JSON-RPC params into a {@link RenameRequest}. */
+function parseRenameRequest(params: unknown): RenameRequest {
+    if (!params || typeof params !== "object") {
+        throw RequestError.invalidParams(undefined, "rename params must be an object");
+    }
+    const { sessionId, title } = params as Record<string, unknown>;
+    if (typeof sessionId !== "string" || sessionId.length === 0) {
+        throw RequestError.invalidParams(undefined, "rename params require a non-empty sessionId");
+    }
+    if (typeof title !== "string" || title.trim().length === 0) {
+        throw RequestError.invalidParams(undefined, "rename params require a non-empty title");
+    }
+    return { sessionId, title };
 }
 
 /** Internal model-selection state. Mirrors the shape the ACP SDK exposed as
@@ -1783,8 +1815,12 @@ export class ClaudeAcpAgent {
             ],
             // Top-level `_meta` (sibling of `agentCapabilities`), per the existing ACP
             // steering extension contract: advertises the `_session/steering` request
-            // so clients know they may inject a follow-up into a running turn.
+            // so clients know they may inject a follow-up into a running turn, and the
+            // `_session/rename` request so clients know they may retitle a session.
             _meta: {
+                renameSession: {
+                    supported: true,
+                },
                 steering: {
                     supported: true,
                 },
@@ -4930,6 +4966,19 @@ export class ClaudeAcpAgent {
             await this.teardownSession(params.sessionId);
         }
         await deleteSession(params.sessionId);
+        return {};
+    }
+
+    /** Apply a user-set title through the SDK's renameSession, persisting it as
+     *  the session file's customTitle. That field takes precedence over both
+     *  generated titles and the summary fallback (see SessionTitles.onTurnEnd),
+     *  so the rename survives into `session/list` and `session/load`. */
+    async renameSession(params: RenameRequest): Promise<RenameResponse> {
+        const session = this.sessions[params.sessionId];
+        if (!session) {
+            throw new Error("Session not found");
+        }
+        await renameClaudeSession(params.sessionId, sanitizeTitle(params.title), { dir: session.cwd });
         return {};
     }
 
@@ -8481,6 +8530,9 @@ export function createClaudeAcpApp(options: ClaudeAcpAppOptions = {}): ClaudeAcp
         .onNotification(methods.agent.session.cancel, (ctx) => requiredAgent(agent).cancel(ctx.params))
         .onRequest<SteerRequest, SteerResponse>(STEER_METHOD, { parse: parseSteerRequest }, (ctx) =>
             requiredAgent(agent).steer(ctx.params),
+        )
+        .onRequest<RenameRequest, RenameResponse>(RENAME_METHOD, { parse: parseRenameRequest }, (ctx) =>
+            requiredAgent(agent).renameSession(ctx.params),
         )
         .onRequest<GoalRequest, GoalControlResponse>(GOAL_CONTROL_METHOD, { parse: parseGoalRequest }, (ctx) =>
             requiredAgent(agent).goal(ctx.params),

@@ -22,6 +22,7 @@ import {
     decodeSessionPreviewHistoryPageLoaded,
     decodeSessionQueuedEvent,
     decodeSessionReadyEvent,
+    decodeSessionRenamedEvent,
     decodeSessionRestoredEvent,
     decodeSessionsListedEvent,
     decodeSessionsQueriedEvent,
@@ -61,6 +62,8 @@ import {
     type SessionPromptDispositionCommand,
     type SessionQueryCommand,
     type SessionReadyEvent,
+    type SessionRenameCommand,
+    type SessionRenamedEvent,
     type SessionRestoreCommand,
     type SessionRestoredEvent,
     type SessionsListedEvent,
@@ -76,6 +79,7 @@ export type RuntimeControlCommand =
     | NativeSessionRequest
     | SessionPrepareCommand
     | SessionConfigureCommand
+    | SessionRenameCommand
     | SessionCloseCommand
     | SessionCancelCommand
     | SessionPromptDispositionCommand
@@ -118,6 +122,7 @@ export type RuntimeControlResult =
     | NativeSessionResult
     | SessionReadyEvent
     | SessionConfigUpdatedEvent
+    | SessionRenamedEvent
     | SessionClosedEvent
     | TurnCompleted
     | TurnStarted
@@ -559,7 +564,9 @@ export async function requestRuntimeControl(
                                           ? decodeSessionReadyEvent(event.data)
                                           : command.kind === "session.configure" && kind === "session.config.updated"
                                             ? decodeSessionConfigUpdatedEvent(event.data)
-                                            : null;
+                                            : command.kind === "session.rename" && kind === "session.renamed"
+                                              ? decodeSessionRenamedEvent(event.data)
+                                              : null;
                     const resolved =
                         result ??
                         (command.kind === "session.preview-history.page.load" &&

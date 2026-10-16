@@ -20,6 +20,7 @@ export function fakeAgentHarnessCapabilities(definition: FakeAgentHarnessDefinit
         listSessions: true,
         loadSession: true,
         promptQueueing: true,
+        renameSession: !(definition.arguments ?? []).includes("--no-rename-session"),
         resumeSession: !(definition.arguments ?? []).includes("--load-only"),
         steering: true,
         unstableForkSession: true,

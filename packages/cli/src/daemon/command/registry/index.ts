@@ -17,6 +17,7 @@ import { runtimeDiagnosticsCommand, runtimePingCommand } from "./runtime.ts";
 import {
     sessionConfigureCommand,
     sessionPrepareCommand,
+    sessionRenameCommand,
     sessionRestoreCommand,
     workspaceListCommand,
 } from "./session.ts";
@@ -39,6 +40,7 @@ export function createCommandRegistry(context: CommandContext): {
         workspaceListCommand,
         sessionPrepareCommand,
         sessionConfigureCommand,
+        sessionRenameCommand,
         sessionRestoreCommand,
         permissionRespondCommand,
         elicitationRespondCommand,

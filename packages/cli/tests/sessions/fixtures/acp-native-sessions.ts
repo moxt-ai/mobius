@@ -153,5 +153,31 @@ export function registerNativeSessions(agent: ReturnType<typeof acp.agent>) {
             nativeMetadata.delete(context.params.sessionId);
             releaseWriter(context.params.sessionId);
             return {};
-        });
+        })
+        .onRequest(
+            "_session/rename",
+            (params: unknown) => params,
+            (context) => {
+                const params = context.params;
+                if (
+                    typeof params !== "object" ||
+                    params === null ||
+                    !("sessionId" in params) ||
+                    typeof params.sessionId !== "string" ||
+                    !("title" in params) ||
+                    typeof params.title !== "string" ||
+                    params.title.trim().length === 0
+                ) {
+                    throw new Error("Invalid controlled Agent rename request");
+                }
+                const metadata = nativeMetadata.get(params.sessionId);
+                if (metadata === undefined) {
+                    throw new Error("Unknown native session");
+                }
+                const state = sessions.get(params.sessionId) ?? readPersistedState(params.sessionId);
+                nativeMetadata.set(params.sessionId, { ...metadata, title: params.title });
+                persistState(params.sessionId, state);
+                return {};
+            },
+        );
 }

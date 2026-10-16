@@ -13,6 +13,7 @@ import {
     decodeSessionPromptCommand,
     decodeSessionPromptDispositionCommand,
     decodeSessionQueryCommand,
+    decodeSessionRenameCommand,
     type Identifier,
     isIdentifier,
     MOBIUS_API_PREFIX,
@@ -121,6 +122,9 @@ const sessionConfigurationBody = v.strictObject({
     directoryId: v.pipe(v.string(), v.minLength(1), v.maxLength(2048)),
     value: v.pipe(v.string(), v.maxLength(500)),
     valueType: v.picklist(["select", "boolean"]),
+});
+const sessionRenameBody = v.strictObject({
+    title: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(500)),
 });
 const sessionInteractionResponseBody = v.variant("kind", [
     v.strictObject({
@@ -568,6 +572,38 @@ export function createPlatformApplication(
                         kind: "session.configure",
                         requestId: crypto.randomUUID(),
                         sessionId,
+                    }),
+                ),
+                context.req.raw.signal,
+            );
+            context.header("Cache-Control", "no-store");
+            return context.json(result);
+        })
+        .post("/:sessionId/rename", sessionAccessTargetMiddleware, async (context) => {
+            const credential = (context.req.header("authorization") ?? "").match(/^Bearer ([^\s]+)$/u)?.[1];
+            if (credential === undefined) {
+                return context.json(
+                    { error: { code: "session_access_required", message: "A Session credential is required" } },
+                    401,
+                );
+            }
+            const access = await context.var.sessionAccess.authorizeSession(
+                context.var.sessionAccessTarget,
+                credential,
+                ProjectPermission.SessionWrite,
+                context.req.raw.signal,
+            );
+            const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
+            const body = v.parse(sessionRenameBody, await context.req.json());
+            const result = await context.var.relay.services.runtimePairings.requestProjectScopeControl(
+                new ProjectScope(access.projectId),
+                access.runtimeId,
+                decodeSessionRenameCommand(
+                    JSON.stringify({
+                        kind: "session.rename",
+                        requestId: crypto.randomUUID(),
+                        sessionId,
+                        title: body.title,
                     }),
                 ),
                 context.req.raw.signal,

@@ -23,6 +23,7 @@ import { AgentProcessPool, type AgentProcessRetention } from "./agent-process-po
 import type { NativeSessionOrigin, NativeSessionPage } from "./native-session.ts";
 import {
     type AcpSessionStore,
+    AcpStoredSession,
     FoundAcpStoredSession,
     MemoryAcpSessionStore,
     MissingAcpStoredSession,
@@ -482,6 +483,38 @@ export class AgentRuntimeManager {
                 const runtime = await this.ensureSession(options);
                 return await runtime.configure(options);
             });
+        });
+
+    readonly renameSession = async (
+        sessionId: string,
+        title: string,
+        signal: AbortSignal,
+    ): Promise<{ readonly title: string; readonly updatedAt: string }> =>
+        await this.#operations.run({ sessionId, signal }, async (options) => {
+            const runtime = this.#executionProcesses.get(options.sessionId);
+            if (runtime !== undefined) {
+                return await runtime.renameSession(title, options.signal);
+            }
+            const stored = this.#store.read(options.sessionId);
+            if (!(stored instanceof FoundAcpStoredSession)) {
+                throw new AcpExecutionError("The Session was not found", {}, "session_not_found");
+            }
+            const normalized = title.slice(0, 500);
+            const updatedAt = new Date().toISOString();
+            this.#store.write(
+                new AcpStoredSession(
+                    stored.session.sessionId,
+                    stored.session.agentId,
+                    stored.session.nativeSessionId,
+                    stored.session.cwd,
+                    stored.session.additionalDirectories,
+                    stored.session.prompted,
+                    normalized,
+                    updatedAt,
+                    stored.session.configurations,
+                ),
+            );
+            return { title: normalized, updatedAt };
         });
 
     readonly cancelPrompt = async (sessionId: string): Promise<void> => {
