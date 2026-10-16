@@ -2092,25 +2092,6 @@ describe.sequential("Platform Turn submission", () => {
                 environment,
             );
             expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("session.prompt");
-            // A queue change on another Session of the same Runtime must not
-            // acknowledge the pending queue-disposition submission.
-            daemon.send(
-                encodeSessionEventEnvelopeV2({
-                    kind: "session.event.v2",
-                    events: [
-                        {
-                            eventId: "other-session-queue-change",
-                            position: "1",
-                            provenance: { kind: "original" },
-                            recordedAt: "2026-09-18T00:00:03.000Z",
-                            sessionGenerationId: "session-generation-1",
-                            sessionId: "another-session",
-                            type: "lifecycle-metadata",
-                            payload: { kind: "session.queue.changed" },
-                        },
-                    ],
-                }),
-            );
             daemon.send(
                 encodeSessionEventEnvelopeV2({
                     kind: "session.event.v2",
@@ -2131,6 +2112,73 @@ describe.sequential("Platform Turn submission", () => {
             expect(await responseJson(await queuedTurn, 200)).toMatchObject({
                 state: { kind: "queued" },
                 turnId: "queued-follow-up",
+            });
+
+            // A queue change on another Session of the same Runtime must not
+            // acknowledge the submission: without Session scoping this Turn
+            // would settle as queued from the foreign event instead of waiting
+            // for its own prompt.started.
+            const crossSessionTurn = worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/turns`, {
+                    body: JSON.stringify({
+                        additionalDirectoryIds: [],
+                        agentId: "codex",
+                        content: "queue behind the foreign queue change",
+                        directoryId: "root",
+                        disposition: "queue",
+                        idempotencyKey: "cross-session-queued",
+                        images: [],
+                        resources: [],
+                        targetCommandId: "long-first-turn",
+                    }),
+                    headers: credentialHeaders(text(sessionAccess, "credential")),
+                    method: "POST",
+                }),
+                environment,
+            );
+            expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("session.prompt");
+            daemon.send(
+                encodeSessionEventEnvelopeV2({
+                    kind: "session.event.v2",
+                    events: [
+                        {
+                            eventId: "foreign-session-queue-change",
+                            position: "1",
+                            provenance: { kind: "original" },
+                            recordedAt: "2026-09-18T00:00:04.000Z",
+                            sessionGenerationId: "session-generation-1",
+                            sessionId: "another-session",
+                            type: "lifecycle-metadata",
+                            payload: { kind: "session.queue.changed" },
+                        },
+                    ],
+                }),
+            );
+            daemon.send(
+                encodeSessionEventEnvelopeV2({
+                    kind: "session.event.v2",
+                    events: [
+                        {
+                            eventId: "cross-session-queued-started",
+                            position: "5",
+                            provenance: { kind: "original" },
+                            recordedAt: "2026-09-18T00:00:05.000Z",
+                            sessionGenerationId: "session-generation-1",
+                            sessionId,
+                            type: "lifecycle-metadata",
+                            payload: {
+                                attemptId: "cross-session-attempt",
+                                commandId: "cross-session-queued",
+                                epoch: "cross-session-epoch",
+                                kind: "prompt.started",
+                            },
+                        },
+                    ],
+                }),
+            );
+            expect(await responseJson(await crossSessionTurn, 200)).toMatchObject({
+                state: { kind: "running" },
+                turnId: "cross-session-queued",
             });
 
             expect(
