@@ -263,6 +263,39 @@ export class SessionTurnHistoryStorage {
             .all()
             .map(decodeItemRead);
 
+    /**
+     * Reads a Turn's items strictly before `beforeSequence`, newest first. A transcript shows a
+     * Turn's conclusion first, so the items a page lists start from the end of its sequence and the
+     * work that produced it is read back from there.
+     */
+    readonly itemsBefore = (
+        commandId: string,
+        beforeSequence: number | null,
+        limit: number,
+        textCharacters: number,
+    ): readonly StoredTurnItemRead[] =>
+        this.#database
+            .select(itemReadColumns(textCharacters))
+            .from(recordedTurnItem)
+            .where(
+                and(
+                    eq(recordedTurnItem.commandId, commandId),
+                    beforeSequence === null ? undefined : lt(recordedTurnItem.sequence, beforeSequence),
+                ),
+            )
+            .orderBy(desc(recordedTurnItem.sequence))
+            .limit(limit)
+            .all()
+            .map(decodeItemRead);
+
+    readonly hasItemBefore = (commandId: string, sequence: number): boolean =>
+        this.#database
+            .select({ sequence: recordedTurnItem.sequence })
+            .from(recordedTurnItem)
+            .where(and(eq(recordedTurnItem.commandId, commandId), lt(recordedTurnItem.sequence, sequence)))
+            .limit(1)
+            .get() !== undefined;
+
     /** The command of a Turn holding an item with this identifier, if any. */
     readonly itemOwner = (itemId: string): string | null =>
         this.#database

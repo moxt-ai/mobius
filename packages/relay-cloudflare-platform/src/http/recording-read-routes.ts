@@ -6,6 +6,7 @@ import {
     SESSION_RECORDING_TURN_ITEM_ID_MAX_LENGTH,
     SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT,
     SESSION_RECORDING_TURN_PAGE_MAX_LIMIT,
+    type SessionRecordingTurnItemCursorDirection,
 } from "@moxt-ai/mobius-protocol";
 import { ProjectPermission } from "@moxt-ai/mobius-relay-core";
 import { type Context, Hono } from "hono";
@@ -37,14 +38,30 @@ function cursor(parse: (value: string) => number | null) {
         v.check((value) => parse(value) !== null),
     );
 }
+
+/** A Turn item cursor accepted only for the direction the read names with it. */
+function itemCursor(direction: SessionRecordingTurnItemCursorDirection) {
+    return v.pipe(
+        v.string(),
+        v.check((value) => parseSessionRecordingTurnItemCursor(value)?.direction === direction),
+    );
+}
 const turnPageQuery = v.object({
     before: v.optional(cursor(parseSessionRecordingTurnCursor)),
     limit: v.optional(pageLimit(SESSION_RECORDING_TURN_PAGE_MAX_LIMIT)),
 });
-const turnItemPageQuery = v.object({
-    after: v.optional(cursor(parseSessionRecordingTurnItemCursor)),
-    limit: v.optional(pageLimit(SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT)),
-});
+// One page reads one run, in the direction its cursor names: `before` reads back toward a Turn's
+// earlier work, `after` forward toward the work it is still producing. A cursor fed to the other
+// direction is rejected rather than read the wrong way and list work twice, and a read names exactly
+// one so a run can never overlap itself.
+const turnItemPageQuery = v.pipe(
+    v.object({
+        after: v.optional(itemCursor("after")),
+        before: v.optional(itemCursor("before")),
+        limit: v.optional(pageLimit(SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT)),
+    }),
+    v.check((query) => (query.after === undefined) !== (query.before === undefined)),
+);
 const recordingIncrementalQuery = v.object({
     after: v.optional(recordingCursor),
     limit: v.optional(v.pipe(v.string(), v.regex(/^[1-9][0-9]{0,4}$/u))),
@@ -199,7 +216,7 @@ export const recordingReadRoutes = new Hono<PlatformApplicationEnvironment>()
     .get("/sessions/:sessionId/turns/:commandId/items", async (context): Promise<Response> => {
         const target = turnTarget(context);
         const commandId = decodedIdentifier(context.req.param("commandId"));
-        const values = definedQuery(context, ["after", "limit"]);
+        const values = definedQuery(context, ["after", "before", "limit"]);
         const query = v.safeParse(turnItemPageQuery, values);
         if (target === null || commandId === null || !query.success) {
             return errorResponse("invalid_request", "The Recording Turn item read is invalid", 400);

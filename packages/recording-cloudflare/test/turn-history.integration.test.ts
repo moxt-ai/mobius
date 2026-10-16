@@ -227,7 +227,7 @@ describe("Recording Turn history", () => {
         });
     });
 
-    it("Given a Turn with many tool calls and an oversized output, When a client reads it, Then pages bound the listing and full reads return every item", async () => {
+    it("Given a Turn with many tool calls and an oversized output, When a client reads it, Then a page starts at its conclusion and reads its work back", async () => {
         await record([requested("command-1", "Scan everything"), started("command-1")]);
         const tools = Array.from({ length: 250 }, (_, index) =>
             acp({
@@ -251,19 +251,38 @@ describe("Recording Turn history", () => {
 
         const [turn] = (await turnPage()).turns;
         expect(turn?.itemCount).toBe(251);
+        // A page starts from the end of the Turn, so the work a member reads back is the work that
+        // produced the conclusion the page does show.
         expect(turn?.items).toHaveLength(200);
-        expect(turn?.itemsCursor).toBe("item:199");
+        expect(turn?.items[0]?.itemId).toBe("tool:tool-51");
+        expect(turn?.itemsCursor).toBe("before:item:51");
+        expect(turn?.items.at(-1)).toMatchObject({
+            detail: { kind: "omitted" },
+            itemId: "tool:tool-large",
+            kind: "tool",
+        });
 
-        const rest = await worker.fetch(
-            new Request(sessionPath(`turns/command-1/items?after=${encodeURIComponent(turn?.itemsCursor ?? "")}`)),
+        // The listed run is the Turn's conclusion; `before` reads the work that produced it.
+        const earlier = await worker.fetch(
+            new Request(sessionPath(`turns/command-1/items?before=${encodeURIComponent(turn?.itemsCursor ?? "")}`)),
             env,
         );
-        expect(rest.status).toBe(200);
-        const remaining = decodeSessionRecordingTurnItemPage(await rest.text());
-        expect(remaining.items).toHaveLength(51);
-        expect(remaining.nextCursor).toBeNull();
-        const large = remaining.items.at(-1);
-        expect(large).toMatchObject({ detail: { kind: "omitted" }, itemId: "tool:tool-large", kind: "tool" });
+        expect(earlier.status).toBe(200);
+        const back = decodeSessionRecordingTurnItemPage(await earlier.text());
+        expect(back.items).toHaveLength(51);
+        expect(back.items[0]?.itemId).toBe("tool:tool-0");
+        expect(back.items.at(-1)?.itemId).toBe("tool:tool-50");
+        expect(back.nextCursor).toBeNull();
+
+        // The forward read a caller uses to follow work still being produced continues the same
+        // boundary in the other direction, so it names its own cursor.
+        const later = await worker.fetch(new Request(sessionPath("turns/command-1/items?after=after:item:51")), env);
+        expect(later.status).toBe(200);
+        const forward = decodeSessionRecordingTurnItemPage(await later.text());
+        expect(forward.items).toHaveLength(199);
+        expect(forward.nextCursor).toBeNull();
+        // Reading back and reading forward meet on the same boundary and never repeat an item.
+        expect(forward.items.map((item) => item.itemId)).not.toContain(back.items.at(-1)?.itemId);
 
         const detail = await worker.fetch(
             new Request(sessionPath(`turns/command-1/items/${encodeURIComponent("tool:tool-large")}`)),
@@ -273,6 +292,80 @@ describe("Recording Turn history", () => {
         expect(decodeSessionRecordingTurnItemDetail(await detail.text()).item).toMatchObject({
             detail: { kind: "inline", rawOutput: "x".repeat(40_000) },
         });
+    });
+
+    it("Given a Turn a client is reading back to its start, When it follows the cursor, Then no item is repeated and every one arrives", async () => {
+        await record([requested("command-1", "Do a lot of work"), started("command-1")]);
+        await record(
+            Array.from({ length: 30 }, (_, index) =>
+                acp({
+                    sessionUpdate: "tool_call",
+                    status: "completed",
+                    title: `Read ${index}`,
+                    toolCallId: `tool-${index}`,
+                }),
+            ),
+        );
+        await record([acp({ content: { text: "All done", type: "text" }, sessionUpdate: "agent_message_chunk" })]);
+
+        const [turn] = (await turnPage()).turns;
+        expect(turn?.itemCount).toBe(31);
+        const seen = new Set(turn?.items.map((item) => item.itemId));
+        expect(seen.size).toBe(turn?.items.length);
+
+        // Following the cursor to the start of the Turn walks its work in order and never repeats.
+        let cursor = turn?.itemsCursor ?? null;
+        const walked = [...(turn?.items ?? [])];
+        while (cursor !== null) {
+            const response = await worker.fetch(
+                new Request(sessionPath(`turns/command-1/items?before=${encodeURIComponent(cursor)}`)),
+                env,
+            );
+            expect(response.status).toBe(200);
+            const page = decodeSessionRecordingTurnItemPage(await response.text());
+            expect(page.items.length).toBeGreaterThan(0);
+            for (const item of page.items) {
+                expect(seen.has(item.itemId)).toBe(false);
+                seen.add(item.itemId);
+            }
+            walked.unshift(...page.items);
+            cursor = page.nextCursor;
+        }
+        expect(cursor).toBeNull();
+        expect(walked).toHaveLength(31);
+        // Walking back lands on the work that produced the conclusion the first page showed.
+        expect(walked[0]?.itemId).toBe("tool:tool-0");
+        expect(walked.at(-1)?.itemId).toContain("answer");
+    });
+
+    it("Given a Turn still being produced, When a client reads its page, Then the work it is still producing is what the page leads with", async () => {
+        await record([requested("command-1", "Keep going"), started("command-1")]);
+        await record(
+            Array.from({ length: 220 }, (_, index) =>
+                acp({
+                    sessionUpdate: "tool_call",
+                    status: "completed",
+                    title: `Read ${index}`,
+                    toolCallId: `tool-${index}`,
+                }),
+            ),
+        );
+        await record([acp({ content: { text: "Still working", type: "text" }, sessionUpdate: "agent_message_chunk" })]);
+
+        const [turn] = (await turnPage()).turns;
+        expect(turn?.itemCount).toBe(221);
+        // The answer is still growing at the end of the Turn, so it is what a member reads first.
+        expect(turn?.items.at(-1)).toMatchObject({ kind: "answer", text: "Still working" });
+        expect(turn?.itemsCursor).toBe("before:item:21");
+    });
+
+    it("Given a Turn whose items a client is reading back, When the read asks for both directions at once, Then it is rejected", async () => {
+        await completedTurn("command-1", "Prompt 1", "Reply 1");
+        const both = await worker.fetch(
+            new Request(sessionPath("turns/command-1/items?after=item:0&before=item:2")),
+            env,
+        );
+        expect(both.status).toBe(400);
     });
 
     it("Given a Recording written before its Turn history existed, When a client reads Turns, Then a retryable error is returned until a backfill step catches up", async () => {
@@ -616,6 +709,29 @@ describe("Recording Turn history", () => {
         await completedTurn("command-1", "Prompt 1", "Reply 1");
         expect((await worker.fetch(new Request(sessionPath("turns?before=item:1")), env)).status).toBe(400);
         expect((await worker.fetch(new Request(sessionPath("turns?limit=101")), env)).status).toBe(400);
-        expect((await worker.fetch(new Request(sessionPath("turns/command-9/items")), env)).status).toBe(404);
+        expect(
+            (await worker.fetch(new Request(sessionPath("turns/command-9/items?before=before:item:2")), env)).status,
+        ).toBe(404);
+    });
+
+    it("Given a Turn item read that names no direction, both, or the wrong one, When a client reads it, Then the read is rejected", async () => {
+        await completedTurn("command-1", "Prompt 1", "Reply 1");
+        // A read continues one run, so it names one direction: a page's cursor fed to the other one
+        // would overlap the run it came from and list work twice.
+        expect((await worker.fetch(new Request(sessionPath("turns/command-1/items")), env)).status).toBe(400);
+        expect(
+            (
+                await worker.fetch(
+                    new Request(sessionPath("turns/command-1/items?after=after:item:1&before=before:item:2")),
+                    env,
+                )
+            ).status,
+        ).toBe(400);
+        expect(
+            (await worker.fetch(new Request(sessionPath("turns/command-1/items?after=before:item:2")), env)).status,
+        ).toBe(400);
+        expect(
+            (await worker.fetch(new Request(sessionPath("turns/command-1/items?before=after:item:1")), env)).status,
+        ).toBe(400);
     });
 });
