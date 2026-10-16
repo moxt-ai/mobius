@@ -2056,7 +2056,11 @@ describe.sequential("Platform Turn submission", () => {
                             sessionGenerationId: "session-generation-1",
                             sessionId,
                             type: "lifecycle-metadata",
-                            payload: { commandId: "long-first-turn", kind: "prompt.completed", stopReason: "cancelled" },
+                            payload: {
+                                commandId: "long-first-turn",
+                                kind: "prompt.completed",
+                                stopReason: "cancelled",
+                            },
                         },
                     ],
                 }),
