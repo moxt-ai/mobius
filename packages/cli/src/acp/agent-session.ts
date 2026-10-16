@@ -976,9 +976,9 @@ export class AgentSession implements AcpClientHandler {
         this.#writeStoredSession(new Date().toISOString());
         const running = new RunningAcpTurn(
             options.commandId,
-            options.onActivity,
+            options.onActivity ?? (() => Promise.resolve()),
             options.onNarration,
-            options.onText,
+            options.onText ?? (() => Promise.resolve()),
             this.prepareAgentContent,
         );
         this.#turn = running;

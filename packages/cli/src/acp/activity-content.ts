@@ -5,19 +5,30 @@ import type {
     ToolCallContent,
     ToolCallLocation,
 } from "@agentclientprotocol/sdk";
-import {
-    AGENT_ACTIVITY_DETAIL_LIMIT,
-    AGENT_ACTIVITY_LOCATION_LENGTH_LIMIT,
-    AGENT_ACTIVITY_LOCATION_LIMIT,
-    AGENT_ACTIVITY_RECORDED_DETAIL_LIMIT,
-    AGENT_ACTIVITY_RECORDED_FIELD_LIMIT,
-    type AgentActivityDetailCapture,
-    type AgentDisplayContent,
-} from "@moxt-ai/mobius-protocol";
+import type { AgentDisplayContent } from "@moxt-ai/mobius-protocol";
 
 const TRUNCATION_MARKER = "\n… output truncated by Mobius";
 
-export type CapturedActivityDetail = Extract<AgentActivityDetailCapture, { readonly kind: "recorded" | "truncated" }>;
+// Bounding budgets for captured Agent activity detail. Purely daemon-internal: the
+// folded activity view never crosses the protocol boundary anymore.
+export const ACTIVITY_DETAIL_LIMIT = 500_000;
+const ACTIVITY_RECORDED_FIELD_LIMIT = 4_000_000;
+const ACTIVITY_RECORDED_DETAIL_LIMIT = 6_000_000;
+const ACTIVITY_LOCATION_LIMIT = 12;
+const ACTIVITY_LOCATION_LENGTH_LIMIT = 1_024;
+
+export type CapturedActivityDetail =
+    | {
+          readonly content: readonly AgentDisplayContent[];
+          readonly input: string;
+          readonly kind: "recorded";
+          readonly output: string;
+      }
+    | {
+          readonly capturedBytes: number;
+          readonly kind: "truncated";
+          readonly originalBytes: number;
+      };
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -32,13 +43,13 @@ export function truncate(value: string, maximumLength: number): string {
 
 export function formatUnknown(value: unknown): string {
     if (typeof value === "string") {
-        return truncate(value, AGENT_ACTIVITY_DETAIL_LIMIT);
+        return truncate(value, ACTIVITY_DETAIL_LIMIT);
     }
     try {
         const encoded = JSON.stringify(value, null, 2);
-        return truncate(encoded ?? "", AGENT_ACTIVITY_DETAIL_LIMIT);
+        return truncate(encoded ?? "", ACTIVITY_DETAIL_LIMIT);
     } catch {
-        return truncate(String(value), AGENT_ACTIVITY_DETAIL_LIMIT);
+        return truncate(String(value), ACTIVITY_DETAIL_LIMIT);
     }
 }
 
@@ -71,14 +82,14 @@ export function summarizeDisplayContent(content: AgentDisplayContent): AgentDisp
     return {
         ...content,
         artifactId: truncate(content.artifactId, 128),
-        data: truncate(content.data, AGENT_ACTIVITY_DETAIL_LIMIT),
+        data: truncate(content.data, ACTIVITY_DETAIL_LIMIT),
         mimeType: truncate(content.mimeType, 255),
         name: truncate(content.name, 500),
-        newText: truncate(content.newText, AGENT_ACTIVITY_DETAIL_LIMIT),
-        oldText: truncate(content.oldText, AGENT_ACTIVITY_DETAIL_LIMIT),
+        newText: truncate(content.newText, ACTIVITY_DETAIL_LIMIT),
+        oldText: truncate(content.oldText, ACTIVITY_DETAIL_LIMIT),
         path: truncate(content.path, 2_048),
         terminalId: truncate(content.terminalId, 255),
-        text: truncate(content.text, AGENT_ACTIVITY_DETAIL_LIMIT),
+        text: truncate(content.text, ACTIVITY_DETAIL_LIMIT),
         uri: truncate(content.uri, 4_096),
     };
 }
@@ -86,14 +97,14 @@ export function summarizeDisplayContent(content: AgentDisplayContent): AgentDisp
 function contentFitsRecordingEnvelope(content: AgentDisplayContent): boolean {
     return (
         content.artifactId.length <= 128 &&
-        content.data.length <= AGENT_ACTIVITY_RECORDED_FIELD_LIMIT &&
+        content.data.length <= ACTIVITY_RECORDED_FIELD_LIMIT &&
         content.mimeType.length <= 255 &&
         content.name.length <= 500 &&
-        content.newText.length <= AGENT_ACTIVITY_RECORDED_FIELD_LIMIT &&
-        content.oldText.length <= AGENT_ACTIVITY_RECORDED_FIELD_LIMIT &&
+        content.newText.length <= ACTIVITY_RECORDED_FIELD_LIMIT &&
+        content.oldText.length <= ACTIVITY_RECORDED_FIELD_LIMIT &&
         content.path.length <= 2_048 &&
         content.terminalId.length <= 255 &&
-        content.text.length <= AGENT_ACTIVITY_RECORDED_FIELD_LIMIT &&
+        content.text.length <= ACTIVITY_RECORDED_FIELD_LIMIT &&
         content.uri.length <= 4_096
     );
 }
@@ -112,17 +123,17 @@ export function captureActivityDetail(
     if (
         content.length <= 100 &&
         content.every(contentFitsRecordingEnvelope) &&
-        input.length <= AGENT_ACTIVITY_RECORDED_FIELD_LIMIT &&
-        output.length <= AGENT_ACTIVITY_RECORDED_FIELD_LIMIT &&
-        JSON.stringify(recorded).length <= AGENT_ACTIVITY_RECORDED_DETAIL_LIMIT
+        input.length <= ACTIVITY_RECORDED_FIELD_LIMIT &&
+        output.length <= ACTIVITY_RECORDED_FIELD_LIMIT &&
+        JSON.stringify(recorded).length <= ACTIVITY_RECORDED_DETAIL_LIMIT
     ) {
         return recorded;
     }
     return {
         capturedBytes: encodedByteLength({
             content: content.slice(0, 100).map(summarizeDisplayContent),
-            input: truncate(input, AGENT_ACTIVITY_DETAIL_LIMIT),
-            output: truncate(output, AGENT_ACTIVITY_DETAIL_LIMIT),
+            input: truncate(input, ACTIVITY_DETAIL_LIMIT),
+            output: truncate(output, ACTIVITY_DETAIL_LIMIT),
         }),
         kind: "truncated",
         originalBytes,
@@ -131,7 +142,7 @@ export function captureActivityDetail(
 
 export function recordedDetail(
     activity: { readonly detail: CapturedActivityDetail } | undefined,
-): Extract<AgentActivityDetailCapture, { readonly kind: "recorded" }> | null {
+): Extract<CapturedActivityDetail, { readonly kind: "recorded" }> | null {
     return activity?.detail.kind === "recorded" ? activity.detail : null;
 }
 
@@ -291,11 +302,11 @@ export function normalizeLocations(locations: readonly ToolCallLocation[]): read
     const normalized: string[] = [];
     const unique = new Set<string>();
     for (const location of locations) {
-        if (normalized.length === AGENT_ACTIVITY_LOCATION_LIMIT) {
+        if (normalized.length === ACTIVITY_LOCATION_LIMIT) {
             break;
         }
         const suffix = typeof location.line === "number" ? `:${location.line.toString()}` : "";
-        const value = truncate(`${location.path}${suffix}`, AGENT_ACTIVITY_LOCATION_LENGTH_LIMIT);
+        const value = truncate(`${location.path}${suffix}`, ACTIVITY_LOCATION_LENGTH_LIMIT);
         if (value.length > 0 && !unique.has(value)) {
             unique.add(value);
             normalized.push(value);
@@ -327,7 +338,7 @@ export function formatPlanEntries(entries: readonly PlanEntry[]): string {
     for (const entry of entries) {
         lines.push(`[${entry.status}] ${entry.content}`);
     }
-    return truncate(lines.join("\n"), AGENT_ACTIVITY_DETAIL_LIMIT);
+    return truncate(lines.join("\n"), ACTIVITY_DETAIL_LIMIT);
 }
 
 export function planStatus(entries: readonly PlanEntry[]): string {

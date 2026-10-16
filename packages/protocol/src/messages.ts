@@ -1,4 +1,4 @@
-import type { SessionConfigurationSelection } from "./control-messages.ts";
+import type { PromptImage, PromptResource, SessionConfigurationSelection } from "./control-messages.ts";
 
 export const SESSION_PROMPT_KIND = "session.prompt";
 export const SESSION_PROMPT_DISPOSITION_KIND = "session.prompt.disposition";
@@ -10,11 +10,6 @@ export const RUNTIME_HEARTBEAT_KIND = "runtime.heartbeat";
 export const RUNTIME_HEARTBEAT_ACK_KIND = "runtime.heartbeat.ack";
 export const RUNTIME_PING_KIND = "runtime.ping";
 export const RUNTIME_PONG_KIND = "runtime.pong";
-export const AGENT_ACTIVITY_DETAIL_LIMIT = 500_000;
-export const AGENT_ACTIVITY_RECORDED_FIELD_LIMIT = 4_000_000;
-export const AGENT_ACTIVITY_RECORDED_DETAIL_LIMIT = 6_000_000;
-export const AGENT_ACTIVITY_LOCATION_LIMIT = 12;
-export const AGENT_ACTIVITY_LOCATION_LENGTH_LIMIT = 1_024;
 
 export const SessionPromptDisposition = Object.freeze({
     Queue: "queue",
@@ -80,23 +75,3 @@ export interface RuntimePongEvent {
     readonly kind: typeof RUNTIME_PONG_KIND;
     readonly requestId: string;
 }
-
-export type AgentActivityDetailCapture =
-    | {
-          readonly artifactId: string;
-          readonly kind: "available";
-      }
-    | {
-          readonly content: readonly AgentDisplayContent[];
-          readonly input: string;
-          readonly kind: "recorded";
-          readonly output: string;
-      }
-    | {
-          readonly capturedBytes: number;
-          readonly kind: "truncated";
-          readonly originalBytes: number;
-      }
-    | { readonly kind: "unrecorded" };
-
-import type { AgentDisplayContent, PromptImage, PromptResource } from "./control-messages.ts";

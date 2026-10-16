@@ -1,7 +1,8 @@
 import type { Plan, PlanEntry, PlanRemoved, PlanUpdate, ToolCall, ToolCallUpdate } from "@agentclientprotocol/sdk";
-import { AGENT_ACTIVITY_DETAIL_LIMIT, type AgentDisplayContent } from "@moxt-ai/mobius-protocol";
+import type { AgentDisplayContent } from "@moxt-ai/mobius-protocol";
 
 import {
+    ACTIVITY_DETAIL_LIMIT,
     type CapturedActivityDetail,
     captureActivityDetail,
     encodedByteLength,
@@ -150,7 +151,7 @@ export class AcpActivityTracker {
         // stream quadratic in the length of the narration.
         const previous = this.#narrations.get(key);
         const previousOutput = previous?.output ?? "";
-        const remaining = Math.max(0, AGENT_ACTIVITY_DETAIL_LIMIT - previousOutput.length);
+        const remaining = Math.max(0, ACTIVITY_DETAIL_LIMIT - previousOutput.length);
         this.#narrations.set(key, {
             activityId: identity.id,
             activityType,
@@ -189,7 +190,7 @@ export class AcpActivityTracker {
                 "",
                 [],
                 "",
-                truncate(text, AGENT_ACTIVITY_DETAIL_LIMIT),
+                truncate(text, ACTIVITY_DETAIL_LIMIT),
                 identity.sequence,
                 severity === "error" ? "failed" : "completed",
                 severity === "error" ? "Agent error" : "Agent warning",
@@ -210,7 +211,7 @@ export class AcpActivityTracker {
             "",
             [],
             "",
-            truncate(output, AGENT_ACTIVITY_DETAIL_LIMIT),
+            truncate(output, ACTIVITY_DETAIL_LIMIT),
             identity.sequence,
             status,
             activityType === "reasoning" ? "Reasoning" : "Progress update",
@@ -240,7 +241,7 @@ export class AcpActivityTracker {
                 "",
                 [],
                 "",
-                truncate(output, AGENT_ACTIVITY_DETAIL_LIMIT),
+                truncate(output, ACTIVITY_DETAIL_LIMIT),
                 identity.sequence,
                 "running",
                 "Plan",
@@ -409,7 +410,7 @@ export class AcpActivityTracker {
                 "",
                 [],
                 "",
-                truncate(narration.output, AGENT_ACTIVITY_DETAIL_LIMIT),
+                truncate(narration.output, ACTIVITY_DETAIL_LIMIT),
                 narration.sequence,
                 "completed",
                 narration.activityType === "reasoning" ? "Reasoning" : "Progress update",

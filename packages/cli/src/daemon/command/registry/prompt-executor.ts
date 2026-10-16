@@ -1,5 +1,4 @@
 import { type SessionPromptCommand, SessionPromptDisposition } from "@moxt-ai/mobius-protocol";
-import type { AcpActivity, AcpActivityNarration } from "../../../acp/activity.ts";
 import { AcpExecutionError, type AgentRuntimeManager } from "../../../acp/agent-runtime-manager.ts";
 import {
     agentForSessionConfiguration,
@@ -32,9 +31,6 @@ export interface ExecutePromptOptions {
         | { readonly kind: "queue-target-unavailable" }
     >;
     readonly signal: AbortSignal;
-    readonly recordTurnActivity: (activity: AcpActivity) => void;
-    readonly recordTurnNarration: (narration: AcpActivityNarration) => void;
-    readonly recordTurnText: (messageId: string, text: string) => void;
     readonly recordSteeringPrompt: () => boolean;
     readonly cancellationRequested: () => boolean;
 }
@@ -50,9 +46,6 @@ export async function executePrompt({
     activateAttempt,
     waitForSessionAvailability,
     signal,
-    recordTurnActivity,
-    recordTurnNarration,
-    recordTurnText,
     recordSteeringPrompt,
     cancellationRequested,
 }: ExecutePromptOptions): Promise<void> {
@@ -156,15 +149,6 @@ export async function executePrompt({
                 disposition: availability.disposition,
                 images: attachments.images,
                 lifecycleV2,
-                onActivity: async (activity) => {
-                    recordTurnActivity(activity);
-                },
-                onNarration: async (increment) => {
-                    recordTurnNarration(increment);
-                },
-                onText: async (text, messageId) => {
-                    recordTurnText(messageId, text);
-                },
                 prompt: command.prompt,
                 resources: attachments.resources,
                 sessionId: command.sessionId,

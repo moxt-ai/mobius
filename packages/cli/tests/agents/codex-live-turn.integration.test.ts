@@ -219,15 +219,6 @@ test("Given real Codex starts a tool, When clients watch and reopen the complete
                             sequence: expect.any(Number),
                             state: "running",
                         });
-                        expect(result.turn?.messages).toEqual(
-                            expect.arrayContaining([
-                                expect.objectContaining({
-                                    id: commandId,
-                                    role: "user",
-                                    text: "Use a shell tool successfully, then reply using the configured model",
-                                }),
-                            ]),
-                        );
                     }
                     snapshotVerified = true;
                     socket.send(
