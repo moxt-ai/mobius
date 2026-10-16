@@ -160,7 +160,47 @@ const embeddedResourceSchema = z
     })
     .readonly();
 
-export const contentBlockV2Schema = z.discriminatedUnion("type", [
+export const unsupportedContentBlockV2Schema = z
+    .object({
+        originalType: z.string().min(1).max(128),
+        raw: boundedJsonSchema,
+        type: z.literal("unsupported"),
+    })
+    .readonly();
+
+// A Relay or consumer older than a daemon's protocol may receive a content
+// block type it does not know. Rather than failing the whole event batch,
+// decode the unknown block as an explicit `unsupported` envelope that keeps
+// the original discriminator and the bounded raw payload, so the stream and
+// recordings survive protocol evolution and the UI can degrade gracefully.
+// Wrapping must be idempotent: the Relay re-encodes what it decodes, and an
+// already-wrapped block matches the union member without double wrapping.
+const KNOWN_CONTENT_BLOCK_TYPES: ReadonlySet<string> = new Set([
+    "text",
+    "image",
+    "audio",
+    "resource_link",
+    "resource",
+    "external_image",
+    "external_audio",
+    "external_resource",
+    "unsupported",
+]);
+const foreignContentBlockSchema = z.preprocess((value) => {
+    if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+        const type = (value as Record<string, unknown>)["type"];
+        if (typeof type === "string" && !KNOWN_CONTENT_BLOCK_TYPES.has(type)) {
+            return {
+                originalType: type,
+                raw: value,
+                type: "unsupported",
+            };
+        }
+    }
+    return value;
+}, unsupportedContentBlockV2Schema);
+
+export const contentBlockV2Schema = z.union([
     textContentSchema,
     imageContentSchema,
     audioContentSchema,
@@ -169,8 +209,11 @@ export const contentBlockV2Schema = z.discriminatedUnion("type", [
     externalImageContentSchema,
     externalAudioContentSchema,
     externalResourceContentSchema,
+    unsupportedContentBlockV2Schema,
+    foreignContentBlockSchema,
 ]);
 export type ContentBlockV2 = z.infer<typeof contentBlockV2Schema>;
+export type UnsupportedContentBlockV2 = z.infer<typeof unsupportedContentBlockV2Schema>;
 export type ExternalImageContentBlockV2 = z.infer<typeof externalImageContentSchema>;
 export type ExternalAudioContentBlockV2 = z.infer<typeof externalAudioContentSchema>;
 export type ExternalResourceContentBlockV2 = z.infer<typeof externalResourceContentSchema>;

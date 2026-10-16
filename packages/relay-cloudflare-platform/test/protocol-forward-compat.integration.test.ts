@@ -382,7 +382,12 @@ describe.sequential("Platform protocol forward compatibility", () => {
                     ],
                 }),
             );
-            // The follow-up known event proves the stream survived the unknown one.
+            // The unknown block crosses as an explicit `unsupported` envelope
+            // that keeps the original type and raw payload, and the follow-up
+            // known event proves the stream survived the unknown one.
+            const wrapped = decodeSessionEventEnvelopeV2(await hostMessages.next());
+            expect(JSON.stringify(wrapped.events)).toContain("external_video");
+            expect(JSON.stringify(wrapped.events)).toContain('"unsupported"');
             daemon.send(
                 JSON.stringify({
                     kind: "session.event.v2",
