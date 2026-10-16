@@ -71,8 +71,6 @@ export {
     decodeNativeSessionHistory,
     decodePromptImagesValue,
     decodePromptResourcesValue,
-    decodeRecordedAgentContentValue,
-    decodeRecordedSessionEvent,
     decodeSessionCommandsUpdatedEvent,
     decodeSessionElicitationRequestedEvent,
     decodeSessionElicitationResolvedEvent,
