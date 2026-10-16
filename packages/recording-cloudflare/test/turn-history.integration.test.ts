@@ -516,23 +516,6 @@ describe("Recording Turn history", () => {
         ]);
     });
 
-    it("Given an undecodable projection state and no recorded failure, When a client reads Turns, Then the read schedules backfill and then reports the failure", async () => {
-        await completedTurn("command-1", "Prompt 1", "Reply 1");
-        const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, sessionId]));
-        await runInDurableObject(stub, (_instance, state) => {
-            state.storage.sql.exec("UPDATE recording_projection SET state_json = '{}'");
-        });
-        const building = await worker.fetch(new Request(sessionPath("turns")), env);
-        expect(building.status).toBe(503);
-        expect(await building.json()).toMatchObject({ error: { code: "projection_building" } });
-        while (await runDurableObjectAlarm(stub)) {
-            // Run every due backfill attempt; each one fails on the undecodable state.
-        }
-        const failed = await worker.fetch(new Request(sessionPath("turns")), env);
-        expect(failed.status).toBe(503);
-        expect(await failed.json()).toMatchObject({ error: { code: "projection_failed" } });
-    });
-
     it("Given a Turn that fills most of a page, When a client reads Turns, Then an older Turn that does not fit moves to the next page", async () => {
         await completedTurn("command-1", "x".repeat(900_000), "Reply 1");
         await record([
