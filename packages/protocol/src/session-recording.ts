@@ -72,10 +72,27 @@ const sessionRecordingDirectorySchema = z
     })
     .readonly();
 
-/** Turns returned by one Turn history page at most. */
+/**
+ * Turns a caller may request from a Turn history page at most. This bounds the request only: a
+ * service counts a page against it, and a page also stays inside a serialized-character budget, so
+ * the request bound never sets how large a response can be.
+ */
 export const SESSION_RECORDING_TURN_PAGE_MAX_LIMIT = 100;
-/** Items returned by one Turn item page at most. */
+/**
+ * Items a caller may request from a Turn item page at most. As with the Turn bound this is a
+ * request limit, not a limit on what a service lists.
+ */
 export const SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT = 1_000;
+/**
+ * Elements a page may carry when decoded. The request bounds above are a contract a service is
+ * expected to honour, so they are not what a decoder is willing to read: a service lists up to a
+ * per-Turn budget of its own, independent of anything a caller requested, and a caller that rejects
+ * a service listing more than it asked for would rather fail the whole read than render it. This
+ * bound is deliberately decoupled from both request limits and left unchanged when those move, so
+ * one deployment's idea of a page size can never decode as `invalid_service_response` in another's.
+ * A page's serialized-character budget is what bounds its actual size.
+ */
+export const SESSION_RECORDING_TURN_PAGE_DECODE_MAX_ELEMENTS = 10_000;
 /** Longest Turn item identifier. */
 export const SESSION_RECORDING_TURN_ITEM_ID_MAX_LENGTH = 4_200;
 
@@ -266,7 +283,7 @@ const sessionRecordingTurnSchema = z
         createdAt: isoTimestamp,
         generationId: identifierStringSchema,
         itemCount: z.number().int().nonnegative().safe(),
-        items: z.array(sessionRecordingTurnItemSchema).max(SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT).readonly(),
+        items: z.array(sessionRecordingTurnItemSchema).max(SESSION_RECORDING_TURN_PAGE_DECODE_MAX_ELEMENTS).readonly(),
         // Continues this Turn's items after the listed prefix, or null when every item is listed.
         itemsCursor: turnItemCursorSchema.nullable(),
         messageId: shortText.nullable(),
@@ -318,7 +335,7 @@ const sessionRecordingTurnPageSchema = z
         // The Recording cursor at the last event this snapshot includes; live reads continue after it.
         tailCursor: recordingCursorSchema,
         title: z.string().max(1_000).nullable(),
-        turns: z.array(sessionRecordingTurnSchema).max(SESSION_RECORDING_TURN_PAGE_MAX_LIMIT).readonly(),
+        turns: z.array(sessionRecordingTurnSchema).max(SESSION_RECORDING_TURN_PAGE_DECODE_MAX_ELEMENTS).readonly(),
         version: z.literal(1),
     })
     .readonly();
@@ -326,7 +343,7 @@ const sessionRecordingTurnPageSchema = z
 const sessionRecordingTurnItemPageSchema = z
     .object({
         commandId: identifierStringSchema,
-        items: z.array(sessionRecordingTurnItemSchema).max(SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT).readonly(),
+        items: z.array(sessionRecordingTurnItemSchema).max(SESSION_RECORDING_TURN_PAGE_DECODE_MAX_ELEMENTS).readonly(),
         nextCursor: turnItemCursorSchema.nullable(),
         sessionId: identifierStringSchema,
         version: z.literal(1),
