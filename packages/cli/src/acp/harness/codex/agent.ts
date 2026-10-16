@@ -9,7 +9,7 @@ import {
     type PromptResponse,
     type SessionNotification,
 } from "@agentclientprotocol/sdk";
-
+import { z } from "zod";
 import { captureProcessTree, type ProcessTreeIdentity, stopProcessTree } from "../../../util/process/executable.ts";
 import { AcpExecutionError } from "../../acp-error.ts";
 import {
@@ -41,6 +41,7 @@ import {
     type UserInputQuestion,
 } from "./app-server-protocol.ts";
 import { decodeThreadItem, reasoningText, toolCallUpdate } from "./items.ts";
+import { CodexQueuedSession } from "./queued-session.ts";
 import { CodexSettings } from "./settings.ts";
 
 const APPROVAL_REASON_CHARACTER_LIMIT = 500;
@@ -223,6 +224,9 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
     #connection: AgentConnection | null = null;
     readonly #settings: CodexSettings;
     #nativeSessionId = "";
+    #execution: { readonly kind: "owned" } | { readonly kind: "queued"; readonly session: CodexQueuedSession } = {
+        kind: "owned",
+    };
     readonly #streamedReasoningItemIds = new Set<string>();
     readonly #agentMessages = new Map<
         string,
@@ -302,16 +306,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 return {};
             })
             .onRequest(methods.agent.session.load, async (context) => {
-                const resumed = threadResumeResponseSchema.parse(
-                    await this.#appServer.request(
-                        "thread/resume",
-                        { cwd: context.params.cwd, excludeTurns: true, threadId: context.params.sessionId },
-                        AbortSignal.any([context.signal, AbortSignal.timeout(APPROVAL_TIMEOUT_MILLISECONDS)]),
-                    ),
-                );
-                this.#nativeSessionId = resumed.thread.id;
-                this.#settings.selectRestoredThread(resumed);
-                await this.#settings.probeCollaborationMode(this.#nativeSessionId, context.signal);
+                await this.#resume(context.params.sessionId, context.params.cwd, context.signal);
                 await this.#replaySavedHistory(context.signal);
                 return { configOptions: this.#settings.configOptions() };
             })
@@ -335,16 +330,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 return { configOptions: this.#settings.configOptions(), sessionId: forked.thread.id };
             })
             .onRequest(methods.agent.session.resume, async (context) => {
-                const resumed = threadResumeResponseSchema.parse(
-                    await this.#appServer.request(
-                        "thread/resume",
-                        { cwd: context.params.cwd, excludeTurns: true, threadId: context.params.sessionId },
-                        AbortSignal.any([context.signal, AbortSignal.timeout(APPROVAL_TIMEOUT_MILLISECONDS)]),
-                    ),
-                );
-                this.#nativeSessionId = resumed.thread.id;
-                this.#settings.selectRestoredThread(resumed);
-                await this.#settings.probeCollaborationMode(this.#nativeSessionId, context.signal);
+                await this.#resume(context.params.sessionId, context.params.cwd, context.signal);
                 return { configOptions: this.#settings.configOptions() };
             })
             .onRequest(methods.agent.session.prompt, async (context) => {
@@ -403,6 +389,9 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
             // Publish closure immediately, but keep stdio intact until the process tree is captured.
             this.#appServer.detach();
             this.#closePromise = (async () => {
+                if (this.#execution.kind === "queued") {
+                    await this.#execution.session.close();
+                }
                 const child = this.#appServer.child();
                 try {
                     const captured: readonly ProcessTreeIdentity[] = await captureProcessTree(child);
@@ -413,6 +402,54 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
             })();
         }
         return this.#closePromise;
+    };
+
+    readonly #resume = async (threadId: string, cwd: string, signal: AbortSignal): Promise<void> => {
+        try {
+            const resumed = threadResumeResponseSchema.parse(
+                await this.#appServer.request(
+                    "thread/resume",
+                    { cwd, excludeTurns: true, threadId },
+                    AbortSignal.any([signal, AbortSignal.timeout(APPROVAL_TIMEOUT_MILLISECONDS)]),
+                ),
+            );
+            this.#nativeSessionId = resumed.thread.id;
+            this.#settings.selectRestoredThread(resumed);
+            await this.#settings.probeCollaborationMode(this.#nativeSessionId, signal);
+        } catch (error) {
+            signal.throwIfAborted();
+            // Current Codex reports writer conflicts as InvalidRequest, without a dedicated error
+            // tag. Require that code plus a readable persisted thread and its queue capability.
+            // Never classify localized error prose or turn unrelated failures into a new thread.
+            const failure = z
+                .object({
+                    code: z.literal("codex_app_server_request_failed"),
+                    cause: z.object({ code: z.literal(-32600) }),
+                })
+                .safeParse(error);
+            if (!failure.success) {
+                throw error;
+            }
+            const saved = z
+                .object({
+                    thread: z.object({
+                        id: z.literal(threadId),
+                        model: z.string().nullish(),
+                        reasoningEffort: z.string().nullish(),
+                        turns: z.array(z.unknown()),
+                    }),
+                })
+                .parse(await this.#appServer.request("thread/read", { threadId, includeTurns: false }, signal));
+            const queued = new CodexQueuedSession(this.#appServer, threadId, this.#emit);
+            await queued.initialize(signal);
+            this.#nativeSessionId = threadId;
+            this.#settings.selectRestoredThread({
+                thread: { id: threadId },
+                model: saved.thread.model,
+                reasoningEffort: saved.thread.reasoningEffort,
+            });
+            this.#execution = { kind: "queued", session: queued };
+        }
     };
 
     // ACP load requires chronological replay. Resume only restores execution;
@@ -830,6 +867,9 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
     };
 
     readonly #runTurn = async (input: readonly unknown[], signal: AbortSignal): Promise<PromptResponse> => {
+        if (this.#execution.kind === "queued") {
+            return await this.#execution.session.prompt(input, signal);
+        }
         signal.throwIfAborted();
         if (this.#turn !== null) {
             throw new AcpExecutionError("Another prompt is already running in this conversation", {}, "session_busy");
@@ -922,6 +962,10 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
     };
 
     readonly #interruptTurn = async (): Promise<void> => {
+        if (this.#execution.kind === "queued") {
+            this.#execution.session.cancel();
+            return;
+        }
         const turn = this.#turn;
         if (turn === null) {
             return;
