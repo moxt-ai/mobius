@@ -2,7 +2,6 @@ export * from "./codecs/messages.ts";
 export * from "./control-messages.ts";
 export * from "./conversation-title.ts";
 export * from "./daemon-transport.ts";
-export * from "./history-images.ts";
 export { decodeIdentifier, type Identifier, isIdentifier } from "./identifier.ts";
 export * from "./messages.ts";
 export * from "./mobius-api.ts";

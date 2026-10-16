@@ -3,7 +3,6 @@ import {
     type AgentDisplayContent,
     SESSION_HISTORY_CHARACTER_LIMIT,
     SESSION_HISTORY_MESSAGE_LIMIT,
-    SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT,
 } from "@moxt-ai/mobius-protocol";
 import { z } from "zod";
 import { AcpExecutionError } from "../acp/acp-error.ts";
@@ -20,6 +19,7 @@ import {
     type NativeHistoryActivity,
     type NativeHistoryEntry,
     type NativeHistoryTimelineMessage,
+    SESSION_HISTORY_PREVIEW_TURN_LIMIT,
 } from "./history-images.ts";
 
 const responseSchema = z.union([
@@ -706,7 +706,7 @@ async function readCodexHistoryWithOptions(
                             method: "thread/turns/list",
                             params: {
                                 threadId: nativeSessionId,
-                                limit: SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT,
+                                limit: SESSION_HISTORY_PREVIEW_TURN_LIMIT,
                                 sortDirection: "desc",
                                 itemsView: "full",
                             },
@@ -745,7 +745,7 @@ async function readCodexHistoryWithOptions(
                             params: {
                                 threadId: nativeSessionId,
                                 cursor: page.nextCursor,
-                                limit: Math.min(SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT, maxTurns - pages.length),
+                                limit: Math.min(SESSION_HISTORY_PREVIEW_TURN_LIMIT, maxTurns - pages.length),
                                 sortDirection: "desc",
                                 itemsView: "full",
                             },
