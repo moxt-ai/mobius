@@ -1,10 +1,10 @@
 import { join, resolve } from "node:path";
 import { mobiusApiPath, RUNTIME_WORKSPACE_BINDING_ID } from "@moxt-ai/mobius-protocol";
-import { type AcpAgentDefinition, LocalAgentCatalog } from "./agent-catalog/local-agent.ts";
-import { readStateDirectory } from "./storage/state-directory.ts";
+import { type AcpAgentDefinition, LocalAgentCatalog } from "../agent-catalog/local-agent.ts";
+import { readStateDirectory } from "../storage/state-directory.ts";
 
-export type { AcpAgentDefinition } from "./agent-catalog/local-agent.ts";
-export { InProcessAcpAgentDefinition, LocalAgentDefinition } from "./agent-catalog/local-agent.ts";
+export type { AcpAgentDefinition } from "../agent-catalog/local-agent.ts";
+export { InProcessAcpAgentDefinition, LocalAgentDefinition } from "../agent-catalog/local-agent.ts";
 
 export function loadDefaultWorkspace(environment: Readonly<NodeJS.ProcessEnv> = process.env): string {
     const { MOBIUS_DEFAULT_WORKSPACE: configuredWorkspace } = environment;

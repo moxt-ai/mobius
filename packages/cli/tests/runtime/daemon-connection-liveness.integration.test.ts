@@ -25,11 +25,11 @@ import {
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
 } from "../../../protocol/src/index.ts";
-import { createDaemonConfig, LocalAgentDefinition } from "../../src/config.ts";
+import { createDaemonConfig, LocalAgentDefinition } from "../../src/daemon/config.ts";
+import { RuntimeRelayRevokedError } from "../../src/daemon/relay/runtime-revocation.ts";
+import { SESSION_EVENT_V2_BATCH_WINDOW_MILLISECONDS } from "../../src/daemon/relay/session-event-publisher.ts";
+import type { DaemonScheduledTask, DaemonTimer } from "../../src/daemon/relay/timer.ts";
 import { runDaemon } from "../../src/daemon/run.ts";
-import { RuntimeRelayRevokedError } from "../../src/relay-connection/runtime-revocation.ts";
-import { SESSION_EVENT_V2_BATCH_WINDOW_MILLISECONDS } from "../../src/relay-connection/session-event-publisher.ts";
-import type { DaemonScheduledTask, DaemonTimer } from "../../src/relay-connection/timer.ts";
 
 const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const fakeAgentPath = fileURLToPath(new URL("../sessions/fixtures/acp-peer.ts", import.meta.url));

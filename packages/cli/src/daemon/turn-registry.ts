@@ -5,8 +5,8 @@ import {
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
-import type { DaemonOperationState } from "../relay-connection/daemon-operation-state.ts";
 import { ActiveDaemonTurn, type RecordedSessionEvent } from "./active-turn.ts";
+import type { DaemonOperationState } from "./relay/daemon-operation-state.ts";
 
 const waitForTurnCompletion = (turn: ActiveDaemonTurn, waitSignal: AbortSignal): Promise<void> => {
     waitSignal.throwIfAborted();

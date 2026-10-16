@@ -4,7 +4,7 @@ import { gzipSync } from "node:zlib";
 import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { afterEach, describe, expect, it } from "vitest";
 import { MOBIUS_API_PREFIX, SESSION_PROMPT_KIND, type SessionPromptCommand } from "../../../protocol/src/index.ts";
-import { createDaemonConfig } from "../../src/config.ts";
+import { createDaemonConfig } from "../../src/daemon/config.ts";
 import { resolvePromptArtifacts } from "../../src/prompt-artifact-resolver.ts";
 
 function digest(bytes: Uint8Array): string {

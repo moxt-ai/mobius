@@ -5,15 +5,15 @@ import {
     UnsupportedProtocolMessageKindError,
 } from "@moxt-ai/mobius-protocol";
 import { type MessageEvent, WebSocket } from "undici";
-import type { AgentRuntimeManager } from "../acp/agent-runtime-manager.ts";
-import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
+import type { AgentRuntimeManager } from "../../acp/agent-runtime-manager.ts";
+import type { WorkspaceDirectoryService } from "../../authorization/workspace-directory.ts";
+import type { ExternalContentStore } from "../../external-content/local-external-content-store.ts";
+import type { NativeSessionService } from "../../native-sessions/service.ts";
+import type { DaemonSessionEventProjectionV2 } from "../../session-event-projection-v2.ts";
+import { createDaemonCommandDispatcher, send } from "../command-dispatcher.ts";
 import type { DaemonConfig } from "../config.ts";
-import { createDaemonCommandDispatcher, send } from "../daemon/command-dispatcher.ts";
-import type { DaemonTurnRegistry } from "../daemon/turn-registry.ts";
-import { reportDaemonUpgrade } from "../daemon/upgrades/upgrade.ts";
-import type { ExternalContentStore } from "../external-content/local-external-content-store.ts";
-import type { NativeSessionService } from "../native-sessions/service.ts";
-import type { DaemonSessionEventProjectionV2 } from "../session-event-projection-v2.ts";
+import type { DaemonTurnRegistry } from "../turn-registry.ts";
+import { reportDaemonUpgrade } from "../upgrades/upgrade.ts";
 import { connectRelay } from "./connect.ts";
 import type { DaemonOperationState } from "./daemon-operation-state.ts";
 import type { RelayConnectionDiagnostics } from "./diagnostics.ts";

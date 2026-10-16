@@ -24,7 +24,7 @@ import { DirectAcpAgentDefinition } from "../../src/agent-catalog/agent-specific
 import { discoverLocalAgentInventory } from "../../src/agent-catalog/discover-local-agents.ts";
 import { publishAgentCatalog } from "../../src/agent-catalog/publish-agent-catalog.ts";
 import { createCatalogAgentResolver } from "../../src/agent-catalog/resolve-catalog-agent.ts";
-import { createDaemonConfig, DaemonLocalContext } from "../../src/config.ts";
+import { createDaemonConfig, DaemonLocalContext } from "../../src/daemon/config.ts";
 import { runDaemon } from "../../src/daemon/run.ts";
 
 const websocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";

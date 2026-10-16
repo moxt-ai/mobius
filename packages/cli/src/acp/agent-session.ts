@@ -24,7 +24,7 @@ import {
 import type { LocalRasterImage } from "../acp/resource/local-raster.ts";
 import { readInlineRaster, readLocalRaster } from "../acp/resource/local-raster.ts";
 import { type LocalVideo, readInlineVideo } from "../acp/resource/local-video.ts";
-import type { AcpAgentDefinition } from "../config.ts";
+import type { AcpAgentDefinition } from "../daemon/config.ts";
 import type { AcpContentExternalizer } from "../external-content/acp-content-externalizer.ts";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
 import { revalidateExecutable } from "../util/process/executable.ts";

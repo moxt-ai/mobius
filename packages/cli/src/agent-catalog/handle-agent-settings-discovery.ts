@@ -6,15 +6,15 @@ import {
     type AgentRuntimeManager,
 } from "../acp/agent-runtime-manager.ts";
 import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
-import type { DaemonConfig } from "../config.ts";
 import {
     agentSettingsFailureDetails,
     operationErrorCode,
     operationErrorMessage,
     send,
 } from "../daemon/command-dispatcher.ts";
-import type { RelayConnectionDiagnostics } from "../relay-connection/diagnostics.ts";
-import type { DaemonTimer } from "../relay-connection/timer.ts";
+import type { DaemonConfig } from "../daemon/config.ts";
+import type { RelayConnectionDiagnostics } from "../daemon/relay/diagnostics.ts";
+import type { DaemonTimer } from "../daemon/relay/timer.ts";
 import { discoverAgentSettings } from "./discover-agent-settings.ts";
 
 interface SettingsDiscoveryDependencies {

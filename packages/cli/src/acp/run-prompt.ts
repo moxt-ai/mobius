@@ -1,4 +1,4 @@
-import { LocalAgentDefinition } from "../config.ts";
+import { LocalAgentDefinition } from "../daemon/config.ts";
 import type { AcpActivity, AcpActivityNarration } from "./activity.ts";
 import { AcpExecutionError, type AcpPromptResult, AgentRuntimeManager } from "./agent-runtime-manager.ts";
 

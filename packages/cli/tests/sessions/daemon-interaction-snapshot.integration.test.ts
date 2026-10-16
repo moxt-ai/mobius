@@ -41,7 +41,7 @@ import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { expect, test } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { LocalAgentDefinition } from "../../src/agent-catalog/local-agent.ts";
-import { createDaemonConfig, DaemonLocalContext } from "../../src/config.ts";
+import { createDaemonConfig, DaemonLocalContext } from "../../src/daemon/config.ts";
 import { runDaemon } from "../../src/daemon/run.ts";
 
 class Messages {

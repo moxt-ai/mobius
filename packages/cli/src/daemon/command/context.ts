@@ -1,13 +1,13 @@
 import type { WebSocket } from "undici";
 import type { AgentRuntimeManager } from "../../acp/agent-runtime-manager.ts";
 import type { WorkspaceDirectoryService } from "../../authorization/workspace-directory.ts";
-import type { DaemonConfig } from "../../config.ts";
 import type { ExternalContentStore } from "../../external-content/local-external-content-store.ts";
 import type { NativeSessionService } from "../../native-sessions/service.ts";
-import type { DaemonOperationState } from "../../relay-connection/daemon-operation-state.ts";
-import type { RelayConnectionDiagnostics } from "../../relay-connection/diagnostics.ts";
-import type { DaemonTimer } from "../../relay-connection/timer.ts";
 import type { DaemonSessionEventProjectionV2 } from "../../session-event-projection-v2.ts";
+import type { DaemonConfig } from "../config.ts";
+import type { DaemonOperationState } from "../relay/daemon-operation-state.ts";
+import type { RelayConnectionDiagnostics } from "../relay/diagnostics.ts";
+import type { DaemonTimer } from "../relay/timer.ts";
 import type { DaemonTurnRegistry } from "../turn-registry.ts";
 
 export interface CommandContext {

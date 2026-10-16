@@ -1,4 +1,4 @@
-import { type DaemonConfig, withDaemonEnvironment } from "../config.ts";
+import { type DaemonConfig, withDaemonEnvironment } from "../daemon/config.ts";
 import { revalidateExecutable } from "../util/process/executable.ts";
 import type { discoverLocalAgentInventory } from "./discover-local-agents.ts";
 import type { AcpAgentDefinition as CatalogAgentDefinition } from "./local-agent.ts";

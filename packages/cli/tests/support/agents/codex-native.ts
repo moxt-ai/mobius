@@ -11,7 +11,7 @@ import { CodexAcpAgent } from "../../../src/acp/harness/codex/agent.ts";
 import { MemoryAcpSessionStore } from "../../../src/acp/session-store.ts";
 import { InProcessAcpAgentDefinition } from "../../../src/agent-catalog/local-agent.ts";
 import { WorkspaceDirectoryService } from "../../../src/authorization/workspace-directory.ts";
-import { createDaemonConfig } from "../../../src/config.ts";
+import { createDaemonConfig } from "../../../src/daemon/config.ts";
 import { NativeSessionService } from "../../../src/native-sessions/service.ts";
 import { FakeOpenAiProvider } from "../llm/openai.ts";
 import { CodexFixture } from "./codex.ts";

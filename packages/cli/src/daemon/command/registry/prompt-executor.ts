@@ -7,11 +7,11 @@ import {
 } from "../../../acp/session-config/apply-session-configuration.ts";
 import { resolveSessionDirectories } from "../../../authorization/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "../../../authorization/workspace-directory.ts";
-import type { DaemonConfig } from "../../../config.ts";
 import { resolvePromptArtifacts } from "../../../prompt-artifact-resolver.ts";
-import type { DaemonOperationState } from "../../../relay-connection/daemon-operation-state.ts";
 import type { DaemonSessionEventProjectionV2 } from "../../../session-event-projection-v2.ts";
 import { operationErrorCode, operationErrorMessage } from "../../command-dispatcher.ts";
+import type { DaemonConfig } from "../../config.ts";
+import type { DaemonOperationState } from "../../relay/daemon-operation-state.ts";
 import { resolveCatalogAgent } from "./session.ts";
 
 export interface ExecutePromptOptions {

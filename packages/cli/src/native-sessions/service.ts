@@ -15,7 +15,7 @@ import { nativeSessionIdSchema } from "../acp/native-session.ts";
 import type { AcpStoredSession } from "../acp/session-store.ts";
 import { LocalAuthorizationError } from "../authorization/local-authorization-error.ts";
 import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
-import type { DaemonConfig } from "../config.ts";
+import type { DaemonConfig } from "../daemon/config.ts";
 
 interface ListedTarget {
     readonly scope: string;
