@@ -10,15 +10,11 @@ export const RUNTIME_HEARTBEAT_KIND = "runtime.heartbeat";
 export const RUNTIME_HEARTBEAT_ACK_KIND = "runtime.heartbeat.ack";
 export const RUNTIME_PING_KIND = "runtime.ping";
 export const RUNTIME_PONG_KIND = "runtime.pong";
-export const SESSION_STARTED_KIND = "session.started";
-export const SESSION_QUEUED_KIND = "session.queued";
 export const AGENT_ACTIVITY_DETAIL_LIMIT = 500_000;
 export const AGENT_ACTIVITY_RECORDED_FIELD_LIMIT = 4_000_000;
 export const AGENT_ACTIVITY_RECORDED_DETAIL_LIMIT = 6_000_000;
 export const AGENT_ACTIVITY_LOCATION_LIMIT = 12;
 export const AGENT_ACTIVITY_LOCATION_LENGTH_LIMIT = 1_024;
-export const SESSION_COMPLETED_KIND = "session.completed";
-export const SESSION_FAILED_KIND = "session.failed";
 
 export const SessionPromptDisposition = Object.freeze({
     Queue: "queue",
@@ -55,12 +51,6 @@ export interface SessionPromptDispositionCommand {
     readonly sessionId: string;
 }
 
-export interface SessionQueuedEvent {
-    readonly commandId: string;
-    readonly kind: typeof SESSION_QUEUED_KIND;
-    readonly sessionId: string;
-}
-
 export interface RuntimeStatusEvent {
     readonly kind: typeof RUNTIME_STATUS_KIND;
     readonly online: boolean;
@@ -91,16 +81,6 @@ export interface RuntimePongEvent {
     readonly requestId: string;
 }
 
-export interface SessionStartedEvent {
-    readonly commandId: string;
-    readonly epoch: string;
-    readonly kind: typeof SESSION_STARTED_KIND;
-    readonly attemptId: string;
-    readonly prompt: string;
-    readonly sequence: 0;
-    readonly sessionId: string;
-}
-
 export type AgentActivityDetailCapture =
     | {
           readonly artifactId: string;
@@ -118,20 +98,5 @@ export type AgentActivityDetailCapture =
           readonly originalBytes: number;
       }
     | { readonly kind: "unrecorded" };
-
-export interface SessionCompletedEvent {
-    readonly commandId: string;
-    readonly kind: typeof SESSION_COMPLETED_KIND;
-    readonly sessionId: string;
-    readonly stopReason: string;
-}
-
-export interface SessionFailedEvent {
-    readonly code: string;
-    readonly commandId: string;
-    readonly kind: typeof SESSION_FAILED_KIND;
-    readonly message: string;
-    readonly sessionId: string;
-}
 
 import type { AgentDisplayContent, PromptImage, PromptResource } from "./control-messages.ts";

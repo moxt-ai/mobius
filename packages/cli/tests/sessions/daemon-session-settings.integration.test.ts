@@ -16,9 +16,7 @@ import {
     encodeAgentSettingsDiscoverCommand,
     encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
-    SESSION_COMPLETED_KIND,
     SESSION_EVENT_V2_KIND,
-    SESSION_FAILED_KIND,
     type SessionEventV2,
     type SessionPromptCommand,
     SessionPromptDisposition,
@@ -128,7 +126,7 @@ async function readTerminalSessionResult(
             if (decodeMessageKind(message) === "session.operation.failed") {
                 const failure = decodeSessionOperationFailedEvent(message);
                 if (failure.sessionId === sessionId && (commandId === "" || failure.requestId === commandId)) {
-                    return new TerminalSessionResult(SESSION_FAILED_KIND, text, failure.code, "");
+                    return new TerminalSessionResult("failed", text, failure.code, "");
                 }
             }
             if (decodeMessageKind(message) !== SESSION_EVENT_V2_KIND) {
@@ -156,11 +154,11 @@ async function readTerminalSessionResult(
             }
             if (payload.kind === "prompt.completed") {
                 bufferedSessionEvents.set(frames, [...deferredEvents, ...events.slice(index + 1)]);
-                return new TerminalSessionResult(SESSION_COMPLETED_KIND, text, "", payload.stopReason);
+                return new TerminalSessionResult("completed", text, "", payload.stopReason);
             }
             if (payload.kind === "prompt.failed" || payload.kind === "prompt.failed-before-start") {
                 bufferedSessionEvents.set(frames, [...deferredEvents, ...events.slice(index + 1)]);
-                return new TerminalSessionResult(SESSION_FAILED_KIND, text, payload.code, "");
+                return new TerminalSessionResult("failed", text, payload.code, "");
             }
         }
     }
@@ -587,9 +585,9 @@ describe("daemon session configuration boundary", () => {
             // The steering Turn is accepted and then injected into the running
             // Turn, so only the running Turn carries the Agent's reply.
             const steeringResult = await readTerminalSessionResult(frames, sessionId, steeringPrompt.commandId, false);
-            expect(steeringResult).toMatchObject({ kind: SESSION_COMPLETED_KIND, text: "" });
+            expect(steeringResult).toMatchObject({ kind: "completed", text: "" });
             const runningResult = await readTerminalSessionResult(frames, sessionId, runningCommandId);
-            expect(runningResult.kind).toBe(SESSION_COMPLETED_KIND);
+            expect(runningResult.kind).toBe("completed");
             expect(runningResult.text).toContain("Steered: focus on the requested fix");
         } finally {
             cancellation.abort();
