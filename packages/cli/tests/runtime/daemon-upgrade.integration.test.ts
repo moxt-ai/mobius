@@ -39,7 +39,7 @@ async function packedRelease(
     } else {
         await writeFile(
             join(root, "dist/cli.js"),
-            'console.log("Starting controlled release"); process.send({ kind: "worker-ready", version: "99.0.3" }, () => { throw new Error("Controlled startup failure after ready"); });',
+            'console.log("Starting controlled release"); throw new Error("Controlled startup failure");',
         );
     }
     await writeFile(

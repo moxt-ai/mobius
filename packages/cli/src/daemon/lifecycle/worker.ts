@@ -72,7 +72,6 @@ async function runWorkerRuntime(version: string, combined: AbortSignal, shutdown
         {
             readonly controller: AbortController;
             readonly completion: Promise<void>;
-            readonly ready: Promise<void>;
         }
     >();
     const fail = (connectionId: string, cause: unknown): void => {
@@ -101,14 +100,7 @@ async function runWorkerRuntime(version: string, combined: AbortSignal, shutdown
             try {
                 const paired = await resumeMobiusRuntime(installation, connection.connectionId, combined);
                 const controller = new AbortController();
-                const ready = Promise.withResolvers<void>();
-                const engine = new MobiusRuntimeEngine(paired.config, {
-                    onConnectionStatus: (status) => {
-                        if (status === "online") {
-                            ready.resolve();
-                        }
-                    },
-                });
+                const engine = new MobiusRuntimeEngine(paired.config);
                 const completion = engine
                     .run(AbortSignal.any([combined, controller.signal]))
                     .then(
@@ -124,7 +116,7 @@ async function runWorkerRuntime(version: string, combined: AbortSignal, shutdown
                         },
                     )
                     .finally(() => active.delete(connection.connectionId));
-                active.set(connection.connectionId, { controller, completion, ready: ready.promise });
+                active.set(connection.connectionId, { controller, completion });
             } catch (cause) {
                 combined.throwIfAborted();
                 fail(connection.connectionId, cause);
@@ -155,19 +147,7 @@ async function runWorkerRuntime(version: string, combined: AbortSignal, shutdown
                 return { kind: "reloaded" };
             },
             async () => {
-                const aborted = Promise.withResolvers<never>();
-                const abort = (): void => aborted.reject(combined.reason);
-                combined.addEventListener("abort", abort, { once: true });
-                try {
-                    combined.throwIfAborted();
-                    await Promise.race([
-                        Promise.all([...active.values()].map((runtime) => runtime.ready)),
-                        aborted.promise,
-                    ]);
-                    combined.throwIfAborted();
-                } finally {
-                    combined.removeEventListener("abort", abort);
-                }
+                combined.throwIfAborted();
                 await recordCurrentData(version, combined);
                 upgrades = runDaemonUpgrades(combined);
                 if (process.connected) {

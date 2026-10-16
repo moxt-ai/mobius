@@ -73,6 +73,34 @@ describe("Mobius manager version compatibility", () => {
             }
         },
     );
+    it("Given Relay withholds liveness ready, When the user starts the daemon, Then local startup succeeds without waiting for Relay", async () => {
+        const directory = await mkdtemp(join(tmpdir(), "mobius-local-start-"));
+        temporaryDirectories.push(directory);
+        const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: directory };
+        const signal = AbortSignal.timeout(15_000);
+        const relay = await startRelay(false);
+        const installation = await openMobiusCliInstallation(signal, environment);
+        await installation.saveConnection(
+            {
+                appId: "app_local_start",
+                channelId: "channel_local_start",
+                defaultWorkspace: directory,
+                pairingId: "",
+                relayOrigin: relay.origin,
+                runtimeCredential: "a".repeat(43),
+                runtimeId: "runtime_local_start",
+            },
+            signal,
+        );
+        try {
+            const result = await runCli(["start"], environment, signal);
+            expect(result.code).toBe(0);
+            expect(result.stdout).toContain("Mobius daemon is running.");
+        } finally {
+            await runCli(["quit"], environment, AbortSignal.timeout(10_000));
+            await relay.close();
+        }
+    }, 30_000);
     it("Given the daemon is stopped, When the user runs mobius start, Then the daemon is running without requiring a connection", async () => {
         const stateRoot = await mkdtemp(join(tmpdir(), "mobius-manager-start-"));
         temporaryDirectories.push(stateRoot);
@@ -455,7 +483,7 @@ describe("Mobius pairing lifecycle", () => {
     }, 75_000);
 });
 
-async function startRelay(): Promise<{ readonly origin: URL; readonly close: () => Promise<void> }> {
+async function startRelay(ready = true): Promise<{ readonly origin: URL; readonly close: () => Promise<void> }> {
     const catalogs = new Map<string, string>();
     const server = createServer((request, response) => {
         const path = request.url ?? "/";
@@ -483,7 +511,9 @@ async function startRelay(): Promise<{ readonly origin: URL; readonly close: () 
                 socket.send(JSON.stringify({ kind: "runtime.heartbeat.ack", heartbeatId: message.heartbeatId }));
             }
         });
-        socket.send(JSON.stringify({ kind: "runtime.liveness.ready" }));
+        if (ready) {
+            socket.send(JSON.stringify({ kind: "runtime.liveness.ready" }));
+        }
     });
     await listen(server);
     return {

@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { WorkerProcess } from "../../src/daemon/lifecycle/worker-process.ts";
-import type { DaemonTimer } from "../../src/relay-connection/timer.ts";
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -11,79 +10,34 @@ afterEach(async () => {
     await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
-async function startWorker(): Promise<{
-    readonly worker: WorkerProcess;
-    readonly observing: Promise<void>;
-    readonly controller: AbortController;
-}> {
+async function startWorker(body: string): Promise<WorkerProcess> {
     vi.useFakeTimers({ now: new Date("2026-10-16T00:00:00Z"), toFake: ["Date", "setTimeout", "clearTimeout"] });
-    const directory = await mkdtemp(join(tmpdir(), "mobius-worker-health-"));
+    const directory = await mkdtemp(join(tmpdir(), "mobius-worker-start-"));
     directories.push(directory);
     const entry = join(directory, "worker.mjs");
-    await writeFile(
-        entry,
-        `
-process.on("disconnect", () => process.exit(0));
-process.send({ kind: "worker-ready", version: "99.0.1" });
-`,
-    );
-    const observing = Promise.withResolvers<void>();
-    const timer: DaemonTimer = {
-        schedule: (callback, milliseconds) => {
-            const timeout = setTimeout(callback, milliseconds);
-            observing.resolve();
-            return { cancel: () => clearTimeout(timeout) };
-        },
-    };
-    const controller = new AbortController();
-    const worker = new WorkerProcess(
+    await writeFile(entry, `process.on("disconnect", () => process.exit(0));\n${body}`);
+    return new WorkerProcess(
         { executable: process.execPath, entry, version: "99.0.1" },
-        controller.signal,
+        new AbortController().signal,
         process.env,
-        timer,
     );
-    return { worker, observing: observing.promise, controller };
 }
 
-it("Given a worker announces readiness, When it remains alive for the full health observation, Then startup succeeds only after five seconds", async () => {
-    const { worker, observing } = await startWorker();
-    let ready = false;
-    const outcome = worker.ready.then(() => {
-        ready = true;
-    });
+it("Given a worker completes local startup, When it announces readiness, Then startup succeeds without a stability delay", async () => {
+    const worker = await startWorker('process.send({ kind: "worker-ready", version: "99.0.1" });');
     try {
-        await observing;
-        await vi.advanceTimersByTimeAsync(4_999);
-        expect(ready).toBe(false);
-        await vi.advanceTimersByTimeAsync(1);
-        await outcome;
-        expect(ready).toBe(true);
+        await worker.ready;
         expect(worker.running).toBe(true);
+        expect(Date.now()).toBe(Date.parse("2026-10-16T00:00:00Z"));
     } finally {
         await worker.close();
     }
 });
 
-it("Given a worker announces readiness, When it exits during health observation, Then startup fails instead of reporting success", async () => {
-    const { worker, observing } = await startWorker();
-    const outcome = worker.ready.catch((cause: unknown) => cause);
+it("Given a worker fails local initialization, When it exits without readiness, Then startup still fails", async () => {
+    const worker = await startWorker("process.exit(1);");
     try {
-        await observing;
-        process.kill(worker.pid, "SIGTERM");
-        await expect(outcome).resolves.toMatchObject({ code: "worker_exited" });
-    } finally {
-        await worker.close();
-    }
-});
-
-it("Given a worker is being observed, When startup is cancelled, Then cancellation is preserved and the process is released", async () => {
-    const { worker, observing, controller } = await startWorker();
-    const outcome = worker.ready.catch((cause: unknown) => cause);
-    try {
-        await observing;
-        const reason = new Error("Startup cancelled");
-        controller.abort(reason);
-        await expect(outcome).resolves.toBe(reason);
+        await expect(worker.ready).rejects.toMatchObject({ code: "worker_exited" });
     } finally {
         await worker.close();
     }
