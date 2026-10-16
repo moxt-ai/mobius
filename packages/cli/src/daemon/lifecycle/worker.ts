@@ -10,6 +10,13 @@ import { MobiusRuntimeEngine } from "../runtime.ts";
 import { prepareUpgradeData, recordCurrentData } from "../upgrades/data.ts";
 import { runDaemonUpgrades } from "../upgrades/upgrade.ts";
 
+class WorkerRuntimeError extends Error {
+    readonly code = "worker_runtime_failed";
+    constructor(connectionId: string, cause: unknown) {
+        super(`Runtime ${connectionId} failed`, { cause });
+    }
+}
+
 export async function reloadDaemon(stateDirectory: string, signal: AbortSignal): Promise<void> {
     try {
         const response = await sendLocalRequest(stateDirectory, "worker", { kind: "reload" }, signal);
@@ -36,6 +43,18 @@ export async function runWorker(version: string, signal: AbortSignal): Promise<v
     const combined = AbortSignal.any([signal, shutdown.signal]);
     const disconnect = (): void => shutdown.abort();
     process.once("disconnect", disconnect);
+    try {
+        await runWorkerRuntime(version, combined, shutdown);
+    } finally {
+        shutdown.abort();
+        process.off("disconnect", disconnect);
+        if (process.connected) {
+            process.disconnect();
+        }
+    }
+}
+
+async function runWorkerRuntime(version: string, combined: AbortSignal, shutdown: AbortController): Promise<void> {
     const control = await openMobiusControlInstallation(combined, process.env);
     await prepareUpgradeData(control.stateDirectory, version, combined);
     const installation = await openMobiusCliInstallation(combined, process.env);
@@ -48,7 +67,18 @@ export async function runWorker(version: string, signal: AbortSignal): Promise<v
             await setTimeout(25, undefined, { signal: deadline });
         }
     }
-    const active = new Map<string, { readonly controller: AbortController; readonly completion: Promise<void> }>();
+    const active = new Map<
+        string,
+        {
+            readonly controller: AbortController;
+            readonly completion: Promise<void>;
+            readonly ready: Promise<void>;
+        }
+    >();
+    const fail = (connectionId: string, cause: unknown): void => {
+        console.error(`Runtime ${connectionId} failed; stopping the daemon`, cause);
+        shutdown.abort(new WorkerRuntimeError(connectionId, cause));
+    };
     const reconcile = async (): Promise<void> => {
         const connections = await installation.listConnections(combined);
         const enabled = new Set(
@@ -71,19 +101,34 @@ export async function runWorker(version: string, signal: AbortSignal): Promise<v
             try {
                 const paired = await resumeMobiusRuntime(installation, connection.connectionId, combined);
                 const controller = new AbortController();
-                const engine = new MobiusRuntimeEngine(paired.config);
+                const ready = Promise.withResolvers<void>();
+                const engine = new MobiusRuntimeEngine(paired.config, {
+                    onConnectionStatus: (status) => {
+                        if (status === "online") {
+                            ready.resolve();
+                        }
+                    },
+                });
                 const completion = engine
                     .run(AbortSignal.any([combined, controller.signal]))
-                    .catch(() => {
-                        if (!combined.aborted && !controller.signal.aborted) {
-                            process.stderr.write(`Runtime ${connection.connectionId} failed.\n`);
-                        }
-                    })
+                    .then(
+                        () => {
+                            if (!combined.aborted && !controller.signal.aborted) {
+                                fail(connection.connectionId, new Error("The Runtime stopped unexpectedly"));
+                            }
+                        },
+                        (cause: unknown) => {
+                            if (!combined.aborted && !controller.signal.aborted) {
+                                fail(connection.connectionId, cause);
+                            }
+                        },
+                    )
                     .finally(() => active.delete(connection.connectionId));
-                active.set(connection.connectionId, { controller, completion });
-            } catch (_cause) {
+                active.set(connection.connectionId, { controller, completion, ready: ready.promise });
+            } catch (cause) {
                 combined.throwIfAborted();
-                process.stderr.write(`Could not load Runtime ${connection.connectionId}.\n`);
+                fail(connection.connectionId, cause);
+                throw cause;
             }
         }
     };
@@ -110,6 +155,19 @@ export async function runWorker(version: string, signal: AbortSignal): Promise<v
                 return { kind: "reloaded" };
             },
             async () => {
+                const aborted = Promise.withResolvers<never>();
+                const abort = (): void => aborted.reject(combined.reason);
+                combined.addEventListener("abort", abort, { once: true });
+                try {
+                    combined.throwIfAborted();
+                    await Promise.race([
+                        Promise.all([...active.values()].map((runtime) => runtime.ready)),
+                        aborted.promise,
+                    ]);
+                    combined.throwIfAborted();
+                } finally {
+                    combined.removeEventListener("abort", abort);
+                }
                 await recordCurrentData(version, combined);
                 upgrades = runDaemonUpgrades(combined);
                 if (process.connected) {
@@ -117,15 +175,14 @@ export async function runWorker(version: string, signal: AbortSignal): Promise<v
                 }
             },
         );
+        if (shutdown.signal.reason instanceof WorkerRuntimeError) {
+            throw shutdown.signal.reason;
+        }
     } finally {
         shutdown.abort();
         await upgrades;
         await reload;
         await Promise.all([...active.values()].map((running) => running.completion));
         await release();
-        process.off("disconnect", disconnect);
-        if (process.connected) {
-            process.disconnect();
-        }
     }
 }

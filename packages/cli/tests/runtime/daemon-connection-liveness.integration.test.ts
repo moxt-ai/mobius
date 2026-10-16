@@ -445,10 +445,36 @@ describe("daemon relay connection liveness", () => {
                 `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/runtime-revoked-channel/daemon`,
             ),
         });
-        const daemon = runDaemon(config, cancellation.signal);
+        const online = Promise.withResolvers<void>();
+        const statuses: string[] = [];
+        const daemon = runDaemon(config, cancellation.signal, undefined, {
+            onConnectionStatus: (status) => {
+                statuses.push(status);
+                if (status === "online") {
+                    online.resolve();
+                }
+            },
+        });
 
         try {
             const socket = await upgraded;
+            const barrier = readClientFrame(socket);
+            writeServerTextFrame(
+                socket,
+                encodeWorkspaceListCommand({
+                    bindingId: "workspace",
+                    directoryId: "default",
+                    kind: WORKSPACE_LIST_KIND,
+                    requestId: "before-relay-ready",
+                }),
+            );
+            expect(decodeMessageKind((await barrier).text)).toBe(WORKSPACE_ENTRIES_KIND);
+            expect(statuses).not.toContain("online");
+            const heartbeat = readClientFrame(socket);
+            writeServerTextFrame(socket, encodeRuntimeLivenessReadyEvent({ kind: RUNTIME_LIVENESS_READY_KIND }));
+            expect(decodeMessageKind((await heartbeat).text)).toBe(RUNTIME_HEARTBEAT_KIND);
+            await online.promise;
+            expect(statuses).toContain("online");
             writeServerCloseFrame(socket, 1008, "Runtime revoked");
 
             await expect(daemon).rejects.toBeInstanceOf(RuntimeRelayRevokedError);
