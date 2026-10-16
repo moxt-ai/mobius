@@ -351,23 +351,26 @@ test("Given real Codex with an active turn, When three follow-ups are accepted a
                 );
             sendPrompt(active, false);
             await entered.promise;
+            // While the target Turn holds the Session, each queued submission is
+            // admitted in submission order and acknowledged by its own V2 queue
+            // change before the next one enters the queue.
             for (const id of [first, cancelled, last]) {
                 sendPrompt(id, true);
-            }
-            const admitted: string[] = [];
-            while (admitted.length < 3) {
-                const message = await peer.nextMessage();
-                if (decodeMessageKind(message) !== SESSION_EVENT_V2_KIND) {
-                    continue;
-                }
-                for (const event of decodeSessionEventEnvelopeV2(message).events) {
-                    if (event.type === "lifecycle-metadata" && event.payload.kind === "session.queue.changed") {
-                        admitted.push(event.eventId);
+                for (;;) {
+                    const message = await peer.nextMessage();
+                    if (decodeMessageKind(message) !== SESSION_EVENT_V2_KIND) {
+                        continue;
+                    }
+                    if (
+                        decodeSessionEventEnvelopeV2(message).events.some(
+                            (event) =>
+                                event.type === "lifecycle-metadata" && event.payload.kind === "session.queue.changed",
+                        )
+                    ) {
+                        break;
                     }
                 }
             }
-            // Authorization completes independently; acknowledgments need not arrive in execution order.
-            expect(admitted).toHaveLength(3);
             peer.send(
                 encodeSessionLiveHistoryV2PageLoad({
                     cursor: null,
@@ -462,16 +465,11 @@ test("Given real Codex with an active turn, When three follow-ups are accepted a
             }
             const late = randomUUID();
             sendPrompt(late, true);
+            // The queued Turn is acknowledged before it completes: its admission
+            // queue change must arrive ahead of its own terminal event.
             let acknowledged = false;
             for (;;) {
                 const message = await peer.nextMessage();
-                if (decodeMessageKind(message) === "session.event.v2") {
-                    for (const event of decodeSessionEventEnvelopeV2(message).events) {
-                        if (event.type === "lifecycle-metadata" && event.payload.kind === "session.queue.changed") {
-                            acknowledged = true;
-                        }
-                    }
-                }
                 if (decodeMessageKind(message) !== "session.event.v2") {
                     continue;
                 }
@@ -483,6 +481,14 @@ test("Given real Codex with an active turn, When three follow-ups are accepted a
                 );
                 if (failure !== undefined) {
                     throw new Error(JSON.stringify(failure));
+                }
+                if (
+                    events.some(
+                        (event) =>
+                            event.type === "lifecycle-metadata" && event.payload.kind === "session.queue.changed",
+                    )
+                ) {
+                    acknowledged = true;
                 }
                 const completion = events.find(
                     (event) => event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed",

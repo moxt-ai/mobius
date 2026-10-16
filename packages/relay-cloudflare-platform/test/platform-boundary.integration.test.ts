@@ -2092,6 +2092,25 @@ describe.sequential("Platform Turn submission", () => {
                 environment,
             );
             expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("session.prompt");
+            // A queue change on another Session of the same Runtime must not
+            // acknowledge the pending queue-disposition submission.
+            daemon.send(
+                encodeSessionEventEnvelopeV2({
+                    kind: "session.event.v2",
+                    events: [
+                        {
+                            eventId: "other-session-queue-change",
+                            position: "1",
+                            provenance: { kind: "original" },
+                            recordedAt: "2026-09-18T00:00:03.000Z",
+                            sessionGenerationId: "session-generation-1",
+                            sessionId: "another-session",
+                            type: "lifecycle-metadata",
+                            payload: { kind: "session.queue.changed" },
+                        },
+                    ],
+                }),
+            );
             daemon.send(
                 encodeSessionEventEnvelopeV2({
                     kind: "session.event.v2",

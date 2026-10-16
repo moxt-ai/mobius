@@ -181,8 +181,12 @@ function lifecycleReply(
         // A queue change on the submitted Session acknowledges a queue-disposition
         // Turn: the daemon records it as the prompt enters its queue. The event is
         // Session-scoped, so this resolves submissions that asked to be queued;
-        // every other disposition keeps waiting for its own prompt.started.
-        if (command.disposition !== "queue") {
+        // every other disposition keeps waiting for its own prompt.started. A
+        // queue-disposition Turn completing on the same Session also records a
+        // queue change, so it can acknowledge a newer submission slightly early;
+        // the response state is advisory while the Turn's own lifecycle events
+        // remain authoritative for its outcome.
+        if (command.disposition !== "queue" || sessionId !== command.sessionId) {
             return { kind: "ignore" };
         }
         return {
