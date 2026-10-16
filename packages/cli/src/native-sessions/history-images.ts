@@ -1,14 +1,24 @@
-import type { AgentDisplayContent, NativeHistoryImage } from "@moxt-ai/mobius-protocol";
-import { parseNativeHistoryText, SESSION_HISTORY_IMAGE_CHARACTER_LIMIT } from "@moxt-ai/mobius-protocol";
+import type { AgentDisplayContent } from "@moxt-ai/mobius-protocol";
 import { readLocalRaster } from "../acp/resource/local-raster.ts";
 
 const IMAGE_MARKER = /\[@image\]\(([^)\r\n]*)(?:\)|$)/g;
+const DATA_IMAGE_HEADER = /^data:(image\/[a-z+]+);base64,/;
+const BASE_64 = /^[A-Za-z0-9+/]*={0,2}$/;
+const SESSION_HISTORY_IMAGE_CHARACTER_LIMIT = 4_000_000;
+/** Turns requested per page when reading a saved Agent thread. */
+export const SESSION_HISTORY_PREVIEW_TURN_LIMIT = 10;
 
 /**
  * Internal materialized history model for direct native reads. It exists only to
  * bound saved Agent threads before they are converted into V2 session events;
  * it is not a protocol contract.
  */
+export interface NativeHistoryImage {
+    readonly data: string;
+    readonly mimeType: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+    readonly name: string;
+}
+
 export interface NativeHistoryMessage {
     readonly role: "user";
     readonly text: string;
@@ -52,6 +62,28 @@ export type NativeHistoryEntry =
       }
     | { readonly status: "unavailable"; readonly cause: { readonly code: string; readonly message: string } };
 
+function isRasterMime(value: string): value is NativeHistoryImage["mimeType"] {
+    return value === "image/png" || value === "image/jpeg" || value === "image/gif" || value === "image/webp";
+}
+
+/** Codex ACP serializes saved images as text links. Only embedded raster data
+ * can be restored without granting filesystem or network access. */
+function parseNativeHistoryImage(uri: string): NativeHistoryImage | null {
+    const header = DATA_IMAGE_HEADER.exec(uri);
+    if (header === null) {
+        return null;
+    }
+    const mimeType = header[1] ?? "";
+    const data = uri.slice(header[0].length);
+    if (!isRasterMime(mimeType) || data.length < 4 || data.length > SESSION_HISTORY_IMAGE_CHARACTER_LIMIT) {
+        return null;
+    }
+    if (data.length % 4 !== 0 || !BASE_64.test(data)) {
+        return null;
+    }
+    return { data, mimeType, name: "" };
+}
+
 export async function embedLocalHistoryImages(
     history: NativeHistoryEntry,
     signal: AbortSignal,
@@ -84,12 +116,12 @@ async function resolveMessageImages(
         if (images.length >= 8 || usedCharacters + imageCharacters >= SESSION_HISTORY_IMAGE_CHARACTER_LIMIT) {
             return "[Image unavailable]";
         }
-        const embedded = parseNativeHistoryText(`[@image](${uri})`).images[0];
-        if (embedded !== undefined) {
+        const embedded = parseNativeHistoryImage(uri);
+        if (embedded !== null) {
             if (usedCharacters + imageCharacters + embedded.data.length > SESSION_HISTORY_IMAGE_CHARACTER_LIMIT) {
                 return "[Image unavailable]";
             }
-            images.push(embedded);
+            images.push({ ...embedded, name: `Image ${(images.length + 1).toString()}` });
             imageCharacters += embedded.data.length;
             return "";
         }
