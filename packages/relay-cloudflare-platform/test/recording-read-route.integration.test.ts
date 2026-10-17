@@ -474,12 +474,31 @@ describe.sequential("Platform Recording read route", () => {
         const missing = await worker.fetch(
             new Request(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}` +
-                    `/recording/sessions/${sessionId}/turns/missing-command/items?runtimeId=${runtimeId}`,
+                    `/recording/sessions/${sessionId}/turns/missing-command/items` +
+                    `?runtimeId=${runtimeId}&before=before:item:2`,
                 { headers: credentialHeaders(credential) },
             ),
             environment,
         );
         expect(missing.status).toBe(404);
+
+        // A read continues one run, so it names one direction: a page's cursor fed to the other one
+        // would overlap the run it came from and list work twice.
+        const itemsUrl =
+            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}` +
+            `/recording/sessions/${sessionId}/turns/missing-command/items?runtimeId=${runtimeId}`;
+        for (const query of [
+            "",
+            "&after=after:item:1&before=before:item:2",
+            "&after=before:item:2",
+            "&before=after:item:1",
+        ]) {
+            const wrongWay = await worker.fetch(
+                new Request(`${itemsUrl}${query}`, { headers: credentialHeaders(credential) }),
+                environment,
+            );
+            expect(wrongWay.status).toBe(400);
+        }
     });
 
     it("Given a daemon reload and Session generation reset, When a Platform app continues from an append cursor, Then reloaded events are retained", async () => {

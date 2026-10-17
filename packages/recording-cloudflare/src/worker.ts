@@ -13,6 +13,7 @@ import {
     SESSION_RECORDING_TURN_ITEM_ID_MAX_LENGTH,
     SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT,
     SESSION_RECORDING_TURN_PAGE_MAX_LIMIT,
+    type SessionRecordingTurnItemCursorDirection,
     type SessionRecordingWrite,
 } from "@moxt-ai/mobius-protocol";
 import { Hono } from "hono";
@@ -128,17 +129,31 @@ function sessionRecordingRoutes(
         .get("/turn-items", async (context): Promise<Response> => {
             const target = eventTarget(context.req.raw);
             const commandId = decodedIdentifier(context.req.query("commandId"));
-            const after = optionalCursor(context.req.query("after"), parseSessionRecordingTurnItemCursor);
+            // A page reads one way, and the cursor says which: `before` reads back toward a Turn's
+            // earlier work, `after` forward toward the work it is still producing. Feeding a page's
+            // cursor to the other direction would overlap the run it came from and list work twice.
+            const after = itemCursorParam(context.req.query("after"), "after");
+            const before = itemCursorParam(context.req.query("before"), "before");
             const limit = boundedLimit(
                 context.req.query("limit"),
                 defaultTurnItemPageLimit,
                 SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT,
             );
-            if (target === null || commandId === null || after === undefined || limit === null) {
+            // A read continues one run, so it names exactly one direction: neither leaves the run
+            // undefined, both would read one boundary two ways, and a cursor for the other direction
+            // would overlap the run it came from.
+            const malformedCursor = after === null || before === null;
+            const namedOneDirection = (after === undefined) !== (before === undefined);
+            if (target === null || commandId === null || malformedCursor || !namedOneDirection || limit === null) {
                 return errorResponse("invalid_target", 400);
             }
             return await turnHistoryResponse(
-                history.itemPage(target, commandId, after, limit),
+                history.itemPage(
+                    target,
+                    commandId,
+                    { afterSequence: after?.sequence ?? null, beforeSequence: before?.sequence ?? null },
+                    limit,
+                ),
                 encodeSessionRecordingTurnItemPage,
                 scheduleBackfill,
             );
@@ -236,6 +251,22 @@ function envelopeError(cause: unknown): Response {
         return errorResponse("invalid_envelope", 400);
     }
     throw cause;
+}
+
+/**
+ * A Turn item cursor for one direction. `undefined` means the caller did not name that direction,
+ * `null` that the value is not a cursor for it: a page's cursor fed to the other direction is
+ * rejected rather than read the wrong way and list work twice.
+ */
+function itemCursorParam(
+    value: string | undefined,
+    direction: SessionRecordingTurnItemCursorDirection,
+): { readonly sequence: number } | null | undefined {
+    if (value === undefined) {
+        return undefined;
+    }
+    const parsed = parseSessionRecordingTurnItemCursor(value);
+    return parsed !== null && parsed.direction === direction ? parsed : null;
 }
 
 function eventTarget(request: Request): {
@@ -472,7 +503,7 @@ export function createRecordingWorker(): RecordingWorker {
                     return errorResponse("not_found", 404);
                 }
                 query.set("commandId", commandId);
-                forwardQuery(context.req.query(), query, ["after", "limit"]);
+                forwardQuery(context.req.query(), query, ["after", "before", "limit"]);
                 return await sessionRecordingFetch(context, query, "turn-items");
             },
         )
