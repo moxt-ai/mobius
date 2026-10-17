@@ -368,6 +368,20 @@ describe("Recording Turn history", () => {
         expect(both.status).toBe(400);
     });
 
+    it("Given a Turn folded before the steering anchor was recorded, When a client reads Turns, Then it is read as a prompt no other command was running for", async () => {
+        await completedTurn("command-1", "Prompt 1", "Reply 1");
+        const stub = env.SESSION_RECORDING.getByName(JSON.stringify([projectId, sessionId]));
+        // A Turn folded before the anchor existed carries no such key at all. Reading it must not
+        // fail the page it is on: an unplaced prompt is what that Turn is.
+        await runInDurableObject(stub, (_instance, state) => {
+            state.storage.sql.exec(`UPDATE recorded_turns SET turn_json = json_remove(turn_json, '$.preceding')`);
+        });
+
+        const page = await turnPage();
+        expect(page.turns).toHaveLength(1);
+        expect(page.turns[0]?.preceding).toBeNull();
+    });
+
     it("Given a Recording written before its Turn history existed, When a client reads Turns, Then a retryable error is returned until a backfill step catches up", async () => {
         await completedTurn("command-1", "Prompt 1", "Reply 1");
         await completedTurn("command-2", "Prompt 2", "Reply 2");
