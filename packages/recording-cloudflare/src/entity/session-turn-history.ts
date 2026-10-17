@@ -27,7 +27,10 @@ export const storedTurnSchema = z
         // tool work close it, and reasoning from another message starts a new item.
         openThought: z.object({ itemId: z.string(), messageId: z.string().nullable() }).readonly().nullable(),
         order: z.number().int().positive().safe(),
-        preceding: sessionRecordingTurnPrecedingSchema.nullable(),
+        // Null when no other command was running when the prompt was requested. A Turn folded before
+        // this was recorded has no such key at all, and it is read as the anchor it is: a prompt that
+        // was not placed between another command's work.
+        preceding: sessionRecordingTurnPrecedingSchema.nullish().transform((value) => value ?? null),
         prompt: sessionRecordingTurnPromptSchema.nullable(),
     })
     .readonly();
