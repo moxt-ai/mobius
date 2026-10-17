@@ -72,10 +72,27 @@ const sessionRecordingDirectorySchema = z
     })
     .readonly();
 
-/** Turns returned by one Turn history page at most. */
+/**
+ * Turns a caller may request from a Turn history page at most. This bounds the request only: a
+ * service counts a page against it, and a page also stays inside a serialized-character budget, so
+ * the request bound never sets how large a response can be.
+ */
 export const SESSION_RECORDING_TURN_PAGE_MAX_LIMIT = 100;
-/** Items returned by one Turn item page at most. */
+/**
+ * Items a caller may request from a Turn item page at most. As with the Turn bound this is a
+ * request limit, not a limit on what a service lists.
+ */
 export const SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT = 1_000;
+/**
+ * Elements a page may carry when decoded. The request bounds above are a contract a service is
+ * expected to honour, so they are not what a decoder is willing to read: a service lists up to a
+ * per-Turn budget of its own, independent of anything a caller requested, and a caller that rejects
+ * a service listing more than it asked for would rather fail the whole read than render it. This
+ * bound is deliberately decoupled from both request limits and left unchanged when those move, so
+ * one deployment's idea of a page size can never decode as `invalid_service_response` in another's.
+ * A page's serialized-character budget is what bounds its actual size.
+ */
+export const SESSION_RECORDING_TURN_PAGE_DECODE_MAX_ELEMENTS = 10_000;
 /** Longest Turn item identifier. */
 export const SESSION_RECORDING_TURN_ITEM_ID_MAX_LENGTH = 4_200;
 
@@ -88,9 +105,32 @@ function cursorPosition(value: string, pattern: RegExp): number | null {
 export const parseSessionRecordingTurnCursor = (value: string): number | null =>
     cursorPosition(value, /^turn:([1-9][0-9]*)$/u);
 
-/** The item sequence a Turn item cursor continues after, or null when the cursor is malformed. */
-export const parseSessionRecordingTurnItemCursor = (value: string): number | null =>
-    cursorPosition(value, /^item:(0|[1-9][0-9]*)$/u);
+/** The edge of a run of a Turn's items: `before` reads back toward the work a Turn did earlier. */
+export type SessionRecordingTurnItemCursorDirection = "after" | "before";
+
+/**
+ * A Turn item cursor, or null when the value is not one. A cursor names both a position and the
+ * direction the read continues from it, so a page returned for one direction can never be fed to
+ * the other: the two runs would overlap and a member would read the same work twice.
+ */
+export const parseSessionRecordingTurnItemCursor = (
+    value: string,
+): { readonly direction: SessionRecordingTurnItemCursorDirection; readonly sequence: number } | null => {
+    const matched = /^(before|after):item:(0|[1-9][0-9]*)$/u.exec(value);
+    if (matched === null) {
+        return null;
+    }
+    const sequence = Number(matched[2]);
+    return Number.isSafeInteger(sequence)
+        ? { direction: matched[1] as SessionRecordingTurnItemCursorDirection, sequence }
+        : null;
+};
+
+/** The Turn item cursor that continues a run at `sequence` in `direction`. */
+export const sessionRecordingTurnItemCursor = (
+    direction: SessionRecordingTurnItemCursorDirection,
+    sequence: number,
+): string => `${direction}:item:${sequence}`;
 
 /** A page size between 1 and `maximum`, or null when the value is not one. */
 export function parseSessionRecordingPageLimit(value: string, maximum: number): number | null {
@@ -107,8 +147,9 @@ const shortText = z.string().max(2_048);
 const itemText = z.string().max(50_000_000);
 // Opaque Turn history cursors: a page continues with Turns older than the Turn order it names.
 const turnCursorSchema = z.string().regex(/^turn:[1-9][0-9]*$/);
-// Opaque Turn item cursors: a page continues with items after the item sequence it names.
-const turnItemCursorSchema = z.string().regex(/^item:(?:0|[1-9][0-9]*)$/);
+// Opaque Turn item cursors: a page continues in the direction the cursor names, from the item
+// sequence it names.
+const turnItemCursorSchema = z.string().regex(/^(?:before|after):item:(?:0|[1-9][0-9]*)$/);
 
 const attemptTiming = {
     attemptId: identifierStringSchema.optional(),
@@ -266,8 +307,10 @@ const sessionRecordingTurnSchema = z
         createdAt: isoTimestamp,
         generationId: identifierStringSchema,
         itemCount: z.number().int().nonnegative().safe(),
-        items: z.array(sessionRecordingTurnItemSchema).max(SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT).readonly(),
-        // Continues this Turn's items after the listed prefix, or null when every item is listed.
+        items: z.array(sessionRecordingTurnItemSchema).max(SESSION_RECORDING_TURN_PAGE_DECODE_MAX_ELEMENTS).readonly(),
+        // Continues this Turn's items before the listed run, or null when every item is listed. A
+        // page starts from the end of a Turn's sequence, so what it leaves out is the work that
+        // produced the conclusion it does show; this cursor reads that work back.
         itemsCursor: turnItemCursorSchema.nullable(),
         messageId: shortText.nullable(),
         // Creation order of Turns in the Session; newer Turns have larger orders.
@@ -318,7 +361,7 @@ const sessionRecordingTurnPageSchema = z
         // The Recording cursor at the last event this snapshot includes; live reads continue after it.
         tailCursor: recordingCursorSchema,
         title: z.string().max(1_000).nullable(),
-        turns: z.array(sessionRecordingTurnSchema).max(SESSION_RECORDING_TURN_PAGE_MAX_LIMIT).readonly(),
+        turns: z.array(sessionRecordingTurnSchema).max(SESSION_RECORDING_TURN_PAGE_DECODE_MAX_ELEMENTS).readonly(),
         version: z.literal(1),
     })
     .readonly();
@@ -326,7 +369,10 @@ const sessionRecordingTurnPageSchema = z
 const sessionRecordingTurnItemPageSchema = z
     .object({
         commandId: identifierStringSchema,
-        items: z.array(sessionRecordingTurnItemSchema).max(SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT).readonly(),
+        items: z.array(sessionRecordingTurnItemSchema).max(SESSION_RECORDING_TURN_PAGE_DECODE_MAX_ELEMENTS).readonly(),
+        // Continues from the edge of this page in the direction it was read: `before` reads back
+        // toward a Turn's earlier work, `after` forward toward the work it is still producing. Null
+        // when the run reached that end of the Turn.
         nextCursor: turnItemCursorSchema.nullable(),
         sessionId: identifierStringSchema,
         version: z.literal(1),

@@ -9,6 +9,7 @@ import type {
     SessionRecordingTurnItemPage,
     SessionRecordingTurnPage,
 } from "@moxt-ai/mobius-protocol";
+import { sessionRecordingTurnItemCursor } from "@moxt-ai/mobius-protocol";
 import {
     emptyProjection,
     type ItemTextChange,
@@ -782,7 +783,16 @@ export class SessionTurnHistory {
                 if (!first && promptSize >= budget) {
                     break reading;
                 }
-                const listed = this.#listItems(turn.commandId, null, listedItemsPerTurn, budget - promptSize, first);
+                // A page starts from the end of each Turn, so the work a page leaves out is the
+                // work that produced the conclusion it does show.
+                const listed = this.#listItems(
+                    turn.commandId,
+                    null,
+                    "backward",
+                    listedItemsPerTurn,
+                    budget - promptSize,
+                    first,
+                );
                 if (!first && listed.items.length === 0 && turn.itemCount > 0) {
                     break reading;
                 }
@@ -833,7 +843,7 @@ export class SessionTurnHistory {
     readonly itemPage = (
         target: RecordingTarget,
         commandId: string,
-        afterSequence: number | null,
+        from: { readonly afterSequence: number | null; readonly beforeSequence: number | null },
         limit: number,
     ): TurnHistoryRead<SessionRecordingTurnItemPage> => {
         const readable = this.#readable(target);
@@ -843,7 +853,17 @@ export class SessionTurnHistory {
         if (!this.#history.hasTurn(commandId)) {
             return { kind: "not_found" };
         }
-        const listed = this.#listItems(commandId, afterSequence, limit, pageCharacterBudget, true);
+        // One page reads one way: `before` reads back toward a Turn's earlier work, `after` forward
+        // toward the work it is still producing. A caller that names neither gets the older one.
+        const backward = from.beforeSequence !== null;
+        const listed = this.#listItems(
+            commandId,
+            backward ? from.beforeSequence : from.afterSequence,
+            backward ? "backward" : "forward",
+            limit,
+            pageCharacterBudget,
+            true,
+        );
         return {
             kind: "ready",
             value: {
@@ -874,13 +894,17 @@ export class SessionTurnHistory {
     };
 
     /**
-     * Lists a Turn's items in sequence order until `limit` or the character budget is reached. Items
-     * load in small chunks with bounded text. `admitFirst` lists the first item even over budget, so a
-     * page that starts with this Turn's items never stalls.
+     * Lists a Turn's items from one end of its sequence until `limit` or the character budget is
+     * reached. `forward` reads the oldest items first and `backward` the newest, which is what a
+     * transcript wants: a Turn's conclusion is what a member sees first, and the work that produced
+     * it fills in above as they read back. Items load in small chunks with bounded text. `admitFirst`
+     * lists the first item of the run even over budget, so a page starting from one end of a Turn
+     * never stalls.
      */
     #listItems(
         commandId: string,
-        afterSequence: number | null,
+        from: number | null,
+        direction: "backward" | "forward",
         limit: number,
         budget: number,
         admitFirst: boolean,
@@ -891,14 +915,13 @@ export class SessionTurnHistory {
     } {
         const items: SessionRecordingTurnItem[] = [];
         let remaining = budget;
-        let after = afterSequence;
+        let fromSequence = from;
         reading: while (items.length < limit) {
-            const chunk = this.#history.itemReadsAfter(
-                commandId,
-                after,
-                Math.min(itemReadChunk, limit - items.length),
-                listedTextCharacters,
-            );
+            const take = Math.min(itemReadChunk, limit - items.length);
+            const chunk =
+                direction === "forward"
+                    ? this.#history.itemReadsAfter(commandId, fromSequence, take, listedTextCharacters)
+                    : this.#history.itemsBefore(commandId, fromSequence, take, listedTextCharacters);
             for (const read of chunk) {
                 const listed = listedItem(read, listedTextCharacters);
                 const size = JSON.stringify(listed).length;
@@ -907,19 +930,26 @@ export class SessionTurnHistory {
                 }
                 items.push(listed);
                 remaining -= size;
-                after = listed.sequence;
+                fromSequence = listed.sequence;
             }
             if (chunk.length < itemReadChunk) {
                 break;
             }
         }
-        const last = items.at(-1);
+        // A backward run collects newest first; a transcript lists items in the order they were made.
+        const ordered = direction === "backward" ? [...items].reverse() : items;
+        const edge = ordered.at(direction === "backward" ? 0 : -1);
+        const more =
+            edge !== undefined &&
+            (direction === "backward"
+                ? this.#history.hasItemBefore(commandId, edge.sequence)
+                : this.#history.hasItemAfter(commandId, edge.sequence));
         return {
             cursor:
-                last !== undefined && this.#history.hasItemAfter(commandId, last.sequence)
-                    ? `item:${last.sequence}`
+                more && edge !== undefined
+                    ? sessionRecordingTurnItemCursor(direction === "backward" ? "before" : "after", edge.sequence)
                     : null,
-            items,
+            items: ordered,
             remaining,
         };
     }
