@@ -41,7 +41,6 @@ export const FILE_FAILED_KIND = "file.failed";
 const DIRECTORY_IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/;
 const DIRECTORY_IDENTIFIER = z.string().min(1).max(2_048).regex(DIRECTORY_IDENTIFIER_PATTERN);
 const SHORT_TEXT = z.string().max(500);
-const LONG_TEXT = z.string().max(100_000);
 
 const workspaceEntrySchema = z
     .object({
@@ -488,24 +487,6 @@ export const elicitationFieldSchema = z
 
 export type SessionElicitationField = z.infer<typeof elicitationFieldSchema>;
 
-export const displayContentSchema = z
-    .object({
-        artifactId: z.string().max(128).default(""),
-        data: z.string().max(4_000_000),
-        mimeType: z.string().max(255),
-        name: z.string().max(500),
-        newText: LONG_TEXT,
-        oldText: LONG_TEXT,
-        path: z.string().max(2_048),
-        terminalId: z.string().max(255),
-        text: LONG_TEXT,
-        type: z.enum(["diff", "image", "resource", "resource_link", "terminal", "text", "video"]),
-        uri: z.string().max(4_096),
-    })
-    .readonly();
-
-export type AgentDisplayContent = z.infer<typeof displayContentSchema>;
-
 export const promptImageSchema = z
     .object({
         data: z.string().min(1).max(4_000_000),
@@ -837,9 +818,6 @@ function decodeValue<T>(value: unknown, schema: z.ZodType<T>): T {
     }
     return result.data;
 }
-
-export const decodeAgentDisplayContentValue = (value: unknown): AgentDisplayContent =>
-    decodeValue(value, displayContentSchema);
 
 export const decodePromptImagesValue = (value: unknown): readonly PromptImage[] =>
     decodeValue(value, z.array(promptImageSchema).max(8).readonly());

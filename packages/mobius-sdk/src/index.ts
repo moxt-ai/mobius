@@ -1,5 +1,4 @@
 export type {
-    AgentDisplayContent,
     AgentExecutionConfiguration,
     AgentModelEffort,
     AgentSetting,
@@ -58,7 +57,6 @@ export {
     AGENT_PERMISSION_MODES,
     conversationTitleFromText,
     DEFAULT_AGENT_EXECUTION_CONFIGURATION,
-    decodeAgentDisplayContentValue,
     decodeAgentExecutionConfiguration,
     decodeAgentSettingsDiscoveredEvent,
     decodeInteraction,

@@ -1,9 +1,5 @@
 import { spawn } from "node:child_process";
-import {
-    type AgentDisplayContent,
-    SESSION_HISTORY_CHARACTER_LIMIT,
-    SESSION_HISTORY_MESSAGE_LIMIT,
-} from "@moxt-ai/mobius-sdk/protocol";
+import { SESSION_HISTORY_CHARACTER_LIMIT, SESSION_HISTORY_MESSAGE_LIMIT } from "@moxt-ai/mobius-sdk/protocol";
 import { z } from "zod";
 import type { AcpAgentDefinition } from "../../../agent-catalog/local-agent.ts";
 import {
@@ -14,6 +10,7 @@ import {
 } from "../../../util/process/executable.ts";
 import { AcpExecutionError } from "../../acp-error.ts";
 import { nativeSessionIdSchema } from "../../native-session.ts";
+import type { ToolCallContent } from "./history-images.ts";
 import {
     embedLocalHistoryImages,
     type NativeHistoryActivity,
@@ -193,20 +190,8 @@ function toolStatus(status: string): string {
     return status === "inProgress" ? "running" : status === "completed" ? "completed" : "failed";
 }
 
-function diffDisplayContent(path: string, newText: string): AgentDisplayContent {
-    return {
-        artifactId: "",
-        data: "",
-        mimeType: "",
-        name: "",
-        newText,
-        oldText: "",
-        path,
-        terminalId: "",
-        text: "",
-        type: "diff",
-        uri: "",
-    };
+function diffContent(path: string, newText: string): ToolCallContent {
+    return { newText, path, type: "diff" };
 }
 
 function messageSize(message: NativeHistoryTimelineMessage): number {
@@ -448,7 +433,7 @@ function decodeHistory(
             } else if (historyItem.type === "fileChange") {
                 const paths = historyItem.changes.map((change) => change.path);
                 const content = historyItem.changes.map(
-                    (change): AgentDisplayContent => diffDisplayContent(change.path, change.diff),
+                    (change): ToolCallContent => diffContent(change.path, change.diff),
                 );
                 append({
                     activities: [
