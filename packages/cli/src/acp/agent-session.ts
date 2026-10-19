@@ -473,9 +473,6 @@ export class AgentSession implements AcpClientHandler {
                 methods.agent.initialize,
                 {
                     clientCapabilities: {
-                        _meta: {
-                            jetbrains: { air: { capabilities: ["sessionFailure"], version: 1 } },
-                        },
                         elicitation: { form: {}, url: {} },
                         plan: {},
                         session: { configOptions: { boolean: {} } },

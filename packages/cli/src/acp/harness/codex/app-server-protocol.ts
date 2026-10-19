@@ -207,13 +207,6 @@ export const turnNotificationSchema = z.object({
     turn: turnSchema,
 });
 
-export const errorNotificationSchema = z.object({
-    error: z.object({ message: boundedText(4_096) }),
-    threadId: boundedText(256),
-    turnId: boundedText(256),
-    willRetry: z.boolean(),
-});
-
 export const commandApprovalParamsSchema = z.object({
     command: z.string().nullish(),
     commandActions: z.array(z.unknown()).max(1_000).nullish(),
