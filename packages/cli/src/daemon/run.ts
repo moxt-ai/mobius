@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { styleText } from "node:util";
-
+import { harnessAdapters } from "../acp/adapter/registry.ts";
 import { resolveMaxAcpProcesses } from "../acp/agent-process-pool.ts";
 import { AgentRuntimeManager } from "../acp/agent-runtime-manager.ts";
 import { CachedAcpSessionEventStoreV2 } from "../acp/session-event-store-v2.ts";
@@ -11,7 +11,6 @@ import { WorkspaceDirectoryService } from "../authorization/workspace-directory.
 import { AcpContentExternalizer } from "../external-content/acp-content-externalizer.ts";
 import { LocalExternalContentStore } from "../external-content/local-external-content-store.ts";
 import { openAcpSessionDatabase, openSessionEventCacheV2Database } from "../local-databases.ts";
-import { readCodexFullHistory } from "../native-sessions/codex-history.ts";
 import { NativeSessionService } from "../native-sessions/service.ts";
 import { DaemonSessionEventProjectionV2 } from "../session-event-projection-v2.ts";
 import { SqliteSessionLiveEventPosition } from "../session-live-event-position.ts";
@@ -110,33 +109,16 @@ export async function runDaemon(
         (sessionId, event) => agentRuntime.recordLifecycleEventV2(sessionId, event),
         activeTurns.recordSessionEventV2,
     );
-    const agentRuntime = new AgentRuntimeManager(
-        new DaemonAcpObserver(eventProjectionV2.record, activeTurns.recordEvent, publisher.publishInfo),
-        sessionStore,
-        {
-            access: (options) =>
-                options.agent.id === "codex"
-                    ? {
-                          kind: "direct",
-                          read: async (nativeSessionId, nativeTurn) =>
-                              (
-                                  await readCodexFullHistory(
-                                      options.agent,
-                                      options.cwd,
-                                      nativeSessionId,
-                                      options.signal,
-                                      nativeTurn,
-                                  )
-                              ).history,
-                      }
-                    : { kind: "acp" },
-        },
-        "native",
-        publisher.publishStatus,
-        new AcpContentExternalizer(externalContent),
+    const agentRuntime = new AgentRuntimeManager({
+        observer: new DaemonAcpObserver(eventProjectionV2.record, activeTurns.recordEvent, publisher.publishInfo),
+        store: sessionStore,
+        adapters: harnessAdapters,
+        sessionIdentity: "native",
+        onSessionStatusChanged: publisher.publishStatus,
+        contentExternalizer: new AcpContentExternalizer(externalContent),
         timer,
-        resolveMaxAcpProcesses(config.localContext.environment),
-    );
+        maxProcesses: resolveMaxAcpProcesses(config.localContext.environment),
+    });
     const directories = new WorkspaceDirectoryService(config.bindingId, config.defaultWorkspace);
     const diagnostics = new RelayConnectionDiagnostics(
         config.channelId,

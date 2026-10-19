@@ -20,7 +20,6 @@ import type {
     SessionPermissionResolvedEvent,
 } from "@moxt-ai/mobius-protocol";
 import type { AcpAgentDefinition } from "../daemon/config.ts";
-import type { NativeHistoryEntry } from "../native-sessions/history-images.ts";
 import type { AcpActivity, AcpActivityNarration } from "./activity.ts";
 import type { NativeSessionOrigin } from "./native-session.ts";
 
@@ -34,24 +33,6 @@ export interface AcpPrepareOptions {
 }
 
 export type AcpSessionRecovery = { readonly kind: "history-required" } | { readonly kind: "interactive-only" };
-
-export type AcpNativeHistoryAccess =
-    | { readonly kind: "acp" }
-    | {
-          readonly kind: "direct";
-          readonly read: (
-              nativeSessionId: string,
-              nativeTurn: () => { readonly commandId: string; readonly nativeTurnId: string } | null,
-          ) => Promise<NativeHistoryEntry>;
-      };
-
-export interface AcpNativeHistoryReader {
-    readonly access: (options: AcpPrepareOptions) => AcpNativeHistoryAccess;
-}
-
-export const acpNativeHistoryReader: AcpNativeHistoryReader = {
-    access: () => ({ kind: "acp" }),
-};
 
 export interface AcpNativeEventReplayV2 {
     readonly nextCursor: string | null;

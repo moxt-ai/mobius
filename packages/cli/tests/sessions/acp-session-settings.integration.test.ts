@@ -1,9 +1,14 @@
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
-
+import { acpAdapters } from "../../src/acp/adapter/registry.ts";
 import { AgentRuntimeManager } from "../../src/acp/agent-runtime-manager.ts";
+import { NullAcpSessionObserver } from "../../src/acp/session-contracts.ts";
+import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
 import { LocalAgentDefinition } from "../../src/daemon/config.ts";
+import { systemDaemonTimer } from "../../src/daemon/relay/timer.ts";
+import { AcpContentExternalizer } from "../../src/external-content/acp-content-externalizer.ts";
+import { UnretainedExternalContentStore } from "../../src/external-content/local-external-content-store.ts";
 
 import { createControlledSession } from "./acp-controls-fixture.ts";
 
@@ -11,7 +16,16 @@ const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.met
 
 describe("Agent setting capabilities", () => {
     it("Given an Agent reports its reasoning effort as the provider default, When a session is prepared, Then Mobius keeps the effort setting with that current value", async () => {
-        const manager = new AgentRuntimeManager();
+        const manager = new AgentRuntimeManager({
+            observer: new NullAcpSessionObserver(),
+            store: new MemoryAcpSessionStore(),
+            adapters: acpAdapters,
+            sessionIdentity: "assigned",
+            onSessionStatusChanged: () => undefined,
+            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            timer: systemDaemonTimer,
+            maxProcesses: null,
+        });
         const agent = new LocalAgentDefinition("controlled-acp", "Controlled ACP", process.execPath, [
             fakeAgentPath,
             "--effort-provider-default",
@@ -62,7 +76,16 @@ describe("Agent setting capabilities", () => {
     });
 
     it("Given an Agent does not expose adjustable reasoning effort, When a session is prepared, Then Mobius does not invent an effort setting", async () => {
-        const manager = new AgentRuntimeManager();
+        const manager = new AgentRuntimeManager({
+            observer: new NullAcpSessionObserver(),
+            store: new MemoryAcpSessionStore(),
+            adapters: acpAdapters,
+            sessionIdentity: "assigned",
+            onSessionStatusChanged: () => undefined,
+            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            timer: systemDaemonTimer,
+            maxProcesses: null,
+        });
         const agent = new LocalAgentDefinition("controlled-acp", "Controlled ACP", process.execPath, [
             fakeAgentPath,
             "--without-reasoning-effort",
@@ -96,7 +119,16 @@ describe("Agent setting capabilities", () => {
     });
 
     it("Given Pi exposes no approval or sandbox setting, When its session is prepared, Then Mobius exposes no synthetic execution control", async () => {
-        const manager = new AgentRuntimeManager();
+        const manager = new AgentRuntimeManager({
+            observer: new NullAcpSessionObserver(),
+            store: new MemoryAcpSessionStore(),
+            adapters: acpAdapters,
+            sessionIdentity: "assigned",
+            onSessionStatusChanged: () => undefined,
+            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            timer: systemDaemonTimer,
+            maxProcesses: null,
+        });
         const agent = new LocalAgentDefinition("pi", "Pi", process.execPath, [
             fakeAgentPath,
             "--without-model",
@@ -124,7 +156,16 @@ describe("Agent setting capabilities", () => {
     });
 
     it("Given an Agent acknowledges a setting without applying it, When Mobius configures the session, Then the Turn is rejected", async () => {
-        const manager = new AgentRuntimeManager();
+        const manager = new AgentRuntimeManager({
+            observer: new NullAcpSessionObserver(),
+            store: new MemoryAcpSessionStore(),
+            adapters: acpAdapters,
+            sessionIdentity: "assigned",
+            onSessionStatusChanged: () => undefined,
+            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            timer: systemDaemonTimer,
+            maxProcesses: null,
+        });
         const agent = new LocalAgentDefinition("fake", "Fake", process.execPath, [
             fakeAgentPath,
             "--ignore-config-update",

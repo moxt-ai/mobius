@@ -3,14 +3,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AcpSessionUpdateV2, NativeSessionCommand, SessionLiveEventV2 } from "@moxt-ai/mobius-protocol";
 import {
-    type AcpNativeHistoryReader,
+    type AdapterResolver,
     AgentRuntimeManager,
-    acpNativeHistoryReader,
+    acpAdapters,
     NullAcpSessionObserver,
 } from "../../src/acp/agent-runtime-manager.ts";
 import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
 import { WorkspaceDirectoryService } from "../../src/authorization/workspace-directory.ts";
 import { createDaemonConfig, LocalAgentDefinition } from "../../src/daemon/config.ts";
+import { systemDaemonTimer } from "../../src/daemon/relay/timer.ts";
+import { AcpContentExternalizer } from "../../src/external-content/acp-content-externalizer.ts";
+import { UnretainedExternalContentStore } from "../../src/external-content/local-external-content-store.ts";
 import { NativeSessionService } from "../../src/native-sessions/service.ts";
 
 const acpUrl = new URL("./fixtures/acp-peer.ts", import.meta.url).toString();
@@ -42,7 +45,7 @@ export async function fixture(
         | "exclusive-writer"
         | "persist-after-first-prompt" = "supported",
     sessionIdentity: "assigned" | "native" = "assigned",
-    nativeHistoryReader: AcpNativeHistoryReader = acpNativeHistoryReader,
+    adapters: AdapterResolver = acpAdapters,
 ) {
     const temporary = await realpath(await mkdtemp(join(tmpdir(), "mobius-native-boundary-")));
     const workspace = join(temporary, "workspace");
@@ -72,7 +75,16 @@ export async function fixture(
     ]);
     const store = new MemoryAcpSessionStore();
     const observer = new NativeSessionObserver();
-    let sessions = new AgentRuntimeManager(observer, store, nativeHistoryReader, sessionIdentity);
+    let sessions = new AgentRuntimeManager({
+        observer,
+        store,
+        adapters,
+        sessionIdentity,
+        onSessionStatusChanged: () => undefined,
+        contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+        timer: systemDaemonTimer,
+        maxProcesses: null,
+    });
     const config = createDaemonConfig(
         {
             defaultWorkspace: workspace,
@@ -100,7 +112,16 @@ export async function fixture(
         additionalDirectories: readonly string[] = [],
         cwd = workspace,
     ): Promise<string> => {
-        const external = new AgentRuntimeManager();
+        const external = new AgentRuntimeManager({
+            observer: new NullAcpSessionObserver(),
+            store: new MemoryAcpSessionStore(),
+            adapters: acpAdapters,
+            sessionIdentity: "assigned",
+            onSessionStatusChanged: () => undefined,
+            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            timer: systemDaemonTimer,
+            maxProcesses: null,
+        });
         const sessionId = crypto.randomUUID();
         const before = new Set(await readdir(native));
         try {
@@ -159,7 +180,16 @@ export async function fixture(
         },
         restart: async () => {
             await sessions.close();
-            sessions = new AgentRuntimeManager(observer, store, nativeHistoryReader, sessionIdentity);
+            sessions = new AgentRuntimeManager({
+                observer,
+                store,
+                adapters,
+                sessionIdentity,
+                onSessionStatusChanged: () => undefined,
+                contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+                timer: systemDaemonTimer,
+                maxProcesses: null,
+            });
             service = new NativeSessionService(config, directories, sessions, async () => ({
                 turn: null,
                 queued: [],

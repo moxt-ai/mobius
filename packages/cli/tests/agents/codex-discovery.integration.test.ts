@@ -2,9 +2,15 @@ import { mkdtemp, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
+import { acpAdapters } from "../../src/acp/adapter/registry.ts";
 import { AgentRuntimeManager } from "../../src/acp/agent-runtime-manager.ts";
+import { NullAcpSessionObserver } from "../../src/acp/session-contracts.ts";
+import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
 import { CodexAgentSpecification } from "../../src/agent-catalog/agents/codex-agent.ts";
 import { discoverLocalAgentInventory } from "../../src/agent-catalog/discover-local-agents.ts";
+import { systemDaemonTimer } from "../../src/daemon/relay/timer.ts";
+import { AcpContentExternalizer } from "../../src/external-content/acp-content-externalizer.ts";
+import { UnretainedExternalContentStore } from "../../src/external-content/local-external-content-store.ts";
 import { CodexFixture } from "../support/agents/codex.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 
@@ -54,7 +60,16 @@ test.skipIf(process.platform === "win32")(
         await using provider = await FakeOpenAiProvider.start("mobius-test-model", "IDENTITY_REPLY");
         await using codex = await CodexFixture.create(provider);
         const directory = await mkdtemp(join(tmpdir(), "mobius-real-codex-identity-"));
-        const manager = new AgentRuntimeManager();
+        const manager = new AgentRuntimeManager({
+            observer: new NullAcpSessionObserver(),
+            store: new MemoryAcpSessionStore(),
+            adapters: acpAdapters,
+            sessionIdentity: "assigned",
+            onSessionStatusChanged: () => undefined,
+            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            timer: systemDaemonTimer,
+            maxProcesses: null,
+        });
         try {
             const first = join(directory, "first.mjs");
             const second = join(directory, "second.mjs");

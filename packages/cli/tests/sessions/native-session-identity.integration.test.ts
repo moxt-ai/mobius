@@ -1,10 +1,9 @@
 import { describe, expect, it } from "vitest";
-import {
-    AgentRuntimeManager,
-    acpNativeHistoryReader,
-    NullAcpSessionObserver,
-} from "../../src/acp/agent-runtime-manager.ts";
+import { AgentRuntimeManager, acpAdapters, NullAcpSessionObserver } from "../../src/acp/agent-runtime-manager.ts";
 import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
+import { systemDaemonTimer } from "../../src/daemon/relay/timer.ts";
+import { AcpContentExternalizer } from "../../src/external-content/acp-content-externalizer.ts";
+import { UnretainedExternalContentStore } from "../../src/external-content/local-external-content-store.ts";
 
 import { fixture } from "./native-session-fixture.ts";
 
@@ -178,12 +177,16 @@ describe("native session identity", () => {
                 sessionId: f.identity.sessionId,
                 signal,
             });
-            const restarted = new AgentRuntimeManager(
-                new NullAcpSessionObserver(),
-                new MemoryAcpSessionStore(),
-                acpNativeHistoryReader,
-                "native",
-            );
+            const restarted = new AgentRuntimeManager({
+                observer: new NullAcpSessionObserver(),
+                store: new MemoryAcpSessionStore(),
+                adapters: acpAdapters,
+                sessionIdentity: "native",
+                onSessionStatusChanged: () => undefined,
+                contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+                timer: systemDaemonTimer,
+                maxProcesses: null,
+            });
             try {
                 await restarted.runPrompt({
                     agent: f.agent,

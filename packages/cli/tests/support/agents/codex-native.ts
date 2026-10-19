@@ -2,16 +2,15 @@ import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { NativeSessionCommand } from "@moxt-ai/mobius-protocol";
-import {
-    AgentRuntimeManager,
-    acpNativeHistoryReader,
-    NullAcpSessionObserver,
-} from "../../../src/acp/agent-runtime-manager.ts";
+import { AgentRuntimeManager, acpAdapters, NullAcpSessionObserver } from "../../../src/acp/agent-runtime-manager.ts";
 import { CodexAcpAgent } from "../../../src/acp/harness/codex/agent.ts";
 import { MemoryAcpSessionStore } from "../../../src/acp/session-store.ts";
 import { InProcessAcpAgentDefinition } from "../../../src/agent-catalog/local-agent.ts";
 import { WorkspaceDirectoryService } from "../../../src/authorization/workspace-directory.ts";
 import { createDaemonConfig } from "../../../src/daemon/config.ts";
+import { systemDaemonTimer } from "../../../src/daemon/relay/timer.ts";
+import { AcpContentExternalizer } from "../../../src/external-content/acp-content-externalizer.ts";
+import { UnretainedExternalContentStore } from "../../../src/external-content/local-external-content-store.ts";
 import { NativeSessionService } from "../../../src/native-sessions/service.ts";
 import { FakeOpenAiProvider } from "../llm/openai.ts";
 import { CodexFixture } from "./codex.ts";
@@ -34,12 +33,16 @@ export async function codexFixture(
         codex.environment,
     );
     const store = new MemoryAcpSessionStore();
-    const sessions = new AgentRuntimeManager(
-        new NullAcpSessionObserver(),
+    const sessions = new AgentRuntimeManager({
+        observer: new NullAcpSessionObserver(),
         store,
-        acpNativeHistoryReader,
+        adapters: acpAdapters,
         sessionIdentity,
-    );
+        onSessionStatusChanged: () => undefined,
+        contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+        timer: systemDaemonTimer,
+        maxProcesses: null,
+    });
     const config = createDaemonConfig(
         {
             defaultWorkspace: workspace,

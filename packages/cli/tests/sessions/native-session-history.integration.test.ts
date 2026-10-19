@@ -2,26 +2,35 @@ import { existsSync, watch } from "node:fs";
 import { readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-
+import { nativeHistoryEventsV2 } from "../../src/acp/adapter/codex/native-history-events-v2.ts";
+import type { Adapter } from "../../src/acp/adapter/context.ts";
 import { fixture } from "./native-session-fixture.ts";
+
+/** A direct-read adapter with canned history, standing in for the Codex app-server. */
+const cannedHistoryAdapter: Adapter = {
+    previewSessionEvents: async (request, context) =>
+        await nativeHistoryEventsV2(
+            context.options.sessionId,
+            request.nativeSessionId,
+            {
+                coveredCommandIds: [],
+                coveredMessageIds: [],
+                messages: [
+                    { role: "user", text: "Read without resuming" },
+                    { activities: [], content: [], role: "assistant", text: "Preview available" },
+                ],
+                status: "available",
+                truncated: false,
+            },
+            request.eventLimit,
+            request.cursor,
+            context.events,
+        ),
+};
 
 describe("native session history", () => {
     it("Given Codex already owns a native session writer, When Chat previews that session, Then Runtime reads history without requesting another writer", async () => {
-        const f = await fixture("Codex", "exclusive-writer", "assigned", {
-            access: () => ({
-                kind: "direct",
-                read: async () => ({
-                    coveredCommandIds: [],
-                    coveredMessageIds: [],
-                    messages: [
-                        { role: "user", text: "Read without resuming" },
-                        { activities: [], content: [], role: "assistant", text: "Preview available" },
-                    ],
-                    status: "available",
-                    truncated: false,
-                }),
-            }),
-        });
+        const f = await fixture("Codex", "exclusive-writer", "assigned", () => cannedHistoryAdapter);
         const signal = new AbortController().signal;
         try {
             const nativeSessionId = await f.seed("Writer-owned Codex session");
@@ -65,21 +74,7 @@ describe("native session history", () => {
     });
 
     it("Given Chat imports a titled Codex conversation, When the imported Chat opens, Then its source title and history remain visible without requesting another writer", async () => {
-        const f = await fixture("Codex", "exclusive-writer", "assigned", {
-            access: () => ({
-                kind: "direct",
-                read: async () => ({
-                    coveredCommandIds: [],
-                    coveredMessageIds: [],
-                    messages: [
-                        { role: "user", text: "Imported Codex source" },
-                        { activities: [], content: [], role: "assistant", text: "Imported Codex response" },
-                    ],
-                    status: "available",
-                    truncated: false,
-                }),
-            }),
-        });
+        const f = await fixture("Codex", "exclusive-writer");
         const signal = new AbortController().signal;
         try {
             await f.seed("Writer-owned Codex session");

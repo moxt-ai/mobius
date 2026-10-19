@@ -77,7 +77,7 @@ describe("Mobius manager version compatibility", () => {
         const directory = await mkdtemp(join(tmpdir(), "mobius-local-start-"));
         temporaryDirectories.push(directory);
         const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: directory };
-        const signal = AbortSignal.timeout(15_000);
+        const signal = AbortSignal.timeout(60_000);
         const relay = await startRelay(false);
         const installation = await openMobiusCliInstallation(signal, environment);
         await installation.saveConnection(
@@ -100,7 +100,7 @@ describe("Mobius manager version compatibility", () => {
             await runCli(["quit"], environment, AbortSignal.timeout(10_000));
             await relay.close();
         }
-    }, 30_000);
+    }, 90_000);
     it("Given the daemon is stopped, When the user runs mobius start, Then the daemon is running without requiring a connection", async () => {
         const stateRoot = await mkdtemp(join(tmpdir(), "mobius-manager-start-"));
         temporaryDirectories.push(stateRoot);

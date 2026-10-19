@@ -5,8 +5,8 @@ import type {
     ContentBlockV2,
     SessionEventPayloadV2,
 } from "@moxt-ai/mobius-protocol";
-import type { AcpNativeEventReplayV2 } from "../acp/session-contracts.ts";
-import type { AcpSessionEventStoreV2 } from "../acp/session-event-store-v2.ts";
+import type { AcpNativeEventReplayV2 } from "../../session-contracts.ts";
+import type { AcpSessionEventStoreV2 } from "../../session-event-store-v2.ts";
 import type { NativeHistoryActivity, NativeHistoryEntry } from "./history-images.ts";
 
 type ToolCallContent = NonNullable<

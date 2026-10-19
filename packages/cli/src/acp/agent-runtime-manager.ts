@@ -12,12 +12,10 @@ import type {
     SessionStatus,
     SessionStatusChangedEvent,
 } from "@moxt-ai/mobius-protocol";
-import { type DaemonTimer, systemDaemonTimer } from "../daemon/relay/timer.ts";
-import { AcpContentExternalizer } from "../external-content/acp-content-externalizer.ts";
-import { UnretainedExternalContentStore } from "../external-content/local-external-content-store.ts";
+import type { DaemonTimer } from "../daemon/relay/timer.ts";
+import type { AcpContentExternalizer } from "../external-content/acp-content-externalizer.ts";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
 import { isNativeChatSessionId } from "../native-sessions/chat-agent.ts";
-import { nativeHistoryEventsV2 } from "../native-sessions/native-history-events-v2.ts";
 import { AcpExecutionError } from "./acp-error.ts";
 import { AgentProcessPool, type AgentProcessRetention } from "./agent-process-pool.ts";
 import type { NativeSessionOrigin, NativeSessionPage } from "./native-session.ts";
@@ -33,6 +31,8 @@ const SESSION_CONTROL_TIMEOUT_MILLISECONDS = 30_000;
 const SESSION_CLOSE_TIMEOUT_MILLISECONDS = 30_000;
 
 export { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp-error.ts";
+export type { Adapter } from "./adapter/context.ts";
+export { type AdapterResolver, acpAdapters } from "./adapter/registry.ts";
 export {
     type AcpAgentSettingsInspectionOptions,
     type AcpAgentSettingsModelEffort,
@@ -40,7 +40,6 @@ export {
     type AcpConfigureOptions,
     type AcpElicitationResponseOptions,
     type AcpNativeEventReplayV2,
-    type AcpNativeHistoryReader,
     type AcpPermissionResponseOptions,
     AcpPreparedSession,
     type AcpPrepareOptions,
@@ -49,17 +48,16 @@ export {
     type AcpSessionRecovery,
     type AcpSteerOptions,
     type AcpTurnOptions,
-    acpNativeHistoryReader,
     NullAcpSessionObserver,
 } from "./session-contracts.ts";
 
+import type { AdapterContext, AdapterResolver, NativeSessionPreviewRequest } from "./adapter/context.ts";
 import {
     type AcpAgentSettingsInspectionOptions,
     AcpAgentSettingsSnapshot,
     type AcpConfigureOptions,
     type AcpElicitationResponseOptions,
     type AcpNativeEventReplayV2,
-    type AcpNativeHistoryReader,
     type AcpPermissionResponseOptions,
     type AcpPreparedSession,
     type AcpPrepareOptions,
@@ -68,7 +66,6 @@ import {
     type AcpSessionRecovery,
     type AcpSteerOptions,
     type AcpTurnOptions,
-    acpNativeHistoryReader,
     NullAcpSessionObserver,
 } from "./session-contracts.ts";
 
@@ -85,27 +82,36 @@ export class AgentRuntimeManager {
     readonly #nativeOperations = new Set<string>();
     readonly #sessionClosures = new Map<string, Promise<void>>();
     readonly #store: AcpSessionStore;
-    readonly #nativeHistoryReader: AcpNativeHistoryReader;
+    readonly #adapters: AdapterResolver;
     readonly #sessionIdentity: "assigned" | "native";
     readonly #onSessionStatusChanged: (event: SessionStatusChangedEvent) => void;
     readonly #contentExternalizer: AcpContentExternalizer;
     readonly #timer: DaemonTimer;
     #observer: AcpSessionObserver;
 
-    constructor(
-        observer: AcpSessionObserver = new NullAcpSessionObserver(),
-        store: AcpSessionStore = new MemoryAcpSessionStore(),
-        nativeHistoryReader: AcpNativeHistoryReader = acpNativeHistoryReader,
-        sessionIdentity: "assigned" | "native" = "assigned",
-        onSessionStatusChanged: (event: SessionStatusChangedEvent) => void = () => undefined,
-        contentExternalizer: AcpContentExternalizer = new AcpContentExternalizer(new UnretainedExternalContentStore()),
-        timer: DaemonTimer = systemDaemonTimer,
-        maxProcesses?: number,
-    ) {
+    constructor({
+        observer,
+        store,
+        adapters,
+        sessionIdentity,
+        onSessionStatusChanged,
+        contentExternalizer,
+        timer,
+        maxProcesses,
+    }: {
+        readonly observer: AcpSessionObserver;
+        readonly store: AcpSessionStore;
+        readonly adapters: AdapterResolver;
+        readonly sessionIdentity: "assigned" | "native";
+        readonly onSessionStatusChanged: (event: SessionStatusChangedEvent) => void;
+        readonly contentExternalizer: AcpContentExternalizer;
+        readonly timer: DaemonTimer;
+        readonly maxProcesses: number | null;
+    }) {
         this.#observer = observer;
-        this.#processes = new AgentProcessPool(maxProcesses);
+        this.#processes = new AgentProcessPool(maxProcesses ?? undefined);
         this.#store = store;
-        this.#nativeHistoryReader = nativeHistoryReader;
+        this.#adapters = adapters;
         this.#sessionIdentity = sessionIdentity;
         this.#onSessionStatusChanged = onSessionStatusChanged;
         this.#contentExternalizer = contentExternalizer;
@@ -833,24 +839,21 @@ export class AgentRuntimeManager {
             }
             this.#nativeOperations.add(key);
             try {
-                const historyAccess = this.#nativeHistoryReader.access(options);
-                if (historyAccess.kind === "direct") {
-                    // Preview is read-only. Direct readers must not resume the source session
-                    // or require its writer lock; ACP access owns the session/load fallback.
-                    const history = await historyAccess.read(nativeSessionId, () => null);
-                    if (history.status === "unavailable") {
-                        throw new AcpExecutionError(history.cause.message, {}, history.cause.code);
-                    }
-                    return nativeHistoryEventsV2(
-                        options.sessionId,
-                        nativeSessionId,
-                        history,
-                        eventLimit,
-                        cursor,
-                        this.#store.eventsV2,
-                    );
-                }
-                return await this.#queryProcesses.previewEventsV2(options, nativeSessionId, eventLimit, cursor);
+                const context: AdapterContext = {
+                    options,
+                    events: this.#store.eventsV2,
+                    previewThroughAcp: async (request: NativeSessionPreviewRequest) =>
+                        await this.#queryProcesses.previewEventsV2(
+                            options,
+                            request.nativeSessionId,
+                            request.eventLimit,
+                            request.cursor,
+                        ),
+                };
+                return await this.#adapters(options.agent).previewSessionEvents(
+                    { nativeSessionId, eventLimit, cursor },
+                    context,
+                );
             } finally {
                 this.#nativeOperations.delete(key);
             }
