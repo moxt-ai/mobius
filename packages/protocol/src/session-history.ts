@@ -3,8 +3,8 @@ import { ProtocolMessageError } from "./codecs/messages.ts";
 import { identifierStringSchema as identifier } from "./identifier.ts";
 import { nativeSessionEventsSchema, sessionEventOmissionSchema } from "./session-event-log.ts";
 
-export const SESSION_LIVE_HISTORY_PAGE_LOAD_KIND = "session.live-history.v2.page.load";
-export const SESSION_LIVE_HISTORY_PAGE_LOADED_KIND = "session.live-history.v2.page.loaded";
+export const SESSION_HISTORY_PAGE_LOAD_KIND = "session.live-history.v2.page.load";
+export const SESSION_HISTORY_PAGE_LOADED_KIND = "session.live-history.v2.page.loaded";
 export const SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND = "session.preview-history.page.load";
 export const SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND = "session.preview-history.page.loaded";
 
@@ -18,8 +18,8 @@ const pageRequestFields = {
     sessionId: identifier,
 };
 
-const sessionLiveHistoryPageLoadSchema = z
-    .object({ ...pageRequestFields, kind: z.literal(SESSION_LIVE_HISTORY_PAGE_LOAD_KIND) })
+const sessionHistoryPageLoadSchema = z
+    .object({ ...pageRequestFields, kind: z.literal(SESSION_HISTORY_PAGE_LOAD_KIND) })
     .readonly();
 
 const sessionPreviewHistoryPageLoadSchema = z
@@ -39,16 +39,16 @@ const pageLoadedFields = {
     sessionId: identifier,
 };
 
-const sessionLiveHistoryPageLoadedSchema = z
-    .object({ ...pageLoadedFields, kind: z.literal(SESSION_LIVE_HISTORY_PAGE_LOADED_KIND) })
+const sessionHistoryPageLoadedSchema = z
+    .object({ ...pageLoadedFields, kind: z.literal(SESSION_HISTORY_PAGE_LOADED_KIND) })
     .readonly();
 
 const sessionPreviewHistoryPageLoadedSchema = z
     .object({ ...pageLoadedFields, kind: z.literal(SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND) })
     .readonly();
 
-export type SessionLiveHistoryPageLoad = z.infer<typeof sessionLiveHistoryPageLoadSchema>;
-export type SessionLiveHistoryPageLoaded = z.infer<typeof sessionLiveHistoryPageLoadedSchema>;
+export type SessionHistoryPageLoad = z.infer<typeof sessionHistoryPageLoadSchema>;
+export type SessionHistoryPageLoaded = z.infer<typeof sessionHistoryPageLoadedSchema>;
 export type SessionPreviewHistoryPageLoad = z.infer<typeof sessionPreviewHistoryPageLoadSchema>;
 export type SessionPreviewHistoryPageLoaded = z.infer<typeof sessionPreviewHistoryPageLoadedSchema>;
 
@@ -61,18 +61,18 @@ function decode<T>(schema: z.ZodType<T>, encoded: string): T {
     }
 }
 
-export const decodeSessionLiveHistoryPageLoad = (encoded: string): SessionLiveHistoryPageLoad =>
-    decode(sessionLiveHistoryPageLoadSchema, encoded);
-export const decodeSessionLiveHistoryPageLoaded = (encoded: string): SessionLiveHistoryPageLoaded =>
-    decode(sessionLiveHistoryPageLoadedSchema, encoded);
+export const decodeSessionHistoryPageLoad = (encoded: string): SessionHistoryPageLoad =>
+    decode(sessionHistoryPageLoadSchema, encoded);
+export const decodeSessionHistoryPageLoaded = (encoded: string): SessionHistoryPageLoaded =>
+    decode(sessionHistoryPageLoadedSchema, encoded);
 export const decodeSessionPreviewHistoryPageLoad = (encoded: string): SessionPreviewHistoryPageLoad =>
     decode(sessionPreviewHistoryPageLoadSchema, encoded);
 export const decodeSessionPreviewHistoryPageLoaded = (encoded: string): SessionPreviewHistoryPageLoaded =>
     decode(sessionPreviewHistoryPageLoadedSchema, encoded);
-export const encodeSessionLiveHistoryPageLoad = (value: SessionLiveHistoryPageLoad): string =>
-    JSON.stringify(sessionLiveHistoryPageLoadSchema.parse(value));
-export const encodeSessionLiveHistoryPageLoaded = (value: SessionLiveHistoryPageLoaded): string =>
-    JSON.stringify(sessionLiveHistoryPageLoadedSchema.parse(value));
+export const encodeSessionHistoryPageLoad = (value: SessionHistoryPageLoad): string =>
+    JSON.stringify(sessionHistoryPageLoadSchema.parse(value));
+export const encodeSessionHistoryPageLoaded = (value: SessionHistoryPageLoaded): string =>
+    JSON.stringify(sessionHistoryPageLoadedSchema.parse(value));
 export const encodeSessionPreviewHistoryPageLoad = (value: SessionPreviewHistoryPageLoad): string =>
     JSON.stringify(sessionPreviewHistoryPageLoadSchema.parse(value));
 export const encodeSessionPreviewHistoryPageLoaded = (value: SessionPreviewHistoryPageLoaded): string =>

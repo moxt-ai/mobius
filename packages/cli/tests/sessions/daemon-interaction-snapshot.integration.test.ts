@@ -9,15 +9,15 @@ import {
     decodeNativeSessionResult,
     decodeSessionElicitationRequestedEvent,
     decodeSessionEventEnvelope,
+    decodeSessionHistoryPageLoaded,
     decodeSessionInfoUpdatedEvent,
-    decodeSessionLiveHistoryPageLoaded,
     decodeSessionPermissionRequestedEvent,
     decodeSessionRestoredEvent,
     decodeSessionStatusChangedEvent,
     decodeSessionsQueriedEvent,
     encodeNativeSessionRequest,
     encodeSessionElicitationRespondCommand,
-    encodeSessionLiveHistoryPageLoad,
+    encodeSessionHistoryPageLoad,
     encodeSessionPermissionRespondCommand,
     encodeSessionPrepareCommand,
     encodeSessionPromptCommand,
@@ -430,7 +430,7 @@ test("Given a real daemon persisted a Session, When Platform restores it by iden
             expect(restoredEvent.ready.runtimeTimings?.map((timing) => timing.name)).not.toContain("session-resume");
 
             restored.socket.send(
-                encodeSessionLiveHistoryPageLoad({
+                encodeSessionHistoryPageLoad({
                     cursor: null,
                     eventLimit: 200,
                     kind: "session.live-history.v2.page.load",
@@ -438,7 +438,7 @@ test("Given a real daemon persisted a Session, When Platform restores it by iden
                     sessionId,
                 }),
             );
-            const history = decodeSessionLiveHistoryPageLoaded(
+            const history = decodeSessionHistoryPageLoaded(
                 await messages.nextKind("session.live-history.v2.page.loaded"),
             );
             expect(JSON.stringify(history.events.events.events)).toContain("Persist this Session");

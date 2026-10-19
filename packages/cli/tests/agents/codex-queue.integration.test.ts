@@ -3,9 +3,9 @@ import {
     decodeMessageKind,
     decodeSessionEvent,
     decodeSessionEventEnvelope,
-    decodeSessionLiveHistoryPageLoaded,
+    decodeSessionHistoryPageLoaded,
     encodeSessionCancelCommand,
-    encodeSessionLiveHistoryPageLoad,
+    encodeSessionHistoryPageLoad,
     encodeSessionPromptCommand,
     encodeSessionPromptDispositionCommand,
     SESSION_EVENT_KIND,
@@ -105,7 +105,7 @@ test("Given real Codex has accepted a steering prompt, When V2 recovery reloads 
             }
             const requestId = randomUUID();
             peer.send(
-                encodeSessionLiveHistoryPageLoad({
+                encodeSessionHistoryPageLoad({
                     cursor: null,
                     eventLimit: 50,
                     kind: "session.live-history.v2.page.load",
@@ -118,7 +118,7 @@ test("Given real Codex has accepted a steering prompt, When V2 recovery reloads 
                 if (decodeMessageKind(message) !== "session.live-history.v2.page.loaded") {
                     continue;
                 }
-                const recovered = decodeSessionLiveHistoryPageLoaded(message);
+                const recovered = decodeSessionHistoryPageLoaded(message);
                 if (recovered.requestId !== requestId) {
                     continue;
                 }
@@ -207,7 +207,7 @@ test("Given real Codex advances between repeated prompts, When V2 recovery pagin
             await queuedEntered.promise;
             const requestId = randomUUID();
             peer.send(
-                encodeSessionLiveHistoryPageLoad({
+                encodeSessionHistoryPageLoad({
                     cursor: null,
                     eventLimit: 1,
                     kind: "session.live-history.v2.page.load",
@@ -220,7 +220,7 @@ test("Given real Codex advances between repeated prompts, When V2 recovery pagin
                 if (decodeMessageKind(message) !== "session.live-history.v2.page.loaded") {
                     continue;
                 }
-                const result = decodeSessionLiveHistoryPageLoaded(message);
+                const result = decodeSessionHistoryPageLoaded(message);
                 if (result.requestId !== requestId) {
                     continue;
                 }
@@ -231,7 +231,7 @@ test("Given real Codex advances between repeated prompts, When V2 recovery pagin
                 while (cursor !== null) {
                     const olderRequestId = randomUUID();
                     peer.send(
-                        encodeSessionLiveHistoryPageLoad({
+                        encodeSessionHistoryPageLoad({
                             cursor,
                             eventLimit: 1,
                             kind: "session.live-history.v2.page.load",
@@ -244,7 +244,7 @@ test("Given real Codex advances between repeated prompts, When V2 recovery pagin
                         if (decodeMessageKind(olderMessage) !== "session.live-history.v2.page.loaded") {
                             continue;
                         }
-                        const older = decodeSessionLiveHistoryPageLoaded(olderMessage);
+                        const older = decodeSessionHistoryPageLoaded(olderMessage);
                         if (older.requestId !== olderRequestId) {
                             continue;
                         }
@@ -372,7 +372,7 @@ test("Given real Codex with an active turn, When three follow-ups are accepted a
                 }
             }
             peer.send(
-                encodeSessionLiveHistoryPageLoad({
+                encodeSessionHistoryPageLoad({
                     cursor: null,
                     eventLimit: 25,
                     kind: "session.live-history.v2.page.load",
@@ -385,7 +385,7 @@ test("Given real Codex with an active turn, When three follow-ups are accepted a
                 if (decodeMessageKind(message) !== "session.live-history.v2.page.loaded") {
                     continue;
                 }
-                const recovered = decodeSessionLiveHistoryPageLoaded(message).events;
+                const recovered = decodeSessionHistoryPageLoaded(message).events;
                 expect(recovered.queuedPromptRequests).toEqual([
                     expect.objectContaining({ commandId: first }),
                     expect.objectContaining({ commandId: cancelled }),

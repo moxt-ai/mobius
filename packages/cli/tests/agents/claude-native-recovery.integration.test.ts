@@ -4,10 +4,10 @@ import {
     decodeNativeSessionResult,
     decodeSessionEvent,
     decodeSessionEventEnvelope,
-    decodeSessionLiveHistoryPageLoaded,
+    decodeSessionHistoryPageLoaded,
     encodeNativeSessionCommand,
     encodeSessionCancelCommand,
-    encodeSessionLiveHistoryPageLoad,
+    encodeSessionHistoryPageLoad,
     encodeSessionPromptCommand,
     SESSION_EVENT_KIND,
     SessionPromptDisposition,
@@ -245,7 +245,7 @@ test("Given a completed real Claude Session, When it is forked, Then its history
 
         const historyRequestId = randomUUID();
         peer.send(
-            encodeSessionLiveHistoryPageLoad({
+            encodeSessionHistoryPageLoad({
                 cursor: null,
                 eventLimit: 50,
                 kind: "session.live-history.v2.page.load",
@@ -262,7 +262,7 @@ test("Given a completed real Claude Session, When it is forked, Then its history
             if (kind !== "session.live-history.v2.page.loaded") {
                 continue;
             }
-            const loaded = decodeSessionLiveHistoryPageLoaded(message);
+            const loaded = decodeSessionHistoryPageLoaded(message);
             if (loaded.requestId !== historyRequestId) {
                 continue;
             }

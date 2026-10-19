@@ -1,10 +1,10 @@
 import {
-    type decodeSessionLiveHistoryPageLoad,
+    type decodeSessionHistoryPageLoad,
     type decodeSessionPreviewHistoryPageLoad,
     type NativeSessionEvents,
     type QueuedPromptRequestEventLog,
-    SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
-    SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
+    SESSION_HISTORY_PAGE_LOAD_KIND,
+    SESSION_HISTORY_PAGE_LOADED_KIND,
     SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND,
     SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND,
     type SessionEvent,
@@ -119,9 +119,9 @@ async function loadHistoryPage(
     };
 }
 
-export async function executeSessionLiveHistoryPageLoad(
+export async function executeSessionHistoryPageLoad(
     socket: WebSocket,
-    command: ReturnType<typeof decodeSessionLiveHistoryPageLoad>,
+    command: ReturnType<typeof decodeSessionHistoryPageLoad>,
     config: DaemonConfig,
     directories: WorkspaceDirectoryService,
     diagnostics: RelayConnectionDiagnostics,
@@ -163,7 +163,7 @@ export async function executeSessionLiveHistoryPageLoad(
         signal.throwIfAborted();
         send(socket, {
             events,
-            kind: SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
+            kind: SESSION_HISTORY_PAGE_LOADED_KIND,
             requestId: command.requestId,
             sessionId: command.sessionId,
         });
@@ -241,13 +241,13 @@ export async function executeSessionPreviewHistoryPageLoad(
     }
 }
 
-export const liveHistoryPageLoadCommand: DaemonCommand = {
-    kind: SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
+export const sessionHistoryPageLoadCommand: DaemonCommand = {
+    kind: SESSION_HISTORY_PAGE_LOAD_KIND,
     handle: (context, message): void => {
-        if (message.kind !== SESSION_LIVE_HISTORY_PAGE_LOAD_KIND) {
+        if (message.kind !== SESSION_HISTORY_PAGE_LOAD_KIND) {
             throw new Error("Command kind mismatch");
         }
-        void executeSessionLiveHistoryPageLoad(
+        void executeSessionHistoryPageLoad(
             context.socket,
             message,
             context.config,

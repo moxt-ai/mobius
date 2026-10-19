@@ -46,12 +46,12 @@ interface BatchBounds {
 /** Batches decoded per query while paging; small enough that one read stays far below Durable Object memory. */
 const batchReadChunk = 32;
 
-interface RecordedSessionLiveHistory {
+interface RecordedSessionHistory {
     readonly events: readonly SessionLiveEvent[];
     readonly sessionId: string;
 }
 
-interface RecordedSessionLiveHistoryPage extends RecordedSessionLiveHistory {
+interface RecordedSessionHistoryPage extends RecordedSessionHistory {
     readonly generationReset: boolean;
     readonly nextCursor: string | null;
     readonly tailCursor: string;
@@ -252,7 +252,7 @@ export class SessionRecordingStorage {
 
     /** The cursor at the newest recorded event. */
     readonly tailCursor = (): string => this.#tailCursor();
-    readonly read = (projectId: string, runtimeId: string, sessionId: string): RecordedSessionLiveHistory | null => {
+    readonly read = (projectId: string, runtimeId: string, sessionId: string): RecordedSessionHistory | null => {
         const rows = this.#requireMetadata(projectId, runtimeId, sessionId);
         if (rows === null) {
             return null;
@@ -266,7 +266,7 @@ export class SessionRecordingStorage {
         sessionId: string,
         after: string,
         limit: number,
-    ): RecordedSessionLiveHistoryPage | null => {
+    ): RecordedSessionHistoryPage | null => {
         const metadata = this.#metadata(projectId, runtimeId, sessionId);
         if (metadata === undefined) {
             return null;

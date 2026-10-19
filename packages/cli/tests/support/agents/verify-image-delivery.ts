@@ -2,9 +2,9 @@ import {
     decodeFileChunkEvent,
     decodeMessageKind,
     decodeSessionEventEnvelope,
-    decodeSessionLiveHistoryPageLoaded,
+    decodeSessionHistoryPageLoaded,
     encodeFileReadCommand,
-    encodeSessionLiveHistoryPageLoad,
+    encodeSessionHistoryPageLoad,
     encodeSessionPermissionRespondCommand,
     encodeSessionPromptCommand,
     type SessionEvent,
@@ -113,7 +113,7 @@ export async function verifyImageDelivery(
     sendPrompt("image-turn", input.prompt);
     expect(imageReferences(await finish())).toContain(input.reference);
     peer.send(
-        encodeSessionLiveHistoryPageLoad({
+        encodeSessionHistoryPageLoad({
             cursor: null,
             eventLimit: 50,
             kind: "session.live-history.v2.page.load",
@@ -129,7 +129,7 @@ export async function verifyImageDelivery(
             throw new Error(message);
         }
         if (kind === "session.live-history.v2.page.loaded") {
-            expect(imageReferences(decodeSessionLiveHistoryPageLoaded(message).events.events.events)).toContain(
+            expect(imageReferences(decodeSessionHistoryPageLoaded(message).events.events.events)).toContain(
                 input.reference,
             );
             break;

@@ -137,19 +137,19 @@ import {
 import { decodeRuntimeUpgradeResult, encodeRuntimeUpgradeResult } from "./runtime-upgrade.ts";
 import { decodeSessionEventEnvelope, encodeSessionEventEnvelope, SESSION_EVENT_KIND } from "./session-event-log.ts";
 import {
-    decodeSessionLiveHistoryPageLoad,
-    decodeSessionLiveHistoryPageLoaded,
+    decodeSessionHistoryPageLoad,
+    decodeSessionHistoryPageLoaded,
     decodeSessionPreviewHistoryPageLoad,
     decodeSessionPreviewHistoryPageLoaded,
-    encodeSessionLiveHistoryPageLoad,
-    encodeSessionLiveHistoryPageLoaded,
+    encodeSessionHistoryPageLoad,
+    encodeSessionHistoryPageLoaded,
     encodeSessionPreviewHistoryPageLoad,
     encodeSessionPreviewHistoryPageLoaded,
-    SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
-    SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
+    SESSION_HISTORY_PAGE_LOAD_KIND,
+    SESSION_HISTORY_PAGE_LOADED_KIND,
     SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND,
     SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND,
-} from "./session-live-history.ts";
+} from "./session-history.ts";
 
 interface MessageSignature<TMessage extends { readonly kind: string }> {
     readonly decoder: (encoded: string) => TMessage;
@@ -246,10 +246,10 @@ const serviceToDaemonSignatures = {
         encodeSessionElicitationRespondCommand,
         decodeSessionElicitationRespondCommand,
     ),
-    [SESSION_LIVE_HISTORY_PAGE_LOAD_KIND]: defineMessageSignature(
-        SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
-        encodeSessionLiveHistoryPageLoad,
-        decodeSessionLiveHistoryPageLoad,
+    [SESSION_HISTORY_PAGE_LOAD_KIND]: defineMessageSignature(
+        SESSION_HISTORY_PAGE_LOAD_KIND,
+        encodeSessionHistoryPageLoad,
+        decodeSessionHistoryPageLoad,
     ),
     [SESSION_PERMISSION_RESPOND_KIND]: defineMessageSignature(
         SESSION_PERMISSION_RESPOND_KIND,
@@ -389,10 +389,10 @@ const daemonToServiceSignatures = {
         encodeSessionOperationFailedEvent,
         decodeSessionOperationFailedEvent,
     ),
-    [SESSION_LIVE_HISTORY_PAGE_LOADED_KIND]: defineMessageSignature(
-        SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
-        encodeSessionLiveHistoryPageLoaded,
-        decodeSessionLiveHistoryPageLoaded,
+    [SESSION_HISTORY_PAGE_LOADED_KIND]: defineMessageSignature(
+        SESSION_HISTORY_PAGE_LOADED_KIND,
+        encodeSessionHistoryPageLoaded,
+        decodeSessionHistoryPageLoaded,
     ),
     [SESSION_READY_KIND]: defineMessageSignature(SESSION_READY_KIND, encodeSessionReadyEvent, decodeSessionReadyEvent),
     [WORKSPACE_ENTRIES_KIND]: defineMessageSignature(

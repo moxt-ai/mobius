@@ -3,9 +3,9 @@ import {
     decodeMessageKind,
     decodeNativeSessionResult,
     decodeSessionEvent,
-    decodeSessionLiveHistoryPageLoaded,
+    decodeSessionHistoryPageLoaded,
     encodeNativeSessionCommand,
-    encodeSessionLiveHistoryPageLoad,
+    encodeSessionHistoryPageLoad,
     encodeSessionPromptCommand,
     type NativeSessionResult,
     SessionPromptDisposition,
@@ -113,7 +113,7 @@ test("Given real Codex saved more than 32 MiB of answers, When a user forks thro
         });
         const historyId = randomUUID();
         peer.send(
-            encodeSessionLiveHistoryPageLoad({
+            encodeSessionHistoryPageLoad({
                 kind: "session.live-history.v2.page.load",
                 sessionId: targetSessionId,
                 requestId: historyId,
@@ -129,7 +129,7 @@ test("Given real Codex saved more than 32 MiB of answers, When a user forks thro
             if (decodeMessageKind(message) !== "session.live-history.v2.page.loaded") {
                 continue;
             }
-            const loaded = decodeSessionLiveHistoryPageLoaded(message);
+            const loaded = decodeSessionHistoryPageLoaded(message);
             if (loaded.requestId !== historyId) {
                 continue;
             }

@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import {
     decodeMessageKind,
     decodeSessionEvent,
-    decodeSessionLiveHistoryPageLoaded,
-    encodeSessionLiveHistoryPageLoad,
+    decodeSessionHistoryPageLoaded,
+    encodeSessionHistoryPageLoad,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -72,7 +72,7 @@ test("Given a real Codex conversation, When more Sessions are opened than the da
         }
         await promptRealSession(peer, sessionId, "Continue the original conversation after opening other Sessions");
         peer.send(
-            encodeSessionLiveHistoryPageLoad({
+            encodeSessionHistoryPageLoad({
                 kind: "session.live-history.v2.page.load",
                 requestId: randomUUID(),
                 sessionId,
@@ -88,7 +88,7 @@ test("Given a real Codex conversation, When more Sessions are opened than the da
             if (decodeMessageKind(message) !== "session.live-history.v2.page.loaded") {
                 continue;
             }
-            const page = decodeSessionLiveHistoryPageLoaded(message).events.events;
+            const page = decodeSessionHistoryPageLoaded(message).events.events;
             const updates = page.events.flatMap((event) => (event.type === "acp" ? [event.payload] : []));
             const userText = [
                 ...new Set(

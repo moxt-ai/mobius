@@ -7,7 +7,7 @@ import {
     decodeSessionConfigureCommand,
     decodeSessionElicitationRespondCommand,
     decodeSessionEventEnvelope,
-    decodeSessionLiveHistoryPageLoad,
+    decodeSessionHistoryPageLoad,
     decodeSessionPermissionRespondCommand,
     decodeSessionPreviewHistoryPageLoad,
     decodeSessionPromptCommand,
@@ -711,7 +711,7 @@ export function createPlatformApplication(
                 const result = await context.var.relay.services.runtimePairings.requestProjectScopeControl(
                     new ProjectScope(target.projectId),
                     target.runtimeId,
-                    decodeSessionLiveHistoryPageLoad(
+                    decodeSessionHistoryPageLoad(
                         JSON.stringify({
                             cursor: context.req.query("cursor") ?? null,
                             eventLimit: v.parse(

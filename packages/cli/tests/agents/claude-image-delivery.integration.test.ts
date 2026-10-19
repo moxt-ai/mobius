@@ -5,9 +5,9 @@ import {
     decodeFileChunkEvent,
     decodeMessageKind,
     decodeSessionEventEnvelope,
-    decodeSessionLiveHistoryPageLoaded,
+    decodeSessionHistoryPageLoaded,
     encodeFileReadCommand,
-    encodeSessionLiveHistoryPageLoad,
+    encodeSessionHistoryPageLoad,
     encodeSessionPermissionRespondCommand,
     encodeSessionPromptCommand,
     type SessionEvent,
@@ -117,7 +117,7 @@ test("Given real Claude reads an image, When its reply streams and native histor
         sendPrompt("image-turn", "Use the read tool to inspect picture.png, then reply");
         expect(imageKeys(await finish())).toContain(key);
         peer.send(
-            encodeSessionLiveHistoryPageLoad({
+            encodeSessionHistoryPageLoad({
                 cursor: null,
                 eventLimit: 50,
                 kind: "session.live-history.v2.page.load",
@@ -133,7 +133,7 @@ test("Given real Claude reads an image, When its reply streams and native histor
             }
             if (kind === "session.live-history.v2.page.loaded") {
                 expect(message).not.toContain(image.toString("base64"));
-                expect(imageKeys(decodeSessionLiveHistoryPageLoaded(message).events.events.events)).toContain(key);
+                expect(imageKeys(decodeSessionHistoryPageLoaded(message).events.events.events)).toContain(key);
                 break;
             }
         }

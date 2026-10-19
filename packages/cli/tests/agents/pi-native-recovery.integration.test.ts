@@ -4,12 +4,12 @@ import {
     decodeNativeSessionResult,
     decodeSessionEvent,
     decodeSessionEventEnvelope,
-    decodeSessionLiveHistoryPageLoaded,
+    decodeSessionHistoryPageLoaded,
     decodeSessionOperationFailedEvent,
     decodeSessionPreviewHistoryPageLoaded,
     encodeNativeSessionCommand,
     encodeSessionCancelCommand,
-    encodeSessionLiveHistoryPageLoad,
+    encodeSessionHistoryPageLoad,
     encodeSessionPreviewHistoryPageLoad,
     encodeSessionPromptCommand,
     SESSION_EVENT_KIND,
@@ -365,7 +365,7 @@ test("Given a saved real Pi native Session, When the user forks it, Then its his
 
         const historyRequestId = randomUUID();
         peer.send(
-            encodeSessionLiveHistoryPageLoad({
+            encodeSessionHistoryPageLoad({
                 cursor: null,
                 eventLimit: 50,
                 kind: "session.live-history.v2.page.load",
@@ -382,7 +382,7 @@ test("Given a saved real Pi native Session, When the user forks it, Then its his
             if (kind !== "session.live-history.v2.page.loaded") {
                 continue;
             }
-            const loaded = decodeSessionLiveHistoryPageLoaded(message);
+            const loaded = decodeSessionHistoryPageLoaded(message);
             if (loaded.requestId !== historyRequestId) {
                 continue;
             }

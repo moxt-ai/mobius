@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto";
 import {
     decodeMessageKind,
     decodeSessionEvent,
-    decodeSessionLiveHistoryPageLoaded,
+    decodeSessionHistoryPageLoaded,
     decodeSessionReadyEvent,
-    encodeSessionLiveHistoryPageLoad,
+    encodeSessionHistoryPageLoad,
     encodeSessionPrepareCommand,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
@@ -83,7 +83,7 @@ async function journey(peer: RealDaemonPeer, agentId: string, reply: string): Pr
     }
     const historyId = randomUUID();
     peer.send(
-        encodeSessionLiveHistoryPageLoad({
+        encodeSessionHistoryPageLoad({
             kind: "session.live-history.v2.page.load",
             requestId: historyId,
             sessionId,
@@ -100,7 +100,7 @@ async function journey(peer: RealDaemonPeer, agentId: string, reply: string): Pr
         if (kind !== "session.live-history.v2.page.loaded") {
             continue;
         }
-        const history = decodeSessionLiveHistoryPageLoaded(message);
+        const history = decodeSessionHistoryPageLoaded(message);
         if (history.requestId !== historyId) {
             continue;
         }

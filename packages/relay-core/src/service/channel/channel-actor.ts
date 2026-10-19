@@ -15,8 +15,8 @@ import {
     decodeSessionCloseCommand,
     decodeSessionConfigureCommand,
     decodeSessionElicitationRespondCommand,
+    decodeSessionHistoryPageLoad,
     decodeSessionListCommand,
-    decodeSessionLiveHistoryPageLoad,
     decodeSessionPermissionRespondCommand,
     decodeSessionPrepareCommand,
     decodeSessionPreviewHistoryPageLoad,
@@ -51,11 +51,11 @@ import {
     SESSION_CONFIGURE_KIND,
     SESSION_ELICITATION_RESPOND_KIND,
     SESSION_EVENT_KIND,
+    SESSION_HISTORY_PAGE_LOAD_KIND,
+    SESSION_HISTORY_PAGE_LOADED_KIND,
     SESSION_INFO_UPDATED_KIND,
     SESSION_LIST_KIND,
     SESSION_LISTED_KIND,
-    SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
-    SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
     SESSION_OPERATION_FAILED_KIND,
     SESSION_PERMISSION_RESPOND_KIND,
     SESSION_PREPARE_KIND,
@@ -194,7 +194,7 @@ export class ChannelActor {
                 this.returnAgentSettingsDiscoveryFailure(message.requestId, encodeDaemonToServiceMessage(message));
                 return;
             }
-            if (kind === SESSION_LIVE_HISTORY_PAGE_LOADED_KIND) {
+            if (kind === SESSION_HISTORY_PAGE_LOADED_KIND) {
                 this.returnHistoryPage("live", message);
                 return;
             }
@@ -259,11 +259,11 @@ export class ChannelActor {
                 this.forwardControl(socket, command, request.requestId, request.sessionId, request);
                 return;
             }
-            if (kind === SESSION_LIVE_HISTORY_PAGE_LOAD_KIND) {
+            if (kind === SESSION_HISTORY_PAGE_LOAD_KIND) {
                 if (!socket.permitsLiveSessionHistory()) {
                     throw new ProtocolMessageError("Live Session history requires an internal connection");
                 }
-                this.forwardHistoryPage(socket, "live", decodeSessionLiveHistoryPageLoad(message));
+                this.forwardHistoryPage(socket, "live", decodeSessionHistoryPageLoad(message));
                 return;
             }
             if (kind === SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND) {
@@ -534,7 +534,7 @@ export class ChannelActor {
             DaemonToServiceMessage,
             {
                 readonly kind:
-                    | typeof SESSION_LIVE_HISTORY_PAGE_LOADED_KIND
+                    | typeof SESSION_HISTORY_PAGE_LOADED_KIND
                     | typeof SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND;
             }
         >,
@@ -552,9 +552,7 @@ export class ChannelActor {
         command: Extract<
             ServiceToDaemonMessage,
             {
-                readonly kind:
-                    | typeof SESSION_LIVE_HISTORY_PAGE_LOAD_KIND
-                    | typeof SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND;
+                readonly kind: typeof SESSION_HISTORY_PAGE_LOAD_KIND | typeof SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND;
             }
         >,
     ): void => {

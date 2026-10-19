@@ -3,9 +3,9 @@ import {
     decodeMessageKind,
     decodeSessionEvent,
     decodeSessionEventEnvelope,
-    decodeSessionLiveHistoryPageLoaded,
+    decodeSessionHistoryPageLoaded,
     encodeSessionCancelCommand,
-    encodeSessionLiveHistoryPageLoad,
+    encodeSessionHistoryPageLoad,
     encodeSessionPromptCommand,
     SESSION_EVENT_KIND,
     SessionPromptDisposition,
@@ -23,7 +23,7 @@ test("Given a newly created real Codex Session, When Chat requests its V2 histor
         const sessionId = await prepareNewRealSession(peer, "codex");
         const requestId = randomUUID();
         peer.send(
-            encodeSessionLiveHistoryPageLoad({
+            encodeSessionHistoryPageLoad({
                 kind: "session.live-history.v2.page.load",
                 requestId,
                 sessionId,
@@ -39,7 +39,7 @@ test("Given a newly created real Codex Session, When Chat requests its V2 histor
             if (decodeMessageKind(message) !== "session.live-history.v2.page.loaded") {
                 continue;
             }
-            expect(decodeSessionLiveHistoryPageLoaded(message)).toMatchObject({
+            expect(decodeSessionHistoryPageLoaded(message)).toMatchObject({
                 events: {
                     events: {
                         sessionGenerationId: expect.any(String),

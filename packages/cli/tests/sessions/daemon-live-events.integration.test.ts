@@ -10,15 +10,15 @@ import {
     decodeMessageKind,
     decodeNativeSessionResult,
     decodeSessionEventEnvelope,
-    decodeSessionLiveHistoryPageLoaded,
+    decodeSessionHistoryPageLoaded,
     encodeNativeSessionRequest,
     encodeSessionCancelCommand,
-    encodeSessionLiveHistoryPageLoad,
+    encodeSessionHistoryPageLoad,
     encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
     NATIVE_SESSION_RESULT_KIND,
     SESSION_EVENT_KIND,
-    SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
+    SESSION_HISTORY_PAGE_LOADED_KIND,
     type SessionEvent,
     type SessionLiveEvent,
     type SessionPromptCommand,
@@ -323,7 +323,7 @@ async function history(
 ) {
     sendText(
         fixture.socket,
-        encodeSessionLiveHistoryPageLoad({
+        encodeSessionHistoryPageLoad({
             kind: "session.live-history.v2.page.load",
             requestId: "history",
             sessionId: command.sessionId,
@@ -337,8 +337,8 @@ async function history(
         if (decodeMessageKind(frame) === "session.operation.failed") {
             throw new Error(frame);
         }
-        if (decodeMessageKind(frame) === SESSION_LIVE_HISTORY_PAGE_LOADED_KIND) {
-            return decodeSessionLiveHistoryPageLoaded(frame).events.events;
+        if (decodeMessageKind(frame) === SESSION_HISTORY_PAGE_LOADED_KIND) {
+            return decodeSessionHistoryPageLoaded(frame).events.events;
         }
     }
 }

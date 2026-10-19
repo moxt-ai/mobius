@@ -16,7 +16,7 @@ import {
     decodeSessionConfigUpdatedEvent,
     decodeSessionElicitationResolvedEvent,
     decodeSessionEventEnvelope,
-    decodeSessionLiveHistoryPageLoaded,
+    decodeSessionHistoryPageLoaded,
     decodeSessionOperationFailedEvent,
     decodeSessionPermissionResolvedEvent,
     decodeSessionPreviewHistoryPageLoaded,
@@ -48,9 +48,9 @@ import {
     type SessionConfigureCommand,
     type SessionElicitationResolvedEvent,
     type SessionElicitationRespondCommand,
+    type SessionHistoryPageLoad,
+    type SessionHistoryPageLoaded,
     type SessionListCommand,
-    type SessionLiveHistoryPageLoad,
-    type SessionLiveHistoryPageLoaded,
     type SessionPermissionResolvedEvent,
     type SessionPermissionRespondCommand,
     type SessionPrepareCommand,
@@ -83,7 +83,7 @@ export type RuntimeControlCommand =
     | SessionPromptDispositionCommand
     | SessionPromptCommand
     | SessionPreviewHistoryPageLoad
-    | SessionLiveHistoryPageLoad
+    | SessionHistoryPageLoad
     | SessionElicitationRespondCommand
     | SessionPermissionRespondCommand
     | SessionListCommand
@@ -126,7 +126,7 @@ export type RuntimeControlResult =
     | TurnStarted
     | TurnQueued
     | SessionPreviewHistoryPageLoaded
-    | SessionLiveHistoryPageLoaded
+    | SessionHistoryPageLoaded
     | SessionElicitationResolvedEvent
     | SessionPermissionResolvedEvent
     | SessionsListedEvent
@@ -574,7 +574,7 @@ export async function requestRuntimeControl(
                             ? decodeSessionPreviewHistoryPageLoaded(event.data)
                             : command.kind === "session.live-history.v2.page.load" &&
                                 kind === "session.live-history.v2.page.loaded"
-                              ? decodeSessionLiveHistoryPageLoaded(event.data)
+                              ? decodeSessionHistoryPageLoaded(event.data)
                               : command.kind === "session.permission.respond" && kind === "session.permission.resolved"
                                 ? decodeSessionPermissionResolvedEvent(event.data)
                                 : command.kind === "session.elicitation.respond" &&

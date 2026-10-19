@@ -6,10 +6,10 @@ import {
     decodeMessageKind,
     decodeNativeSessionResult,
     decodeSessionEventEnvelope,
-    decodeSessionLiveHistoryPageLoaded,
+    decodeSessionHistoryPageLoaded,
     encodeFileReadCommand,
     encodeNativeSessionCommand,
-    encodeSessionLiveHistoryPageLoad,
+    encodeSessionHistoryPageLoad,
     encodeSessionPromptCommand,
     type NativeSessionResult,
     type SessionEvent,
@@ -237,7 +237,7 @@ test("Given saved Codex image generation, When the real daemon reopens it throug
             }
         };
         peer.send(
-            encodeSessionLiveHistoryPageLoad({
+            encodeSessionHistoryPageLoad({
                 cursor: null,
                 eventLimit: 50,
                 kind: "session.live-history.v2.page.load",
@@ -254,7 +254,7 @@ test("Given saved Codex image generation, When the real daemon reopens it throug
             if (kind === "session.live-history.v2.page.loaded") {
                 expect(message).not.toContain(image.toString("base64"));
                 expect(message.length).toBeLessThan(50_000);
-                const events = decodeSessionLiveHistoryPageLoaded(message).events.events.events;
+                const events = decodeSessionHistoryPageLoaded(message).events.events.events;
                 expect(imageKeys(events)).toContain(key);
                 expect(openedImageKeys(events)).toContain(key);
                 break;

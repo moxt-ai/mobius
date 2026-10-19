@@ -12,8 +12,8 @@ import {
     encodeSessionConfigUpdatedEvent,
     encodeSessionConfigureCommand,
     encodeSessionEventEnvelope,
+    encodeSessionHistoryPageLoaded,
     encodeSessionInfoUpdatedEvent,
-    encodeSessionLiveHistoryPageLoaded,
     encodeSessionOperationFailedEvent,
     encodeSessionPreviewHistoryPageLoaded,
     encodeSessionPromptCommand,
@@ -1225,7 +1225,7 @@ describe.sequential("Platform Session-only boundary", () => {
                 title: "Renamed session",
                 updatedAt: "2026-09-18T00:01:00.000Z",
             });
-            const historyPage = encodeSessionLiveHistoryPageLoaded({
+            const historyPage = encodeSessionHistoryPageLoaded({
                 events: {
                     events: {
                         sessionGenerationId: "session-generation-1",

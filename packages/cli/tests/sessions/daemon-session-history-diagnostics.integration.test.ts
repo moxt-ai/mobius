@@ -10,10 +10,10 @@ import {
     decodeFileEndEvent,
     decodeMessageKind,
     decodeSessionEvent,
-    decodeSessionLiveHistoryPageLoaded,
+    decodeSessionHistoryPageLoaded,
     decodeSessionOperationFailedEvent,
     encodeFileReadCommand,
-    encodeSessionLiveHistoryPageLoad,
+    encodeSessionHistoryPageLoad,
     encodeSessionPrepareCommand,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
@@ -98,7 +98,7 @@ if (process.argv.includes("--version")) {
                     }
                 }
                 peer.send(
-                    encodeSessionLiveHistoryPageLoad({
+                    encodeSessionHistoryPageLoad({
                         cursor: null,
                         eventLimit: 50,
                         kind: "session.live-history.v2.page.load",
@@ -118,7 +118,7 @@ if (process.argv.includes("--version")) {
                     if (messageKind !== "session.live-history.v2.page.loaded") {
                         continue;
                     }
-                    const events = decodeSessionLiveHistoryPageLoaded(message).events.events.events;
+                    const events = decodeSessionHistoryPageLoaded(message).events.events.events;
                     expect(JSON.stringify(events).length).toBeLessThan(10_000);
                     expect(JSON.stringify(events)).not.toContain("iVBORw0KGgoAAAANSUhEUg");
                     for (const event of events) {
