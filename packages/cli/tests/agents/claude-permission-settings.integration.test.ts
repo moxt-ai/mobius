@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { decodeSessionReadyEvent, encodeSessionPrepareCommand } from "@moxt-ai/mobius-protocol";
 import { expect, test } from "vitest";
@@ -34,7 +34,12 @@ test.each([
             configDirectory = join(home, "config-alias");
             await symlink(config, configDirectory, process.platform === "win32" ? "junction" : "dir");
         }
-        const environment = { ...agent.environment, CLAUDE_CONFIG_DIR: configDirectory };
+        const diagnostics = join(home, "settings-diagnostic.jsonl");
+        const environment = {
+            ...agent.environment,
+            CLAUDE_CONFIG_DIR: configDirectory,
+            MOBIUS_SETTINGS_DIAGNOSTICS: diagnostics,
+        };
         await withRealDaemon(
             new ClaudeCodeAgentSpecification(),
             environment,
@@ -64,6 +69,7 @@ test.each([
                         continue;
                     }
                     const option = ready.configOptions.find((option) => option.id === "mode");
+                    console.log(await readFile(diagnostics, "utf8"));
                     expect(option?.type === "select" ? option.currentValue : undefined).toBe(
                         trusted ? "bypassPermissions" : "default",
                     );

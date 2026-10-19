@@ -101,6 +101,12 @@ export class SettingsManager {
     private async loadAllSettings(): Promise<void> {
         try {
             const resolved = await resolveSettings({ cwd: this.cwd });
+            if (process.env.MOBIUS_SETTINGS_DIAGNOSTICS) {
+                fs.appendFileSync(
+                    process.env.MOBIUS_SETTINGS_DIAGNOSTICS,
+                    JSON.stringify({ cwd: this.cwd, configDirectory: process.env.CLAUDE_CONFIG_DIR, resolved }) + "\n",
+                );
+            }
             // At the home directory, the SDK can load the user file again as
             // project settings. macOS also canonicalizes /var to /private/var
             // for the cwd. Canonicalize only the trusted user's directory;
