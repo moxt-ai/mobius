@@ -31,7 +31,7 @@ async function readDistribution(resources: string): Promise<Record<string, unkno
     const candidates = new Map<string, Record<string, unknown>>();
     for (const entry of listPackage(resources, { isPack: false })) {
         signal.throwIfAborted();
-        if (!/^\/\.vite\/build\/[^/]+\.js$/.test(entry)) {
+        if (!/^\/\.vite\/build\/[^/]+\.js$/.test(entry.replaceAll("\\", "/"))) {
             continue;
         }
         const source = extractFile(resources, entry.slice(1)).toString("utf8");
