@@ -1,0 +1,79 @@
+name: Post-Merge Review
+
+run-name: '[Post-Merge Review] ${{ github.event.pull_request.title }}'
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [closed]
+
+# Only trusted base-branch workflow code runs; no PR code is checked out.
+permissions: {}
+
+concurrency:
+  group: moxt-post-merge-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  trigger-review:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Request Moxt review
+        env:
+          WEBHOOK_URL: ${{ vars.MOXT_REVIEW_WEBHOOK_URL || 'https://webhook.moxt.ai/web/api/external/webhooks/integrations/trigger/6zrnmb90/a6a7f99b-4195-4ab5-b9c7-54bff8adcc28' }}
+          WEBHOOK_TOKEN: ${{ secrets.MOXT_REVIEW_WEBHOOK_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "$WEBHOOK_TOKEN" ]]; then
+            echo '::error::Configure MOXT_REVIEW_WEBHOOK_TOKEN as an Actions secret.'
+            exit 1
+          fi
+          case "$WEBHOOK_URL" in
+            https://webhook.moxt.ai/web/api/external/webhooks/integrations/trigger/*) ;;
+            *)
+              echo '::error::MOXT_REVIEW_WEBHOOK_URL must be a production Moxt integration webhook URL.'
+              exit 1
+              ;;
+          esac
+
+          payload="$RUNNER_TEMP/moxt-post-merge-review.json"
+          jq '{
+            action: .action,
+            number: .pull_request.number,
+            repository: .repository.full_name,
+            pull_request: {
+              title: .pull_request.title,
+              head_sha: .pull_request.head.sha,
+              merge_commit_sha: .pull_request.merge_commit_sha,
+              author: .pull_request.user.login
+            }
+          }' "$GITHUB_EVENT_PATH" > "$payload"
+
+          # Delivery can start an asynchronous pipeline; do not retry and duplicate it.
+          status=$(curl \
+            --silent --show-error --fail-with-body \
+            --proto '=https' --connect-timeout 10 --max-time 30 \
+            --request POST \
+            --header 'Content-Type: application/json' \
+            --header "authorization: $WEBHOOK_TOKEN" \
+            --data-binary "@$payload" \
+            --output "$RUNNER_TEMP/moxt-post-merge-review-response" \
+            --write-out '%{http_code}' \
+            "$WEBHOOK_URL")
+
+          if [[ "$status" != '202' ]]; then
+            echo "::error::Expected Moxt HTTP 202 Accepted, received HTTP $status."
+            exit 1
+          fi
+
+          echo 'Moxt accepted the post-merge review request.'
+          {
+            echo '### Moxt review requested'
+            echo
+            echo 'Moxt accepted the webhook (HTTP 202). This confirms delivery, not review completion.'
+            echo 'The reviewer agent publishes the result back to the pull request asynchronously.'
+          } >> "$GITHUB_STEP_SUMMARY"
