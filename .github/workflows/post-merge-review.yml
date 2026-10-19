@@ -1,22 +1,28 @@
-name: Post-Merge Review
+name: Moxt PR Review
 
-run-name: '[Post-Merge Review] ${{ github.event.pull_request.title }}'
+run-name: 'Moxt review for PR #${{ github.event.pull_request.number || inputs.pr_number }}'
 
 on:
   pull_request_target:
     branches: [main]
-    types: [closed]
+    types: [opened, reopened, synchronize, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Open pull request number to review
+        required: true
+        type: string
 
 # Only trusted base-branch workflow code runs; no PR code is checked out.
-permissions: {}
+permissions:
+  pull-requests: read
 
 concurrency:
-  group: moxt-post-merge-review-${{ github.event.pull_request.number }}
+  group: moxt-pr-review-${{ github.event.pull_request.number || inputs.pr_number }}
   cancel-in-progress: false
 
 jobs:
   trigger-review:
-    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
@@ -24,6 +30,10 @@ jobs:
         env:
           WEBHOOK_URL: ${{ vars.MOXT_REVIEW_WEBHOOK_URL || 'https://webhook.moxt.ai/web/api/external/webhooks/integrations/trigger/6zrnmb90/a6a7f99b-4195-4ab5-b9c7-54bff8adcc28' }}
           WEBHOOK_TOKEN: ${{ secrets.MOXT_REVIEW_WEBHOOK_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          REVIEW_ACTION: ${{ github.event.action || 'workflow_dispatch' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -40,18 +50,39 @@ jobs:
               ;;
           esac
 
-          payload="$RUNNER_TEMP/moxt-post-merge-review.json"
-          jq '{
-            action: .action,
-            number: .pull_request.number,
-            repository: .repository.full_name,
+          if [[ ! "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo '::error::Expected a positive pull request number.'
+            exit 1
+          fi
+
+          # Fetch current metadata with a read-only token. Never check out or run PR code.
+          pull_request="$RUNNER_TEMP/moxt-pull-request.json"
+          curl --silent --show-error --fail \
+            --proto '=https' --connect-timeout 10 --max-time 30 \
+            --header "authorization: Bearer $GH_TOKEN" \
+            --header 'Accept: application/vnd.github+json' \
+            --output "$pull_request" \
+            "https://api.github.com/repos/$REPOSITORY/pulls/$PR_NUMBER"
+
+          if ! jq -e '.state == "open"' "$pull_request" > /dev/null; then
+            echo 'Pull request is no longer open; skipping review.'
+            exit 0
+          fi
+
+          payload="$RUNNER_TEMP/moxt-pr-review.json"
+          jq --arg action "$REVIEW_ACTION" --arg repository "$REPOSITORY" '{
+            action: $action,
+            number: .number,
+            repository: $repository,
             pull_request: {
-              title: .pull_request.title,
-              head_sha: .pull_request.head.sha,
-              merge_commit_sha: .pull_request.merge_commit_sha,
-              author: .pull_request.user.login
+              title: .title,
+              url: .html_url,
+              head_sha: .head.sha,
+              base_sha: .base.sha,
+              author: .user.login,
+              draft: .draft
             }
-          }' "$GITHUB_EVENT_PATH" > "$payload"
+          }' "$pull_request" > "$payload"
 
           # Delivery can start an asynchronous pipeline; do not retry and duplicate it.
           status=$(curl \
@@ -61,7 +92,7 @@ jobs:
             --header 'Content-Type: application/json' \
             --header "authorization: $WEBHOOK_TOKEN" \
             --data-binary "@$payload" \
-            --output "$RUNNER_TEMP/moxt-post-merge-review-response" \
+            --output "$RUNNER_TEMP/moxt-pr-review-response" \
             --write-out '%{http_code}' \
             "$WEBHOOK_URL")
 
@@ -70,10 +101,11 @@ jobs:
             exit 1
           fi
 
-          echo 'Moxt accepted the post-merge review request.'
+          echo 'Moxt accepted the pull request review request.'
           {
             echo '### Moxt review requested'
             echo
             echo 'Moxt accepted the webhook (HTTP 202). This confirms delivery, not review completion.'
             echo 'The reviewer agent publishes the result back to the pull request asynchronously.'
+            echo 'Each new head commit receives a comment; repeated delivery of the same head is deduplicated by the reviewer.'
           } >> "$GITHUB_STEP_SUMMARY"
