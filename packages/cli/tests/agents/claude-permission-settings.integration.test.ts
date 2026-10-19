@@ -64,10 +64,9 @@ test.each([
                         continue;
                     }
                     const option = ready.configOptions.find((option) => option.id === "mode");
-                    expect(
-                        option?.type === "select" ? option.currentValue : undefined,
-                        await peer.readDiagnostics(),
-                    ).toBe(trusted ? "bypassPermissions" : "default");
+                    expect(option?.type === "select" ? option.currentValue : undefined).toBe(
+                        trusted ? "bypassPermissions" : "default",
+                    );
                     break;
                 }
             },
