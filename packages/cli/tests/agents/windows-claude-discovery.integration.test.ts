@@ -7,21 +7,34 @@ import { expect, test } from "vitest";
 import { ClaudeFixture } from "../support/agents/claude.ts";
 import { FakeAnthropicProvider } from "../support/llm/anthropic.ts";
 
-test.runIf(process.platform === "win32").each(["native", "desktop", "desktop-classic"])(
-    "Given real Claude is installed in the Windows %s location outside PATH, When the user lists Agents, Then Claude is ready",
-    async (installation) => {
+test.runIf(process.platform === "win32").each([
+    { installation: "native", directories: [".local", "bin"] },
+    {
+        installation: "desktop",
+        directories: [
+            "AppData",
+            "Local",
+            "Claude-Data",
+            "claude_pzs8sxrjxfjjc",
+            "claude-code",
+            "2.1.299",
+            "test-build",
+        ],
+    },
+    {
+        installation: "desktop-classic",
+        directories: ["AppData", "Roaming", "Claude", "claude-code", "2.1.299"],
+    },
+])(
+    "Given real Claude is installed in the Windows $installation location outside PATH, When the user lists Agents, Then Claude is ready",
+    async ({ directories }) => {
         await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-6", "WINDOWS_DISCOVERY_REPLY");
         await using claude = await ClaudeFixture.create(provider);
         const directory = await mkdtemp(join(tmpdir(), "mobius-windows-claude-"));
         const workspace = join(directory, "workspace");
         const userProfile = join(directory, "user");
         const localAppData = join(userProfile, "AppData", "Local");
-        const nativeDirectory =
-            installation === "native"
-                ? join(userProfile, ".local", "bin")
-                : installation === "desktop-classic"
-                  ? join(userProfile, "AppData", "Roaming", "Claude", "claude-code", "2.1.299")
-                  : join(localAppData, "Claude-Data", "claude_pzs8sxrjxfjjc", "claude-code", "2.1.299", "test-build");
+        const nativeDirectory = join(userProfile, ...directories);
         const nativeExecutable = join(nativeDirectory, "claude.exe");
         try {
             await Promise.all([mkdir(workspace), mkdir(nativeDirectory, { recursive: true })]);
