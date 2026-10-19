@@ -100,16 +100,7 @@ export class PairingDirectoryService implements PairingOperations {
             await this.readProjectRuntime(storage, scope, normalizedRuntimeId, signal);
             throw new PairingDirectoryError("runtime_unavailable", "The selected Runtime is unavailable");
         }
-        // The credential carries the paired Agent catalog so command dispatch can
-        // check each command's capability against the advertising Agent without a
-        // second directory read.
-        return new ChannelHostCredential(
-            created.channel_id,
-            normalizedRuntimeId,
-            scope.projectId,
-            credentialId,
-            parseAgents(created.agents_json),
-        );
+        return new ChannelHostCredential(created.channel_id, normalizedRuntimeId, scope.projectId, credentialId);
     };
 
     readonly closeControlHost: PairingOperations["closeControlHost"] = async (access, signal) => {

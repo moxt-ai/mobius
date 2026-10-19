@@ -116,14 +116,8 @@ export class VerifiedChannelAccess {
 export class ChannelHostCredential extends VerifiedChannelAccess {
     readonly credentialId: string;
 
-    constructor(
-        channelId: string,
-        runtimeId: string,
-        projectId: string,
-        credentialId: string,
-        agents: readonly AgentDescriptor[] = [],
-    ) {
-        super(channelId, runtimeId, projectId, agents);
+    constructor(channelId: string, runtimeId: string, projectId: string, credentialId: string) {
+        super(channelId, runtimeId, projectId, []);
         this.credentialId = credentialId;
     }
 }

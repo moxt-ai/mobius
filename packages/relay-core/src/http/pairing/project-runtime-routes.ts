@@ -359,7 +359,7 @@ export function createProjectRuntimeRoutes() {
                         title: body.title,
                     }),
                 );
-                const result = await context.env.services.runtimePairings.requestControl(
+                const result = await context.env.services.runtimePairings.renameRuntimeSession(
                     validateIdentifier(context.req.param("projectId"), "project_id"),
                     validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
                     bearerToken(context.req.raw),
@@ -465,7 +465,7 @@ export function createProjectRuntimeRoutes() {
                     }
                     throw error;
                 }
-                const result = await context.env.services.runtimePairings.requestControl(
+                const result = await context.env.services.runtimePairings.submitRuntimeTurn(
                     validateIdentifier(context.req.param("projectId"), "project_id"),
                     validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
                     bearerToken(context.req.raw),
