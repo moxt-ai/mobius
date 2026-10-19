@@ -5,15 +5,15 @@ import {
     SESSION_HISTORY_MESSAGE_LIMIT,
 } from "@moxt-ai/mobius-protocol";
 import { z } from "zod";
-import { AcpExecutionError } from "../acp/acp-error.ts";
-import { nativeSessionIdSchema } from "../acp/native-session.ts";
-import type { AcpAgentDefinition } from "../agent-catalog/local-agent.ts";
+import type { AcpAgentDefinition } from "../../../agent-catalog/local-agent.ts";
 import {
     executableLaunch,
     platformSpawnOptions,
     revalidateExecutable,
     stopProcessTree,
-} from "../util/process/executable.ts";
+} from "../../../util/process/executable.ts";
+import { AcpExecutionError } from "../../acp-error.ts";
+import { nativeSessionIdSchema } from "../../native-session.ts";
 import {
     embedLocalHistoryImages,
     type NativeHistoryActivity,

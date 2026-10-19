@@ -8,14 +8,14 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
-import {
-    AgentRuntimeManager,
-    acpNativeHistoryReader,
-    createWritableAcpStream,
-} from "../../src/acp/agent-runtime-manager.ts";
+import { AgentRuntimeManager, acpAdapters, createWritableAcpStream } from "../../src/acp/agent-runtime-manager.ts";
+import { NullAcpSessionObserver } from "../../src/acp/session-contracts.ts";
 import { CachedAcpSessionEventStoreV2 } from "../../src/acp/session-event-store-v2.ts";
 import { FoundAcpStoredSession, MemoryAcpSessionStore, SqliteAcpSessionStore } from "../../src/acp/session-store.ts";
 import { LocalAgentDefinition } from "../../src/daemon/config.ts";
+import { systemDaemonTimer } from "../../src/daemon/relay/timer.ts";
+import { AcpContentExternalizer } from "../../src/external-content/acp-content-externalizer.ts";
+import { UnretainedExternalContentStore } from "../../src/external-content/local-external-content-store.ts";
 import { acpSessionStoreMigrations } from "../../src/generated/acp-session-store-migrations.ts";
 import { AccumulatingOperationMetrics } from "../../src/infra/operation-metrics.ts";
 import { openAcpSessionDatabase, openSessionEventCacheV2Database } from "../../src/local-databases.ts";
@@ -62,7 +62,16 @@ describe("ACP conversation sessions", () => {
             [fakeAgentPath, "--agent-name", "Codex"],
             { MOBIUS_FAKE_ACP_STATE_DIRECTORY: temporaryDirectory },
         );
-        const firstManager = new AgentRuntimeManager(undefined, store);
+        const firstManager = new AgentRuntimeManager({
+            observer: new NullAcpSessionObserver(),
+            store,
+            adapters: acpAdapters,
+            sessionIdentity: "assigned",
+            onSessionStatusChanged: () => undefined,
+            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            timer: systemDaemonTimer,
+            maxProcesses: null,
+        });
         const signal = new AbortController().signal;
 
         try {
@@ -87,7 +96,16 @@ describe("ACP conversation sessions", () => {
             await firstManager.close();
 
             vi.setSystemTime(new Date("2026-10-14T12:00:00.000Z"));
-            const reopenedManager = new AgentRuntimeManager(undefined, store);
+            const reopenedManager = new AgentRuntimeManager({
+                observer: new NullAcpSessionObserver(),
+                store,
+                adapters: acpAdapters,
+                sessionIdentity: "assigned",
+                onSessionStatusChanged: () => undefined,
+                contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+                timer: systemDaemonTimer,
+                maxProcesses: null,
+            });
             try {
                 await reopenedManager.prepareSession({
                     additionalDirectories: [],
@@ -456,7 +474,16 @@ describe("ACP conversation sessions", () => {
         ]);
         const signal = new AbortController().signal;
         const firstStore = new SqliteAcpSessionStore(openAcpSessionDatabase(databasePath));
-        const firstRuntime = new AgentRuntimeManager(undefined, firstStore, acpNativeHistoryReader, "native");
+        const firstRuntime = new AgentRuntimeManager({
+            observer: new NullAcpSessionObserver(),
+            store: firstStore,
+            adapters: acpAdapters,
+            sessionIdentity: "native",
+            onSessionStatusChanged: () => undefined,
+            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            timer: systemDaemonTimer,
+            maxProcesses: null,
+        });
 
         try {
             await firstRuntime.runPrompt({
@@ -478,7 +505,16 @@ describe("ACP conversation sessions", () => {
         }
 
         const restartedStore = new SqliteAcpSessionStore(openAcpSessionDatabase(databasePath));
-        const restartedRuntime = new AgentRuntimeManager(undefined, restartedStore, acpNativeHistoryReader, "native");
+        const restartedRuntime = new AgentRuntimeManager({
+            observer: new NullAcpSessionObserver(),
+            store: restartedStore,
+            adapters: acpAdapters,
+            sessionIdentity: "native",
+            onSessionStatusChanged: () => undefined,
+            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            timer: systemDaemonTimer,
+            maxProcesses: null,
+        });
         try {
             expect(restartedRuntime.findSessions([sessionId])).toEqual([
                 expect.objectContaining({ agentId: "claude", prompted: true, sessionId }),
@@ -517,7 +553,16 @@ child.once("exit", (code) => process.exit(code ?? 84));
             );
             await chmod(adapterPath, 0o700);
             vi.useFakeTimers({ toFake: ["clearTimeout", "setTimeout"] });
-            const manager = new AgentRuntimeManager();
+            const manager = new AgentRuntimeManager({
+                observer: new NullAcpSessionObserver(),
+                store: new MemoryAcpSessionStore(),
+                adapters: acpAdapters,
+                sessionIdentity: "assigned",
+                onSessionStatusChanged: () => undefined,
+                contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+                timer: systemDaemonTimer,
+                maxProcesses: null,
+            });
             const adapterBaseline = new LocalAgentDefinition("pi", "Pi", adapterPath, []);
             const agentBaseline = new LocalAgentDefinition("pi", "Pi", process.execPath, []);
             const agent = new LocalAgentDefinition(
@@ -600,7 +645,16 @@ child.once("exit", (code) => process.exit(code ?? 84));
     );
 
     it("Given a prepared conversation has no turns, When its agent selection changes, Then the same Mobius session is rebound before the first prompt", async () => {
-        const manager = new AgentRuntimeManager();
+        const manager = new AgentRuntimeManager({
+            observer: new NullAcpSessionObserver(),
+            store: new MemoryAcpSessionStore(),
+            adapters: acpAdapters,
+            sessionIdentity: "assigned",
+            onSessionStatusChanged: () => undefined,
+            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            timer: systemDaemonTimer,
+            maxProcesses: null,
+        });
         const codex = new LocalAgentDefinition("codex", "Codex", process.execPath, [
             fakeAgentPath,
             "--agent-name",
@@ -664,7 +718,16 @@ child.once("exit", (code) => process.exit(code ?? 84));
     });
 
     it("Given Controlled ACP emits untagged messages before a tool call, When they arrive, Then Mobius streams them without waiting for the tool boundary", async () => {
-        const manager = new AgentRuntimeManager();
+        const manager = new AgentRuntimeManager({
+            observer: new NullAcpSessionObserver(),
+            store: new MemoryAcpSessionStore(),
+            adapters: acpAdapters,
+            sessionIdentity: "assigned",
+            onSessionStatusChanged: () => undefined,
+            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            timer: systemDaemonTimer,
+            maxProcesses: null,
+        });
         const agent = new LocalAgentDefinition("controlled-acp", "Controlled ACP", process.execPath, [
             fakeAgentPath,
             "--agent-name",
@@ -724,16 +787,16 @@ child.once("exit", (code) => process.exit(code ?? 84));
         const store = new MemoryAcpSessionStore();
         // The scenario exercises retirement at the boundary, so it pins the
         // retained process budget instead of inheriting the production default.
-        const manager = new AgentRuntimeManager(
-            undefined,
+        const manager = new AgentRuntimeManager({
+            observer: new NullAcpSessionObserver(),
             store,
-            acpNativeHistoryReader,
-            "assigned",
-            () => undefined,
-            undefined,
-            undefined,
-            10,
-        );
+            adapters: acpAdapters,
+            sessionIdentity: "assigned",
+            onSessionStatusChanged: () => undefined,
+            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            timer: systemDaemonTimer,
+            maxProcesses: 10,
+        });
         const agent = new LocalAgentDefinition(
             "codex",
             "Codex",
@@ -807,7 +870,16 @@ child.once("exit", (code) => process.exit(code ?? 84));
     });
 
     it("Given an ACP agent announces a different session while creating one, When Mobius receives the created session, Then the local boundary rejects the queued update", async () => {
-        const manager = new AgentRuntimeManager();
+        const manager = new AgentRuntimeManager({
+            observer: new NullAcpSessionObserver(),
+            store: new MemoryAcpSessionStore(),
+            adapters: acpAdapters,
+            sessionIdentity: "assigned",
+            onSessionStatusChanged: () => undefined,
+            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            timer: systemDaemonTimer,
+            maxProcesses: null,
+        });
         const agent = new LocalAgentDefinition("controlled-acp", "Controlled ACP", process.execPath, [
             fakeAgentPath,
             "--agent-name",
@@ -832,7 +904,16 @@ child.once("exit", (code) => process.exit(code ?? 84));
     });
 
     it("Given an ACP agent returns the standard authentication error, When Mobius starts its session, Then the local boundary preserves an authentication-required code", async () => {
-        const manager = new AgentRuntimeManager();
+        const manager = new AgentRuntimeManager({
+            observer: new NullAcpSessionObserver(),
+            store: new MemoryAcpSessionStore(),
+            adapters: acpAdapters,
+            sessionIdentity: "assigned",
+            onSessionStatusChanged: () => undefined,
+            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            timer: systemDaemonTimer,
+            maxProcesses: null,
+        });
         const agent = new LocalAgentDefinition("controlled-acp", "Controlled ACP", process.execPath, [
             fakeAgentPath,
             "--authentication-required",
@@ -854,7 +935,16 @@ child.once("exit", (code) => process.exit(code ?? 84));
     });
 
     it("Given an ACP agent rejects a prompt with a non-authentication error, When Mobius runs that turn, Then the local boundary preserves the agent's real failure reason", async () => {
-        const manager = new AgentRuntimeManager();
+        const manager = new AgentRuntimeManager({
+            observer: new NullAcpSessionObserver(),
+            store: new MemoryAcpSessionStore(),
+            adapters: acpAdapters,
+            sessionIdentity: "assigned",
+            onSessionStatusChanged: () => undefined,
+            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            timer: systemDaemonTimer,
+            maxProcesses: null,
+        });
         const agent = new LocalAgentDefinition("controlled-acp", "Controlled ACP", process.execPath, [
             fakeAgentPath,
             "--agent-name",
@@ -886,7 +976,16 @@ child.once("exit", (code) => process.exit(code ?? 84));
     });
 
     it("Given Codex includes an invalid-prompt detail in an internal ACP error, When Mobius runs that turn, Then the user receives the actionable detail", async () => {
-        const manager = new AgentRuntimeManager();
+        const manager = new AgentRuntimeManager({
+            observer: new NullAcpSessionObserver(),
+            store: new MemoryAcpSessionStore(),
+            adapters: acpAdapters,
+            sessionIdentity: "assigned",
+            onSessionStatusChanged: () => undefined,
+            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            timer: systemDaemonTimer,
+            maxProcesses: null,
+        });
         const agent = new LocalAgentDefinition("codex", "Codex", process.execPath, [
             fakeAgentPath,
             "--agent-name",
@@ -919,7 +1018,16 @@ child.once("exit", (code) => process.exit(code ?? 84));
 
     it("Given an ACP Agent has a tool subprocess, When the turn is cancelled, Then Mobius retains the process tree until Runtime shutdown", async () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-cancel-tree-"));
-        const manager = new AgentRuntimeManager();
+        const manager = new AgentRuntimeManager({
+            observer: new NullAcpSessionObserver(),
+            store: new MemoryAcpSessionStore(),
+            adapters: acpAdapters,
+            sessionIdentity: "assigned",
+            onSessionStatusChanged: () => undefined,
+            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            timer: systemDaemonTimer,
+            maxProcesses: null,
+        });
         const adapterPath = join(temporaryDirectory, "codex-acp.mjs");
         const childPidPath = join(temporaryDirectory, "tool-child.pid");
         await writeFile(
@@ -1016,7 +1124,16 @@ agent.once("exit", (code) => process.exit(code ?? 84));
     });
 
     it("Given an existing Agent conversation, When a caller changes its Agent identity, Then the local boundary rejects the request", async () => {
-        const manager = new AgentRuntimeManager();
+        const manager = new AgentRuntimeManager({
+            observer: new NullAcpSessionObserver(),
+            store: new MemoryAcpSessionStore(),
+            adapters: acpAdapters,
+            sessionIdentity: "assigned",
+            onSessionStatusChanged: () => undefined,
+            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            timer: systemDaemonTimer,
+            maxProcesses: null,
+        });
         const codex = new LocalAgentDefinition("codex", "Codex", process.execPath, [fakeAgentPath]);
         const claude = new LocalAgentDefinition("claude", "Claude Code", process.execPath, [fakeAgentPath]);
 
@@ -1055,7 +1172,16 @@ agent.once("exit", (code) => process.exit(code ?? 84));
     });
 
     it("Given an ACP subprocess exits during shutdown, When its session manager closes, Then the stream failure is contained", async () => {
-        const manager = new AgentRuntimeManager();
+        const manager = new AgentRuntimeManager({
+            observer: new NullAcpSessionObserver(),
+            store: new MemoryAcpSessionStore(),
+            adapters: acpAdapters,
+            sessionIdentity: "assigned",
+            onSessionStatusChanged: () => undefined,
+            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            timer: systemDaemonTimer,
+            maxProcesses: null,
+        });
         const agent = new LocalAgentDefinition("codex", "Codex", process.execPath, [
             fakeAgentPath,
             "--exit-after-session-creation",

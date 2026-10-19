@@ -3,7 +3,13 @@ import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { NativeSessionCommand } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it, vi } from "vitest";
+import { acpAdapters } from "../../src/acp/adapter/registry.ts";
 import { AgentRuntimeManager } from "../../src/acp/agent-runtime-manager.ts";
+import { NullAcpSessionObserver } from "../../src/acp/session-contracts.ts";
+import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
+import { systemDaemonTimer } from "../../src/daemon/relay/timer.ts";
+import { AcpContentExternalizer } from "../../src/external-content/acp-content-externalizer.ts";
+import { UnretainedExternalContentStore } from "../../src/external-content/local-external-content-store.ts";
 
 import { fixture } from "./native-session-fixture.ts";
 
@@ -86,7 +92,16 @@ describe("native session preparation", () => {
         vi.useFakeTimers({ toFake: ["Date"] });
         vi.setSystemTime(new Date("2026-09-14T00:00:00Z"));
         const f = await fixture("Claude Code", "exclusive-writer");
-        const external = new AgentRuntimeManager();
+        const external = new AgentRuntimeManager({
+            observer: new NullAcpSessionObserver(),
+            store: new MemoryAcpSessionStore(),
+            adapters: acpAdapters,
+            sessionIdentity: "assigned",
+            onSessionStatusChanged: () => undefined,
+            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            timer: systemDaemonTimer,
+            maxProcesses: null,
+        });
         try {
             await external.runPrompt({
                 agent: f.agent,

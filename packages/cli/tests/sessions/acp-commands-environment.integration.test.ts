@@ -2,14 +2,29 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { acpAdapters } from "../../src/acp/adapter/registry.ts";
 import { AgentRuntimeManager } from "../../src/acp/agent-runtime-manager.ts";
+import { NullAcpSessionObserver } from "../../src/acp/session-contracts.ts";
+import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
 import { createDaemonConfig, DaemonLocalContext, LocalAgentDefinition } from "../../src/daemon/config.ts";
+import { systemDaemonTimer } from "../../src/daemon/relay/timer.ts";
+import { AcpContentExternalizer } from "../../src/external-content/acp-content-externalizer.ts";
+import { UnretainedExternalContentStore } from "../../src/external-content/local-external-content-store.ts";
 
 import { fakeAgent, fakeAgentPath, RecordingObserver } from "./acp-feature-fixture.ts";
 
 describe("acp commands environment", () => {
     it("Given an ACP Agent has not advertised commands, When Mobius prepares a session, Then it does not invent compact", async () => {
-        const manager = new AgentRuntimeManager();
+        const manager = new AgentRuntimeManager({
+            observer: new NullAcpSessionObserver(),
+            store: new MemoryAcpSessionStore(),
+            adapters: acpAdapters,
+            sessionIdentity: "assigned",
+            onSessionStatusChanged: () => undefined,
+            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            timer: systemDaemonTimer,
+            maxProcesses: null,
+        });
         const agent = new LocalAgentDefinition("controlled-acp", "Controlled ACP", process.execPath, [
             fakeAgentPath,
             "--agent-name",
@@ -34,7 +49,16 @@ describe("acp commands environment", () => {
     it("Given an ACP Agent advertises compact, When its commands update, Then Mobius preserves the ACP command", async () => {
         const agentId = "unknown-acp";
         const observer = new RecordingObserver();
-        const manager = new AgentRuntimeManager(observer);
+        const manager = new AgentRuntimeManager({
+            observer,
+            store: new MemoryAcpSessionStore(),
+            adapters: acpAdapters,
+            sessionIdentity: "assigned",
+            onSessionStatusChanged: () => undefined,
+            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            timer: systemDaemonTimer,
+            maxProcesses: null,
+        });
         const agent = fakeAgent(["--advertise-compact-command"], {}, agentId);
 
         try {
@@ -73,7 +97,16 @@ describe("acp commands environment", () => {
         const workspace = await mkdtemp(join(tmpdir(), "mobius-login-shell-workspace-"));
         const generatedImages = await mkdtemp(join(tmpdir(), "mobius-login-shell-images-"));
         const observer = new RecordingObserver();
-        const manager = new AgentRuntimeManager(observer);
+        const manager = new AgentRuntimeManager({
+            observer,
+            store: new MemoryAcpSessionStore(),
+            adapters: acpAdapters,
+            sessionIdentity: "assigned",
+            onSessionStatusChanged: () => undefined,
+            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            timer: systemDaemonTimer,
+            maxProcesses: null,
+        });
         let answer = "";
         const localContext = new DaemonLocalContext(join(workspace, "state"), {
             FAKE_ACP_IMAGE_DIRECTORY: generatedImages,

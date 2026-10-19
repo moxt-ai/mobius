@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { acpAdapters } from "../../src/acp/adapter/registry.ts";
 import { AgentRuntimeManager } from "../../src/acp/agent-runtime-manager.ts";
+import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
 import { LocalAgentDefinition } from "../../src/daemon/config.ts";
+import { systemDaemonTimer } from "../../src/daemon/relay/timer.ts";
+import { AcpContentExternalizer } from "../../src/external-content/acp-content-externalizer.ts";
+import { UnretainedExternalContentStore } from "../../src/external-content/local-external-content-store.ts";
 import { fakeAgentPath, RecordingObserver } from "./acp-feature-fixture.ts";
 
 const usage = { cachedReadTokens: 200, inputTokens: 600, outputTokens: 200, thoughtTokens: 50, totalTokens: 1_000 };
@@ -26,7 +31,16 @@ async function run(
     observer: RecordingObserver,
     context?: typeof contextUsage,
 ) {
-    const manager = new AgentRuntimeManager(observer);
+    const manager = new AgentRuntimeManager({
+        observer,
+        store: new MemoryAcpSessionStore(),
+        adapters: acpAdapters,
+        sessionIdentity: "assigned",
+        onSessionStatusChanged: () => undefined,
+        contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+        timer: systemDaemonTimer,
+        maxProcesses: null,
+    });
     try {
         return await manager.runPrompt({
             additionalDirectories: [],

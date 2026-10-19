@@ -1,6 +1,12 @@
 import { LocalAgentDefinition } from "../daemon/config.ts";
+import { systemDaemonTimer } from "../daemon/relay/timer.ts";
+import { AcpContentExternalizer } from "../external-content/acp-content-externalizer.ts";
+import { UnretainedExternalContentStore } from "../external-content/local-external-content-store.ts";
 import type { AcpActivity, AcpActivityNarration } from "./activity.ts";
+import { acpAdapters } from "./adapter/registry.ts";
 import { AcpExecutionError, type AcpPromptResult, AgentRuntimeManager } from "./agent-runtime-manager.ts";
+import { NullAcpSessionObserver } from "./session-contracts.ts";
+import { MemoryAcpSessionStore } from "./session-store.ts";
 
 interface RunAcpPromptOptions {
     readonly agentArguments: readonly string[];
@@ -16,7 +22,16 @@ interface RunAcpPromptOptions {
 export { AcpExecutionError };
 
 export async function runAcpPrompt(options: RunAcpPromptOptions): Promise<AcpPromptResult> {
-    const agentRuntime = new AgentRuntimeManager();
+    const agentRuntime = new AgentRuntimeManager({
+        observer: new NullAcpSessionObserver(),
+        store: new MemoryAcpSessionStore(),
+        adapters: acpAdapters,
+        sessionIdentity: "assigned",
+        onSessionStatusChanged: () => undefined,
+        contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+        timer: systemDaemonTimer,
+        maxProcesses: null,
+    });
     const commandId = crypto.randomUUID();
     try {
         return await agentRuntime.runPrompt({

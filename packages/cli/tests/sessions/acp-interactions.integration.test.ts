@@ -1,12 +1,27 @@
 import { describe, expect, it } from "vitest";
+import { acpAdapters } from "../../src/acp/adapter/registry.ts";
 import { AgentRuntimeManager } from "../../src/acp/agent-runtime-manager.ts";
+import { NullAcpSessionObserver } from "../../src/acp/session-contracts.ts";
+import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
+import { systemDaemonTimer } from "../../src/daemon/relay/timer.ts";
+import { AcpContentExternalizer } from "../../src/external-content/acp-content-externalizer.ts";
+import { UnretainedExternalContentStore } from "../../src/external-content/local-external-content-store.ts";
 import { completeAcpControls, createControlledSession } from "./acp-controls-fixture.ts";
 
 import { fakeAgent } from "./acp-feature-fixture.ts";
 
 describe("acp interactions", () => {
     it("Given an Agent turn is running, When a targeted steering prompt is submitted, Then it is injected into that exact turn and preserves the Agent message anchor", async () => {
-        const manager = new AgentRuntimeManager();
+        const manager = new AgentRuntimeManager({
+            observer: new NullAcpSessionObserver(),
+            store: new MemoryAcpSessionStore(),
+            adapters: acpAdapters,
+            sessionIdentity: "assigned",
+            onSessionStatusChanged: () => undefined,
+            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            timer: systemDaemonTimer,
+            maxProcesses: null,
+        });
         const signal = new AbortController().signal;
         const activityArrived = Promise.withResolvers<void>();
         const output: { readonly messageId: string; readonly text: string }[] = [];
