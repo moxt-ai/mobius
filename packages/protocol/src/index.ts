@@ -6,7 +6,6 @@ export { decodeIdentifier, type Identifier, isIdentifier } from "./identifier.ts
 export * from "./messages.ts";
 export * from "./mobius-api.ts";
 export * from "./native-sessions.ts";
-export * from "./organization-invites.ts";
 export * from "./project-location.ts";
 export * from "./prompt-usage.ts";
 export * from "./resource-model.ts";

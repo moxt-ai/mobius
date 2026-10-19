@@ -1,6 +1,6 @@
-import { organizationInviteTokenSchema } from "@moxt-ai/mobius-protocol";
 import type { VerifiedExternalIdentity } from "@moxt-ai/mobius-relay-core";
-import type { OrganizationInviteRow } from "../entity/organization-invite.ts";
+import * as v from "valibot";
+import { type OrganizationInviteRow, organizationInviteTokenSchema } from "../entity/organization-invite.ts";
 import { PlatformControlPlaneError } from "../entity/platform-control-plane.ts";
 import type { OrganizationMembershipGateway } from "../infra/organization-membership-gateway.ts";
 import type { OrganizationInviteStorage } from "../storage/organization-invite-storage.ts";
@@ -90,7 +90,7 @@ export class OrganizationInviteService {
     };
 
     private readonly resolve = async (token: string, signal: AbortSignal) => {
-        if (!organizationInviteTokenSchema.safeParse(token).success) {
+        if (!v.safeParse(organizationInviteTokenSchema, token).success) {
             throw new PlatformControlPlaneError("invalid_request", "Invalid invitation", 400);
         }
         const row = await this.storage.find(await digest(token), signal);
