@@ -29,7 +29,6 @@ export const SESSION_ELICITATION_REQUESTED_KIND = "session.elicitation.requested
 export const SESSION_ELICITATION_RESPOND_KIND = "session.elicitation.respond";
 export const SESSION_ELICITATION_RESOLVED_KIND = "session.elicitation.resolved";
 export const SESSION_OPERATION_FAILED_KIND = "session.operation.failed";
-export const AGENT_CONTENT_KIND = "agent.content";
 export const AGENT_SETTINGS_DISCOVER_KIND = "agent.settings.discover";
 export const AGENT_SETTINGS_DISCOVERED_KIND = "agent.settings.discovered";
 export const AGENT_SETTINGS_DISCOVERY_FAILED_KIND = "agent.settings.discovery.failed";
@@ -809,19 +808,6 @@ const sessionOperationFailedEventSchema = z
 
 export type SessionOperationFailedEvent = z.infer<typeof sessionOperationFailedEventSchema>;
 
-const agentContentEventSchema = z
-    .object({
-        commandId: IDENTIFIER,
-        content: displayContentSchema,
-        contentId: IDENTIFIER,
-        kind: z.literal(AGENT_CONTENT_KIND),
-        messageId: z.string().max(255),
-        sessionId: IDENTIFIER,
-    })
-    .readonly();
-
-export type AgentContentEvent = z.infer<typeof agentContentEventSchema>;
-
 function parseJson(encoded: string): unknown {
     try {
         return JSON.parse(encoded);
@@ -997,5 +983,3 @@ export const decodeSessionOperationFailedEvent = (encoded: string): SessionOpera
     decode(encoded, sessionOperationFailedEventSchema);
 export const encodeSessionOperationFailedEvent = (message: SessionOperationFailedEvent): string =>
     encode(message, sessionOperationFailedEventSchema);
-export const decodeAgentContentEvent = (encoded: string): AgentContentEvent => decode(encoded, agentContentEventSchema);
-export const encodeAgentContentEvent = (message: AgentContentEvent): string => encode(message, agentContentEventSchema);

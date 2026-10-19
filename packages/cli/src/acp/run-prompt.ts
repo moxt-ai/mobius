@@ -2,7 +2,6 @@ import { LocalAgentDefinition } from "../daemon/config.ts";
 import { systemDaemonTimer } from "../daemon/relay/timer.ts";
 import { AcpContentExternalizer } from "../external-content/acp-content-externalizer.ts";
 import { UnretainedExternalContentStore } from "../external-content/local-external-content-store.ts";
-import type { AcpActivity, AcpActivityNarration } from "./activity.ts";
 import { acpAdapters } from "./adapter/registry.ts";
 import { AcpExecutionError, type AcpPromptResult, AgentRuntimeManager } from "./agent-runtime-manager.ts";
 import { NullAcpSessionObserver } from "./session-contracts.ts";
@@ -12,9 +11,6 @@ interface RunAcpPromptOptions {
     readonly agentArguments: readonly string[];
     readonly agentCommand: string;
     readonly cwd: string;
-    readonly onActivity?: (activity: AcpActivity) => Promise<void>;
-    readonly onNarration?: (narration: AcpActivityNarration) => Promise<void>;
-    readonly onText?: (text: string) => Promise<void>;
     readonly prompt: string;
     readonly signal: AbortSignal;
 }
@@ -45,9 +41,6 @@ export async function runAcpPrompt(options: RunAcpPromptOptions): Promise<AcpPro
                 content: [{ text: options.prompt, type: "text" }],
                 epoch: crypto.randomUUID(),
             },
-            ...(options.onActivity === undefined ? {} : { onActivity: options.onActivity }),
-            ...(options.onNarration === undefined ? {} : { onNarration: options.onNarration }),
-            ...(options.onText === undefined ? {} : { onText: options.onText }),
             prompt: options.prompt,
             resources: [],
             sessionId: crypto.randomUUID(),

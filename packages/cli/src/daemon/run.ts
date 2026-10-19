@@ -110,7 +110,7 @@ export async function runDaemon(
         activeTurns.recordSessionEvent,
     );
     const agentRuntime = new AgentRuntimeManager({
-        observer: new DaemonAcpObserver(eventProjection.record, activeTurns.recordEvent, publisher.publishInfo),
+        observer: new DaemonAcpObserver(eventProjection.record, publisher.publishInfo),
         store: sessionStore,
         adapters: harnessAdapters,
         sessionIdentity: "native",

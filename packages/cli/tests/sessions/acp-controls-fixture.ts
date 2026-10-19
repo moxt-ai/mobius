@@ -59,8 +59,6 @@ export async function createControlledSession() {
 
 /** Drive the controlled peer's permission/form dialogue through production ports. */
 export async function completeAcpControls(session: Awaited<ReturnType<typeof createControlledSession>>) {
-    const text: string[] = [];
-    const activityContent: string[] = [];
     const running = session.manager.runPrompt({
         ...session.request,
         commandId: "controls-command",
@@ -80,12 +78,6 @@ export async function completeAcpControls(session: Awaited<ReturnType<typeof cre
                 uri: "mobius://upload/context.txt",
             },
         ],
-        onText: async (chunk) => {
-            text.push(chunk);
-        },
-        onActivity: async (activity) => {
-            activityContent.push(...activity.content.map((item) => item.type));
-        },
     });
     // Observe startup failure while waiting for an interaction, rather than timing out later.
     const finishedBeforeInteraction = running.then(() => {
@@ -105,5 +97,5 @@ export async function completeAcpControls(session: Awaited<ReturnType<typeof cre
         interactionId: elicitation.interactionId,
         sessionId: session.request.sessionId,
     });
-    return { permission, elicitation, completed: await running, text: text.join(""), activityContent };
+    return { permission, elicitation, completed: await running, text: session.observer.agentText() };
 }

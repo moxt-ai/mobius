@@ -135,8 +135,6 @@ export async function fixture(
                 prompt: title,
                 images: [],
                 resources: [],
-                onText: async () => {},
-                onActivity: async () => {},
             });
         } finally {
             await external.close();

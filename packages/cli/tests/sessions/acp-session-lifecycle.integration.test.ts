@@ -20,6 +20,7 @@ import { acpSessionStoreMigrations } from "../../src/generated/acp-session-store
 import { AccumulatingOperationMetrics } from "../../src/infra/operation-metrics.ts";
 import { openAcpSessionDatabase, openSessionEventCacheDatabase } from "../../src/local-databases.ts";
 import { SqliteSessionLiveEventPosition } from "../../src/session-live-event-position.ts";
+import { RecordingObserver } from "./acp-feature-fixture.ts";
 
 const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
 
@@ -82,8 +83,6 @@ describe("ACP conversation sessions", () => {
                 commandId: "initial-command",
                 cwd: process.cwd(),
                 images: [],
-                onActivity: () => Promise.resolve(),
-                onText: () => Promise.resolve(),
                 prompt: "initial activity",
                 resources: [],
                 sessionId: "existing-conversation",
@@ -126,8 +125,6 @@ describe("ACP conversation sessions", () => {
                     commandId: "new-command",
                     cwd: process.cwd(),
                     images: [],
-                    onActivity: () => Promise.resolve(),
-                    onText: () => Promise.resolve(),
                     prompt: "new activity",
                     resources: [],
                     sessionId: "existing-conversation",
@@ -492,8 +489,6 @@ describe("ACP conversation sessions", () => {
                 commandId: "claude-first-turn",
                 cwd: process.cwd(),
                 images: [],
-                onActivity: () => Promise.resolve(),
-                onText: () => Promise.resolve(),
                 prompt: "Remember this conversation",
                 resources: [],
                 sessionId,
@@ -576,7 +571,8 @@ child.once("exit", (code) => process.exit(code ?? 84));
                 adapterBaseline.adapterIdentity,
                 agentBaseline.agentIdentity,
             );
-            const activityStarted = Promise.withResolvers<void>();
+            const observer = new RecordingObserver();
+            manager.setObserver(observer);
 
             try {
                 const hangingTurn = manager.runPrompt({
@@ -585,11 +581,6 @@ child.once("exit", (code) => process.exit(code ?? 84));
                     commandId: "pi-hanging-command",
                     cwd: process.cwd(),
                     images: [],
-                    onActivity: () => {
-                        activityStarted.resolve();
-                        return Promise.resolve();
-                    },
-                    onText: () => Promise.resolve(),
                     prompt: "wait until cancelled",
                     resources: [],
                     sessionId: "pi-hanging-conversation",
@@ -604,7 +595,7 @@ child.once("exit", (code) => process.exit(code ?? 84));
                         settled = true;
                     },
                 );
-                await activityStarted.promise;
+                await observer.turnStarted();
 
                 await vi.advanceTimersByTimeAsync(7 * 24 * 60 * 60 * 1_000);
 
@@ -617,24 +608,19 @@ child.once("exit", (code) => process.exit(code ?? 84));
 
                 await expect(hangingTurn).resolves.toEqual({ stopReason: "cancelled" });
                 expect(processExists(piPid)).toBe(true);
-                const resumedChunks: string[] = [];
+                observer.events.length = 0;
                 await manager.runPrompt({
                     additionalDirectories: [],
                     agent,
                     commandId: "pi-after-cancellation",
                     cwd: process.cwd(),
                     images: [],
-                    onActivity: () => Promise.resolve(),
-                    onText: (text) => {
-                        resumedChunks.push(text);
-                        return Promise.resolve();
-                    },
                     prompt: "continue in the retained process",
                     resources: [],
                     sessionId: "pi-hanging-conversation",
                     signal: new AbortController().signal,
                 });
-                expect(resumedChunks.join("")).toBe("Pi turn 2: continue in the retained process");
+                expect(observer.agentText()).toBe("Pi turn 2: continue in the retained process");
                 expect(processExists(piPid)).toBe(true);
             } finally {
                 vi.useRealTimers();
@@ -694,32 +680,29 @@ child.once("exit", (code) => process.exit(code ?? 84));
                 ]),
             );
 
-            const chunks: string[] = [];
+            const observer = new RecordingObserver();
+            manager.setObserver(observer);
             await manager.runPrompt({
                 additionalDirectories: [],
                 agent: claude,
                 commandId: "command-after-rebind",
                 cwd: process.cwd(),
                 images: [],
-                onActivity: () => Promise.resolve(),
-                onText: (text) => {
-                    chunks.push(text);
-                    return Promise.resolve();
-                },
                 prompt: "selected agent",
                 resources: [],
                 sessionId: "rebound-conversation",
                 signal: new AbortController().signal,
             });
-            expect(chunks.join("")).toBe("Claude Code turn 1: selected agent");
+            expect(observer.agentText()).toBe("Claude Code turn 1: selected agent");
         } finally {
             await manager.close();
         }
     });
 
-    it("Given Controlled ACP emits untagged messages before a tool call, When they arrive, Then Mobius streams them without waiting for the tool boundary", async () => {
+    it("Given Controlled ACP emits untagged messages before a tool call, When they arrive, Then each update is recorded live without waiting for the tool boundary", async () => {
+        const observer = new RecordingObserver();
         const manager = new AgentRuntimeManager({
-            observer: new NullAcpSessionObserver(),
+            observer,
             store: new MemoryAcpSessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
@@ -733,13 +716,6 @@ child.once("exit", (code) => process.exit(code ?? 84));
             "--agent-name",
             "Controlled ACP",
         ]);
-        const activityUpdates: Array<{
-            readonly activityId: string;
-            readonly activityType: string;
-            readonly output: string;
-            readonly sequence: number;
-        }> = [];
-        const responseChunks: string[] = [];
 
         try {
             await manager.runPrompt({
@@ -748,14 +724,6 @@ child.once("exit", (code) => process.exit(code ?? 84));
                 commandId: "controlled-acp-interleaved-command",
                 cwd: process.cwd(),
                 images: [],
-                onActivity: (activity) => {
-                    activityUpdates.push(activity);
-                    return Promise.resolve();
-                },
-                onText: (text) => {
-                    responseChunks.push(text);
-                    return Promise.resolve();
-                },
                 prompt: "interleave untagged progress",
                 resources: [],
                 sessionId: "controlled-acp-interleaved-conversation",
@@ -765,21 +733,36 @@ child.once("exit", (code) => process.exit(code ?? 84));
             await manager.close();
         }
 
-        const activitiesById = new Map(activityUpdates.map((activity) => [activity.activityId, activity]));
-        const timeline = [...activitiesById.values()]
-            .sort((left, right) => left.sequence - right.sequence)
-            .map((activity) => ({ activityType: activity.activityType, output: activity.output }));
-        expect(timeline).toEqual([
-            { activityType: "progress", output: "Gathering context" },
-            { activityType: "reasoning", output: "Inspecting the workspace" },
-            { activityType: "tool", output: '{\n  "name": "mobius-workspace"\n}' },
+        expect(
+            observer
+                .acpUpdates()
+                .map((update) =>
+                    (update.sessionUpdate === "agent_message_chunk" ||
+                        update.sessionUpdate === "agent_thought_chunk") &&
+                    update.content.type === "text"
+                        ? { messageId: update.messageId ?? "", text: update.content.text }
+                        : null,
+                )
+                .filter((entry): entry is { messageId: string; text: string } => entry !== null),
+        ).toEqual([
+            { messageId: "progress-1", text: "Gathering context" },
+            { messageId: "reasoning-1", text: "Inspecting " },
+            { messageId: "reasoning-1", text: "the workspace" },
+            { messageId: "intermediate-1-1", text: "Checking the workspace" },
+            { messageId: "intermediate-1-2", text: "Preparing the next tool call" },
+            { messageId: "assistant-1", text: "Controlled ACP turn 1: " },
+            { messageId: "assistant-1", text: "interleave untagged progress" },
         ]);
-        expect(responseChunks).toEqual([
-            "Checking the workspace",
-            "Preparing the next tool call",
-            "Controlled ACP turn 1: ",
-            "interleave untagged progress",
-        ]);
+        expect(observer.toolUpdates("tool-1").at(0)).toMatchObject({
+            sessionUpdate: "tool_call",
+            status: "in_progress",
+            title: "Read package metadata",
+        });
+        expect(observer.toolUpdates("tool-1").at(-1)).toMatchObject({
+            sessionUpdate: "tool_call_update",
+            status: "completed",
+            rawOutput: { name: "mobius-workspace" },
+        });
     });
 
     it("Given the least recently used conversation has an active turn, When an eleventh conversation starts, Then the active process is retained and the oldest idle process is released", async () => {
@@ -787,8 +770,9 @@ child.once("exit", (code) => process.exit(code ?? 84));
         const store = new MemoryAcpSessionStore();
         // The scenario exercises retirement at the boundary, so it pins the
         // retained process budget instead of inheriting the production default.
+        const observer = new RecordingObserver();
         const manager = new AgentRuntimeManager({
-            observer: new NullAcpSessionObserver(),
+            observer,
             store,
             adapters: acpAdapters,
             sessionIdentity: "assigned",
@@ -805,23 +789,22 @@ child.once("exit", (code) => process.exit(code ?? 84));
             { MOBIUS_FAKE_ACP_STATE_DIRECTORY: temporaryDirectory },
         );
         const signal = new AbortController().signal;
-        const activityStarted = Promise.withResolvers<void>();
         const activeTurn = manager.runPrompt({
             additionalDirectories: [],
             agent,
             commandId: "conversation-1-active",
             cwd: temporaryDirectory,
             images: [],
-            onActivity: () => {
-                activityStarted.resolve();
-                return Promise.resolve();
-            },
-            onText: () => Promise.resolve(),
             prompt: "wait until cancelled",
             resources: [],
             sessionId: "conversation-1",
             signal,
         });
+        const activityStarted = observer.waitForEvent(() =>
+            observer.events.some(
+                ({ event }) => event.type === "acp" && event.payload.sessionUpdate === "agent_thought_chunk",
+            ),
+        );
         const runTurn = async (sessionId: string): Promise<void> => {
             await manager.runPrompt({
                 additionalDirectories: [],
@@ -829,8 +812,6 @@ child.once("exit", (code) => process.exit(code ?? 84));
                 commandId: `${sessionId}-turn`,
                 cwd: temporaryDirectory,
                 images: [],
-                onActivity: () => Promise.resolve(),
-                onText: () => Promise.resolve(),
                 prompt: "first",
                 resources: [],
                 sessionId,
@@ -846,7 +827,7 @@ child.once("exit", (code) => process.exit(code ?? 84));
         };
 
         try {
-            await activityStarted.promise;
+            await activityStarted;
             for (let index = 2; index <= 10; index += 1) {
                 await runTurn(`conversation-${index.toString()}`);
             }
@@ -959,8 +940,6 @@ child.once("exit", (code) => process.exit(code ?? 84));
                     commandId: "command-model-unavailable",
                     cwd: process.cwd(),
                     images: [],
-                    onActivity: () => Promise.resolve(),
-                    onText: () => Promise.resolve(),
                     prompt: "fail with model unavailable",
                     resources: [],
                     sessionId: "model-unavailable-session",
@@ -1000,8 +979,6 @@ child.once("exit", (code) => process.exit(code ?? 84));
                     commandId: "command-invalid-prompt",
                     cwd: process.cwd(),
                     images: [],
-                    onActivity: () => Promise.resolve(),
-                    onText: () => Promise.resolve(),
                     prompt: "fail with invalid prompt detail",
                     resources: [],
                     sessionId: "invalid-prompt-session",
@@ -1018,8 +995,9 @@ child.once("exit", (code) => process.exit(code ?? 84));
 
     it("Given an ACP Agent has a tool subprocess, When the turn is cancelled, Then Mobius retains the process tree until Runtime shutdown", async () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-cancel-tree-"));
+        const observer = new RecordingObserver();
         const manager = new AgentRuntimeManager({
-            observer: new NullAcpSessionObserver(),
+            observer,
             store: new MemoryAcpSessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
@@ -1059,7 +1037,6 @@ agent.once("exit", (code) => process.exit(code ?? 84));
             MOBIUS_FAKE_ACP_STATE_DIRECTORY: temporaryDirectory,
             MOBIUS_TEST_CHILD_PID_FILE: childPidPath,
         });
-        const activityStarted = Promise.withResolvers<void>();
         let childPid = 0;
 
         try {
@@ -1069,17 +1046,12 @@ agent.once("exit", (code) => process.exit(code ?? 84));
                 commandId: "command-cancelled-tree",
                 cwd: temporaryDirectory,
                 images: [],
-                onActivity: () => {
-                    activityStarted.resolve();
-                    return Promise.resolve();
-                },
-                onText: () => Promise.resolve(),
                 prompt: "wait until cancelled",
                 resources: [],
                 sessionId: "cancelled-tree-conversation",
                 signal: new AbortController().signal,
             });
-            await activityStarted.promise;
+            await observer.turnStarted();
             childPid = Number.parseInt(await readFile(childPidPath, "utf8"), 10);
             expect(Number.isSafeInteger(childPid)).toBe(true);
 
@@ -1089,24 +1061,19 @@ agent.once("exit", (code) => process.exit(code ?? 84));
                 stopReason: "cancelled",
             });
             expect(processExists(childPid)).toBe(true);
-            const nextChunks: string[] = [];
+            observer.events.length = 0;
             await manager.runPrompt({
                 additionalDirectories: [],
                 agent,
                 commandId: "command-after-tree-cancel",
                 cwd: temporaryDirectory,
                 images: [],
-                onActivity: () => Promise.resolve(),
-                onText: (text) => {
-                    nextChunks.push(text);
-                    return Promise.resolve();
-                },
                 prompt: "continue",
                 resources: [],
                 sessionId: "cancelled-tree-conversation",
                 signal: new AbortController().signal,
             });
-            expect(nextChunks.join("")).toBe("Codex turn 2: continue");
+            expect(observer.agentText()).toBe("Codex turn 2: continue");
             expect(processExists(childPid)).toBe(true);
             await manager.close();
             expect(processExists(childPid)).toBe(false);
@@ -1144,8 +1111,6 @@ agent.once("exit", (code) => process.exit(code ?? 84));
                 commandId: "command-locked-first",
                 cwd: process.cwd(),
                 images: [],
-                onActivity: () => Promise.resolve(),
-                onText: () => Promise.resolve(),
                 prompt: "first",
                 resources: [],
                 sessionId: "locked-conversation",
@@ -1158,8 +1123,6 @@ agent.once("exit", (code) => process.exit(code ?? 84));
                     commandId: "command-locked-second",
                     cwd: process.cwd(),
                     images: [],
-                    onActivity: () => Promise.resolve(),
-                    onText: () => Promise.resolve(),
                     prompt: "second",
                     resources: [],
                     sessionId: "locked-conversation",

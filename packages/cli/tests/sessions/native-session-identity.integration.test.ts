@@ -154,8 +154,6 @@ describe("native session identity", () => {
                     images: [],
                     resources: [],
                     signal: new AbortController().signal,
-                    onText: async () => {},
-                    onActivity: async () => {},
                 });
                 expect(reply.stopReason).toBe("end_turn");
                 expect((await f.list()).entries).toHaveLength(action === "fork" ? 2 : 1);
@@ -198,8 +196,6 @@ describe("native session identity", () => {
                     prompt: "Continue this chat",
                     images: [],
                     resources: [],
-                    onText: async () => {},
-                    onActivity: async () => {},
                 });
                 const replay = await restarted.loadSessionEvents(
                     {
@@ -257,8 +253,6 @@ describe("native session identity", () => {
                 prompt: "Post-fork turn",
                 images: [],
                 resources: [],
-                onText: async () => {},
-                onActivity: async () => {},
             });
 
             const replay = await f.sessions.loadSessionEvents(

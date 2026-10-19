@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import {
-    type AgentContentEvent,
     decodeIdentifier,
     type NativeSessionResult,
     SESSION_ELICITATION_REQUESTED_KIND,
@@ -8,32 +7,23 @@ import {
     SESSION_PERMISSION_REQUESTED_KIND,
     SESSION_PERMISSION_RESOLVED_KIND,
     type SessionCancelCommand,
-    type SessionCommandsUpdatedEvent,
-    type SessionConfigUpdatedEvent,
     type SessionElicitationRequestedEvent,
     type SessionElicitationResolvedEvent,
-    type SessionInfoUpdatedEvent,
     type SessionPermissionRequestedEvent,
     type SessionPermissionResolvedEvent,
     type SessionPromptCommand,
     SessionPromptDisposition,
     type SessionPromptDispositionCommand,
-    type SessionReadyEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
 
 type ActiveTurnSnapshot = Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"];
 
-/** Session event kinds the daemon folds into an in-flight prompt Turn. */
+/** Interaction events the daemon folds into an in-flight prompt Turn. */
 export type RecordedSessionEvent =
-    | AgentContentEvent
-    | SessionCommandsUpdatedEvent
-    | SessionConfigUpdatedEvent
     | SessionElicitationRequestedEvent
     | SessionElicitationResolvedEvent
-    | SessionInfoUpdatedEvent
     | SessionPermissionRequestedEvent
-    | SessionPermissionResolvedEvent
-    | SessionReadyEvent;
+    | SessionPermissionResolvedEvent;
 
 type TurnDispatchState =
     | { readonly kind: "pending" }

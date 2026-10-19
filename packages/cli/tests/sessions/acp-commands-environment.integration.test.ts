@@ -68,8 +68,6 @@ describe("acp commands environment", () => {
                 commandId: `${agentId}-compact-command`,
                 cwd: process.cwd(),
                 images: [],
-                onActivity: () => Promise.resolve(),
-                onText: () => Promise.resolve(),
                 prompt: "advertise commands",
                 resources: [],
                 sessionId: `${agentId}-compact-session`,
@@ -107,7 +105,6 @@ describe("acp commands environment", () => {
             timer: systemDaemonTimer,
             maxProcesses: null,
         });
-        let answer = "";
         const localContext = new DaemonLocalContext(join(workspace, "state"), {
             FAKE_ACP_IMAGE_DIRECTORY: generatedImages,
             PATH: process.env["PATH"] ?? "",
@@ -128,19 +125,13 @@ describe("acp commands environment", () => {
                 commandId: "login-shell-command",
                 cwd: workspace,
                 images: [],
-                onActivity: () => Promise.resolve(),
-                onText: (text) => {
-                    answer += text;
-                    return Promise.resolve();
-                },
                 prompt: "generate markdown image",
                 resources: [],
                 sessionId: "login-shell-session",
                 signal: new AbortController().signal,
             });
 
-            expect(answer).toContain(join(generatedImages, "generated-image.png"));
-            expect(observer.content).toHaveLength(0);
+            expect(observer.agentText()).toContain(join(generatedImages, "generated-image.png"));
         } finally {
             await manager.close();
             await Promise.all([

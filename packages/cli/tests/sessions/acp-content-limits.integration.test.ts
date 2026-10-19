@@ -2,7 +2,6 @@ import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { AcpActivity } from "../../src/acp/activity.ts";
 import { acpAdapters } from "../../src/acp/adapter/registry.ts";
 import { AgentRuntimeManager } from "../../src/acp/agent-runtime-manager.ts";
 import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
@@ -13,7 +12,7 @@ import { UnretainedExternalContentStore } from "../../src/external-content/local
 import { fakeAgent, RecordingObserver } from "./acp-feature-fixture.ts";
 
 describe("acp content limits", () => {
-    it("Given an ACP tool returns inline image bytes, When Mobius records the tool update, Then it exposes a local image reference without inline bytes", async () => {
+    it("Given an ACP tool returns inline image bytes, When Mobius records the tool update, Then the live event exposes an external image reference without inline bytes", async () => {
         const observer = new RecordingObserver();
         const manager = new AgentRuntimeManager({
             observer,
@@ -25,7 +24,6 @@ describe("acp content limits", () => {
             timer: systemDaemonTimer,
             maxProcesses: null,
         });
-        const activities: AcpActivity[] = [];
         try {
             await manager.runPrompt({
                 additionalDirectories: [],
@@ -33,33 +31,36 @@ describe("acp content limits", () => {
                 commandId: "image-command",
                 cwd: process.cwd(),
                 images: [],
-                onActivity: (activity) => {
-                    activities.push(activity);
-                    return Promise.resolve();
-                },
-                onText: () => Promise.resolve(),
                 prompt: "generate inline image",
                 resources: [],
                 sessionId: "image-session",
                 signal: new AbortController().signal,
             });
 
+            const completed = observer
+                .toolUpdates("tool-1")
+                .findLast((update) => update.sessionUpdate === "tool_call_update");
+            expect(completed).toMatchObject({
+                sessionUpdate: "tool_call_update",
+                status: "completed",
+            });
             expect(
-                activities.some((activity) =>
-                    activity.content.some(
-                        (content) =>
-                            content.type === "image" &&
-                            content.data.length === 0 &&
-                            content.uri.startsWith("mobius-content:image:"),
+                observer
+                    .acpUpdates()
+                    .findLast(
+                        (update) =>
+                            update.sessionUpdate === "tool_call_update" &&
+                            (update.content ?? []).some(
+                                (item) => item.type === "content" && item.content.type === "external_image",
+                            ),
                     ),
-                ),
-            ).toBe(true);
+            ).toBeDefined();
         } finally {
             await manager.close();
         }
     });
 
-    it("Given two Turns reuse a tool ID, When each Turn produces an image, Then the image stays in each tool activity without a separate content event", async () => {
+    it("Given two Turns reuse a tool ID, When each Turn produces an image, Then each turn records its own external image event", async () => {
         const observer = new RecordingObserver();
         const manager = new AgentRuntimeManager({
             observer,
@@ -71,7 +72,6 @@ describe("acp content limits", () => {
             timer: systemDaemonTimer,
             maxProcesses: null,
         });
-        const activities: AcpActivity[] = [];
         try {
             for (const commandId of ["first-image-turn", "second-image-turn"]) {
                 await manager.runPrompt({
@@ -80,11 +80,6 @@ describe("acp content limits", () => {
                     commandId,
                     cwd: process.cwd(),
                     images: [],
-                    onActivity: (activity) => {
-                        activities.push(activity);
-                        return Promise.resolve();
-                    },
-                    onText: () => Promise.resolve(),
                     prompt: "generate inline image with reused tool id",
                     resources: [],
                     sessionId: "reused-image-session",
@@ -92,15 +87,23 @@ describe("acp content limits", () => {
                 });
             }
             expect(
-                activities.filter((activity) => activity.content.some((content) => content.type === "image")),
+                observer
+                    .acpUpdates()
+                    .filter(
+                        (update) =>
+                            (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") &&
+                            update.toolCallId === "reused-image-tool" &&
+                            (update.content ?? []).some(
+                                (item) => item.type === "content" && item.content.type === "external_image",
+                            ),
+                    ),
             ).toHaveLength(2);
-            expect(observer.content).toHaveLength(0);
         } finally {
             await manager.close();
         }
     });
 
-    it("Given an ACP tool returns more than 500,000 characters, When Mobius records the tool update, Then it truncates the visible output at 500,000 characters", async () => {
+    it("Given an ACP tool returns more than 500,000 characters, When Mobius records the tool update, Then the raw output stays intact in the event log", async () => {
         const observer = new RecordingObserver();
         const manager = new AgentRuntimeManager({
             observer,
@@ -112,7 +115,6 @@ describe("acp content limits", () => {
             timer: systemDaemonTimer,
             maxProcesses: null,
         });
-        const activities: AcpActivity[] = [];
         try {
             await manager.runPrompt({
                 additionalDirectories: [],
@@ -120,30 +122,25 @@ describe("acp content limits", () => {
                 commandId: "oversized-tool-output-command",
                 cwd: process.cwd(),
                 images: [],
-                onActivity: (activity) => {
-                    activities.push(activity);
-                    return Promise.resolve();
-                },
-                onText: () => Promise.resolve(),
                 prompt: "return oversized tool output",
                 resources: [],
                 sessionId: "oversized-tool-output-session",
                 signal: new AbortController().signal,
             });
 
-            const completedTool = activities.findLast(
-                (activity) => activity.activityType === "tool" && activity.status === "completed",
-            );
-            expect(completedTool?.output).toHaveLength(500_000);
-            expect(completedTool?.output).toMatch(/… output truncated by Mobius$/);
+            const completed = observer
+                .toolUpdates("tool-1")
+                .findLast((update) => update.sessionUpdate === "tool_call_update");
+            expect(completed).toMatchObject({ rawOutput: "x".repeat(500_001), status: "completed" });
         } finally {
             await manager.close();
         }
     });
 
-    it("Given an Agent streams a long reasoning Turn, When it completes, Then the Runtime receives a bounded snapshot", async () => {
+    it("Given an Agent streams a long reasoning turn, When it completes, Then every reasoning chunk lands in the event log", async () => {
+        const observer = new RecordingObserver();
         const manager = new AgentRuntimeManager({
-            observer: new RecordingObserver(),
+            observer,
             store: new MemoryAcpSessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
@@ -152,7 +149,6 @@ describe("acp content limits", () => {
             timer: systemDaemonTimer,
             maxProcesses: null,
         });
-        const activities: AcpActivity[] = [];
         try {
             await manager.runPrompt({
                 additionalDirectories: [],
@@ -160,27 +156,30 @@ describe("acp content limits", () => {
                 commandId: "oversized-reasoning-command",
                 cwd: process.cwd(),
                 images: [],
-                onActivity: (activity) => {
-                    activities.push(activity);
-                    return Promise.resolve();
-                },
-                onText: () => Promise.resolve(),
                 prompt: "stream oversized reasoning",
                 resources: [],
                 sessionId: "oversized-reasoning-session",
                 signal: new AbortController().signal,
             });
-            const completed = activities.findLast(
-                (activity) => activity.activityType === "reasoning" && activity.status === "completed",
-            );
-            expect(completed?.output.length).toBeLessThanOrEqual(500_000);
-            expect(completed?.detail.kind).toBe("truncated");
+            const reasoning = observer
+                .acpUpdates()
+                .map((update) =>
+                    update.sessionUpdate === "agent_thought_chunk" && update.content.type === "text"
+                        ? update.content.text.length
+                        : null,
+                )
+                .filter((length): length is number => length !== null);
+            expect(reasoning).toEqual([
+                "Inspecting ".length,
+                "the workspace".length,
+                ...Array.from({ length: 8 }, () => 100_000),
+            ]);
         } finally {
             await manager.close();
         }
     });
 
-    it("Given an ACP agent links a local image in Markdown, When Mobius records the reply, Then it preserves the original path for on-demand reading", async () => {
+    it("Given an ACP agent links a local image in Markdown, When Mobius records the reply, Then the reply text preserves the original path", async () => {
         const directory = await mkdtemp(join(tmpdir(), "mobius-markdown-image-"));
         const observer = new RecordingObserver();
         const manager = new AgentRuntimeManager({
@@ -193,7 +192,6 @@ describe("acp content limits", () => {
             timer: systemDaemonTimer,
             maxProcesses: null,
         });
-        const output: string[] = [];
         try {
             await manager.runPrompt({
                 additionalDirectories: [],
@@ -201,28 +199,22 @@ describe("acp content limits", () => {
                 commandId: "markdown-image-command",
                 cwd: directory,
                 images: [],
-                onActivity: () => Promise.resolve(),
-                onText: (text) => {
-                    output.push(text);
-                    return Promise.resolve();
-                },
                 prompt: "generate markdown image",
                 resources: [],
                 sessionId: "markdown-image-session",
                 signal: new AbortController().signal,
             });
 
-            expect(output.join("")).toContain(
-                `![Generated image](<${await realpath(join(directory, "generated-image.png"))}>`,
+            expect(observer.agentText()).toContain(
+                `![Generated image](<${await realpath(join(directory, "generated-image.png"))}`,
             );
-            expect(observer.content).toEqual([]);
         } finally {
             await manager.close();
             await rm(directory, { force: true, recursive: true });
         }
     });
 
-    it("Given an ACP Agent links an image outside its workspace, When Mobius records the reply, Then it preserves the Agent path", async () => {
+    it("Given an ACP Agent links an image outside its workspace, When Mobius records the reply, Then the reply text preserves the Agent path", async () => {
         const workspace = await mkdtemp(join(tmpdir(), "mobius-agent-workspace-"));
         const generatedImages = await mkdtemp(join(tmpdir(), "mobius-agent-generated-images-"));
         const observer = new RecordingObserver();
@@ -236,7 +228,6 @@ describe("acp content limits", () => {
             timer: systemDaemonTimer,
             maxProcesses: null,
         });
-        const output: string[] = [];
         try {
             await manager.runPrompt({
                 additionalDirectories: [],
@@ -244,19 +235,15 @@ describe("acp content limits", () => {
                 commandId: "codex-generated-image-command",
                 cwd: workspace,
                 images: [],
-                onActivity: () => Promise.resolve(),
-                onText: (text) => {
-                    output.push(text);
-                    return Promise.resolve();
-                },
                 prompt: "generate markdown image",
                 resources: [],
                 sessionId: "codex-generated-image-session",
                 signal: new AbortController().signal,
             });
 
-            expect(output.join("")).toContain(`![Generated image](<${join(generatedImages, "generated-image.png")}>`);
-            expect(observer.content).toEqual([]);
+            expect(observer.agentText()).toContain(
+                `![Generated image](<${join(generatedImages, "generated-image.png")}`,
+            );
         } finally {
             await manager.close();
             await Promise.all([
@@ -266,7 +253,7 @@ describe("acp content limits", () => {
         }
     });
 
-    it("Given an ACP agent returns image and video output, When Mobius records the reply, Then local images stay referenced and inline videos stay inline", async () => {
+    it("Given an ACP agent returns image and video output, When Mobius records the reply, Then the image stays referenced in text and the video is externalized", async () => {
         const directory = await mkdtemp(join(tmpdir(), "mobius-media-output-"));
         const observer = new RecordingObserver();
         const manager = new AgentRuntimeManager({
@@ -279,7 +266,6 @@ describe("acp content limits", () => {
             timer: systemDaemonTimer,
             maxProcesses: null,
         });
-        const output: string[] = [];
         try {
             await manager.runPrompt({
                 additionalDirectories: [],
@@ -287,31 +273,34 @@ describe("acp content limits", () => {
                 commandId: "media-command",
                 cwd: directory,
                 images: [],
-                onActivity: () => Promise.resolve(),
-                onText: (text) => {
-                    output.push(text);
-                    return Promise.resolve();
-                },
                 prompt: "generate media artifacts",
                 resources: [],
                 sessionId: "media-session",
                 signal: new AbortController().signal,
             });
 
-            expect(output.join("")).toContain(
-                `![Generated image](<${await realpath(join(directory, "generated-image.png"))}>`,
+            expect(observer.agentText()).toContain(
+                `![Generated image](<${await realpath(join(directory, "generated-image.png"))}`,
             );
-            expect(observer.content).toContainEqual(
-                expect.objectContaining({
-                    content: expect.objectContaining({
-                        artifactId: "",
-                        data: "AAAAGGZ0eXBpc29tAAACAGlzb21pc28y",
-                        mimeType: "video/mp4",
-                        name: "generated-video.mp4",
-                        type: "video",
-                    }),
-                }),
-            );
+            expect(
+                observer
+                    .acpUpdates()
+                    .findLast(
+                        (update) =>
+                            update.sessionUpdate === "agent_message_chunk" &&
+                            update.content.type === "external_resource",
+                    ),
+            ).toMatchObject({
+                content: {
+                    byteLength: 24,
+                    encoding: "binary",
+                    mimeType: "video/mp4",
+                    resourceKey: expect.any(String),
+                    type: "external_resource",
+                    uri: "file:///generated-video.mp4",
+                },
+                sessionUpdate: "agent_message_chunk",
+            });
         } finally {
             await manager.close();
             await rm(directory, { force: true, recursive: true });

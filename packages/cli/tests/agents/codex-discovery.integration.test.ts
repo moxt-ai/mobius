@@ -4,13 +4,13 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 import { acpAdapters } from "../../src/acp/adapter/registry.ts";
 import { AgentRuntimeManager } from "../../src/acp/agent-runtime-manager.ts";
-import { NullAcpSessionObserver } from "../../src/acp/session-contracts.ts";
 import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
 import { CodexAgentSpecification } from "../../src/agent-catalog/agents/codex-agent.ts";
 import { discoverLocalAgentInventory } from "../../src/agent-catalog/discover-local-agents.ts";
 import { systemDaemonTimer } from "../../src/daemon/relay/timer.ts";
 import { AcpContentExternalizer } from "../../src/external-content/acp-content-externalizer.ts";
 import { UnretainedExternalContentStore } from "../../src/external-content/local-external-content-store.ts";
+import { RecordingObserver } from "../sessions/acp-feature-fixture.ts";
 import { CodexFixture } from "../support/agents/codex.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 
@@ -60,8 +60,9 @@ test.skipIf(process.platform === "win32")(
         await using provider = await FakeOpenAiProvider.start("mobius-test-model", "IDENTITY_REPLY");
         await using codex = await CodexFixture.create(provider);
         const directory = await mkdtemp(join(tmpdir(), "mobius-real-codex-identity-"));
+        const observer = new RecordingObserver();
         const manager = new AgentRuntimeManager({
-            observer: new NullAcpSessionObserver(),
+            observer,
             store: new MemoryAcpSessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
@@ -88,7 +89,7 @@ test.skipIf(process.platform === "win32")(
                 throw new Error("Real Codex was not discovered");
             }
             const run = async (sessionId: string): Promise<string> => {
-                let text = "";
+                observer.events.length = 0;
                 await manager.runPrompt({
                     agent,
                     sessionId,
@@ -99,12 +100,8 @@ test.skipIf(process.platform === "win32")(
                     images: [],
                     resources: [],
                     signal: AbortSignal.timeout(30_000),
-                    onActivity: async () => {},
-                    onText: async (chunk) => {
-                        text += chunk;
-                    },
                 });
-                return text;
+                return observer.agentText();
             };
             expect(await run("existing")).toContain("IDENTITY_REPLY");
             await unlink(link);

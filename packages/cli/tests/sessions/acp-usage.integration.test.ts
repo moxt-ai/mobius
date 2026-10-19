@@ -52,8 +52,6 @@ async function run(
             sessionId: "usage-session",
             prompt: "Complete this turn",
             signal: AbortSignal.timeout(10_000),
-            onActivity: async () => {},
-            onText: async () => {},
         });
     } finally {
         await manager.close();

@@ -113,8 +113,6 @@ describe("native session preparation", () => {
                 prompt: "Saved conversation",
                 images: [],
                 resources: [],
-                onText: async () => {},
-                onActivity: async () => {},
             });
             const entry = (await f.list()).entries[0];
             if (entry === undefined) {

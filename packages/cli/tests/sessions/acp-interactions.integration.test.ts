@@ -1,19 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { acpAdapters } from "../../src/acp/adapter/registry.ts";
 import { AgentRuntimeManager } from "../../src/acp/agent-runtime-manager.ts";
-import { NullAcpSessionObserver } from "../../src/acp/session-contracts.ts";
 import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
 import { systemDaemonTimer } from "../../src/daemon/relay/timer.ts";
 import { AcpContentExternalizer } from "../../src/external-content/acp-content-externalizer.ts";
 import { UnretainedExternalContentStore } from "../../src/external-content/local-external-content-store.ts";
 import { completeAcpControls, createControlledSession } from "./acp-controls-fixture.ts";
 
-import { fakeAgent } from "./acp-feature-fixture.ts";
+import { fakeAgent, RecordingObserver } from "./acp-feature-fixture.ts";
 
 describe("acp interactions", () => {
     it("Given an Agent turn is running, When a targeted steering prompt is submitted, Then it is injected into that exact turn and preserves the Agent message anchor", async () => {
+        const observer = new RecordingObserver();
         const manager = new AgentRuntimeManager({
-            observer: new NullAcpSessionObserver(),
+            observer,
             store: new MemoryAcpSessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
@@ -23,8 +23,6 @@ describe("acp interactions", () => {
             maxProcesses: null,
         });
         const signal = new AbortController().signal;
-        const activityArrived = Promise.withResolvers<void>();
-        const output: { readonly messageId: string; readonly text: string }[] = [];
         try {
             const running = manager.runPrompt({
                 additionalDirectories: [],
@@ -32,20 +30,30 @@ describe("acp interactions", () => {
                 commandId: "running-command",
                 cwd: process.cwd(),
                 images: [],
-                onActivity: () => {
-                    activityArrived.resolve();
-                    return Promise.resolve();
-                },
-                onText: (text, messageId) => {
-                    output.push({ messageId, text });
-                    return Promise.resolve();
+                lifecycle: {
+                    attemptId: "steering-attempt",
+                    content: [{ text: "wait for steering", type: "text" }],
+                    epoch: "steering-epoch",
                 },
                 prompt: "wait for steering",
                 resources: [],
                 sessionId: "steering-session",
                 signal,
             });
-            await activityArrived.promise;
+            const finishedBeforeStart = running.then(() => {
+                throw new Error("The steering target completed before its structured content arrived");
+            });
+            await Promise.race([
+                observer.waitForEvent(
+                    (event) =>
+                        event.type === "acp" &&
+                        (event.payload.sessionUpdate === "agent_message_chunk" ||
+                            event.payload.sessionUpdate === "user_message_chunk" ||
+                            event.payload.sessionUpdate === "agent_thought_chunk") &&
+                        event.payload.content.type !== "text",
+                ),
+                finishedBeforeStart,
+            ]);
 
             await expect(
                 manager.steerPrompt({
@@ -54,6 +62,11 @@ describe("acp interactions", () => {
                     commandId: "steering-command",
                     cwd: process.cwd(),
                     images: [],
+                    lifecycle: {
+                        attemptId: "steering-attempt-2",
+                        content: [{ text: "focus on the requested fix", type: "text" }],
+                        epoch: "steering-epoch-2",
+                    },
                     prompt: "focus on the requested fix",
                     resources: [],
                     sessionId: "steering-session",
@@ -62,10 +75,7 @@ describe("acp interactions", () => {
                 }),
             ).resolves.toBe("injected");
             await expect(running).resolves.toMatchObject({ stopReason: "end_turn" });
-            expect(output).toContainEqual({
-                messageId: "assistant-1",
-                text: "Steered: focus on the requested fix",
-            });
+            expect(observer.agentText()).toContain("Steered: focus on the requested fix");
         } finally {
             await manager.close();
         }
@@ -110,8 +120,6 @@ describe("acp interactions", () => {
             prompt: "exercise URL elicitation",
             images: [],
             resources: [],
-            onActivity: async () => {},
-            onText: async () => {},
         });
         const elicitation = await Promise.race([
             session.observer.elicitationArrived.promise,
