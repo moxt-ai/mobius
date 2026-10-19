@@ -82,13 +82,8 @@ function mergeTextChunk(previous: AcpSessionUpdateV2, incoming: AcpSessionUpdate
 }
 
 export class SessionEventHistoryProjectionV2 {
-    readonly #allocateEventId: () => string;
     readonly #toolCalls = new Map<string, SessionEventV2>();
     #latestEvent: SessionEventV2 | null = null;
-
-    constructor(allocateEventId: () => string) {
-        this.#allocateEventId = allocateEventId;
-    }
 
     readonly apply = (liveEvent: SessionLiveEventV2): SessionEventHistoryProjectionMutationV2 => {
         if (liveEvent.type === "acp" && liveEvent.payload.sessionUpdate === "tool_call_update") {
@@ -112,7 +107,7 @@ export class SessionEventHistoryProjectionV2 {
             }
         }
 
-        const event = projectNewEvent(liveEvent, this.#allocateEventId());
+        const event = projectNewEvent(liveEvent, liveEvent.eventId);
         this.#latestEvent = event;
         this.#indexToolCall(event);
         return { event, kind: "append" };

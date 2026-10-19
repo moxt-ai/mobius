@@ -179,7 +179,7 @@ describe("ACP conversation sessions", () => {
         }
     });
 
-    it("Given a projected tool has flushed to SQLite, When more live updates arrive, Then history replaces that Session event without retaining live identities", async () => {
+    it("Given a projected tool has flushed to SQLite, When more live updates arrive, Then history replaces that Session event while keeping the projected live identity", async () => {
         vi.useFakeTimers({ toFake: ["clearImmediate", "setImmediate"] });
         vi.setSystemTime(new Date("2026-10-12T00:00:00.000Z"));
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-tool-projection-"));
@@ -248,7 +248,7 @@ describe("ACP conversation sessions", () => {
                 },
                 type: "acp",
             });
-            expect(liveEvents.map((event) => event.eventId)).not.toContain(toolEvents[0]?.eventId);
+            expect(liveEvents.map((event) => event.eventId)).toContain(toolEvents[0]?.eventId);
         } finally {
             store.close();
             sessionDatabase.close();

@@ -36,9 +36,9 @@ class SessionEventsV2 {
     readonly #projection: SessionEventHistoryProjectionV2;
     readonly sessionGenerationId: string;
 
-    constructor(sessionGenerationId: string, allocateEventId: () => string) {
+    constructor(sessionGenerationId: string) {
         this.sessionGenerationId = sessionGenerationId;
-        this.#projection = new SessionEventHistoryProjectionV2(allocateEventId);
+        this.#projection = new SessionEventHistoryProjectionV2();
     }
 
     readonly apply = (
@@ -163,9 +163,7 @@ export class MemoryAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
 
     readonly #session = (sessionId: string): SessionEventsV2 => {
         const sessionGenerationId = randomUUID();
-        const session =
-            this.#events.get(sessionId) ??
-            new SessionEventsV2(sessionGenerationId, () => this.#eventIds.allocate(sessionId, sessionGenerationId));
+        const session = this.#events.get(sessionId) ?? new SessionEventsV2(sessionGenerationId);
         this.#events.set(sessionId, session);
         return session;
     };
@@ -202,10 +200,7 @@ export class MemoryAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
         if (this.#events.get(sessionId)?.sessionGenerationId === sessionGenerationId) {
             return;
         }
-        this.#events.set(
-            sessionId,
-            new SessionEventsV2(sessionGenerationId, () => this.#eventIds.allocate(sessionId, sessionGenerationId)),
-        );
+        this.#events.set(sessionId, new SessionEventsV2(sessionGenerationId));
         for (const event of events) {
             this.append(sessionId, event);
         }
@@ -225,10 +220,7 @@ export class MemoryAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
 
     readonly reset = (sessionId: string): void => {
         const sessionGenerationId = randomUUID();
-        this.#events.set(
-            sessionId,
-            new SessionEventsV2(sessionGenerationId, () => this.#eventIds.allocate(sessionId, sessionGenerationId)),
-        );
+        this.#events.set(sessionId, new SessionEventsV2(sessionGenerationId));
     };
 }
 
@@ -251,9 +243,7 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
 
     readonly #session = (sessionId: string): SessionEventsV2 => {
         const sessionGenerationId = randomUUID();
-        const session =
-            this.#sessions.get(sessionId) ??
-            new SessionEventsV2(sessionGenerationId, () => this.#eventIds.allocate(sessionId, sessionGenerationId));
+        const session = this.#sessions.get(sessionId) ?? new SessionEventsV2(sessionGenerationId);
         this.#sessions.set(sessionId, session);
         return session;
     };
@@ -313,10 +303,7 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
             return;
         }
         this.#deletePersisted(sessionId);
-        this.#sessions.set(
-            sessionId,
-            new SessionEventsV2(sessionGenerationId, () => this.#eventIds.allocate(sessionId, sessionGenerationId)),
-        );
+        this.#sessions.set(sessionId, new SessionEventsV2(sessionGenerationId));
         for (const event of events) {
             this.append(sessionId, event);
         }
@@ -390,10 +377,7 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
         const previous = this.#sessions.get(sessionId);
         this.#deletePersisted(sessionId, previous?.sessionGenerationId);
         const sessionGenerationId = randomUUID();
-        this.#sessions.set(
-            sessionId,
-            new SessionEventsV2(sessionGenerationId, () => this.#eventIds.allocate(sessionId, sessionGenerationId)),
-        );
+        this.#sessions.set(sessionId, new SessionEventsV2(sessionGenerationId));
     };
 
     readonly close = (): void => {
