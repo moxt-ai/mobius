@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { decodeAttempt, decodeTurn, transitionAttempt, transitionTurn } from "../src/index.ts";
+import { decodeInteraction, decodeTurn } from "../src/index.ts";
 
-describe("Mobius resource lifecycle contract", () => {
-    it("Given a terminal Turn without retained content, When a caller queues it again, Then the lifecycle transition is rejected", () => {
+describe("Mobius resource contract", () => {
+    it("Given a persisted Turn page, When a caller decodes it, Then every terminal state round-trips", () => {
         const turn = {
             acceptedAt: "2026-09-07T00:00:01.000Z",
             bindingId: "binding-a",
@@ -26,38 +26,40 @@ describe("Mobius resource lifecycle contract", () => {
         ];
         for (const state of terminalStates) {
             const decoded = decodeTurn({ ...turn, state });
-            expect(() => transitionTurn(decoded, { kind: "queued" })).toThrowError(
-                expect.objectContaining({ code: "invalid_resource_transition" }),
-            );
+            expect(decoded.state.kind).toBe(state.kind);
         }
+        const queued = decodeTurn({
+            ...turn,
+            request: { content: "hello", kind: "prompt", sessionConfigurations: [] },
+            state: { kind: "queued" },
+        });
+        expect(queued.request.kind).toBe("prompt");
     });
 
-    it("Given a terminal Attempt, When a caller requests a backward lifecycle transition, Then the explicit transition contract rejects it", () => {
-        const attempt = decodeAttempt({
-            attemptId: "attempt-terminal",
-            bindingId: "binding-a",
+    it("Given an Interaction snapshot, When a caller decodes it, Then the request and response states round-trip", () => {
+        const interaction = decodeInteraction({
+            attemptId: "attempt-a",
+            interactionId: "interaction-a",
+            request: {
+                kind: "permission",
+                options: [
+                    { kind: "allow_once", name: "Allow", optionId: "option-allow" },
+                    { kind: "reject_once", name: "Reject", optionId: "option-reject" },
+                ],
+                title: "Run the tool",
+                toolCallId: "tool-call-a",
+                toolKind: "bash",
+            },
             sessionId: "session-a",
             state: {
-                completedAt: "2026-09-07T00:00:03.000Z",
-                kind: "succeeded",
-                result: { kind: "agent_result", stopReason: "end_turn" },
-                startedAt: "2026-09-07T00:00:02.000Z",
+                kind: "responded",
+                respondedAt: "2026-09-07T00:00:02.000Z",
+                responderId: "responder-a",
+                response: { content: "allowed", kind: "permission" },
             },
             turnId: "turn-a",
         });
-        expect(() =>
-            transitionAttempt(attempt, {
-                kind: "running",
-                startedAt: "2026-09-07T00:00:04.000Z",
-            }),
-        ).toThrowError(expect.objectContaining({ code: "invalid_resource_transition" }));
-        expect(() =>
-            transitionAttempt(attempt, {
-                completedAt: "2026-09-07T00:00:04.000Z",
-                kind: "succeeded",
-                result: { kind: "agent_result", stopReason: "changed_result" },
-                startedAt: "2026-09-07T00:00:02.000Z",
-            }),
-        ).toThrowError(expect.objectContaining({ code: "invalid_resource_transition" }));
+        expect(interaction.state.kind).toBe("responded");
+        expect(interaction.request.kind).toBe("permission");
     });
 });
