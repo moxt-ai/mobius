@@ -102,12 +102,17 @@ export class SettingsManager {
         try {
             const resolved = await resolveSettings({ cwd: this.cwd });
             // At the home directory, the SDK can load the user file again as
-            // project settings. Preserve its user trust without trusting a
-            // different project file (including a symlink to the user file).
+            // project settings. macOS also canonicalizes /var to /private/var
+            // for the cwd. Canonicalize only the trusted user's directory;
+            // never resolve a project file's symlink into a trusted user file.
             const userPaths = new Set(
-                resolved.sources.flatMap((source) =>
-                    source.source === "user" && source.path !== undefined ? [path.resolve(source.path)] : [],
-                ),
+                resolved.sources.flatMap((source) => {
+                    if (source.source !== "user" || source.path === undefined) {
+                        return [];
+                    }
+                    const userPath = path.resolve(source.path);
+                    return [userPath, path.join(fs.realpathSync(path.dirname(userPath)), path.basename(userPath))];
+                }),
             );
             const sources = resolved.sources.filter(
                 (source) =>

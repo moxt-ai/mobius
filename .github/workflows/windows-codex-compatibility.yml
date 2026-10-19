@@ -110,16 +110,13 @@ jobs:
           $root = Join-Path $env:RUNNER_TEMP 'claude-desktop'
           $package = Join-Path $root 'Claude.msix'
           $expanded = Join-Path $root 'package'
-          $resources = Join-Path $root 'resources'
           New-Item -ItemType Directory -Path $expanded -Force | Out-Null
           Invoke-WebRequest -Uri 'https://api.anthropic.com/api/desktop/win32/x64/msix/latest/redirect' -OutFile $package -TimeoutSec 300
           tar -xf $package -C $expanded
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $signature = Get-AuthenticodeSignature -LiteralPath (Join-Path $expanded 'app/Claude.exe')
           if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Anthropic') { throw 'Desktop publisher signature is invalid' }
-          npx --yes @electron/asar@4.3.1 extract (Join-Path $expanded 'app/resources/app.asar') $resources
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node scripts/prepare-claude-desktop.ts $resources (Join-Path $root 'engine')
+          node scripts/prepare-claude-desktop.ts (Join-Path $expanded 'app/resources/app.asar') (Join-Path $root 'engine')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Read the official macOS Desktop distribution
         if: runner.os == 'macOS'
@@ -135,8 +132,7 @@ jobs:
           hdiutil detach "$root/mount"
           trap - EXIT
           codesign --verify --deep --strict "$root/Claude.app"
-          npx --yes @electron/asar@4.3.1 extract "$root/Claude.app/Contents/Resources/app.asar" "$root/resources"
-          node scripts/prepare-claude-desktop.ts "$root/resources" "$root/engine"
+          node scripts/prepare-claude-desktop.ts "$root/Claude.app/Contents/Resources/app.asar" "$root/engine"
       - name: Verify the Windows Desktop engine signature
         if: runner.os == 'Windows'
         shell: pwsh

@@ -1,11 +1,12 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { appendFile, chmod, mkdir, mkdtemp, open, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, mkdtemp, open, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
 import { createZstdDecompress } from "node:zlib";
+import { extractFile, listPackage } from "@electron/asar";
 
 const releaseOrigin = "https://downloads.claude.ai/claude-code-releases";
 const run = promisify(execFile);
@@ -28,13 +29,12 @@ function text(value: unknown, pattern: RegExp): string {
 // Read the distribution's build pin as data. Never import or evaluate Desktop application code.
 async function readDistribution(resources: string): Promise<Record<string, unknown>> {
     const candidates = new Map<string, Record<string, unknown>>();
-    const build = join(resources, ".vite", "build");
-    for (const entry of await readdir(build, { withFileTypes: true })) {
+    for (const entry of listPackage(resources, { isPack: false })) {
         signal.throwIfAborted();
-        if (!entry.isFile() || !entry.name.endsWith(".js")) {
+        if (!/^\/\.vite\/build\/[^/]+\.js$/.test(entry)) {
             continue;
         }
-        const source = await readFile(join(build, entry.name), { encoding: "utf8", signal });
+        const source = extractFile(resources, entry.slice(1)).toString("utf8");
         for (const match of source.matchAll(/JSON\.parse\('((?:\\.|[^'\\])*)'\)/g)) {
             const literal = match[1];
             if (literal === undefined || !literal.includes(releaseOrigin)) {
@@ -104,9 +104,7 @@ if (
     !isAbsolute(resourcesArgument) ||
     !isAbsolute(cacheArgument)
 ) {
-    throw new Error(
-        "Usage: node scripts/prepare-claude-desktop.ts <extracted-app.asar-directory> <engine-cache-directory>",
-    );
+    throw new Error("Usage: node scripts/prepare-claude-desktop.ts <app.asar-file> <engine-cache-directory>");
 }
 if (process.platform !== "win32" && process.platform !== "darwin") {
     throw new Error("Desktop compatibility requires Windows or macOS");
@@ -172,7 +170,7 @@ try {
     if (reported.stdout.trim() !== `${version} (Claude Code)`) {
         throw new Error("Downloaded engine disagrees with the Desktop build pin");
     }
-    const packageJson: unknown = JSON.parse(await readFile(join(resources, "package.json"), "utf8"));
+    const packageJson: unknown = JSON.parse(extractFile(resources, "package.json").toString("utf8"));
     const desktopVersion = text(object(packageJson)["version"], /^\d+(?:\.\d+)+$/);
     const result = { desktopVersion, engineVersion: version, platform, checksum, binary };
     await mkdir("test-results", { recursive: true });
