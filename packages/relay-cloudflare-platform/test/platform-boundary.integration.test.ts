@@ -728,20 +728,6 @@ describe.sequential("Platform Session-only boundary", () => {
             201,
         );
         const redemptionUrl = `${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtime-pairings/${text(pairing, "pairingId")}/redeem`;
-        const missingInstallationMetadata = await worker.fetch(
-            new Request(redemptionUrl, {
-                body: JSON.stringify({
-                    agents: readyAgents,
-                    machineName: "Private reconnect Runtime",
-                    pairingCode: text(pairing, "pairingCode"),
-                    workspaceName: "private-reconnect-workspace",
-                }),
-                headers: { "content-type": "application/json" },
-                method: "POST",
-            }),
-            environment,
-        );
-        expect(missingInstallationMetadata.status).toBe(400);
         const claimed = await responseJson(
             await worker.fetch(
                 new Request(redemptionUrl, {
@@ -1559,7 +1545,7 @@ describe.sequential("Platform Session-only boundary", () => {
                     {
                         body: JSON.stringify({
                             agents: [],
-                            installableAgents: [],
+                            futureClientField: "unknown keys are tolerated",
                             machineName: "Unattended Runtime",
                             pairingCode: text(pairing, "pairingCode"),
                             workspaceName: "unattended-workspace",
@@ -1590,7 +1576,7 @@ describe.sequential("Platform Session-only boundary", () => {
 
         const catalogUpdate = await worker.fetch(
             new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/channels/${text(claimed, "channelId")}/catalog`, {
-                body: JSON.stringify({ agents: [], installableAgents: [] }),
+                body: JSON.stringify({ agents: [], installableAgents: { ignored: true } }),
                 headers: { authorization: `Bearer ${runtimeCredential}`, "content-type": "application/json" },
                 method: "PUT",
             }),

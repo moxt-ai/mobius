@@ -7,9 +7,8 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function assertExactKeys(value: Readonly<Record<string, unknown>>, expected: readonly string[]): void {
-    const keys = Object.keys(value);
-    if (keys.length !== expected.length || keys.some((key) => !expected.includes(key))) {
+export function assertRequiredKeys(value: Readonly<Record<string, unknown>>, required: readonly string[]): void {
+    if (required.some((key) => !(key in value))) {
         throw new PairingDirectoryError("invalid_request", "The request fields are invalid");
     }
 }

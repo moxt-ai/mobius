@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { validateAgents, validateIdentifier, validateLegacyInstallableAgents } from "../../entity/pairing/pairing.ts";
+import { validateAgents, validateIdentifier } from "../../entity/pairing/pairing.ts";
 import { bearerToken, readString } from "../../infra/relay-http.ts";
 import { bodyParser } from "../middleware/body-parser.ts";
 import { errorMiddleware, rethrowHonoError } from "../middleware/error-middleware.ts";
@@ -9,23 +9,18 @@ export function createChannelRoutes() {
     return new Hono<RelayHttpEnvironment>()
         .onError(rethrowHonoError)
         .use("*", errorMiddleware)
-        .put(
-            "/:channelId/catalog",
-            bodyParser<RelayHttpEnvironment>(["agents", "installableAgents"]),
-            async (context) => {
-                const useCases = context.env.services.channels;
-                const body = context.req.valid("json");
-                const agents = validateAgents(body["agents"]);
-                validateLegacyInstallableAgents(body["installableAgents"]);
-                await useCases.updateAgentCatalog(
-                    validateIdentifier(context.req.param("channelId"), "channel_id"),
-                    context.req.query("token") ?? bearerToken(context.req.raw),
-                    agents,
-                    context.req.raw.signal,
-                );
-                return new Response(null, { status: 204 });
-            },
-        )
+        .put("/:channelId/catalog", bodyParser<RelayHttpEnvironment>(["agents"]), async (context) => {
+            const useCases = context.env.services.channels;
+            const body = context.req.valid("json");
+            const agents = validateAgents(body["agents"]);
+            await useCases.updateAgentCatalog(
+                validateIdentifier(context.req.param("channelId"), "channel_id"),
+                context.req.query("token") ?? bearerToken(context.req.raw),
+                agents,
+                context.req.raw.signal,
+            );
+            return new Response(null, { status: 204 });
+        })
         .post("/:channelId/access-grants", async (context) => {
             const useCases = context.env.services.channels;
             return context.json(

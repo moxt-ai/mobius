@@ -1,5 +1,5 @@
 import type { Env, MiddlewareHandler } from "hono";
-import { assertExactKeys, parseJsonBody } from "../../infra/relay-http.ts";
+import { assertRequiredKeys, parseJsonBody } from "../../infra/relay-http.ts";
 
 export type ParsedBodyInput = {
     readonly in: { readonly json: unknown };
@@ -19,13 +19,13 @@ function parsedBodyParser<TEnvironment extends Env, TPath extends string = strin
 }
 
 export function bodyParser<TEnvironment extends Env, TPath extends string = string>(
-    fields?: readonly string[],
+    requiredFields?: readonly string[],
     maximumLength?: number,
 ): MiddlewareHandler<TEnvironment, TPath, ParsedBodyInput> {
     return parsedBodyParser<TEnvironment, TPath>(async (request) => {
         const body = await parseJsonBody(request, maximumLength);
-        if (fields !== undefined) {
-            assertExactKeys(body, fields);
+        if (requiredFields !== undefined) {
+            assertRequiredKeys(body, requiredFields);
         }
         return body;
     });

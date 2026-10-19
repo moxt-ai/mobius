@@ -25,7 +25,7 @@ import {
     PairingDirectoryError,
     validateIdentifier,
 } from "../../entity/pairing/pairing.ts";
-import { assertExactKeys, bearerToken, readString } from "../../infra/relay-http.ts";
+import { assertRequiredKeys, bearerToken, readString } from "../../infra/relay-http.ts";
 import { bodyParser } from "../middleware/body-parser.ts";
 import { errorMiddleware, rethrowHonoError } from "../middleware/error-middleware.ts";
 import type { RelayHttpEnvironment } from "../relay-http-environment.ts";
@@ -523,7 +523,7 @@ export function createProjectRuntimeRoutes() {
                 ) {
                     throw new PairingDirectoryError("invalid_request", "Choose a supported native session operation");
                 }
-                assertExactKeys(
+                assertRequiredKeys(
                     body,
                     body["action"] === "list"
                         ? ["action", "agentId", "directoryId", "additionalDirectoryIds", "cursor", "discoveryId"]
@@ -564,7 +564,7 @@ export function createProjectRuntimeRoutes() {
             bodyParser<RelayHttpEnvironment>(),
             async (context) => {
                 const body = context.req.valid("json");
-                assertExactKeys(body, ["directoryId"]);
+                assertRequiredKeys(body, ["directoryId"]);
                 const command = decodeWorkspaceListCommand(
                     JSON.stringify({
                         bindingId: RUNTIME_WORKSPACE_BINDING_ID,
