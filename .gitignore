@@ -19,9 +19,10 @@ packages/recording-cloudflare/src/generated/
 packages/cli/src/generated/
 
 # Local-only agent instructions and skills; shared workspace skills
-# under .zcode/skills are tracked in the repository.
-.agents/
-.zcode/*
-!.zcode/skills/
-.zcode/skills/*
-!.zcode/skills/worktree-*/
+# under .agents/skills are tracked in the repository and reach Claude
+# Code through the .claude/skills symlink.
+.zcode/
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/worktree-*/
