@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, symlink } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { copyFile, mkdir, symlink } from "node:fs/promises";
+import { basename, delimiter, dirname, join } from "node:path";
 import {
     decodeSessionEventV2,
     encodeSessionPermissionRespondCommand,
@@ -23,11 +23,27 @@ test("Given native Claude is installed outside PATH, When two prompts execute th
     }
     const nativeDirectory = join(home, ".local", "bin");
     await mkdir(nativeDirectory, { recursive: true });
-    await symlink(agent.executable, join(nativeDirectory, "claude"));
+    if (process.platform === "win32") {
+        await copyFile(agent.executable, join(nativeDirectory, "claude.exe"));
+    } else {
+        await symlink(agent.executable, join(nativeDirectory, "claude"));
+    }
     const environment = Object.fromEntries(
         Object.entries(agent.environment).filter(([name]) => name !== "MOBIUS_CLAUDE_PATH"),
     );
     environment["PATH"] = "/usr/bin:/bin";
+    if (process.platform === "win32") {
+        const systemRoot = process.env["SystemRoot"];
+        if (systemRoot === undefined) {
+            throw new Error("Windows system directory is unavailable");
+        }
+        environment["USERPROFILE"] = home;
+        environment["PATH"] = [
+            dirname(process.execPath),
+            join(systemRoot, "System32"),
+            join(systemRoot, "System32", "WindowsPowerShell", "v1.0"),
+        ].join(delimiter);
+    }
     await withRealDaemon(new ClaudeCodeAgentSpecification(), environment, async (peer) => {
         for (const turn of [0, 1]) {
             const prompt =

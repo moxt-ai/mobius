@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { decodeSessionReadyEvent, encodeSessionPrepareCommand } from "@moxt-ai/mobius-protocol";
 import { expect, test } from "vitest";
@@ -8,9 +8,13 @@ import { ClaudeFixture } from "../support/agents/claude.ts";
 import { withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeAnthropicProvider } from "../support/llm/anthropic.ts";
 
-test.each([true, false])(
-    "Given bypass is configured in a %s user settings file, When Claude starts through the daemon, Then only the trusted user mode is inherited",
-    async (trusted) => {
+test.each([
+    { source: "user", trusted: true, alias: false },
+    { source: "user directory alias", trusted: true, alias: true },
+    { source: "project", trusted: false, alias: false },
+])(
+    "Given bypass is configured through $source settings, When Claude starts through the daemon, Then only the trusted user mode is inherited",
+    async ({ trusted, alias }) => {
         await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-6", "PERMISSION_SETTINGS_OK");
         await using agent = await ClaudeFixture.create(provider);
         const home = agent.environment["HOME"];
@@ -25,7 +29,12 @@ test.each([true, false])(
             join(trusted ? config : join(workspace, ".claude"), "settings.json"),
             JSON.stringify({ permissions: { defaultMode: "bypassPermissions" } }),
         );
-        const environment = { ...agent.environment, CLAUDE_CONFIG_DIR: config };
+        let configDirectory = config;
+        if (alias) {
+            configDirectory = join(home, "config-alias");
+            await symlink(config, configDirectory, process.platform === "win32" ? "junction" : "dir");
+        }
+        const environment = { ...agent.environment, CLAUDE_CONFIG_DIR: configDirectory };
         await withRealDaemon(
             new ClaudeCodeAgentSpecification(),
             environment,

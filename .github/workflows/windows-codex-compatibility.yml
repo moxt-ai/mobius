@@ -1,13 +1,20 @@
-name: Windows latest Agent compatibility
+name: Windows and macOS Agent compatibility
 
 on:
   workflow_dispatch:
+    inputs:
+      suite:
+        description: Compatibility suite
+        type: choice
+        default: all
+        options: [all, cli, desktop]
 
 permissions:
   contents: read
 
 jobs:
   agents:
+    if: inputs.suite != 'desktop'
     name: Verify latest Codex and Claude on Windows
     runs-on: windows-latest
     timeout-minutes: 30
@@ -73,5 +80,86 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-latest-agents-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/
+          if-no-files-found: warn
+
+  desktop:
+    name: Claude Desktop engine (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    if: inputs.suite != 'cli'
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+      - run: pnpm install --frozen-lockfile
+      - name: Read the official Windows Desktop distribution
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $root = Join-Path $env:RUNNER_TEMP 'claude-desktop'
+          $package = Join-Path $root 'Claude.msix'
+          $expanded = Join-Path $root 'package'
+          New-Item -ItemType Directory -Path $expanded -Force | Out-Null
+          Invoke-WebRequest -Uri 'https://api.anthropic.com/api/desktop/win32/x64/msix/latest/redirect' -OutFile $package -TimeoutSec 300
+          tar -xf $package -C $expanded
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $signature = Get-AuthenticodeSignature -LiteralPath (Join-Path $expanded 'app/Claude.exe')
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Anthropic') { throw 'Desktop publisher signature is invalid' }
+          node scripts/prepare-claude-desktop.ts (Join-Path $expanded 'app/resources/app.asar') (Join-Path $root 'engine')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Read the official macOS Desktop distribution
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          root="$RUNNER_TEMP/claude-desktop"
+          mkdir -p "$root/mount"
+          curl --fail --show-error --location --proto '=https' --connect-timeout 15 --max-time 300 \
+            https://api.anthropic.com/api/desktop/darwin/universal/dmg/latest/redirect --output "$root/Claude.dmg"
+          hdiutil attach "$root/Claude.dmg" -readonly -nobrowse -mountpoint "$root/mount"
+          trap 'hdiutil detach "$root/mount"' EXIT
+          ditto "$root/mount/Claude.app" "$root/Claude.app"
+          hdiutil detach "$root/mount"
+          trap - EXIT
+          codesign --verify --deep --strict "$root/Claude.app"
+          node scripts/prepare-claude-desktop.ts "$root/Claude.app/Contents/Resources/app.asar" "$root/engine"
+      - name: Verify the Windows Desktop engine signature
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $signature = Get-AuthenticodeSignature -LiteralPath $env:MOBIUS_TEST_CLAUDE_PATH
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Anthropic') { throw 'Desktop engine publisher signature is invalid' }
+      - name: Verify the macOS Desktop engine signature
+        if: runner.os == 'macOS'
+        shell: bash
+        run: codesign --verify --deep --strict "$(dirname "$(dirname "$(dirname "$MOBIUS_TEST_CLAUDE_PATH")")")"
+      - name: Build Mobius CLI
+        run: pnpm --filter @moxt-ai/mobius build
+      - name: Verify the Desktop-selected engine through Mobius
+        run: >-
+          pnpm --filter @moxt-ai/mobius exec vitest run
+          tests/agents/windows-claude-discovery.integration.test.ts
+          tests/agents/macos-claude-desktop-discovery.integration.test.ts
+          tests/agents/claude-live-turn.integration.test.ts
+          tests/agents/claude-native-recovery.integration.test.ts
+          tests/agents/claude-permission-settings.integration.test.ts
+          --maxWorkers=1
+          --reporter=default --reporter=junit
+          --outputFile.junit=../../test-results/claude-desktop.xml
+      - name: Upload Desktop compatibility results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: claude-desktop-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: test-results/
           if-no-files-found: warn

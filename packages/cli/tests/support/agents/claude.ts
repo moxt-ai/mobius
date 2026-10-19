@@ -28,6 +28,7 @@ export class ClaudeFixture implements AsyncDisposable {
             CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
             DISABLE_AUTOUPDATER: "1",
             HOME: directory,
+            ...(process.platform === "win32" ? { USERPROFILE: directory } : {}),
             MOBIUS_CLAUDE_PATH: executable,
             MOBIUS_CODEX_PATH: missing,
             MOBIUS_PI_PATH: missing,
