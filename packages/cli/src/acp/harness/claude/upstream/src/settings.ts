@@ -111,10 +111,7 @@ export class SettingsManager {
                         return [];
                     }
                     const userPath = path.resolve(source.path);
-                    return [
-                        userPath,
-                        path.join(fs.realpathSync.native(path.dirname(userPath)), path.basename(userPath)),
-                    ];
+                    return [userPath, path.join(fs.realpathSync(path.dirname(userPath)), path.basename(userPath))];
                 }),
             );
             const sources = resolved.sources.filter(
