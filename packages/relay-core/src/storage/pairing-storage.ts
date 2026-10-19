@@ -401,9 +401,9 @@ export class PairingStorage {
                 (credential_id, channel_id, token_hash, authority, created_at, last_used_at)
                 SELECT ?, channel_id, ?, 'linked', ?, ? FROM pairing_channels
                  WHERE project_id = ? AND runtime_id = ? AND status = 'paired'
-                RETURNING channel_id`)
+                RETURNING channel_id, (SELECT agents_json FROM pairing_channels WHERE channel_id = channel_host_credentials.channel_id) AS agents_json`)
             .bind(credentialId, tokenHash, now, now, projectId, runtimeId)
-            .first<{ readonly channel_id: string }>(signal);
+            .first<{ readonly channel_id: string; readonly agents_json: string }>(signal);
 
     readonly removeControlHost = (channelId: string, credentialId: string, signal: AbortSignal) =>
         this.#database

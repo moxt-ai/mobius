@@ -116,8 +116,14 @@ export class VerifiedChannelAccess {
 export class ChannelHostCredential extends VerifiedChannelAccess {
     readonly credentialId: string;
 
-    constructor(channelId: string, runtimeId: string, projectId: string, credentialId: string) {
-        super(channelId, runtimeId, projectId, []);
+    constructor(
+        channelId: string,
+        runtimeId: string,
+        projectId: string,
+        credentialId: string,
+        agents: readonly AgentDescriptor[] = [],
+    ) {
+        super(channelId, runtimeId, projectId, agents);
         this.credentialId = credentialId;
     }
 }
@@ -263,6 +269,8 @@ function pairingDirectoryErrorStatus(code: string): number {
         case "runtime_unavailable":
         case "agent_settings_discovery_unsupported":
         case "session_turn_configuration_unsupported":
+        case "steering_unsupported":
+        case "session_rename_unsupported":
         case "idempotency_conflict":
             return 409;
         case "pairing_timeout":
@@ -413,9 +421,12 @@ function normalizePersistedAgents(value: unknown): unknown {
 // shape is validated explicitly into a fresh object, unknown fields are ignored,
 // and missing known fields default to unsupported. This keeps an older Relay
 // compatible with a newer daemon that advertises capabilities it does not know.
+// A capability value this Relay cannot interpret is advisory, not a pairing
+// failure: the agent stays listed with that capability withheld, and each
+// command that needs it is rejected when it is issued.
 function validateAgentCapabilities(value: unknown): SessionCapabilities {
     if (!isRecord(value)) {
-        throw new PairingDirectoryError("invalid_agents", "The local Agent capabilities are invalid");
+        return unsupportedSessionCapabilities();
     }
     const capabilities: Record<keyof SessionCapabilities, boolean> = {
         ...unsupportedSessionCapabilities(),
@@ -426,7 +437,7 @@ function validateAgentCapabilities(value: unknown): SessionCapabilities {
         }
         const advertised = value[field];
         if (advertised !== undefined && typeof advertised !== "boolean") {
-            throw new PairingDirectoryError("invalid_agents", "The local Agent capabilities are invalid");
+            continue;
         }
         capabilities[field] = advertised === true;
     }

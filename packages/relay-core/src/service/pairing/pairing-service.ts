@@ -6,6 +6,7 @@ import { PairingDirectoryError, VerifiedChannelAccess } from "../../entity/pairi
 import type { ChannelGateway } from "../../gateway/channel-gateway.ts";
 import { type OperationTiming, unmeasuredOperationTiming } from "../../infra/operation-timing.ts";
 import { RuntimeDescriptor } from "../channel/channel.ts";
+import { authorizeCommandCapability } from "./command-capability.ts";
 import type { PairingOperations } from "./pairing-operations.ts";
 import {
     type RuntimeControlCommand,
@@ -111,7 +112,10 @@ export class PairingService {
                     deadline,
                 ),
         );
+        // Capabilities are advisory until the command is issued; the paired
+        // catalog decides here, before the Runtime connection is opened.
         try {
+            authorizeCommandCapability(command, access.agents);
             const response = await timing.measure(
                 "control-connect",
                 "Connect Runtime control host",
@@ -219,7 +223,10 @@ export class PairingService {
     ) => {
         const deadline = AbortSignal.any([signal, AbortSignal.timeout(120000)]);
         const access = await this.#pairings.openProjectScopeControlHost(scope, runtimeId, deadline);
+        // Capabilities are advisory until the command is issued; the paired
+        // catalog decides here, before the Runtime connection is opened.
         try {
+            authorizeCommandCapability(command, access.agents);
             const response = await this.#channels.acceptHost(
                 access,
                 new Request("https://runtime.internal/host", { headers: { Upgrade: "websocket" } }),
