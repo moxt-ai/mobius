@@ -250,7 +250,6 @@ it("Given ACP exposes select and boolean settings, When a user configures the co
         requestId: "configure-fast-mode",
     });
 
-    const text: string[] = [];
     await expect(
         session.manager.runPrompt({
             ...session.request,
@@ -258,11 +257,7 @@ it("Given ACP exposes select and boolean settings, When a user configures the co
             prompt: "Report execution settings",
             images: [],
             resources: [],
-            onActivity: async () => {},
-            onText: async (chunk) => {
-                text.push(chunk);
-            },
         }),
     ).resolves.toMatchObject({ stopReason: "end_turn" });
-    expect(text.join("")).toBe("plan test-large high fast");
+    expect(session.observer.agentText()).toBe("plan test-large high fast");
 });

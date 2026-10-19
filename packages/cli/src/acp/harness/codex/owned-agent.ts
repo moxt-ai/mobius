@@ -8,11 +8,9 @@ import type {
 import { methods } from "@agentclientprotocol/sdk";
 import { AcpExecutionError } from "../../acp-error.ts";
 import { type AcpEndpointTermination, acpEndpointTerminationError } from "../../in-process/acp-endpoint.ts";
-import { sessionFailureMeta } from "../../session-failure.ts";
 import type { CodexAppServerClient, CodexAppServerServerRequest } from "./app-server-client.ts";
 import {
     commandApprovalParamsSchema,
-    errorNotificationSchema,
     fileChangeApprovalParamsSchema,
     type McpElicitationParams,
     mcpElicitationParamsSchema,
@@ -178,7 +176,6 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
         string,
         { readonly phase: "commentary" | "final_answer" | null | undefined; readonly kind: "started" | "streaming" }
     >();
-    readonly #noticeRevisions = new Map<string, number>();
     #turn: ActiveTurn | null = null;
     #nativeTurnId: string | null = null;
     #updateTail: Promise<void> = Promise.resolve();
@@ -219,33 +216,6 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
     };
 
     readonly onNotification = async (method: string, params: unknown): Promise<void> => {
-        if (method === "error") {
-            const decoded = errorNotificationSchema.safeParse(params);
-            if (
-                decoded.success &&
-                decoded.data.willRetry &&
-                decoded.data.threadId === this.#context.threadId() &&
-                this.#turn !== null &&
-                decoded.data.turnId === this.#turn.turn.id
-            ) {
-                const id = `codex:${decoded.data.turnId}:error`;
-                const revision = (this.#noticeRevisions.get(id) ?? 0) + 1;
-                this.#noticeRevisions.set(id, revision);
-                await this.#enqueue(async () => {
-                    await this.#context.emit({
-                        _meta: sessionFailureMeta({
-                            category: "service",
-                            id,
-                            revision,
-                            severity: "warning",
-                            title: decoded.data.error.message,
-                        }),
-                        sessionUpdate: "session_info_update",
-                    });
-                });
-            }
-            return;
-        }
         if (method === "turn/started") {
             const decoded = turnNotificationSchema.safeParse(params);
             if (decoded.success && decoded.data.threadId === this.#context.threadId() && this.#turn !== null) {

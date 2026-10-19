@@ -9,8 +9,6 @@ import {
     type SessionNotification,
 } from "@agentclientprotocol/sdk";
 import {
-    AGENT_CONTENT_KIND,
-    type AgentDisplayContent,
     decodeAcpSessionUpdate,
     decodeAgentPromptResponse,
     SESSION_COMMANDS_UPDATED_KIND,
@@ -21,15 +19,11 @@ import {
     type SessionConfigOption,
     type SessionEventPayload,
 } from "@moxt-ai/mobius-sdk/protocol";
-import type { LocalRasterImage } from "../acp/resource/local-raster.ts";
-import { readInlineRaster, readLocalRaster } from "../acp/resource/local-raster.ts";
-import { type LocalVideo, readInlineVideo } from "../acp/resource/local-video.ts";
 import type { AcpAgentDefinition } from "../daemon/config.ts";
 import type { AcpContentExternalizer } from "../external-content/acp-content-externalizer.ts";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
 import { revalidateExecutable } from "../util/process/executable.ts";
 import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp-error.ts";
-import { imageDisplayContent, isProgressMessage, normalizeContentBlock } from "./activity-content.ts";
 import { AgentConnection } from "./agent-connection.ts";
 import { type AcpTurnState, IdleAcpTurn, RunningAcpTurn } from "./agent-turn.ts";
 import { AgentUpdateStream } from "./agent-update-stream.ts";
@@ -59,7 +53,6 @@ import {
     type AcpSteerOptions,
     type AcpTurnOptions,
 } from "./session-contracts.ts";
-import { readAcpSessionFailure } from "./session-failure.ts";
 import { AcpHistoryReplay } from "./session-history.ts";
 import { AcpSessionInteractions } from "./session-interactions.ts";
 import { type AcpSessionStore, AcpStoredSession, FoundAcpStoredSession } from "./session-store.ts";
@@ -458,69 +451,6 @@ export class AgentSession implements AcpClientHandler {
         return await completion;
     }
 
-    private readonly prepareAgentContent = async (content: AgentDisplayContent): Promise<AgentDisplayContent> => {
-        if (content.type === "image" && content.uri.length > 0) {
-            const signal = AbortSignal.timeout(20_000);
-            const raster = await readLocalRaster(content.uri, signal);
-            if (raster !== null) {
-                return await this.importRaster(raster, signal);
-            }
-        }
-        if (content.type === "image" && content.data.length > 0) {
-            const raster = readInlineRaster(content.data, content.name);
-            if (raster !== null) {
-                return await this.importRaster(raster, AbortSignal.timeout(20_000));
-            }
-        }
-        if (content.type === "video" && content.data.length > 0) {
-            const video = readInlineVideo(content.data, content.mimeType, content.name);
-            if (video === null) {
-                return { ...content, data: "" };
-            }
-            return this.importVideo(video);
-        }
-        return content;
-    };
-
-    private readonly emitAgentContent = async (content: AgentDisplayContent, messageId: string): Promise<void> => {
-        const prepared = await this.prepareAgentContent(content);
-        await this.#getObserver().onContent({
-            commandId: this.#turn.commandId,
-            content: prepared,
-            contentId: `content-${crypto.randomUUID()}`,
-            kind: AGENT_CONTENT_KIND,
-            messageId,
-            sessionId: this.#mobiusSessionId,
-        });
-    };
-
-    private readonly importRaster = async (
-        raster: LocalRasterImage,
-        _signal: AbortSignal,
-    ): Promise<AgentDisplayContent> => {
-        if (raster.sourceUri.length > 0) {
-            return {
-                ...imageDisplayContent(raster.mimeType, raster.name, "", ""),
-                uri: raster.sourceUri,
-            };
-        }
-        return imageDisplayContent(raster.mimeType, raster.name, await raster.base64(), "");
-    };
-
-    private readonly importVideo = (video: LocalVideo): AgentDisplayContent => ({
-        artifactId: "",
-        data: video.base64(),
-        mimeType: video.mimeType,
-        name: video.name,
-        newText: "",
-        oldText: "",
-        path: "",
-        terminalId: "",
-        text: "",
-        type: "video",
-        uri: "",
-    });
-
     async #initializeAgent(signal: AbortSignal): Promise<void> {
         await this.#metrics.measure("agent-initialize", async () => await this.#initializeAgentOperation(signal));
     }
@@ -543,9 +473,6 @@ export class AgentSession implements AcpClientHandler {
                 methods.agent.initialize,
                 {
                     clientCapabilities: {
-                        _meta: {
-                            jetbrains: { air: { capabilities: ["sessionFailure"], version: 1 } },
-                        },
                         elicitation: { form: {}, url: {} },
                         plan: {},
                         session: { configOptions: { boolean: {} } },
@@ -974,13 +901,7 @@ export class AgentSession implements AcpClientHandler {
         }
         this.#prompted = true;
         this.#writeStoredSession(new Date().toISOString());
-        const running = new RunningAcpTurn(
-            options.commandId,
-            options.onActivity ?? (() => Promise.resolve()),
-            options.onNarration,
-            options.onText ?? (() => Promise.resolve()),
-            this.prepareAgentContent,
-        );
+        const running = new RunningAcpTurn(options.commandId);
         this.#turn = running;
         const lifecycle = options.lifecycle;
         if (lifecycle !== undefined) {
@@ -1020,7 +941,6 @@ export class AgentSession implements AcpClientHandler {
                 options.signal,
             );
             await this.#updates.drained();
-            await running.activities.finish();
             let result: AcpPromptResult;
             try {
                 result = decodeAgentPromptResponse(response);
@@ -1031,10 +951,6 @@ export class AgentSession implements AcpClientHandler {
                     "acp_invalid_prompt_response",
                 );
             }
-            const failure = readAcpSessionFailure(response);
-            if (failure !== null) {
-                await running.activities.recordNotice(failure.id, failure.revision, failure.severity, failure.title);
-            }
             this.#writeStoredSession(new Date().toISOString());
             if (lifecycle !== undefined) {
                 await this.recordLifecycleEvent({
@@ -1044,7 +960,6 @@ export class AgentSession implements AcpClientHandler {
             }
             return result;
         } catch (error) {
-            await running.activities.finish();
             const failure =
                 error instanceof AcpExecutionError
                     ? error
@@ -1246,57 +1161,6 @@ export class AgentSession implements AcpClientHandler {
         ) {
             return;
         }
-        if (update.sessionUpdate === "agent_message_chunk") {
-            if (update.content.type === "text") {
-                if (isProgressMessage(update)) {
-                    await this.#turn.activities.recordNarrative(
-                        "progress",
-                        update.messageId ?? "current",
-                        update.content.text,
-                    );
-                } else {
-                    await this.#turn.activities.finishNarrative();
-                    await this.#turn.onText(update.content.text, truncate(update.messageId ?? "", 255));
-                }
-            } else {
-                await this.#turn.activities.finishNarrative();
-                await this.emitAgentContent(
-                    normalizeContentBlock(update.content),
-                    truncate(update.messageId ?? "", 255),
-                );
-            }
-            return;
-        }
-        if (update.sessionUpdate === "agent_thought_chunk") {
-            if (update.content.type === "text") {
-                await this.#turn.activities.recordNarrative(
-                    "reasoning",
-                    update.messageId ?? "current",
-                    update.content.text,
-                );
-            }
-            return;
-        }
-        if (update.sessionUpdate === "tool_call") {
-            await this.#turn.activities.recordToolCall(update);
-            return;
-        }
-        if (update.sessionUpdate === "tool_call_update") {
-            await this.#turn.activities.recordToolCallUpdate(update);
-            return;
-        }
-        if (update.sessionUpdate === "plan") {
-            await this.#turn.activities.recordPlan(update);
-            return;
-        }
-        if (update.sessionUpdate === "plan_update") {
-            await this.#turn.activities.recordPlanUpdate(update);
-            return;
-        }
-        if (update.sessionUpdate === "plan_removed") {
-            await this.#turn.activities.removePlan(update);
-            return;
-        }
         if (update.sessionUpdate === "available_commands_update") {
             const commands: SessionCommand[] = update.availableCommands
                 .slice(0, 500)
@@ -1334,10 +1198,6 @@ export class AgentSession implements AcpClientHandler {
             return;
         }
         if (update.sessionUpdate === "session_info_update") {
-            const failure = readAcpSessionFailure(update);
-            if (failure !== null && this.#turn.running) {
-                await this.#turn.activities.recordNotice(failure.id, failure.revision, failure.severity, failure.title);
-            }
             if (Object.hasOwn(update, "title")) {
                 this.#sessionTitle = truncate(update.title ?? "", 500);
             }

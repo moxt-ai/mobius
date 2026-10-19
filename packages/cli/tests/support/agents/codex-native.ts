@@ -76,8 +76,6 @@ export async function codexFixture(
             images: [],
             resources: [],
             signal: AbortSignal.timeout(30_000),
-            onText: async () => {},
-            onActivity: async () => {},
         });
     };
     const seed = async (title: string): Promise<string> => {

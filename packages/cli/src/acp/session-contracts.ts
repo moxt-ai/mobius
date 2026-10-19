@@ -1,5 +1,4 @@
 import type {
-    AgentContentEvent,
     AgentModelEffort,
     AgentPromptResponse,
     ContentBlock,
@@ -20,7 +19,6 @@ import type {
     SessionPermissionResolvedEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
 import type { AcpAgentDefinition } from "../daemon/config.ts";
-import type { AcpActivity, AcpActivityNarration } from "./activity.ts";
 import type { NativeSessionOrigin } from "./native-session.ts";
 
 export interface AcpPrepareOptions {
@@ -75,18 +73,6 @@ export interface AcpTurnOptions extends AcpPrepareOptions, AcpPromptContentOptio
     readonly cancellationRequested?: () => boolean;
     readonly commandId: string;
     readonly disposition?: string;
-    /**
-     * Optional observation sinks for the folded activity view. Without a sink the
-     * same information still flows through the Session Event V2 stream; these hooks
-     * exist for in-process observers such as the supported test API.
-     */
-    readonly onActivity?: (activity: AcpActivity) => Promise<void>;
-    /**
-     * Receives streamed narration increments. Optional: without a sink the same text
-     * still arrives once on the completed activity snapshot, just without live updates.
-     */
-    readonly onNarration?: (narration: AcpActivityNarration) => Promise<void>;
-    readonly onText?: (text: string, messageId: string) => Promise<void>;
     readonly targetCommandId?: string;
 }
 
@@ -115,7 +101,6 @@ export interface AcpSessionObserver {
     readonly onSessionEvent?: (event: SessionLiveEvent) => Promise<void>;
     readonly onCommands: (event: SessionCommandsUpdatedEvent) => Promise<void>;
     readonly onConfig: (event: SessionConfigUpdatedEvent) => Promise<void>;
-    readonly onContent: (event: AgentContentEvent) => Promise<void>;
     readonly onElicitation: (event: SessionElicitationRequestedEvent) => Promise<void>;
     readonly onElicitationResolved: (event: SessionElicitationResolvedEvent) => Promise<void>;
     readonly onInfo: (event: SessionInfoUpdatedEvent) => Promise<void>;
@@ -127,7 +112,6 @@ export class NullAcpSessionObserver implements AcpSessionObserver {
     readonly onSessionEvent = (_event: SessionLiveEvent): Promise<void> => Promise.resolve();
     readonly onCommands = (): Promise<void> => Promise.resolve();
     readonly onConfig = (): Promise<void> => Promise.resolve();
-    readonly onContent = (_event: AgentContentEvent): Promise<void> => Promise.resolve();
     readonly onElicitation = (): Promise<void> => Promise.resolve();
     readonly onElicitationResolved = (): Promise<void> => Promise.resolve();
     readonly onInfo = (_event: SessionInfoUpdatedEvent): Promise<void> => Promise.resolve();
