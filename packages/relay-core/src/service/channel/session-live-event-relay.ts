@@ -2,7 +2,7 @@ import { encodeSessionEventEnvelope, type SessionEventEnvelope } from "@moxt-ai/
 import type { BestEffortRecording } from "./best-effort-recording.ts";
 import type { ChannelPeers } from "./channel-actor.ts";
 
-export class LiveSessionEventRelay {
+export class SessionLiveEventRelay {
     readonly #projectId: string;
     readonly #runtimeId: string;
     readonly #peers: ChannelPeers;

@@ -19,10 +19,10 @@ import { MobiusAppCredentialProvider, MobiusPlatformAppClient } from "@moxt-ai/m
 import {
     MobiusClient,
     type MobiusLiveEventSubscription,
-    type MobiusLiveSessionEventObserver,
     MobiusPageRequest,
     MobiusRecordingPolicy,
     MobiusRuntimePairingRequest,
+    type MobiusSessionEventObserver,
     MobiusSessionImportBinding,
     StaticMobiusCredentialProvider,
     WsTransport,
@@ -613,7 +613,7 @@ async function compactCommand(directory: string, flags: ReadonlyMap<string, stri
         const discoverySignal = AbortSignal.any([shutdown.signal, AbortSignal.timeout(5_000)]);
         let advertisedCommands: readonly SessionCommand[] = [];
         let subscription: MobiusLiveEventSubscription | undefined;
-        const observer: MobiusLiveSessionEventObserver = {
+        const observer: MobiusSessionEventObserver = {
             reconcile: () => Promise.resolve(),
             receive: (events) => {
                 for (const event of events) {
@@ -753,7 +753,7 @@ async function getCommand(directory: string, flags: ReadonlyMap<string, string>)
             event.type === "lifecycle-metadata" &&
             (event.payload.kind === "prompt.completed" || event.payload.kind === "prompt.failed") &&
             event.payload.commandId === followedCommandId;
-        const observer: MobiusLiveSessionEventObserver = {
+        const observer: MobiusSessionEventObserver = {
             reconcile: async (liveConnection) => {
                 const events = await sessionEvents(service, session, signal);
                 for (const event of events.events.events) {

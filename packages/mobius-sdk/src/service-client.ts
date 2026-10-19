@@ -499,7 +499,7 @@ export class MobiusRequestExecutor {
         };
         try {
             const credential = validateCredential(await this.#credentialProvider.credential(controller.signal));
-            const events = await this.#transport.openLiveSessionEvents(
+            const events = await this.#transport.openSessionLiveEvents(
                 new Request(requestUrl(this.#endpoint, path), {
                     headers: this.authenticationHeaders(credential, "application/json"),
                     signal: controller.signal,
@@ -1413,18 +1413,18 @@ export class MobiusInteractionResources {
     };
 }
 
-export type MobiusLiveSessionConnection = { readonly kind: "initial" } | { readonly kind: "reconnected" };
+export type MobiusSessionLiveEventConnection = { readonly kind: "initial" } | { readonly kind: "reconnected" };
 
-export interface MobiusLiveSessionEventObserver {
+export interface MobiusSessionEventObserver {
     readonly receive: (events: SessionLiveEventBatch) => Promise<boolean>;
-    readonly reconcile: (connection: MobiusLiveSessionConnection) => Promise<void>;
+    readonly reconcile: (connection: MobiusSessionLiveEventConnection) => Promise<void>;
 }
 
 export class MobiusLiveEventSubscription {
     readonly #controller = new AbortController();
     readonly #executor: MobiusRequestExecutor;
     readonly #maximumReconnectAttempts: number;
-    readonly #observer: MobiusLiveSessionEventObserver;
+    readonly #observer: MobiusSessionEventObserver;
     readonly #path: string;
     #closed = false;
     readonly connected: Promise<void>;
@@ -1433,7 +1433,7 @@ export class MobiusLiveEventSubscription {
     constructor(
         executor: MobiusRequestExecutor,
         path: string,
-        observer: MobiusLiveSessionEventObserver,
+        observer: MobiusSessionEventObserver,
         signal: AbortSignal,
         maximumReconnectAttempts: number,
     ) {
@@ -1471,7 +1471,7 @@ export class MobiusLiveEventSubscription {
         rejectConnected: (cause: unknown) => void,
     ): Promise<void> => {
         let attempts = 0;
-        let connectionState: MobiusLiveSessionConnection = { kind: "initial" };
+        let connectionState: MobiusSessionLiveEventConnection = { kind: "initial" };
         while (!this.#closed) {
             let connection: LiveEventConnection | null = null;
             try {
@@ -1574,7 +1574,7 @@ export class MobiusEventResources {
 
     readonly subscribeLive = async (
         sessionId: string,
-        observer: MobiusLiveSessionEventObserver,
+        observer: MobiusSessionEventObserver,
         signal: AbortSignal,
     ): Promise<MobiusLiveEventSubscription> => {
         const subscription = new MobiusLiveEventSubscription(

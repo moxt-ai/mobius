@@ -9,13 +9,13 @@ export interface MobiusTransportSessionEvent {
 }
 
 export interface MobiusLiveEventTransport {
-    readonly openLiveSessionEvents: (request: Request) => Promise<ReadableStream<MobiusTransportSessionEvent>>;
+    readonly openSessionLiveEvents: (request: Request) => Promise<ReadableStream<MobiusTransportSessionEvent>>;
 }
 
 export function isMobiusLiveEventTransport(
     transport: MobiusHttpTransport,
 ): transport is MobiusHttpTransport & MobiusLiveEventTransport {
-    return "openLiveSessionEvents" in transport && typeof transport.openLiveSessionEvents === "function";
+    return "openSessionLiveEvents" in transport && typeof transport.openSessionLiveEvents === "function";
 }
 
 export class HttpTransport implements MobiusHttpTransport {

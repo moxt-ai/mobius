@@ -79,7 +79,7 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { SessionRuntimeError } from "../../entity/do/session.ts";
 import type { BestEffortRecording } from "./best-effort-recording.ts";
-import { LiveSessionEventRelay } from "./live-session-event-relay.ts";
+import { SessionLiveEventRelay } from "./session-live-event-relay.ts";
 
 function sessionErrorCloseCode(error: SessionRuntimeError): 1008 | 1013 {
     if (error.code === "session_busy") {
@@ -99,7 +99,7 @@ export interface ChannelSocket {
     readonly matchesHistoryRequest: (kind: HistoryRequestKind, requestId: string) => boolean;
     readonly isOpen: () => boolean;
     readonly isSame: (socket: ChannelSocket) => boolean;
-    readonly permitsLiveSessionHistory: () => boolean;
+    readonly permitsSessionHistory: () => boolean;
     readonly send: (message: string) => void;
     readonly trackAgentSettingsDiscovery: (requestId: string, agentId: string) => "tracked" | "duplicate" | "busy";
 }
@@ -114,7 +114,7 @@ export class ChannelActor {
     readonly #peers: ChannelPeers;
     readonly #projectId: string;
     readonly #runtimeId: string;
-    readonly #liveEvents: LiveSessionEventRelay;
+    readonly #liveEvents: SessionLiveEventRelay;
 
     constructor(cx: {
         readonly config: { readonly projectId: string; readonly runtimeId: string };
@@ -128,7 +128,7 @@ export class ChannelActor {
         this.#peers = peers;
         this.#projectId = projectId;
         this.#runtimeId = runtimeId;
-        this.#liveEvents = new LiveSessionEventRelay(projectId, runtimeId, peers, recording);
+        this.#liveEvents = new SessionLiveEventRelay(projectId, runtimeId, peers, recording);
     }
 
     readonly attachDaemon = async (replacedExistingConnection: boolean, _signal: AbortSignal): Promise<void> => {
@@ -260,14 +260,14 @@ export class ChannelActor {
                 return;
             }
             if (kind === SESSION_HISTORY_PAGE_LOAD_KIND) {
-                if (!socket.permitsLiveSessionHistory()) {
+                if (!socket.permitsSessionHistory()) {
                     throw new ProtocolMessageError("Live Session history requires an internal connection");
                 }
                 this.forwardHistoryPage(socket, "live", decodeSessionHistoryPageLoad(message));
                 return;
             }
             if (kind === SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND) {
-                if (!socket.permitsLiveSessionHistory()) {
+                if (!socket.permitsSessionHistory()) {
                     throw new ProtocolMessageError("Session preview history requires an internal connection");
                 }
                 this.forwardHistoryPage(socket, "preview", decodeSessionPreviewHistoryPageLoad(message));

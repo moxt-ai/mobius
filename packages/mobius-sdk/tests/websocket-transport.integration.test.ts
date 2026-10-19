@@ -172,7 +172,7 @@ it("Given a replacement WebSocket carries a live subscription, When the old sock
     if (second === undefined) {
         throw new Error("Expected the replacement WebSocket connection");
     }
-    const events = await transport.openLiveSessionEvents(
+    const events = await transport.openSessionLiveEvents(
         new Request("https://relay.example.test/mobius/api/v1/projects/project/sessions/session/events-v2"),
     );
     const subscriptionId = second.subscriptionIds[0];
