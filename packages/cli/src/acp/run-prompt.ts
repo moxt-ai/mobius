@@ -40,7 +40,7 @@ export async function runAcpPrompt(options: RunAcpPromptOptions): Promise<AcpPro
             cwd: options.cwd,
             commandId,
             images: [],
-            lifecycleV2: {
+            lifecycle: {
                 attemptId: crypto.randomUUID(),
                 content: [{ text: options.prompt, type: "text" }],
                 epoch: crypto.randomUUID(),

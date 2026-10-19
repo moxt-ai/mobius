@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
     decodeMessageKind,
     decodeNativeSessionResult,
-    decodeSessionEventV2,
+    decodeSessionEvent,
     encodeNativeSessionCommand,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
@@ -128,7 +128,7 @@ test("Given another local Codex owns the Session lock, When Morty opens and prom
             // The public prompt-started event establishes that the daemon accepted the remote turn.
             let reply = "";
             for (;;) {
-                const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+                const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
                 if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.started") {
                     release.resolve();
                 }

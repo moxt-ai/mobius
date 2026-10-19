@@ -4,7 +4,7 @@ import {
     decodeSessionRecordingHistory,
     decodeSessionRecordingHistoryPage,
     decodeSessionRecordingTurnPage,
-    encodeSessionEventEnvelopeV2,
+    encodeSessionEventEnvelope,
     MOBIUS_API_PREFIX,
 } from "@moxt-ai/mobius-protocol";
 import { DurableObjectSqlDatabase, RuntimeRelay } from "@moxt-ai/mobius-relay-core";
@@ -109,7 +109,7 @@ async function recordThroughRelay(projectId: string, sessionId: string, textCont
         try {
             await relay.webSocketMessage(
                 daemon,
-                encodeSessionEventEnvelopeV2({
+                encodeSessionEventEnvelope({
                     kind: "session.event.v2",
                     events: [
                         {
@@ -172,7 +172,7 @@ async function recordSessionEvents(
         try {
             await relay.webSocketMessage(
                 daemon,
-                encodeSessionEventEnvelopeV2({
+                encodeSessionEventEnvelope({
                     kind: "session.event.v2",
                     events: events.map((event) => ({
                         eventId: `event-${generationId}-${event.position}`,

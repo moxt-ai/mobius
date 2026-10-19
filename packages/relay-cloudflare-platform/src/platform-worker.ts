@@ -6,8 +6,8 @@ import {
     decodeSessionCancelCommand,
     decodeSessionConfigureCommand,
     decodeSessionElicitationRespondCommand,
-    decodeSessionEventEnvelopeV2,
-    decodeSessionLiveHistoryV2PageLoad,
+    decodeSessionEventEnvelope,
+    decodeSessionLiveHistoryPageLoad,
     decodeSessionPermissionRespondCommand,
     decodeSessionPreviewHistoryPageLoad,
     decodeSessionPromptCommand,
@@ -711,7 +711,7 @@ export function createPlatformApplication(
                 const result = await context.var.relay.services.runtimePairings.requestProjectScopeControl(
                     new ProjectScope(target.projectId),
                     target.runtimeId,
-                    decodeSessionLiveHistoryV2PageLoad(
+                    decodeSessionLiveHistoryPageLoad(
                         JSON.stringify({
                             cursor: context.req.query("cursor") ?? null,
                             eventLimit: v.parse(
@@ -778,7 +778,7 @@ export function createPlatformApplication(
                         return;
                     }
                     if (kind === "session.event.v2") {
-                        const envelope = decodeSessionEventEnvelopeV2(event.data);
+                        const envelope = decodeSessionEventEnvelope(event.data);
                         const events = envelope.events.filter(
                             (sessionEvent) => sessionEvent.sessionId === context.req.param("sessionId"),
                         );

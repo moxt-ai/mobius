@@ -12,7 +12,7 @@ import {
     SESSION_PERMISSION_RESOLVED_KIND,
     type SessionElicitationRequestedEvent,
     type SessionElicitationResolvedEvent,
-    type SessionEventPayloadV2,
+    type SessionEventPayload,
     type SessionPermissionOption,
     type SessionPermissionRequestedEvent,
     type SessionPermissionResolvedEvent,
@@ -32,7 +32,7 @@ interface SessionInteractionContext {
     readonly commandId: () => string;
     readonly assertNativeSession: (sessionId: string) => void;
     readonly observer: () => AcpSessionObserver;
-    readonly recordSessionEventV2: (event: SessionEventPayloadV2) => Promise<void>;
+    readonly recordSessionEvent: (event: SessionEventPayload) => Promise<void>;
 }
 export class AcpSessionInteractions {
     readonly #pendingPermissions = new Map<string, PendingPermission>();
@@ -43,28 +43,28 @@ export class AcpSessionInteractions {
         this.#context = context;
     }
     readonly #notifyPermissionRequested = async (event: SessionPermissionRequestedEvent): Promise<void> => {
-        await this.#context.recordSessionEventV2({
+        await this.#context.recordSessionEvent({
             payload: { event, kind: "session.permission.requested" },
             type: "lifecycle-metadata",
         });
         await this.#context.observer().onPermission(event);
     };
     readonly #notifyPermissionResolved = async (event: SessionPermissionResolvedEvent): Promise<void> => {
-        await this.#context.recordSessionEventV2({
+        await this.#context.recordSessionEvent({
             payload: { event, kind: "session.permission.resolved" },
             type: "lifecycle-metadata",
         });
         await this.#context.observer().onPermissionResolved(event);
     };
     readonly #notifyElicitationRequested = async (event: SessionElicitationRequestedEvent): Promise<void> => {
-        await this.#context.recordSessionEventV2({
+        await this.#context.recordSessionEvent({
             payload: { event, kind: "session.elicitation.requested" },
             type: "lifecycle-metadata",
         });
         await this.#context.observer().onElicitation(event);
     };
     readonly #notifyElicitationResolved = async (event: SessionElicitationResolvedEvent): Promise<void> => {
-        await this.#context.recordSessionEventV2({
+        await this.#context.recordSessionEvent({
             payload: { event, kind: "session.elicitation.resolved" },
             type: "lifecycle-metadata",
         });

@@ -1,20 +1,20 @@
-import { decodeSessionEventV2, type SessionEventV2 } from "@moxt-ai/mobius-protocol";
+import { decodeSessionEvent, type SessionEvent } from "@moxt-ai/mobius-protocol";
 import { and, asc, eq, gte, lte } from "drizzle-orm";
 import type { NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
 import { z } from "zod";
 import type { LocalSqliteDatabase } from "../infra/local-sqlite-database.ts";
-import { sessionEventV2 } from "../schema/session-event-cache/index.ts";
+import { sessionEvent } from "../schema/session-event-cache/index.ts";
 
 const cachedEventRowSchema = z.object({ eventJson: z.string(), ordinal: z.number().int().positive() });
 
-interface SessionEventCacheV2Batch {
-    readonly events: readonly SessionEventV2[];
+interface SessionEventCacheBatch {
+    readonly events: readonly SessionEvent[];
     readonly firstOrdinal: number;
     readonly sessionGenerationId: string;
     readonly sessionId: string;
 }
 
-export class SessionEventCacheV2Database {
+export class SessionEventCacheDatabase {
     readonly #database: NodeSQLiteDatabase;
     readonly #databaseOrdinalsBySession = new Map<string, Map<string, number>>();
     readonly #ignoredPersistedSessions = new Set<string>();
@@ -25,7 +25,7 @@ export class SessionEventCacheV2Database {
         this.#localDatabase = localDatabase;
         this.#database = localDatabase.orm;
         try {
-            this.#localDatabase.transaction(() => this.#database.delete(sessionEventV2).run());
+            this.#localDatabase.transaction(() => this.#database.delete(sessionEvent).run());
         } catch (error) {
             this.#localDatabase.close();
             throw error;
@@ -36,7 +36,7 @@ export class SessionEventCacheV2Database {
         return this.#isAvailable;
     }
 
-    readonly replace = (sessionId: string, sessionGenerationId: string, event: SessionEventV2): void => {
+    readonly replace = (sessionId: string, sessionGenerationId: string, event: SessionEvent): void => {
         if (!this.#isAvailable) {
             return;
         }
@@ -46,13 +46,13 @@ export class SessionEventCacheV2Database {
         }
         try {
             this.#database
-                .update(sessionEventV2)
+                .update(sessionEvent)
                 .set({ eventJson: JSON.stringify(event) })
                 .where(
                     and(
-                        eq(sessionEventV2.generationId, sessionGenerationId),
-                        eq(sessionEventV2.sessionId, sessionId),
-                        eq(sessionEventV2.ordinal, ordinal),
+                        eq(sessionEvent.generationId, sessionGenerationId),
+                        eq(sessionEvent.sessionId, sessionId),
+                        eq(sessionEvent.ordinal, ordinal),
                     ),
                 )
                 .run();
@@ -61,7 +61,7 @@ export class SessionEventCacheV2Database {
         }
     };
 
-    readonly insert = (batches: readonly SessionEventCacheV2Batch[]): boolean => {
+    readonly insert = (batches: readonly SessionEventCacheBatch[]): boolean => {
         if (!this.#isAvailable) {
             return false;
         }
@@ -80,7 +80,7 @@ export class SessionEventCacheV2Database {
             this.#localDatabase.transaction(() => {
                 for (let offset = 0; offset < values.length; offset += 200) {
                     this.#database
-                        .insert(sessionEventV2)
+                        .insert(sessionEvent)
                         .values(values.slice(offset, offset + 200))
                         .run();
                 }
@@ -104,26 +104,26 @@ export class SessionEventCacheV2Database {
         sessionGenerationId: string,
         startOrdinal: number,
         endOrdinal: number,
-    ): readonly { readonly event: SessionEventV2; readonly ordinal: number }[] => {
+    ): readonly { readonly event: SessionEvent; readonly ordinal: number }[] => {
         if (this.#ignoredPersistedSessions.has(sessionId)) {
             return [];
         }
         return this.#database
-            .select({ eventJson: sessionEventV2.eventJson, ordinal: sessionEventV2.ordinal })
-            .from(sessionEventV2)
+            .select({ eventJson: sessionEvent.eventJson, ordinal: sessionEvent.ordinal })
+            .from(sessionEvent)
             .where(
                 and(
-                    eq(sessionEventV2.generationId, sessionGenerationId),
-                    eq(sessionEventV2.sessionId, sessionId),
-                    gte(sessionEventV2.ordinal, startOrdinal),
-                    lte(sessionEventV2.ordinal, endOrdinal),
+                    eq(sessionEvent.generationId, sessionGenerationId),
+                    eq(sessionEvent.sessionId, sessionId),
+                    gte(sessionEvent.ordinal, startOrdinal),
+                    lte(sessionEvent.ordinal, endOrdinal),
                 ),
             )
-            .orderBy(asc(sessionEventV2.ordinal))
+            .orderBy(asc(sessionEvent.ordinal))
             .all()
             .map((value) => {
                 const row = cachedEventRowSchema.parse(value);
-                return { event: decodeSessionEventV2(JSON.parse(row.eventJson)), ordinal: row.ordinal };
+                return { event: decodeSessionEvent(JSON.parse(row.eventJson)), ordinal: row.ordinal };
             });
     };
 
@@ -135,13 +135,13 @@ export class SessionEventCacheV2Database {
         }
         try {
             this.#database
-                .delete(sessionEventV2)
+                .delete(sessionEvent)
                 .where(
                     sessionGenerationId === undefined
-                        ? eq(sessionEventV2.sessionId, sessionId)
+                        ? eq(sessionEvent.sessionId, sessionId)
                         : and(
-                              eq(sessionEventV2.generationId, sessionGenerationId),
-                              eq(sessionEventV2.sessionId, sessionId),
+                              eq(sessionEvent.generationId, sessionGenerationId),
+                              eq(sessionEvent.sessionId, sessionId),
                           ),
                 )
                 .run();

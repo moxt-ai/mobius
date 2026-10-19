@@ -10,7 +10,7 @@ import { LocalAgentCatalogError } from "../agent-catalog/local-agent.ts";
 import { LocalAuthorizationError } from "../authorization/local-authorization-error.ts";
 import type { DurationMetric } from "../infra/operation-metrics.ts";
 import { PromptArtifactError } from "../prompt-artifact-resolver.ts";
-import type { DaemonSessionEventProjectionV2 } from "../session-event-projection-v2.ts";
+import type { DaemonSessionEventProjection } from "../session-event-projection.ts";
 import type { CommandContext } from "./command/context.ts";
 import { createCommandRegistry } from "./command/registry/index.ts";
 import type { DaemonOperationState } from "./relay/daemon-operation-state.ts";
@@ -32,7 +32,7 @@ export function send(socket: WebSocket, message: DaemonToServiceMessage): void {
 }
 
 export async function settleAbandonedTurn(
-    projection: DaemonSessionEventProjectionV2,
+    projection: DaemonSessionEventProjection,
     operations: DaemonOperationState,
     cancellation: SessionCancelCommand,
 ): Promise<void> {

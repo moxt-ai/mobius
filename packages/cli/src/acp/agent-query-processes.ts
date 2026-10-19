@@ -5,7 +5,7 @@ import { AgentSession } from "./agent-session.ts";
 import { RetainedAgentProcesses } from "./retained-agent-processes.ts";
 import { waitForSharedOperation } from "./runtime-operations.ts";
 import {
-    type AcpNativeEventReplayV2,
+    type AcpNativeEventReplay,
     type AcpPreparedSession,
     type AcpPrepareOptions,
     NullAcpSessionObserver,
@@ -129,18 +129,18 @@ export class AgentQueryProcesses {
     ): Promise<T> =>
         await this.#processesByQuery.use(options.sessionId, async () => await operation(await this.#ensure(options)));
 
-    readonly previewEventsV2 = async (
+    readonly previewEvents = async (
         options: AcpPrepareOptions,
         nativeSessionId: string,
         eventLimit: number,
         cursor: string | null,
-    ): Promise<AcpNativeEventReplayV2> => {
+    ): Promise<AcpNativeEventReplay> => {
         if (cursor !== null) {
             const preview = this.#eventPreviewsBySession.get(options.sessionId);
             if (preview === undefined || preview.nativeSessionId !== nativeSessionId) {
                 throw new Error("The native event cursor is invalid");
             }
-            return preview.store.eventsV2.page(options.sessionId, eventLimit, cursor);
+            return preview.store.events.page(options.sessionId, eventLimit, cursor);
         }
         const store = new MemoryAcpSessionStore();
         const previous = this.#eventPreviewsBySession.get(options.sessionId);
@@ -158,7 +158,7 @@ export class AgentQueryProcesses {
                     ),
                 async (runtime) => {
                     runtime.selectNativeSession(nativeSessionId);
-                    return await runtime.loadHistoryEventsV2(eventLimit, null, options.signal);
+                    return await runtime.loadHistoryEvents(eventLimit, null, options.signal);
                 },
                 async (runtime) => await runtime.closeProcess(),
             );

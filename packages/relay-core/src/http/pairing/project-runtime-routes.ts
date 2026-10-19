@@ -61,7 +61,7 @@ const configureSessionSchema = v.strictObject({
 const renameSessionSchema = v.strictObject({
     title: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(500)),
 });
-const nativeEventsV2Schema = v.strictObject({
+const nativeEventsSchema = v.strictObject({
     ...sessionIdentitySchema.entries,
     cursor: v.nullable(v.string()),
     eventLimit: v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(10_000)),
@@ -374,7 +374,7 @@ export function createProjectRuntimeRoutes() {
             "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/native-events-preview",
             bodyParser<RelayHttpEnvironment>(),
             async (context) => {
-                const body = validated(nativeEventsV2Schema, context.req.valid("json"));
+                const body = validated(nativeEventsSchema, context.req.valid("json"));
                 const command = decodeSessionPreviewHistoryPageLoad(
                     JSON.stringify({
                         ...body,

@@ -85,7 +85,7 @@ describe("acp interactions", () => {
         expect(result.completed).toEqual({ stopReason: "end_turn" });
         expect(result.text).toContain("main");
         expect(
-            session.observer.eventsV2.flatMap(({ event }) =>
+            session.observer.events.flatMap(({ event }) =>
                 event.type === "lifecycle-metadata" ? [event.payload.kind] : [],
             ),
         ).toEqual([
@@ -97,8 +97,8 @@ describe("acp interactions", () => {
             "session.elicitation.resolved",
             "prompt.completed",
         ]);
-        expect(session.observer.eventsV2.map(({ position }) => position)).toEqual(
-            session.observer.eventsV2.map(({ position }) => position).toSorted((left, right) => left - right),
+        expect(session.observer.events.map(({ position }) => position)).toEqual(
+            session.observer.events.map(({ position }) => position).toSorted((left, right) => left - right),
         );
     });
 

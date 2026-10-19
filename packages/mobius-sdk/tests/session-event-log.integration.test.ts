@@ -1,6 +1,6 @@
 import { once } from "node:events";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { ExternalImageContentBlockV2, MobiusSessionExportV2, SessionEventV2 } from "@moxt-ai/mobius-protocol";
+import type { ExternalImageContentBlock, MobiusSessionExport, SessionEvent } from "@moxt-ai/mobius-protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import {
     MobiusClient,
@@ -11,7 +11,7 @@ import {
 
 const recordedAt = "2026-10-07T00:00:00.000Z";
 
-function event(sessionId: string, eventId: string): SessionEventV2 {
+function event(sessionId: string, eventId: string): SessionEvent {
     return {
         eventId,
         payload: {
@@ -78,7 +78,7 @@ describe("Session Event Log V2 SDK", () => {
 
     it("Given a V2 export and immutable fork boundary, When a consumer uses the explicit SDK APIs, Then raw pages and copy requests cross the production HTTP boundary unchanged", async () => {
         const sourceEvent = event("source-session", "source-event-1");
-        const exported: MobiusSessionExportV2 = {
+        const exported: MobiusSessionExport = {
             formatVersion: "2",
             session: {
                 binding: { bindingId: "binding-1", runtimeId: "runtime-1" },
@@ -88,7 +88,7 @@ describe("Session Event Log V2 SDK", () => {
             },
         };
         const received: Array<{ readonly method: string; readonly path: string; readonly body: unknown }> = [];
-        const externalImage: ExternalImageContentBlockV2 = {
+        const externalImage: ExternalImageContentBlock = {
             byteLength: 3,
             imageKey: "a".repeat(64),
             mimeType: "image/png",
@@ -153,7 +153,7 @@ describe("Session Event Log V2 SDK", () => {
 
         try {
             expect(
-                await client.events.listV2("source-session", new MobiusPageRequest(500, ""), signal, {
+                await client.events.list("source-session", new MobiusPageRequest(500, ""), signal, {
                     omit: ["agent-reasoning"],
                 }),
             ).toEqual({
@@ -164,16 +164,16 @@ describe("Session Event Log V2 SDK", () => {
                 truncated: false,
                 version: 2,
             });
-            expect(await client.sessions.exportV2("source-session", signal)).toEqual(exported);
+            expect(await client.sessions.export("source-session", signal)).toEqual(exported);
             expect(await client.sessions.readExternalContent("source-session", externalImage, signal)).toMatchObject({
                 bytes: Uint8Array.of(1, 2, 3),
                 mediaType: "image/png",
                 name: "image",
             });
-            expect((await client.sessions.importV2(exported, binding, signal)).sessionId).toBe("imported-session");
+            expect((await client.sessions.import(exported, binding, signal)).sessionId).toBe("imported-session");
             expect(
                 (
-                    await client.sessions.forkRecordedV2(
+                    await client.sessions.forkRecorded(
                         "source-session",
                         { targetBinding: binding, throughEventId: sourceEvent.eventId },
                         signal,

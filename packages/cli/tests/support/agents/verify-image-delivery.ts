@@ -1,19 +1,19 @@
 import {
     decodeFileChunkEvent,
     decodeMessageKind,
-    decodeSessionEventEnvelopeV2,
-    decodeSessionLiveHistoryV2PageLoaded,
+    decodeSessionEventEnvelope,
+    decodeSessionLiveHistoryPageLoaded,
     encodeFileReadCommand,
-    encodeSessionLiveHistoryV2PageLoad,
+    encodeSessionLiveHistoryPageLoad,
     encodeSessionPermissionRespondCommand,
     encodeSessionPromptCommand,
-    type SessionEventV2,
+    type SessionEvent,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { expect } from "vitest";
 import type { RealDaemonPeer } from "./real-daemon.ts";
 
-function imageReferences(events: readonly SessionEventV2[]): readonly string[] {
+function imageReferences(events: readonly SessionEvent[]): readonly string[] {
     return events.flatMap((event) => {
         if (
             event.type !== "acp" ||
@@ -66,8 +66,8 @@ export async function verifyImageDelivery(
                 targetCommandId: "",
             }),
         );
-    const finish = async (): Promise<readonly SessionEventV2[]> => {
-        const events: SessionEventV2[] = [];
+    const finish = async (): Promise<readonly SessionEvent[]> => {
+        const events: SessionEvent[] = [];
         for (;;) {
             const message = await peer.nextMessage();
             expect(message).not.toContain(encodedPrefix);
@@ -78,7 +78,7 @@ export async function verifyImageDelivery(
             if (kind !== "session.event.v2") {
                 continue;
             }
-            const batch = decodeSessionEventEnvelopeV2(message).events;
+            const batch = decodeSessionEventEnvelope(message).events;
             events.push(...batch);
             for (const event of batch) {
                 if (
@@ -113,7 +113,7 @@ export async function verifyImageDelivery(
     sendPrompt("image-turn", input.prompt);
     expect(imageReferences(await finish())).toContain(input.reference);
     peer.send(
-        encodeSessionLiveHistoryV2PageLoad({
+        encodeSessionLiveHistoryPageLoad({
             cursor: null,
             eventLimit: 50,
             kind: "session.live-history.v2.page.load",
@@ -129,7 +129,7 @@ export async function verifyImageDelivery(
             throw new Error(message);
         }
         if (kind === "session.live-history.v2.page.loaded") {
-            expect(imageReferences(decodeSessionLiveHistoryV2PageLoaded(message).events.events.events)).toContain(
+            expect(imageReferences(decodeSessionLiveHistoryPageLoaded(message).events.events.events)).toContain(
                 input.reference,
             );
             break;

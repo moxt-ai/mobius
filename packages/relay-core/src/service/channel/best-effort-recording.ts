@@ -1,8 +1,8 @@
 import {
-    SESSION_EVENT_V2_BATCH_MAX_SIZE,
-    SESSION_EVENT_V2_KIND,
-    type SessionEventEnvelopeV2,
-    type SessionLiveEventV2,
+    SESSION_EVENT_BATCH_MAX_SIZE,
+    SESSION_EVENT_KIND,
+    type SessionEventEnvelope,
+    type SessionLiveEvent,
 } from "@moxt-ai/mobius-protocol";
 import type { SessionRecording, SessionRecordingTarget } from "../../infra/session-recording.ts";
 import { RuntimeMessageScheduler } from "./runtime-message-scheduler.ts";
@@ -12,13 +12,13 @@ const DEADLINE_MILLISECONDS = 10_000;
 
 interface SessionLane {
     readonly target: SessionRecordingTarget;
-    readonly events: SessionLiveEventV2[];
+    readonly events: SessionLiveEvent[];
     /** Events were lost since the last delivery; the next delivered event carries the omission marker. */
     gap: boolean;
     draining: boolean;
 }
 
-function eventBytes(event: SessionLiveEventV2): number {
+function eventBytes(event: SessionLiveEvent): number {
     return new TextEncoder().encode(JSON.stringify(event)).byteLength;
 }
 
@@ -42,7 +42,7 @@ export class BestEffortRecording {
         this.#waitUntil = waitUntil;
     }
 
-    readonly publish = (target: SessionRecordingTarget, envelope: SessionEventEnvelopeV2): void => {
+    readonly publish = (target: SessionRecordingTarget, envelope: SessionEventEnvelope): void => {
         const laneKey = JSON.stringify([target.projectId, target.runtimeId, target.sessionId]);
         const lane = this.#lanes.get(laneKey) ?? { target, events: [], gap: false, draining: false };
         this.#lanes.set(laneKey, lane);
@@ -85,7 +85,7 @@ export class BestEffortRecording {
 
     async #drain(lane: SessionLane): Promise<void> {
         while (lane.events.length > 0) {
-            const batch = lane.events.splice(0, SESSION_EVENT_V2_BATCH_MAX_SIZE);
+            const batch = lane.events.splice(0, SESSION_EVENT_BATCH_MAX_SIZE);
             const batchBytes = batch.reduce((total, event) => total + eventBytes(event), 0);
             const [first, ...rest] = lane.gap ? batch : [];
             const events =
@@ -104,7 +104,7 @@ export class BestEffortRecording {
         lane.draining = false;
     }
 
-    async #deliver(target: SessionRecordingTarget, events: readonly SessionLiveEventV2[]): Promise<boolean> {
+    async #deliver(target: SessionRecordingTarget, events: readonly SessionLiveEvent[]): Promise<boolean> {
         const controller = new AbortController();
         const timer = setTimeout(
             () => controller.abort(new DOMException("Recording deadline expired", "TimeoutError")),
@@ -113,7 +113,7 @@ export class BestEffortRecording {
         try {
             const result = await this.#recording.deliver(
                 target,
-                { events, kind: SESSION_EVENT_V2_KIND },
+                { events, kind: SESSION_EVENT_KIND },
                 controller.signal,
             );
             if (result.kind === "failed") {

@@ -9,7 +9,7 @@ import type { AgentRuntimeManager } from "../../acp/agent-runtime-manager.ts";
 import type { WorkspaceDirectoryService } from "../../authorization/workspace-directory.ts";
 import type { ExternalContentStore } from "../../external-content/local-external-content-store.ts";
 import type { NativeSessionService } from "../../native-sessions/service.ts";
-import type { DaemonSessionEventProjectionV2 } from "../../session-event-projection-v2.ts";
+import type { DaemonSessionEventProjection } from "../../session-event-projection.ts";
 import { createDaemonCommandDispatcher, send } from "../command-dispatcher.ts";
 import type { DaemonConfig } from "../config.ts";
 import type { DaemonTurnRegistry } from "../turn-registry.ts";
@@ -42,7 +42,7 @@ export interface RelayConnectionOptions {
     readonly nativeSessions: NativeSessionService;
     readonly operations: DaemonOperationState;
     readonly publisher: DaemonSessionEventPublisher;
-    readonly eventProjectionV2: DaemonSessionEventProjectionV2;
+    readonly eventProjection: DaemonSessionEventProjection;
     readonly externalContent: ExternalContentStore;
     readonly activeTurns: DaemonTurnRegistry;
     readonly connectionEpoch: number;
@@ -59,7 +59,7 @@ export async function runRelayConnection({
     nativeSessions,
     operations,
     publisher,
-    eventProjectionV2,
+    eventProjection,
     externalContent,
     activeTurns,
     connectionEpoch,
@@ -79,7 +79,7 @@ export async function runRelayConnection({
         sessions,
         nativeSessions,
         operations,
-        eventProjectionV2,
+        eventProjection,
         externalContent,
         activeTurns,
         diagnostics,

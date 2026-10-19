@@ -1,38 +1,38 @@
 import {
-    type decodeSessionLiveHistoryV2PageLoad,
+    type decodeSessionLiveHistoryPageLoad,
     type decodeSessionPreviewHistoryPageLoad,
-    type NativeSessionEventsV2,
-    type QueuedPromptRequestEventLogV2,
-    SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND,
-    SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND,
+    type NativeSessionEvents,
+    type QueuedPromptRequestEventLog,
+    SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
+    SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
     SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND,
     SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND,
-    type SessionEventV2,
+    type SessionEvent,
 } from "@moxt-ai/mobius-protocol";
 import type { WebSocket } from "undici";
 import { AcpExecutionError, type AgentRuntimeManager } from "../../../acp/agent-runtime-manager.ts";
-import type { AcpSessionEventPageV2 } from "../../../acp/session-event-store-v2.ts";
+import type { AcpSessionEventPage } from "../../../acp/session-event-store.ts";
 import { resolveSessionDirectories } from "../../../authorization/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "../../../authorization/workspace-directory.ts";
 import type { NativeSessionService } from "../../../native-sessions/service.ts";
-import type { DaemonSessionEventProjectionV2 } from "../../../session-event-projection-v2.ts";
+import type { DaemonSessionEventProjection } from "../../../session-event-projection.ts";
 import { operationErrorCode, reportOperationFailure, send } from "../../command-dispatcher.ts";
 import type { DaemonConfig } from "../../config.ts";
 import type { RelayConnectionDiagnostics } from "../../relay/diagnostics.ts";
 import type { DaemonCommand } from "../definition.ts";
 import { resolveCatalogAgent } from "./session.ts";
 
-function isAgentReasoning(event: SessionEventV2 | undefined): boolean {
+function isAgentReasoning(event: SessionEvent | undefined): boolean {
     return event?.type === "acp" && event.payload.sessionUpdate === "agent_thought_chunk";
 }
 
-interface OrderedHistoryEventV2 {
+interface OrderedHistoryEvent {
     readonly cursor: string | null;
-    readonly event: SessionEventV2;
+    readonly event: SessionEvent;
 }
 
-function omitAgentReasoning(events: readonly OrderedHistoryEventV2[]): readonly OrderedHistoryEventV2[] {
-    const retained: OrderedHistoryEventV2[] = [];
+function omitAgentReasoning(events: readonly OrderedHistoryEvent[]): readonly OrderedHistoryEvent[] {
+    const retained: OrderedHistoryEvent[] = [];
     let previousReasoningMessageId: string | null | undefined;
     for (const positioned of events) {
         const { event } = positioned;
@@ -62,11 +62,11 @@ async function loadHistoryPage(
     eventLimit: number,
     initialCursor: string | null,
     omitReasoning: boolean,
-    queuedPromptRequests: readonly QueuedPromptRequestEventLogV2[],
-    load: (eventLimit: number, cursor: string | null) => Promise<AcpSessionEventPageV2>,
-): Promise<NativeSessionEventsV2> {
+    queuedPromptRequests: readonly QueuedPromptRequestEventLog[],
+    load: (eventLimit: number, cursor: string | null) => Promise<AcpSessionEventPage>,
+): Promise<NativeSessionEvents> {
     let cursor = initialCursor;
-    let loaded: readonly OrderedHistoryEventV2[] = [];
+    let loaded: readonly OrderedHistoryEvent[] = [];
     let sessionGenerationId: string | null = null;
     let sourceNextCursor: string | null = null;
     do {
@@ -119,15 +119,15 @@ async function loadHistoryPage(
     };
 }
 
-export async function executeSessionLiveHistoryV2PageLoad(
+export async function executeSessionLiveHistoryPageLoad(
     socket: WebSocket,
-    command: ReturnType<typeof decodeSessionLiveHistoryV2PageLoad>,
+    command: ReturnType<typeof decodeSessionLiveHistoryPageLoad>,
     config: DaemonConfig,
     directories: WorkspaceDirectoryService,
     diagnostics: RelayConnectionDiagnostics,
     sessions: AgentRuntimeManager,
     nativeSessions: NativeSessionService,
-    eventProjectionV2: DaemonSessionEventProjectionV2,
+    eventProjection: DaemonSessionEventProjection,
     signal: AbortSignal,
 ): Promise<void> {
     let agentId: string | undefined;
@@ -151,19 +151,19 @@ export async function executeSessionLiveHistoryV2PageLoad(
             sessionId: command.sessionId,
             signal,
         };
-        const recovery = eventProjectionV2.promptRequestRecovery(command.sessionId);
+        const recovery = eventProjection.promptRequestRecovery(command.sessionId);
         const events = await loadHistoryPage(
             command.sessionId,
             command.eventLimit,
             command.cursor,
             command.omit?.includes("agent-reasoning") === true,
             recovery.queuedPromptRequests,
-            async (eventLimit, cursor) => await sessions.loadSessionEventsV2(loadOptions, eventLimit, cursor),
+            async (eventLimit, cursor) => await sessions.loadSessionEvents(loadOptions, eventLimit, cursor),
         );
         signal.throwIfAborted();
         send(socket, {
             events,
-            kind: SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND,
+            kind: SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
             requestId: command.requestId,
             sessionId: command.sessionId,
         });
@@ -215,7 +215,7 @@ export async function executeSessionPreviewHistoryPageLoad(
             command.omit?.includes("agent-reasoning") === true,
             [],
             async (eventLimit, cursor) =>
-                await sessions.previewNativeSessionEventsV2(loadOptions, command.sessionId, eventLimit, cursor),
+                await sessions.previewNativeSessionEvents(loadOptions, command.sessionId, eventLimit, cursor),
         );
         signal.throwIfAborted();
         send(socket, {
@@ -242,12 +242,12 @@ export async function executeSessionPreviewHistoryPageLoad(
 }
 
 export const liveHistoryPageLoadCommand: DaemonCommand = {
-    kind: SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND,
+    kind: SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
     handle: (context, message): void => {
-        if (message.kind !== SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND) {
+        if (message.kind !== SESSION_LIVE_HISTORY_PAGE_LOAD_KIND) {
             throw new Error("Command kind mismatch");
         }
-        void executeSessionLiveHistoryV2PageLoad(
+        void executeSessionLiveHistoryPageLoad(
             context.socket,
             message,
             context.config,
@@ -255,7 +255,7 @@ export const liveHistoryPageLoadCommand: DaemonCommand = {
             context.diagnostics,
             context.sessions,
             context.nativeSessions,
-            context.eventProjectionV2,
+            context.eventProjection,
             context.signal,
         );
     },

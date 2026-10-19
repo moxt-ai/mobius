@@ -61,7 +61,7 @@ async function run(
 }
 
 const recordedContextUsage = (observer: RecordingObserver) =>
-    observer.eventsV2.flatMap(({ event }) =>
+    observer.events.flatMap(({ event }) =>
         event.type === "acp" && event.payload.sessionUpdate === "usage_update" ? [event.payload] : [],
     );
 

@@ -5,14 +5,14 @@ import {
     decodeFileChunkEvent,
     decodeMessageKind,
     decodeNativeSessionResult,
-    decodeSessionEventEnvelopeV2,
-    decodeSessionLiveHistoryV2PageLoaded,
+    decodeSessionEventEnvelope,
+    decodeSessionLiveHistoryPageLoaded,
     encodeFileReadCommand,
     encodeNativeSessionCommand,
-    encodeSessionLiveHistoryV2PageLoad,
+    encodeSessionLiveHistoryPageLoad,
     encodeSessionPromptCommand,
     type NativeSessionResult,
-    type SessionEventV2,
+    type SessionEvent,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { expect, test } from "vitest";
@@ -26,7 +26,7 @@ const image = Buffer.from(
     "base64",
 );
 
-function imageKeys(events: readonly SessionEventV2[]): readonly string[] {
+function imageKeys(events: readonly SessionEvent[]): readonly string[] {
     return events.flatMap((event) => {
         if (
             event.type !== "acp" ||
@@ -40,7 +40,7 @@ function imageKeys(events: readonly SessionEventV2[]): readonly string[] {
     });
 }
 
-function openedImageKeys(events: readonly SessionEventV2[]): readonly string[] {
+function openedImageKeys(events: readonly SessionEvent[]): readonly string[] {
     return events.flatMap((event) => {
         if (event.type !== "acp" || event.payload.sessionUpdate !== "tool_call") {
             return [];
@@ -214,8 +214,8 @@ test("Given saved Codex image generation, When the real daemon reopens it throug
                     targetCommandId: "",
                 }),
             );
-        const finish = async (): Promise<readonly SessionEventV2[]> => {
-            const events: SessionEventV2[] = [];
+        const finish = async (): Promise<readonly SessionEvent[]> => {
+            const events: SessionEvent[] = [];
             for (;;) {
                 const message = await peer.nextMessage();
                 const kind = decodeMessageKind(message);
@@ -224,7 +224,7 @@ test("Given saved Codex image generation, When the real daemon reopens it throug
                     throw new Error(message);
                 }
                 if (kind === "session.event.v2") {
-                    for (const event of decodeSessionEventEnvelopeV2(message).events) {
+                    for (const event of decodeSessionEventEnvelope(message).events) {
                         events.push(event);
                         if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.failed") {
                             throw new Error(JSON.stringify(event));
@@ -237,7 +237,7 @@ test("Given saved Codex image generation, When the real daemon reopens it throug
             }
         };
         peer.send(
-            encodeSessionLiveHistoryV2PageLoad({
+            encodeSessionLiveHistoryPageLoad({
                 cursor: null,
                 eventLimit: 50,
                 kind: "session.live-history.v2.page.load",
@@ -254,7 +254,7 @@ test("Given saved Codex image generation, When the real daemon reopens it throug
             if (kind === "session.live-history.v2.page.loaded") {
                 expect(message).not.toContain(image.toString("base64"));
                 expect(message.length).toBeLessThan(50_000);
-                const events = decodeSessionLiveHistoryV2PageLoaded(message).events.events.events;
+                const events = decodeSessionLiveHistoryPageLoaded(message).events.events.events;
                 expect(imageKeys(events)).toContain(key);
                 expect(openedImageKeys(events)).toContain(key);
                 break;

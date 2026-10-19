@@ -16,7 +16,7 @@ import {
     decodeSessionConfigureCommand,
     decodeSessionElicitationRespondCommand,
     decodeSessionListCommand,
-    decodeSessionLiveHistoryV2PageLoad,
+    decodeSessionLiveHistoryPageLoad,
     decodeSessionPermissionRespondCommand,
     decodeSessionPrepareCommand,
     decodeSessionPreviewHistoryPageLoad,
@@ -50,12 +50,12 @@ import {
     SESSION_CONFIG_UPDATED_KIND,
     SESSION_CONFIGURE_KIND,
     SESSION_ELICITATION_RESPOND_KIND,
-    SESSION_EVENT_V2_KIND,
+    SESSION_EVENT_KIND,
     SESSION_INFO_UPDATED_KIND,
     SESSION_LIST_KIND,
     SESSION_LISTED_KIND,
-    SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND,
-    SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND,
+    SESSION_LIVE_HISTORY_PAGE_LOAD_KIND,
+    SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
     SESSION_OPERATION_FAILED_KIND,
     SESSION_PERMISSION_RESPOND_KIND,
     SESSION_PREPARE_KIND,
@@ -167,7 +167,7 @@ export class ChannelActor {
     ): Promise<void> => {
         try {
             const kind = message.kind;
-            if (kind === SESSION_EVENT_V2_KIND) {
+            if (kind === SESSION_EVENT_KIND) {
                 this.#liveEvents.receive(message);
                 return;
             }
@@ -194,7 +194,7 @@ export class ChannelActor {
                 this.returnAgentSettingsDiscoveryFailure(message.requestId, encodeDaemonToServiceMessage(message));
                 return;
             }
-            if (kind === SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND) {
+            if (kind === SESSION_LIVE_HISTORY_PAGE_LOADED_KIND) {
                 this.returnHistoryPage("live", message);
                 return;
             }
@@ -259,11 +259,11 @@ export class ChannelActor {
                 this.forwardControl(socket, command, request.requestId, request.sessionId, request);
                 return;
             }
-            if (kind === SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND) {
+            if (kind === SESSION_LIVE_HISTORY_PAGE_LOAD_KIND) {
                 if (!socket.permitsLiveSessionHistory()) {
                     throw new ProtocolMessageError("Live Session history requires an internal connection");
                 }
-                this.forwardHistoryPage(socket, "live", decodeSessionLiveHistoryV2PageLoad(message));
+                this.forwardHistoryPage(socket, "live", decodeSessionLiveHistoryPageLoad(message));
                 return;
             }
             if (kind === SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND) {
@@ -534,7 +534,7 @@ export class ChannelActor {
             DaemonToServiceMessage,
             {
                 readonly kind:
-                    | typeof SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND
+                    | typeof SESSION_LIVE_HISTORY_PAGE_LOADED_KIND
                     | typeof SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND;
             }
         >,
@@ -553,7 +553,7 @@ export class ChannelActor {
             ServiceToDaemonMessage,
             {
                 readonly kind:
-                    | typeof SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND
+                    | typeof SESSION_LIVE_HISTORY_PAGE_LOAD_KIND
                     | typeof SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND;
             }
         >,

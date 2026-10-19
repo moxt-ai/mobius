@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import {
     decodeMessageKind,
-    decodeSessionEventV2,
-    decodeSessionLiveHistoryV2PageLoaded,
+    decodeSessionEvent,
+    decodeSessionLiveHistoryPageLoaded,
     decodeSessionReadyEvent,
-    encodeSessionLiveHistoryV2PageLoad,
+    encodeSessionLiveHistoryPageLoad,
     encodeSessionPrepareCommand,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
@@ -41,7 +41,7 @@ async function journey(peer: RealDaemonPeer, agentId: string, reply: string): Pr
         );
         let output = "";
         for (;;) {
-            const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
             if (
                 event.type === "acp" &&
                 event.payload.sessionUpdate === "agent_message_chunk" &&
@@ -83,7 +83,7 @@ async function journey(peer: RealDaemonPeer, agentId: string, reply: string): Pr
     }
     const historyId = randomUUID();
     peer.send(
-        encodeSessionLiveHistoryV2PageLoad({
+        encodeSessionLiveHistoryPageLoad({
             kind: "session.live-history.v2.page.load",
             requestId: historyId,
             sessionId,
@@ -100,7 +100,7 @@ async function journey(peer: RealDaemonPeer, agentId: string, reply: string): Pr
         if (kind !== "session.live-history.v2.page.loaded") {
             continue;
         }
-        const history = decodeSessionLiveHistoryV2PageLoaded(message);
+        const history = decodeSessionLiveHistoryPageLoaded(message);
         if (history.requestId !== historyId) {
             continue;
         }

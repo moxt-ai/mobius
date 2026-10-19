@@ -1,14 +1,14 @@
 import { randomUUID } from "node:crypto";
 import {
     decodeMessageKind,
-    decodeSessionEventEnvelopeV2,
-    decodeSessionEventV2,
-    decodeSessionLiveHistoryV2PageLoaded,
+    decodeSessionEvent,
+    decodeSessionEventEnvelope,
+    decodeSessionLiveHistoryPageLoaded,
     encodeSessionCancelCommand,
-    encodeSessionLiveHistoryV2PageLoad,
+    encodeSessionLiveHistoryPageLoad,
     encodeSessionPromptCommand,
     encodeSessionPromptDispositionCommand,
-    SESSION_EVENT_V2_KIND,
+    SESSION_EVENT_KIND,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { expect, test } from "vitest";
@@ -68,8 +68,8 @@ test("Given real Codex has accepted a steering prompt, When V2 recovery reloads 
             for (;;) {
                 const message = await peer.nextMessage();
                 if (
-                    decodeMessageKind(message) === SESSION_EVENT_V2_KIND &&
-                    decodeSessionEventEnvelopeV2(message).events.some(
+                    decodeMessageKind(message) === SESSION_EVENT_KIND &&
+                    decodeSessionEventEnvelope(message).events.some(
                         (event) =>
                             event.type === "lifecycle-metadata" && event.payload.kind === "session.queue.changed",
                     )
@@ -91,7 +91,7 @@ test("Given real Codex has accepted a steering prompt, When V2 recovery reloads 
                     continue;
                 }
                 if (
-                    decodeSessionEventEnvelopeV2(message).events.some(
+                    decodeSessionEventEnvelope(message).events.some(
                         (event) =>
                             event.type === "lifecycle-metadata" &&
                             event.payload.kind === "prompt.requested" &&
@@ -105,7 +105,7 @@ test("Given real Codex has accepted a steering prompt, When V2 recovery reloads 
             }
             const requestId = randomUUID();
             peer.send(
-                encodeSessionLiveHistoryV2PageLoad({
+                encodeSessionLiveHistoryPageLoad({
                     cursor: null,
                     eventLimit: 50,
                     kind: "session.live-history.v2.page.load",
@@ -118,7 +118,7 @@ test("Given real Codex has accepted a steering prompt, When V2 recovery reloads 
                 if (decodeMessageKind(message) !== "session.live-history.v2.page.loaded") {
                     continue;
                 }
-                const recovered = decodeSessionLiveHistoryV2PageLoaded(message);
+                const recovered = decodeSessionLiveHistoryPageLoaded(message);
                 if (recovered.requestId !== requestId) {
                     continue;
                 }
@@ -193,8 +193,8 @@ test("Given real Codex advances between repeated prompts, When V2 recovery pagin
             for (;;) {
                 const message = await peer.nextMessage();
                 if (
-                    decodeMessageKind(message) === SESSION_EVENT_V2_KIND &&
-                    decodeSessionEventEnvelopeV2(message).events.some(
+                    decodeMessageKind(message) === SESSION_EVENT_KIND &&
+                    decodeSessionEventEnvelope(message).events.some(
                         (event) =>
                             event.type === "lifecycle-metadata" && event.payload.kind === "session.queue.changed",
                     )
@@ -207,7 +207,7 @@ test("Given real Codex advances between repeated prompts, When V2 recovery pagin
             await queuedEntered.promise;
             const requestId = randomUUID();
             peer.send(
-                encodeSessionLiveHistoryV2PageLoad({
+                encodeSessionLiveHistoryPageLoad({
                     cursor: null,
                     eventLimit: 1,
                     kind: "session.live-history.v2.page.load",
@@ -220,7 +220,7 @@ test("Given real Codex advances between repeated prompts, When V2 recovery pagin
                 if (decodeMessageKind(message) !== "session.live-history.v2.page.loaded") {
                     continue;
                 }
-                const result = decodeSessionLiveHistoryV2PageLoaded(message);
+                const result = decodeSessionLiveHistoryPageLoaded(message);
                 if (result.requestId !== requestId) {
                     continue;
                 }
@@ -231,7 +231,7 @@ test("Given real Codex advances between repeated prompts, When V2 recovery pagin
                 while (cursor !== null) {
                     const olderRequestId = randomUUID();
                     peer.send(
-                        encodeSessionLiveHistoryV2PageLoad({
+                        encodeSessionLiveHistoryPageLoad({
                             cursor,
                             eventLimit: 1,
                             kind: "session.live-history.v2.page.load",
@@ -244,7 +244,7 @@ test("Given real Codex advances between repeated prompts, When V2 recovery pagin
                         if (decodeMessageKind(olderMessage) !== "session.live-history.v2.page.loaded") {
                             continue;
                         }
-                        const older = decodeSessionLiveHistoryV2PageLoaded(olderMessage);
+                        const older = decodeSessionLiveHistoryPageLoaded(olderMessage);
                         if (older.requestId !== olderRequestId) {
                             continue;
                         }
@@ -299,7 +299,7 @@ test("Given real Codex advances between repeated prompts, When V2 recovery pagin
             }
             releaseQueued.resolve();
             for (;;) {
-                const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+                const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
                 if (
                     event.type === "lifecycle-metadata" &&
                     event.payload.kind === "prompt.completed" &&
@@ -358,11 +358,11 @@ test("Given real Codex with an active turn, When three follow-ups are accepted a
                 sendPrompt(id, true);
                 for (;;) {
                     const message = await peer.nextMessage();
-                    if (decodeMessageKind(message) !== SESSION_EVENT_V2_KIND) {
+                    if (decodeMessageKind(message) !== SESSION_EVENT_KIND) {
                         continue;
                     }
                     if (
-                        decodeSessionEventEnvelopeV2(message).events.some(
+                        decodeSessionEventEnvelope(message).events.some(
                             (event) =>
                                 event.type === "lifecycle-metadata" && event.payload.kind === "session.queue.changed",
                         )
@@ -372,7 +372,7 @@ test("Given real Codex with an active turn, When three follow-ups are accepted a
                 }
             }
             peer.send(
-                encodeSessionLiveHistoryV2PageLoad({
+                encodeSessionLiveHistoryPageLoad({
                     cursor: null,
                     eventLimit: 25,
                     kind: "session.live-history.v2.page.load",
@@ -385,7 +385,7 @@ test("Given real Codex with an active turn, When three follow-ups are accepted a
                 if (decodeMessageKind(message) !== "session.live-history.v2.page.loaded") {
                     continue;
                 }
-                const recovered = decodeSessionLiveHistoryV2PageLoaded(message).events;
+                const recovered = decodeSessionLiveHistoryPageLoaded(message).events;
                 expect(recovered.queuedPromptRequests).toEqual([
                     expect.objectContaining({ commandId: first }),
                     expect.objectContaining({ commandId: cancelled }),
@@ -397,7 +397,7 @@ test("Given real Codex with an active turn, When three follow-ups are accepted a
                 encodeSessionCancelCommand({ kind: "session.cancel", sessionId: peer.sessionId, commandId: cancelled }),
             );
             for (;;) {
-                const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+                const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
                 if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
                     expect(event.payload.commandId).toBe(cancelled);
                     expect(event.payload.stopReason).toBe("cancelled");
@@ -413,7 +413,7 @@ test("Given real Codex with an active turn, When three follow-ups are accepted a
                 if (decodeMessageKind(message) !== "session.event.v2") {
                     continue;
                 }
-                for (const event of decodeSessionEventEnvelopeV2(message).events) {
+                for (const event of decodeSessionEventEnvelope(message).events) {
                     if (
                         event.type === "lifecycle-metadata" &&
                         (event.payload.kind === "prompt.failed" || event.payload.kind === "prompt.failed-before-start")
@@ -449,7 +449,7 @@ test("Given real Codex with an active turn, When three follow-ups are accepted a
                 if (decodeMessageKind(message) !== "session.event.v2") {
                     continue;
                 }
-                const failure = decodeSessionEventEnvelopeV2(message).events.find(
+                const failure = decodeSessionEventEnvelope(message).events.find(
                     (event) =>
                         event.type === "lifecycle-metadata" &&
                         (event.payload.kind === "prompt.failed" || event.payload.kind === "prompt.failed-before-start"),
@@ -473,7 +473,7 @@ test("Given real Codex with an active turn, When three follow-ups are accepted a
                 if (decodeMessageKind(message) !== "session.event.v2") {
                     continue;
                 }
-                const events = decodeSessionEventEnvelopeV2(message).events;
+                const events = decodeSessionEventEnvelope(message).events;
                 const failure = events.find(
                     (event) =>
                         event.type === "lifecycle-metadata" &&

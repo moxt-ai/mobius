@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
     decodeMessageKind,
-    decodeSessionEventV2,
+    decodeSessionEvent,
     decodeSessionReadyEvent,
     encodeSessionPrepareCommand,
     encodeSessionPromptCommand,
@@ -49,7 +49,7 @@ test("Given an existing real Codex conversation, When the process exits or its t
                     );
                     let text = "";
                     for (;;) {
-                        const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+                        const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
                         if (
                             event.type === "lifecycle-metadata" &&
                             "commandId" in event.payload &&
@@ -143,7 +143,7 @@ test("Given a real Codex conversation in Plan mode, When its process recovers be
                         }),
                     );
                     for (;;) {
-                        const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+                        const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
                         if (
                             event.type === "lifecycle-metadata" &&
                             "commandId" in event.payload &&

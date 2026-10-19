@@ -11,13 +11,13 @@ import type { DaemonCommand } from "../definition.ts";
 
 export const sessionCancelCommand: DaemonCommand = {
     kind: SESSION_CANCEL_KIND,
-    handle: ({ activeTurns, eventProjectionV2, operations, sessions }, message): void => {
+    handle: ({ activeTurns, eventProjection, operations, sessions }, message): void => {
         if (message.kind !== SESSION_CANCEL_KIND) {
             throw new Error("Command kind mismatch");
         }
         const turn = activeTurns.get(message.commandId);
         if (turn === undefined || !turn.matches(message)) {
-            void settleAbandonedTurn(eventProjectionV2, operations, message).catch((error: unknown) => {
+            void settleAbandonedTurn(eventProjection, operations, message).catch((error: unknown) => {
                 console.error("Could not settle abandoned turn", error);
             });
             return;

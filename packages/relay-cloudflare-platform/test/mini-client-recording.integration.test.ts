@@ -3,7 +3,7 @@ import { env } from "cloudflare:workers";
 import {
     decodeSessionRecordingDirectory,
     decodeSessionRecordingHistory,
-    encodeSessionEventEnvelopeV2,
+    encodeSessionEventEnvelope,
     MOBIUS_API_PREFIX,
 } from "@moxt-ai/mobius-protocol";
 import { DurableObjectSqlDatabase, RuntimeRelay } from "@moxt-ai/mobius-relay-core";
@@ -65,7 +65,7 @@ function text(value: Record<string, unknown>, key: string): string {
 }
 
 function turnMessage(sessionId: string): string {
-    return encodeSessionEventEnvelopeV2({
+    return encodeSessionEventEnvelope({
         kind: "session.event.v2",
         events: [
             {
@@ -281,7 +281,7 @@ describe.sequential("Mini-client Recording integration", () => {
         const sessionId = "streamed-recording-session";
         const chunkCount = 400;
         const messages = Array.from({ length: chunkCount }, (_, index) =>
-            encodeSessionEventEnvelopeV2({
+            encodeSessionEventEnvelope({
                 kind: "session.event.v2",
                 events: [
                     {

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { decodeSessionEventV2, encodeSessionPromptCommand, SessionPromptDisposition } from "@moxt-ai/mobius-protocol";
+import { decodeSessionEvent, encodeSessionPromptCommand, SessionPromptDisposition } from "@moxt-ai/mobius-protocol";
 import { expect, test } from "vitest";
 import { CodexAgentSpecification } from "../../src/agent-catalog/agents/codex-agent.ts";
 import { CodexFixture } from "../support/agents/codex.ts";
@@ -30,7 +30,7 @@ test("Given a real Codex conversation, When the user sends slash-prefixed text, 
             );
             let text = "";
             for (;;) {
-                const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+                const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
                 if (
                     event.type === "lifecycle-metadata" &&
                     "commandId" in event.payload &&

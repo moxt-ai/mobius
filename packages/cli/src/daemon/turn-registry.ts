@@ -1,7 +1,7 @@
 import {
     SESSION_ELICITATION_RESOLVED_KIND,
     SESSION_PERMISSION_RESOLVED_KIND,
-    type SessionLiveEventV2,
+    type SessionLiveEvent,
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -74,7 +74,7 @@ export class DaemonTurnRegistry {
         return event;
     };
 
-    readonly recordSessionEventV2 = (event: SessionLiveEventV2): void => {
+    readonly recordSessionEvent = (event: SessionLiveEvent): void => {
         if (
             event.type === "lifecycle-metadata" &&
             (event.payload.kind === "session.permission.requested" ||

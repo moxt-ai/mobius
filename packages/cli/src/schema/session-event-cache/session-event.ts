@@ -1,6 +1,6 @@
 import { index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
-export const sessionEventV2 = sqliteTable(
+export const sessionEvent = sqliteTable(
     "session_event_v2",
     {
         eventJson: text("event_json").notNull(),

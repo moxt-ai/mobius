@@ -1,7 +1,7 @@
 import {
-    decodeSessionEventEnvelopeV2,
-    encodeSessionEventEnvelopeV2,
-    type SessionLiveEventV2,
+    decodeSessionEventEnvelope,
+    encodeSessionEventEnvelope,
+    type SessionLiveEvent,
     type SessionRecordingWrite,
 } from "@moxt-ai/mobius-protocol";
 import { and, asc, desc, eq, gt, gte, lt } from "drizzle-orm";
@@ -12,14 +12,14 @@ import { recordedSessionEvent, recordingMetadata } from "../schema/session-recor
 import { applyDurableObjectMigrations } from "./durable-object-migrations.ts";
 
 export interface RecordedBatch {
-    readonly events: readonly SessionLiveEventV2[];
+    readonly events: readonly SessionLiveEvent[];
     readonly generation: string;
     readonly ordinal: number;
 }
 
 interface SelectedEvent {
     readonly batch: RecordedBatch;
-    readonly event: SessionLiveEventV2;
+    readonly event: SessionLiveEvent;
     readonly index: number;
 }
 
@@ -47,7 +47,7 @@ interface BatchBounds {
 const batchReadChunk = 32;
 
 interface RecordedSessionLiveHistory {
-    readonly events: readonly SessionLiveEventV2[];
+    readonly events: readonly SessionLiveEvent[];
     readonly sessionId: string;
 }
 
@@ -184,7 +184,7 @@ export class SessionRecordingStorage {
      */
     readonly append = (
         write: SessionRecordingWrite,
-        project: (ordinal: number, events: readonly SessionLiveEventV2[]) => void = () => undefined,
+        project: (ordinal: number, events: readonly SessionLiveEvent[]) => void = () => undefined,
     ): boolean =>
         this.#storage.transactionSync(() => {
             const [event, ...remainingEvents] = write.envelope.events;
@@ -220,7 +220,7 @@ export class SessionRecordingStorage {
             const inserted = this.#database
                 .insert(recordedSessionEvent)
                 .values({
-                    envelopeJson: encodeSessionEventEnvelopeV2(write.envelope),
+                    envelopeJson: encodeSessionEventEnvelope(write.envelope),
                     firstPosition: Number(event.position),
                     lastPosition: finalEvent === undefined ? Number(event.position) : Number(finalEvent.position),
                     recordedAt: Date.parse(event.recordedAt),
@@ -411,6 +411,6 @@ export class SessionRecordingStorage {
             .orderBy(asc(recordedSessionEvent.ordinal))
             .all();
     };
-    readonly #decode = (row: { readonly envelopeJson: string }): readonly SessionLiveEventV2[] =>
-        decodeSessionEventEnvelopeV2(JSON.parse(row.envelopeJson)).events;
+    readonly #decode = (row: { readonly envelopeJson: string }): readonly SessionLiveEvent[] =>
+        decodeSessionEventEnvelope(JSON.parse(row.envelopeJson)).events;
 }

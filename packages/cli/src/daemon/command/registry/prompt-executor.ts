@@ -8,7 +8,7 @@ import {
 import { resolveSessionDirectories } from "../../../authorization/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "../../../authorization/workspace-directory.ts";
 import { resolvePromptArtifacts } from "../../../prompt-artifact-resolver.ts";
-import type { DaemonSessionEventProjectionV2 } from "../../../session-event-projection-v2.ts";
+import type { DaemonSessionEventProjection } from "../../../session-event-projection.ts";
 import { operationErrorCode, operationErrorMessage } from "../../command-dispatcher.ts";
 import type { DaemonConfig } from "../../config.ts";
 import type { DaemonOperationState } from "../../relay/daemon-operation-state.ts";
@@ -16,7 +16,7 @@ import { resolveCatalogAgent } from "./session.ts";
 
 export interface ExecutePromptOptions {
     readonly operations: DaemonOperationState;
-    readonly eventProjectionV2: DaemonSessionEventProjectionV2;
+    readonly eventProjection: DaemonSessionEventProjection;
     readonly command: SessionPromptCommand;
     readonly config: DaemonConfig;
     readonly directories: WorkspaceDirectoryService;
@@ -37,7 +37,7 @@ export interface ExecutePromptOptions {
 
 export async function executePrompt({
     operations,
-    eventProjectionV2,
+    eventProjection,
     command,
     config,
     directories,
@@ -116,7 +116,7 @@ export async function executePrompt({
             }
         }
         const stream = activateAttempt();
-        const lifecycleV2 = eventProjectionV2.started(
+        const lifecycle = eventProjection.started(
             command.sessionId,
             command.commandId,
             attemptId,
@@ -132,7 +132,7 @@ export async function executePrompt({
                 commandId: command.commandId,
                 cwd: resolved.cwd,
                 images: attachments.images,
-                lifecycleV2,
+                lifecycle,
                 prompt: command.prompt,
                 resources: attachments.resources,
                 sessionId: command.sessionId,
@@ -148,7 +148,7 @@ export async function executePrompt({
                 cwd: resolved.cwd,
                 disposition: availability.disposition,
                 images: attachments.images,
-                lifecycleV2,
+                lifecycle,
                 prompt: command.prompt,
                 resources: attachments.resources,
                 sessionId: command.sessionId,
@@ -158,11 +158,11 @@ export async function executePrompt({
             stopReason = result.stopReason;
         }
 
-        await eventProjectionV2.completed(command.sessionId, command.commandId, stopReason);
+        await eventProjection.completed(command.sessionId, command.commandId, stopReason);
         operations.transitionExecution(command.commandId, stopReason === "cancelled" ? "cancelled" : "succeeded");
     } catch (error) {
         if (signal.aborted && cancellationRequested()) {
-            await eventProjectionV2.completed(command.sessionId, command.commandId, "cancelled");
+            await eventProjection.completed(command.sessionId, command.commandId, "cancelled");
             operations.transitionExecution(command.commandId, "cancelled");
             return;
         }
@@ -172,7 +172,7 @@ export async function executePrompt({
             code === "session_operation_failed"
                 ? "The local agent could not complete the request"
                 : operationErrorMessage(error);
-        await eventProjectionV2.failed(command.sessionId, command.commandId, failureCode, failureMessage);
+        await eventProjection.failed(command.sessionId, command.commandId, failureCode, failureMessage);
         operations.transitionExecution(command.commandId, "failed");
         console.error("Mobius daemon command failed", error);
     }

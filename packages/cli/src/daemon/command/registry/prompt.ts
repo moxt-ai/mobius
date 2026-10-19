@@ -28,18 +28,18 @@ export const sessionPromptCommand: DaemonCommand = {
             return;
         }
         const turn = context.activeTurns.start(message, receipt.attemptId);
-        context.eventProjectionV2.requested(message);
+        context.eventProjection.requested(message);
         // Queue admission is acknowledged by the V2 session.queue.changed lifecycle
         // event; the relay resolves the pending Turn submission from it, so the
         // daemon sends no separate acknowledgment frame.
         const queueChanged = (): void => {
-            void context.eventProjectionV2.queueChanged(message.sessionId).catch((error: unknown) => {
+            void context.eventProjection.queueChanged(message.sessionId).catch((error: unknown) => {
                 console.error("Could not record queue change", error);
             });
         };
         void executePrompt({
             operations: context.operations,
-            eventProjectionV2: context.eventProjectionV2,
+            eventProjection: context.eventProjection,
             command: message,
             config: context.config,
             directories: context.directories,
@@ -59,7 +59,7 @@ export const sessionPromptCommand: DaemonCommand = {
             })
             .finally(() => {
                 context.activeTurns.finish(turn);
-                context.eventProjectionV2.publishTerminal(message.sessionId, message.commandId);
+                context.eventProjection.publishTerminal(message.sessionId, message.commandId);
                 if (message.disposition === SessionPromptDisposition.Queue) {
                     queueChanged();
                 }

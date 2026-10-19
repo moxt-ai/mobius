@@ -1,33 +1,33 @@
 import {
     type AgentSettingsDiscoveredEvent,
     decodeAgentSettingsDiscoveredEvent,
-    decodeMobiusSessionExportV2,
-    decodeNativeSessionEventsV2,
+    decodeMobiusSessionExport,
+    decodeNativeSessionEvents,
     decodeNativeSessionResult,
     decodeSessionClosedEvent,
     decodeSessionConfigUpdatedEvent,
-    decodeSessionEventLogPageV2,
-    decodeSessionLiveEventBatchV2,
+    decodeSessionEventLogPage,
+    decodeSessionLiveEventBatch,
     decodeSessionReadyEvent,
     decodeSessionRenamedEvent,
     decodeSessionRestoredEvent,
     decodeSessionsListedEvent,
     decodeSessionsQueriedEvent,
     decodeWorkspaceEntriesEvent,
-    type ExternalAudioContentBlockV2,
-    type ExternalImageContentBlockV2,
-    type ExternalResourceContentBlockV2,
+    type ExternalAudioContentBlock,
+    type ExternalImageContentBlock,
+    type ExternalResourceContentBlock,
     isIdentifier,
     MOBIUS_API_PREFIX,
-    type MobiusSessionExportV2,
-    type NativeEventPageRequestV2,
-    type NativeSessionEventsV2,
+    type MobiusSessionExport,
+    type NativeEventPageRequest,
+    type NativeSessionEvents,
     type NativeSessionRequest,
     type NativeSessionResult,
     type SessionConfigureCommand,
-    type SessionEventLogPageV2,
-    type SessionEventOmissionV2,
-    type SessionLiveEventBatchV2,
+    type SessionEventLogPage,
+    type SessionEventOmission,
+    type SessionLiveEventBatch,
     SessionPromptDisposition,
     type WorkspaceEntriesEvent,
 } from "@moxt-ai/mobius-protocol";
@@ -124,9 +124,9 @@ export interface DiscoverMobiusAgentSettingsRequest {
 }
 
 export type MobiusExternalContentBlock =
-    | ExternalImageContentBlockV2
-    | ExternalAudioContentBlockV2
-    | ExternalResourceContentBlockV2;
+    | ExternalImageContentBlock
+    | ExternalAudioContentBlock
+    | ExternalResourceContentBlock;
 
 export function externalContentPath(content: MobiusExternalContentBlock): string {
     let kind: "audio" | "image" | "resource";
@@ -1127,17 +1127,17 @@ export class MobiusSessionResources {
         return decodeSessionRenamedEvent(JSON.stringify(result));
     };
 
-    readonly exportV2 = async (sessionId: string, signal: AbortSignal): Promise<MobiusSessionExportV2> =>
-        decodeMobiusSessionExportV2(
+    readonly export = async (sessionId: string, signal: AbortSignal): Promise<MobiusSessionExport> =>
+        decodeMobiusSessionExport(
             await this.#executor.get(sessionPath(this.#projectId, sessionId, "export-v2"), signal),
         );
 
-    readonly importV2 = async (
-        exported: MobiusSessionExportV2,
+    readonly import = async (
+        exported: MobiusSessionExport,
         targetBinding: MobiusSessionImportBinding,
         signal: AbortSignal,
     ): Promise<MobiusSession> => {
-        const validated = decodeMobiusSessionExportV2(exported);
+        const validated = decodeMobiusSessionExport(exported);
         return decodeMobiusSession(
             await this.#executor.post(
                 projectPath(this.#projectId, "session-imports-v2"),
@@ -1147,7 +1147,7 @@ export class MobiusSessionResources {
         );
     };
 
-    readonly forkRecordedV2 = async (
+    readonly forkRecorded = async (
         sessionId: string,
         request: {
             readonly throughEventId: string;
@@ -1192,7 +1192,7 @@ export class MobiusSessionResources {
     ): ReturnType<MobiusSessionResources["readFile"]> =>
         await this.readFile(sessionId, externalContentPath(content), signal, maximumBytes);
 
-    readonly previewRuntimeNativeEventsV2 = async (
+    readonly previewRuntimeNativeEvents = async (
         runtimeId: string,
         sessionId: string,
         identity: {
@@ -1200,9 +1200,9 @@ export class MobiusSessionResources {
             readonly agentId: string;
             readonly directoryId: string;
         },
-        page: NativeEventPageRequestV2,
+        page: NativeEventPageRequest,
         signal: AbortSignal,
-    ): Promise<NativeSessionEventsV2> => {
+    ): Promise<NativeSessionEvents> => {
         const result = await this.#executor.post(
             projectPath(
                 this.#projectId,
@@ -1216,19 +1216,19 @@ export class MobiusSessionResources {
             },
             signal,
         );
-        return decodeNativeSessionEventsV2(result);
+        return decodeNativeSessionEvents(result);
     };
 
-    readonly previewSessionNativeEventsV2 = async (
+    readonly previewSessionNativeEvents = async (
         sessionId: string,
         identity: {
             readonly additionalDirectoryIds: readonly string[];
             readonly agentId: string;
             readonly directoryId: string;
         },
-        page: NativeEventPageRequestV2,
+        page: NativeEventPageRequest,
         signal: AbortSignal,
-    ): Promise<NativeSessionEventsV2> => {
+    ): Promise<NativeSessionEvents> => {
         const path = requestUrl(
             new URL("https://mobius.invalid/"),
             sessionPath(this.#projectId, sessionId, "native-events-preview"),
@@ -1245,7 +1245,7 @@ export class MobiusSessionResources {
         for (const directoryId of identity.additionalDirectoryIds) {
             path.searchParams.append("additionalDirectoryId", directoryId);
         }
-        return decodeNativeSessionEventsV2(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal));
+        return decodeNativeSessionEvents(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal));
     };
 
     readonly readSessionExecution = async (
@@ -1415,16 +1415,16 @@ export class MobiusInteractionResources {
 
 export type MobiusLiveSessionConnection = { readonly kind: "initial" } | { readonly kind: "reconnected" };
 
-export interface MobiusLiveSessionEventObserverV2 {
-    readonly receive: (events: SessionLiveEventBatchV2) => Promise<boolean>;
+export interface MobiusLiveSessionEventObserver {
+    readonly receive: (events: SessionLiveEventBatch) => Promise<boolean>;
     readonly reconcile: (connection: MobiusLiveSessionConnection) => Promise<void>;
 }
 
-export class MobiusLiveEventSubscriptionV2 {
+export class MobiusLiveEventSubscription {
     readonly #controller = new AbortController();
     readonly #executor: MobiusRequestExecutor;
     readonly #maximumReconnectAttempts: number;
-    readonly #observer: MobiusLiveSessionEventObserverV2;
+    readonly #observer: MobiusLiveSessionEventObserver;
     readonly #path: string;
     #closed = false;
     readonly connected: Promise<void>;
@@ -1433,7 +1433,7 @@ export class MobiusLiveEventSubscriptionV2 {
     constructor(
         executor: MobiusRequestExecutor,
         path: string,
-        observer: MobiusLiveSessionEventObserverV2,
+        observer: MobiusLiveSessionEventObserver,
         signal: AbortSignal,
         maximumReconnectAttempts: number,
     ) {
@@ -1497,7 +1497,7 @@ export class MobiusLiveEventSubscriptionV2 {
                                 cause,
                             });
                         }
-                        const events = decodeSessionLiveEventBatchV2(value);
+                        const events = decodeSessionLiveEventBatch(value);
                         if (!(await this.#observer.receive(events))) {
                             this.close();
                         }
@@ -1564,7 +1564,7 @@ export class MobiusEventResources {
     readonly #executor: MobiusRequestExecutor;
     readonly #maximumReconnectAttempts: number;
     readonly #projectId: string;
-    readonly #liveSubscriptionsV2 = new Set<MobiusLiveEventSubscriptionV2>();
+    readonly #liveSubscriptions = new Set<MobiusLiveEventSubscription>();
 
     constructor(executor: MobiusRequestExecutor, projectId: string, maximumReconnectAttempts: number) {
         this.#executor = executor;
@@ -1572,32 +1572,30 @@ export class MobiusEventResources {
         this.#projectId = projectId;
     }
 
-    readonly subscribeLiveV2 = async (
+    readonly subscribeLive = async (
         sessionId: string,
-        observer: MobiusLiveSessionEventObserverV2,
+        observer: MobiusLiveSessionEventObserver,
         signal: AbortSignal,
-    ): Promise<MobiusLiveEventSubscriptionV2> => {
-        const subscription = new MobiusLiveEventSubscriptionV2(
+    ): Promise<MobiusLiveEventSubscription> => {
+        const subscription = new MobiusLiveEventSubscription(
             this.#executor,
             sessionPath(this.#projectId, sessionId, "events-v2"),
             observer,
             signal,
             this.#maximumReconnectAttempts,
         );
-        this.#liveSubscriptionsV2.add(subscription);
-        void subscription.completed
-            .finally(() => this.#liveSubscriptionsV2.delete(subscription))
-            .catch(() => undefined);
+        this.#liveSubscriptions.add(subscription);
+        void subscription.completed.finally(() => this.#liveSubscriptions.delete(subscription)).catch(() => undefined);
         await subscription.connected;
         return subscription;
     };
 
-    readonly listV2 = async (
+    readonly list = async (
         sessionId: string,
         page: MobiusPageRequest,
         signal: AbortSignal,
-        options: { readonly omit?: readonly SessionEventOmissionV2[] } = {},
-    ): Promise<SessionEventLogPageV2> => {
+        options: { readonly omit?: readonly SessionEventOmission[] } = {},
+    ): Promise<SessionEventLogPage> => {
         const path = requestUrl(
             new URL("https://mobius.invalid/"),
             sessionPath(this.#projectId, sessionId, "events-v2"),
@@ -1615,14 +1613,14 @@ export class MobiusEventResources {
         for (const omission of options.omit ?? []) {
             path.searchParams.append("omit", omission);
         }
-        return decodeSessionEventLogPageV2(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal));
+        return decodeSessionEventLogPage(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal));
     };
 
     readonly close = (): void => {
-        for (const subscription of this.#liveSubscriptionsV2) {
+        for (const subscription of this.#liveSubscriptions) {
             subscription.close();
         }
-        this.#liveSubscriptionsV2.clear();
+        this.#liveSubscriptions.clear();
     };
 }
 

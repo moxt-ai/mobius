@@ -3,7 +3,7 @@ import { env } from "cloudflare:workers";
 import {
     decodeDaemonToServiceMessage,
     decodeServiceToDaemonMessage,
-    decodeSessionEventEnvelopeV2,
+    decodeSessionEventEnvelope,
     decodeSessionPromptCommand,
     decodeSessionRecordingHistory,
     encodeNativeSessionRequest,
@@ -11,9 +11,9 @@ import {
     encodeSessionClosedEvent,
     encodeSessionConfigUpdatedEvent,
     encodeSessionConfigureCommand,
-    encodeSessionEventEnvelopeV2,
+    encodeSessionEventEnvelope,
     encodeSessionInfoUpdatedEvent,
-    encodeSessionLiveHistoryV2PageLoaded,
+    encodeSessionLiveHistoryPageLoaded,
     encodeSessionOperationFailedEvent,
     encodeSessionPreviewHistoryPageLoaded,
     encodeSessionPromptCommand,
@@ -66,7 +66,7 @@ class ControlledRecording implements SessionRecording {
 }
 
 function liveEvent(sessionId: string, text: string): string {
-    return encodeSessionEventEnvelopeV2({
+    return encodeSessionEventEnvelope({
         kind: "session.event.v2",
         events: [
             {
@@ -1068,7 +1068,7 @@ describe.sequential("Platform Session-only boundary", () => {
             expect(decodeSessionPromptCommand(JSON.stringify(prompt)).prompt).toBe("show the local answer");
             const answer = liveEvent(sessionId, "local answer");
             daemon.send(answer);
-            const received = decodeSessionEventEnvelopeV2(await hostMessages.next());
+            const received = decodeSessionEventEnvelope(await hostMessages.next());
             expect(JSON.stringify(received.events.map((event) => event.payload))).toContain("local answer");
             expect(received).not.toHaveProperty("cursor");
             expect(received).not.toHaveProperty("sequence");
@@ -1076,7 +1076,7 @@ describe.sequential("Platform Session-only boundary", () => {
             daemon.send(answer);
             expect(
                 JSON.stringify(
-                    decodeSessionEventEnvelopeV2(await hostMessages.next()).events.map((event) => event.payload),
+                    decodeSessionEventEnvelope(await hostMessages.next()).events.map((event) => event.payload),
                 ),
             ).toContain("local answer");
 
@@ -1119,12 +1119,12 @@ describe.sequential("Platform Session-only boundary", () => {
             });
             expect(
                 JSON.stringify(
-                    decodeSessionEventEnvelopeV2(await hostMessages.next()).events.map((event) => event.payload),
+                    decodeSessionEventEnvelope(await hostMessages.next()).events.map((event) => event.payload),
                 ),
             ).toContain("recording is stalled");
             expect(
                 JSON.stringify(
-                    decodeSessionEventEnvelopeV2(await hostMessages.next()).events.map((event) => event.payload),
+                    decodeSessionEventEnvelope(await hostMessages.next()).events.map((event) => event.payload),
                 ),
             ).toContain("live output continues");
             const browserAccess = await responseJson(
@@ -1182,7 +1182,7 @@ describe.sequential("Platform Session-only boundary", () => {
                 type: rawEvent.type,
             };
             const secondRawEvent = { ...rawEvent, eventId: "event-v2-2", position: "2" };
-            daemon.send(encodeSessionEventEnvelopeV2({ events: [rawEvent, secondRawEvent], kind: "session.event.v2" }));
+            daemon.send(encodeSessionEventEnvelope({ events: [rawEvent, secondRawEvent], kind: "session.event.v2" }));
             expect(JSON.parse(await hostMessages.next())).toMatchObject({ kind: "session.event.v2" });
             expect(JSON.parse(await v2Messages.next())).toEqual([rawEvent, secondRawEvent]);
             const historyResponse = worker.fetch(
@@ -1225,7 +1225,7 @@ describe.sequential("Platform Session-only boundary", () => {
                 title: "Renamed session",
                 updatedAt: "2026-09-18T00:01:00.000Z",
             });
-            const historyPage = encodeSessionLiveHistoryV2PageLoaded({
+            const historyPage = encodeSessionLiveHistoryPageLoaded({
                 events: {
                     events: {
                         sessionGenerationId: "session-generation-1",
@@ -1353,7 +1353,7 @@ describe.sequential("Platform Session-only boundary", () => {
             daemon.send(answer);
             expect(
                 JSON.stringify(
-                    decodeSessionEventEnvelopeV2(await hostMessages.next()).events.map((event) => event.payload),
+                    decodeSessionEventEnvelope(await hostMessages.next()).events.map((event) => event.payload),
                 ),
             ).toContain("local answer");
             expect(JSON.parse(await transportMessages.next())).toMatchObject({
@@ -1687,7 +1687,7 @@ describe.sequential("Platform Recording policy configuration", () => {
             try {
                 await relay.webSocketMessage(
                     daemon,
-                    encodeSessionEventEnvelopeV2({
+                    encodeSessionEventEnvelope({
                         kind: "session.event.v2",
                         events: [
                             {
@@ -1965,7 +1965,7 @@ describe.sequential("Platform Turn submission", () => {
             }
             expect(delivered.prompt).toBe(longPrompt);
             daemon.send(
-                encodeSessionEventEnvelopeV2({
+                encodeSessionEventEnvelope({
                     kind: "session.event.v2",
                     events: [
                         {
@@ -2005,7 +2005,7 @@ describe.sequential("Platform Turn submission", () => {
             );
             expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("session.cancel");
             daemon.send(
-                encodeSessionEventEnvelopeV2({
+                encodeSessionEventEnvelope({
                     kind: "session.event.v2",
                     events: [
                         {
@@ -2027,7 +2027,7 @@ describe.sequential("Platform Turn submission", () => {
                 }),
             );
             daemon.send(
-                encodeSessionEventEnvelopeV2({
+                encodeSessionEventEnvelope({
                     kind: "session.event.v2",
                     events: [
                         {
@@ -2073,7 +2073,7 @@ describe.sequential("Platform Turn submission", () => {
             );
             expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("session.prompt");
             daemon.send(
-                encodeSessionEventEnvelopeV2({
+                encodeSessionEventEnvelope({
                     kind: "session.event.v2",
                     events: [
                         {
@@ -2118,7 +2118,7 @@ describe.sequential("Platform Turn submission", () => {
             );
             expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("session.prompt");
             daemon.send(
-                encodeSessionEventEnvelopeV2({
+                encodeSessionEventEnvelope({
                     kind: "session.event.v2",
                     events: [
                         {
@@ -2135,7 +2135,7 @@ describe.sequential("Platform Turn submission", () => {
                 }),
             );
             daemon.send(
-                encodeSessionEventEnvelopeV2({
+                encodeSessionEventEnvelope({
                     kind: "session.event.v2",
                     events: [
                         {

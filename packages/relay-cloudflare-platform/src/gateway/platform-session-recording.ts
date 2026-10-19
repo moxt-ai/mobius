@@ -2,8 +2,8 @@ import {
     encodeSessionRecordingWrite,
     encodeSessionStatusWebhookBody,
     isIdentifier,
-    type SessionEventEnvelopeV2,
-    type SessionEventV2,
+    type SessionEvent,
+    type SessionEventEnvelope,
     type SessionStatusWebhookCommand,
 } from "@moxt-ai/mobius-protocol";
 import type {
@@ -48,7 +48,7 @@ export class PlatformSessionRecording implements SessionRecording {
 
     readonly deliver = async (
         target: SessionRecordingTarget,
-        envelope: SessionEventEnvelopeV2,
+        envelope: SessionEventEnvelope,
         signal: AbortSignal,
     ): Promise<SessionRecordingDeliveryResult> => {
         const policy = await this.#policies.readProject(target.projectId, signal);
@@ -89,7 +89,7 @@ export class PlatformSessionRecording implements SessionRecording {
 
     async #publishTerminalStatus(
         target: SessionRecordingTarget,
-        envelope: SessionEventEnvelopeV2,
+        envelope: SessionEventEnvelope,
         signal: AbortSignal,
     ): Promise<void> {
         const commands = terminatedCommands(envelope.events);
@@ -134,7 +134,7 @@ export class PlatformSessionRecording implements SessionRecording {
         }
     }
 }
-function terminalStatus(events: readonly SessionEventV2[]): "running" | "idle" | "failed" | null {
+function terminalStatus(events: readonly SessionEvent[]): "running" | "idle" | "failed" | null {
     let status: "running" | "idle" | "failed" | null = null;
     for (const event of events) {
         if (event.type !== "lifecycle-metadata") {
@@ -162,7 +162,7 @@ function terminalStatus(events: readonly SessionEventV2[]): "running" | "idle" |
  * observes the events it carries, so a command that ended earlier is absent here and must not be
  * inferred from these results.
  */
-function terminatedCommands(events: readonly SessionEventV2[]): SessionStatusWebhookCommand[] {
+function terminatedCommands(events: readonly SessionEvent[]): SessionStatusWebhookCommand[] {
     const byCommand = new Map<string, SessionStatusWebhookCommand>();
     for (const event of events) {
         if (event.type !== "lifecycle-metadata") {

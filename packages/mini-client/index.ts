@@ -7,19 +7,19 @@ import { join } from "node:path";
 import { setTimeout } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import {
-    type NativeSessionEventsV2,
+    type NativeSessionEvents,
     RUNTIME_WORKSPACE_BINDING_ID,
     type SessionCommand,
     type SessionConfigOption,
     type SessionConfigurationSelection,
-    type SessionEventV2,
+    type SessionEvent,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { MobiusAppCredentialProvider, MobiusPlatformAppClient } from "@moxt-ai/mobius-sdk/platform";
 import {
     MobiusClient,
-    type MobiusLiveEventSubscriptionV2,
-    type MobiusLiveSessionEventObserverV2,
+    type MobiusLiveEventSubscription,
+    type MobiusLiveSessionEventObserver,
     MobiusPageRequest,
     MobiusRecordingPolicy,
     MobiusRuntimePairingRequest,
@@ -334,11 +334,11 @@ async function runtimeCommand(directory: string): Promise<void> {
     }
 }
 
-async function allEventsV2(service: MobiusClient, sessionId: string): Promise<readonly SessionEventV2[]> {
+async function allEvents(service: MobiusClient, sessionId: string): Promise<readonly SessionEvent[]> {
     let cursor = "";
-    let events: readonly SessionEventV2[] = [];
+    let events: readonly SessionEvent[] = [];
     do {
-        const page = await service.events.listV2(sessionId, new MobiusPageRequest(100, cursor), operationSignal());
+        const page = await service.events.list(sessionId, new MobiusPageRequest(100, cursor), operationSignal());
         events = [...page.events, ...events];
         cursor = page.nextCursor ?? "";
     } while (cursor.length > 0);
@@ -360,7 +360,7 @@ async function copyEventLogCommand(
     const connection = client(state);
     try {
         const service = connection.service;
-        const sourceEvents = await allEventsV2(service, source.sessionId);
+        const sourceEvents = await allEvents(service, source.sessionId);
         const throughEventId =
             operation === "fork" ? requireFlag(flags, "through-event") : sourceEvents.at(-1)?.eventId;
         if (throughEventId === undefined) {
@@ -368,12 +368,12 @@ async function copyEventLogCommand(
         }
         const target =
             operation === "import"
-                ? await service.sessions.importV2(
-                      await service.sessions.exportV2(source.sessionId, operationSignal()),
+                ? await service.sessions.import(
+                      await service.sessions.export(source.sessionId, operationSignal()),
                       copiedSessionBinding(state, source),
                       operationSignal(),
                   )
-                : await service.sessions.forkRecordedV2(
+                : await service.sessions.forkRecorded(
                       source.sessionId,
                       { targetBinding: copiedSessionBinding(state, source), throughEventId },
                       operationSignal(),
@@ -383,7 +383,7 @@ async function copyEventLogCommand(
             throw new MiniClientError("event_not_found", "The selected V2 fork boundary is unavailable");
         }
         const expected = operation === "import" ? sourceEvents : sourceEvents.slice(0, boundary + 1);
-        const copied = await allEventsV2(service, target.sessionId);
+        const copied = await allEvents(service, target.sessionId);
         const matches =
             copied.length === expected.length &&
             copied.every(
@@ -612,8 +612,8 @@ async function compactCommand(directory: string, flags: ReadonlyMap<string, stri
         execution = await sessionClient(state, session);
         const discoverySignal = AbortSignal.any([shutdown.signal, AbortSignal.timeout(5_000)]);
         let advertisedCommands: readonly SessionCommand[] = [];
-        let subscription: MobiusLiveEventSubscriptionV2 | undefined;
-        const observer: MobiusLiveSessionEventObserverV2 = {
+        let subscription: MobiusLiveEventSubscription | undefined;
+        const observer: MobiusLiveSessionEventObserver = {
             reconcile: () => Promise.resolve(),
             receive: (events) => {
                 for (const event of events) {
@@ -631,7 +631,7 @@ async function compactCommand(directory: string, flags: ReadonlyMap<string, stri
             },
         };
         try {
-            subscription = await execution.service.events.subscribeLiveV2(session.sessionId, observer, discoverySignal);
+            subscription = await execution.service.events.subscribeLive(session.sessionId, observer, discoverySignal);
             const ready = await loadSession(authority.service, state.runtimeId, session);
             let commands = ready.commands;
             if (!commands.some((candidate) => candidate.name.toLowerCase() === "compact")) {
@@ -699,15 +699,15 @@ async function cancelCommand(directory: string, flags: ReadonlyMap<string, strin
     }
 }
 
-async function sessionEventsV2(
+async function sessionEvents(
     service: MobiusClient,
     session: MiniClientSession,
     signal: AbortSignal,
-): Promise<NativeSessionEventsV2> {
-    const pages: NativeSessionEventsV2[] = [];
+): Promise<NativeSessionEvents> {
+    const pages: NativeSessionEvents[] = [];
     let cursor: string | null = null;
     do {
-        const page = await service.events.listV2(session.sessionId, new MobiusPageRequest(50, cursor ?? ""), signal);
+        const page = await service.events.list(session.sessionId, new MobiusPageRequest(50, cursor ?? ""), signal);
         pages.push({ events: page, queuedPromptRequests: [] });
         cursor = page.nextCursor;
     } while (cursor !== null && pages.length < 100);
@@ -740,22 +740,22 @@ async function getCommand(directory: string, flags: ReadonlyMap<string, string>)
     const connection = await sessionClient(state, session);
     const service = connection.service;
     const signal = shutdown.signal;
-    let subscription: MobiusLiveEventSubscriptionV2 | undefined;
+    let subscription: MobiusLiveEventSubscription | undefined;
     try {
         if (!follow) {
-            output({ events: await sessionEventsV2(service, session, signal), sessionId: session.sessionId });
+            output({ events: await sessionEvents(service, session, signal), sessionId: session.sessionId });
             return;
         }
         const seen = new Set<string>();
         const followedCommandId = targetTurnId(session);
         const terminal = Promise.withResolvers<void>();
-        const isFollowedTerminal = (event: SessionEventV2): boolean =>
+        const isFollowedTerminal = (event: SessionEvent): boolean =>
             event.type === "lifecycle-metadata" &&
             (event.payload.kind === "prompt.completed" || event.payload.kind === "prompt.failed") &&
             event.payload.commandId === followedCommandId;
-        const observer: MobiusLiveSessionEventObserverV2 = {
+        const observer: MobiusLiveSessionEventObserver = {
             reconcile: async (liveConnection) => {
-                const events = await sessionEventsV2(service, session, signal);
+                const events = await sessionEvents(service, session, signal);
                 for (const event of events.events.events) {
                     seen.add(event.eventId);
                 }
@@ -779,7 +779,7 @@ async function getCommand(directory: string, flags: ReadonlyMap<string, string>)
                 return true;
             },
         };
-        subscription = await service.events.subscribeLiveV2(session.sessionId, observer, signal);
+        subscription = await service.events.subscribeLive(session.sessionId, observer, signal);
         await Promise.race([subscription.completed, terminal.promise]);
     } finally {
         subscription?.close();

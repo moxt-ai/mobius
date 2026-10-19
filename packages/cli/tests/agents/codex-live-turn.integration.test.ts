@@ -9,8 +9,8 @@ import {
     decodeMessageKind,
     decodeNativeSessionResult,
     decodeRuntimeHeartbeatEvent,
-    decodeSessionEventEnvelopeV2,
-    decodeSessionLiveHistoryV2PageLoaded,
+    decodeSessionEventEnvelope,
+    decodeSessionLiveHistoryPageLoaded,
     decodeSessionOperationFailedEvent,
     decodeSessionPromptCommand,
     encodeFileReadCommand,
@@ -18,7 +18,7 @@ import {
     encodeRuntimeHeartbeatAckEvent,
     encodeRuntimeLivenessReadyEvent,
     encodeSessionCancelCommand,
-    encodeSessionLiveHistoryV2PageLoad,
+    encodeSessionLiveHistoryPageLoad,
     encodeSessionPromptCommand,
     FILE_CHUNK_KIND,
     FILE_END_KIND,
@@ -29,8 +29,8 @@ import {
     RUNTIME_HEARTBEAT_KIND,
     RUNTIME_LIVENESS_READY_KIND,
     SESSION_CANCEL_KIND,
-    SESSION_EVENT_V2_KIND,
-    SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND,
+    SESSION_EVENT_KIND,
+    SESSION_LIVE_HISTORY_PAGE_LOADED_KIND,
     SESSION_OPERATION_FAILED_KIND,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -162,8 +162,8 @@ test("Given real Codex starts a tool, When clients watch and reopen the complete
             while (!completed) {
                 const message = await messages.next();
                 if (
-                    decodeMessageKind(message) === SESSION_EVENT_V2_KIND &&
-                    decodeSessionEventEnvelopeV2(message).events.some(
+                    decodeMessageKind(message) === SESSION_EVENT_KIND &&
+                    decodeSessionEventEnvelope(message).events.some(
                         (event) =>
                             event.type === "lifecycle-metadata" && event.payload.kind === "session.queue.changed",
                     ) === true &&
@@ -222,7 +222,7 @@ test("Given real Codex starts a tool, When clients watch and reopen the complete
                     }
                     snapshotVerified = true;
                     socket.send(
-                        encodeSessionLiveHistoryV2PageLoad({
+                        encodeSessionLiveHistoryPageLoad({
                             kind: "session.live-history.v2.page.load",
                             requestId: randomUUID(),
                             sessionId,
@@ -232,8 +232,8 @@ test("Given real Codex starts a tool, When clients watch and reopen the complete
                     );
                     continue;
                 }
-                if (decodeMessageKind(message) === SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND) {
-                    const recovered = decodeSessionLiveHistoryV2PageLoaded(message).events;
+                if (decodeMessageKind(message) === SESSION_LIVE_HISTORY_PAGE_LOADED_KIND) {
+                    const recovered = decodeSessionLiveHistoryPageLoaded(message).events;
                     expect(
                         recovered.events.events.some(
                             (event) => event.type === "acp" && event.payload.sessionUpdate === "tool_call",
@@ -242,10 +242,10 @@ test("Given real Codex starts a tool, When clients watch and reopen the complete
                     releaseProvider.resolve();
                     continue;
                 }
-                if (decodeMessageKind(message) !== SESSION_EVENT_V2_KIND) {
+                if (decodeMessageKind(message) !== SESSION_EVENT_KIND) {
                     continue;
                 }
-                for (const event of decodeSessionEventEnvelopeV2(message).events) {
+                for (const event of decodeSessionEventEnvelope(message).events) {
                     if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.started") {
                         expect(started).toBe(false);
                         expect(event.payload).toMatchObject({
@@ -341,7 +341,7 @@ test("Given real Codex starts a tool, When clients watch and reopen the complete
                 break;
             }
             socket.send(
-                encodeSessionLiveHistoryV2PageLoad({
+                encodeSessionLiveHistoryPageLoad({
                     kind: "session.live-history.v2.page.load",
                     requestId: randomUUID(),
                     sessionId,
@@ -351,10 +351,10 @@ test("Given real Codex starts a tool, When clients watch and reopen the complete
             );
             for (;;) {
                 const message = await messages.next();
-                if (decodeMessageKind(message) !== SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND) {
+                if (decodeMessageKind(message) !== SESSION_LIVE_HISTORY_PAGE_LOADED_KIND) {
                     continue;
                 }
-                const page = decodeSessionLiveHistoryV2PageLoaded(message).events.events;
+                const page = decodeSessionLiveHistoryPageLoaded(message).events.events;
                 const updates = page.events.flatMap((event) => (event.type === "acp" ? [event.payload] : []));
                 const toolUpdates = updates.filter(
                     (update) => update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update",

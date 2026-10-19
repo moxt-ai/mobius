@@ -15,8 +15,8 @@ import {
     decodeSessionClosedEvent,
     decodeSessionConfigUpdatedEvent,
     decodeSessionElicitationResolvedEvent,
-    decodeSessionEventEnvelopeV2,
-    decodeSessionLiveHistoryV2PageLoaded,
+    decodeSessionEventEnvelope,
+    decodeSessionLiveHistoryPageLoaded,
     decodeSessionOperationFailedEvent,
     decodeSessionPermissionResolvedEvent,
     decodeSessionPreviewHistoryPageLoaded,
@@ -33,14 +33,14 @@ import {
     FILE_END_KIND,
     FILE_FAILED_KIND,
     type FileReadCommand,
-    type LifecycleMetadataV2,
+    type LifecycleMetadata,
     type NativeSessionRequest,
     type NativeSessionResult,
     type RuntimeDiagnosticsRequest,
     type RuntimeDiagnosticsResult,
     type RuntimePingCommand,
     type RuntimePongEvent,
-    SESSION_EVENT_V2_KIND,
+    SESSION_EVENT_KIND,
     type SessionCancelCommand,
     type SessionCloseCommand,
     type SessionClosedEvent,
@@ -49,8 +49,8 @@ import {
     type SessionElicitationResolvedEvent,
     type SessionElicitationRespondCommand,
     type SessionListCommand,
-    type SessionLiveHistoryV2PageLoad,
-    type SessionLiveHistoryV2PageLoaded,
+    type SessionLiveHistoryPageLoad,
+    type SessionLiveHistoryPageLoaded,
     type SessionPermissionResolvedEvent,
     type SessionPermissionRespondCommand,
     type SessionPrepareCommand,
@@ -83,7 +83,7 @@ export type RuntimeControlCommand =
     | SessionPromptDispositionCommand
     | SessionPromptCommand
     | SessionPreviewHistoryPageLoad
-    | SessionLiveHistoryV2PageLoad
+    | SessionLiveHistoryPageLoad
     | SessionElicitationRespondCommand
     | SessionPermissionRespondCommand
     | SessionListCommand
@@ -126,7 +126,7 @@ export type RuntimeControlResult =
     | TurnStarted
     | TurnQueued
     | SessionPreviewHistoryPageLoaded
-    | SessionLiveHistoryV2PageLoaded
+    | SessionLiveHistoryPageLoaded
     | SessionElicitationResolvedEvent
     | SessionPermissionResolvedEvent
     | SessionsListedEvent
@@ -135,7 +135,7 @@ export type RuntimeControlResult =
 
 interface LifecycleExpectation {
     /** Resolve as soon as any of these V2 lifecycle kinds appears. */
-    readonly resolveOn: readonly LifecycleMetadataV2["kind"][];
+    readonly resolveOn: readonly LifecycleMetadata["kind"][];
 }
 
 /** V2 lifecycle kinds that answer each Turn-shaped control command. */
@@ -166,7 +166,7 @@ function lifecycleReply(
     expectation: LifecycleExpectation,
     requestId: string,
     sessionId: string,
-    payload: LifecycleMetadataV2,
+    payload: LifecycleMetadata,
 ): LifecycleReply {
     // V2 envelopes are broadcast to every host socket, so only events carrying
     // this command's own identifiers answer it; other Turns' failures and
@@ -500,12 +500,12 @@ export async function requestRuntimeControl(
                     if (typeof event.data !== "string") {
                         return;
                     }
-                    if (decodeMessageKind(event.data) === SESSION_EVENT_V2_KIND) {
+                    if (decodeMessageKind(event.data) === SESSION_EVENT_KIND) {
                         const expectation = lifecycleExpectation(command);
                         if (expectation === null) {
                             return;
                         }
-                        for (const lifecycleEvent of decodeSessionEventEnvelopeV2(event.data).events) {
+                        for (const lifecycleEvent of decodeSessionEventEnvelope(event.data).events) {
                             if (lifecycleEvent.type !== "lifecycle-metadata") {
                                 continue;
                             }
@@ -574,7 +574,7 @@ export async function requestRuntimeControl(
                             ? decodeSessionPreviewHistoryPageLoaded(event.data)
                             : command.kind === "session.live-history.v2.page.load" &&
                                 kind === "session.live-history.v2.page.loaded"
-                              ? decodeSessionLiveHistoryV2PageLoaded(event.data)
+                              ? decodeSessionLiveHistoryPageLoaded(event.data)
                               : command.kind === "session.permission.respond" && kind === "session.permission.resolved"
                                 ? decodeSessionPermissionResolvedEvent(event.data)
                                 : command.kind === "session.elicitation.respond" &&
