@@ -1,4 +1,4 @@
-import type { ServiceToDaemonMessage } from "@moxt-ai/mobius-protocol";
+import type { ServiceToDaemonMessage } from "@moxt-ai/mobius-sdk/protocol";
 import type { CommandContext } from "./context.ts";
 
 export interface DaemonCommand {

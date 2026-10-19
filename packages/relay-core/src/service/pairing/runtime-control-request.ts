@@ -68,7 +68,7 @@ import {
     type SessionsQueriedEvent,
     type WorkspaceEntriesEvent,
     type WorkspaceListCommand,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { SessionRuntimeError } from "../../entity/do/session.ts";
 
 export type RuntimeControlCommand =

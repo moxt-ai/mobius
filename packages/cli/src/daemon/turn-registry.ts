@@ -4,7 +4,7 @@ import {
     type SessionLiveEvent,
     type SessionPromptCommand,
     SessionPromptDisposition,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { ActiveDaemonTurn, type RecordedSessionEvent } from "./active-turn.ts";
 import type { DaemonOperationState } from "./relay/daemon-operation-state.ts";
 

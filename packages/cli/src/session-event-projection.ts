@@ -5,7 +5,7 @@ import type {
     SessionEventPayload,
     SessionLiveEvent,
     SessionPromptCommand,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import type { DaemonSessionEventPublisher } from "./daemon/relay/session-event-publisher.ts";
 
 interface QueuedPromptRequest {

@@ -1,4 +1,4 @@
-import { decodeIdentifier, type Identifier, isIdentifier, MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
+import { decodeIdentifier, type Identifier, isIdentifier, MOBIUS_API_PREFIX } from "@moxt-ai/mobius-sdk/protocol";
 import {
     MobiusApiError,
     MobiusCancellationError,

@@ -20,7 +20,7 @@ import {
     type SessionEvent,
     type SessionPromptCommand,
     SessionPromptDisposition,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { listen, port, sendText } from "@moxt-ai/mobius-test/websocket";
 import { describe, expect, it } from "vitest";
 import { LocalAgentDefinition } from "../../src/agent-catalog/local-agent.ts";

@@ -1,4 +1,4 @@
-import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
+import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-sdk/protocol";
 import { MobiusApiError, MobiusConnectionError, MobiusProtocolError, MobiusValidationError } from "../errors.ts";
 import type { MobiusHttpTransport, MobiusTransportSessionEvent } from "./http-transport.ts";
 

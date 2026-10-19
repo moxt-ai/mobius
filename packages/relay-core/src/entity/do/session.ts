@@ -1,4 +1,4 @@
-import type { SessionOperationFailedEvent } from "@moxt-ai/mobius-protocol";
+import type { SessionOperationFailedEvent } from "@moxt-ai/mobius-sdk/protocol";
 import type { HttpError } from "../http-error.ts";
 
 export class ProjectScope {

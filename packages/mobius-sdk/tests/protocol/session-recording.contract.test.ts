@@ -4,7 +4,7 @@ import {
     decodeSessionRecordingTurnPage,
     SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT,
     SESSION_RECORDING_TURN_PAGE_MAX_LIMIT,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { describe, expect, it } from "vitest";
 
 // One event past the retired history limit, to prove the boundary no longer exists.

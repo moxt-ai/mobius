@@ -8,7 +8,7 @@ import {
     FILE_CHUNK_KIND,
     FILE_END_KIND,
     type FileReadCommand,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { readLocalRaster } from "../../../../../acp/resource/local-raster.ts";
 import type { ExternalContentStore } from "../../../../../external-content/local-external-content-store.ts";
 

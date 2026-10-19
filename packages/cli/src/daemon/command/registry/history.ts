@@ -8,7 +8,7 @@ import {
     SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND,
     SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND,
     type SessionEvent,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import type { WebSocket } from "undici";
 import { AcpExecutionError, type AgentRuntimeManager } from "../../../acp/agent-runtime-manager.ts";
 import type { AcpSessionEventPage } from "../../../acp/session-event-store.ts";

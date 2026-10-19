@@ -18,11 +18,6 @@ const run = (command, args) => {
 
 const releases = [
     {
-        selected: process.env.PROTOCOL_CHANGED === "true" && process.env.PROTOCOL_EXISTS !== "true",
-        directory: "packages/protocol",
-        archive: resolve(runnerTemp, "mobius-protocol.tgz"),
-    },
-    {
         selected: process.env.SDK_CHANGED === "true" && process.env.SDK_EXISTS !== "true",
         directory: "packages/mobius-sdk",
         archive: resolve(runnerTemp, "mobius-sdk.tgz"),

@@ -17,7 +17,7 @@ import {
     encodeSessionPrepareCommand,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
 import { ControlledAcpAgentSpecification } from "../support/agents/controlled-acp.ts";
 import { withRealDaemon } from "../support/agents/real-daemon.ts";

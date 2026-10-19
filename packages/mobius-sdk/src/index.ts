@@ -52,7 +52,7 @@ export type {
     TurnRequest,
     WorkspaceEntriesEvent,
     WorkspaceEntry,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 export {
     AGENT_DEFAULT_EXECUTION_SETTING,
     AGENT_PERMISSION_MODE_CONFIG_ID,
@@ -95,7 +95,7 @@ export {
     SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT,
     SESSION_RECORDING_TURN_PAGE_MAX_LIMIT,
     SessionPromptDisposition,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 export * from "./errors.ts";
 export * from "./project-authentication.ts";
 export * from "./resources.ts";

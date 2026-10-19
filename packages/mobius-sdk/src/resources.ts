@@ -8,7 +8,7 @@ import {
     type SessionCapabilities,
     type SessionConfigurationSelection,
     type TurnRequest,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 
 import { MobiusProtocolError, MobiusValidationError } from "./errors.ts";
 

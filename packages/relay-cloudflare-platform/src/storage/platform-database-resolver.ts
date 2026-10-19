@@ -1,6 +1,6 @@
-import { isProjectLocationHint } from "@moxt-ai/mobius-protocol";
 import { PairingDirectoryError, type ProjectDatabaseBindings } from "@moxt-ai/mobius-relay-core/contracts";
 import type { SqlDatabase } from "@moxt-ai/mobius-relay-core/database";
+import { isProjectLocationHint } from "@moxt-ai/mobius-sdk/protocol";
 import type { PlatformProjectPlacement, PlatformProjectPlacementRegistry } from "../entity/platform-control-plane.ts";
 import { decodePlatformProjectPlacement, projectBucketLocation } from "../entity/platform-project-id.ts";
 import { ProjectDurableObjectDatabase } from "./project-durable-object-database.ts";

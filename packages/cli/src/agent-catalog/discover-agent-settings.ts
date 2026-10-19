@@ -9,7 +9,7 @@ import {
     type AgentSettingsDiscoverCommand,
     type AgentSettingsDiscoveredEvent,
     type SessionConfigOption,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import {
     type AcpAgentSettingsModelEffort,
     AcpConfigurationValueUnavailableError,

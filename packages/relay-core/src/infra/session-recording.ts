@@ -1,4 +1,4 @@
-import type { SessionEventEnvelope } from "@moxt-ai/mobius-protocol";
+import type { SessionEventEnvelope } from "@moxt-ai/mobius-sdk/protocol";
 
 export interface SessionRecordingTarget {
     readonly projectId: string;

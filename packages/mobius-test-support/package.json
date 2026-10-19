@@ -14,7 +14,7 @@
     "dependencies": {
         "@agentclientprotocol/sdk": "1.4.0",
         "@moxt-ai/mobius": "workspace:*",
-        "@moxt-ai/mobius-protocol": "workspace:*"
+        "@moxt-ai/mobius-sdk": "workspace:*"
     },
     "devDependencies": {
         "@types/node": "^24.13.5"

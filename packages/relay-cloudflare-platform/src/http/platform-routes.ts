@@ -1,10 +1,10 @@
-import { isIdentifier, MOBIUS_API_PREFIX, PROJECT_LOCATION_HINTS } from "@moxt-ai/mobius-protocol";
 import {
     errorMiddleware,
     notFoundResponse,
     requestTimeoutMiddleware,
     rethrowHonoError,
 } from "@moxt-ai/mobius-relay-core";
+import { isIdentifier, MOBIUS_API_PREFIX, PROJECT_LOCATION_HINTS } from "@moxt-ai/mobius-sdk/protocol";
 import { Hono } from "hono";
 import * as v from "valibot";
 import { PlatformControlPlaneError } from "../entity/platform-control-plane.ts";

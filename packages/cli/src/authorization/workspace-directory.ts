@@ -1,7 +1,7 @@
 import { readdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, normalize, relative } from "node:path";
-import type { WorkspaceEntry } from "@moxt-ai/mobius-protocol";
+import type { WorkspaceEntry } from "@moxt-ai/mobius-sdk/protocol";
 import { LocalAuthorizationError } from "./local-authorization-error.ts";
 
 export class WorkspaceDirectoryListing {

@@ -7,12 +7,6 @@ if (output === undefined) {
 
 const packages = [
     {
-        output: "protocol_exists",
-        required: process.env.PROTOCOL_CHANGED === "true" || process.env.SDK_CHANGED === "true",
-        manifest: "packages/protocol/package.json",
-        name: "@moxt-ai/mobius-protocol",
-    },
-    {
         output: "sdk_exists",
         required: process.env.SDK_CHANGED === "true",
         manifest: "packages/mobius-sdk/package.json",

@@ -1,4 +1,4 @@
-import type { ProjectLocationHint } from "@moxt-ai/mobius-protocol";
+import type { ProjectLocationHint } from "@moxt-ai/mobius-sdk/protocol";
 import { PlatformControlPlaneError, type PlatformProjectPlacement } from "./platform-control-plane.ts";
 
 const placements: ReadonlyMap<string, PlatformProjectPlacement> = new Map([

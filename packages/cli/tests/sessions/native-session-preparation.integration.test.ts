@@ -1,7 +1,7 @@
 import { existsSync, watch } from "node:fs";
 import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { NativeSessionCommand } from "@moxt-ai/mobius-protocol";
+import type { NativeSessionCommand } from "@moxt-ai/mobius-sdk/protocol";
 import { describe, expect, it, vi } from "vitest";
 import { acpAdapters } from "../../src/acp/adapter/registry.ts";
 import { AgentRuntimeManager } from "../../src/acp/agent-runtime-manager.ts";

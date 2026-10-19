@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import type { Duplex } from "node:stream";
-import { encodeRuntimeStatusEvent, RUNTIME_STATUS_KIND } from "@moxt-ai/mobius-protocol";
+import { encodeRuntimeStatusEvent, RUNTIME_STATUS_KIND } from "@moxt-ai/mobius-sdk/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { listen, port as readPort, sendText as writeServerTextFrame } from "../../test-support/src/websocket.ts";
 import { connectMobiusClient, type MobiusClient } from "../src/client.ts";

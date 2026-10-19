@@ -5,7 +5,7 @@ import {
     RUNTIME_STATUS_KIND,
     type SessionElicitationRespondCommand,
     type SessionPermissionResolvedEvent,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import ReconnectingWebSocket, { type CloseEvent as ReconnectingCloseEvent } from "partysocket/ws";
 
 const CONNECTION_TIMEOUT_MILLISECONDS = 15_000;

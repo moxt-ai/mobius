@@ -16,7 +16,7 @@ import {
     encodeAgentSettingsDiscoverCommand,
     encodeSessionPrepareCommand,
     MOBIUS_API_PREFIX,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { listen, port, sendText } from "@moxt-ai/mobius-test/websocket";
 import { expect, test } from "vitest";
 import type { LocalAgentSpecification } from "../../src/agent-catalog/agent-specification.ts";

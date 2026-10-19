@@ -16,7 +16,7 @@ import {
     type SessionPermissionOption,
     type SessionPermissionRequestedEvent,
     type SessionPermissionResolvedEvent,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { AcpExecutionError } from "./acp-error.ts";
 import { normalizeElicitationFields, validateElicitationContent } from "./elicitation.ts";
 import { PendingElicitation, PendingPermission } from "./pending-interactions.ts";

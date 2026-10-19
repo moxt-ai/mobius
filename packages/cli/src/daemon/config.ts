@@ -1,5 +1,5 @@
 import { join, resolve } from "node:path";
-import { mobiusApiPath, RUNTIME_WORKSPACE_BINDING_ID } from "@moxt-ai/mobius-protocol";
+import { mobiusApiPath, RUNTIME_WORKSPACE_BINDING_ID } from "@moxt-ai/mobius-sdk/protocol";
 import { type AcpAgentDefinition, LocalAgentCatalog } from "../agent-catalog/local-agent.ts";
 import { readStateDirectory } from "../storage/state-directory.ts";
 

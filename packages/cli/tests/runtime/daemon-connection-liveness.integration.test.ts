@@ -5,8 +5,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { listen, port as readPort, sendText as writeServerTextFrame } from "@moxt-ai/mobius-test/websocket";
-import { afterEach, describe, expect, it, vi } from "vitest";
 import {
     decodeMessageKind,
     decodeRuntimeHeartbeatEvent,
@@ -24,7 +22,9 @@ import {
     type SessionEvent,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
-} from "../../../protocol/src/index.ts";
+} from "@moxt-ai/mobius-sdk/protocol";
+import { listen, port as readPort, sendText as writeServerTextFrame } from "@moxt-ai/mobius-test/websocket";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDaemonConfig, LocalAgentDefinition } from "../../src/daemon/config.ts";
 import { RuntimeRelayRevokedError } from "../../src/daemon/relay/runtime-revocation.ts";
 import { SESSION_EVENT_BATCH_WINDOW_MILLISECONDS } from "../../src/daemon/relay/session-event-publisher.ts";

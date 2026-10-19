@@ -3,7 +3,7 @@ import {
     decodeSessionLiveEvent,
     type SessionEvent,
     type SessionLiveEvent,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { describe, expect, it } from "vitest";
 
 const eventWithoutProvenance = {

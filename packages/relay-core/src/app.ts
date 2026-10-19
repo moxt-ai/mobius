@@ -1,4 +1,4 @@
-import { MOBIUS_API_PREFIX, parseMobiusApiPrefix } from "@moxt-ai/mobius-protocol";
+import { MOBIUS_API_PREFIX, parseMobiusApiPrefix } from "@moxt-ai/mobius-sdk/protocol";
 import { Hono } from "hono";
 import { createChannelRoutes } from "./http/channel/channel-routes.ts";
 import { rethrowHonoError } from "./http/middleware/error-middleware.ts";

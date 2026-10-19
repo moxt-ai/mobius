@@ -27,8 +27,8 @@ module.exports = {
         {
             name: "protocol-does-not-depend-on-implementations",
             severity: "error",
-            from: { path: "^packages/protocol/src/" },
-            to: { path: "^packages/", pathNot: "^packages/protocol/" },
+            from: { path: "^packages/mobius-sdk/src/protocol/" },
+            to: { path: "^packages/", pathNot: "^packages/mobius-sdk/" },
         },
     ],
     options: {

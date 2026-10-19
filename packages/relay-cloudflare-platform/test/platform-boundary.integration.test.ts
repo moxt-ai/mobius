@@ -1,6 +1,12 @@
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
+    DurableObjectDatabaseAdapter,
+    DurableObjectSqlDatabase,
+    RuntimeRelay,
+    type SessionRecording,
+} from "@moxt-ai/mobius-relay-core";
+import {
     decodeDaemonToServiceMessage,
     decodeServiceToDaemonMessage,
     decodeSessionEventEnvelope,
@@ -20,13 +26,7 @@ import {
     encodeSessionRenamedEvent,
     encodeSessionStatusChangedEvent,
     MOBIUS_API_PREFIX,
-} from "@moxt-ai/mobius-protocol";
-import {
-    DurableObjectDatabaseAdapter,
-    DurableObjectSqlDatabase,
-    RuntimeRelay,
-    type SessionRecording,
-} from "@moxt-ai/mobius-relay-core";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDurableObjectDependencies } from "../../relay-core/src/di/create-durable-object-dependencies.ts";
 import { createTestMobiusPlatformApp } from "../../test-support/src/app.ts";

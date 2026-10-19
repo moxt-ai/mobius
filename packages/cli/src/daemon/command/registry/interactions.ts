@@ -5,7 +5,7 @@ import {
     SESSION_ELICITATION_RESPOND_KIND,
     SESSION_PERMISSION_RESPOND_KIND,
     SESSION_PROMPT_DISPOSITION_KIND,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { reportOperationFailure, send, settleAbandonedTurn } from "../../command-dispatcher.ts";
 import type { DaemonCommand } from "../definition.ts";
 

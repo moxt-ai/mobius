@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { decodeDaemonToServiceMessage, type RuntimeUpgradeResult } from "@moxt-ai/mobius-protocol";
+import { decodeDaemonToServiceMessage, type RuntimeUpgradeResult } from "@moxt-ai/mobius-sdk/protocol";
 import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";

@@ -10,7 +10,7 @@ import {
     encodeSessionPromptDispositionCommand,
     SESSION_EVENT_KIND,
     SessionPromptDisposition,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
 import { CodexAgentSpecification } from "../../src/agent-catalog/agents/codex-agent.ts";
 import { CodexFixture } from "../support/agents/codex.ts";

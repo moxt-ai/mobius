@@ -1,4 +1,4 @@
-import { encodeSessionEventEnvelope, type SessionEventEnvelope } from "@moxt-ai/mobius-protocol";
+import { encodeSessionEventEnvelope, type SessionEventEnvelope } from "@moxt-ai/mobius-sdk/protocol";
 import type { BestEffortRecording } from "./best-effort-recording.ts";
 import type { ChannelPeers } from "./channel-actor.ts";
 

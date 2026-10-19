@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { SessionEvent, SessionEventPayload, SessionLiveEvent } from "@moxt-ai/mobius-protocol";
+import type { SessionEvent, SessionEventPayload, SessionLiveEvent } from "@moxt-ai/mobius-sdk/protocol";
 import type { LocalSqliteDatabase } from "../infra/local-sqlite-database.ts";
 import { SessionEventHistoryProjection } from "../session-event-history-projection.ts";
 import {

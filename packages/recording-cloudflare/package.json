@@ -15,7 +15,7 @@
         "typecheck": "tsc --project tsconfig.json && tsc --project test/tsconfig.json"
     },
     "dependencies": {
-        "@moxt-ai/mobius-protocol": "workspace:*",
+        "@moxt-ai/mobius-sdk": "workspace:*",
         "drizzle-orm": "^0.45.2",
         "hono": "^4.13.8",
         "zod": "^4.6.5"

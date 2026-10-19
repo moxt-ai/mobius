@@ -20,7 +20,7 @@ import {
     type SessionCommand,
     type SessionConfigOption,
     type SessionEventPayload,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import type { LocalRasterImage } from "../acp/resource/local-raster.ts";
 import { readInlineRaster, readLocalRaster } from "../acp/resource/local-raster.ts";
 import { type LocalVideo, readInlineVideo } from "../acp/resource/local-video.ts";

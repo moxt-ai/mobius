@@ -1,10 +1,10 @@
+import { ProjectAuthenticationError, ProjectPermission } from "@moxt-ai/mobius-relay-core";
 import {
     decodeSessionAccessCredential,
     isIdentifier,
     issueSessionAccessCredential,
     verifySessionAccessCredential,
-} from "@moxt-ai/mobius-protocol";
-import { ProjectAuthenticationError, ProjectPermission } from "@moxt-ai/mobius-relay-core";
+} from "@moxt-ai/mobius-sdk/protocol";
 import type { AppCredentialAuthenticationService } from "./app-credential-authentication-service.ts";
 import type { PlatformControlPlaneService } from "./platform-control-plane-service.ts";
 

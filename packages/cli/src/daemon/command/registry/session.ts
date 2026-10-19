@@ -5,14 +5,14 @@ import type {
     SessionRenameCommand,
     SessionRestoreCommand,
     WorkspaceListCommand,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import {
     SESSION_CONFIGURE_KIND,
     SESSION_PREPARE_KIND,
     SESSION_RENAME_KIND,
     SESSION_RESTORE_KIND,
     WORKSPACE_LIST_KIND,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import type { WebSocket } from "undici";
 import { AcpExecutionError } from "../../../acp/acp-error.ts";
 import type { AcpSessionRecovery, AgentRuntimeManager } from "../../../acp/agent-runtime-manager.ts";

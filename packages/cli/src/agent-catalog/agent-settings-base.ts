@@ -3,7 +3,7 @@ import {
     type SessionConfigOption,
     type SessionConfigurationSelection,
     type SessionConfigValue,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import type { AcpAgentDefinition } from "./local-agent.ts";
 
 export class AgentSettingsConfigurationError extends Error {

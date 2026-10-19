@@ -8,7 +8,7 @@ import {
     encodeSessionPrepareCommand,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
 import { ClaudeCodeAgentSpecification } from "../../src/agent-catalog/agents/claude-code-agent.ts";
 import { CodexAgentSpecification } from "../../src/agent-catalog/agents/codex-agent.ts";

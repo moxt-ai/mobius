@@ -1,6 +1,6 @@
 import { once } from "node:events";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { ExternalImageContentBlock, MobiusSessionExport, SessionEvent } from "@moxt-ai/mobius-protocol";
+import type { ExternalImageContentBlock, MobiusSessionExport, SessionEvent } from "@moxt-ai/mobius-sdk/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import {
     MobiusClient,

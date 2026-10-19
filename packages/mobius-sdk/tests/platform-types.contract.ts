@@ -1,4 +1,4 @@
-import type { ProjectLocationHint } from "@moxt-ai/mobius-protocol";
+import type { ProjectLocationHint } from "@moxt-ai/mobius-sdk/protocol";
 import type { MobiusCreatePlatformProjectRequest } from "../src/platform.ts";
 
 const request: MobiusCreatePlatformProjectRequest = {

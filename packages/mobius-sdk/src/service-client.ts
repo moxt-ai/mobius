@@ -30,7 +30,7 @@ import {
     type SessionLiveEventBatch,
     SessionPromptDisposition,
     type WorkspaceEntriesEvent,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 
 import {
     MobiusApiError,

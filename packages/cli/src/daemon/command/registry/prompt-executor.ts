@@ -1,4 +1,4 @@
-import { type SessionPromptCommand, SessionPromptDisposition } from "@moxt-ai/mobius-protocol";
+import { type SessionPromptCommand, SessionPromptDisposition } from "@moxt-ai/mobius-sdk/protocol";
 import { AcpExecutionError, type AgentRuntimeManager } from "../../../acp/agent-runtime-manager.ts";
 import {
     agentForSessionConfiguration,

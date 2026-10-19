@@ -1,4 +1,4 @@
-import { AGENT_SETTINGS_DISCOVERY_FAILED_KIND, type AgentSettingsDiscoverCommand } from "@moxt-ai/mobius-protocol";
+import { AGENT_SETTINGS_DISCOVERY_FAILED_KIND, type AgentSettingsDiscoverCommand } from "@moxt-ai/mobius-sdk/protocol";
 import { WebSocket } from "undici";
 import {
     AcpConfigurationValueUnavailableError,

@@ -1,21 +1,20 @@
-name: Publish Protocol and SDK
-
+name: Publish SDK
+ 
 on:
   push:
     branches: [main]
     paths:
-      - packages/protocol/package.json
       - packages/mobius-sdk/package.json
   workflow_dispatch:
-
+ 
 permissions:
   contents: read
   id-token: write
-
+ 
 concurrency:
-  group: publish-protocol-and-sdk
+  group: publish-sdk
   cancel-in-progress: false
-
+ 
 jobs:
   publish:
     name: npm
@@ -27,62 +26,45 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-
+ 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
           package-manager-cache: false
-
+ 
       - name: Detect package version changes
         id: versions
         env:
           BEFORE_SHA: ${{ github.event.before }}
           EVENT_NAME: ${{ github.event_name }}
         run: node scripts/ci-detect-mobius-package-versions.cjs
-
+ 
       - name: Enable pnpm
-        if: steps.versions.outputs.protocol_changed == 'true' || steps.versions.outputs.sdk_changed == 'true'
+        if: steps.versions.outputs.sdk_changed == 'true'
         run: corepack enable
-
+ 
       - name: Install release dependencies
-        if: steps.versions.outputs.protocol_changed == 'true' || steps.versions.outputs.sdk_changed == 'true'
+        if: steps.versions.outputs.sdk_changed == 'true'
         run: pnpm install --frozen-lockfile
-
+ 
       - name: Ensure npm supports OIDC trusted publishing
-        if: steps.versions.outputs.protocol_changed == 'true' || steps.versions.outputs.sdk_changed == 'true'
+        if: steps.versions.outputs.sdk_changed == 'true'
         run: npm install --global npm@11.5.1
-
+ 
       - name: Check npm publication state
         id: registry
-        if: steps.versions.outputs.protocol_changed == 'true' || steps.versions.outputs.sdk_changed == 'true'
+        if: steps.versions.outputs.sdk_changed == 'true'
         env:
-          PROTOCOL_CHANGED: ${{ steps.versions.outputs.protocol_changed }}
           SDK_CHANGED: ${{ steps.versions.outputs.sdk_changed }}
         run: node scripts/ci-check-mobius-publication-state.cjs
-
-      - name: Require the SDK Protocol dependency
-        if: steps.versions.outputs.sdk_changed == 'true' && steps.versions.outputs.protocol_changed != 'true' && steps.registry.outputs.protocol_exists != 'true'
-        env:
-          PROTOCOL_EXISTS: ${{ steps.registry.outputs.protocol_exists }}
-        run: node scripts/ci-require-mobius-protocol.cjs
-
+ 
       - name: Pack release artifacts
-        if: steps.versions.outputs.protocol_changed == 'true' || steps.versions.outputs.sdk_changed == 'true'
+        if: steps.versions.outputs.sdk_changed == 'true'
         env:
-          PROTOCOL_CHANGED: ${{ steps.versions.outputs.protocol_changed }}
-          PROTOCOL_EXISTS: ${{ steps.registry.outputs.protocol_exists }}
           SDK_CHANGED: ${{ steps.versions.outputs.sdk_changed }}
           SDK_EXISTS: ${{ steps.registry.outputs.sdk_exists }}
         run: node scripts/ci-pack-mobius-releases.cjs
-
-      - name: Publish Protocol
-        if: steps.versions.outputs.protocol_changed == 'true' && steps.registry.outputs.protocol_exists != 'true'
-        run: node scripts/ci-publish-mobius-release.cjs protocol
-
-      - name: Wait for Protocol registry availability
-        if: steps.versions.outputs.sdk_changed == 'true' && steps.versions.outputs.protocol_changed == 'true' && steps.registry.outputs.protocol_exists != 'true'
-        run: node scripts/ci-wait-for-mobius-protocol.cjs
-
+ 
       - name: Publish SDK
         if: steps.versions.outputs.sdk_changed == 'true' && steps.registry.outputs.sdk_exists != 'true'
         run: node scripts/ci-publish-mobius-release.cjs sdk

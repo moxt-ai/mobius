@@ -1,5 +1,5 @@
-import { RUNTIME_WORKSPACE_BINDING_ID } from "@moxt-ai/mobius-protocol";
 import { MobiusRecordingPolicy } from "@moxt-ai/mobius-sdk";
+import { RUNTIME_WORKSPACE_BINDING_ID } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, it } from "vitest";
 import { startTestPlatform } from "../support/platform.ts";
 

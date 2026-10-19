@@ -1,4 +1,8 @@
-import { isIdentifier, type SessionRecordingDirectory, type SessionRecordingSummary } from "@moxt-ai/mobius-protocol";
+import {
+    isIdentifier,
+    type SessionRecordingDirectory,
+    type SessionRecordingSummary,
+} from "@moxt-ai/mobius-sdk/protocol";
 import { and, desc, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/durable-sqlite";
 import { recordingDirectoryDurableObjectMigrations } from "../generated/recording-directory-do-migrations.ts";

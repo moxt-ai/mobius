@@ -14,12 +14,6 @@ if (!manual && (beforeRevision === undefined || !/^([0-9a-f]{40}|[0-9a-f]{64})$/
 
 const packages = [
     {
-        label: "Protocol",
-        manifest: "packages/protocol/package.json",
-        name: "@moxt-ai/mobius-protocol",
-        output: "protocol",
-    },
-    {
         label: "SDK",
         manifest: "packages/mobius-sdk/package.json",
         legacyManifest: "packages/web-sdk/package.json",

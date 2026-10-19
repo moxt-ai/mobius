@@ -3,7 +3,7 @@ import {
     decodeSessionRecordingDirectory,
     decodeSessionRecordingHistory,
     decodeSessionRecordingHistoryPage,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRecordingWorker } from "../src/worker.ts";
 

@@ -11,7 +11,7 @@ import type {
     SessionEventPayload,
     SessionStatus,
     SessionStatusChangedEvent,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import type { DaemonTimer } from "../daemon/relay/timer.ts";
 import type { AcpContentExternalizer } from "../external-content/acp-content-externalizer.ts";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";

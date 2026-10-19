@@ -4,7 +4,7 @@ import {
     type SessionRecordingStatus,
     type SessionRecordingSummary,
     type SessionRecordingWrite,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import type { RecordingDirectoryStorage } from "../storage/recording-directory-storage.ts";
 
 const statusFromEvent = (event: SessionLiveEvent): SessionRecordingStatus | null => {

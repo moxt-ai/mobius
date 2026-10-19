@@ -8,8 +8,8 @@ import type {
     SessionRecordingTurnItemDetail,
     SessionRecordingTurnItemPage,
     SessionRecordingTurnPage,
-} from "@moxt-ai/mobius-protocol";
-import { sessionRecordingTurnItemCursor } from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
+import { sessionRecordingTurnItemCursor } from "@moxt-ai/mobius-sdk/protocol";
 import {
     emptyProjection,
     type ItemTextChange,

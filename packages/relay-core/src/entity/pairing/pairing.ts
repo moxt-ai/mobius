@@ -1,4 +1,8 @@
-import { isIdentifier, MAX_LOCAL_AGENT_DIRECTORY_ENTRIES, type SessionCapabilities } from "@moxt-ai/mobius-protocol";
+import {
+    isIdentifier,
+    MAX_LOCAL_AGENT_DIRECTORY_ENTRIES,
+    type SessionCapabilities,
+} from "@moxt-ai/mobius-sdk/protocol";
 import type { HttpError } from "../http-error.ts";
 
 export const PAIRING_LIFETIME_MILLISECONDS = 10 * 60 * 1_000;

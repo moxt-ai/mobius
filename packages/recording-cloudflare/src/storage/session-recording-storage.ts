@@ -3,7 +3,7 @@ import {
     encodeSessionEventEnvelope,
     type SessionLiveEvent,
     type SessionRecordingWrite,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { and, asc, desc, eq, gt, gte, lt } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/durable-sqlite";
 import { sessionRecordingDurableObjectMigrations } from "../generated/session-recording-do-migrations.ts";

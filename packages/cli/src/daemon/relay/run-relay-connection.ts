@@ -3,7 +3,7 @@ import {
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_LIVENESS_READY_KIND,
     UnsupportedProtocolMessageKindError,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { type MessageEvent, WebSocket } from "undici";
 import type { AgentRuntimeManager } from "../../acp/agent-runtime-manager.ts";
 import type { WorkspaceDirectoryService } from "../../authorization/workspace-directory.ts";

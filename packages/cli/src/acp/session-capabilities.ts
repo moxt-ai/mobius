@@ -1,5 +1,5 @@
 import type { InitializeResponse } from "@agentclientprotocol/sdk";
-import type { SessionCapabilities } from "@moxt-ai/mobius-protocol";
+import type { SessionCapabilities } from "@moxt-ai/mobius-sdk/protocol";
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
     return typeof value === "object" && value !== null && !Array.isArray(value);

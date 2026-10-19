@@ -1,5 +1,5 @@
-import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import type { SqlDatabase } from "@moxt-ai/mobius-relay-core/database";
+import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-sdk/protocol";
 import { decodePlatformProjectPlacement, projectIdFromPrefixedValue } from "../entity/platform-project-id.ts";
 import { encodeProjectDurableObjectPath } from "../entity/project-durable-object-path.ts";
 

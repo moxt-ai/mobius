@@ -1,5 +1,5 @@
 import type { SessionConfigOption } from "@agentclientprotocol/sdk";
-import { AGENT_MODEL_EFFORT_RESOLUTION_COMPLETE, type AgentModelEffort } from "@moxt-ai/mobius-protocol";
+import { AGENT_MODEL_EFFORT_RESOLUTION_COMPLETE, type AgentModelEffort } from "@moxt-ai/mobius-sdk/protocol";
 import { AcpExecutionError } from "../../acp-error.ts";
 import type { CodexAppServerClient } from "./app-server-client.ts";
 import { type CodexModel, modelListResponseSchema } from "./app-server-protocol.ts";
