@@ -1,10 +1,4 @@
-import type {
-    AgentSettingsDiscoverCommand,
-    FileReadCommand,
-    SessionPromptCommand,
-    SessionRenameCommand,
-    WorkspaceListCommand,
-} from "@moxt-ai/mobius-protocol";
+import type { AgentSettingsDiscoverCommand, FileReadCommand, WorkspaceListCommand } from "@moxt-ai/mobius-protocol";
 import { decodeRuntimeDiagnosticsRequest } from "@moxt-ai/mobius-protocol";
 import { ProjectPermission } from "../../entity/authentication/project-authentication.ts";
 import type { ProjectScope } from "../../entity/do/session.ts";
@@ -382,38 +376,6 @@ export class PairingService {
             await this.#pairings.closeControlHost(access, AbortSignal.timeout(15000));
         }
     };
-
-    /**
-     * Submits a Turn.
-     */
-    readonly submitProjectScopeTurn = async (
-        scope: ProjectScope,
-        runtimeId: string,
-        command: SessionPromptCommand,
-        signal: AbortSignal,
-    ) => await this.requestProjectScopeControl(scope, runtimeId, command, signal);
-
-    /**
-     * Submits a Turn through a Project credential.
-     */
-    readonly submitRuntimeTurn = async (
-        projectId: string,
-        runtimeId: string,
-        token: string,
-        command: SessionPromptCommand,
-        signal: AbortSignal,
-    ) => await this.requestControl(projectId, runtimeId, token, command, signal);
-
-    /**
-     * Renames the Session through a Project credential.
-     */
-    readonly renameRuntimeSession = async (
-        projectId: string,
-        runtimeId: string,
-        token: string,
-        command: SessionRenameCommand,
-        signal: AbortSignal,
-    ) => await this.requestControl(projectId, runtimeId, token, command, signal);
 
     readonly readProjectRuntimePairing = (projectId: string, pairingId: string, token: string, signal: AbortSignal) =>
         this.#pairings.readProjectRuntimePairing(projectId, pairingId, token, signal);

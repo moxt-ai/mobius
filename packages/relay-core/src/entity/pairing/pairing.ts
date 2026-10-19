@@ -414,8 +414,8 @@ function normalizePersistedAgents(value: unknown): unknown {
 // and missing known fields default to unsupported. This keeps an older Relay
 // compatible with a newer daemon that advertises capabilities it does not know.
 // A capability value this Relay cannot interpret is advisory, not a pairing
-// failure: the agent stays listed with that capability withheld, and each
-// command that needs it is rejected when it is issued.
+// failure: the agent stays listed with that capability withheld, and the
+// daemon decides whether a command may use it when it executes the command.
 function validateAgentCapabilities(value: unknown): SessionCapabilities {
     if (!isRecord(value)) {
         return unsupportedSessionCapabilities();
