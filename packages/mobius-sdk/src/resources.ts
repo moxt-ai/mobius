@@ -88,6 +88,16 @@ function integerField(value: Readonly<Record<string, unknown>>, field: string): 
     return candidate;
 }
 
+function optionalArrayField(value: Readonly<Record<string, unknown>>, field: string, maximumLength = 10_000): void {
+    const candidate = value[field];
+    if (candidate === undefined) {
+        return;
+    }
+    if (!Array.isArray(candidate) || candidate.length > maximumLength) {
+        throw invalidResponse(`The service returned an invalid ${field}`);
+    }
+}
+
 function booleanField(value: Readonly<Record<string, unknown>>, field: string): boolean {
     const candidate = value[field];
     if (typeof candidate !== "boolean") {
@@ -466,7 +476,7 @@ function decodeAgentDescriptor(value: unknown): MobiusAgentDescriptor {
 const EMPTY_INSTALLABLE_AGENTS: readonly never[] = Object.freeze([]);
 
 function validateInstallableAgentsCompatibility(resource: Readonly<Record<string, unknown>>): void {
-    arrayField(resource, "installableAgents", 100);
+    optionalArrayField(resource, "installableAgents", 100);
 }
 
 export class MobiusRuntimeDescriptor {
