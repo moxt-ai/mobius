@@ -22,7 +22,7 @@ jobs:
     steps:
       - name: Request Moxt review
         env:
-          WEBHOOK_URL: ${{ vars.MOXT_REVIEW_WEBHOOK_URL || 'https://webhook.moxt.ai/web/api/external/webhooks/integrations/trigger/6zrnmb90/e2cc910c-1ba4-4290-9a64-88a42120f158' }}
+          WEBHOOK_URL: ${{ vars.MOXT_REVIEW_WEBHOOK_URL || 'https://webhook.moxt.ai/web/api/external/webhooks/integrations/trigger/6zrnmb90/a6a7f99b-4195-4ab5-b9c7-54bff8adcc28' }}
           WEBHOOK_TOKEN: ${{ secrets.MOXT_REVIEW_WEBHOOK_TOKEN }}
         shell: bash
         run: |
