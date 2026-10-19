@@ -413,9 +413,12 @@ function normalizePersistedAgents(value: unknown): unknown {
 // shape is validated explicitly into a fresh object, unknown fields are ignored,
 // and missing known fields default to unsupported. This keeps an older Relay
 // compatible with a newer daemon that advertises capabilities it does not know.
+// A capability value this Relay cannot interpret is advisory, not a pairing
+// failure: the agent stays listed with that capability withheld, and the
+// daemon decides whether a command may use it when it executes the command.
 function validateAgentCapabilities(value: unknown): SessionCapabilities {
     if (!isRecord(value)) {
-        throw new PairingDirectoryError("invalid_agents", "The local Agent capabilities are invalid");
+        return unsupportedSessionCapabilities();
     }
     const capabilities: Record<keyof SessionCapabilities, boolean> = {
         ...unsupportedSessionCapabilities(),
@@ -426,7 +429,7 @@ function validateAgentCapabilities(value: unknown): SessionCapabilities {
         }
         const advertised = value[field];
         if (advertised !== undefined && typeof advertised !== "boolean") {
-            throw new PairingDirectoryError("invalid_agents", "The local Agent capabilities are invalid");
+            continue;
         }
         capabilities[field] = advertised === true;
     }

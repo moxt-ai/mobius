@@ -17,6 +17,7 @@ import {
     encodeSessionOperationFailedEvent,
     encodeSessionPreviewHistoryPageLoaded,
     encodeSessionPromptCommand,
+    encodeSessionRenamedEvent,
     encodeSessionStatusChangedEvent,
     MOBIUS_API_PREFIX,
 } from "@moxt-ai/mobius-protocol";
@@ -2196,5 +2197,330 @@ describe.sequential("Platform Turn submission", () => {
         } finally {
             daemon.close();
         }
+    });
+
+    it("Given an Agent whose capability advertisement withholds steering and Session renaming, When Chat steers a Turn or renames the Session, Then the Relay forwards both and the Runtime's own answer decides", async () => {
+        const gatedAgent = readyAgents[0];
+        if (gatedAgent === undefined) {
+            throw new Error("Expected the shared Agent directory entry");
+        }
+        const worker = createTestMobiusPlatformApp(
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
+            createPlatformGateways,
+        );
+        const environment = bindings();
+        const tenants = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/platform/tenants`, {
+                    headers: developerHeaders(),
+                }),
+                environment,
+            ),
+            200,
+        );
+        const tenantValues = tenants["tenants"];
+        if (!Array.isArray(tenantValues) || tenantValues.length === 0) {
+            throw new Error("Expected a Platform tenant");
+        }
+        const app = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps`, {
+                    body: JSON.stringify({
+                        displayName: "Capability-gated commands App",
+                        tenantId: text(record(tenantValues[0]), "tenantId"),
+                    }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const appId = text(app, "appId");
+        const appCredential = text(record(app["defaultCredential"]), "credential");
+        const project = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${appId}/projects`, {
+                    body: JSON.stringify({
+                        displayName: "Capability-gated commands Project",
+                        idempotencyKey: "capability-gated-commands-project",
+                        locationHint: "apac",
+                    }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const projectId = text(project, "projectId");
+        const pairing = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtime-pairings`, {
+                    body: JSON.stringify({ idempotencyKey: "capability-gated-commands-runtime" }),
+                    headers: credentialHeaders(appCredential),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const claimed = await responseJson(
+            await worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtime-pairings/${text(pairing, "pairingId")}/redeem`,
+                    {
+                        body: JSON.stringify({
+                            agents: [
+                                {
+                                    ...gatedAgent,
+                                    // The Agent withholds both command capabilities, so pairing
+                                    // must still succeed and only the commands are rejected.
+                                    capabilities: {
+                                        ...gatedAgent.capabilities,
+                                        renameSession: false,
+                                        steering: false,
+                                    },
+                                },
+                            ],
+                            installableAgents: [],
+                            machineName: "Capability-gated commands Runtime",
+                            pairingCode: text(pairing, "pairingCode"),
+                            workspaceName: "capability-gated-commands-workspace",
+                        }),
+                        headers: { "content-type": "application/json" },
+                        method: "POST",
+                    },
+                ),
+                environment,
+            ),
+            200,
+        );
+        const runtimeId = text(claimed, "runtimeId");
+        const sessionId = "capability-gated-session";
+        const sessionAccess = await responseJson(
+            await worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/access-credentials`,
+                    {
+                        body: JSON.stringify({ expiresInSeconds: 900, runtimeId }),
+                        headers: credentialHeaders(appCredential),
+                        method: "POST",
+                    },
+                ),
+                environment,
+            ),
+            201,
+        );
+        const sessionCredential = text(sessionAccess, "credential");
+
+        // Pairing succeeded, so the Agent remains listed with its capabilities.
+        expect(
+            await responseJson(
+                await worker.fetch(
+                    new Request(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtimes/${runtimeId}/agents`,
+                        { headers: credentialHeaders(appCredential) },
+                    ),
+                    environment,
+                ),
+                200,
+            ),
+        ).toMatchObject({ agents: [{ id: "codex", label: "Codex" }], runtimeId });
+
+        // The Relay no longer decides from the catalog. It forwards the steer
+        // to the Runtime, whose own rejection answers with the same
+        // machine-readable code and a terminal status.
+        const daemonResponse = await worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect?liveness=1`, {
+                headers: { authorization: `Bearer ${text(claimed, "runtimeCredential")}`, Upgrade: "websocket" },
+            }),
+            environment,
+        );
+        if (daemonResponse.webSocket === null) {
+            throw new Error("Expected the Runtime socket");
+        }
+        const daemon = daemonResponse.webSocket;
+        const daemonMessages = new SocketMessages(daemon);
+        daemon.accept();
+        try {
+            expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("runtime.liveness.ready");
+            const steer = worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/turns/some-active-turn/disposition`,
+                    {
+                        body: JSON.stringify({ disposition: "steer" }),
+                        headers: credentialHeaders(sessionCredential),
+                        method: "PUT",
+                    },
+                ),
+                environment,
+            );
+            const forwarded = decodeServiceToDaemonMessage(await daemonMessages.next());
+            expect(forwarded).toMatchObject({ kind: "session.prompt.disposition", sessionId });
+            daemon.send(
+                encodeSessionOperationFailedEvent({
+                    code: "steering_unsupported",
+                    kind: "session.operation.failed",
+                    message: "The selected agent does not support mid-turn steering",
+                    requestId: "some-active-turn",
+                    sessionId,
+                }),
+            );
+            expect(await responseJson(await steer, 409)).toMatchObject({
+                error: { code: "steering_unsupported" },
+            });
+
+            // A rename forwards unchanged even though no listed Agent
+            // advertises renaming: the Runtime renames the stored Session
+            // itself, exactly as it does for Agents without the extension.
+            const rename = worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/rename`,
+                    {
+                        body: JSON.stringify({ title: "Renamed despite the withheld capability" }),
+                        headers: credentialHeaders(sessionCredential),
+                        method: "POST",
+                    },
+                ),
+                environment,
+            );
+            const renameCommand = decodeServiceToDaemonMessage(await daemonMessages.next());
+            expect(renameCommand).toMatchObject({ kind: "session.rename", sessionId });
+            daemon.send(
+                encodeSessionRenamedEvent({
+                    kind: "session.renamed",
+                    requestId: renameCommand.kind === "session.rename" ? renameCommand.requestId : "",
+                    sessionId,
+                    title: "Renamed despite the withheld capability",
+                    updatedAt: "2030-01-01T00:00:00.000Z",
+                }),
+            );
+            expect(await responseJson(await rename, 200)).toMatchObject({
+                kind: "session.renamed",
+                sessionId,
+                title: "Renamed despite the withheld capability",
+            });
+        } finally {
+            daemon.close(1000, "Test complete");
+        }
+    });
+
+    it("Given an Agent whose capability advertisement carries values the Relay cannot interpret, When it pairs, Then pairing succeeds and the unreadable capabilities stay withheld", async () => {
+        const worker = createTestMobiusPlatformApp(
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
+            createPlatformGateways,
+        );
+        const environment = bindings();
+        const tenants = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/platform/tenants`, {
+                    headers: developerHeaders(),
+                }),
+                environment,
+            ),
+            200,
+        );
+        const tenantValues = tenants["tenants"];
+        if (!Array.isArray(tenantValues) || tenantValues.length === 0) {
+            throw new Error("Expected a Platform tenant");
+        }
+        const app = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps`, {
+                    body: JSON.stringify({
+                        displayName: "Malformed capabilities App",
+                        tenantId: text(record(tenantValues[0]), "tenantId"),
+                    }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const appId = text(app, "appId");
+        const appCredential = text(record(app["defaultCredential"]), "credential");
+        const project = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${appId}/projects`, {
+                    body: JSON.stringify({
+                        displayName: "Malformed capabilities Project",
+                        idempotencyKey: "malformed-capabilities-project",
+                        locationHint: "apac",
+                    }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const projectId = text(project, "projectId");
+        const pairing = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtime-pairings`, {
+                    body: JSON.stringify({ idempotencyKey: "malformed-capabilities-runtime" }),
+                    headers: credentialHeaders(appCredential),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const advertised = readyAgents[0];
+        if (advertised === undefined) {
+            throw new Error("Expected the shared Agent directory entry");
+        }
+        const malformed = {
+            ...advertised,
+            capabilities: {
+                ...advertised.capabilities,
+                // Non-boolean advertisement values used to reject the whole
+                // pairing; they now stay withheld instead.
+                renameSession: "yes",
+                steering: null,
+            },
+        };
+        const claimed = await responseJson(
+            await worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtime-pairings/${text(pairing, "pairingId")}/redeem`,
+                    {
+                        body: JSON.stringify({
+                            agents: [malformed],
+                            installableAgents: [],
+                            machineName: "Malformed capabilities Runtime",
+                            pairingCode: text(pairing, "pairingCode"),
+                            workspaceName: "malformed-capabilities-workspace",
+                        }),
+                        headers: { "content-type": "application/json" },
+                        method: "POST",
+                    },
+                ),
+                environment,
+            ),
+            200,
+        );
+        expect(
+            await responseJson(
+                await worker.fetch(
+                    new Request(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtimes/${text(claimed, "runtimeId")}/agents`,
+                        { headers: credentialHeaders(appCredential) },
+                    ),
+                    environment,
+                ),
+                200,
+            ),
+        ).toMatchObject({
+            agents: [
+                {
+                    capabilities: { renameSession: false, steering: false },
+                    id: "codex",
+                },
+            ],
+            runtimeId: text(claimed, "runtimeId"),
+        });
     });
 });
