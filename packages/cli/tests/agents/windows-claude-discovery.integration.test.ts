@@ -7,15 +7,21 @@ import { expect, test } from "vitest";
 import { ClaudeFixture } from "../support/agents/claude.ts";
 import { FakeAnthropicProvider } from "../support/llm/anthropic.ts";
 
-test.runIf(process.platform === "win32")(
-    "Given real Claude is installed in the Windows native location outside PATH, When the user lists Agents, Then Claude is ready",
-    async () => {
+test.runIf(process.platform === "win32").each(["native", "desktop", "desktop-classic"])(
+    "Given real Claude is installed in the Windows %s location outside PATH, When the user lists Agents, Then Claude is ready",
+    async (installation) => {
         await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-6", "WINDOWS_DISCOVERY_REPLY");
         await using claude = await ClaudeFixture.create(provider);
         const directory = await mkdtemp(join(tmpdir(), "mobius-windows-claude-"));
         const workspace = join(directory, "workspace");
         const userProfile = join(directory, "user");
-        const nativeDirectory = join(userProfile, ".local", "bin");
+        const localAppData = join(userProfile, "AppData", "Local");
+        const nativeDirectory =
+            installation === "native"
+                ? join(userProfile, ".local", "bin")
+                : installation === "desktop-classic"
+                  ? join(userProfile, "AppData", "Roaming", "Claude", "claude-code", "2.1.299")
+                  : join(localAppData, "Claude-Data", "claude_pzs8sxrjxfjjc", "claude-code", "2.1.299", "test-build");
         const nativeExecutable = join(nativeDirectory, "claude.exe");
         try {
             await Promise.all([mkdir(workspace), mkdir(nativeDirectory, { recursive: true })]);
@@ -34,6 +40,8 @@ test.runIf(process.platform === "win32")(
                         ...environment,
                         Path: dirname(process.execPath),
                         USERPROFILE: userProfile,
+                        LOCALAPPDATA: localAppData,
+                        APPDATA: join(userProfile, "AppData", "Roaming"),
                         MOBIUS_STATE_DIRECTORY: join(directory, "state"),
                     },
                     signal: AbortSignal.timeout(30000),
