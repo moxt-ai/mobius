@@ -2,17 +2,17 @@ import { randomUUID } from "node:crypto";
 import {
     decodeMessageKind,
     decodeNativeSessionResult,
-    decodeSessionEventEnvelopeV2,
-    decodeSessionEventV2,
-    decodeSessionLiveHistoryV2PageLoaded,
+    decodeSessionEvent,
+    decodeSessionEventEnvelope,
+    decodeSessionHistoryPageLoaded,
     decodeSessionOperationFailedEvent,
     decodeSessionPreviewHistoryPageLoaded,
     encodeNativeSessionCommand,
     encodeSessionCancelCommand,
-    encodeSessionLiveHistoryV2PageLoad,
+    encodeSessionHistoryPageLoad,
     encodeSessionPreviewHistoryPageLoad,
     encodeSessionPromptCommand,
-    SESSION_EVENT_V2_KIND,
+    SESSION_EVENT_KIND,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { expect, test } from "vitest";
@@ -60,7 +60,7 @@ test("Given a real pi native Session, When the active prompt is cancelled with a
             const finish = async (commandId: string, reason: string): Promise<string> => {
                 let text = "";
                 for (;;) {
-                    const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+                    const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
                     if (
                         event.type === "lifecycle-metadata" &&
                         event.payload.kind === "prompt.failed" &&
@@ -107,8 +107,8 @@ test("Given a real pi native Session, When the active prompt is cancelled with a
             for (;;) {
                 const message = await peer.nextMessage();
                 if (
-                    decodeMessageKind(message) === SESSION_EVENT_V2_KIND &&
-                    decodeSessionEventEnvelopeV2(message).events.some(
+                    decodeMessageKind(message) === SESSION_EVENT_KIND &&
+                    decodeSessionEventEnvelope(message).events.some(
                         (event) =>
                             event.type === "lifecycle-metadata" && event.payload.kind === "session.queue.changed",
                     )
@@ -150,7 +150,7 @@ test("Given a real Pi native Session was previewed, When the user imports it, Th
             }),
         );
         for (;;) {
-            const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
             if (
                 event.type === "lifecycle-metadata" &&
                 event.payload.kind === "prompt.failed" &&
@@ -281,7 +281,7 @@ test("Given a saved real Pi native Session, When the user forks it, Then its his
             }),
         );
         for (;;) {
-            const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
             if (
                 event.type === "lifecycle-metadata" &&
                 event.payload.kind === "prompt.completed" &&
@@ -365,7 +365,7 @@ test("Given a saved real Pi native Session, When the user forks it, Then its his
 
         const historyRequestId = randomUUID();
         peer.send(
-            encodeSessionLiveHistoryV2PageLoad({
+            encodeSessionHistoryPageLoad({
                 cursor: null,
                 eventLimit: 50,
                 kind: "session.live-history.v2.page.load",
@@ -382,7 +382,7 @@ test("Given a saved real Pi native Session, When the user forks it, Then its his
             if (kind !== "session.live-history.v2.page.loaded") {
                 continue;
             }
-            const loaded = decodeSessionLiveHistoryV2PageLoaded(message);
+            const loaded = decodeSessionHistoryPageLoaded(message);
             if (loaded.requestId !== historyRequestId) {
                 continue;
             }
@@ -417,7 +417,7 @@ test("Given a saved real Pi native Session, When the user forks it, Then its his
         );
         let reply = "";
         for (;;) {
-            const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
             if (
                 event.type === "acp" &&
                 event.payload.sessionUpdate === "agent_message_chunk" &&

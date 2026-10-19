@@ -11,13 +11,13 @@ import {
     AGENT_SETTINGS_DISCOVERED_KIND,
     decodeAgentSettingsDiscoveredEvent,
     decodeMessageKind,
-    decodeSessionEventEnvelopeV2,
+    decodeSessionEventEnvelope,
     decodeSessionOperationFailedEvent,
     encodeAgentSettingsDiscoverCommand,
     encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
-    SESSION_EVENT_V2_KIND,
-    type SessionEventV2,
+    SESSION_EVENT_KIND,
+    type SessionEvent,
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -100,7 +100,7 @@ class TerminalSessionResult {
     }
 }
 
-const bufferedSessionEvents = new WeakMap<ClientFrames, SessionEventV2[]>();
+const bufferedSessionEvents = new WeakMap<ClientFrames, SessionEvent[]>();
 
 function _readStringField(value: unknown, field: string): string {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -117,7 +117,7 @@ async function readTerminalSessionResult(
     includeAcpText = true,
 ): Promise<TerminalSessionResult> {
     let text = "";
-    const deferredEvents: SessionEventV2[] = [];
+    const deferredEvents: SessionEvent[] = [];
     for (;;) {
         let events = bufferedSessionEvents.get(frames) ?? [];
         bufferedSessionEvents.delete(frames);
@@ -129,10 +129,10 @@ async function readTerminalSessionResult(
                     return new TerminalSessionResult("failed", text, failure.code, "");
                 }
             }
-            if (decodeMessageKind(message) !== SESSION_EVENT_V2_KIND) {
+            if (decodeMessageKind(message) !== SESSION_EVENT_KIND) {
                 continue;
             }
-            events = [...decodeSessionEventEnvelopeV2(message).events];
+            events = [...decodeSessionEventEnvelope(message).events];
         }
         for (const [index, event] of events.entries()) {
             if (event.sessionId !== sessionId) {
@@ -166,11 +166,11 @@ async function readTerminalSessionResult(
 async function readCommandActivity(frames: ClientFrames, sessionId: string, _commandId: string): Promise<void> {
     for (;;) {
         const message = await frames.next();
-        if (decodeMessageKind(message) !== SESSION_EVENT_V2_KIND) {
+        if (decodeMessageKind(message) !== SESSION_EVENT_KIND) {
             continue;
         }
         if (
-            decodeSessionEventEnvelopeV2(message).events.some(
+            decodeSessionEventEnvelope(message).events.some(
                 (event) =>
                     event.sessionId === sessionId &&
                     event.type === "acp" &&

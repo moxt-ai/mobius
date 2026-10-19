@@ -6,9 +6,9 @@ import type {
     SessionConfigUpdatedEvent,
     SessionElicitationRequestedEvent,
     SessionElicitationResolvedEvent,
-    SessionEventPayloadV2,
+    SessionEventPayload,
     SessionInfoUpdatedEvent,
-    SessionLiveEventV2,
+    SessionLiveEvent,
     SessionPermissionRequestedEvent,
     SessionPermissionResolvedEvent,
 } from "@moxt-ai/mobius-protocol";
@@ -26,7 +26,7 @@ export class RecordingObserver implements AcpSessionObserver {
     readonly permissions: SessionPermissionRequestedEvent[] = [];
     readonly permissionResolutions: SessionPermissionResolvedEvent[] = [];
     readonly elicitationResolutions: SessionElicitationResolvedEvent[] = [];
-    readonly eventsV2: { readonly event: SessionEventPayloadV2; readonly position: number }[] = [];
+    readonly events: { readonly event: SessionEventPayload; readonly position: number }[] = [];
     readonly permissionArrived = Promise.withResolvers<SessionPermissionRequestedEvent>();
     readonly elicitationArrived = Promise.withResolvers<SessionElicitationRequestedEvent>();
 
@@ -72,12 +72,12 @@ export class RecordingObserver implements AcpSessionObserver {
         return Promise.resolve();
     };
 
-    readonly onSessionEventV2 = (liveEvent: SessionLiveEventV2): Promise<void> => {
-        const event: SessionEventPayloadV2 =
+    readonly onSessionEvent = (liveEvent: SessionLiveEvent): Promise<void> => {
+        const event: SessionEventPayload =
             liveEvent.type === "acp"
                 ? { payload: liveEvent.payload, type: "acp" }
                 : { payload: liveEvent.payload, type: "lifecycle-metadata" };
-        this.eventsV2.push({
+        this.events.push({
             event,
             position: Number(liveEvent.position),
         });

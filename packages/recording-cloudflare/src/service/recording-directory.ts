@@ -1,13 +1,13 @@
 import {
     conversationTitleFromText,
-    type SessionLiveEventV2,
+    type SessionLiveEvent,
     type SessionRecordingStatus,
     type SessionRecordingSummary,
     type SessionRecordingWrite,
 } from "@moxt-ai/mobius-protocol";
 import type { RecordingDirectoryStorage } from "../storage/recording-directory-storage.ts";
 
-const statusFromEvent = (event: SessionLiveEventV2): SessionRecordingStatus | null => {
+const statusFromEvent = (event: SessionLiveEvent): SessionRecordingStatus | null => {
     if (event.type !== "lifecycle-metadata") {
         return null;
     }

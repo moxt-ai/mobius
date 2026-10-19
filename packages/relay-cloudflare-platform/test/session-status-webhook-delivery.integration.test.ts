@@ -1,9 +1,5 @@
 import { env } from "cloudflare:workers";
-import {
-    decodeSessionStatusWebhookBody,
-    MOBIUS_API_PREFIX,
-    type SessionEventEnvelopeV2,
-} from "@moxt-ai/mobius-protocol";
+import { decodeSessionStatusWebhookBody, MOBIUS_API_PREFIX, type SessionEventEnvelope } from "@moxt-ai/mobius-protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestMobiusPlatformApp } from "../../test-support/src/app.ts";
 import { FakeClerk } from "../../test-support/src/clerk.ts";
@@ -164,7 +160,7 @@ async function provisionProject(name: string): Promise<{ appId: string; projectI
     return { appId, projectId: text(project, "projectId") };
 }
 
-function event(index: number, payload: Record<string, unknown>): SessionEventEnvelopeV2["events"][number] {
+function event(index: number, payload: Record<string, unknown>): SessionEventEnvelope["events"][number] {
     return {
         eventId: `session-status-delivery-event-${index}`,
         position: String(index),
@@ -174,10 +170,10 @@ function event(index: number, payload: Record<string, unknown>): SessionEventEnv
         sessionId: "session-status-delivery-session",
         type: "lifecycle-metadata",
         payload,
-    } as SessionEventEnvelopeV2["events"][number];
+    } as SessionEventEnvelope["events"][number];
 }
 
-async function deliver(projectId: string, events: SessionEventEnvelopeV2["events"]): Promise<RecordedWebhookTransport> {
+async function deliver(projectId: string, events: SessionEventEnvelope["events"]): Promise<RecordedWebhookTransport> {
     const environment = bindings();
     const webhookStorage = new AppSessionStatusWebhookStorage(environment.PLATFORM_DIRECTORY_DATABASE);
     const transport = new RecordedWebhookTransport();

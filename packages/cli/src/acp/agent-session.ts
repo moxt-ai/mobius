@@ -11,7 +11,7 @@ import {
 import {
     AGENT_CONTENT_KIND,
     type AgentDisplayContent,
-    decodeAcpSessionUpdateV2,
+    decodeAcpSessionUpdate,
     decodeAgentPromptResponse,
     SESSION_COMMANDS_UPDATED_KIND,
     SESSION_CONFIG_UPDATED_KIND,
@@ -19,7 +19,7 @@ import {
     type SessionCapabilities,
     type SessionCommand,
     type SessionConfigOption,
-    type SessionEventPayloadV2,
+    type SessionEventPayload,
 } from "@moxt-ai/mobius-protocol";
 import type { LocalRasterImage } from "../acp/resource/local-raster.ts";
 import { readInlineRaster, readLocalRaster } from "../acp/resource/local-raster.ts";
@@ -48,7 +48,7 @@ import { AcpSessionConfigurations } from "./session-configuration.ts";
 import {
     type AcpConfigureOptions,
     type AcpElicitationResponseOptions,
-    type AcpNativeEventReplayV2,
+    type AcpNativeEventReplay,
     type AcpPermissionResponseOptions,
     AcpPreparedSession,
     type AcpPrepareOptions,
@@ -164,7 +164,7 @@ export class AgentSession implements AcpClientHandler {
             commandId: () => this.#turn.commandId,
             assertNativeSession: (sessionId) => this.assertNativeSession(sessionId),
             observer: getObserver,
-            recordSessionEventV2: this.recordLifecycleEventV2,
+            recordSessionEvent: this.recordLifecycleEvent,
         });
         this.#connection = new AgentConnection(agent, cwd, this);
         this.#contentExternalizer = contentExternalizer;
@@ -386,11 +386,11 @@ export class AgentSession implements AcpClientHandler {
         await this.#completedHistory(signal, "ACP agent exited while loading history");
     };
 
-    readonly loadHistoryEventsV2 = async (
+    readonly loadHistoryEvents = async (
         eventLimit: number,
         cursor: string | null,
         signal: AbortSignal,
-    ): Promise<AcpNativeEventReplayV2> => {
+    ): Promise<AcpNativeEventReplay> => {
         if (!this.#capabilities.loadSession) {
             throw new AcpExecutionError(
                 "This Agent restores context but does not provide message history.",
@@ -405,9 +405,9 @@ export class AgentSession implements AcpClientHandler {
     async #completedHistory(signal: AbortSignal, exitMessage: string): Promise<AcpHistoryReplay> {
         if (!this.#prompted && this.#nativeHistoryOwnership.kind === "fresh-session") {
             if (this.#sessionLoad.kind === "not-requested") {
-                this.#store.eventsV2.reset(this.#mobiusSessionId);
+                this.#store.events.reset(this.#mobiusSessionId);
                 this.#sessionLoad = {
-                    history: new AcpHistoryReplay(this.#store.eventsV2, this.#mobiusSessionId),
+                    history: new AcpHistoryReplay(this.#store.events, this.#mobiusSessionId),
                     kind: "loaded",
                     response: {},
                 };
@@ -426,8 +426,8 @@ export class AgentSession implements AcpClientHandler {
         if (this.#sessionLoad.kind === "capturing") {
             return await waitForSharedOperation(this.#sessionLoad.completion, signal);
         }
-        this.#store.eventsV2.reset(this.#mobiusSessionId);
-        const history = new AcpHistoryReplay(this.#store.eventsV2, this.#mobiusSessionId);
+        this.#store.events.reset(this.#mobiusSessionId);
+        const history = new AcpHistoryReplay(this.#store.events, this.#mobiusSessionId);
         const completion = Promise.resolve().then(async (): Promise<LoadedSession> => {
             try {
                 const response = await this.race(
@@ -961,7 +961,7 @@ export class AgentSession implements AcpClientHandler {
         if (!this.#capabilities.loadSession && this.#sessionLoad.kind === "not-requested") {
             this.#sessionLoad = {
                 kind: "loaded",
-                history: new AcpHistoryReplay(this.#store.eventsV2, this.#mobiusSessionId),
+                history: new AcpHistoryReplay(this.#store.events, this.#mobiusSessionId),
                 response: {},
             };
         }
@@ -982,26 +982,24 @@ export class AgentSession implements AcpClientHandler {
             this.prepareAgentContent,
         );
         this.#turn = running;
-        const lifecycleV2 = options.lifecycleV2;
-        if (lifecycleV2 !== undefined) {
-            await this.recordLifecycleEventV2({
+        const lifecycle = options.lifecycle;
+        if (lifecycle !== undefined) {
+            await this.recordLifecycleEvent({
                 payload: {
                     commandId: options.commandId,
-                    content: lifecycleV2.content,
-                    ...(lifecycleV2.disposition === undefined ? {} : { disposition: lifecycleV2.disposition }),
+                    content: lifecycle.content,
+                    ...(lifecycle.disposition === undefined ? {} : { disposition: lifecycle.disposition }),
                     kind: "prompt.requested",
-                    ...(lifecycleV2.context === undefined ? {} : { context: lifecycleV2.context }),
-                    ...(lifecycleV2.targetCommandId === undefined
-                        ? {}
-                        : { targetCommandId: lifecycleV2.targetCommandId }),
+                    ...(lifecycle.context === undefined ? {} : { context: lifecycle.context }),
+                    ...(lifecycle.targetCommandId === undefined ? {} : { targetCommandId: lifecycle.targetCommandId }),
                 },
                 type: "lifecycle-metadata",
             });
-            await this.recordLifecycleEventV2({
+            await this.recordLifecycleEvent({
                 payload: {
-                    attemptId: lifecycleV2.attemptId,
+                    attemptId: lifecycle.attemptId,
                     commandId: options.commandId,
-                    epoch: lifecycleV2.epoch,
+                    epoch: lifecycle.epoch,
                     kind: "prompt.started",
                 },
                 type: "lifecycle-metadata",
@@ -1038,8 +1036,8 @@ export class AgentSession implements AcpClientHandler {
                 await running.activities.recordNotice(failure.id, failure.revision, failure.severity, failure.title);
             }
             this.#writeStoredSession(new Date().toISOString());
-            if (lifecycleV2 !== undefined) {
-                await this.recordLifecycleEventV2({
+            if (lifecycle !== undefined) {
+                await this.recordLifecycleEvent({
                     payload: { commandId: options.commandId, kind: "prompt.completed", stopReason: result.stopReason },
                     type: "lifecycle-metadata",
                 });
@@ -1051,13 +1049,13 @@ export class AgentSession implements AcpClientHandler {
                 error instanceof AcpExecutionError
                     ? error
                     : new AcpExecutionError("ACP agent execution failed", { cause: error });
-            if (lifecycleV2 !== undefined) {
-                await this.recordLifecycleEventV2({
+            if (lifecycle !== undefined) {
+                await this.recordLifecycleEvent({
                     payload:
                         options.cancellationRequested?.() === true
                             ? { commandId: options.commandId, kind: "prompt.completed", stopReason: "cancelled" }
                             : {
-                                  attemptId: lifecycleV2.attemptId,
+                                  attemptId: lifecycle.attemptId,
                                   code: failure.code,
                                   commandId: options.commandId,
                                   kind: "prompt.failed",
@@ -1087,26 +1085,24 @@ export class AgentSession implements AcpClientHandler {
             throw new AcpExecutionError("The target turn is no longer active", {}, "steering_target_unavailable");
         }
         const prompt = this.buildPrompt(options);
-        const lifecycleV2 = options.lifecycleV2;
-        if (lifecycleV2 !== undefined) {
-            await this.recordLifecycleEventV2({
+        const lifecycle = options.lifecycle;
+        if (lifecycle !== undefined) {
+            await this.recordLifecycleEvent({
                 payload: {
                     commandId: options.commandId,
-                    content: lifecycleV2.content,
-                    ...(lifecycleV2.disposition === undefined ? {} : { disposition: lifecycleV2.disposition }),
+                    content: lifecycle.content,
+                    ...(lifecycle.disposition === undefined ? {} : { disposition: lifecycle.disposition }),
                     kind: "prompt.requested",
-                    ...(lifecycleV2.context === undefined ? {} : { context: lifecycleV2.context }),
-                    ...(lifecycleV2.targetCommandId === undefined
-                        ? {}
-                        : { targetCommandId: lifecycleV2.targetCommandId }),
+                    ...(lifecycle.context === undefined ? {} : { context: lifecycle.context }),
+                    ...(lifecycle.targetCommandId === undefined ? {} : { targetCommandId: lifecycle.targetCommandId }),
                 },
                 type: "lifecycle-metadata",
             });
-            await this.recordLifecycleEventV2({
+            await this.recordLifecycleEvent({
                 payload: {
-                    attemptId: lifecycleV2.attemptId,
+                    attemptId: lifecycle.attemptId,
                     commandId: options.commandId,
-                    epoch: lifecycleV2.epoch,
+                    epoch: lifecycle.epoch,
                     kind: "prompt.started",
                 },
                 type: "lifecycle-metadata",
@@ -1131,8 +1127,8 @@ export class AgentSession implements AcpClientHandler {
             }
             const outcome = response["outcome"];
             if (outcome === "injected" || outcome === "startedNewTurn") {
-                if (lifecycleV2 !== undefined) {
-                    await this.recordLifecycleEventV2({
+                if (lifecycle !== undefined) {
+                    await this.recordLifecycleEvent({
                         payload: { commandId: options.commandId, kind: "prompt.completed", stopReason: "steered" },
                         type: "lifecycle-metadata",
                     });
@@ -1159,10 +1155,10 @@ export class AgentSession implements AcpClientHandler {
                 error instanceof AcpExecutionError
                     ? error
                     : new AcpExecutionError("ACP agent execution failed", { cause: error });
-            if (lifecycleV2 !== undefined) {
-                await this.recordLifecycleEventV2({
+            if (lifecycle !== undefined) {
+                await this.recordLifecycleEvent({
                     payload: {
-                        attemptId: lifecycleV2.attemptId,
+                        attemptId: lifecycle.attemptId,
                         code: failure.code,
                         commandId: options.commandId,
                         kind: "prompt.failed",
@@ -1199,20 +1195,20 @@ export class AgentSession implements AcpClientHandler {
 
     readonly onUpdate = (notification: SessionNotification): Promise<void> => this.#updates.receive(notification);
 
-    readonly recordControlEventV2 = async (event: SessionEventPayloadV2): Promise<boolean> => {
+    readonly recordControlEvent = async (event: SessionEventPayload): Promise<boolean> => {
         if (this.#sessionLoad.kind !== "loaded") {
             return false;
         }
-        await this.recordLifecycleEventV2(event);
+        await this.recordLifecycleEvent(event);
         return true;
     };
 
-    readonly recordLifecycleEventV2 = async (event: SessionEventPayloadV2): Promise<void> => {
+    readonly recordLifecycleEvent = async (event: SessionEventPayload): Promise<void> => {
         if (event.type !== "lifecycle-metadata" || this.#sessionLoad.kind !== "loaded") {
             return;
         }
         const liveEvent = this.#sessionLoad.history.recordLifecycle(event);
-        await this.#getObserver().onSessionEventV2?.(liveEvent);
+        await this.#getObserver().onSessionEvent?.(liveEvent);
     };
 
     readonly selectNativeSession = (sessionId: string): void => {
@@ -1228,13 +1224,13 @@ export class AgentSession implements AcpClientHandler {
             AbortSignal.timeout(30_000),
         );
         const update = externalized.agent;
-        const rawUpdate = decodeAcpSessionUpdateV2(JSON.stringify(externalized.event));
+        const rawUpdate = decodeAcpSessionUpdate(JSON.stringify(externalized.event));
         if (this.#sessionLoad.kind === "capturing") {
             await this.#sessionLoad.history.record(update, rawUpdate);
         } else if (this.#sessionLoad.kind === "loaded") {
-            const onSessionEventV2 = this.#getObserver().onSessionEventV2;
+            const onSessionEvent = this.#getObserver().onSessionEvent;
             await this.#sessionLoad.history.record(update, rawUpdate, async (liveEvent) => {
-                await onSessionEventV2?.(liveEvent);
+                await onSessionEvent?.(liveEvent);
             });
         }
         if (

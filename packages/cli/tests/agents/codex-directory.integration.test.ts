@@ -25,7 +25,7 @@ it("Given saved Codex threads, When its directory is listed through the in-proce
         if (opened.action !== "import") {
             throw new Error("Expected an imported conversation");
         }
-        const replay = await f.sessions.loadSessionEventsV2(
+        const replay = await f.sessions.loadSessionEvents(
             {
                 agent: f.agent,
                 cwd: f.workspace,

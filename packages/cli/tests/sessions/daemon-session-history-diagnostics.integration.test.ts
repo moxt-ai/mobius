@@ -9,11 +9,11 @@ import {
     decodeFileChunkEvent,
     decodeFileEndEvent,
     decodeMessageKind,
-    decodeSessionEventV2,
-    decodeSessionLiveHistoryV2PageLoaded,
+    decodeSessionEvent,
+    decodeSessionHistoryPageLoaded,
     decodeSessionOperationFailedEvent,
     encodeFileReadCommand,
-    encodeSessionLiveHistoryV2PageLoad,
+    encodeSessionHistoryPageLoad,
     encodeSessionPrepareCommand,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
@@ -92,13 +92,13 @@ if (process.argv.includes("--version")) {
                     }),
                 );
                 for (;;) {
-                    const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+                    const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
                     if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
                         break;
                     }
                 }
                 peer.send(
-                    encodeSessionLiveHistoryV2PageLoad({
+                    encodeSessionHistoryPageLoad({
                         cursor: null,
                         eventLimit: 50,
                         kind: "session.live-history.v2.page.load",
@@ -118,7 +118,7 @@ if (process.argv.includes("--version")) {
                     if (messageKind !== "session.live-history.v2.page.loaded") {
                         continue;
                     }
-                    const events = decodeSessionLiveHistoryV2PageLoaded(message).events.events.events;
+                    const events = decodeSessionHistoryPageLoaded(message).events.events.events;
                     expect(JSON.stringify(events).length).toBeLessThan(10_000);
                     expect(JSON.stringify(events)).not.toContain("iVBORw0KGgoAAAANSUhEUg");
                     for (const event of events) {

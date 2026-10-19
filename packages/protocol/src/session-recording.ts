@@ -4,18 +4,18 @@ import { sessionElicitationRequestedEventSchema, sessionPermissionRequestedEvent
 import { identifierStringSchema } from "./identifier.ts";
 import {
     boundedJsonSchema,
-    contentBlockV2Schema,
-    sessionEventEnvelopeV2Schema,
-    sessionLiveEventV2Schema,
+    contentBlockSchema,
+    sessionEventEnvelopeSchema,
+    sessionLiveEventSchema,
     toolCallContentSchema,
     toolCallLocationSchema,
     toolKindSchema,
     toolStatusSchema,
-} from "./session-event-log-v2.ts";
+} from "./session-event-log.ts";
 
 const sessionRecordingWriteSchema = z
     .object({
-        envelope: sessionEventEnvelopeV2Schema,
+        envelope: sessionEventEnvelopeSchema,
         projectId: identifierStringSchema,
         runtimeId: identifierStringSchema,
     })
@@ -26,7 +26,7 @@ const sessionRecordingWriteSchema = z
 // the payload was already parsed, turning a long Session into a hard failure. Bounded reads use pages.
 const sessionRecordingHistorySchema = z
     .object({
-        events: z.array(sessionLiveEventV2Schema).readonly(),
+        events: z.array(sessionLiveEventSchema).readonly(),
         sessionId: identifierStringSchema,
     })
     .readonly();
@@ -39,7 +39,7 @@ const recordingCursorSchema = z.string().regex(/^v2:[1-9][0-9]*:(?:0|[1-9][0-9]*
 
 const sessionRecordingHistoryPageSchema = z
     .object({
-        events: z.array(sessionLiveEventV2Schema).max(10_000).readonly(),
+        events: z.array(sessionLiveEventSchema).max(10_000).readonly(),
         // The append-order cursor after this page, or null when the caller has caught up.
         nextCursor: recordingCursorSchema.nullable(),
         // The append-order cursor at the newest recorded event, so an idle poller can compare one token.
@@ -286,7 +286,7 @@ export const sessionRecordingTurnItemSchema = z.discriminatedUnion("kind", [
 
 export const sessionRecordingTurnPromptSchema = z
     .object({
-        content: z.array(contentBlockV2Schema).min(1).max(100).readonly(),
+        content: z.array(contentBlockSchema).min(1).max(100).readonly(),
         disposition: shortText.optional(),
         targetCommandId: identifierStringSchema.optional(),
     })

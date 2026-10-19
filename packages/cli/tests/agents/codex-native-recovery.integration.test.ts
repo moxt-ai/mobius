@@ -1,13 +1,13 @@
 import { randomUUID } from "node:crypto";
 import {
     decodeMessageKind,
-    decodeSessionEventEnvelopeV2,
-    decodeSessionEventV2,
-    decodeSessionLiveHistoryV2PageLoaded,
+    decodeSessionEvent,
+    decodeSessionEventEnvelope,
+    decodeSessionHistoryPageLoaded,
     encodeSessionCancelCommand,
-    encodeSessionLiveHistoryV2PageLoad,
+    encodeSessionHistoryPageLoad,
     encodeSessionPromptCommand,
-    SESSION_EVENT_V2_KIND,
+    SESSION_EVENT_KIND,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { expect, test } from "vitest";
@@ -23,7 +23,7 @@ test("Given a newly created real Codex Session, When Chat requests its V2 histor
         const sessionId = await prepareNewRealSession(peer, "codex");
         const requestId = randomUUID();
         peer.send(
-            encodeSessionLiveHistoryV2PageLoad({
+            encodeSessionHistoryPageLoad({
                 kind: "session.live-history.v2.page.load",
                 requestId,
                 sessionId,
@@ -39,7 +39,7 @@ test("Given a newly created real Codex Session, When Chat requests its V2 histor
             if (decodeMessageKind(message) !== "session.live-history.v2.page.loaded") {
                 continue;
             }
-            expect(decodeSessionLiveHistoryV2PageLoaded(message)).toMatchObject({
+            expect(decodeSessionHistoryPageLoaded(message)).toMatchObject({
                 events: {
                     events: {
                         sessionGenerationId: expect.any(String),
@@ -97,7 +97,7 @@ test("Given a real Codex native Session, When the active prompt is cancelled wit
             const finish = async (commandId: string, reason: string): Promise<string> => {
                 let text = "";
                 for (;;) {
-                    const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+                    const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
                     if (
                         event.type === "lifecycle-metadata" &&
                         event.payload.kind === "prompt.failed" &&
@@ -144,8 +144,8 @@ test("Given a real Codex native Session, When the active prompt is cancelled wit
             for (;;) {
                 const message = await peer.nextMessage();
                 if (
-                    decodeMessageKind(message) === SESSION_EVENT_V2_KIND &&
-                    decodeSessionEventEnvelopeV2(message).events.some(
+                    decodeMessageKind(message) === SESSION_EVENT_KIND &&
+                    decodeSessionEventEnvelope(message).events.some(
                         (event) =>
                             event.type === "lifecycle-metadata" && event.payload.kind === "session.queue.changed",
                     )

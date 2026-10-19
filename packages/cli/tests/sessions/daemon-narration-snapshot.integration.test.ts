@@ -8,10 +8,10 @@ import { fileURLToPath } from "node:url";
 
 import {
     decodeMessageKind,
-    decodeSessionEventEnvelopeV2,
+    decodeSessionEventEnvelope,
     encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
-    SESSION_EVENT_V2_KIND,
+    SESSION_EVENT_KIND,
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -183,10 +183,10 @@ describe("daemon narration delivery", () => {
             let completedNarration = false;
             for (;;) {
                 const message = await frames.next();
-                if (decodeMessageKind(message) !== SESSION_EVENT_V2_KIND) {
+                if (decodeMessageKind(message) !== SESSION_EVENT_KIND) {
                     continue;
                 }
-                const events = decodeSessionEventEnvelopeV2(message).events;
+                const events = decodeSessionEventEnvelope(message).events;
                 for (const event of events) {
                     if (
                         event.type === "acp" &&

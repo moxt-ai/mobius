@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
     decodeMessageKind,
     decodeRuntimeHeartbeatEvent,
-    decodeSessionEventEnvelopeV2,
+    decodeSessionEventEnvelope,
     encodeRuntimeHeartbeatAckEvent,
     encodeRuntimeLivenessReadyEvent,
     encodeSessionPromptCommand,
@@ -19,15 +19,15 @@ import {
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_HEARTBEAT_KIND,
     RUNTIME_LIVENESS_READY_KIND,
-    SESSION_EVENT_V2_KIND,
+    SESSION_EVENT_KIND,
     SESSION_PROMPT_KIND,
-    type SessionEventV2,
+    type SessionEvent,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
 } from "../../../protocol/src/index.ts";
 import { createDaemonConfig, LocalAgentDefinition } from "../../src/daemon/config.ts";
 import { RuntimeRelayRevokedError } from "../../src/daemon/relay/runtime-revocation.ts";
-import { SESSION_EVENT_V2_BATCH_WINDOW_MILLISECONDS } from "../../src/daemon/relay/session-event-publisher.ts";
+import { SESSION_EVENT_BATCH_WINDOW_MILLISECONDS } from "../../src/daemon/relay/session-event-publisher.ts";
 import type { DaemonScheduledTask, DaemonTimer } from "../../src/daemon/relay/timer.ts";
 import { runDaemon } from "../../src/daemon/run.ts";
 
@@ -792,13 +792,13 @@ describe("daemon relay connection liveness", () => {
             if (firstSocket === undefined) {
                 throw new Error("Test relay did not retain the first connection");
             }
-            const initialEvents: SessionEventV2[] = [];
+            const initialEvents: SessionEvent[] = [];
             while (
                 !initialEvents.some(
                     (event) => event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed",
                 )
             ) {
-                (await timer.waitForTask(SESSION_EVENT_V2_BATCH_WINDOW_MILLISECONDS)).run();
+                (await timer.waitForTask(SESSION_EVENT_BATCH_WINDOW_MILLISECONDS)).run();
                 let frame = await firstFrame.next();
                 if (decodeMessageKind(frame.text) === RUNTIME_HEARTBEAT_KIND) {
                     const heartbeat = decodeRuntimeHeartbeatEvent(frame.text);
@@ -811,10 +811,10 @@ describe("daemon relay connection liveness", () => {
                     );
                     frame = await firstFrame.next();
                 }
-                while (decodeMessageKind(frame.text) !== SESSION_EVENT_V2_KIND) {
+                while (decodeMessageKind(frame.text) !== SESSION_EVENT_KIND) {
                     frame = await firstFrame.next();
                 }
-                initialEvents.push(...decodeSessionEventEnvelopeV2(frame.text).events);
+                initialEvents.push(...decodeSessionEventEnvelope(frame.text).events);
             }
             expect(initialEvents).toEqual(
                 expect.arrayContaining([
@@ -852,15 +852,15 @@ describe("daemon relay connection liveness", () => {
                         targetCommandId: "",
                     }),
                 );
-                (await timer.waitForTask(SESSION_EVENT_V2_BATCH_WINDOW_MILLISECONDS)).run();
+                (await timer.waitForTask(SESSION_EVENT_BATCH_WINDOW_MILLISECONDS)).run();
                 let terminal = false;
                 let answer = "";
                 while (!terminal) {
                     const frame = await firstFrame.next();
-                    if (decodeMessageKind(frame.text) !== SESSION_EVENT_V2_KIND) {
+                    if (decodeMessageKind(frame.text) !== SESSION_EVENT_KIND) {
                         continue;
                     }
-                    for (const event of decodeSessionEventEnvelopeV2(frame.text).events) {
+                    for (const event of decodeSessionEventEnvelope(frame.text).events) {
                         if (
                             event.type === "acp" &&
                             event.payload.sessionUpdate === "agent_message_chunk" &&
@@ -871,7 +871,7 @@ describe("daemon relay connection liveness", () => {
                         terminal ||= event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed";
                     }
                     if (!terminal) {
-                        (await timer.waitForTask(SESSION_EVENT_V2_BATCH_WINDOW_MILLISECONDS)).run();
+                        (await timer.waitForTask(SESSION_EVENT_BATCH_WINDOW_MILLISECONDS)).run();
                     }
                 }
                 expect(answer).toContain("keep broadcasting");
@@ -912,7 +912,7 @@ describe("daemon relay connection liveness", () => {
             const restarted = waitForUpgrade();
             daemon = runDaemon(config, cancellation.signal, timer);
             await restarted;
-            (await timer.waitForTask(SESSION_EVENT_V2_BATCH_WINDOW_MILLISECONDS)).run();
+            (await timer.waitForTask(SESSION_EVENT_BATCH_WINDOW_MILLISECONDS)).run();
             const freshFrames = clientFrames[2];
             if (freshFrames === undefined) {
                 throw new Error("Test relay did not observe the restarted daemon");
@@ -921,10 +921,10 @@ describe("daemon relay connection liveness", () => {
             if (decodeMessageKind(freshFrame.text) === RUNTIME_HEARTBEAT_KIND) {
                 freshFrame = await freshFrames.next();
             }
-            while (decodeMessageKind(freshFrame.text) !== SESSION_EVENT_V2_KIND) {
+            while (decodeMessageKind(freshFrame.text) !== SESSION_EVENT_KIND) {
                 freshFrame = await freshFrames.next();
             }
-            const freshReady = decodeSessionEventEnvelopeV2(freshFrame.text);
+            const freshReady = decodeSessionEventEnvelope(freshFrame.text);
             expect(freshReady.events.every((event) => event.sessionId === "fresh-session")).toBe(true);
             expect(freshReady.events).toEqual(
                 expect.arrayContaining([

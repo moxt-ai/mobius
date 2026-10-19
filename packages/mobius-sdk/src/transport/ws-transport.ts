@@ -219,7 +219,7 @@ export class WsTransport implements MobiusHttpTransport {
         return await response;
     };
 
-    readonly openLiveSessionEvents = async (request: Request): Promise<ReadableStream<MobiusTransportSessionEvent>> => {
+    readonly openSessionLiveEvents = async (request: Request): Promise<ReadableStream<MobiusTransportSessionEvent>> => {
         request.signal.throwIfAborted();
         const requestUrl = new URL(request.url);
         if (this.#origin !== null && this.#origin !== requestUrl.origin) {

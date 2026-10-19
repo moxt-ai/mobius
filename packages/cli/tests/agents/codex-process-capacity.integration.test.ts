@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import {
     decodeMessageKind,
-    decodeSessionEventV2,
-    decodeSessionLiveHistoryV2PageLoaded,
-    encodeSessionLiveHistoryV2PageLoad,
+    decodeSessionEvent,
+    decodeSessionHistoryPageLoaded,
+    encodeSessionHistoryPageLoad,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -40,7 +40,7 @@ async function promptRealSession(peer: RealDaemonPeer, sessionId: string, text: 
     );
     let output = "";
     for (;;) {
-        const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+        const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
         if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.failed") {
             throw new Error(JSON.stringify(event));
         }
@@ -72,7 +72,7 @@ test("Given a real Codex conversation, When more Sessions are opened than the da
         }
         await promptRealSession(peer, sessionId, "Continue the original conversation after opening other Sessions");
         peer.send(
-            encodeSessionLiveHistoryV2PageLoad({
+            encodeSessionHistoryPageLoad({
                 kind: "session.live-history.v2.page.load",
                 requestId: randomUUID(),
                 sessionId,
@@ -88,7 +88,7 @@ test("Given a real Codex conversation, When more Sessions are opened than the da
             if (decodeMessageKind(message) !== "session.live-history.v2.page.loaded") {
                 continue;
             }
-            const page = decodeSessionLiveHistoryV2PageLoaded(message).events.events;
+            const page = decodeSessionHistoryPageLoaded(message).events.events;
             const updates = page.events.flatMap((event) => (event.type === "acp" ? [event.payload] : []));
             const userText = [
                 ...new Set(

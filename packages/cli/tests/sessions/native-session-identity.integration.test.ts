@@ -29,7 +29,7 @@ describe("native session identity", () => {
             if (first.action !== "import") {
                 throw new Error("Expected a native import");
             }
-            const initial = await f.sessions.loadSessionEventsV2(
+            const initial = await f.sessions.loadSessionEvents(
                 {
                     additionalDirectories: [],
                     agent: f.agent,
@@ -57,7 +57,7 @@ describe("native session identity", () => {
                 ready: { sessionId: first.ready.sessionId },
             });
             await expect(
-                f.sessions.loadSessionEventsV2(
+                f.sessions.loadSessionEvents(
                     {
                         additionalDirectories: [],
                         agent: f.agent,
@@ -85,7 +85,7 @@ describe("native session identity", () => {
                 if (entry === undefined) {
                     throw new Error("Missing native conversation");
                 }
-                const source = await f.sessions.previewNativeSessionEventsV2(
+                const source = await f.sessions.previewNativeSessionEvents(
                     {
                         additionalDirectories: [],
                         agent: f.agent,
@@ -103,7 +103,7 @@ describe("native session identity", () => {
                     { ...f.identity, action, entryId: entry.entryId, targetSessionId },
                     signal,
                 );
-                const replayed = await f.sessions.loadSessionEventsV2(
+                const replayed = await f.sessions.loadSessionEvents(
                     {
                         additionalDirectories: [],
                         agent: f.agent,
@@ -201,7 +201,7 @@ describe("native session identity", () => {
                     onText: async () => {},
                     onActivity: async () => {},
                 });
-                const replay = await restarted.loadSessionEventsV2(
+                const replay = await restarted.loadSessionEvents(
                     {
                         agent: f.agent,
                         additionalDirectories: [],
@@ -261,7 +261,7 @@ describe("native session identity", () => {
                 onActivity: async () => {},
             });
 
-            const replay = await f.sessions.loadSessionEventsV2(
+            const replay = await f.sessions.loadSessionEvents(
                 {
                     agent: f.agent,
                     additionalDirectories: [],

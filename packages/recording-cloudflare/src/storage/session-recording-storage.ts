@@ -1,7 +1,7 @@
 import {
-    decodeSessionEventEnvelopeV2,
-    encodeSessionEventEnvelopeV2,
-    type SessionLiveEventV2,
+    decodeSessionEventEnvelope,
+    encodeSessionEventEnvelope,
+    type SessionLiveEvent,
     type SessionRecordingWrite,
 } from "@moxt-ai/mobius-protocol";
 import { and, asc, desc, eq, gt, gte, lt } from "drizzle-orm";
@@ -12,14 +12,14 @@ import { recordedSessionEvent, recordingMetadata } from "../schema/session-recor
 import { applyDurableObjectMigrations } from "./durable-object-migrations.ts";
 
 export interface RecordedBatch {
-    readonly events: readonly SessionLiveEventV2[];
+    readonly events: readonly SessionLiveEvent[];
     readonly generation: string;
     readonly ordinal: number;
 }
 
 interface SelectedEvent {
     readonly batch: RecordedBatch;
-    readonly event: SessionLiveEventV2;
+    readonly event: SessionLiveEvent;
     readonly index: number;
 }
 
@@ -46,12 +46,12 @@ interface BatchBounds {
 /** Batches decoded per query while paging; small enough that one read stays far below Durable Object memory. */
 const batchReadChunk = 32;
 
-interface RecordedSessionLiveHistory {
-    readonly events: readonly SessionLiveEventV2[];
+interface RecordedSessionHistory {
+    readonly events: readonly SessionLiveEvent[];
     readonly sessionId: string;
 }
 
-interface RecordedSessionLiveHistoryPage extends RecordedSessionLiveHistory {
+interface RecordedSessionHistoryPage extends RecordedSessionHistory {
     readonly generationReset: boolean;
     readonly nextCursor: string | null;
     readonly tailCursor: string;
@@ -184,7 +184,7 @@ export class SessionRecordingStorage {
      */
     readonly append = (
         write: SessionRecordingWrite,
-        project: (ordinal: number, events: readonly SessionLiveEventV2[]) => void = () => undefined,
+        project: (ordinal: number, events: readonly SessionLiveEvent[]) => void = () => undefined,
     ): boolean =>
         this.#storage.transactionSync(() => {
             const [event, ...remainingEvents] = write.envelope.events;
@@ -220,7 +220,7 @@ export class SessionRecordingStorage {
             const inserted = this.#database
                 .insert(recordedSessionEvent)
                 .values({
-                    envelopeJson: encodeSessionEventEnvelopeV2(write.envelope),
+                    envelopeJson: encodeSessionEventEnvelope(write.envelope),
                     firstPosition: Number(event.position),
                     lastPosition: finalEvent === undefined ? Number(event.position) : Number(finalEvent.position),
                     recordedAt: Date.parse(event.recordedAt),
@@ -252,7 +252,7 @@ export class SessionRecordingStorage {
 
     /** The cursor at the newest recorded event. */
     readonly tailCursor = (): string => this.#tailCursor();
-    readonly read = (projectId: string, runtimeId: string, sessionId: string): RecordedSessionLiveHistory | null => {
+    readonly read = (projectId: string, runtimeId: string, sessionId: string): RecordedSessionHistory | null => {
         const rows = this.#requireMetadata(projectId, runtimeId, sessionId);
         if (rows === null) {
             return null;
@@ -266,7 +266,7 @@ export class SessionRecordingStorage {
         sessionId: string,
         after: string,
         limit: number,
-    ): RecordedSessionLiveHistoryPage | null => {
+    ): RecordedSessionHistoryPage | null => {
         const metadata = this.#metadata(projectId, runtimeId, sessionId);
         if (metadata === undefined) {
             return null;
@@ -411,6 +411,6 @@ export class SessionRecordingStorage {
             .orderBy(asc(recordedSessionEvent.ordinal))
             .all();
     };
-    readonly #decode = (row: { readonly envelopeJson: string }): readonly SessionLiveEventV2[] =>
-        decodeSessionEventEnvelopeV2(JSON.parse(row.envelopeJson)).events;
+    readonly #decode = (row: { readonly envelopeJson: string }): readonly SessionLiveEvent[] =>
+        decodeSessionEventEnvelope(JSON.parse(row.envelopeJson)).events;
 }

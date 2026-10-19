@@ -1,8 +1,8 @@
-import { encodeSessionEventEnvelopeV2, type SessionEventEnvelopeV2 } from "@moxt-ai/mobius-protocol";
+import { encodeSessionEventEnvelope, type SessionEventEnvelope } from "@moxt-ai/mobius-protocol";
 import type { BestEffortRecording } from "./best-effort-recording.ts";
 import type { ChannelPeers } from "./channel-actor.ts";
 
-export class LiveSessionEventRelay {
+export class SessionLiveEventRelay {
     readonly #projectId: string;
     readonly #runtimeId: string;
     readonly #peers: ChannelPeers;
@@ -15,8 +15,8 @@ export class LiveSessionEventRelay {
         this.#recording = recording;
     }
 
-    readonly receive = (envelope: SessionEventEnvelopeV2): void => {
-        const message = encodeSessionEventEnvelopeV2(envelope);
+    readonly receive = (envelope: SessionEventEnvelope): void => {
+        const message = encodeSessionEventEnvelope(envelope);
         for (const host of this.#peers.hosts()) {
             try {
                 host.send(message);

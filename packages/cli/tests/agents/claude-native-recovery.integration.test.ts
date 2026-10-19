@@ -2,14 +2,14 @@ import { randomUUID } from "node:crypto";
 import {
     decodeMessageKind,
     decodeNativeSessionResult,
-    decodeSessionEventEnvelopeV2,
-    decodeSessionEventV2,
-    decodeSessionLiveHistoryV2PageLoaded,
+    decodeSessionEvent,
+    decodeSessionEventEnvelope,
+    decodeSessionHistoryPageLoaded,
     encodeNativeSessionCommand,
     encodeSessionCancelCommand,
-    encodeSessionLiveHistoryV2PageLoad,
+    encodeSessionHistoryPageLoad,
     encodeSessionPromptCommand,
-    SESSION_EVENT_V2_KIND,
+    SESSION_EVENT_KIND,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { expect, test } from "vitest";
@@ -57,7 +57,7 @@ test("Given a real claude native Session, When the active prompt is cancelled wi
             const finish = async (commandId: string, reason: string): Promise<string> => {
                 let text = "";
                 for (;;) {
-                    const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+                    const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
                     if (
                         event.type === "lifecycle-metadata" &&
                         event.payload.kind === "prompt.failed" &&
@@ -104,8 +104,8 @@ test("Given a real claude native Session, When the active prompt is cancelled wi
             for (;;) {
                 const message = await peer.nextMessage();
                 if (
-                    decodeMessageKind(message) === SESSION_EVENT_V2_KIND &&
-                    decodeSessionEventEnvelopeV2(message).events.some(
+                    decodeMessageKind(message) === SESSION_EVENT_KIND &&
+                    decodeSessionEventEnvelope(message).events.some(
                         (event) =>
                             event.type === "lifecycle-metadata" && event.payload.kind === "session.queue.changed",
                     )
@@ -148,7 +148,7 @@ test("Given a completed real Claude Session, When it is forked, Then its history
         const finish = async (sessionId: string, commandId: string): Promise<string> => {
             let text = "";
             for (;;) {
-                const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+                const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
                 if (
                     event.type === "lifecycle-metadata" &&
                     event.payload.kind === "prompt.failed" &&
@@ -245,7 +245,7 @@ test("Given a completed real Claude Session, When it is forked, Then its history
 
         const historyRequestId = randomUUID();
         peer.send(
-            encodeSessionLiveHistoryV2PageLoad({
+            encodeSessionHistoryPageLoad({
                 cursor: null,
                 eventLimit: 50,
                 kind: "session.live-history.v2.page.load",
@@ -262,7 +262,7 @@ test("Given a completed real Claude Session, When it is forked, Then its history
             if (kind !== "session.live-history.v2.page.loaded") {
                 continue;
             }
-            const loaded = decodeSessionLiveHistoryV2PageLoaded(message);
+            const loaded = decodeSessionHistoryPageLoaded(message);
             if (loaded.requestId !== historyRequestId) {
                 continue;
             }

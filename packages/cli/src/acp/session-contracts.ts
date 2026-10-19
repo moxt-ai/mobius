@@ -2,8 +2,8 @@ import type {
     AgentContentEvent,
     AgentModelEffort,
     AgentPromptResponse,
-    ContentBlockV2,
-    PromptExecutionContextV2,
+    ContentBlock,
+    PromptExecutionContext,
     PromptImage,
     PromptResource,
     SessionCapabilities,
@@ -13,9 +13,9 @@ import type {
     SessionConfigUpdatedEvent,
     SessionElicitationRequestedEvent,
     SessionElicitationResolvedEvent,
-    SessionEventV2,
+    SessionEvent,
     SessionInfoUpdatedEvent,
-    SessionLiveEventV2,
+    SessionLiveEvent,
     SessionPermissionRequestedEvent,
     SessionPermissionResolvedEvent,
 } from "@moxt-ai/mobius-protocol";
@@ -34,11 +34,11 @@ export interface AcpPrepareOptions {
 
 export type AcpSessionRecovery = { readonly kind: "history-required" } | { readonly kind: "interactive-only" };
 
-export interface AcpNativeEventReplayV2 {
+export interface AcpNativeEventReplay {
     readonly nextCursor: string | null;
     readonly sessionGenerationId: string;
     readonly truncated: boolean;
-    readonly events: readonly SessionEventV2[];
+    readonly events: readonly SessionEvent[];
 }
 
 export interface AcpAgentSettingsInspectionOptions {
@@ -59,10 +59,10 @@ export interface AcpConfigureOptions extends AcpPrepareOptions {
 
 export interface AcpPromptContentOptions {
     readonly images: readonly PromptImage[];
-    readonly lifecycleV2?: {
-        readonly context?: PromptExecutionContextV2;
+    readonly lifecycle?: {
+        readonly context?: PromptExecutionContext;
         readonly attemptId: string;
-        readonly content: readonly ContentBlockV2[];
+        readonly content: readonly ContentBlock[];
         readonly disposition?: string;
         readonly epoch: string;
         readonly targetCommandId?: string;
@@ -112,7 +112,7 @@ export interface AcpElicitationResponseOptions {
 export type AcpPromptResult = AgentPromptResponse;
 
 export interface AcpSessionObserver {
-    readonly onSessionEventV2?: (event: SessionLiveEventV2) => Promise<void>;
+    readonly onSessionEvent?: (event: SessionLiveEvent) => Promise<void>;
     readonly onCommands: (event: SessionCommandsUpdatedEvent) => Promise<void>;
     readonly onConfig: (event: SessionConfigUpdatedEvent) => Promise<void>;
     readonly onContent: (event: AgentContentEvent) => Promise<void>;
@@ -124,7 +124,7 @@ export interface AcpSessionObserver {
 }
 
 export class NullAcpSessionObserver implements AcpSessionObserver {
-    readonly onSessionEventV2 = (_event: SessionLiveEventV2): Promise<void> => Promise.resolve();
+    readonly onSessionEvent = (_event: SessionLiveEvent): Promise<void> => Promise.resolve();
     readonly onCommands = (): Promise<void> => Promise.resolve();
     readonly onConfig = (): Promise<void> => Promise.resolve();
     readonly onContent = (_event: AgentContentEvent): Promise<void> => Promise.resolve();

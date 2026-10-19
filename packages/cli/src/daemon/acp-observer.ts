@@ -1,29 +1,29 @@
-import type { AgentContentEvent, SessionInfoUpdatedEvent, SessionLiveEventV2 } from "@moxt-ai/mobius-protocol";
+import type { AgentContentEvent, SessionInfoUpdatedEvent, SessionLiveEvent } from "@moxt-ai/mobius-protocol";
 import { NullAcpSessionObserver } from "../acp/session-contracts.ts";
 
 export class DaemonAcpObserver extends NullAcpSessionObserver {
     readonly #publishInfo: (event: SessionInfoUpdatedEvent) => void;
-    readonly #record: (event: AgentContentEvent) => void;
-    readonly #recordV2: (event: SessionLiveEventV2) => void;
+    readonly #recordContent: (event: AgentContentEvent) => void;
+    readonly #record: (event: SessionLiveEvent) => void;
 
     constructor(
-        recordV2: (event: SessionLiveEventV2) => void,
-        record: (event: AgentContentEvent) => void,
+        record: (event: SessionLiveEvent) => void,
+        recordContent: (event: AgentContentEvent) => void,
         publishInfo: (event: SessionInfoUpdatedEvent) => void,
     ) {
         super();
         this.#publishInfo = publishInfo;
+        this.#recordContent = recordContent;
         this.#record = record;
-        this.#recordV2 = recordV2;
     }
 
-    override readonly onSessionEventV2 = (event: SessionLiveEventV2): Promise<void> => {
-        this.#recordV2(event);
+    override readonly onSessionEvent = (event: SessionLiveEvent): Promise<void> => {
+        this.#record(event);
         return Promise.resolve();
     };
 
     override readonly onContent = (event: AgentContentEvent): Promise<void> => {
-        this.#record(event);
+        this.#recordContent(event);
         return Promise.resolve();
     };
 

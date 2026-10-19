@@ -1,49 +1,49 @@
 import { randomUUID } from "node:crypto";
-import type { SessionEventPayloadV2, SessionEventV2, SessionLiveEventV2 } from "@moxt-ai/mobius-protocol";
+import type { SessionEvent, SessionEventPayload, SessionLiveEvent } from "@moxt-ai/mobius-protocol";
 import type { LocalSqliteDatabase } from "../infra/local-sqlite-database.ts";
-import { SessionEventHistoryProjectionV2 } from "../session-event-history-projection-v2.ts";
+import { SessionEventHistoryProjection } from "../session-event-history-projection.ts";
 import {
     InMemorySessionEventIdAllocator,
     type SessionEventIdAllocator,
 } from "../session-event-id/session-event-id-allocator.ts";
 import type { SessionLiveEventPosition } from "../session-live-event-position.ts";
-import { SessionEventCacheV2Database } from "./session-event-cache-v2-database.ts";
+import { SessionEventCacheDatabase } from "./session-event-cache-database.ts";
 
 const HOT_EVENT_HIGH_WATER_MARK = 256;
 const HOT_EVENT_RETENTION = 128;
 
-class ProjectedSessionEventV2 {
-    #event: SessionEventV2;
+class ProjectedSessionEvent {
+    #event: SessionEvent;
 
-    constructor(event: SessionEventV2) {
+    constructor(event: SessionEvent) {
         this.#event = event;
     }
 
-    get event(): SessionEventV2 {
+    get event(): SessionEvent {
         return this.#event;
     }
 
-    readonly replaceEvent = (event: SessionEventV2): void => {
+    readonly replaceEvent = (event: SessionEvent): void => {
         this.#event = event;
     };
 }
 
-class SessionEventsV2 {
-    readonly hot: ProjectedSessionEventV2[] = [];
+class SessionEvents {
+    readonly hot: ProjectedSessionEvent[] = [];
     readonly #eventIndexById = new Map<string, number>();
-    readonly #itemsByEventId = new Map<string, ProjectedSessionEventV2>();
+    readonly #itemsByEventId = new Map<string, ProjectedSessionEvent>();
     readonly #projectedEventIds: string[] = [];
-    readonly #projection: SessionEventHistoryProjectionV2;
+    readonly #projection: SessionEventHistoryProjection;
     readonly sessionGenerationId: string;
 
     constructor(sessionGenerationId: string) {
         this.sessionGenerationId = sessionGenerationId;
-        this.#projection = new SessionEventHistoryProjectionV2();
+        this.#projection = new SessionEventHistoryProjection();
     }
 
     readonly apply = (
-        event: SessionLiveEventV2,
-    ): { readonly item: ProjectedSessionEventV2; readonly kind: "append" | "replace" } => {
+        event: SessionLiveEvent,
+    ): { readonly item: ProjectedSessionEvent; readonly kind: "append" | "replace" } => {
         const projected = this.#projection.apply(event);
         if (projected.kind === "replace") {
             const current = this.#itemsByEventId.get(projected.replacedEventId);
@@ -53,7 +53,7 @@ class SessionEventsV2 {
             current.replaceEvent(projected.event);
             return { item: current, kind: "replace" };
         }
-        const item = new ProjectedSessionEventV2(projected.event);
+        const item = new ProjectedSessionEvent(projected.event);
         this.hot.push(item);
         this.#eventIndexById.set(projected.event.eventId, this.#projectedEventIds.length);
         this.#itemsByEventId.set(projected.event.eventId, item);
@@ -99,22 +99,22 @@ type FlushSchedule =
     | { readonly kind: "idle" }
     | { readonly handle: NodeJS.Immediate; readonly kind: "scheduled" };
 
-export interface AcpSessionEventPageV2 {
-    readonly events: readonly SessionEventV2[];
+export interface AcpSessionEventPage {
+    readonly events: readonly SessionEvent[];
     readonly nextCursor: string | null;
     readonly sessionGenerationId: string;
     readonly truncated: boolean;
 }
 
-export interface AcpSessionEventStoreV2 {
-    readonly append: (sessionId: string, event: SessionEventPayloadV2) => SessionLiveEventV2;
+export interface AcpSessionEventStore {
+    readonly append: (sessionId: string, event: SessionEventPayload) => SessionLiveEvent;
     readonly close: () => void;
     readonly materialize: (
         sessionId: string,
         sessionGenerationId: string,
-        events: readonly SessionEventPayloadV2[],
+        events: readonly SessionEventPayload[],
     ) => void;
-    readonly page: (sessionId: string, eventLimit: number, cursor: string | null) => AcpSessionEventPageV2;
+    readonly page: (sessionId: string, eventLimit: number, cursor: string | null) => AcpSessionEventPage;
     readonly remove: (sessionId: string) => void;
     readonly reset: (sessionId: string) => void;
 }
@@ -124,8 +124,8 @@ function liveEvent(
     sessionGenerationId: string,
     eventId: string,
     position: number,
-    event: SessionEventPayloadV2,
-): SessionLiveEventV2 {
+    event: SessionEventPayload,
+): SessionLiveEvent {
     return {
         eventId,
         ...event,
@@ -137,12 +137,12 @@ function liveEvent(
 }
 
 function eventPage(
-    session: SessionEventsV2,
+    session: SessionEvents,
     sessionGenerationId: string,
     endIndex: number,
     eventLimit: number,
-    read: (startIndex: number, endIndex: number) => readonly SessionEventV2[],
-): AcpSessionEventPageV2 {
+    read: (startIndex: number, endIndex: number) => readonly SessionEvent[],
+): AcpSessionEventPage {
     const startIndex = Math.max(0, endIndex - eventLimit);
     return {
         events: read(startIndex, endIndex),
@@ -152,23 +152,23 @@ function eventPage(
     };
 }
 
-export class MemoryAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
+export class MemoryAcpSessionEventStore implements AcpSessionEventStore {
     readonly #allocatedPositionBySession = new Map<string, number>();
-    readonly #events = new Map<string, SessionEventsV2>();
+    readonly #events = new Map<string, SessionEvents>();
     readonly #eventIds: SessionEventIdAllocator;
 
     constructor(eventIds: SessionEventIdAllocator = new InMemorySessionEventIdAllocator()) {
         this.#eventIds = eventIds;
     }
 
-    readonly #session = (sessionId: string): SessionEventsV2 => {
+    readonly #session = (sessionId: string): SessionEvents => {
         const sessionGenerationId = randomUUID();
-        const session = this.#events.get(sessionId) ?? new SessionEventsV2(sessionGenerationId);
+        const session = this.#events.get(sessionId) ?? new SessionEvents(sessionGenerationId);
         this.#events.set(sessionId, session);
         return session;
     };
 
-    readonly append = (sessionId: string, event: SessionEventPayloadV2): SessionLiveEventV2 => {
+    readonly append = (sessionId: string, event: SessionEventPayload): SessionLiveEvent => {
         const session = this.#session(sessionId);
         const allocatedPosition = this.#allocatedPositionBySession.get(sessionId) ?? 9_999;
         if (allocatedPosition === Number.MAX_SAFE_INTEGER) {
@@ -195,18 +195,18 @@ export class MemoryAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
     readonly materialize = (
         sessionId: string,
         sessionGenerationId: string,
-        events: readonly SessionEventPayloadV2[],
+        events: readonly SessionEventPayload[],
     ): void => {
         if (this.#events.get(sessionId)?.sessionGenerationId === sessionGenerationId) {
             return;
         }
-        this.#events.set(sessionId, new SessionEventsV2(sessionGenerationId));
+        this.#events.set(sessionId, new SessionEvents(sessionGenerationId));
         for (const event of events) {
             this.append(sessionId, event);
         }
     };
 
-    readonly page = (sessionId: string, eventLimit: number, cursor: string | null): AcpSessionEventPageV2 => {
+    readonly page = (sessionId: string, eventLimit: number, cursor: string | null): AcpSessionEventPage => {
         const session = this.#session(sessionId);
         const endIndex = session.endIndex(cursor);
         return eventPage(session, session.sessionGenerationId, endIndex, eventLimit, (start, end) =>
@@ -220,15 +220,15 @@ export class MemoryAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
 
     readonly reset = (sessionId: string): void => {
         const sessionGenerationId = randomUUID();
-        this.#events.set(sessionId, new SessionEventsV2(sessionGenerationId));
+        this.#events.set(sessionId, new SessionEvents(sessionGenerationId));
     };
 }
 
-export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
-    readonly #cacheDatabase: SessionEventCacheV2Database;
+export class CachedAcpSessionEventStore implements AcpSessionEventStore {
+    readonly #cacheDatabase: SessionEventCacheDatabase;
     readonly #eventIds: SessionEventIdAllocator;
     readonly #liveEventPositions: SessionLiveEventPosition;
-    readonly #sessions = new Map<string, SessionEventsV2>();
+    readonly #sessions = new Map<string, SessionEvents>();
     #flushSchedule: FlushSchedule = { kind: "idle" };
 
     constructor(
@@ -238,17 +238,17 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
     ) {
         this.#eventIds = eventIds;
         this.#liveEventPositions = liveEventPositions;
-        this.#cacheDatabase = new SessionEventCacheV2Database(localDatabase);
+        this.#cacheDatabase = new SessionEventCacheDatabase(localDatabase);
     }
 
-    readonly #session = (sessionId: string): SessionEventsV2 => {
+    readonly #session = (sessionId: string): SessionEvents => {
         const sessionGenerationId = randomUUID();
-        const session = this.#sessions.get(sessionId) ?? new SessionEventsV2(sessionGenerationId);
+        const session = this.#sessions.get(sessionId) ?? new SessionEvents(sessionGenerationId);
         this.#sessions.set(sessionId, session);
         return session;
     };
 
-    readonly append = (sessionId: string, event: SessionEventPayloadV2): SessionLiveEventV2 => {
+    readonly append = (sessionId: string, event: SessionEventPayload): SessionLiveEvent => {
         if (this.#flushSchedule.kind === "closed") {
             throw new Error("The V2 Session event store is closed");
         }
@@ -272,11 +272,7 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
         return recorded;
     };
 
-    readonly #updateProjectedEvent = (
-        sessionId: string,
-        session: SessionEventsV2,
-        item: ProjectedSessionEventV2,
-    ): void => {
+    readonly #updateProjectedEvent = (sessionId: string, session: SessionEvents, item: ProjectedSessionEvent): void => {
         this.#cacheDatabase.replace(sessionId, session.sessionGenerationId, item.event);
     };
 
@@ -297,13 +293,13 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
     readonly materialize = (
         sessionId: string,
         sessionGenerationId: string,
-        events: readonly SessionEventPayloadV2[],
+        events: readonly SessionEventPayload[],
     ): void => {
         if (this.#sessions.get(sessionId)?.sessionGenerationId === sessionGenerationId) {
             return;
         }
         this.#deletePersisted(sessionId);
-        this.#sessions.set(sessionId, new SessionEventsV2(sessionGenerationId));
+        this.#sessions.set(sessionId, new SessionEvents(sessionGenerationId));
         for (const event of events) {
             this.append(sessionId, event);
         }
@@ -340,7 +336,7 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
         }
     };
 
-    readonly page = (sessionId: string, eventLimit: number, cursor: string | null): AcpSessionEventPageV2 => {
+    readonly page = (sessionId: string, eventLimit: number, cursor: string | null): AcpSessionEventPage => {
         const session = this.#sessions.get(sessionId);
         const current = session ?? this.#session(sessionId);
         const endIndex = current.endIndex(cursor);
@@ -377,7 +373,7 @@ export class CachedAcpSessionEventStoreV2 implements AcpSessionEventStoreV2 {
         const previous = this.#sessions.get(sessionId);
         this.#deletePersisted(sessionId, previous?.sessionGenerationId);
         const sessionGenerationId = randomUUID();
-        this.#sessions.set(sessionId, new SessionEventsV2(sessionGenerationId));
+        this.#sessions.set(sessionId, new SessionEvents(sessionGenerationId));
     };
 
     readonly close = (): void => {

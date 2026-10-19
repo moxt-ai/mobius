@@ -1,22 +1,22 @@
-import type { AcpSessionUpdateV2, SessionEventV2, SessionLiveEventV2 } from "@moxt-ai/mobius-protocol";
+import type { AcpSessionUpdate, SessionEvent, SessionLiveEvent } from "@moxt-ai/mobius-protocol";
 
-type AcpSessionEventV2 = Extract<SessionEventV2, { readonly type: "acp" }>;
-type ToolCallV2 = Extract<AcpSessionUpdateV2, { readonly sessionUpdate: "tool_call" | "tool_call_update" }>;
+type AcpSessionEvent = Extract<SessionEvent, { readonly type: "acp" }>;
+type ToolCall = Extract<AcpSessionUpdate, { readonly sessionUpdate: "tool_call" | "tool_call_update" }>;
 
-export type SessionEventHistoryProjectionMutationV2 =
-    | { readonly event: SessionEventV2; readonly kind: "append" }
-    | { readonly event: SessionEventV2; readonly kind: "replace"; readonly replacedEventId: string };
+export type SessionEventHistoryProjectionMutation =
+    | { readonly event: SessionEvent; readonly kind: "append" }
+    | { readonly event: SessionEvent; readonly kind: "replace"; readonly replacedEventId: string };
 
-function projectNewEvent(liveEvent: SessionLiveEventV2, eventId: string): SessionEventV2 {
+function projectNewEvent(liveEvent: SessionLiveEvent, eventId: string): SessionEvent {
     const { position: _position, eventId: _liveEventId, ...event } = liveEvent;
     return { ...event, eventId };
 }
 
-function replaceAcpPayload(event: AcpSessionEventV2, payload: AcpSessionUpdateV2): AcpSessionEventV2 {
+function replaceAcpPayload(event: AcpSessionEvent, payload: AcpSessionUpdate): AcpSessionEvent {
     return { ...event, payload };
 }
 
-function mergeToolCall(previous: ToolCallV2, incoming: ToolCallV2): ToolCallV2 {
+function mergeToolCall(previous: ToolCall, incoming: ToolCall): ToolCall {
     if (previous.sessionUpdate === "tool_call_update") {
         return { ...previous, ...incoming, sessionUpdate: "tool_call_update", toolCallId: previous.toolCallId };
     }
@@ -66,7 +66,7 @@ function mergeToolCall(previous: ToolCallV2, incoming: ToolCallV2): ToolCallV2 {
     };
 }
 
-function mergeTextChunk(previous: AcpSessionUpdateV2, incoming: AcpSessionUpdateV2): AcpSessionUpdateV2 | null {
+function mergeTextChunk(previous: AcpSessionUpdate, incoming: AcpSessionUpdate): AcpSessionUpdate | null {
     if (
         (previous.sessionUpdate !== "agent_message_chunk" &&
             previous.sessionUpdate !== "agent_thought_chunk" &&
@@ -81,11 +81,11 @@ function mergeTextChunk(previous: AcpSessionUpdateV2, incoming: AcpSessionUpdate
     return { ...previous, content: { text: `${previous.content.text}${incoming.content.text}`, type: "text" } };
 }
 
-export class SessionEventHistoryProjectionV2 {
-    readonly #toolCalls = new Map<string, SessionEventV2>();
-    #latestEvent: SessionEventV2 | null = null;
+export class SessionEventHistoryProjection {
+    readonly #toolCalls = new Map<string, SessionEvent>();
+    #latestEvent: SessionEvent | null = null;
 
-    readonly apply = (liveEvent: SessionLiveEventV2): SessionEventHistoryProjectionMutationV2 => {
+    readonly apply = (liveEvent: SessionLiveEvent): SessionEventHistoryProjectionMutation => {
         if (liveEvent.type === "acp" && liveEvent.payload.sessionUpdate === "tool_call_update") {
             const current = this.#toolCalls.get(liveEvent.payload.toolCallId);
             if (
@@ -117,10 +117,7 @@ export class SessionEventHistoryProjectionV2 {
         this.#latestEvent?.eventId === eventId ||
         [...this.#toolCalls.values()].some((event) => event.eventId === eventId);
 
-    readonly #replace = (
-        current: SessionEventV2,
-        replacement: SessionEventV2,
-    ): SessionEventHistoryProjectionMutationV2 => {
+    readonly #replace = (current: SessionEvent, replacement: SessionEvent): SessionEventHistoryProjectionMutation => {
         if (this.#latestEvent?.eventId === current.eventId) {
             this.#latestEvent = replacement;
         }
@@ -128,7 +125,7 @@ export class SessionEventHistoryProjectionV2 {
         return { event: replacement, kind: "replace", replacedEventId: current.eventId };
     };
 
-    readonly #indexToolCall = (event: SessionEventV2): void => {
+    readonly #indexToolCall = (event: SessionEvent): void => {
         if (
             event.type === "acp" &&
             (event.payload.sessionUpdate === "tool_call" || event.payload.sessionUpdate === "tool_call_update")

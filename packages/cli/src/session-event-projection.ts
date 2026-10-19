@@ -1,16 +1,16 @@
 import type {
-    ContentBlockV2,
-    PromptExecutionContextV2,
-    QueuedPromptRequestEventLogV2,
-    SessionEventPayloadV2,
-    SessionLiveEventV2,
+    ContentBlock,
+    PromptExecutionContext,
+    QueuedPromptRequestEventLog,
+    SessionEventPayload,
+    SessionLiveEvent,
     SessionPromptCommand,
 } from "@moxt-ai/mobius-protocol";
 import type { DaemonSessionEventPublisher } from "./daemon/relay/session-event-publisher.ts";
 
-interface QueuedPromptRequestV2 {
+interface QueuedPromptRequest {
     readonly commandId: string;
-    readonly content: readonly ContentBlockV2[];
+    readonly content: readonly ContentBlock[];
     readonly disposition?: string;
     readonly sessionId: string;
     readonly targetCommandId?: string;
@@ -22,12 +22,12 @@ interface QueuedPromptRequestV2 {
     readonly phase: "queued" | "running";
 }
 
-export interface PromptRequestRecoveryV2 {
-    readonly queuedPromptRequests: readonly QueuedPromptRequestEventLogV2[];
+export interface PromptRequestRecovery {
+    readonly queuedPromptRequests: readonly QueuedPromptRequestEventLog[];
 }
 
-function promptContent(command: SessionPromptCommand): readonly ContentBlockV2[] {
-    const content: ContentBlockV2[] = [];
+function promptContent(command: SessionPromptCommand): readonly ContentBlock[] {
+    const content: ContentBlock[] = [];
     if (command.prompt.length > 0) {
         content.push({ text: command.prompt, type: "text" });
     }
@@ -51,18 +51,18 @@ function promptContent(command: SessionPromptCommand): readonly ContentBlockV2[]
     return content;
 }
 
-export class DaemonSessionEventProjectionV2 {
+export class DaemonSessionEventProjection {
     readonly #publisher: DaemonSessionEventPublisher;
-    readonly #terminal = new Map<string, SessionLiveEventV2>();
-    readonly #publications = new Map<string, SessionLiveEventV2[]>();
-    readonly #queued = new Map<string, QueuedPromptRequestV2>();
-    readonly #recordActiveTurn: (event: SessionLiveEventV2) => void;
+    readonly #terminal = new Map<string, SessionLiveEvent>();
+    readonly #publications = new Map<string, SessionLiveEvent[]>();
+    readonly #queued = new Map<string, QueuedPromptRequest>();
+    readonly #recordActiveTurn: (event: SessionLiveEvent) => void;
 
-    readonly #recordLifecycle: (sessionId: string, event: SessionEventPayloadV2) => Promise<boolean>;
+    readonly #recordLifecycle: (sessionId: string, event: SessionEventPayload) => Promise<boolean>;
     constructor(
         publisher: DaemonSessionEventPublisher,
-        recordLifecycle: (sessionId: string, event: SessionEventPayloadV2) => Promise<boolean>,
-        recordActiveTurn: (event: SessionLiveEventV2) => void,
+        recordLifecycle: (sessionId: string, event: SessionEventPayload) => Promise<boolean>,
+        recordActiveTurn: (event: SessionLiveEvent) => void,
     ) {
         this.#recordLifecycle = recordLifecycle;
         this.#recordActiveTurn = recordActiveTurn;
@@ -93,10 +93,10 @@ export class DaemonSessionEventProjectionV2 {
         disposition: string,
     ): {
         readonly attemptId: string;
-        readonly content: readonly ContentBlockV2[];
+        readonly content: readonly ContentBlock[];
         readonly disposition?: string;
         readonly epoch: string;
-        readonly context: PromptExecutionContextV2;
+        readonly context: PromptExecutionContext;
         readonly targetCommandId?: string;
     } => {
         const request = this.#queued.get(commandId);
@@ -114,7 +114,7 @@ export class DaemonSessionEventProjectionV2 {
         throw new Error("The executing prompt was not registered in the V2 queue");
     };
 
-    readonly record = (recorded: SessionLiveEventV2): void => {
+    readonly record = (recorded: SessionLiveEvent): void => {
         this.#recordActiveTurn(recorded);
         const sessionId = recorded.sessionId;
         if (
@@ -134,7 +134,7 @@ export class DaemonSessionEventProjectionV2 {
         if (pending !== undefined) {
             pending.push(recorded);
         } else {
-            this.#publisher.publishV2(recorded);
+            this.#publisher.publish(recorded);
         }
     };
 
@@ -156,7 +156,7 @@ export class DaemonSessionEventProjectionV2 {
                     break;
                 }
                 pending.shift();
-                this.#publisher.publishV2(next);
+                this.#publisher.publish(next);
             }
             if (pending.length === 0) {
                 this.#publications.delete(sessionId);
@@ -205,7 +205,7 @@ export class DaemonSessionEventProjectionV2 {
         }
     };
 
-    readonly promptRequestRecovery = (sessionId: string): PromptRequestRecoveryV2 => ({
+    readonly promptRequestRecovery = (sessionId: string): PromptRequestRecovery => ({
         queuedPromptRequests: [...this.#queued.values()]
             .filter((request) => request.sessionId === sessionId && request.phase === "queued")
             .map(({ commandId, content, disposition, targetCommandId }) => ({

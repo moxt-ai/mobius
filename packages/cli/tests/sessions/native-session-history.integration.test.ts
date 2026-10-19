@@ -2,14 +2,14 @@ import { existsSync, watch } from "node:fs";
 import { readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { nativeHistoryEventsV2 } from "../../src/acp/adapter/codex/native-history-events-v2.ts";
+import { nativeHistoryEvents } from "../../src/acp/adapter/codex/native-history-events.ts";
 import type { Adapter } from "../../src/acp/adapter/context.ts";
 import { fixture } from "./native-session-fixture.ts";
 
 /** A direct-read adapter with canned history, standing in for the Codex app-server. */
 const cannedHistoryAdapter: Adapter = {
     previewSessionEvents: async (request, context) =>
-        await nativeHistoryEventsV2(
+        await nativeHistoryEvents(
             context.options.sessionId,
             request.nativeSessionId,
             {
@@ -45,7 +45,7 @@ describe("native session history", () => {
                 { kind: "import", nativeSessionId, title: "Writer-owned Codex session" },
             );
 
-            const preview = await f.sessions.previewNativeSessionEventsV2(
+            const preview = await f.sessions.previewNativeSessionEvents(
                 {
                     additionalDirectories: [],
                     agent: f.agent,
@@ -92,7 +92,7 @@ describe("native session history", () => {
                 entry.title,
             );
 
-            const replay = await f.sessions.loadSessionEventsV2(
+            const replay = await f.sessions.loadSessionEvents(
                 {
                     additionalDirectories: [],
                     agent: f.agent,
@@ -134,7 +134,7 @@ describe("native session history", () => {
                 signal,
             );
 
-            const replay = await f.sessions.loadSessionEventsV2(
+            const replay = await f.sessions.loadSessionEvents(
                 {
                     additionalDirectories: [],
                     agent: f.agent,
@@ -175,7 +175,7 @@ describe("native session history", () => {
                 signal,
             );
 
-            const replay = await f.sessions.loadSessionEventsV2(
+            const replay = await f.sessions.loadSessionEvents(
                 {
                     additionalDirectories: [],
                     agent: f.agent,
@@ -205,7 +205,7 @@ describe("native session history", () => {
         const f = await fixture("Pi");
         try {
             const nativeSessionId = await f.seed("Preserve this update");
-            const replay = await f.sessions.previewNativeSessionEventsV2(
+            const replay = await f.sessions.previewNativeSessionEvents(
                 {
                     additionalDirectories: [],
                     agent: f.agent,
@@ -245,7 +245,7 @@ describe("native session history", () => {
                 },
             ]);
 
-            const newestMessage = await f.sessions.previewNativeSessionEventsV2(
+            const newestMessage = await f.sessions.previewNativeSessionEvents(
                 {
                     additionalDirectories: [],
                     agent: f.agent,
@@ -261,7 +261,7 @@ describe("native session history", () => {
             expect(
                 newestMessage.events.flatMap((event) => (event.type === "acp" ? [event.payload.sessionUpdate] : [])),
             ).toEqual(["agent_thought_chunk", "tool_call", "tool_call", "agent_message_chunk"]);
-            const olderMessage = await f.sessions.previewNativeSessionEventsV2(
+            const olderMessage = await f.sessions.previewNativeSessionEvents(
                 {
                     additionalDirectories: [],
                     agent: f.agent,
@@ -297,7 +297,7 @@ describe("native session history", () => {
                 signal,
             );
 
-            const replay = await f.sessions.loadSessionEventsV2(
+            const replay = await f.sessions.loadSessionEvents(
                 {
                     additionalDirectories: [],
                     agent: f.agent,
@@ -343,9 +343,9 @@ describe("native session history", () => {
                 sessionId,
                 signal,
             };
-            const first = f.sessions.loadSessionEventsV2(options, 50, null);
+            const first = f.sessions.loadSessionEvents(options, 50, null);
             await paused.promise;
-            const second = f.sessions.loadSessionEventsV2(options, 50, null);
+            const second = f.sessions.loadSessionEvents(options, 50, null);
             await rm(join(f.native, "pause-load"));
 
             for (const replay of await Promise.all([first, second])) {

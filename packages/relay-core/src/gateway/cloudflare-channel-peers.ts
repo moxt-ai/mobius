@@ -102,7 +102,7 @@ export class CloudflareChannelSocket implements RuntimeSocket {
     };
     readonly bindHistoryRequest = (kind: HistoryRequestKind, requestId: string): void => {
         const attachment = v.parse(attachmentSchema, this.#socket.deserializeAttachment());
-        if (!this.permitsLiveSessionHistory()) {
+        if (!this.permitsSessionHistory()) {
             throw new ProtocolMessageError("History replies require an internal connection");
         }
         if (attachment.role === "host" || attachment.role === "relay") {
@@ -128,7 +128,7 @@ export class CloudflareChannelSocket implements RuntimeSocket {
     readonly isOpen = (): boolean => this.#socket.readyState === WebSocket.OPEN;
     readonly isSame = (socket: ChannelSocket): boolean =>
         socket instanceof CloudflareChannelSocket && socket.#socket === this.#socket;
-    readonly permitsLiveSessionHistory = (): boolean => {
+    readonly permitsSessionHistory = (): boolean => {
         const identity = this.identity();
         return identity.role === "relay" || (identity.role === "host" && identity.credentialId.startsWith("ctl_"));
     };
@@ -189,7 +189,7 @@ export class CloudflareChannelPeers implements RuntimePeers {
 
     readonly historyRecipients = (): readonly ChannelSocket[] =>
         this.sockets()
-            .filter(({ socket }) => socket.permitsLiveSessionHistory())
+            .filter(({ socket }) => socket.permitsSessionHistory())
             .map(({ socket }) => socket);
 
     readonly accept: RuntimePeers["accept"] = (identity) => {

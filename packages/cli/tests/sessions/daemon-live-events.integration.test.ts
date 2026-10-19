@@ -9,18 +9,18 @@ import { fileURLToPath } from "node:url";
 import {
     decodeMessageKind,
     decodeNativeSessionResult,
-    decodeSessionEventEnvelopeV2,
-    decodeSessionLiveHistoryV2PageLoaded,
+    decodeSessionEventEnvelope,
+    decodeSessionHistoryPageLoaded,
     encodeNativeSessionRequest,
     encodeSessionCancelCommand,
-    encodeSessionLiveHistoryV2PageLoad,
+    encodeSessionHistoryPageLoad,
     encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
     NATIVE_SESSION_RESULT_KIND,
-    SESSION_EVENT_V2_KIND,
-    SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND,
-    type SessionEventV2,
-    type SessionLiveEventV2,
+    SESSION_EVENT_KIND,
+    SESSION_HISTORY_PAGE_LOADED_KIND,
+    type SessionEvent,
+    type SessionLiveEvent,
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -28,7 +28,7 @@ import { listen, port, sendText } from "@moxt-ai/mobius-test/websocket";
 import { describe, expect, it } from "vitest";
 import { LocalAgentDefinition } from "../../src/agent-catalog/local-agent.ts";
 import { createDaemonConfig, DaemonLocalContext } from "../../src/daemon/config.ts";
-import { SESSION_EVENT_V2_BATCH_WINDOW_MILLISECONDS } from "../../src/daemon/relay/session-event-publisher.ts";
+import { SESSION_EVENT_BATCH_WINDOW_MILLISECONDS } from "../../src/daemon/relay/session-event-publisher.ts";
 import type { DaemonScheduledTask, DaemonTimer } from "../../src/daemon/relay/timer.ts";
 import { runDaemon } from "../../src/daemon/run.ts";
 
@@ -62,7 +62,7 @@ class ControllableDaemonTimer implements DaemonTimer {
 
     readonly schedule = (callback: () => void, milliseconds: number): DaemonScheduledTask => {
         const task = new ControllableDaemonTask(callback);
-        if (milliseconds !== SESSION_EVENT_V2_BATCH_WINDOW_MILLISECONDS) {
+        if (milliseconds !== SESSION_EVENT_BATCH_WINDOW_MILLISECONDS) {
             return task;
         }
         this.batchWindowMilliseconds.push(milliseconds);
@@ -248,7 +248,7 @@ async function startControlledDaemon(options: { readonly stateDirectory?: string
 }
 
 type Fixture = Awaited<ReturnType<typeof startControlledDaemon>>;
-const pendingLiveEvents = new WeakMap<Fixture, SessionLiveEventV2[]>();
+const pendingLiveEvents = new WeakMap<Fixture, SessionLiveEvent[]>();
 function prompt(fixture: Fixture, text: string): SessionPromptCommand {
     return {
         additionalDirectoryIds: [],
@@ -265,7 +265,7 @@ function prompt(fixture: Fixture, text: string): SessionPromptCommand {
         targetCommandId: "",
     };
 }
-async function nextLive(fixture: Fixture): Promise<SessionLiveEventV2> {
+async function nextLive(fixture: Fixture): Promise<SessionLiveEvent> {
     const pending = pendingLiveEvents.get(fixture) ?? [];
     const buffered = pending.shift();
     if (buffered !== undefined) {
@@ -279,10 +279,10 @@ async function nextLive(fixture: Fixture): Promise<SessionLiveEventV2> {
         if (decodeMessageKind(frame) === "session.operation.failed") {
             throw new Error(frame);
         }
-        if (decodeMessageKind(frame) !== SESSION_EVENT_V2_KIND) {
+        if (decodeMessageKind(frame) !== SESSION_EVENT_KIND) {
             continue;
         }
-        const events = [...decodeSessionEventEnvelopeV2(frame).events];
+        const events = [...decodeSessionEventEnvelope(frame).events];
         fixture.liveBatchSizes.push(events.length);
         const failure = events.find(
             (event) =>
@@ -323,7 +323,7 @@ async function history(
 ) {
     sendText(
         fixture.socket,
-        encodeSessionLiveHistoryV2PageLoad({
+        encodeSessionHistoryPageLoad({
             kind: "session.live-history.v2.page.load",
             requestId: "history",
             sessionId: command.sessionId,
@@ -337,8 +337,8 @@ async function history(
         if (decodeMessageKind(frame) === "session.operation.failed") {
             throw new Error(frame);
         }
-        if (decodeMessageKind(frame) === SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND) {
-            return decodeSessionLiveHistoryV2PageLoaded(frame).events.events;
+        if (decodeMessageKind(frame) === SESSION_HISTORY_PAGE_LOADED_KIND) {
+            return decodeSessionHistoryPageLoaded(frame).events.events;
         }
     }
 }
@@ -466,7 +466,7 @@ describe("daemon V2 live delivery", () => {
         try {
             const command = prompt(fixture, "interleave progress and hold");
             sendText(fixture.socket, encodeSessionPromptCommand(command));
-            const live: SessionEventV2[] = [];
+            const live: SessionEvent[] = [];
             const order: string[] = [];
             let accumulated = "";
             for (;;) {
@@ -549,7 +549,7 @@ describe("daemon V2 live delivery", () => {
         try {
             const command = prompt(fixture, "stream token burst");
             sendText(fixture.socket, encodeSessionPromptCommand(command));
-            const live: SessionEventV2[] = [];
+            const live: SessionEvent[] = [];
             let text = "";
             for (;;) {
                 const event = await nextLive(fixture);

@@ -1,19 +1,19 @@
 import { createHash } from "node:crypto";
 import type {
-    AcpSessionUpdateV2,
+    AcpSessionUpdate,
     AgentDisplayContent,
-    ContentBlockV2,
-    SessionEventPayloadV2,
+    ContentBlock,
+    SessionEventPayload,
 } from "@moxt-ai/mobius-protocol";
-import type { AcpNativeEventReplayV2 } from "../../session-contracts.ts";
-import type { AcpSessionEventStoreV2 } from "../../session-event-store-v2.ts";
+import type { AcpNativeEventReplay } from "../../session-contracts.ts";
+import type { AcpSessionEventStore } from "../../session-event-store.ts";
 import type { NativeHistoryActivity, NativeHistoryEntry } from "./history-images.ts";
 
 type ToolCallContent = NonNullable<
-    Extract<AcpSessionUpdateV2, { readonly sessionUpdate: "tool_call" }>["content"]
+    Extract<AcpSessionUpdate, { readonly sessionUpdate: "tool_call" }>["content"]
 >[number];
 
-function contentBlock(content: AgentDisplayContent): ContentBlockV2 | null {
+function contentBlock(content: AgentDisplayContent): ContentBlock | null {
     switch (content.type) {
         case "text":
             return { text: content.text, type: "text" };
@@ -74,7 +74,7 @@ function toolContent(content: AgentDisplayContent): ToolCallContent | null {
     return block === null ? null : { content: block, type: "content" };
 }
 
-function toolKind(value: string): Extract<AcpSessionUpdateV2, { readonly sessionUpdate: "tool_call" }>["kind"] {
+function toolKind(value: string): Extract<AcpSessionUpdate, { readonly sessionUpdate: "tool_call" }>["kind"] {
     switch (value) {
         case "read":
         case "edit":
@@ -92,7 +92,7 @@ function toolKind(value: string): Extract<AcpSessionUpdateV2, { readonly session
     }
 }
 
-function toolStatus(value: string): Extract<AcpSessionUpdateV2, { readonly sessionUpdate: "tool_call" }>["status"] {
+function toolStatus(value: string): Extract<AcpSessionUpdate, { readonly sessionUpdate: "tool_call" }>["status"] {
     switch (value) {
         case "pending":
             return "pending";
@@ -106,7 +106,7 @@ function toolStatus(value: string): Extract<AcpSessionUpdateV2, { readonly sessi
     }
 }
 
-function activityEvent(activity: NativeHistoryActivity): SessionEventPayloadV2 {
+function activityEvent(activity: NativeHistoryActivity): SessionEventPayload {
     const content = activity.content.flatMap((item) => {
         const converted = toolContent(item);
         return converted === null ? [] : [converted];
@@ -131,14 +131,14 @@ function activityEvent(activity: NativeHistoryActivity): SessionEventPayloadV2 {
 function contentEvent(
     sessionUpdate: "agent_message_chunk" | "user_message_chunk",
     messageId: string,
-    content: ContentBlockV2,
-): SessionEventPayloadV2 {
+    content: ContentBlock,
+): SessionEventPayload {
     return { payload: { content, messageId, sessionUpdate }, type: "acp" };
 }
 
 type AvailableNativeHistory = Extract<NativeHistoryEntry, { readonly status: "available" }>;
 
-function historyEvents(history: AvailableNativeHistory): readonly SessionEventPayloadV2[] {
+function historyEvents(history: AvailableNativeHistory): readonly SessionEventPayload[] {
     return history.messages.flatMap((message, index) => {
         const messageId = `native-history-${index.toString()}`;
         const sessionUpdate = message.role === "user" ? "user_message_chunk" : "agent_message_chunk";
@@ -165,14 +165,14 @@ function historyEvents(history: AvailableNativeHistory): readonly SessionEventPa
     });
 }
 
-export function nativeHistoryEventsV2(
+export function nativeHistoryEvents(
     sessionId: string,
     nativeSessionId: string,
     history: AvailableNativeHistory,
     eventLimit: number,
     cursor: string | null,
-    eventStore: AcpSessionEventStoreV2,
-): AcpNativeEventReplayV2 {
+    eventStore: AcpSessionEventStore,
+): AcpNativeEventReplay {
     const events = historyEvents(history);
     const generationId = createHash("sha256")
         .update(nativeSessionId)

@@ -8,16 +8,16 @@ import {
     decodeMessageKind,
     decodeNativeSessionResult,
     decodeSessionElicitationRequestedEvent,
-    decodeSessionEventEnvelopeV2,
+    decodeSessionEventEnvelope,
+    decodeSessionHistoryPageLoaded,
     decodeSessionInfoUpdatedEvent,
-    decodeSessionLiveHistoryV2PageLoaded,
     decodeSessionPermissionRequestedEvent,
     decodeSessionRestoredEvent,
     decodeSessionStatusChangedEvent,
     decodeSessionsQueriedEvent,
     encodeNativeSessionRequest,
     encodeSessionElicitationRespondCommand,
-    encodeSessionLiveHistoryV2PageLoad,
+    encodeSessionHistoryPageLoad,
     encodeSessionPermissionRespondCommand,
     encodeSessionPrepareCommand,
     encodeSessionPromptCommand,
@@ -27,7 +27,7 @@ import {
     NATIVE_SESSION_RESULT_KIND,
     SESSION_ELICITATION_REQUESTED_KIND,
     SESSION_ELICITATION_RESOLVED_KIND,
-    SESSION_EVENT_V2_KIND,
+    SESSION_EVENT_KIND,
     SESSION_INFO_UPDATED_KIND,
     SESSION_PERMISSION_REQUESTED_KIND,
     SESSION_PERMISSION_RESOLVED_KIND,
@@ -64,8 +64,8 @@ class Messages {
         for (;;) {
             const raw = this.#buffered.shift() ?? (await new Promise<string>((resolve) => this.#waiting.push(resolve)));
             const message = raw;
-            if (decodeMessageKind(raw) === SESSION_EVENT_V2_KIND) {
-                const events = decodeSessionEventEnvelopeV2(raw).events.filter(
+            if (decodeMessageKind(raw) === SESSION_EVENT_KIND) {
+                const events = decodeSessionEventEnvelope(raw).events.filter(
                     (event) => event.type === "lifecycle-metadata",
                 );
                 const matching = events.find(
@@ -430,7 +430,7 @@ test("Given a real daemon persisted a Session, When Platform restores it by iden
             expect(restoredEvent.ready.runtimeTimings?.map((timing) => timing.name)).not.toContain("session-resume");
 
             restored.socket.send(
-                encodeSessionLiveHistoryV2PageLoad({
+                encodeSessionHistoryPageLoad({
                     cursor: null,
                     eventLimit: 200,
                     kind: "session.live-history.v2.page.load",
@@ -438,7 +438,7 @@ test("Given a real daemon persisted a Session, When Platform restores it by iden
                     sessionId,
                 }),
             );
-            const history = decodeSessionLiveHistoryV2PageLoaded(
+            const history = decodeSessionHistoryPageLoaded(
                 await messages.nextKind("session.live-history.v2.page.loaded"),
             );
             expect(JSON.stringify(history.events.events.events)).toContain("Persist this Session");

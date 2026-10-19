@@ -2,10 +2,10 @@ import { randomUUID } from "node:crypto";
 import {
     decodeMessageKind,
     decodeNativeSessionResult,
-    decodeSessionEventV2,
-    decodeSessionLiveHistoryV2PageLoaded,
+    decodeSessionEvent,
+    decodeSessionHistoryPageLoaded,
     encodeNativeSessionCommand,
-    encodeSessionLiveHistoryV2PageLoad,
+    encodeSessionHistoryPageLoad,
     encodeSessionPromptCommand,
     type NativeSessionResult,
     SessionPromptDisposition,
@@ -41,7 +41,7 @@ test("Given real Codex saved more than 32 MiB of answers, When a user forks thro
                 }),
             );
             for (;;) {
-                const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+                const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
                 if (event.type !== "lifecycle-metadata") {
                     continue;
                 }
@@ -113,7 +113,7 @@ test("Given real Codex saved more than 32 MiB of answers, When a user forks thro
         });
         const historyId = randomUUID();
         peer.send(
-            encodeSessionLiveHistoryV2PageLoad({
+            encodeSessionHistoryPageLoad({
                 kind: "session.live-history.v2.page.load",
                 sessionId: targetSessionId,
                 requestId: historyId,
@@ -129,7 +129,7 @@ test("Given real Codex saved more than 32 MiB of answers, When a user forks thro
             if (decodeMessageKind(message) !== "session.live-history.v2.page.loaded") {
                 continue;
             }
-            const loaded = decodeSessionLiveHistoryV2PageLoaded(message);
+            const loaded = decodeSessionHistoryPageLoaded(message);
             if (loaded.requestId !== historyId) {
                 continue;
             }
@@ -160,7 +160,7 @@ test("Given real Codex saved more than 32 MiB of answers, When a user forks thro
             }),
         );
         for (;;) {
-            const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
             if (
                 event.type !== "lifecycle-metadata" ||
                 (event.payload.kind !== "prompt.failed" && event.payload.kind !== "prompt.completed") ||

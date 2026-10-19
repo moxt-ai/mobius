@@ -10,7 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { AgentRuntimeManager, acpAdapters, createWritableAcpStream } from "../../src/acp/agent-runtime-manager.ts";
 import { NullAcpSessionObserver } from "../../src/acp/session-contracts.ts";
-import { CachedAcpSessionEventStoreV2 } from "../../src/acp/session-event-store-v2.ts";
+import { CachedAcpSessionEventStore } from "../../src/acp/session-event-store.ts";
 import { FoundAcpStoredSession, MemoryAcpSessionStore, SqliteAcpSessionStore } from "../../src/acp/session-store.ts";
 import { LocalAgentDefinition } from "../../src/daemon/config.ts";
 import { systemDaemonTimer } from "../../src/daemon/relay/timer.ts";
@@ -18,7 +18,7 @@ import { AcpContentExternalizer } from "../../src/external-content/acp-content-e
 import { UnretainedExternalContentStore } from "../../src/external-content/local-external-content-store.ts";
 import { acpSessionStoreMigrations } from "../../src/generated/acp-session-store-migrations.ts";
 import { AccumulatingOperationMetrics } from "../../src/infra/operation-metrics.ts";
-import { openAcpSessionDatabase, openSessionEventCacheV2Database } from "../../src/local-databases.ts";
+import { openAcpSessionDatabase, openSessionEventCacheDatabase } from "../../src/local-databases.ts";
 import { SqliteSessionLiveEventPosition } from "../../src/session-live-event-position.ts";
 
 const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
@@ -152,8 +152,8 @@ describe("ACP conversation sessions", () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-live-event-position-"));
         const sessionDatabasePath = join(temporaryDirectory, "sessions.sqlite");
         const firstSessionDatabase = openAcpSessionDatabase(sessionDatabasePath);
-        const first = new CachedAcpSessionEventStoreV2(
-            openSessionEventCacheV2Database(join(temporaryDirectory, "first-events.sqlite")),
+        const first = new CachedAcpSessionEventStore(
+            openSessionEventCacheDatabase(join(temporaryDirectory, "first-events.sqlite")),
             new SqliteSessionLiveEventPosition(firstSessionDatabase),
         );
         try {
@@ -179,8 +179,8 @@ describe("ACP conversation sessions", () => {
         }
 
         const secondSessionDatabase = openAcpSessionDatabase(sessionDatabasePath);
-        const second = new CachedAcpSessionEventStoreV2(
-            openSessionEventCacheV2Database(join(temporaryDirectory, "second-events.sqlite")),
+        const second = new CachedAcpSessionEventStore(
+            openSessionEventCacheDatabase(join(temporaryDirectory, "second-events.sqlite")),
             new SqliteSessionLiveEventPosition(secondSessionDatabase),
         );
         try {
@@ -202,8 +202,8 @@ describe("ACP conversation sessions", () => {
         vi.setSystemTime(new Date("2026-10-12T00:00:00.000Z"));
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-tool-projection-"));
         const sessionDatabase = openAcpSessionDatabase(join(temporaryDirectory, "sessions.sqlite"));
-        const store = new CachedAcpSessionEventStoreV2(
-            openSessionEventCacheV2Database(join(temporaryDirectory, "events.sqlite")),
+        const store = new CachedAcpSessionEventStore(
+            openSessionEventCacheDatabase(join(temporaryDirectory, "events.sqlite")),
             new SqliteSessionLiveEventPosition(sessionDatabase),
         );
         try {
@@ -280,8 +280,8 @@ describe("ACP conversation sessions", () => {
         vi.setSystemTime(new Date("2026-10-09T00:00:00.000Z"));
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-tiering-"));
         const sessionDatabase = openAcpSessionDatabase(join(temporaryDirectory, "sessions.sqlite"));
-        const store = new CachedAcpSessionEventStoreV2(
-            openSessionEventCacheV2Database(join(temporaryDirectory, "events.sqlite")),
+        const store = new CachedAcpSessionEventStore(
+            openSessionEventCacheDatabase(join(temporaryDirectory, "events.sqlite")),
             new SqliteSessionLiveEventPosition(sessionDatabase),
         );
         try {
@@ -314,8 +314,8 @@ describe("ACP conversation sessions", () => {
         vi.setSystemTime(new Date("2026-10-14T00:00:00.000Z"));
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-cursor-"));
         const sessionDatabase = openAcpSessionDatabase(join(temporaryDirectory, "sessions.sqlite"));
-        const store = new CachedAcpSessionEventStoreV2(
-            openSessionEventCacheV2Database(join(temporaryDirectory, "events.sqlite")),
+        const store = new CachedAcpSessionEventStore(
+            openSessionEventCacheDatabase(join(temporaryDirectory, "events.sqlite")),
             new SqliteSessionLiveEventPosition(sessionDatabase),
         );
         try {
@@ -362,8 +362,8 @@ describe("ACP conversation sessions", () => {
         const databasePath = join(temporaryDirectory, "events.sqlite");
         const sessionDatabasePath = join(temporaryDirectory, "sessions.sqlite");
         const firstSessionDatabase = openAcpSessionDatabase(sessionDatabasePath);
-        const first = new CachedAcpSessionEventStoreV2(
-            openSessionEventCacheV2Database(databasePath),
+        const first = new CachedAcpSessionEventStore(
+            openSessionEventCacheDatabase(databasePath),
             new SqliteSessionLiveEventPosition(firstSessionDatabase),
         );
         let firstGeneration = "";
@@ -420,8 +420,8 @@ describe("ACP conversation sessions", () => {
         }
 
         const secondSessionDatabase = openAcpSessionDatabase(sessionDatabasePath);
-        const second = new CachedAcpSessionEventStoreV2(
-            openSessionEventCacheV2Database(databasePath),
+        const second = new CachedAcpSessionEventStore(
+            openSessionEventCacheDatabase(databasePath),
             new SqliteSessionLiveEventPosition(secondSessionDatabase),
         );
         try {

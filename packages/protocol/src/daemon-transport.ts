@@ -135,25 +135,21 @@ import {
     encodeRuntimeDiagnosticsResult,
 } from "./runtime-diagnostics.ts";
 import { decodeRuntimeUpgradeResult, encodeRuntimeUpgradeResult } from "./runtime-upgrade.ts";
+import { decodeSessionEventEnvelope, encodeSessionEventEnvelope, SESSION_EVENT_KIND } from "./session-event-log.ts";
 import {
-    decodeSessionEventEnvelopeV2,
-    encodeSessionEventEnvelopeV2,
-    SESSION_EVENT_V2_KIND,
-} from "./session-event-log-v2.ts";
-import {
-    decodeSessionLiveHistoryV2PageLoad,
-    decodeSessionLiveHistoryV2PageLoaded,
+    decodeSessionHistoryPageLoad,
+    decodeSessionHistoryPageLoaded,
     decodeSessionPreviewHistoryPageLoad,
     decodeSessionPreviewHistoryPageLoaded,
-    encodeSessionLiveHistoryV2PageLoad,
-    encodeSessionLiveHistoryV2PageLoaded,
+    encodeSessionHistoryPageLoad,
+    encodeSessionHistoryPageLoaded,
     encodeSessionPreviewHistoryPageLoad,
     encodeSessionPreviewHistoryPageLoaded,
-    SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND,
-    SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND,
+    SESSION_HISTORY_PAGE_LOAD_KIND,
+    SESSION_HISTORY_PAGE_LOADED_KIND,
     SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND,
     SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND,
-} from "./session-live-history.ts";
+} from "./session-history.ts";
 
 interface MessageSignature<TMessage extends { readonly kind: string }> {
     readonly decoder: (encoded: string) => TMessage;
@@ -250,10 +246,10 @@ const serviceToDaemonSignatures = {
         encodeSessionElicitationRespondCommand,
         decodeSessionElicitationRespondCommand,
     ),
-    [SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND]: defineMessageSignature(
-        SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND,
-        encodeSessionLiveHistoryV2PageLoad,
-        decodeSessionLiveHistoryV2PageLoad,
+    [SESSION_HISTORY_PAGE_LOAD_KIND]: defineMessageSignature(
+        SESSION_HISTORY_PAGE_LOAD_KIND,
+        encodeSessionHistoryPageLoad,
+        decodeSessionHistoryPageLoad,
     ),
     [SESSION_PERMISSION_RESPOND_KIND]: defineMessageSignature(
         SESSION_PERMISSION_RESPOND_KIND,
@@ -383,20 +379,20 @@ const daemonToServiceSignatures = {
         decodeRuntimeDiagnosticsResult,
     ),
     [RUNTIME_PONG_KIND]: defineMessageSignature(RUNTIME_PONG_KIND, encodeRuntimePongEvent, decodeRuntimePongEvent),
-    [SESSION_EVENT_V2_KIND]: defineMessageSignature(
-        SESSION_EVENT_V2_KIND,
-        encodeSessionEventEnvelopeV2,
-        decodeSessionEventEnvelopeV2,
+    [SESSION_EVENT_KIND]: defineMessageSignature(
+        SESSION_EVENT_KIND,
+        encodeSessionEventEnvelope,
+        decodeSessionEventEnvelope,
     ),
     [SESSION_OPERATION_FAILED_KIND]: defineMessageSignature(
         SESSION_OPERATION_FAILED_KIND,
         encodeSessionOperationFailedEvent,
         decodeSessionOperationFailedEvent,
     ),
-    [SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND]: defineMessageSignature(
-        SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND,
-        encodeSessionLiveHistoryV2PageLoaded,
-        decodeSessionLiveHistoryV2PageLoaded,
+    [SESSION_HISTORY_PAGE_LOADED_KIND]: defineMessageSignature(
+        SESSION_HISTORY_PAGE_LOADED_KIND,
+        encodeSessionHistoryPageLoaded,
+        decodeSessionHistoryPageLoaded,
     ),
     [SESSION_READY_KIND]: defineMessageSignature(SESSION_READY_KIND, encodeSessionReadyEvent, decodeSessionReadyEvent),
     [WORKSPACE_ENTRIES_KIND]: defineMessageSignature(

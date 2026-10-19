@@ -1,14 +1,14 @@
 import { randomUUID } from "node:crypto";
 import {
     decodeMessageKind,
-    decodeSessionEventEnvelopeV2,
-    decodeSessionEventV2,
+    decodeSessionEvent,
+    decodeSessionEventEnvelope,
     decodeSessionReadyEvent,
     encodeSessionPermissionRespondCommand,
     encodeSessionPrepareCommand,
     encodeSessionPromptCommand,
     encodeSessionPromptDispositionCommand,
-    SESSION_EVENT_V2_KIND,
+    SESSION_EVENT_KIND,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { expect, test } from "vitest";
@@ -76,8 +76,8 @@ test("Given real Pi has an active SDK turn, When the user steers it, Then Pi con
             for (;;) {
                 const message = await peer.nextMessage();
                 if (
-                    decodeMessageKind(message) === SESSION_EVENT_V2_KIND &&
-                    decodeSessionEventEnvelopeV2(message).events.some(
+                    decodeMessageKind(message) === SESSION_EVENT_KIND &&
+                    decodeSessionEventEnvelope(message).events.some(
                         (event) =>
                             event.type === "lifecycle-metadata" && event.payload.kind === "session.queue.changed",
                     )
@@ -99,7 +99,7 @@ test("Given real Pi has an active SDK turn, When the user steers it, Then Pi con
                 if (decodeMessageKind(message) !== "session.event.v2") {
                     continue;
                 }
-                for (const event of decodeSessionEventEnvelopeV2(message).events) {
+                for (const event of decodeSessionEventEnvelope(message).events) {
                     if (
                         event.type === "lifecycle-metadata" &&
                         event.payload.kind === "prompt.failed" &&
@@ -123,7 +123,7 @@ test("Given real Pi has an active SDK turn, When the user steers it, Then Pi con
             }
             let text = "";
             for (;;) {
-                const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+                const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
                 if (
                     event.type === "acp" &&
                     event.payload.sessionUpdate === "agent_message_chunk" &&
@@ -218,7 +218,7 @@ test("Given real Pi without an external ACP adapter, When Bash executes through 
             let toolOutput: unknown;
             const toolContent = new Map<string, readonly unknown[]>();
             for (;;) {
-                const event = decodeSessionEventV2(JSON.parse(await peer.nextEvent()));
+                const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
                 if (event.type === "lifecycle-metadata" && event.payload.kind === "session.permission.requested") {
                     const option = event.payload.event.options.find((entry) => entry.kind === "allow_once");
                     if (option === undefined) {

@@ -8,7 +8,7 @@ export { createWritableAcpStream } from "./agent-connection.ts";
 
 import type {
     SessionConfigOption,
-    SessionEventPayloadV2,
+    SessionEventPayload,
     SessionStatus,
     SessionStatusChangedEvent,
 } from "@moxt-ai/mobius-protocol";
@@ -39,7 +39,7 @@ export {
     AcpAgentSettingsSnapshot,
     type AcpConfigureOptions,
     type AcpElicitationResponseOptions,
-    type AcpNativeEventReplayV2,
+    type AcpNativeEventReplay,
     type AcpPermissionResponseOptions,
     AcpPreparedSession,
     type AcpPrepareOptions,
@@ -57,7 +57,7 @@ import {
     AcpAgentSettingsSnapshot,
     type AcpConfigureOptions,
     type AcpElicitationResponseOptions,
-    type AcpNativeEventReplayV2,
+    type AcpNativeEventReplay,
     type AcpPermissionResponseOptions,
     type AcpPreparedSession,
     type AcpPrepareOptions,
@@ -119,12 +119,12 @@ export class AgentRuntimeManager {
         this.#queryProcesses = new AgentQueryProcesses(this.#processes, contentExternalizer);
     }
 
-    readonly recordLifecycleEventV2 = async (sessionId: string, event: SessionEventPayloadV2): Promise<boolean> => {
+    readonly recordLifecycleEvent = async (sessionId: string, event: SessionEventPayload): Promise<boolean> => {
         const runtime = this.#executionProcesses.get(sessionId);
         if (runtime === undefined) {
             return false;
         }
-        return await runtime.recordControlEventV2(event);
+        return await runtime.recordControlEvent(event);
     };
 
     readonly setObserver = (observer: AcpSessionObserver): void => {
@@ -822,12 +822,12 @@ export class AgentRuntimeManager {
             );
         });
 
-    readonly previewNativeSessionEventsV2 = async (
+    readonly previewNativeSessionEvents = async (
         options: AcpPrepareOptions,
         nativeSessionId: string,
         eventLimit: number,
         cursor: string | null,
-    ): Promise<AcpNativeEventReplayV2> =>
+    ): Promise<AcpNativeEventReplay> =>
         this.#operations.run(options, async (options) => {
             const key = `${options.agent.id}:${nativeSessionId}`;
             if (this.#nativeOperations.has(key)) {
@@ -841,9 +841,9 @@ export class AgentRuntimeManager {
             try {
                 const context: AdapterContext = {
                     options,
-                    events: this.#store.eventsV2,
+                    events: this.#store.events,
                     previewThroughAcp: async (request: NativeSessionPreviewRequest) =>
-                        await this.#queryProcesses.previewEventsV2(
+                        await this.#queryProcesses.previewEvents(
                             options,
                             request.nativeSessionId,
                             request.eventLimit,
@@ -859,15 +859,15 @@ export class AgentRuntimeManager {
             }
         });
 
-    readonly loadSessionEventsV2 = async (
+    readonly loadSessionEvents = async (
         options: AcpPrepareOptions,
         eventLimit: number,
         cursor: string | null,
-    ): Promise<AcpNativeEventReplayV2> =>
+    ): Promise<AcpNativeEventReplay> =>
         this.#operations.run(options, async (options) => {
             return await this.#executionProcesses.use(options.sessionId, async () => {
                 const runtime = await this.ensureSession(options);
-                return await runtime.loadHistoryEventsV2(eventLimit, cursor, options.signal);
+                return await runtime.loadHistoryEvents(eventLimit, cursor, options.signal);
             });
         });
 

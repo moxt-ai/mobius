@@ -1,7 +1,7 @@
 import type {
-    AcpSessionUpdateV2,
-    LifecycleMetadataV2,
-    SessionLiveEventV2,
+    AcpSessionUpdate,
+    LifecycleMetadata,
+    SessionLiveEvent,
     SessionRecordingTurn,
     SessionRecordingTurnAttempt,
     SessionRecordingTurnItem,
@@ -153,7 +153,7 @@ class ProjectionFold {
         this.#turnCount = projection.turnCount;
     }
 
-    readonly fold = (events: readonly SessionLiveEventV2[]): void => {
+    readonly fold = (events: readonly SessionLiveEvent[]): void => {
         for (const event of events) {
             if (this.#state.retiredGenerationIds.includes(event.sessionGenerationId)) {
                 // A late batch of a replaced process; folding it would interrupt the current generation.
@@ -229,7 +229,7 @@ class ProjectionFold {
         return turn;
     }
 
-    #ensureTurn(commandId: string, event: SessionLiveEventV2): StoredTurn {
+    #ensureTurn(commandId: string, event: SessionLiveEvent): StoredTurn {
         const existing = this.#turn(commandId);
         if (existing !== null) {
             return existing;
@@ -341,7 +341,7 @@ class ProjectionFold {
             : { ...attemptTiming(turn.attempt), interactionIds: [first, ...rest], kind: "waiting_input" };
     }
 
-    #markInterruptedAttempts(event: SessionLiveEventV2): void {
+    #markInterruptedAttempts(event: SessionLiveEvent): void {
         const candidates = new Map<string, StoredTurn>();
         for (const turn of this.#storage.openTurns()) {
             candidates.set(turn.commandId, turn);
@@ -367,7 +367,7 @@ class ProjectionFold {
         }
     }
 
-    #pushActive(event: SessionLiveEventV2, commandId: string): void {
+    #pushActive(event: SessionLiveEvent, commandId: string): void {
         const active = this.#state.activeCommands;
         const commandIds = active?.generationId === event.sessionGenerationId ? active.commandIds : [];
         this.#state = {
@@ -379,7 +379,7 @@ class ProjectionFold {
         };
     }
 
-    #removeActive(event: SessionLiveEventV2, commandId: string): void {
+    #removeActive(event: SessionLiveEvent, commandId: string): void {
         const active = this.#state.activeCommands;
         if (active === null || active.generationId !== event.sessionGenerationId) {
             return;
@@ -391,7 +391,7 @@ class ProjectionFold {
         };
     }
 
-    #foldLifecycle(event: SessionLiveEventV2, payload: LifecycleMetadataV2): void {
+    #foldLifecycle(event: SessionLiveEvent, payload: LifecycleMetadata): void {
         switch (payload.kind) {
             case "session.queue.changed":
                 return;
@@ -492,7 +492,7 @@ class ProjectionFold {
         }
     }
 
-    #requestInteraction(event: SessionLiveEventV2, interaction: StoredInteraction): void {
+    #requestInteraction(event: SessionLiveEvent, interaction: StoredInteraction): void {
         // A repeated request event must not reopen a request that was already answered or closed.
         if (this.#interaction(interaction.interactionId)?.resolved === true) {
             return;
@@ -521,7 +521,7 @@ class ProjectionFold {
         this.#putTurn({ ...turn, attempt: this.#waitingAttempt(turn) });
     }
 
-    #foldAcp(event: SessionLiveEventV2, update: AcpSessionUpdateV2): void {
+    #foldAcp(event: SessionLiveEvent, update: AcpSessionUpdate): void {
         if (update.sessionUpdate === "session_info_update") {
             const title = update.title?.trim();
             if (title !== undefined && title.length > 0) {
@@ -558,7 +558,7 @@ class ProjectionFold {
         }
     }
 
-    #appendAnswer(event: SessionLiveEventV2, commandId: string, messageId: string | null, text: string): void {
+    #appendAnswer(event: SessionLiveEvent, commandId: string, messageId: string | null, text: string): void {
         const turn = this.#ensureTurn(commandId, event);
         const open =
             turn.openAnswer !== null && turn.openAnswer.messageId === messageId
@@ -582,7 +582,7 @@ class ProjectionFold {
         });
     }
 
-    #appendThought(event: SessionLiveEventV2, commandId: string, messageId: string | null, text: string): void {
+    #appendThought(event: SessionLiveEvent, commandId: string, messageId: string | null, text: string): void {
         const turn = this.#ensureTurn(commandId, event);
         const open =
             turn.openThought !== null && turn.openThought.messageId === messageId
@@ -606,9 +606,9 @@ class ProjectionFold {
     }
 
     #mergeTool(
-        event: SessionLiveEventV2,
+        event: SessionLiveEvent,
         commandId: string,
-        update: Extract<AcpSessionUpdateV2, { readonly sessionUpdate: "tool_call" | "tool_call_update" }>,
+        update: Extract<AcpSessionUpdate, { readonly sessionUpdate: "tool_call" | "tool_call_update" }>,
     ): void {
         const itemId = `tool:${update.toolCallId}`;
         const owner = update.sessionUpdate === "tool_call_update" ? this.#toolOwner(commandId, itemId) : commandId;
@@ -700,7 +700,7 @@ export class SessionTurnHistory {
      * the batch is left for backfill: earlier batches are unfolded, an earlier fold failed, or this
      * fold failed. A failed fold rolls back on its own and never prevents the batch from recording.
      */
-    readonly project = (ordinal: number, events: readonly SessionLiveEventV2[]): boolean => {
+    readonly project = (ordinal: number, events: readonly SessionLiveEvent[]): boolean => {
         try {
             return this.#history.transaction(() => {
                 const projection = this.#history.projection() ?? emptyProjection;

@@ -4,15 +4,15 @@ import { styleText } from "node:util";
 import { harnessAdapters } from "../acp/adapter/registry.ts";
 import { resolveMaxAcpProcesses } from "../acp/agent-process-pool.ts";
 import { AgentRuntimeManager } from "../acp/agent-runtime-manager.ts";
-import { CachedAcpSessionEventStoreV2 } from "../acp/session-event-store-v2.ts";
+import { CachedAcpSessionEventStore } from "../acp/session-event-store.ts";
 import { SqliteAcpSessionStore } from "../acp/session-store.ts";
 import { publishAgentCatalog } from "../agent-catalog/publish-agent-catalog.ts";
 import { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
 import { AcpContentExternalizer } from "../external-content/acp-content-externalizer.ts";
 import { LocalExternalContentStore } from "../external-content/local-external-content-store.ts";
-import { openAcpSessionDatabase, openSessionEventCacheV2Database } from "../local-databases.ts";
+import { openAcpSessionDatabase, openSessionEventCacheDatabase } from "../local-databases.ts";
 import { NativeSessionService } from "../native-sessions/service.ts";
-import { DaemonSessionEventProjectionV2 } from "../session-event-projection-v2.ts";
+import { DaemonSessionEventProjection } from "../session-event-projection.ts";
 import { SqliteSessionLiveEventPosition } from "../session-live-event-position.ts";
 import { DaemonAcpObserver } from "./acp-observer.ts";
 import type { DaemonConfig } from "./config.ts";
@@ -89,28 +89,28 @@ export async function runDaemon(
     const stateDirectory = config.localContext.stateDirectory;
     const channelHash = createHash("sha256").update(config.channelId).digest("hex");
     const sessionDatabase = openAcpSessionDatabase(join(stateDirectory, "sessions", `${channelHash}.sqlite`));
-    let eventsV2: CachedAcpSessionEventStoreV2;
+    let events: CachedAcpSessionEventStore;
     try {
-        eventsV2 = new CachedAcpSessionEventStoreV2(
-            openSessionEventCacheV2Database(join(stateDirectory, "sessions", `${channelHash}.events.sqlite`)),
+        events = new CachedAcpSessionEventStore(
+            openSessionEventCacheDatabase(join(stateDirectory, "sessions", `${channelHash}.events.sqlite`)),
             new SqliteSessionLiveEventPosition(sessionDatabase),
         );
     } catch (error) {
         sessionDatabase.close();
         throw error;
     }
-    const sessionStore = new SqliteAcpSessionStore(sessionDatabase, eventsV2);
+    const sessionStore = new SqliteAcpSessionStore(sessionDatabase, events);
     await using externalContent = new LocalExternalContentStore(stateDirectory);
     const operations = new DaemonOperationState();
     const publisher = new DaemonSessionEventPublisher(timer);
     const activeTurns = new DaemonTurnRegistry(operations);
-    const eventProjectionV2 = new DaemonSessionEventProjectionV2(
+    const eventProjection = new DaemonSessionEventProjection(
         publisher,
-        (sessionId, event) => agentRuntime.recordLifecycleEventV2(sessionId, event),
-        activeTurns.recordSessionEventV2,
+        (sessionId, event) => agentRuntime.recordLifecycleEvent(sessionId, event),
+        activeTurns.recordSessionEvent,
     );
     const agentRuntime = new AgentRuntimeManager({
-        observer: new DaemonAcpObserver(eventProjectionV2.record, activeTurns.recordEvent, publisher.publishInfo),
+        observer: new DaemonAcpObserver(eventProjection.record, activeTurns.recordEvent, publisher.publishInfo),
         store: sessionStore,
         adapters: harnessAdapters,
         sessionIdentity: "native",
@@ -192,7 +192,7 @@ export async function runDaemon(
                     nativeSessions,
                     operations,
                     publisher,
-                    eventProjectionV2,
+                    eventProjection,
                     externalContent,
                     activeTurns,
                     connectionEpoch,

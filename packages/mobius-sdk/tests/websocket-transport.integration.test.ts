@@ -172,7 +172,7 @@ it("Given a replacement WebSocket carries a live subscription, When the old sock
     if (second === undefined) {
         throw new Error("Expected the replacement WebSocket connection");
     }
-    const events = await transport.openLiveSessionEvents(
+    const events = await transport.openSessionLiveEvents(
         new Request("https://relay.example.test/mobius/api/v1/projects/project/sessions/session/events-v2"),
     );
     const subscriptionId = second.subscriptionIds[0];
@@ -215,7 +215,7 @@ it("Given an idle Session stream and a brief network interruption, When connecti
     });
     const reconciliations: string[] = [];
     const controller = new AbortController();
-    const subscription = await client.events.subscribeLiveV2(
+    const subscription = await client.events.subscribeLive(
         "session-1",
         {
             receive: async () => true,
@@ -253,7 +253,7 @@ it("Given a live Session stream cannot reconnect, When its retry budget expires,
         transport,
     });
     const controller = new AbortController();
-    const subscription = await client.events.subscribeLiveV2(
+    const subscription = await client.events.subscribeLive(
         "session-1",
         { receive: async () => true, reconcile: async () => undefined },
         controller.signal,

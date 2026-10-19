@@ -4,13 +4,13 @@ import { join } from "node:path";
 import {
     decodeFileChunkEvent,
     decodeMessageKind,
-    decodeSessionEventEnvelopeV2,
-    decodeSessionLiveHistoryV2PageLoaded,
+    decodeSessionEventEnvelope,
+    decodeSessionHistoryPageLoaded,
     encodeFileReadCommand,
-    encodeSessionLiveHistoryV2PageLoad,
+    encodeSessionHistoryPageLoad,
     encodeSessionPermissionRespondCommand,
     encodeSessionPromptCommand,
-    type SessionEventV2,
+    type SessionEvent,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { expect, test } from "vitest";
@@ -24,7 +24,7 @@ const image = Buffer.from(
     "base64",
 );
 
-function imageKeys(events: readonly SessionEventV2[]): readonly string[] {
+function imageKeys(events: readonly SessionEvent[]): readonly string[] {
     return events.flatMap((event) => {
         if (
             event.type !== "acp" ||
@@ -63,8 +63,8 @@ test("Given real Claude reads an image, When its reply streams and native histor
                     targetCommandId: "",
                 }),
             );
-        const finish = async (): Promise<readonly SessionEventV2[]> => {
-            const events: SessionEventV2[] = [];
+        const finish = async (): Promise<readonly SessionEvent[]> => {
+            const events: SessionEvent[] = [];
             for (;;) {
                 const message = await peer.nextMessage();
                 const kind = decodeMessageKind(message);
@@ -73,7 +73,7 @@ test("Given real Claude reads an image, When its reply streams and native histor
                     throw new Error(message);
                 }
                 if (kind === "session.event.v2") {
-                    const batch = decodeSessionEventEnvelopeV2(message).events;
+                    const batch = decodeSessionEventEnvelope(message).events;
                     events.push(...batch);
                     for (const event of batch) {
                         if (
@@ -117,7 +117,7 @@ test("Given real Claude reads an image, When its reply streams and native histor
         sendPrompt("image-turn", "Use the read tool to inspect picture.png, then reply");
         expect(imageKeys(await finish())).toContain(key);
         peer.send(
-            encodeSessionLiveHistoryV2PageLoad({
+            encodeSessionHistoryPageLoad({
                 cursor: null,
                 eventLimit: 50,
                 kind: "session.live-history.v2.page.load",
@@ -133,7 +133,7 @@ test("Given real Claude reads an image, When its reply streams and native histor
             }
             if (kind === "session.live-history.v2.page.loaded") {
                 expect(message).not.toContain(image.toString("base64"));
-                expect(imageKeys(decodeSessionLiveHistoryV2PageLoaded(message).events.events.events)).toContain(key);
+                expect(imageKeys(decodeSessionHistoryPageLoaded(message).events.events.events)).toContain(key);
                 break;
             }
         }

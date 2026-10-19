@@ -3,7 +3,7 @@ import type { CommandContext } from "../context.ts";
 import type { DaemonCommand } from "../definition.ts";
 import { createAgentSettingsCommands } from "./agent-settings.ts";
 import { fileReadCommand } from "./file-read/index.ts";
-import { liveHistoryPageLoadCommand, previewHistoryPageLoadCommand } from "./history.ts";
+import { previewHistoryPageLoadCommand, sessionHistoryPageLoadCommand } from "./history.ts";
 import {
     elicitationRespondCommand,
     permissionRespondCommand,
@@ -29,7 +29,7 @@ export function createCommandRegistry(context: CommandContext): {
     const commands: readonly DaemonCommand[] = [
         runtimeDiagnosticsCommand,
         runtimePingCommand,
-        liveHistoryPageLoadCommand,
+        sessionHistoryPageLoadCommand,
         previewHistoryPageLoadCommand,
         ...createNativeSessionCommands(context),
         ...createAgentSettingsCommands(context),

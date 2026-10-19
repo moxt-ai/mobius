@@ -5,10 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
-    type AcpSessionUpdateV2,
+    type AcpSessionUpdate,
     decodeMessageKind,
     decodeRuntimeHeartbeatEvent,
-    decodeSessionEventEnvelopeV2,
+    decodeSessionEventEnvelope,
     encodeRuntimeHeartbeatAckEvent,
     encodeRuntimeLivenessReadyEvent,
     encodeSessionPromptCommand,
@@ -16,7 +16,7 @@ import {
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_HEARTBEAT_KIND,
     RUNTIME_LIVENESS_READY_KIND,
-    SESSION_EVENT_V2_KIND,
+    SESSION_EVENT_KIND,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { listen, port } from "@moxt-ai/mobius-test/websocket";
@@ -133,14 +133,14 @@ test("Given real Codex dispatches and waits for a subagent, When the turn runs t
             }),
         );
 
-        const updates: AcpSessionUpdateV2[] = [];
+        const updates: AcpSessionUpdate[] = [];
         let completed = false;
         while (!completed) {
             const message = await messages.next();
-            if (decodeMessageKind(message) !== SESSION_EVENT_V2_KIND) {
+            if (decodeMessageKind(message) !== SESSION_EVENT_KIND) {
                 continue;
             }
-            for (const event of decodeSessionEventEnvelopeV2(message).events) {
+            for (const event of decodeSessionEventEnvelope(message).events) {
                 if (event.type === "acp") {
                     updates.push(event.payload);
                 }

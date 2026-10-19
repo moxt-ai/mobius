@@ -1,8 +1,8 @@
 import {
-    decodeSessionEventV2,
-    decodeSessionLiveEventV2,
-    type SessionEventV2,
-    type SessionLiveEventV2,
+    decodeSessionEvent,
+    decodeSessionLiveEvent,
+    type SessionEvent,
+    type SessionLiveEvent,
 } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it } from "vitest";
 
@@ -22,17 +22,17 @@ const sharedEvent = { ...eventWithoutProvenance, provenance: { kind: "original" 
 
 describe("Session Event V2 contracts", () => {
     it("Given a session event without provenance, When it crosses the protocol boundary, Then it is accepted", () => {
-        expect(decodeSessionEventV2(eventWithoutProvenance)).toEqual(eventWithoutProvenance);
+        expect(decodeSessionEvent(eventWithoutProvenance)).toEqual(eventWithoutProvenance);
     });
 
     it("Given a historical event without a position, When it crosses the protocol boundary, Then it is accepted", () => {
-        const event: SessionEventV2 = sharedEvent;
+        const event: SessionEvent = sharedEvent;
 
-        expect(decodeSessionEventV2(event)).toEqual(event);
+        expect(decodeSessionEvent(event)).toEqual(event);
     });
 
     it("Given a historical event with a legacy position, When it crosses the protocol boundary, Then the position is omitted", () => {
-        expect(decodeSessionEventV2({ ...sharedEvent, position: "1" })).toEqual(sharedEvent);
+        expect(decodeSessionEvent({ ...sharedEvent, position: "1" })).toEqual(sharedEvent);
     });
 
     it("Given a tool call with opaque metadata, When it crosses the recorded event boundary, Then the metadata is omitted", () => {
@@ -46,7 +46,7 @@ describe("Session Event V2 contracts", () => {
             },
         };
 
-        expect(decodeSessionEventV2(event)).toEqual({
+        expect(decodeSessionEvent(event)).toEqual({
             ...event,
             payload: {
                 sessionUpdate: "tool_call",
@@ -66,7 +66,7 @@ describe("Session Event V2 contracts", () => {
             },
         };
 
-        expect(decodeSessionEventV2(event)).toEqual({
+        expect(decodeSessionEvent(event)).toEqual({
             ...event,
             payload: {
                 sessionUpdate: "tool_call_update",
@@ -90,7 +90,7 @@ describe("Session Event V2 contracts", () => {
             },
         };
 
-        expect(decodeSessionEventV2(event)).toEqual({
+        expect(decodeSessionEvent(event)).toEqual({
             ...event,
             payload: {
                 content: { annotations: { audience: ["user"] }, text: "Hello", type: "text" },
@@ -120,7 +120,7 @@ describe("Session Event V2 contracts", () => {
             },
         };
 
-        expect(decodeSessionEventV2(event)).toEqual({
+        expect(decodeSessionEvent(event)).toEqual({
             ...event,
             payload: {
                 content: [
@@ -141,12 +141,12 @@ describe("Session Event V2 contracts", () => {
     });
 
     it("Given a live event with a position, When it crosses the protocol boundary, Then it is accepted without a sequence", () => {
-        const event: SessionLiveEventV2 = { ...sharedEvent, position: "1" };
+        const event: SessionLiveEvent = { ...sharedEvent, position: "1" };
 
-        expect(decodeSessionLiveEventV2(event)).toEqual(event);
+        expect(decodeSessionLiveEvent(event)).toEqual(event);
     });
 
     it("Given a live event without a position, When it crosses the protocol boundary, Then it is rejected", () => {
-        expect(() => decodeSessionLiveEventV2(sharedEvent)).toThrow();
+        expect(() => decodeSessionLiveEvent(sharedEvent)).toThrow();
     });
 });

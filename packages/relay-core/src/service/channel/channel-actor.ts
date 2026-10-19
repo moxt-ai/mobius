@@ -15,8 +15,8 @@ import {
     decodeSessionCloseCommand,
     decodeSessionConfigureCommand,
     decodeSessionElicitationRespondCommand,
+    decodeSessionHistoryPageLoad,
     decodeSessionListCommand,
-    decodeSessionLiveHistoryV2PageLoad,
     decodeSessionPermissionRespondCommand,
     decodeSessionPrepareCommand,
     decodeSessionPreviewHistoryPageLoad,
@@ -50,12 +50,12 @@ import {
     SESSION_CONFIG_UPDATED_KIND,
     SESSION_CONFIGURE_KIND,
     SESSION_ELICITATION_RESPOND_KIND,
-    SESSION_EVENT_V2_KIND,
+    SESSION_EVENT_KIND,
+    SESSION_HISTORY_PAGE_LOAD_KIND,
+    SESSION_HISTORY_PAGE_LOADED_KIND,
     SESSION_INFO_UPDATED_KIND,
     SESSION_LIST_KIND,
     SESSION_LISTED_KIND,
-    SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND,
-    SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND,
     SESSION_OPERATION_FAILED_KIND,
     SESSION_PERMISSION_RESPOND_KIND,
     SESSION_PREPARE_KIND,
@@ -79,7 +79,7 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { SessionRuntimeError } from "../../entity/do/session.ts";
 import type { BestEffortRecording } from "./best-effort-recording.ts";
-import { LiveSessionEventRelay } from "./live-session-event-relay.ts";
+import { SessionLiveEventRelay } from "./session-live-event-relay.ts";
 
 function sessionErrorCloseCode(error: SessionRuntimeError): 1008 | 1013 {
     if (error.code === "session_busy") {
@@ -99,7 +99,7 @@ export interface ChannelSocket {
     readonly matchesHistoryRequest: (kind: HistoryRequestKind, requestId: string) => boolean;
     readonly isOpen: () => boolean;
     readonly isSame: (socket: ChannelSocket) => boolean;
-    readonly permitsLiveSessionHistory: () => boolean;
+    readonly permitsSessionHistory: () => boolean;
     readonly send: (message: string) => void;
     readonly trackAgentSettingsDiscovery: (requestId: string, agentId: string) => "tracked" | "duplicate" | "busy";
 }
@@ -114,7 +114,7 @@ export class ChannelActor {
     readonly #peers: ChannelPeers;
     readonly #projectId: string;
     readonly #runtimeId: string;
-    readonly #liveEvents: LiveSessionEventRelay;
+    readonly #liveEvents: SessionLiveEventRelay;
 
     constructor(cx: {
         readonly config: { readonly projectId: string; readonly runtimeId: string };
@@ -128,7 +128,7 @@ export class ChannelActor {
         this.#peers = peers;
         this.#projectId = projectId;
         this.#runtimeId = runtimeId;
-        this.#liveEvents = new LiveSessionEventRelay(projectId, runtimeId, peers, recording);
+        this.#liveEvents = new SessionLiveEventRelay(projectId, runtimeId, peers, recording);
     }
 
     readonly attachDaemon = async (replacedExistingConnection: boolean, _signal: AbortSignal): Promise<void> => {
@@ -167,7 +167,7 @@ export class ChannelActor {
     ): Promise<void> => {
         try {
             const kind = message.kind;
-            if (kind === SESSION_EVENT_V2_KIND) {
+            if (kind === SESSION_EVENT_KIND) {
                 this.#liveEvents.receive(message);
                 return;
             }
@@ -194,7 +194,7 @@ export class ChannelActor {
                 this.returnAgentSettingsDiscoveryFailure(message.requestId, encodeDaemonToServiceMessage(message));
                 return;
             }
-            if (kind === SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND) {
+            if (kind === SESSION_HISTORY_PAGE_LOADED_KIND) {
                 this.returnHistoryPage("live", message);
                 return;
             }
@@ -259,15 +259,15 @@ export class ChannelActor {
                 this.forwardControl(socket, command, request.requestId, request.sessionId, request);
                 return;
             }
-            if (kind === SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND) {
-                if (!socket.permitsLiveSessionHistory()) {
+            if (kind === SESSION_HISTORY_PAGE_LOAD_KIND) {
+                if (!socket.permitsSessionHistory()) {
                     throw new ProtocolMessageError("Live Session history requires an internal connection");
                 }
-                this.forwardHistoryPage(socket, "live", decodeSessionLiveHistoryV2PageLoad(message));
+                this.forwardHistoryPage(socket, "live", decodeSessionHistoryPageLoad(message));
                 return;
             }
             if (kind === SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND) {
-                if (!socket.permitsLiveSessionHistory()) {
+                if (!socket.permitsSessionHistory()) {
                     throw new ProtocolMessageError("Session preview history requires an internal connection");
                 }
                 this.forwardHistoryPage(socket, "preview", decodeSessionPreviewHistoryPageLoad(message));
@@ -534,7 +534,7 @@ export class ChannelActor {
             DaemonToServiceMessage,
             {
                 readonly kind:
-                    | typeof SESSION_LIVE_HISTORY_V2_PAGE_LOADED_KIND
+                    | typeof SESSION_HISTORY_PAGE_LOADED_KIND
                     | typeof SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND;
             }
         >,
@@ -552,9 +552,7 @@ export class ChannelActor {
         command: Extract<
             ServiceToDaemonMessage,
             {
-                readonly kind:
-                    | typeof SESSION_LIVE_HISTORY_V2_PAGE_LOAD_KIND
-                    | typeof SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND;
+                readonly kind: typeof SESSION_HISTORY_PAGE_LOAD_KIND | typeof SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND;
             }
         >,
     ): void => {
