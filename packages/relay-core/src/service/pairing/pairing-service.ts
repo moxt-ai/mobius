@@ -2,14 +2,12 @@ import type {
     AgentSettingsDiscoverCommand,
     FileReadCommand,
     SessionPromptCommand,
-    SessionPromptDispositionCommand,
     SessionRenameCommand,
     WorkspaceListCommand,
 } from "@moxt-ai/mobius-protocol";
-import { decodeRuntimeDiagnosticsRequest, SessionPromptDisposition } from "@moxt-ai/mobius-protocol";
+import { decodeRuntimeDiagnosticsRequest } from "@moxt-ai/mobius-protocol";
 import { ProjectPermission } from "../../entity/authentication/project-authentication.ts";
 import type { ProjectScope } from "../../entity/do/session.ts";
-import type { AgentDescriptor } from "../../entity/pairing/pairing.ts";
 import { PairingDirectoryError, VerifiedChannelAccess } from "../../entity/pairing/pairing.ts";
 import type { ChannelGateway } from "../../gateway/channel-gateway.ts";
 import { type OperationTiming, unmeasuredOperationTiming } from "../../infra/operation-timing.ts";
@@ -386,85 +384,17 @@ export class PairingService {
     };
 
     /**
-     * Steers the named Turn. The command owns its capability decision: the
-     * Runtime's paired catalog must advertise steering on some Agent before
-     * the disposition reaches the Runtime. Resolution fails open when no
-     * Agent is listed, so the local execution boundary stays the authority.
-     */
-    readonly steerSessionTurn = async (
-        scope: ProjectScope,
-        runtimeId: string,
-        command: SessionPromptDispositionCommand,
-        signal: AbortSignal,
-    ) => {
-        const deadline = AbortSignal.any([signal, AbortSignal.timeout(120000)]);
-        const agents = await this.#projectScopeAgents(scope, runtimeId, deadline);
-        if (agents.length > 0 && !agents.some((agent) => agent.capabilities.steering)) {
-            throw new PairingDirectoryError(
-                "steering_unsupported",
-                "The selected Agent does not support mid-turn steering",
-            );
-        }
-        return await this.requestProjectScopeControl(scope, runtimeId, command, signal);
-    };
-
-    /**
-     * Renames the Session. The command owns its capability decision: the
-     * Runtime's paired catalog must advertise Session renaming on some Agent
-     * before the rename reaches the Runtime. Resolution fails open when no
-     * Agent is listed, so the local execution boundary stays the authority.
-     */
-    readonly renameProjectScopeSession = async (
-        scope: ProjectScope,
-        runtimeId: string,
-        command: SessionRenameCommand,
-        signal: AbortSignal,
-    ) => {
-        const deadline = AbortSignal.any([signal, AbortSignal.timeout(120000)]);
-        const agents = await this.#projectScopeAgents(scope, runtimeId, deadline);
-        if (agents.length > 0 && !agents.some((agent) => agent.capabilities.renameSession)) {
-            throw new PairingDirectoryError(
-                "session_rename_unsupported",
-                "The selected Agent does not support Session renaming",
-            );
-        }
-        return await this.requestProjectScopeControl(scope, runtimeId, command, signal);
-    };
-
-    /**
-     * Submits a Turn. The command owns its capability decision: a Turn that
-     * asks to steer names its Agent, and that Agent's advertisement decides
-     * before the prompt reaches the Runtime. Resolution fails open when the
-     * named Agent is not listed, so the local execution boundary stays the
-     * authority.
+     * Submits a Turn.
      */
     readonly submitProjectScopeTurn = async (
         scope: ProjectScope,
         runtimeId: string,
         command: SessionPromptCommand,
         signal: AbortSignal,
-    ) => {
-        if (command.disposition === SessionPromptDisposition.Steer) {
-            const deadline = AbortSignal.any([signal, AbortSignal.timeout(120000)]);
-            const agent = (await this.#projectScopeAgents(scope, runtimeId, deadline)).find(
-                (candidate) => candidate.id === command.agentId,
-            );
-            if (agent !== undefined && agent.capabilities.steering !== true) {
-                throw new PairingDirectoryError(
-                    "steering_unsupported",
-                    "The selected Agent does not support mid-turn steering",
-                );
-            }
-        }
-        return await this.requestProjectScopeControl(scope, runtimeId, command, signal);
-    };
+    ) => await this.requestProjectScopeControl(scope, runtimeId, command, signal);
 
     /**
-     * Submits a Turn through a Project credential. The command owns its
-     * capability decision: a Turn that asks to steer names its Agent, and
-     * that Agent's advertisement decides before the prompt reaches the
-     * Runtime. Resolution fails open when the named Agent is not listed, so
-     * the local execution boundary stays the authority.
+     * Submits a Turn through a Project credential.
      */
     readonly submitRuntimeTurn = async (
         projectId: string,
@@ -472,34 +402,10 @@ export class PairingService {
         token: string,
         command: SessionPromptCommand,
         signal: AbortSignal,
-    ) => {
-        if (command.disposition === SessionPromptDisposition.Steer) {
-            const deadline = AbortSignal.any([signal, AbortSignal.timeout(120000)]);
-            const agent = (
-                await this.#pairings.authorizeProjectRuntime(
-                    projectId,
-                    runtimeId,
-                    token,
-                    ProjectPermission.SessionWrite,
-                    deadline,
-                )
-            ).agents.find((candidate) => candidate.id === command.agentId);
-            if (agent !== undefined && agent.capabilities.steering !== true) {
-                throw new PairingDirectoryError(
-                    "steering_unsupported",
-                    "The selected Agent does not support mid-turn steering",
-                );
-            }
-        }
-        return await this.requestControl(projectId, runtimeId, token, command, signal);
-    };
+    ) => await this.requestControl(projectId, runtimeId, token, command, signal);
 
     /**
-     * Renames the Session through a Project credential. The command owns its
-     * capability decision: the Runtime's paired catalog must advertise Session
-     * renaming on some Agent before the rename reaches the Runtime. Resolution
-     * fails open when no Agent is listed, so the local execution boundary
-     * stays the authority.
+     * Renames the Session through a Project credential.
      */
     readonly renameRuntimeSession = async (
         projectId: string,
@@ -507,35 +413,7 @@ export class PairingService {
         token: string,
         command: SessionRenameCommand,
         signal: AbortSignal,
-    ) => {
-        const deadline = AbortSignal.any([signal, AbortSignal.timeout(120000)]);
-        const agents = (
-            await this.#pairings.authorizeProjectRuntime(
-                projectId,
-                runtimeId,
-                token,
-                ProjectPermission.SessionWrite,
-                deadline,
-            )
-        ).agents;
-        if (agents.length > 0 && !agents.some((agent) => agent.capabilities.renameSession)) {
-            throw new PairingDirectoryError(
-                "session_rename_unsupported",
-                "The selected Agent does not support Session renaming",
-            );
-        }
-        return await this.requestControl(projectId, runtimeId, token, command, signal);
-    };
-
-    /** Resolves the paired Agent catalog for a Runtime within a Project scope. */
-    readonly #projectScopeAgents = async (
-        scope: ProjectScope,
-        runtimeId: string,
-        signal: AbortSignal,
-    ): Promise<readonly AgentDescriptor[]> => {
-        const access = await this.#pairings.authorizeProjectScopeRuntime(scope, runtimeId, signal);
-        return access.agents;
-    };
+    ) => await this.requestControl(projectId, runtimeId, token, command, signal);
 
     readonly readProjectRuntimePairing = (projectId: string, pairingId: string, token: string, signal: AbortSignal) =>
         this.#pairings.readProjectRuntimePairing(projectId, pairingId, token, signal);

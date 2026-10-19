@@ -13,7 +13,13 @@ function sessionRuntimeErrorStatus(code: string): number {
     if (code === "session_not_found") {
         return 404;
     }
-    if (code === "session_busy" || code === "session_conflict" || code === "idempotency_conflict") {
+    if (
+        code === "session_busy" ||
+        code === "session_conflict" ||
+        code === "idempotency_conflict" ||
+        code === "steering_target_unavailable" ||
+        code === "steering_unsupported"
+    ) {
         return 409;
     }
     if (code === "invalid_cursor" || code === "invalid_request") {

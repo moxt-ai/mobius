@@ -17,6 +17,7 @@ import {
     encodeSessionOperationFailedEvent,
     encodeSessionPreviewHistoryPageLoaded,
     encodeSessionPromptCommand,
+    encodeSessionRenamedEvent,
     encodeSessionStatusChangedEvent,
     MOBIUS_API_PREFIX,
 } from "@moxt-ai/mobius-protocol";
@@ -2212,7 +2213,7 @@ describe.sequential("Platform Turn submission", () => {
         }
     });
 
-    it("Given an Agent whose capability advertisement withholds or malforms steering and Session renaming, When it pairs and Chat later steers a Turn or renames the Session, Then pairing succeeds and the Relay answers a typed command failure without forwarding", async () => {
+    it("Given an Agent whose capability advertisement withholds steering and Session renaming, When Chat steers a Turn or renames the Session, Then the Relay forwards both and the Runtime's own answer decides", async () => {
         const gatedAgent = readyAgents[0];
         if (gatedAgent === undefined) {
             throw new Error("Expected the shared Agent directory entry");
@@ -2341,71 +2342,82 @@ describe.sequential("Platform Turn submission", () => {
             ),
         ).toMatchObject({ agents: [{ id: "codex", label: "Codex" }], runtimeId });
 
-        // Steering a Turn and renaming the Session are both rejected at the
-        // command boundary with a typed failure and no daemon round trip.
-        expect(
-            await responseJson(
-                await worker.fetch(
-                    new Request(
-                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/turns/some-active-turn/disposition`,
-                        {
-                            body: JSON.stringify({ disposition: "steer" }),
-                            headers: credentialHeaders(sessionCredential),
-                            method: "PUT",
-                        },
-                    ),
-                    environment,
+        // The Relay no longer decides from the catalog. It forwards the steer
+        // to the Runtime, whose own rejection answers with the same
+        // machine-readable code and a terminal status.
+        const daemonResponse = await worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect?liveness=1`, {
+                headers: { authorization: `Bearer ${text(claimed, "runtimeCredential")}`, Upgrade: "websocket" },
+            }),
+            environment,
+        );
+        if (daemonResponse.webSocket === null) {
+            throw new Error("Expected the Runtime socket");
+        }
+        const daemon = daemonResponse.webSocket;
+        const daemonMessages = new SocketMessages(daemon);
+        daemon.accept();
+        try {
+            expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("runtime.liveness.ready");
+            const steer = worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/turns/some-active-turn/disposition`,
+                    {
+                        body: JSON.stringify({ disposition: "steer" }),
+                        headers: credentialHeaders(sessionCredential),
+                        method: "PUT",
+                    },
                 ),
-                409,
-            ),
-        ).toMatchObject({ error: { code: "steering_unsupported" } });
-        expect(
-            await responseJson(
-                await worker.fetch(
-                    new Request(
-                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/rename`,
-                        {
-                            body: JSON.stringify({ title: "Renamed despite the withheld capability" }),
-                            headers: credentialHeaders(sessionCredential),
-                            method: "POST",
-                        },
-                    ),
-                    environment,
-                ),
-                409,
-            ),
-        ).toMatchObject({ error: { code: "session_rename_unsupported" } });
+                environment,
+            );
+            const forwarded = decodeServiceToDaemonMessage(await daemonMessages.next());
+            expect(forwarded).toMatchObject({ kind: "session.prompt.disposition", sessionId });
+            daemon.send(
+                encodeSessionOperationFailedEvent({
+                    code: "steering_unsupported",
+                    kind: "session.operation.failed",
+                    message: "The selected agent does not support mid-turn steering",
+                    requestId: "some-active-turn",
+                    sessionId,
+                }),
+            );
+            expect(await responseJson(await steer, 409)).toMatchObject({
+                error: { code: "steering_unsupported" },
+            });
 
-        // A steer-named prompt to an Agent this Relay does not know is the
-        // Runtime's decision, not the catalog's: the command still forwards
-        // and fails at the Runtime boundary instead of the capability check.
-        expect(
-            await responseJson(
-                await worker.fetch(
-                    new Request(
-                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtimes/${runtimeId}/sessions/${sessionId}/turns`,
-                        {
-                            body: JSON.stringify({
-                                additionalDirectoryIds: [],
-                                agentId: "unknown-agent",
-                                content: "steer the active Turn",
-                                directoryId: "root",
-                                disposition: "steer",
-                                idempotencyKey: "unknown-agent-steer",
-                                images: [],
-                                resources: [],
-                                sessionConfigurations: [],
-                                targetCommandId: "some-active-turn",
-                            }),
-                            headers: credentialHeaders(appCredential),
-                            method: "POST",
-                        },
-                    ),
-                    environment,
+            // A rename forwards unchanged even though no listed Agent
+            // advertises renaming: the Runtime renames the stored Session
+            // itself, exactly as it does for Agents without the extension.
+            const rename = worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/rename`,
+                    {
+                        body: JSON.stringify({ title: "Renamed despite the withheld capability" }),
+                        headers: credentialHeaders(sessionCredential),
+                        method: "POST",
+                    },
                 ),
-                503,
-            ),
-        ).toMatchObject({ error: { code: "runtime_offline" } });
+                environment,
+            );
+            const renameCommand = decodeServiceToDaemonMessage(await daemonMessages.next());
+            expect(renameCommand).toMatchObject({ kind: "session.rename", sessionId });
+            daemon.send(
+                encodeSessionRenamedEvent({
+                    kind: "session.renamed",
+                    requestId: renameCommand.kind === "session.rename" ? renameCommand.requestId : "",
+                    sessionId,
+                    title: "Renamed despite the withheld capability",
+                    updatedAt: "2030-01-01T00:00:00.000Z",
+                }),
+            );
+            expect(await responseJson(await rename, 200)).toMatchObject({
+                kind: "session.renamed",
+                sessionId,
+                title: "Renamed despite the withheld capability",
+            });
+        } finally {
+            daemon.close(1000, "Test complete");
+        }
     });
 
     it("Given an Agent whose capability advertisement carries values the Relay cannot interpret, When it pairs, Then pairing succeeds and the unreadable capabilities stay withheld", async () => {

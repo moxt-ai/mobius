@@ -263,8 +263,6 @@ function pairingDirectoryErrorStatus(code: string): number {
         case "runtime_unavailable":
         case "agent_settings_discovery_unsupported":
         case "session_turn_configuration_unsupported":
-        case "steering_unsupported":
-        case "session_rename_unsupported":
         case "idempotency_conflict":
             return 409;
         case "pairing_timeout":

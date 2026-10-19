@@ -451,7 +451,7 @@ export function createPlatformApplication(
                 }
                 throw error;
             }
-            const accepted = await context.var.relay.services.runtimePairings.submitProjectScopeTurn(
+            const accepted = await context.var.relay.services.runtimePairings.requestProjectScopeControl(
                 new ProjectScope(access.projectId),
                 access.runtimeId,
                 command,
@@ -496,7 +496,7 @@ export function createPlatformApplication(
             const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
             const turnId = v.parse(sessionIdentifier, context.req.param("turnId"));
             const body = v.parse(sessionPromptDispositionBody, await context.req.json());
-            const started = await context.var.relay.services.runtimePairings.steerSessionTurn(
+            const started = await context.var.relay.services.runtimePairings.requestProjectScopeControl(
                 new ProjectScope(access.projectId),
                 access.runtimeId,
                 decodeSessionPromptDispositionCommand(
@@ -595,7 +595,7 @@ export function createPlatformApplication(
             );
             const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
             const body = v.parse(sessionRenameBody, await context.req.json());
-            const result = await context.var.relay.services.runtimePairings.renameProjectScopeSession(
+            const result = await context.var.relay.services.runtimePairings.requestProjectScopeControl(
                 new ProjectScope(access.projectId),
                 access.runtimeId,
                 decodeSessionRenameCommand(
