@@ -376,6 +376,16 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                     await this.#emit(agentMessageUpdate(item.id, item.text, item.phase));
                     continue;
                 }
+                if (item.type === "contextCompaction") {
+                    // Replay settles the persisted compaction as completed — its
+                    // summary (if any) is not part of the turn items surface.
+                    await this.#emit({
+                        compactionId: item.id,
+                        sessionUpdate: "compaction_update",
+                        status: "completed",
+                    });
+                    continue;
+                }
                 const update = toolCallUpdate(item, "snapshot");
                 if (update !== null) {
                     await this.#emit({ ...update, sessionUpdate: "tool_call" });

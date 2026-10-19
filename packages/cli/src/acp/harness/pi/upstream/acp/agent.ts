@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync, unlinkSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import {
@@ -510,24 +511,38 @@ export class PiAcpAgent {
 
             if (cmd === "compact") {
                 const customInstructions = args.join(" ").trim() || undefined;
+                const compactionId = randomUUID();
+                await this.conn.sessionUpdate({
+                    sessionId: session.sessionId,
+                    update: {
+                        compactionId,
+                        sessionUpdate: "compaction_update",
+                        status: "in_progress",
+                    },
+                });
+
                 const res = await session.proc.compact(customInstructions);
 
                 const r: any = res && typeof res === "object" ? (res as any) : null;
-                const tokensBefore = typeof r?.tokensBefore === "number" ? r.tokensBefore : null;
                 const summary = typeof r?.summary === "string" ? r.summary : null;
 
-                const headerLines = [
-                    `Compaction completed.${customInstructions ? " (custom instructions applied)" : ""}`,
-                    tokensBefore !== null ? `Tokens before: ${tokensBefore}` : null,
-                ].filter(Boolean);
-
-                const text = headerLines.join("\n") + (summary ? `\n\n${summary}` : "");
+                if (summary !== null && summary.length > 0) {
+                    await this.conn.sessionUpdate({
+                        sessionId: session.sessionId,
+                        update: {
+                            compactionId,
+                            content: { text: summary, type: "text" },
+                            sessionUpdate: "compaction_summary_chunk",
+                        },
+                    });
+                }
 
                 await this.conn.sessionUpdate({
                     sessionId: session.sessionId,
                     update: {
-                        sessionUpdate: "agent_message_chunk",
-                        content: { type: "text", text },
+                        compactionId,
+                        sessionUpdate: "compaction_update",
+                        status: "completed",
                     },
                 });
 

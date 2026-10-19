@@ -475,7 +475,7 @@ export class AgentSession implements AcpClientHandler {
                     clientCapabilities: {
                         elicitation: { form: {}, url: {} },
                         plan: {},
-                        session: { configOptions: { boolean: {} } },
+                        session: { compaction: {}, configOptions: { boolean: {} } },
                     },
                     clientInfo: { name: "mobius", version: "0.0.3" },
                     protocolVersion: PROTOCOL_VERSION,

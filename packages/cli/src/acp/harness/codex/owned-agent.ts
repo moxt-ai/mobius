@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
     AgentConnection,
     ContentBlock,
@@ -240,6 +241,19 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
             }
             return;
         }
+        if (method === "thread/compacted") {
+            // Older app-servers report compaction through this notification instead
+            // of a contextCompaction item. It carries no summary, so a lone
+            // completed update (fresh id) is the faithful mapping.
+            await this.#enqueue(async () => {
+                await this.#context.emit({
+                    compactionId: randomUUID(),
+                    sessionUpdate: "compaction_update",
+                    status: "completed",
+                });
+            });
+            return;
+        }
         if (method === "thread/settings/updated") {
             const decoded = threadSettingsUpdatedSchema.safeParse(params);
             if (decoded.success && decoded.data.threadId === this.#context.threadId()) {
@@ -327,6 +341,19 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
             }
             await this.#enqueue(async () => {
                 await this.#context.emit(agentMessageUpdate(item.id, item.text, item.phase));
+            });
+            return;
+        }
+        if (item.type === "contextCompaction") {
+            // The item id doubles as the ACP compaction id: started opens the
+            // compaction, completed settles it. Codex exposes no streamed summary,
+            // so no compaction_summary_chunk follows.
+            await this.#enqueue(async () => {
+                await this.#context.emit({
+                    compactionId: item.id,
+                    sessionUpdate: "compaction_update",
+                    status: method === "item/completed" ? "completed" : "in_progress",
+                });
             });
             return;
         }

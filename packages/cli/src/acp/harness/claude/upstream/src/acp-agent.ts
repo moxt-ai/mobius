@@ -2347,7 +2347,11 @@ export class ClaudeAcpAgent {
         // `status` (compact_result success/failed) twice for a single failed
         // compaction, and the two messages are indistinguishable — so we report the
         // outcome only while a compaction is in progress, then clear this.
+        // `compactionId` holds the Agent-owned ID of the in-flight compaction while
+        // one is open; the daemon always advertises `session.compaction`, so every
+        // client of this adapter receives ID-addressed compaction updates.
         let compactionInProgress = false;
+        let compactionId: string | null = null;
         // Anthropic API message id of the assistant message currently being
         // streamed, captured from `message_start` so the streamed chunks that follow
         // (whose delta events don't carry it) can all be tagged with the same,
@@ -2437,6 +2441,7 @@ export class ClaudeAcpAgent {
             lastAssistantError = undefined;
             lastRefusalExplanation = null;
             compactionInProgress = false;
+            compactionId = null;
             // Do NOT reset currentStreamMessageId or streamedBlocks here. Turn
             // activation can fire mid-message (the replayed user echo with
             // --replay-user-messages lands between a message's blocks); clearing the
@@ -3082,17 +3087,24 @@ export class ClaudeAcpAgent {
                                 }
                                 break;
                             case "status": {
-                                // These banners count as delivered text (via sendUpdate), so
-                                // an echo-less turn that only ever emits them (e.g. `/compact`,
-                                // promoted at its own result) doesn't have its result text
-                                // re-emitted by the issue-#453 fallback.
+                                // The SDK signals compaction lifecycle through `status`
+                                // frames: `status: "compacting"` opens it, and a later
+                                // frame carrying `compact_result` settles it. The SDK
+                                // emits the terminal status twice for a single failed
+                                // compaction and the two messages are indistinguishable,
+                                // so `compactionInProgress` gates the settle. The
+                                // generated summary streams ahead of the settle as
+                                // compaction_summary_chunk (see the compaction content
+                                // block case in toAcpNotifications).
                                 if (message.status === "compacting") {
                                     compactionInProgress = true;
+                                    compactionId = randomUUID();
                                     await sendUpdate({
                                         sessionId: message.session_id,
                                         update: {
-                                            sessionUpdate: "agent_message_chunk",
-                                            content: { type: "text", text: "Compacting..." },
+                                            compactionId,
+                                            sessionUpdate: "compaction_update",
+                                            status: "in_progress",
                                         },
                                     });
                                 } else if (message.compact_result === "success" && compactionInProgress) {
@@ -3100,21 +3112,28 @@ export class ClaudeAcpAgent {
                                     // message carrying `compact_result`, not the `compact_boundary`
                                     // message (which only fires when there's content to compact).
                                     compactionInProgress = false;
+                                    const settledId = compactionId;
+                                    compactionId = null;
                                     await sendUpdate({
                                         sessionId: message.session_id,
                                         update: {
-                                            sessionUpdate: "agent_message_chunk",
-                                            content: { type: "text", text: "\n\nCompacting completed." },
+                                            compactionId: settledId ?? randomUUID(),
+                                            sessionUpdate: "compaction_update",
+                                            status: "completed",
                                         },
                                     });
                                 } else if (message.compact_result === "failed" && compactionInProgress) {
                                     compactionInProgress = false;
-                                    const reason = message.compact_error ? `: ${message.compact_error}` : ".";
+                                    const settledId = compactionId;
+                                    compactionId = null;
+                                    const error = message.compact_error ?? null;
                                     await sendUpdate({
                                         sessionId: message.session_id,
                                         update: {
-                                            sessionUpdate: "agent_message_chunk",
-                                            content: { type: "text", text: `\n\nCompacting failed${reason}` },
+                                            compactionId: settledId ?? randomUUID(),
+                                            error,
+                                            sessionUpdate: "compaction_update",
+                                            status: "failed",
                                         },
                                     });
                                 }
@@ -4192,6 +4211,7 @@ export class ClaudeAcpAgent {
                                 emittedToolCalls: session.emittedToolCalls,
                                 messageId: currentStreamMessageId,
                                 streamedToolInputs,
+                                compactionId: compactionId ?? undefined,
                             },
                         )) {
                             // sendUpdate records delivery; a subagent stream's chunks carry
@@ -4504,6 +4524,7 @@ export class ClaudeAcpAgent {
                                     message.type === "user"
                                         ? (message as { tool_result_meta?: unknown }).tool_result_meta
                                         : undefined,
+                                compactionId: compactionId ?? undefined,
                             },
                         )) {
                             // sendUpdate records delivery. Subagent text/thinking is
@@ -7934,6 +7955,10 @@ export function toAcpNotifications(
         // untyped in sdk.d.ts) and validated by `parseToolResultMeta`. Stamps
         // denied/interrupted tool_call_updates with why the tool never ran.
         toolResultMeta?: unknown;
+        // ID of the in-flight compaction that streamed `compaction` content blocks
+        // belong to. Absent when no compaction is open, in which case those blocks
+        // are dropped.
+        compactionId?: string;
     },
 ): SessionNotification[] {
     const taskState = options?.taskState ?? new Map();
@@ -8293,11 +8318,30 @@ export function toAcpNotifications(
             case "citations_delta":
             case "signature_delta":
             case "container_upload":
-            case "compaction":
-            case "compaction_delta":
             case "advisor_tool_result":
             case "fallback":
                 break;
+            case "compaction":
+            case "compaction_delta": {
+                // The summary the model produced while compacting streams as
+                // `compaction` content blocks (deltas carry `content`). Forward each
+                // as a compaction_summary_chunk addressed to the in-flight
+                // compaction; the terminal compaction_update settles the summary.
+                const text = (chunk as { content?: unknown }).content;
+                if (
+                    options?.compactionId !== undefined &&
+                    options.compactionId.length > 0 &&
+                    typeof text === "string" &&
+                    text.length > 0
+                ) {
+                    update = {
+                        compactionId: options.compactionId,
+                        content: { text, type: "text" },
+                        sessionUpdate: "compaction_summary_chunk",
+                    };
+                }
+                break;
+            }
 
             default:
                 unreachable(chunk, logger);
@@ -8334,6 +8378,7 @@ export function streamEventToAcpNotifications(
         emittedToolCalls?: Set<string>;
         messageId?: string;
         streamedToolInputs?: StreamedToolInputCache;
+        compactionId?: string;
     },
 ): SessionNotification[] {
     const event = message.event;
@@ -8346,6 +8391,7 @@ export function streamEventToAcpNotifications(
         taskState: options?.taskState,
         emittedToolCalls: options?.emittedToolCalls,
         messageId: options?.messageId,
+        compactionId: options?.compactionId,
     };
     switch (event.type) {
         case "content_block_start": {
