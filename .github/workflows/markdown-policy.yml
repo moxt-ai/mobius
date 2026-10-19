@@ -58,15 +58,17 @@ jobs:
                 }
                 const paths = files.flatMap(file => file.previous_filename
                   ? [file.filename, file.previous_filename] : [file.filename]);
+                // Skills can change alongside implementation; classify all other paths, including rename sources.
+                const checkedPaths = paths.filter(path => !path.startsWith('.agent/skills/'));
                 const isMarkdown = path => /\.(md|markdown|mdx)$/i.test(path);
-                const markdown = paths.filter(isMarkdown);
-                const other = paths.filter(path => !isMarkdown(path));
+                const markdown = checkedPaths.filter(isMarkdown);
+                const other = checkedPaths.filter(path => !isMarkdown(path));
                 const mixed = markdown.length > 0 && other.length > 0;
                 const description = mixed
                   ? 'Split Markdown and non-Markdown changes into separate PRs.'
                   : markdown.length > 0
                     ? 'Markdown-only PR; taowen-paraflow review is recommended, not required.'
-                    : 'No Markdown changes.';
+                    : 'No Markdown changes outside exempt skill directories.';
                 await publish(sha, mixed ? 'failure' : 'success', description);
                 core.summary.addHeading(`PR #${pull.number}`).addRaw(description).addEOL();
                 if (mixed) {
