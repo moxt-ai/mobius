@@ -1,8 +1,12 @@
-import type { OrganizationInvite } from "@moxt-ai/mobius-sdk/platform";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Link, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { createPlatformClient } from "../services/platform-client.ts";
+import {
+    createOrganizationInvite,
+    listOrganizationInvites,
+    type OrganizationInvite,
+    revokeOrganizationInvite,
+} from "../services/organization-invite-client.ts";
 
 interface InviteProps {
     readonly endpoint: string;
@@ -29,8 +33,12 @@ function InviteContent({ endpoint, getToken, organization }: InviteProps) {
     const lifetime = useRef(new AbortController());
     useEffect(() => {
         const controller = new AbortController();
-        void createPlatformClient(endpoint, getToken)
-            .listOrganizationInvites(organization.id, AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]))
+        void listOrganizationInvites(
+            endpoint,
+            getToken,
+            organization.id,
+            AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]),
+        )
             .then((links) => {
                 if (!controller.signal.aborted) {
                     setState({ kind: "ready", links });
@@ -114,7 +122,9 @@ function InviteContent({ endpoint, getToken, organization }: InviteProps) {
                         className={`${button} border-[#168247] bg-[#168247] text-white hover:bg-[#11683a]`}
                         onClick={() =>
                             void perform(async (signal) => {
-                                const link = await createPlatformClient(endpoint, getToken).createOrganizationInvite(
+                                const link = await createOrganizationInvite(
+                                    endpoint,
+                                    getToken,
                                     organization.id,
                                     signal,
                                 );
@@ -183,7 +193,9 @@ function InviteContent({ endpoint, getToken, organization }: InviteProps) {
                                         aria-label={`Revoke invite created ${new Date(link.createdAt).toISOString()}`}
                                         onClick={() =>
                                             void perform(async (signal) => {
-                                                await createPlatformClient(endpoint, getToken).revokeOrganizationInvite(
+                                                await revokeOrganizationInvite(
+                                                    endpoint,
+                                                    getToken,
                                                     organization.id,
                                                     link.id,
                                                     signal,

@@ -1,5 +1,7 @@
 import * as v from "valibot";
 
+export const organizationInviteTokenSchema = v.pipe(v.string(), v.regex(/^[a-f0-9]{64}$/));
+
 export const organizationInviteRowSchema = v.object({
     id: v.pipe(v.string(), v.uuid()),
     organization_id: v.pipe(v.string(), v.regex(/^org_[a-zA-Z0-9]+$/)),

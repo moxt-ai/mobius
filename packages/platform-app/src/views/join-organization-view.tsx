@@ -1,6 +1,9 @@
-import type { OrganizationInvitePreview } from "@moxt-ai/mobius-sdk/platform";
 import { useEffect, useState } from "react";
-import { createPlatformClient } from "../services/platform-client.ts";
+import {
+    acceptOrganizationInvite,
+    type OrganizationInvitePreview,
+    previewOrganizationInvite,
+} from "../services/organization-invite-client.ts";
 
 type JoinState =
     | { readonly kind: "loading" }
@@ -25,8 +28,12 @@ export function JoinOrganizationView({
     useEffect(() => {
         const controller = new AbortController();
         setState({ kind: "loading" });
-        void createPlatformClient(endpoint, getToken)
-            .previewOrganizationInvite(token, AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]))
+        void previewOrganizationInvite(
+            endpoint,
+            getToken,
+            token,
+            AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]),
+        )
             .then((invite) => {
                 if (!controller.signal.aborted) {
                     setState({ kind: "ready", invite });
@@ -49,7 +56,7 @@ export function JoinOrganizationView({
         const controller = new AbortController();
         const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(20_000)]);
         void (async () => {
-            const joined = await createPlatformClient(endpoint, getToken).acceptOrganizationInvite(token, signal);
+            const joined = await acceptOrganizationInvite(endpoint, getToken, token, signal);
             signal.throwIfAborted();
             await onJoined(joined.organizationId, signal);
         })().catch((cause: unknown) => {
