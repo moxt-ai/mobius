@@ -1,7 +1,15 @@
-import type { AcpSessionUpdate, SessionEvent, SessionLiveEvent } from "@moxt-ai/mobius-sdk/protocol";
+import {
+    type AcpSessionUpdate,
+    MAX_CONTENT_LENGTH,
+    type SessionEvent,
+    type SessionLiveEvent,
+} from "@moxt-ai/mobius-sdk/protocol";
 
 type AcpSessionEvent = Extract<SessionEvent, { readonly type: "acp" }>;
 type ToolCall = Extract<AcpSessionUpdate, { readonly sessionUpdate: "tool_call" | "tool_call_update" }>;
+
+/** A chunk may only be merged while the result still satisfies the protocol's per-string bound. */
+const MAX_MERGED_TEXT_LENGTH = MAX_CONTENT_LENGTH;
 
 export type SessionEventHistoryProjectionMutation =
     | { readonly event: SessionEvent; readonly kind: "append" }
@@ -76,6 +84,13 @@ function mergeTextChunk(previous: AcpSessionUpdate, incoming: AcpSessionUpdate):
         previous.content.type !== "text" ||
         incoming.content.type !== "text"
     ) {
+        return null;
+    }
+    // A message id groups a whole assistant message, so a long reasoning stream would otherwise
+    // merge into an event that no longer fits the protocol's per-string bound. Start a new event
+    // instead: the projector keys replacements by event id, so retaining the same message id
+    // keeps the stream an ordered sequence of bounded chunks.
+    if (previous.content.text.length + incoming.content.text.length > MAX_MERGED_TEXT_LENGTH) {
         return null;
     }
     return { ...previous, content: { text: `${previous.content.text}${incoming.content.text}`, type: "text" } };

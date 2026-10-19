@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
+import { decodeSessionEvent, MAX_CONTENT_LENGTH } from "@moxt-ai/mobius-sdk/protocol";
 import { describe, expect, it, vi } from "vitest";
 
 import { AgentRuntimeManager, acpAdapters, createWritableAcpStream } from "../../src/acp/agent-runtime-manager.ts";
@@ -1185,5 +1186,52 @@ agent.once("exit", (code) => process.exit(code ?? 84));
         const writer = createWritableAcpStream(output).getWriter();
 
         await expect(writer.write(new Uint8Array([1]))).rejects.toThrow("broken pipe");
+    });
+
+    it("Given one message streams more reasoning than the protocol content bound, When history is read, Then it returns bounded events that preserve every character in order", async () => {
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-reasoning-bound-"));
+        const sessionDatabase = openAcpSessionDatabase(join(temporaryDirectory, "sessions.sqlite"));
+        const store = new CachedAcpSessionEventStore(
+            openSessionEventCacheDatabase(join(temporaryDirectory, "events.sqlite")),
+            new SqliteSessionLiveEventPosition(sessionDatabase),
+        );
+        try {
+            const chunkText = "0123456789".repeat(1_000);
+            const chunkCount = 200;
+            for (let chunk = 0; chunk < chunkCount; chunk += 1) {
+                store.append("session-1", {
+                    payload: {
+                        content: { text: chunkText, type: "text" },
+                        messageId: "reasoning-message",
+                        sessionUpdate: "agent_thought_chunk",
+                    },
+                    type: "acp",
+                });
+            }
+
+            const page = store.page("session-1", 1_000, null);
+            const texts = page.events.map((event) => {
+                if (event.type !== "acp" || event.payload.sessionUpdate !== "agent_thought_chunk") {
+                    throw new Error("Expected merged reasoning events");
+                }
+                if (event.payload.content.type !== "text") {
+                    throw new Error("Expected text reasoning content");
+                }
+                return event.payload.content.text;
+            });
+
+            expect(texts.length).toBeGreaterThan(1);
+            for (const text of texts) {
+                expect(text.length).toBeLessThanOrEqual(MAX_CONTENT_LENGTH);
+            }
+            expect(texts.join("")).toBe(chunkText.repeat(chunkCount));
+            for (const event of page.events) {
+                expect(() => decodeSessionEvent(JSON.parse(JSON.stringify(event)))).not.toThrow();
+            }
+        } finally {
+            store.close();
+            sessionDatabase.close();
+            await rm(temporaryDirectory, { force: true, recursive: true });
+        }
     });
 });

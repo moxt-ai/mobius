@@ -10,7 +10,7 @@ import { identifierStringSchema as identifier } from "./identifier.ts";
 
 const MAX_EVENT_COUNT = 10_000;
 const MAX_COLLECTION_SIZE = 1_000;
-const MAX_CONTENT_LENGTH = 1_000_000;
+export const MAX_CONTENT_LENGTH = 1_000_000;
 const MAX_JSON_DEPTH = 16;
 const MAX_JSON_KEYS = 1_000;
 export const SESSION_EVENT_KIND = "session.event.v2";
