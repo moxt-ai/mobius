@@ -1,6 +1,6 @@
 import { mkdir, realpath, stat } from "node:fs/promises";
 import { resolve } from "node:path";
-import { isIdentifier } from "@moxt-ai/mobius-protocol";
+import { isIdentifier } from "@moxt-ai/mobius-sdk/protocol";
 
 import {
     discoverLocalAgentInventory,

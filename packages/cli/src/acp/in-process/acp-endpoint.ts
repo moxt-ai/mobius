@@ -1,5 +1,5 @@
 import type { AgentApp } from "@agentclientprotocol/sdk";
-import type { AgentModelEffort } from "@moxt-ai/mobius-protocol";
+import type { AgentModelEffort } from "@moxt-ai/mobius-sdk/protocol";
 import { AcpExecutionError } from "../acp-error.ts";
 
 export type AcpEndpointTermination =

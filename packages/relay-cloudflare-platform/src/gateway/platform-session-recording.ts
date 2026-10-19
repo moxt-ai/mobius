@@ -1,3 +1,8 @@
+import type {
+    SessionRecording,
+    SessionRecordingDeliveryResult,
+    SessionRecordingTarget,
+} from "@moxt-ai/mobius-relay-core";
 import {
     encodeSessionRecordingWrite,
     encodeSessionStatusWebhookBody,
@@ -5,12 +10,7 @@ import {
     type SessionEvent,
     type SessionEventEnvelope,
     type SessionStatusWebhookCommand,
-} from "@moxt-ai/mobius-protocol";
-import type {
-    SessionRecording,
-    SessionRecordingDeliveryResult,
-    SessionRecordingTarget,
-} from "@moxt-ai/mobius-relay-core";
+} from "@moxt-ai/mobius-sdk/protocol";
 import type { AppSessionStatusWebhookService } from "../service/app-session-status-webhook-service.ts";
 import type { AppSessionStatusWebhookStorage } from "../storage/app-session-status-webhook-storage.ts";
 import type { RecordingPolicyStorage } from "../storage/recording-policy-storage.ts";

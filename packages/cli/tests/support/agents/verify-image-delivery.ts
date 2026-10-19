@@ -9,7 +9,7 @@ import {
     encodeSessionPromptCommand,
     type SessionEvent,
     SessionPromptDisposition,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { expect } from "vitest";
 import type { RealDaemonPeer } from "./real-daemon.ts";
 

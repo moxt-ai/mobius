@@ -1,5 +1,5 @@
 import * as acp from "@agentclientprotocol/sdk";
-import type { SessionCapabilities } from "@moxt-ai/mobius-protocol";
+import type { SessionCapabilities } from "@moxt-ai/mobius-sdk/protocol";
 import type { FakeAgentHarnessOptions, HarnessOutput, HarnessReplyPlan } from "./model.ts";
 
 export type FakeHarnessEndpointTermination = { readonly kind: "closed" };

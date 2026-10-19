@@ -1,4 +1,4 @@
-import type { AgentContentEvent, SessionInfoUpdatedEvent, SessionLiveEvent } from "@moxt-ai/mobius-protocol";
+import type { AgentContentEvent, SessionInfoUpdatedEvent, SessionLiveEvent } from "@moxt-ai/mobius-sdk/protocol";
 import { NullAcpSessionObserver } from "../acp/session-contracts.ts";
 
 export class DaemonAcpObserver extends NullAcpSessionObserver {

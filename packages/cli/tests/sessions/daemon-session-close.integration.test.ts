@@ -18,7 +18,7 @@ import {
     encodeSessionCloseCommand,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test, vi } from "vitest";
 import type {
     AcpEndpointTermination,

@@ -1,3 +1,4 @@
+import { ProjectPermission } from "@moxt-ai/mobius-relay-core";
 import {
     isIdentifier,
     parseSessionRecordingPageLimit,
@@ -7,8 +8,7 @@ import {
     SESSION_RECORDING_TURN_ITEM_PAGE_MAX_LIMIT,
     SESSION_RECORDING_TURN_PAGE_MAX_LIMIT,
     type SessionRecordingTurnItemCursorDirection,
-} from "@moxt-ai/mobius-protocol";
-import { ProjectPermission } from "@moxt-ai/mobius-relay-core";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { type Context, Hono } from "hono";
 import * as v from "valibot";
 import { PlatformControlPlaneError } from "../entity/platform-control-plane.ts";

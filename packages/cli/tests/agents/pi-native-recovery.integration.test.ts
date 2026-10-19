@@ -14,7 +14,7 @@ import {
     encodeSessionPromptCommand,
     SESSION_EVENT_KIND,
     SessionPromptDisposition,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
 import { PiAgentSpecification } from "../../src/agent-catalog/agents/pi-agent.ts";
 import { PiFixture } from "../support/agents/pi.ts";

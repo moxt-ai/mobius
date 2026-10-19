@@ -1,5 +1,5 @@
 import type { ElicitationContentValue } from "@agentclientprotocol/sdk";
-import type { SessionElicitationField, SessionElicitationOption } from "@moxt-ai/mobius-protocol";
+import type { SessionElicitationField, SessionElicitationOption } from "@moxt-ai/mobius-sdk/protocol";
 import { AcpExecutionError } from "./acp-error.ts";
 import { isRecord, readString, truncate } from "./value-utils.ts";
 

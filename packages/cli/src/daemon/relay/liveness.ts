@@ -4,7 +4,7 @@ import {
     RUNTIME_HEARTBEAT_KIND,
     type RuntimeHeartbeatAckEvent,
     type RuntimeHeartbeatEvent,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 
 import type { DaemonScheduledTask, DaemonTimer } from "./timer.ts";
 

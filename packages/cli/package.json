@@ -1,6 +1,6 @@
 {
     "name": "@moxt-ai/mobius",
-    "version": "0.0.253",
+    "version": "0.0.254",
     "description": "Mobius CLI for pairing and running local AI agent services.",
     "type": "module",
     "bin": {
@@ -73,7 +73,6 @@
     },
     "devDependencies": {
         "@anthropic-ai/sdk": "0.122.0",
-        "@moxt-ai/mobius-protocol": "workspace:*",
         "@moxt-ai/mobius-sdk": "workspace:*",
         "@moxt-ai/mobius-test": "workspace:*",
         "@types/node": "^24.13.5",

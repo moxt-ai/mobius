@@ -4,7 +4,7 @@ import type {
     AgentDisplayContent,
     ContentBlock,
     SessionEventPayload,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import type { AcpNativeEventReplay } from "../../session-contracts.ts";
 import type { AcpSessionEventStore } from "../../session-event-store.ts";
 import type { NativeHistoryActivity, NativeHistoryEntry } from "./history-images.ts";

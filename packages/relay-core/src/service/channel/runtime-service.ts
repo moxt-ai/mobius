@@ -10,7 +10,7 @@ import {
     type RuntimeLivenessReadyEvent,
     SESSION_EVENT_KIND,
     UnsupportedProtocolMessageKindError,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { ProjectScope } from "../../entity/do/session.ts";
 import type { ChannelActor, ChannelPeers, ChannelSocket } from "./channel-actor.ts";
 import type { ChannelCredentialService } from "./channel-credential-service.ts";

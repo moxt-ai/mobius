@@ -16,7 +16,6 @@
         "@cloudflare/vitest-plugin": "^1.1.12",
         "@cloudflare/workers-types": "^5.20260918.1",
         "@moxt-ai/mobius-sdk": "workspace:*",
-        "@moxt-ai/mobius-protocol": "workspace:*",
         "@types/ws": "^8.18.1",
         "@moxt-ai/mobius-relay-core": "workspace:*",
         "@moxt-ai/mobius-relay-cloudflare-platform": "workspace:*",

@@ -1,7 +1,7 @@
 import { mkdir, realpath, stat } from "node:fs/promises";
 import { hostname } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { isIdentifier, mobiusApiUrl } from "@moxt-ai/mobius-protocol";
+import { isIdentifier, mobiusApiUrl } from "@moxt-ai/mobius-sdk/protocol";
 import { fetch, type Response } from "undici";
 import packageMetadata from "../../../package.json" with { type: "json" };
 import { discoverLocalAgentInventory, type LocalAgentInventory } from "../../agent-catalog/discover-local-agents.ts";

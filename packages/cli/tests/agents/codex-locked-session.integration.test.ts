@@ -6,7 +6,7 @@ import {
     encodeNativeSessionCommand,
     encodeSessionPromptCommand,
     SessionPromptDisposition,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
 import { CodexAppServerClient } from "../../src/acp/harness/codex/app-server-client.ts";
 import { CodexAgentSpecification } from "../../src/agent-catalog/agents/codex-agent.ts";

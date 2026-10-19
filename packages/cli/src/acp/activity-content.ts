@@ -5,7 +5,7 @@ import type {
     ToolCallContent,
     ToolCallLocation,
 } from "@agentclientprotocol/sdk";
-import type { AgentDisplayContent } from "@moxt-ai/mobius-protocol";
+import type { AgentDisplayContent } from "@moxt-ai/mobius-sdk/protocol";
 
 const TRUNCATION_MARKER = "\n… output truncated by Mobius";
 

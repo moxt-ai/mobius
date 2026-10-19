@@ -1,4 +1,4 @@
-export type { AgentExecutionConfiguration, TurnRequest } from "@moxt-ai/mobius-protocol";
+export type { AgentExecutionConfiguration, TurnRequest } from "@moxt-ai/mobius-sdk/protocol";
 export {
     AGENT_DEFAULT_EXECUTION_SETTING,
     AGENT_PERMISSION_MODE_CONFIG_ID,
@@ -6,7 +6,7 @@ export {
     DEFAULT_AGENT_EXECUTION_CONFIGURATION,
     decodeAgentExecutionConfiguration,
     issueSessionAccessCredential,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 export * from "./errors.ts";
 export * from "./resources.ts";
 export * from "./service-client.ts";

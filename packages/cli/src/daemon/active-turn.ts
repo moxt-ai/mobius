@@ -19,7 +19,7 @@ import {
     SessionPromptDisposition,
     type SessionPromptDispositionCommand,
     type SessionReadyEvent,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 
 type ActiveTurnSnapshot = Extract<NativeSessionResult, { readonly action: "active-turn" }>["turn"];
 

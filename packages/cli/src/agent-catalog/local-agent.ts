@@ -1,5 +1,5 @@
 import { realpathSync, statSync } from "node:fs";
-import type { SessionCapabilities } from "@moxt-ai/mobius-protocol";
+import type { SessionCapabilities } from "@moxt-ai/mobius-sdk/protocol";
 
 import type { InProcessAcpEndpointFactory } from "../acp/in-process/acp-endpoint.ts";
 import { unsupportedSessionCapabilities } from "../acp/session-capabilities.ts";

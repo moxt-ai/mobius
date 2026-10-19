@@ -1,4 +1,4 @@
-import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
+import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-sdk/protocol";
 import { type HttpError, toHttpError } from "../../entity/http-error.ts";
 import { logger } from "../../infra/logger.ts";
 

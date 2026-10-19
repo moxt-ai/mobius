@@ -1,4 +1,4 @@
-import type { SessionCapabilities } from "@moxt-ai/mobius-protocol";
+import type { SessionCapabilities } from "@moxt-ai/mobius-sdk/protocol";
 import { unsupportedSessionCapabilities } from "../acp/session-capabilities.ts";
 import { ProcessExecutionError } from "../util/process/executable.ts";
 import { probeAcpReadiness } from "./acp-readiness-probe.ts";

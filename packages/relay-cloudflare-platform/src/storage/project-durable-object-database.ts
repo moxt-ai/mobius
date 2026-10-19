@@ -1,5 +1,5 @@
-import type { ProjectLocationHint } from "@moxt-ai/mobius-protocol";
 import { DatabaseError, type SqlDatabase, type SqlStatement } from "@moxt-ai/mobius-relay-core/database";
+import type { ProjectLocationHint } from "@moxt-ai/mobius-sdk/protocol";
 import * as v from "valibot";
 import { encodeProjectDurableObjectPath } from "../entity/project-durable-object-path.ts";
 

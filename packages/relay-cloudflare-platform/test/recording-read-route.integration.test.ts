@@ -1,13 +1,13 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
+import { DurableObjectSqlDatabase, RuntimeRelay } from "@moxt-ai/mobius-relay-core";
 import {
     decodeSessionRecordingHistory,
     decodeSessionRecordingHistoryPage,
     decodeSessionRecordingTurnPage,
     encodeSessionEventEnvelope,
     MOBIUS_API_PREFIX,
-} from "@moxt-ai/mobius-protocol";
-import { DurableObjectSqlDatabase, RuntimeRelay } from "@moxt-ai/mobius-relay-core";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDurableObjectDependencies } from "../../relay-core/src/di/create-durable-object-dependencies.ts";
 import { createTestMobiusPlatformApp } from "../../test-support/src/app.ts";

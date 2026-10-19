@@ -1,4 +1,4 @@
-import { parseMobiusApiPrefix } from "@moxt-ai/mobius-protocol";
+import { parseMobiusApiPrefix } from "@moxt-ai/mobius-sdk/protocol";
 import type { ChannelGateway } from "../gateway/channel-gateway.ts";
 import type { ProjectAccessAuthorizer } from "../gateway/project-access-authorizer.ts";
 import type { DatabaseResolver } from "../infra/database-resolver.ts";

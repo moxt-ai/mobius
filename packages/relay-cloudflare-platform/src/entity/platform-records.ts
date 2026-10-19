@@ -1,4 +1,4 @@
-import { PROJECT_LOCATION_HINTS } from "@moxt-ai/mobius-protocol";
+import { PROJECT_LOCATION_HINTS } from "@moxt-ai/mobius-sdk/protocol";
 import * as v from "valibot";
 
 const nonNegativeInteger = v.pipe(v.number(), v.safeInteger(), v.minValue(0));

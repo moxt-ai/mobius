@@ -1,4 +1,4 @@
-import type { AgentDisplayContent } from "@moxt-ai/mobius-protocol";
+import type { AgentDisplayContent } from "@moxt-ai/mobius-sdk/protocol";
 import { readLocalRaster } from "../../resource/local-raster.ts";
 
 const IMAGE_MARKER = /\[@image\]\(([^)\r\n]*)(?:\)|$)/g;

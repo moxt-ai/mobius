@@ -16,7 +16,7 @@ import {
     ProtocolMessageError,
     RUNTIME_WORKSPACE_BINDING_ID,
     type SessionPromptCommand,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { Hono } from "hono";
 import * as v from "valibot";
 import {

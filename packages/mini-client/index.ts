@@ -6,6 +6,7 @@ import { type FileHandle, mkdir, open, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { MobiusAppCredentialProvider, MobiusPlatformAppClient } from "@moxt-ai/mobius-sdk/platform";
 import {
     type NativeSessionEvents,
     RUNTIME_WORKSPACE_BINDING_ID,
@@ -14,8 +15,7 @@ import {
     type SessionConfigurationSelection,
     type SessionEvent,
     SessionPromptDisposition,
-} from "@moxt-ai/mobius-protocol";
-import { MobiusAppCredentialProvider, MobiusPlatformAppClient } from "@moxt-ai/mobius-sdk/platform";
+} from "@moxt-ai/mobius-sdk/protocol";
 import {
     MobiusClient,
     type MobiusLiveEventSubscription,

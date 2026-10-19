@@ -1,4 +1,4 @@
-import { PROJECT_LOCATION_HINTS } from "@moxt-ai/mobius-protocol";
+import { PROJECT_LOCATION_HINTS } from "@moxt-ai/mobius-sdk/protocol";
 import { sql } from "drizzle-orm";
 import { check, index, integer, sqliteTable, text, unique } from "drizzle-orm/sqlite-core";
 

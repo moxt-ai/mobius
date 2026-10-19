@@ -6,9 +6,8 @@ const { join, resolve } = require("node:path");
 const release = process.argv[2];
 const runnerTemp = process.env.RUNNER_TEMP;
 const definitions = {
-    // The Protocol and SDK archives are packed by `ci-pack-mobius-releases.cjs` so their
+    // The SDK archive is packed by `ci-pack-mobius-releases.cjs` so its
     // `publishConfig` overrides (rewritten `workspace:*` dependencies) are applied before publish.
-    protocol: { archiveName: "mobius-protocol.tgz" },
     sdk: { archiveName: "mobius-sdk.tgz" },
 };
 if (release !== "cli" && definitions[release] === undefined) {

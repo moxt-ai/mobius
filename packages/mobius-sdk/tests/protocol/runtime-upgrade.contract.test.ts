@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decodeDaemonToServiceMessage, decodeServiceToDaemonMessage } from "../src/index.ts";
+import { decodeDaemonToServiceMessage, decodeServiceToDaemonMessage } from "../../src/protocol/index.ts";
 
 describe("Runtime upgrade wire contract", () => {
     it("Given a server upgrade command, When decoded, Then remote upgrade triggering is rejected", () => {

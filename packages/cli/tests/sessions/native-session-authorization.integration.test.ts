@@ -1,6 +1,6 @@
 import { mkdir, readdir, rm, symlink } from "node:fs/promises";
 import { join } from "node:path";
-import type { NativeSessionCommand, NativeSessionEntry } from "@moxt-ai/mobius-protocol";
+import type { NativeSessionCommand, NativeSessionEntry } from "@moxt-ai/mobius-sdk/protocol";
 import { describe, expect, it } from "vitest";
 
 import { fixture } from "./native-session-fixture.ts";

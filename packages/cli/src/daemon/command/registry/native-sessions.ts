@@ -5,7 +5,7 @@ import {
     SESSION_LISTED_KIND,
     SESSION_QUERIED_KIND,
     SESSION_QUERY_KIND,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { createNativeSessionRequestHandler } from "../../../native-sessions/handle-native-requests.ts";
 import { reportOperationFailure, send } from "../../command-dispatcher.ts";
 import type { CommandContext } from "../context.ts";

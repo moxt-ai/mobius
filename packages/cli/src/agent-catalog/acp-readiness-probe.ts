@@ -13,7 +13,7 @@ import {
     type RequestPermissionResponse,
     type SessionNotification,
 } from "@agentclientprotocol/sdk";
-import type { SessionCapabilities } from "@moxt-ai/mobius-protocol";
+import type { SessionCapabilities } from "@moxt-ai/mobius-sdk/protocol";
 
 import { type AcpClientHandler, createAcpClient } from "../acp/create-client.ts";
 import { acpEndpointTerminationError } from "../acp/in-process/acp-endpoint.ts";

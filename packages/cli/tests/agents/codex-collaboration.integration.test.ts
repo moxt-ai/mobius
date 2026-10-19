@@ -18,7 +18,7 @@ import {
     RUNTIME_LIVENESS_READY_KIND,
     SESSION_EVENT_KIND,
     SessionPromptDisposition,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { expect, test } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";

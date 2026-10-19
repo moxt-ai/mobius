@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mobiusApiPath } from "@moxt-ai/mobius-protocol";
+import { mobiusApiPath } from "@moxt-ai/mobius-sdk/protocol";
 import { MobiusClient, StaticMobiusCredentialProvider } from "@moxt-ai/mobius-sdk/server";
 import * as v from "valibot";
 import { createDaemonConfig, DaemonLocalContext } from "../../src/daemon/config.ts";

@@ -11,7 +11,7 @@ import type {
     SessionLiveEvent,
     SessionPermissionRequestedEvent,
     SessionPermissionResolvedEvent,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import type { AcpSessionObserver } from "../../src/acp/agent-runtime-manager.ts";
 import { LocalAgentDefinition } from "../../src/daemon/config.ts";
 

@@ -11,7 +11,7 @@ import {
     encodeSessionPromptCommand,
     SESSION_EVENT_KIND,
     SessionPromptDisposition,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
 import { ClaudeCodeAgentSpecification } from "../../src/agent-catalog/agents/claude-code-agent.ts";
 import { ClaudeFixture } from "../support/agents/claude.ts";

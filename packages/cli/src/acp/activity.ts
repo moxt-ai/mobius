@@ -1,5 +1,5 @@
 import type { Plan, PlanEntry, PlanRemoved, PlanUpdate, ToolCall, ToolCallUpdate } from "@agentclientprotocol/sdk";
-import type { AgentDisplayContent } from "@moxt-ai/mobius-protocol";
+import type { AgentDisplayContent } from "@moxt-ai/mobius-sdk/protocol";
 
 import {
     ACTIVITY_DETAIL_LIMIT,

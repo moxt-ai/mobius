@@ -1,4 +1,4 @@
-import type { AgentDisplayContent } from "@moxt-ai/mobius-protocol";
+import type { AgentDisplayContent } from "@moxt-ai/mobius-sdk/protocol";
 import { type AcpActivity, type AcpActivityNarration, AcpActivityTracker } from "./activity.ts";
 
 const SESSION_CONTROL_COMMAND_ID = "session-control";

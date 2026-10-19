@@ -1,4 +1,3 @@
-import type { ProjectLocationHint } from "@moxt-ai/mobius-protocol";
 import {
     AuditActor,
     createRandomToken,
@@ -16,6 +15,7 @@ import {
     type VerifiedExternalIdentity,
     validateIdentifier,
 } from "@moxt-ai/mobius-relay-core";
+import type { ProjectLocationHint } from "@moxt-ai/mobius-sdk/protocol";
 import {
     hasControlCharacters,
     PlatformAppCredentialAccess,

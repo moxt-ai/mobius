@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { gzipSync } from "node:zlib";
+import { MOBIUS_API_PREFIX, SESSION_PROMPT_KIND, type SessionPromptCommand } from "@moxt-ai/mobius-sdk/protocol";
 import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { afterEach, describe, expect, it } from "vitest";
-import { MOBIUS_API_PREFIX, SESSION_PROMPT_KIND, type SessionPromptCommand } from "../../../protocol/src/index.ts";
 import { createDaemonConfig } from "../../src/daemon/config.ts";
 import { resolvePromptArtifacts } from "../../src/prompt-artifact-resolver.ts";
 

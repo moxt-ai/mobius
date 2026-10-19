@@ -1,4 +1,4 @@
-import { ProtocolMessageError } from "@moxt-ai/mobius-protocol";
+import { ProtocolMessageError } from "@moxt-ai/mobius-sdk/protocol";
 import * as v from "valibot";
 import type { ChannelSocket, HistoryRequestKind } from "../service/channel/channel-actor.ts";
 import type { RuntimePeers, RuntimeSocket, RuntimeSocketIdentity } from "../service/channel/runtime-service.ts";

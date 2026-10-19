@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
-import { isProjectLocationHint, PROJECT_LOCATION_HINTS, type ProjectLocationHint } from "../src/index.ts";
+import { isProjectLocationHint, PROJECT_LOCATION_HINTS, type ProjectLocationHint } from "../../src/protocol/index.ts";
 
 describe("Project location protocol contract", () => {
     it("Given Project location values, When they are checked, Then only the published location hints are accepted", () => {

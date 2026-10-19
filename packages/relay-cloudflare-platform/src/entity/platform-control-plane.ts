@@ -1,4 +1,3 @@
-import type { ProjectLocationHint } from "@moxt-ai/mobius-protocol";
 import {
     AuditActorKind,
     type ExternalIdentityAuthenticator,
@@ -7,6 +6,7 @@ import {
     type ProjectPermission,
     type VerifiedExternalIdentity,
 } from "@moxt-ai/mobius-relay-core/contracts";
+import type { ProjectLocationHint } from "@moxt-ai/mobius-sdk/protocol";
 
 export class PlatformAuditActorKind extends AuditActorKind {
     static readonly Application = new PlatformAuditActorKind("application");

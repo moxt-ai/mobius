@@ -76,7 +76,7 @@ import {
     UnsupportedProtocolMessageKindError,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { SessionRuntimeError } from "../../entity/do/session.ts";
 import type { BestEffortRecording } from "./best-effort-recording.ts";
 import { SessionLiveEventRelay } from "./session-live-event-relay.ts";

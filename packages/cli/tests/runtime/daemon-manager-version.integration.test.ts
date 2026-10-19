@@ -7,7 +7,7 @@ import { createConnection, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { decodeDaemonToServiceMessage } from "@moxt-ai/mobius-protocol";
+import { decodeDaemonToServiceMessage } from "@moxt-ai/mobius-sdk/protocol";
 import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";

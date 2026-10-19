@@ -15,7 +15,7 @@ import {
     SESSION_RECORDING_TURN_PAGE_MAX_LIMIT,
     type SessionRecordingTurnItemCursorDirection,
     type SessionRecordingWrite,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { Hono } from "hono";
 import { RecordingDirectory } from "./service/recording-directory.ts";
 import { SessionTurnHistory, type TurnHistoryRead } from "./service/session-turn-history.ts";

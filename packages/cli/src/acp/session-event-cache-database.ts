@@ -1,4 +1,4 @@
-import { decodeSessionEvent, type SessionEvent } from "@moxt-ai/mobius-protocol";
+import { decodeSessionEvent, type SessionEvent } from "@moxt-ai/mobius-sdk/protocol";
 import { and, asc, eq, gte, lte } from "drizzle-orm";
 import type { NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
 import { z } from "zod";

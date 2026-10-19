@@ -4,7 +4,7 @@ import {
     sessionRecordingTurnItemSchema,
     sessionRecordingTurnPrecedingSchema,
     sessionRecordingTurnPromptSchema,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { z } from "zod";
 
 const count = z.number().int().nonnegative().safe();

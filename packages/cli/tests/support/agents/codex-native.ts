@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { NativeSessionCommand } from "@moxt-ai/mobius-protocol";
+import type { NativeSessionCommand } from "@moxt-ai/mobius-sdk/protocol";
 import { AgentRuntimeManager, acpAdapters, NullAcpSessionObserver } from "../../../src/acp/agent-runtime-manager.ts";
 import { CodexAcpAgent } from "../../../src/acp/harness/codex/agent.ts";
 import { MemoryAcpSessionStore } from "../../../src/acp/session-store.ts";

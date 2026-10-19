@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { isIdentifier, type PromptImage, type PromptResource } from "@moxt-ai/mobius-protocol";
+import { isIdentifier, type PromptImage, type PromptResource } from "@moxt-ai/mobius-sdk/protocol";
 import { fetch } from "undici";
 
 import type { DaemonConfig } from "./daemon/config.ts";

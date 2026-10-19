@@ -3,7 +3,7 @@ import {
     SESSION_EVENT_KIND,
     type SessionEventEnvelope,
     type SessionLiveEvent,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import type { SessionRecording, SessionRecordingTarget } from "../../infra/session-recording.ts";
 import { RuntimeMessageScheduler } from "./runtime-message-scheduler.ts";
 

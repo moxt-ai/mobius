@@ -1,4 +1,8 @@
-import { encodeSessionPromptCommand, SESSION_PROMPT_KIND, SessionPromptDisposition } from "@moxt-ai/mobius-protocol";
+import {
+    encodeSessionPromptCommand,
+    SESSION_PROMPT_KIND,
+    SessionPromptDisposition,
+} from "@moxt-ai/mobius-sdk/protocol";
 import { send } from "../../command-dispatcher.ts";
 import type { DaemonCommand } from "../definition.ts";
 import { executePrompt } from "./prompt-executor.ts";

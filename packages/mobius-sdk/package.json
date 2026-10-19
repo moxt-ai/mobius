@@ -1,6 +1,6 @@
 {
     "name": "@moxt-ai/mobius-sdk",
-    "version": "0.0.101",
+    "version": "0.0.102",
     "description": "Unified Mobius TypeScript SDK for browsers and Node.js.",
     "type": "module",
     "types": "./src/index.ts",
@@ -8,7 +8,8 @@
         ".": "./src/index.ts",
         "./channel": "./src/channel.ts",
         "./platform": "./src/platform.ts",
-        "./server": "./src/server.ts"
+        "./server": "./src/server.ts",
+        "./protocol": "./src/protocol/index.ts"
     },
     "files": [
         "dist",
@@ -40,6 +41,11 @@
                 "types": "./dist/server.d.ts",
                 "import": "./dist/server.js",
                 "default": "./dist/server.js"
+            },
+            "./protocol": {
+                "types": "./dist/protocol/index.d.ts",
+                "import": "./dist/protocol/index.js",
+                "default": "./dist/protocol/index.js"
             }
         }
     },
@@ -54,8 +60,8 @@
         "typecheck": "tsc --project tsconfig.json"
     },
     "dependencies": {
-        "@moxt-ai/mobius-protocol": "workspace:*",
-        "partysocket": "1.3.0"
+        "partysocket": "1.3.0",
+        "zod": "^4.6.5"
     },
     "devDependencies": {
         "@types/node": "^24.13.5",

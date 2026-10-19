@@ -8,7 +8,7 @@ import {
     type SessionMetadata,
     type SessionReadyEvent,
     type WorkspaceEntry,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { AcpExecutionError, type AcpPrepareOptions, type AgentRuntimeManager } from "../acp/agent-runtime-manager.ts";
 import type { NativeSessionInfo } from "../acp/native-session.ts";
 import { nativeSessionIdSchema } from "../acp/native-session.ts";

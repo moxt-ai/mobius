@@ -1,5 +1,5 @@
-import type { AgentSettingsDiscoverCommand, FileReadCommand, WorkspaceListCommand } from "@moxt-ai/mobius-protocol";
-import { decodeRuntimeDiagnosticsRequest } from "@moxt-ai/mobius-protocol";
+import type { AgentSettingsDiscoverCommand, FileReadCommand, WorkspaceListCommand } from "@moxt-ai/mobius-sdk/protocol";
+import { decodeRuntimeDiagnosticsRequest } from "@moxt-ai/mobius-sdk/protocol";
 import { ProjectPermission } from "../../entity/authentication/project-authentication.ts";
 import type { ProjectScope } from "../../entity/do/session.ts";
 import { PairingDirectoryError, VerifiedChannelAccess } from "../../entity/pairing/pairing.ts";

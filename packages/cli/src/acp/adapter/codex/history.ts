@@ -3,7 +3,7 @@ import {
     type AgentDisplayContent,
     SESSION_HISTORY_CHARACTER_LIMIT,
     SESSION_HISTORY_MESSAGE_LIMIT,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { z } from "zod";
 import type { AcpAgentDefinition } from "../../../agent-catalog/local-agent.ts";
 import {

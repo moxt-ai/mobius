@@ -1,4 +1,4 @@
-import type { SessionConfigurationSelection } from "@moxt-ai/mobius-protocol";
+import type { SessionConfigurationSelection } from "@moxt-ai/mobius-sdk/protocol";
 import { AgentSettingsAdapter, AppliedAgentLaunchSettings } from "./agent-settings-base.ts";
 import { CodexSettingsAdapter } from "./agents/codex-settings-adapter.ts";
 import type { AcpAgentDefinition } from "./local-agent.ts";

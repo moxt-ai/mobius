@@ -5,7 +5,7 @@ import { connect, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
+import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-sdk/protocol";
 import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { describe, expect, it } from "vitest";
 import { ControlledCodexFixture } from "../support/agents/controlled-codex.ts";

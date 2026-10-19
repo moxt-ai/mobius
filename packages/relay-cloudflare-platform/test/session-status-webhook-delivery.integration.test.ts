@@ -1,5 +1,9 @@
 import { env } from "cloudflare:workers";
-import { decodeSessionStatusWebhookBody, MOBIUS_API_PREFIX, type SessionEventEnvelope } from "@moxt-ai/mobius-protocol";
+import {
+    decodeSessionStatusWebhookBody,
+    MOBIUS_API_PREFIX,
+    type SessionEventEnvelope,
+} from "@moxt-ai/mobius-sdk/protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestMobiusPlatformApp } from "../../test-support/src/app.ts";
 import { FakeClerk } from "../../test-support/src/clerk.ts";

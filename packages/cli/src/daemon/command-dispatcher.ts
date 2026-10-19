@@ -3,7 +3,7 @@ import {
     encodeDaemonToServiceMessage,
     type ServiceToDaemonMessage,
     type SessionCancelCommand,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { WebSocket } from "undici";
 import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "../acp/agent-runtime-manager.ts";
 import { LocalAgentCatalogError } from "../agent-catalog/local-agent.ts";

@@ -1,6 +1,6 @@
 import { mkdir, readFile, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative } from "node:path";
-import { runtimeUpgradeVersionSchema } from "@moxt-ai/mobius-protocol";
+import { runtimeUpgradeVersionSchema } from "@moxt-ai/mobius-sdk/protocol";
 import { gt } from "semver";
 import { z } from "zod";
 import { validateLocalPath } from "../../filesystem/private-path.ts";

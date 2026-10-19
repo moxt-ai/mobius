@@ -1,4 +1,4 @@
-import { isIdentifier } from "@moxt-ai/mobius-protocol";
+import { isIdentifier } from "@moxt-ai/mobius-sdk/protocol";
 import type { ProjectScope } from "../do/session.ts";
 import type { HttpError } from "../http-error.ts";
 import { VerifiedChannelAccess } from "../pairing/pairing.ts";

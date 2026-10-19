@@ -6,7 +6,7 @@ import {
     type SessionInfoUpdatedEvent,
     type SessionLiveEvent,
     type SessionStatusChangedEvent,
-} from "@moxt-ai/mobius-protocol";
+} from "@moxt-ai/mobius-sdk/protocol";
 import { WebSocket } from "undici";
 import type { DaemonScheduledTask, DaemonTimer } from "./timer.ts";
 

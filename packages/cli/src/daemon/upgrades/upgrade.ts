@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { setInterval, setTimeout } from "node:timers/promises";
-import { decodeIdentifier, type RuntimeUpgradeResult } from "@moxt-ai/mobius-protocol";
+import { decodeIdentifier, type RuntimeUpgradeResult } from "@moxt-ai/mobius-sdk/protocol";
 import packageMetadata from "../../../package.json" with { type: "json" };
 import { isNodeError, sendLocalRequest } from "../control/local-client.ts";
 import { type DaemonSwitchState, lifecycleResponse } from "../control/protocol.ts";

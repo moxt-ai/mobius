@@ -1,4 +1,4 @@
-import { RUNTIME_PING_KIND, RUNTIME_PONG_KIND } from "@moxt-ai/mobius-protocol";
+import { RUNTIME_PING_KIND, RUNTIME_PONG_KIND } from "@moxt-ai/mobius-sdk/protocol";
 import packageMetadata from "../../../../package.json" with { type: "json" };
 import { send } from "../../command-dispatcher.ts";
 import type { DaemonCommand } from "../definition.ts";
