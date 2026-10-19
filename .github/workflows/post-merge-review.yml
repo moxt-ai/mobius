@@ -105,6 +105,7 @@ jobs:
           {
             echo '### Moxt review requested'
             echo
+            jq -r '"PR: \(.html_url)\n\nRequested head: \(.head.sha)\n\nBase: \(.base.sha)\n"' "$pull_request"
             echo 'Moxt accepted the webhook (HTTP 202). This confirms delivery, not review completion.'
             echo 'The reviewer agent publishes the result back to the pull request asynchronously.'
             echo 'Each new head commit receives a comment; repeated delivery of the same head is deduplicated by the reviewer.'
