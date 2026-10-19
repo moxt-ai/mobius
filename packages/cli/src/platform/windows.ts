@@ -1,4 +1,5 @@
 import { type ChildProcess, execFile } from "node:child_process";
+import { readdirSync } from "node:fs";
 import { readFile, realpath } from "node:fs/promises";
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -11,6 +12,55 @@ const execute = promisify(execFile);
 
 function environmentValue(environment: Readonly<NodeJS.ProcessEnv>, name: string): string | undefined {
     return Object.entries(environment).find(([key]) => key.toUpperCase() === name.toUpperCase())?.[1];
+}
+
+function installedDirectories(directory: string): readonly string[] {
+    try {
+        return readdirSync(directory, { withFileTypes: true })
+            .filter((entry) => entry.isDirectory())
+            .map((entry) => entry.name);
+    } catch (cause) {
+        if (
+            cause instanceof Error &&
+            "code" in cause &&
+            (cause.code === "ENOENT" || cause.code === "ENOTDIR" || cause.code === "EACCES")
+        ) {
+            return [];
+        }
+        throw cause;
+    }
+}
+
+function desktopClaudeExecutablePaths(environment: Readonly<NodeJS.ProcessEnv>): readonly string[] {
+    const roots: string[] = [];
+    const localAppData = environmentValue(environment, "LOCALAPPDATA");
+    if (localAppData !== undefined && isAbsolute(localAppData)) {
+        const dataDirectory = join(localAppData, "Claude-Data");
+        for (const installation of installedDirectories(dataDirectory)) {
+            if (installation.startsWith("claude_")) {
+                roots.push(join(dataDirectory, installation, "claude-code"));
+            }
+        }
+    }
+    const appData = environmentValue(environment, "APPDATA");
+    if (appData !== undefined && isAbsolute(appData)) {
+        roots.push(join(appData, "Claude", "claude-code"));
+    }
+    const paths: string[] = [];
+    for (const root of roots) {
+        const versions = installedDirectories(root)
+            .filter((version) => /^\d+\.\d+\.\d+$/.test(version))
+            .toSorted((left, right) => right.localeCompare(left, "en", { numeric: true }));
+        for (const version of versions) {
+            const directory = join(root, version);
+            // Desktop can keep the engine directly under its version or in a build-hash directory.
+            paths.push(join(directory, "claude.exe"));
+            for (const build of installedDirectories(directory)) {
+                paths.push(join(directory, build, "claude.exe"));
+            }
+        }
+    }
+    return paths;
 }
 
 function executableExtensions(executableName: string, environment: Readonly<NodeJS.ProcessEnv>): readonly string[] {
@@ -217,6 +267,7 @@ export const windowsPlatform: PlatformSupport = {
         if (localAppData !== undefined && isAbsolute(localAppData)) {
             paths.push(join(localAppData, "Microsoft", "WinGet", "Links", "claude.exe"));
         }
+        paths.push(...desktopClaudeExecutablePaths(environment));
         return paths;
     },
 };
