@@ -4,6 +4,7 @@ import type { CliContext } from "../../context.ts";
 import { registerManagerCommand } from "./manager.ts";
 import { registerQuitCommand } from "./quit.ts";
 import { registerStartCommand } from "./start.ts";
+import { registerUpgradeCommand } from "./upgrade.ts";
 import { registerWorkerCommand } from "./worker.ts";
 
 export function registerInternalDaemonHandlers(program: Command, context: CliContext): void {
@@ -14,4 +15,5 @@ export function registerInternalDaemonHandlers(program: Command, context: CliCon
 export function registerDaemonLifecycleHandlers(program: Command, context: CliContext): void {
     registerStartCommand(program, context);
     registerQuitCommand(program, context);
+    registerUpgradeCommand(program, context);
 }
