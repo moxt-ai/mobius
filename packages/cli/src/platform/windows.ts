@@ -1,10 +1,10 @@
 import { type ChildProcess, execFile } from "node:child_process";
-import { readdirSync } from "node:fs";
 import { readFile, realpath } from "node:fs/promises";
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { LocalPathError } from "../filesystem/path-error.ts";
 import { ProcessExecutionError } from "../util/process/process-error.ts";
+import { claudeDesktopExecutablePaths, installedDirectories } from "./claude-desktop.ts";
 import type { PlatformSupport, ProcessLaunch, ProcessTableEntry, ProcessTreeIdentity } from "./contracts.ts";
 import { parseProcessTable, processExists } from "./posix.ts";
 
@@ -12,23 +12,6 @@ const execute = promisify(execFile);
 
 function environmentValue(environment: Readonly<NodeJS.ProcessEnv>, name: string): string | undefined {
     return Object.entries(environment).find(([key]) => key.toUpperCase() === name.toUpperCase())?.[1];
-}
-
-function installedDirectories(directory: string): readonly string[] {
-    try {
-        return readdirSync(directory, { withFileTypes: true })
-            .filter((entry) => entry.isDirectory())
-            .map((entry) => entry.name);
-    } catch (cause) {
-        if (
-            cause instanceof Error &&
-            "code" in cause &&
-            (cause.code === "ENOENT" || cause.code === "ENOTDIR" || cause.code === "EACCES")
-        ) {
-            return [];
-        }
-        throw cause;
-    }
 }
 
 function desktopClaudeExecutablePaths(environment: Readonly<NodeJS.ProcessEnv>): readonly string[] {
@@ -46,21 +29,7 @@ function desktopClaudeExecutablePaths(environment: Readonly<NodeJS.ProcessEnv>):
     if (appData !== undefined && isAbsolute(appData)) {
         roots.push(join(appData, "Claude", "claude-code"));
     }
-    const paths: string[] = [];
-    for (const root of roots) {
-        const versions = installedDirectories(root)
-            .filter((version) => /^\d+\.\d+\.\d+$/.test(version))
-            .toSorted((left, right) => right.localeCompare(left, "en", { numeric: true }));
-        for (const version of versions) {
-            const directory = join(root, version);
-            // Desktop can keep the engine directly under its version or in a build-hash directory.
-            paths.push(join(directory, "claude.exe"));
-            for (const build of installedDirectories(directory)) {
-                paths.push(join(directory, build, "claude.exe"));
-            }
-        }
-    }
-    return paths;
+    return claudeDesktopExecutablePaths(roots, [["claude.exe"]]);
 }
 
 function executableExtensions(executableName: string, environment: Readonly<NodeJS.ProcessEnv>): readonly string[] {
