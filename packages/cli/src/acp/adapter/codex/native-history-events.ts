@@ -1,78 +1,8 @@
 import { createHash } from "node:crypto";
-import type {
-    AcpSessionUpdate,
-    AgentDisplayContent,
-    ContentBlock,
-    SessionEventPayload,
-} from "@moxt-ai/mobius-sdk/protocol";
+import type { AcpSessionUpdate, ContentBlock, SessionEventPayload } from "@moxt-ai/mobius-sdk/protocol";
 import type { AcpNativeEventReplay } from "../../session-contracts.ts";
 import type { AcpSessionEventStore } from "../../session-event-store.ts";
 import type { NativeHistoryActivity, NativeHistoryEntry } from "./history-images.ts";
-
-type ToolCallContent = NonNullable<
-    Extract<AcpSessionUpdate, { readonly sessionUpdate: "tool_call" }>["content"]
->[number];
-
-function contentBlock(content: AgentDisplayContent): ContentBlock | null {
-    switch (content.type) {
-        case "text":
-            return { text: content.text, type: "text" };
-        case "image":
-            return {
-                data: content.data,
-                mimeType: content.mimeType,
-                type: "image",
-                ...(content.uri.length === 0 ? {} : { uri: content.uri }),
-            };
-        case "resource_link":
-            return {
-                name: content.name.length === 0 ? content.uri : content.name,
-                type: "resource_link",
-                uri: content.uri,
-                ...(content.mimeType.length === 0 ? {} : { mimeType: content.mimeType }),
-            };
-        case "resource":
-            return {
-                resource:
-                    content.text.length > 0
-                        ? {
-                              text: content.text,
-                              uri: content.uri,
-                              ...(content.mimeType.length === 0 ? {} : { mimeType: content.mimeType }),
-                          }
-                        : {
-                              blob: content.data,
-                              uri: content.uri,
-                              ...(content.mimeType.length === 0 ? {} : { mimeType: content.mimeType }),
-                          },
-                type: "resource",
-            };
-        case "diff":
-        case "terminal":
-        case "video":
-            return null;
-        default: {
-            const unhandled: never = content.type;
-            throw new Error(`Unknown native history content: ${String(unhandled)}`);
-        }
-    }
-}
-
-function toolContent(content: AgentDisplayContent): ToolCallContent | null {
-    if (content.type === "diff") {
-        return {
-            newText: content.newText,
-            path: content.path,
-            type: "diff",
-            ...(content.oldText.length === 0 ? {} : { oldText: content.oldText }),
-        };
-    }
-    if (content.type === "terminal") {
-        return { terminalId: content.terminalId, type: "terminal" };
-    }
-    const block = contentBlock(content);
-    return block === null ? null : { content: block, type: "content" };
-}
 
 function toolKind(value: string): Extract<AcpSessionUpdate, { readonly sessionUpdate: "tool_call" }>["kind"] {
     switch (value) {
@@ -107,13 +37,9 @@ function toolStatus(value: string): Extract<AcpSessionUpdate, { readonly session
 }
 
 function activityEvent(activity: NativeHistoryActivity): SessionEventPayload {
-    const content = activity.content.flatMap((item) => {
-        const converted = toolContent(item);
-        return converted === null ? [] : [converted];
-    });
     return {
         payload: {
-            content,
+            content: activity.content,
             kind: toolKind(activity.toolKind),
             locations: activity.locations.map((path) => ({ path })),
             rawInput: activity.input,
@@ -157,10 +83,7 @@ function historyEvents(history: AvailableNativeHistory): readonly SessionEventPa
             return [...images, ...text];
         }
         const activities = message.activities.map(activityEvent);
-        const content = message.content.flatMap((item) => {
-            const converted = contentBlock(item);
-            return converted === null ? [] : [contentEvent(sessionUpdate, messageId, converted)];
-        });
+        const content = message.content.map((block) => contentEvent(sessionUpdate, messageId, block));
         return [...activities, ...content, ...images, ...text];
     });
 }

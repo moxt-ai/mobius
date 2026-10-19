@@ -1,5 +1,11 @@
-import type { AgentDisplayContent } from "@moxt-ai/mobius-sdk/protocol";
+import type { AcpSessionUpdate, ContentBlock } from "@moxt-ai/mobius-sdk/protocol";
 import { readLocalRaster } from "../../resource/local-raster.ts";
+
+type ToolCallContent = NonNullable<
+    Extract<AcpSessionUpdate, { readonly sessionUpdate: "tool_call" }>["content"]
+>[number];
+
+export type { ToolCallContent };
 
 const IMAGE_MARKER = /\[@image\]\(([^)\r\n]*)(?:\)|$)/g;
 const DATA_IMAGE_HEADER = /^data:(image\/[a-z+]+);base64,/;
@@ -27,7 +33,8 @@ export interface NativeHistoryMessage {
 
 export interface NativeAssistantHistoryMessage {
     readonly activities: readonly NativeHistoryActivity[];
-    readonly content: readonly AgentDisplayContent[];
+    /** Raw message content; recorded verbatim into the session event log. */
+    readonly content: readonly ContentBlock[];
     readonly role: "assistant";
     /** Absent when the source Agent does not report a terminal outcome. */
     readonly outcome?: "succeeded" | "cancelled" | "failed";
@@ -38,7 +45,8 @@ export interface NativeAssistantHistoryMessage {
 export interface NativeHistoryActivity {
     readonly activityId: string;
     readonly activityType: string;
-    readonly content: readonly AgentDisplayContent[];
+    /** Raw tool content; recorded verbatim into the session event log. */
+    readonly content: readonly ToolCallContent[];
     readonly input: string;
     readonly locations: readonly string[];
     readonly name: string;
