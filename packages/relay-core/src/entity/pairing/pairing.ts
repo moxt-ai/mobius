@@ -504,12 +504,6 @@ export function validateAgents(value: unknown): readonly AgentDescriptor[] {
     return agents;
 }
 
-export function validateLegacyInstallableAgents(value: unknown): void {
-    if (!Array.isArray(value) || value.length > MAX_LOCAL_AGENT_DIRECTORY_ENTRIES) {
-        throw new PairingDirectoryError("invalid_agents", "The installable Agent directory is invalid");
-    }
-}
-
 export function validateDisplayName(value: unknown, field: string): string {
     if (typeof value !== "string") {
         throw new PairingDirectoryError(`invalid_${field}`, `The ${field.replaceAll("_", " ")} is invalid`);
