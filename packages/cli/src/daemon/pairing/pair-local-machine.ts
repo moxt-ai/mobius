@@ -267,7 +267,6 @@ async function claimPairing(
         response = await fetch(endpoint, {
             body: JSON.stringify({
                 agents,
-                installableAgents: [],
                 machineName: hostname(),
                 pairingCode: options.code,
                 workspaceName: basename(defaultWorkspace) || "Local workspace",

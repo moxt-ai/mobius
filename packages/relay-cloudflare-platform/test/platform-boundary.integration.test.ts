@@ -734,7 +734,6 @@ describe.sequential("Platform Session-only boundary", () => {
                 new Request(redemptionUrl, {
                     body: JSON.stringify({
                         agents: readyAgents,
-                        installableAgents: [],
                         machineName: "Private reconnect Runtime",
                         pairingCode: text(pairing, "pairingCode"),
                         workspaceName: "private-reconnect-workspace",
@@ -759,7 +758,7 @@ describe.sequential("Platform Session-only boundary", () => {
                 ),
                 200,
             ),
-        ).toMatchObject({ agents: [{ id: "codex", label: "Codex" }], installableAgents: [], runtimeId });
+        ).toMatchObject({ agents: [{ id: "codex", label: "Codex" }], runtimeId });
         const sessionId = "local-codex-session";
         const daemonResponse = await worker.fetch(
             new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect?liveness=1`, {
@@ -1573,11 +1572,11 @@ describe.sequential("Platform Session-only boundary", () => {
                 ),
                 200,
             ),
-        ).toMatchObject({ agents: [], installableAgents: [], runtimeId });
+        ).toMatchObject({ agents: [], runtimeId });
 
         const catalogUpdate = await worker.fetch(
             new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/channels/${text(claimed, "channelId")}/catalog`, {
-                body: JSON.stringify({ agents: [], installableAgents: { ignored: true } }),
+                body: JSON.stringify({ agents: [], "ignored keys are tolerated": true }),
                 headers: { authorization: `Bearer ${runtimeCredential}`, "content-type": "application/json" },
                 method: "PUT",
             }),
@@ -1595,7 +1594,7 @@ describe.sequential("Platform Session-only boundary", () => {
                 ),
                 200,
             ),
-        ).toMatchObject({ agents: [], installableAgents: [], runtimeId });
+        ).toMatchObject({ agents: [], runtimeId });
     });
 });
 
@@ -1891,7 +1890,6 @@ describe.sequential("Platform Turn submission", () => {
                     {
                         body: JSON.stringify({
                             agents: readyAgents,
-                            installableAgents: [],
                             machineName: "Long prompt Runtime",
                             pairingCode: text(pairing, "pairingCode"),
                             workspaceName: "long-prompt-workspace",
@@ -2079,7 +2077,6 @@ describe.sequential("Platform Turn submission", () => {
                         {
                             eventId: "queued-follow-up-admitted",
                             position: "4",
-                            provenance: { kind: "original" },
                             recordedAt: "2026-09-18T00:00:03.000Z",
                             sessionGenerationId: "session-generation-1",
                             sessionId,
@@ -2124,7 +2121,6 @@ describe.sequential("Platform Turn submission", () => {
                         {
                             eventId: "foreign-session-queue-change",
                             position: "1",
-                            provenance: { kind: "original" },
                             recordedAt: "2026-09-18T00:00:04.000Z",
                             sessionGenerationId: "session-generation-1",
                             sessionId: "another-session",
@@ -2141,7 +2137,6 @@ describe.sequential("Platform Turn submission", () => {
                         {
                             eventId: "cross-session-queued-started",
                             position: "5",
-                            provenance: { kind: "original" },
                             recordedAt: "2026-09-18T00:00:05.000Z",
                             sessionGenerationId: "session-generation-1",
                             sessionId,
@@ -2283,7 +2278,6 @@ describe.sequential("Platform Turn submission", () => {
                                     },
                                 },
                             ],
-                            installableAgents: [],
                             machineName: "Capability-gated commands Runtime",
                             pairingCode: text(pairing, "pairingCode"),
                             workspaceName: "capability-gated-commands-workspace",
@@ -2489,7 +2483,6 @@ describe.sequential("Platform Turn submission", () => {
                     {
                         body: JSON.stringify({
                             agents: [malformed],
-                            installableAgents: [],
                             machineName: "Malformed capabilities Runtime",
                             pairingCode: text(pairing, "pairingCode"),
                             workspaceName: "malformed-capabilities-workspace",

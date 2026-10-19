@@ -168,7 +168,6 @@ function event(index: number, payload: Record<string, unknown>): SessionEventEnv
     return {
         eventId: `session-status-delivery-event-${index}`,
         position: String(index),
-        provenance: { kind: "original" },
         recordedAt: "2026-10-15T00:00:00.000Z",
         sessionGenerationId: "session-status-delivery-generation",
         sessionId: "session-status-delivery-session",

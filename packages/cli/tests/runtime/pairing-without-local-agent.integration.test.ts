@@ -110,7 +110,6 @@ describe("pairing a machine without a local Agent", () => {
             expect(relay.claims).toHaveLength(1);
             expect(relay.claims[0]).toMatchObject({
                 agents: [],
-                installableAgents: [],
                 pairingCode: "ABCD-EFGH-JKLM-NPQR-STUV",
             });
         } finally {
