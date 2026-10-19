@@ -1487,7 +1487,7 @@ export class MobiusLiveEventSubscription {
             return;
         }
         this.#closed = true;
-        this.#controller.abort(new Error("The live V2 Session event subscription closed"));
+        this.#controller.abort(new Error("The live session event subscription closed"));
     };
 
     private readonly run = async (
@@ -1511,13 +1511,13 @@ export class MobiusLiveEventSubscription {
                     while (!this.#closed) {
                         const result = await reader.read();
                         if (result.done) {
-                            throw new MobiusConnectionError("The live V2 Session event stream disconnected");
+                            throw new MobiusConnectionError("The live session event stream disconnected");
                         }
                         let value: unknown;
                         try {
                             value = JSON.parse(result.value.data);
                         } catch (cause) {
-                            throw new MobiusProtocolError("The live V2 Session event stream contains invalid JSON", {
+                            throw new MobiusProtocolError("The live session event stream contains invalid JSON", {
                                 cause,
                             });
                         }
@@ -1552,7 +1552,7 @@ export class MobiusLiveEventSubscription {
                 attempts += 1;
                 if (attempts > this.#maximumReconnectAttempts) {
                     const details = connectionCauseMessages(cause);
-                    const message = `The live V2 Session event stream could not recover${
+                    const message = `The live session event stream could not recover${
                         details.length > 0 ? `. Cause: ${details.join(". Caused by: ")}` : ""
                     }`;
                     const failure = new MobiusConnectionError(message, { cause });
