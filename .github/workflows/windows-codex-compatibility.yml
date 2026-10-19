@@ -112,7 +112,7 @@ jobs:
           $expanded = Join-Path $root 'package'
           $resources = Join-Path $root 'resources'
           New-Item -ItemType Directory -Path $expanded -Force | Out-Null
-          Invoke-WebRequest -Uri 'https://claude.ai/api/desktop/win32/x64/msix/latest/redirect' -OutFile $package -TimeoutSec 300
+          Invoke-WebRequest -Uri 'https://api.anthropic.com/api/desktop/win32/x64/msix/latest/redirect' -OutFile $package -TimeoutSec 300
           tar -xf $package -C $expanded
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $signature = Get-AuthenticodeSignature -LiteralPath (Join-Path $expanded 'app/Claude.exe')
@@ -128,7 +128,7 @@ jobs:
           root="$RUNNER_TEMP/claude-desktop"
           mkdir -p "$root/mount"
           curl --fail --show-error --location --proto '=https' --connect-timeout 15 --max-time 300 \
-            https://claude.ai/api/desktop/darwin/universal/dmg/latest/redirect --output "$root/Claude.dmg"
+            https://api.anthropic.com/api/desktop/darwin/universal/dmg/latest/redirect --output "$root/Claude.dmg"
           hdiutil attach "$root/Claude.dmg" -readonly -nobrowse -mountpoint "$root/mount"
           trap 'hdiutil detach "$root/mount"' EXIT
           ditto "$root/mount/Claude.app" "$root/Claude.app"
