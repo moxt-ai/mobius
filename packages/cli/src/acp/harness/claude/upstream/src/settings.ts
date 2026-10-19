@@ -101,15 +101,9 @@ export class SettingsManager {
     private async loadAllSettings(): Promise<void> {
         try {
             const resolved = await resolveSettings({ cwd: this.cwd });
-            if (process.env.MOBIUS_SETTINGS_DIAGNOSTICS) {
-                fs.appendFileSync(
-                    process.env.MOBIUS_SETTINGS_DIAGNOSTICS,
-                    JSON.stringify({ cwd: this.cwd, configDirectory: process.env.CLAUDE_CONFIG_DIR, resolved }) + "\n",
-                );
-            }
             // At the home directory, the SDK can load the user file again as
-            // project settings. macOS also canonicalizes /var to /private/var
-            // for the cwd. Canonicalize only the trusted user's directory;
+            // project settings. The cwd can expand macOS /var aliases or
+            // Windows 8.3 short names. Canonicalize only the trusted user's directory;
             // never resolve a project file's symlink into a trusted user file.
             const userPaths = new Set(
                 resolved.sources.flatMap((source) => {
@@ -117,7 +111,10 @@ export class SettingsManager {
                         return [];
                     }
                     const userPath = path.resolve(source.path);
-                    return [userPath, path.join(fs.realpathSync(path.dirname(userPath)), path.basename(userPath))];
+                    return [
+                        userPath,
+                        path.join(fs.realpathSync.native(path.dirname(userPath)), path.basename(userPath)),
+                    ];
                 }),
             );
             const sources = resolved.sources.filter(
