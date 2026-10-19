@@ -69,6 +69,24 @@ export async function ensureWorkingProcess(
     }
 }
 
+// Returns the running worker's version, or null when no compatible manager
+// reports one. Callers fall back to ensureWorkingProcess to start a daemon.
+export async function readWorkingProcessVersion(stateDirectory: string, signal: AbortSignal): Promise<string | null> {
+    try {
+        const response = lifecycleResponse.safeParse(
+            await sendLocalRequest(stateDirectory, "manager", { kind: "status" }, signal),
+        );
+        if (response.success && response.data.kind === "status") {
+            return response.data.worker?.version ?? null;
+        }
+    } catch (cause) {
+        if (!isNodeError(cause, "ENOENT") && !isNodeError(cause, "ECONNREFUSED")) {
+            throw cause;
+        }
+    }
+    return null;
+}
+
 async function ensureManager(stateDirectory: string, managerVersion: string, signal: AbortSignal): Promise<void> {
     let managerStarted = false;
     while (!signal.aborted) {
