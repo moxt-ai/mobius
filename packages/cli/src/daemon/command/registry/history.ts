@@ -15,11 +15,11 @@ import type { AcpSessionEventPage } from "../../../acp/session-event-store.ts";
 import { resolveSessionDirectories } from "../../../authorization/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "../../../authorization/workspace-directory.ts";
 import type { NativeSessionService } from "../../../native-sessions/service.ts";
-import type { DaemonSessionEventProjection } from "../../../session-event-projection.ts";
+import type { RuntimeSessionEventProjection } from "../../../session-event-projection.ts";
 import { operationErrorCode, reportOperationFailure, send } from "../../command-dispatcher.ts";
-import type { DaemonConfig } from "../../config.ts";
+import type { RuntimeConfig } from "../../config.ts";
 import type { RelayConnectionDiagnostics } from "../../relay/diagnostics.ts";
-import type { DaemonCommand } from "../definition.ts";
+import type { RuntimeCommand } from "../definition.ts";
 import { resolveCatalogAgent } from "./session.ts";
 
 function isAgentReasoning(event: SessionEvent | undefined): boolean {
@@ -122,12 +122,12 @@ async function loadHistoryPage(
 export async function executeSessionHistoryPageLoad(
     socket: WebSocket,
     command: ReturnType<typeof decodeSessionHistoryPageLoad>,
-    config: DaemonConfig,
+    config: RuntimeConfig,
     directories: WorkspaceDirectoryService,
     diagnostics: RelayConnectionDiagnostics,
     sessions: AgentRuntimeManager,
     nativeSessions: NativeSessionService,
-    eventProjection: DaemonSessionEventProjection,
+    eventProjection: RuntimeSessionEventProjection,
     signal: AbortSignal,
 ): Promise<void> {
     let agentId: string | undefined;
@@ -187,7 +187,7 @@ export async function executeSessionHistoryPageLoad(
 export async function executeSessionPreviewHistoryPageLoad(
     socket: WebSocket,
     command: ReturnType<typeof decodeSessionPreviewHistoryPageLoad>,
-    config: DaemonConfig,
+    config: RuntimeConfig,
     directories: WorkspaceDirectoryService,
     diagnostics: RelayConnectionDiagnostics,
     sessions: AgentRuntimeManager,
@@ -241,7 +241,7 @@ export async function executeSessionPreviewHistoryPageLoad(
     }
 }
 
-export const sessionHistoryPageLoadCommand: DaemonCommand = {
+export const sessionHistoryPageLoadCommand: RuntimeCommand = {
     kind: SESSION_HISTORY_PAGE_LOAD_KIND,
     handle: (context, message): void => {
         if (message.kind !== SESSION_HISTORY_PAGE_LOAD_KIND) {
@@ -261,7 +261,7 @@ export const sessionHistoryPageLoadCommand: DaemonCommand = {
     },
 };
 
-export const previewHistoryPageLoadCommand: DaemonCommand = {
+export const previewHistoryPageLoadCommand: RuntimeCommand = {
     kind: SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND,
     handle: (context, message): void => {
         if (message.kind !== SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND) {

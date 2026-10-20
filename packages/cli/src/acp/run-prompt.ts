@@ -1,5 +1,5 @@
 import { LocalAgentDefinition } from "../daemon/config.ts";
-import { systemDaemonTimer } from "../daemon/relay/timer.ts";
+import { systemTimer } from "../daemon/relay/timer.ts";
 import { AcpContentExternalizer } from "../external-content/acp-content-externalizer.ts";
 import { UnretainedExternalContentStore } from "../external-content/local-external-content-store.ts";
 import { acpAdapters } from "./adapter/registry.ts";
@@ -25,7 +25,7 @@ export async function runAcpPrompt(options: RunAcpPromptOptions): Promise<AcpPro
         sessionIdentity: "assigned",
         onSessionStatusChanged: () => undefined,
         contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
-        timer: systemDaemonTimer,
+        timer: systemTimer,
         maxProcesses: null,
     });
     const commandId = crypto.randomUUID();

@@ -10,8 +10,8 @@ import {
 } from "../../src/acp/agent-runtime-manager.ts";
 import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
 import { WorkspaceDirectoryService } from "../../src/authorization/workspace-directory.ts";
-import { createDaemonConfig, LocalAgentDefinition } from "../../src/daemon/config.ts";
-import { systemDaemonTimer } from "../../src/daemon/relay/timer.ts";
+import { createRuntimeConfig, LocalAgentDefinition } from "../../src/daemon/config.ts";
+import { systemTimer } from "../../src/daemon/relay/timer.ts";
 import { AcpContentExternalizer } from "../../src/external-content/acp-content-externalizer.ts";
 import { UnretainedExternalContentStore } from "../../src/external-content/local-external-content-store.ts";
 import { NativeSessionService } from "../../src/native-sessions/service.ts";
@@ -82,10 +82,10 @@ export async function fixture(
         sessionIdentity,
         onSessionStatusChanged: () => undefined,
         contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
-        timer: systemDaemonTimer,
+        timer: systemTimer,
         maxProcesses: null,
     });
-    const config = createDaemonConfig(
+    const config = createRuntimeConfig(
         {
             defaultWorkspace: workspace,
             channelId: "test-channel",
@@ -119,7 +119,7 @@ export async function fixture(
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
             contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
-            timer: systemDaemonTimer,
+            timer: systemTimer,
             maxProcesses: null,
         });
         const sessionId = crypto.randomUUID();
@@ -185,7 +185,7 @@ export async function fixture(
                 sessionIdentity,
                 onSessionStatusChanged: () => undefined,
                 contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
-                timer: systemDaemonTimer,
+                timer: systemTimer,
                 maxProcesses: null,
             });
             service = new NativeSessionService(config, directories, sessions, async () => ({

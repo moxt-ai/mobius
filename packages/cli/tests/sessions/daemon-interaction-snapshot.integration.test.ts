@@ -41,8 +41,8 @@ import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { expect, test } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { LocalAgentDefinition } from "../../src/agent-catalog/local-agent.ts";
-import { createDaemonConfig, DaemonLocalContext } from "../../src/daemon/config.ts";
-import { runDaemon } from "../../src/daemon/run.ts";
+import { createRuntimeConfig, RuntimeLocalContext } from "../../src/daemon/config.ts";
+import { runRuntime } from "../../src/daemon/run.ts";
 
 class Messages {
     readonly #buffered: string[] = [];
@@ -112,13 +112,13 @@ test("Given an Agent was inspected transiently, When its first Turn materializes
             MOBIUS_FAKE_ACP_STATE_DIRECTORY: join(stateDirectory, "agent"),
         },
     );
-    const config = createDaemonConfig(
+    const config = createRuntimeConfig(
         { channelId: "interaction", defaultWorkspace: workspace, relayUrl },
         [agent],
-        new DaemonLocalContext(stateDirectory),
+        new RuntimeLocalContext(stateDirectory),
     );
     const cancellation = new AbortController();
-    const daemon = runDaemon(config, cancellation.signal);
+    const runtime = runRuntime(config, cancellation.signal);
     try {
         const socket = await connected.promise;
         const messages = new Messages(socket);
@@ -238,7 +238,7 @@ test("Given an Agent was inspected transiently, When its first Turn materializes
         await messages.nextKind("prompt.completed");
     } finally {
         cancellation.abort();
-        await daemon;
+        await runtime;
         for (const socket of websocketServer.clients) {
             socket.terminate();
         }
@@ -267,13 +267,13 @@ test("Given a real daemon prepared a Session, When Platform queries its metadata
         "--agent-name",
         "Codex",
     ]);
-    const config = createDaemonConfig(
+    const config = createRuntimeConfig(
         { channelId: "session-query", defaultWorkspace: workspace, relayUrl },
         [agent],
-        new DaemonLocalContext(stateDirectory),
+        new RuntimeLocalContext(stateDirectory),
     );
     const cancellation = new AbortController();
-    const daemon = runDaemon(config, cancellation.signal);
+    const runtime = runRuntime(config, cancellation.signal);
     try {
         const socket = await connected.promise;
         const messages = new Messages(socket);
@@ -314,7 +314,7 @@ test("Given a real daemon prepared a Session, When Platform queries its metadata
         });
     } finally {
         cancellation.abort();
-        await daemon;
+        await runtime;
         for (const socket of websocketServer.clients) {
             socket.terminate();
         }
@@ -343,16 +343,16 @@ test("Given a real daemon persisted a Session, When Platform restores it by iden
         [fakeAgentPath, "--agent-name", "Codex", "--replay-history-once"],
         { MOBIUS_FAKE_ACP_STATE_DIRECTORY: join(stateDirectory, "agent") },
     );
-    const config = createDaemonConfig(
+    const config = createRuntimeConfig(
         { channelId: "session-restore", defaultWorkspace: workspace, relayUrl },
         [agent],
-        new DaemonLocalContext(stateDirectory),
+        new RuntimeLocalContext(stateDirectory),
     );
     const startDaemon = async () => {
         const connected = Promise.withResolvers<WebSocket>();
         websocketServer.once("connection", (socket) => connected.resolve(socket));
         const cancellation = new AbortController();
-        const completion = runDaemon(config, cancellation.signal);
+        const completion = runRuntime(config, cancellation.signal);
         return { cancellation, completion, socket: await connected.promise };
     };
     try {

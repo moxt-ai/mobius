@@ -6,7 +6,7 @@ import { AgentRuntimeManager } from "../../src/acp/agent-runtime-manager.ts";
 import { NullAcpSessionObserver } from "../../src/acp/session-contracts.ts";
 import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
 import { LocalAgentDefinition } from "../../src/daemon/config.ts";
-import { systemDaemonTimer } from "../../src/daemon/relay/timer.ts";
+import { systemTimer } from "../../src/daemon/relay/timer.ts";
 import { AcpContentExternalizer } from "../../src/external-content/acp-content-externalizer.ts";
 import { UnretainedExternalContentStore } from "../../src/external-content/local-external-content-store.ts";
 
@@ -23,7 +23,7 @@ describe("Agent setting capabilities", () => {
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
             contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
-            timer: systemDaemonTimer,
+            timer: systemTimer,
             maxProcesses: null,
         });
         const agent = new LocalAgentDefinition("controlled-acp", "Controlled ACP", process.execPath, [
@@ -83,7 +83,7 @@ describe("Agent setting capabilities", () => {
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
             contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
-            timer: systemDaemonTimer,
+            timer: systemTimer,
             maxProcesses: null,
         });
         const agent = new LocalAgentDefinition("controlled-acp", "Controlled ACP", process.execPath, [
@@ -126,7 +126,7 @@ describe("Agent setting capabilities", () => {
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
             contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
-            timer: systemDaemonTimer,
+            timer: systemTimer,
             maxProcesses: null,
         });
         const agent = new LocalAgentDefinition("pi", "Pi", process.execPath, [
@@ -163,7 +163,7 @@ describe("Agent setting capabilities", () => {
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
             contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
-            timer: systemDaemonTimer,
+            timer: systemTimer,
             maxProcesses: null,
         });
         const agent = new LocalAgentDefinition("fake", "Fake", process.execPath, [

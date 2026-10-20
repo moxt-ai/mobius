@@ -7,9 +7,9 @@ import {
     SESSION_PROMPT_DISPOSITION_KIND,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { reportOperationFailure, send, settleAbandonedTurn } from "../../command-dispatcher.ts";
-import type { DaemonCommand } from "../definition.ts";
+import type { RuntimeCommand } from "../definition.ts";
 
-export const sessionCancelCommand: DaemonCommand = {
+export const sessionCancelCommand: RuntimeCommand = {
     kind: SESSION_CANCEL_KIND,
     handle: ({ activeTurns, eventProjection, operations, sessions }, message): void => {
         if (message.kind !== SESSION_CANCEL_KIND) {
@@ -32,7 +32,7 @@ export const sessionCancelCommand: DaemonCommand = {
     },
 };
 
-export const sessionCloseCommand: DaemonCommand = {
+export const sessionCloseCommand: RuntimeCommand = {
     kind: SESSION_CLOSE_KIND,
     handle: ({ sessions, signal, socket }, message): void => {
         if (message.kind !== SESSION_CLOSE_KIND) {
@@ -49,7 +49,7 @@ export const sessionCloseCommand: DaemonCommand = {
     },
 };
 
-export const promptDispositionCommand: DaemonCommand = {
+export const promptDispositionCommand: RuntimeCommand = {
     kind: SESSION_PROMPT_DISPOSITION_KIND,
     handle: ({ activeTurns, socket }, message): void => {
         if (message.kind !== SESSION_PROMPT_DISPOSITION_KIND) {
@@ -67,7 +67,7 @@ export const promptDispositionCommand: DaemonCommand = {
     },
 };
 
-export const permissionRespondCommand: DaemonCommand = {
+export const permissionRespondCommand: RuntimeCommand = {
     kind: SESSION_PERMISSION_RESPOND_KIND,
     handle: ({ sessions, socket }, message): void => {
         if (message.kind !== SESSION_PERMISSION_RESPOND_KIND) {
@@ -79,7 +79,7 @@ export const permissionRespondCommand: DaemonCommand = {
     },
 };
 
-export const elicitationRespondCommand: DaemonCommand = {
+export const elicitationRespondCommand: RuntimeCommand = {
     kind: SESSION_ELICITATION_RESPOND_KIND,
     handle: ({ sessions, socket }, message): void => {
         if (message.kind !== SESSION_ELICITATION_RESPOND_KIND) {

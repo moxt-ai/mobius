@@ -1,5 +1,5 @@
 import { describeEnvironmentProxyRoute } from "../../util/network/environment-proxy.ts";
-import type { DaemonDiagnosticLog } from "../observability/diagnostic-log.ts";
+import type { RuntimeDiagnosticLog } from "../observability/diagnostic-log.ts";
 
 const MAX_DIAGNOSTIC_TEXT_LENGTH = 256;
 
@@ -48,13 +48,13 @@ function addFailureDetails(details: Record<string, string>, failure: unknown): v
 
 export class RelayConnectionDiagnostics {
     readonly #channelId: string;
-    readonly #localLog: DaemonDiagnosticLog;
+    readonly #localLog: RuntimeDiagnosticLog;
     #lastClosedEpoch = 0;
     #lastFailedEpoch = 0;
     readonly #relayOrigin: string;
     readonly #route: Readonly<Record<string, string>>;
 
-    constructor(channelId: string, relayUrl: URL, localLog: DaemonDiagnosticLog) {
+    constructor(channelId: string, relayUrl: URL, localLog: RuntimeDiagnosticLog) {
         this.#channelId = channelId;
         this.#localLog = localLog;
         this.#relayOrigin = relayUrl.origin;

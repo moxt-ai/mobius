@@ -11,7 +11,7 @@ export function loadDefaultWorkspace(environment: Readonly<NodeJS.ProcessEnv> = 
     return configuredWorkspace ?? join(readStateDirectory(environment), "workspace");
 }
 
-export class DaemonLocalContext {
+export class RuntimeLocalContext {
     readonly environment: Readonly<NodeJS.ProcessEnv>;
     readonly stateDirectory: string;
 
@@ -21,7 +21,7 @@ export class DaemonLocalContext {
     }
 }
 
-export function withDaemonEnvironment(
+export function withRuntimeEnvironment(
     agent: AcpAgentDefinition,
     environment: Readonly<NodeJS.ProcessEnv>,
 ): AcpAgentDefinition {
@@ -34,11 +34,11 @@ export function withDaemonEnvironment(
     return agent.withEnvironment({ ...launchEnvironment, ...agent.environment });
 }
 
-export abstract class DaemonReconnectTarget {
+export abstract class RuntimeReconnectTarget {
     abstract readonly commandArgument: string;
 }
 
-export class OpaqueDaemonReconnectTarget extends DaemonReconnectTarget {
+export class OpaqueRuntimeReconnectTarget extends RuntimeReconnectTarget {
     readonly connectionId: string;
     readonly commandArgument: string;
 
@@ -49,14 +49,14 @@ export class OpaqueDaemonReconnectTarget extends DaemonReconnectTarget {
     }
 }
 
-export interface DaemonConfig {
+export interface RuntimeConfig {
     readonly agents: readonly AcpAgentDefinition[];
     readonly defaultWorkspace: string;
     readonly bindingId: string;
     readonly catalog: LocalAgentCatalog;
     readonly channelId: string;
-    readonly localContext: DaemonLocalContext;
-    readonly reconnectTarget: DaemonReconnectTarget | null;
+    readonly localContext: RuntimeLocalContext;
+    readonly reconnectTarget: RuntimeReconnectTarget | null;
     readonly relayUrl: URL;
     /**
      * Serves the definition a command should run against, re-discoving the Agent when its
@@ -66,25 +66,25 @@ export interface DaemonConfig {
     readonly resolveAgent?: (agent: AcpAgentDefinition, signal: AbortSignal) => Promise<AcpAgentDefinition>;
 }
 
-export interface DaemonConnectionConfig {
+export interface RuntimeConnectionConfig {
     readonly defaultWorkspace: string;
     readonly channelId: string;
     readonly relayUrl: URL;
 }
 
-export function createDaemonConfig(
-    connection: DaemonConnectionConfig,
+export function createRuntimeConfig(
+    connection: RuntimeConnectionConfig,
     agents: readonly AcpAgentDefinition[] = [],
-    localContext: DaemonLocalContext = new DaemonLocalContext(readStateDirectory(), process.env),
-    reconnectTarget: DaemonReconnectTarget | null = null,
-    resolveAgent?: DaemonConfig["resolveAgent"],
-): DaemonConfig {
-    const daemonAgents = agents.map((agent) => withDaemonEnvironment(agent, localContext.environment));
+    localContext: RuntimeLocalContext = new RuntimeLocalContext(readStateDirectory(), process.env),
+    reconnectTarget: RuntimeReconnectTarget | null = null,
+    resolveAgent?: RuntimeConfig["resolveAgent"],
+): RuntimeConfig {
+    const runtimeAgents = agents.map((agent) => withRuntimeEnvironment(agent, localContext.environment));
     return {
-        agents: daemonAgents,
+        agents: runtimeAgents,
         defaultWorkspace: connection.defaultWorkspace,
         bindingId: RUNTIME_WORKSPACE_BINDING_ID,
-        catalog: new LocalAgentCatalog(daemonAgents),
+        catalog: new LocalAgentCatalog(runtimeAgents),
         channelId: connection.channelId,
         localContext,
         reconnectTarget,
@@ -93,7 +93,7 @@ export function createDaemonConfig(
     };
 }
 
-export function loadDaemonConfig(): DaemonConfig {
+export function loadRuntimeConfig(): RuntimeConfig {
     const relayUrl = new URL(
         process.env["MOBIUS_RELAY_URL"] ?? `ws://127.0.0.1:8787${mobiusApiPath("/channels/local/daemon")}`,
     );
@@ -103,7 +103,7 @@ export function loadDaemonConfig(): DaemonConfig {
         throw new Error("MOBIUS_RELAY_URL must use ws or wss");
     }
 
-    return createDaemonConfig(
+    return createRuntimeConfig(
         {
             defaultWorkspace: loadDefaultWorkspace(),
             channelId: process.env["MOBIUS_CHANNEL_ID"] ?? "local",

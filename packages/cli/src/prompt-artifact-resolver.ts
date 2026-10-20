@@ -3,8 +3,8 @@ import { createHash } from "node:crypto";
 import { isIdentifier, type PromptImage, type PromptResource } from "@moxt-ai/mobius-sdk/protocol";
 import { fetch } from "undici";
 
-import type { DaemonConfig } from "./daemon/config.ts";
-import { relayHttpEndpoint, runtimeAuthorization } from "./daemon/relay/runtime-authentication.ts";
+import type { RuntimeConfig } from "./daemon/config.ts";
+import { relayAuthorization, relayHttpEndpoint } from "./daemon/relay/relay-authentication.ts";
 import { environmentProxyDispatcher } from "./util/network/environment-proxy.ts";
 
 const ARTIFACT_SCHEME = "mobius-artifact:";
@@ -85,7 +85,7 @@ function parseReference(resource: PromptResource): PromptArtifactReference {
     return new PromptArtifactReference(artifactId, byteLength, sha256, resource);
 }
 
-function downloadUrl(config: DaemonConfig, command: ArtifactPromptCommand, reference: PromptArtifactReference): URL {
+function downloadUrl(config: RuntimeConfig, command: ArtifactPromptCommand, reference: PromptArtifactReference): URL {
     const url = relayHttpEndpoint(config.relayUrl);
     let channelPath = "";
     if (url.pathname.endsWith("/daemon")) {
@@ -151,7 +151,7 @@ async function responseBytes(
 }
 
 async function download(
-    config: DaemonConfig,
+    config: RuntimeConfig,
     command: ArtifactPromptCommand,
     reference: PromptArtifactReference,
     signal: AbortSignal,
@@ -166,7 +166,7 @@ async function download(
             headers: {
                 accept: reference.resource.mimeType,
                 "accept-encoding": "identity",
-                ...runtimeAuthorization(config.relayUrl),
+                ...relayAuthorization(config.relayUrl),
             },
             signal: requestSignal,
         });
@@ -222,7 +222,7 @@ function isTextMediaType(mediaType: string): boolean {
 }
 
 export async function resolvePromptArtifacts(
-    config: DaemonConfig,
+    config: RuntimeConfig,
     command: ArtifactPromptCommand,
     signal: AbortSignal,
 ): Promise<ResolvedPromptArtifacts> {

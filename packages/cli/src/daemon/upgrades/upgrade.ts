@@ -3,16 +3,16 @@ import { setInterval, setTimeout } from "node:timers/promises";
 import { decodeIdentifier, type RuntimeUpgradeResult } from "@moxt-ai/mobius-sdk/protocol";
 import packageMetadata from "../../../package.json" with { type: "json" };
 import { isNodeError, sendLocalRequest } from "../control/local-client.ts";
-import { type DaemonSwitchState, lifecycleResponse } from "../control/protocol.ts";
+import { type DaemonReleaseSwitchState, lifecycleResponse } from "../control/protocol.ts";
 import { readSwitchStatus } from "../control/switch-status.ts";
 import { openMobiusControlInstallation } from "../pairing/pair-local-machine.ts";
-import { DaemonUpgradeError, findNewDaemonRelease, installDaemonRelease } from "./package.ts";
+import { DaemonReleaseUpgradeError, findNewDaemonReleaseVersion, installDaemonReleaseVersion } from "./package.ts";
 
 // A switch may consume the new worker's startup budget and the rollback restart.
 const SWITCH_COMPLETION_MILLISECONDS = 300_000;
 const SWITCH_POLL_MILLISECONDS = 200;
 
-export async function reportDaemonUpgrade(
+export async function reportDaemonUpgradeAvailability(
     send: (result: RuntimeUpgradeResult) => void,
     signal: AbortSignal,
 ): Promise<void> {
@@ -50,11 +50,11 @@ export async function reportDaemonUpgrade(
 
 // One loop belongs to the worker, regardless of how many Relay connections it owns.
 // Await each attempt so checks and installations never overlap.
-export async function runDaemonUpgrades(signal: AbortSignal): Promise<void> {
+export async function runDaemonReleaseUpgrades(signal: AbortSignal): Promise<void> {
     try {
         for await (const _tick of setInterval(3_600_000, undefined, { signal })) {
             try {
-                await checkDaemonUpgrade(signal);
+                await checkDaemonReleaseUpgrade(signal);
             } catch (cause) {
                 signal.throwIfAborted();
                 console.error("Daemon npm upgrade check failed", cause);
@@ -67,36 +67,36 @@ export async function runDaemonUpgrades(signal: AbortSignal): Promise<void> {
     }
 }
 
-export type DaemonUpgradeAttempt =
+export type DaemonReleaseUpgradeAttempt =
     | { readonly kind: "current" }
     | { readonly kind: "requested"; readonly id: string; readonly version: string };
 
-export type DaemonSwitchOutcome =
-    | Extract<DaemonSwitchState, { kind: "switched" }>
-    | Extract<DaemonSwitchState, { kind: "rolled-back" }>;
+export type DaemonReleaseSwitchOutcome =
+    | Extract<DaemonReleaseSwitchState, { kind: "switched" }>
+    | Extract<DaemonReleaseSwitchState, { kind: "rolled-back" }>;
 
 // The shared one-shot upgrade: find the newest npm release beyond the running
 // version, install it, and ask the manager to switch. Callers observe the
-// result through awaitDaemonSwitch.
-export async function requestDaemonUpgrade(
+// result through awaitDaemonReleaseSwitch.
+export async function requestDaemonReleaseUpgrade(
     stateDirectory: string,
     currentVersion: string,
     signal: AbortSignal,
-): Promise<DaemonUpgradeAttempt> {
-    const version = await findNewDaemonRelease(currentVersion, signal);
+): Promise<DaemonReleaseUpgradeAttempt> {
+    const version = await findNewDaemonReleaseVersion(currentVersion, signal);
     if (version === null) {
         return { kind: "current" };
     }
-    const launch = await installDaemonRelease(version, signal);
+    const launch = await installDaemonReleaseVersion(version, signal);
     const id = randomUUID();
     const response = lifecycleResponse.parse(
         await sendLocalRequest(stateDirectory, "manager", { kind: "switch", id, context: "npm", launch }, signal),
     );
     if (response.kind === "error") {
-        throw new DaemonUpgradeError(response.code, response.message);
+        throw new DaemonReleaseUpgradeError(response.code, response.message);
     }
     if (response.kind !== "switching") {
-        throw new DaemonUpgradeError("manager_incompatible", "The manager does not support daemon switching");
+        throw new DaemonReleaseUpgradeError("manager_incompatible", "The manager does not support daemon switching");
     }
     return { kind: "requested", id, version };
 }
@@ -104,15 +104,15 @@ export async function requestDaemonUpgrade(
 // Wait until the manager settles the switch requested under the given id. The
 // manager serializes switch work, so a bounded poll observes the terminal state
 // without holding a control connection for the whole switch.
-export async function awaitDaemonSwitch(
+export async function awaitDaemonReleaseSwitch(
     stateDirectory: string,
     id: string,
     signal: AbortSignal,
-): Promise<DaemonSwitchOutcome> {
+): Promise<DaemonReleaseSwitchOutcome> {
     const deadline = AbortSignal.any([signal, AbortSignal.timeout(SWITCH_COMPLETION_MILLISECONDS)]);
-    let outcome: DaemonSwitchOutcome | undefined;
+    let outcome: DaemonReleaseSwitchOutcome | undefined;
     while (!deadline.aborted) {
-        let state: DaemonSwitchState | null;
+        let state: DaemonReleaseSwitchState | null;
         try {
             state = await readSwitchStatus(stateDirectory, deadline);
         } catch (cause) {
@@ -141,7 +141,7 @@ export async function awaitDaemonSwitch(
     return outcome;
 }
 
-async function checkDaemonUpgrade(signal: AbortSignal): Promise<void> {
+async function checkDaemonReleaseUpgrade(signal: AbortSignal): Promise<void> {
     const control = await openMobiusControlInstallation(signal, process.env);
     const transition = await readSwitchStatus(control.stateDirectory, signal);
     if (
@@ -150,5 +150,5 @@ async function checkDaemonUpgrade(signal: AbortSignal): Promise<void> {
     ) {
         return;
     }
-    await requestDaemonUpgrade(control.stateDirectory, packageMetadata.version, signal);
+    await requestDaemonReleaseUpgrade(control.stateDirectory, packageMetadata.version, signal);
 }

@@ -1,6 +1,6 @@
 import type { ServiceToDaemonMessage } from "@moxt-ai/mobius-sdk/protocol";
 import type { CommandContext } from "../context.ts";
-import type { DaemonCommand } from "../definition.ts";
+import type { RuntimeCommand } from "../definition.ts";
 import { createAgentSettingsCommands } from "./agent-settings.ts";
 import { fileReadCommand } from "./file-read/index.ts";
 import { previewHistoryPageLoadCommand, sessionHistoryPageLoadCommand } from "./history.ts";
@@ -26,7 +26,7 @@ export function createCommandRegistry(context: CommandContext): {
     readonly dispatch: (message: ServiceToDaemonMessage) => void;
     readonly settle: () => Promise<void>;
 } {
-    const commands: readonly DaemonCommand[] = [
+    const commands: readonly RuntimeCommand[] = [
         runtimeDiagnosticsCommand,
         runtimePingCommand,
         sessionHistoryPageLoadCommand,

@@ -4,8 +4,8 @@ import { join } from "node:path";
 import { mobiusApiPath } from "@moxt-ai/mobius-sdk/protocol";
 import { MobiusClient, StaticMobiusCredentialProvider } from "@moxt-ai/mobius-sdk/server";
 import * as v from "valibot";
-import { createDaemonConfig, DaemonLocalContext } from "../../src/daemon/config.ts";
-import { runDaemon } from "../../src/daemon/run.ts";
+import { createRuntimeConfig, RuntimeLocalContext } from "../../src/daemon/config.ts";
+import { runRuntime } from "../../src/daemon/run.ts";
 import {
     defaultFakeAgentHarness,
     type FakeAgentHarnessDefinition,
@@ -50,7 +50,7 @@ export async function createFakeAgentHarnessRuntime(options: {
     const directory = await mkdtemp(join(tmpdir(), "mobius-agent-harness-"));
     const workspace = join(directory, "workspace");
     const harnessState = join(directory, "harness");
-    let daemon: Promise<void> | undefined;
+    let runtime: Promise<void> | undefined;
     try {
         await Promise.all([mkdir(workspace), mkdir(harnessState)]);
         await Promise.all(
@@ -109,19 +109,19 @@ export async function createFakeAgentHarnessRuntime(options: {
         const relayUrl = new URL(mobiusApiPath("/v1/runtimes/connect"), options.origin);
         relayUrl.protocol = relayUrl.protocol === "https:" ? "wss:" : "ws:";
         relayUrl.searchParams.set("token", claim.runtimeCredential);
-        const localContext = new DaemonLocalContext(directory, process.env);
-        const config = createDaemonConfig(
+        const localContext = new RuntimeLocalContext(directory, process.env);
+        const config = createRuntimeConfig(
             { channelId: pairing.channelId, defaultWorkspace: workspace, relayUrl },
             harnesses.map((definition) => fakeAgentHarness(definition, harnessState)),
             localContext,
         );
-        daemon = runDaemon(config, signal);
-        void daemon.catch((error: unknown) => {
+        runtime = runRuntime(config, signal);
+        void runtime.catch((error: unknown) => {
             if (!signal.aborted) {
                 console.error("Controlled Agent harness daemon failed", error);
             }
         });
-        const failure = daemon.then<never>(() => {
+        const failure = runtime.then<never>(() => {
             throw new Error("The production daemon stopped unexpectedly");
         });
         void failure.catch(() => undefined);
@@ -142,13 +142,13 @@ export async function createFakeAgentHarnessRuntime(options: {
                 }
                 disposed = true;
                 cancellation.abort(new Error("Controlled Agent harness Runtime stopped"));
-                await daemon?.catch(() => undefined);
+                await runtime?.catch(() => undefined);
                 await rm(directory, { recursive: true, force: true });
             },
         };
     } catch (cause) {
         cancellation.abort(cause);
-        await daemon?.catch(() => undefined);
+        await runtime?.catch(() => undefined);
         await rm(directory, { recursive: true, force: true });
         throw cause;
     }

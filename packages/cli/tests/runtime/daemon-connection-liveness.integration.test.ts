@@ -25,11 +25,11 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { listen, port as readPort, sendText as writeServerTextFrame } from "@moxt-ai/mobius-test/websocket";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDaemonConfig, LocalAgentDefinition } from "../../src/daemon/config.ts";
+import { createRuntimeConfig, LocalAgentDefinition } from "../../src/daemon/config.ts";
 import { RuntimeRelayRevokedError } from "../../src/daemon/relay/runtime-revocation.ts";
 import { SESSION_EVENT_BATCH_WINDOW_MILLISECONDS } from "../../src/daemon/relay/session-event-publisher.ts";
-import type { DaemonScheduledTask, DaemonTimer } from "../../src/daemon/relay/timer.ts";
-import { runDaemon } from "../../src/daemon/run.ts";
+import type { ScheduledTask, Timer } from "../../src/daemon/relay/timer.ts";
+import { runRuntime } from "../../src/daemon/run.ts";
 
 const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const fakeAgentPath = fileURLToPath(new URL("../sessions/fixtures/acp-peer.ts", import.meta.url));
@@ -52,7 +52,7 @@ class ClientWebSocketFrame {
     }
 }
 
-class ControllableDaemonTask implements DaemonScheduledTask {
+class ControllableDaemonTask implements ScheduledTask {
     readonly #callback: () => void;
     #cancelled = false;
 
@@ -73,11 +73,11 @@ class ControllableDaemonTask implements DaemonScheduledTask {
     };
 }
 
-class ControllableDaemonTimer implements DaemonTimer {
+class ControllableTimer implements Timer {
     readonly #scheduled = new Map<number, ControllableDaemonTask[]>();
     readonly #waiters = new Map<number, Array<(task: ControllableDaemonTask) => void>>();
 
-    readonly schedule = (callback: () => void, milliseconds: number): DaemonScheduledTask => {
+    readonly schedule = (callback: () => void, milliseconds: number): ScheduledTask => {
         const task = new ControllableDaemonTask(callback);
         const waiter = this.#waiters.get(milliseconds)?.shift();
         if (waiter !== undefined) {
@@ -292,7 +292,7 @@ describe("daemon relay connection liveness", () => {
         process.env["NO_PROXY"] = "127.0.0.1,localhost";
         process.env["no_proxy"] = "127.0.0.1,localhost";
         process.env["PATH"] = "";
-        const config = createDaemonConfig({
+        const config = createRuntimeConfig({
             defaultWorkspace,
             channelId: "heartbeat-channel",
             relayUrl: new URL(
@@ -303,7 +303,7 @@ describe("daemon relay connection liveness", () => {
         vi.useFakeTimers({ toFake: ["Date", "clearTimeout", "setTimeout"] });
         vi.setSystemTime(new Date("2026-09-04T00:00:00.000Z"));
         const firstConnection = waitForUpgrade();
-        const daemon = runDaemon(config, cancellation.signal);
+        const runtime = runRuntime(config, cancellation.signal);
 
         try {
             await firstConnection;
@@ -356,7 +356,7 @@ describe("daemon relay connection liveness", () => {
         } finally {
             cancellation.abort();
             await vi.runAllTimersAsync();
-            await daemon;
+            await runtime;
             for (const socket of sockets) {
                 socket.destroy();
             }
@@ -438,7 +438,7 @@ describe("daemon relay connection liveness", () => {
         process.env["NO_PROXY"] = "127.0.0.1,localhost";
         process.env["no_proxy"] = "127.0.0.1,localhost";
         process.env["PATH"] = "";
-        const config = createDaemonConfig({
+        const config = createRuntimeConfig({
             defaultWorkspace,
             channelId: "runtime-revoked-channel",
             relayUrl: new URL(
@@ -447,7 +447,7 @@ describe("daemon relay connection liveness", () => {
         });
         const online = Promise.withResolvers<void>();
         const statuses: string[] = [];
-        const daemon = runDaemon(config, cancellation.signal, undefined, {
+        const runtime = runRuntime(config, cancellation.signal, undefined, {
             onConnectionStatus: (status) => {
                 statuses.push(status);
                 if (status === "online") {
@@ -477,8 +477,8 @@ describe("daemon relay connection liveness", () => {
             expect(statuses).toContain("online");
             writeServerCloseFrame(socket, 1008, "Runtime revoked");
 
-            await expect(daemon).rejects.toBeInstanceOf(RuntimeRelayRevokedError);
-            await expect(daemon).rejects.toMatchObject({
+            await expect(runtime).rejects.toBeInstanceOf(RuntimeRelayRevokedError);
+            await expect(runtime).rejects.toMatchObject({
                 code: "runtime_relay_revoked",
                 closeCode: 1008,
                 closeReason: "Runtime revoked",
@@ -486,7 +486,7 @@ describe("daemon relay connection liveness", () => {
             expect(upgradeCount).toBe(1);
         } finally {
             cancellation.abort();
-            await daemon.catch(() => undefined);
+            await runtime.catch(() => undefined);
             for (const socket of sockets) {
                 socket.destroy();
             }
@@ -587,7 +587,7 @@ describe("daemon relay connection liveness", () => {
         process.env["NO_PROXY"] = "127.0.0.1,localhost";
         process.env["no_proxy"] = "127.0.0.1,localhost";
         process.env["PATH"] = "";
-        const config = createDaemonConfig({
+        const config = createRuntimeConfig({
             defaultWorkspace,
             channelId: "liveness-channel",
             relayUrl: new URL(`ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/liveness-channel/daemon`),
@@ -596,7 +596,7 @@ describe("daemon relay connection liveness", () => {
         vi.useFakeTimers({ toFake: ["Date", "clearTimeout", "setTimeout"] });
         vi.setSystemTime(new Date("2026-09-04T00:00:00.000Z"));
         const firstConnection = waitForUpgrade();
-        const daemon = runDaemon(config, cancellation.signal);
+        const runtime = runRuntime(config, cancellation.signal);
 
         try {
             await catalogFailure;
@@ -635,7 +635,7 @@ describe("daemon relay connection liveness", () => {
         } finally {
             cancellation.abort();
             await vi.runAllTimersAsync();
-            await daemon;
+            await runtime;
             for (const socket of sockets) {
                 socket.destroy();
             }
@@ -757,7 +757,7 @@ describe("daemon relay connection liveness", () => {
         });
         await listen(relay);
         let cancellation = new AbortController();
-        const timer = new ControllableDaemonTimer();
+        const timer = new ControllableTimer();
         const previousFakeAcpStateDirectory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
         const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
         const previousNoProxy = process.env["NO_PROXY"];
@@ -766,7 +766,7 @@ describe("daemon relay connection liveness", () => {
         process.env["MOBIUS_STATE_DIRECTORY"] = stateDirectory;
         process.env["NO_PROXY"] = "127.0.0.1,localhost";
         process.env["no_proxy"] = "127.0.0.1,localhost";
-        const config = createDaemonConfig(
+        const config = createRuntimeConfig(
             {
                 defaultWorkspace,
                 channelId: "reconciliation-channel",
@@ -780,7 +780,7 @@ describe("daemon relay connection liveness", () => {
         vi.useFakeTimers({ toFake: ["Date"] });
         vi.setSystemTime(new Date("2026-09-08T00:00:00.000Z"));
         const firstConnection = waitForUpgrade();
-        let daemon = runDaemon(config, cancellation.signal, timer);
+        let runtime = runRuntime(config, cancellation.signal, timer);
 
         try {
             await firstConnection;
@@ -907,10 +907,10 @@ describe("daemon relay connection liveness", () => {
 
             // A fresh daemon also starts with live events, never an old delivery queue.
             cancellation.abort();
-            await daemon;
+            await runtime;
             cancellation = new AbortController();
             const restarted = waitForUpgrade();
-            daemon = runDaemon(config, cancellation.signal, timer);
+            runtime = runRuntime(config, cancellation.signal, timer);
             await restarted;
             (await timer.waitForTask(SESSION_EVENT_BATCH_WINDOW_MILLISECONDS)).run();
             const freshFrames = clientFrames[2];
@@ -938,7 +938,7 @@ describe("daemon relay connection liveness", () => {
             expect(await readdir(stateDirectory)).not.toContain("events");
         } finally {
             cancellation.abort();
-            await daemon;
+            await runtime;
             for (const socket of sockets) {
                 socket.destroy();
             }

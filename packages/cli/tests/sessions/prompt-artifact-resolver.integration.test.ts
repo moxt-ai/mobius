@@ -4,7 +4,7 @@ import { gzipSync } from "node:zlib";
 import { MOBIUS_API_PREFIX, SESSION_PROMPT_KIND, type SessionPromptCommand } from "@moxt-ai/mobius-sdk/protocol";
 import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { afterEach, describe, expect, it } from "vitest";
-import { createDaemonConfig } from "../../src/daemon/config.ts";
+import { createRuntimeConfig } from "../../src/daemon/config.ts";
 import { resolvePromptArtifacts } from "../../src/prompt-artifact-resolver.ts";
 
 function digest(bytes: Uint8Array): string {
@@ -66,7 +66,7 @@ describe("daemon prompt artifact resolution", () => {
             `ws://127.0.0.1:${port(server).toString()}${MOBIUS_API_PREFIX}/channels/channel-artifact/daemon`,
         );
         relayUrl.searchParams.set("token", "daemon-secret");
-        const config = createDaemonConfig({
+        const config = createRuntimeConfig({
             channelId: "channel-artifact",
             defaultWorkspace: "/tmp",
             relayUrl,
@@ -148,7 +148,7 @@ describe("daemon prompt artifact resolution", () => {
         const relayUrl = new URL(
             `ws://127.0.0.1:${port(server).toString()}${MOBIUS_API_PREFIX}/channels/channel-artifact/daemon?token=daemon-secret`,
         );
-        const config = createDaemonConfig({
+        const config = createRuntimeConfig({
             channelId: "channel-artifact",
             defaultWorkspace: "/tmp",
             relayUrl,
@@ -205,7 +205,7 @@ describe("daemon prompt artifact resolution", () => {
         const relayUrl = new URL(
             `ws://127.0.0.1:${port(server).toString()}${MOBIUS_API_PREFIX}/channels/channel-artifact/daemon?token=daemon-secret`,
         );
-        const config = createDaemonConfig({
+        const config = createRuntimeConfig({
             channelId: "channel-artifact",
             defaultWorkspace: "/tmp",
             relayUrl,

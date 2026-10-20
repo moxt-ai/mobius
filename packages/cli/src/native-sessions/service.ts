@@ -15,7 +15,7 @@ import { nativeSessionIdSchema } from "../acp/native-session.ts";
 import type { AcpStoredSession } from "../acp/session-store.ts";
 import { LocalAuthorizationError } from "../authorization/local-authorization-error.ts";
 import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
-import type { DaemonConfig } from "../daemon/config.ts";
+import type { RuntimeConfig } from "../daemon/config.ts";
 
 interface ListedTarget {
     readonly scope: string;
@@ -64,7 +64,7 @@ function nextForkTitle(sourceTitle: string, sessions: readonly AcpStoredSession[
 export class NativeSessionService {
     readonly #entries = new Map<string, ListedTarget>();
     readonly #cursors = new Map<string, ListedCursor>();
-    readonly #config: DaemonConfig;
+    readonly #config: RuntimeConfig;
     readonly #directories: WorkspaceDirectoryService;
     readonly #sessions: AgentRuntimeManager;
     readonly #activeTurn: (
@@ -73,7 +73,7 @@ export class NativeSessionService {
     ) => Promise<Pick<Extract<NativeSessionResult, { readonly action: "active-turn" }>, "turn" | "queued">>;
 
     constructor(
-        config: DaemonConfig,
+        config: RuntimeConfig,
         directories: WorkspaceDirectoryService,
         sessions: AgentRuntimeManager,
         activeTurn: (

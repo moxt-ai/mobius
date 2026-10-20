@@ -1,10 +1,10 @@
 import { FILE_FAILED_KIND, FILE_READ_KIND } from "@moxt-ai/mobius-sdk/protocol";
 import { WebSocket } from "undici";
 import { send } from "../../../command-dispatcher.ts";
-import type { DaemonCommand } from "../../definition.ts";
+import type { RuntimeCommand } from "../../definition.ts";
 import { streamLocalFile } from "./logic/local-file-streamer.ts";
 
-export const fileReadCommand: DaemonCommand = {
+export const fileReadCommand: RuntimeCommand = {
     kind: FILE_READ_KIND,
     handle: ({ externalContent, sessions, signal, socket }, message): void => {
         if (message.kind !== FILE_READ_KIND) {

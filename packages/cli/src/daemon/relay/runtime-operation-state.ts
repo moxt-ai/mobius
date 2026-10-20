@@ -2,14 +2,14 @@ import { createHash, randomUUID } from "node:crypto";
 
 const MAX_TERMINAL_RECEIPTS = 1_024;
 
-export type DaemonExecutionState = "cancelled" | "dispatching" | "failed" | "running" | "succeeded";
+export type RuntimeExecutionState = "cancelled" | "dispatching" | "failed" | "running" | "succeeded";
 
-export type DaemonExecutionReceipt =
+export type RuntimeExecutionReceipt =
     | Readonly<{
           attemptId: string;
           commandId: string;
           kind: "accepted" | "duplicate";
-          state: DaemonExecutionState;
+          state: RuntimeExecutionState;
       }>
     | { readonly kind: "conflict" };
 
@@ -17,18 +17,18 @@ type StoredExecution = Readonly<{
     attemptId: string;
     commandHash: string;
     sessionId: string;
-    state: DaemonExecutionState;
+    state: RuntimeExecutionState;
 }>;
 
-function isTerminal(state: DaemonExecutionState): boolean {
+function isTerminal(state: RuntimeExecutionState): boolean {
     return state === "succeeded" || state === "failed" || state === "cancelled";
 }
 
-export class DaemonOperationState {
+export class RuntimeOperationState {
     readonly #executions = new Map<string, StoredExecution>();
     #terminalCount = 0;
 
-    readonly claimExecution = (commandId: string, sessionId: string, commandJson: string): DaemonExecutionReceipt => {
+    readonly claimExecution = (commandId: string, sessionId: string, commandJson: string): RuntimeExecutionReceipt => {
         const commandHash = createHash("sha256").update(commandJson).digest("hex");
         const existing = this.#executions.get(commandId);
         if (existing !== undefined) {
@@ -42,10 +42,10 @@ export class DaemonOperationState {
         return { attemptId, commandId, kind: "accepted", state: "dispatching" };
     };
 
-    readonly transitionExecution = (commandId: string, state: DaemonExecutionState): void => {
+    readonly transitionExecution = (commandId: string, state: RuntimeExecutionState): void => {
         const current = this.#executions.get(commandId);
         if (current === undefined) {
-            throw new Error("The daemon execution receipt does not exist");
+            throw new Error("The runtime execution receipt does not exist");
         }
         if (current.state === state) {
             return;
@@ -54,7 +54,7 @@ export class DaemonOperationState {
             (current.state === "dispatching" && (state === "running" || state === "failed" || state === "cancelled")) ||
             (current.state === "running" && isTerminal(state));
         if (!allowed) {
-            throw new Error("The daemon execution transition is invalid");
+            throw new Error("The runtime execution transition is invalid");
         }
         this.#executions.set(commandId, { ...current, state });
         if (isTerminal(state)) {
@@ -63,7 +63,7 @@ export class DaemonOperationState {
         }
     };
 
-    /** Receipts disappear when the daemon process exits. */
+    /** Receipts disappear when the runtime process exits. */
     readonly findUnsettledAttemptId = (commandId: string, sessionId: string): string | null => {
         const receipt = this.#executions.get(commandId);
         return receipt?.sessionId === sessionId && !isTerminal(receipt.state) ? receipt.attemptId : null;

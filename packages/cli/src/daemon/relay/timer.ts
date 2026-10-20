@@ -1,16 +1,20 @@
-export interface DaemonScheduledTask {
+export interface ScheduledTask {
     readonly cancel: () => void;
 }
 
-export interface DaemonTimer {
-    readonly schedule: (callback: () => void, milliseconds: number) => DaemonScheduledTask;
+export interface Timer {
+    readonly schedule: (callback: () => void, milliseconds: number) => ScheduledTask;
 }
 
-class SystemDaemonTimer implements DaemonTimer {
-    readonly schedule = (callback: () => void, milliseconds: number): DaemonScheduledTask => {
+class SystemTimer implements Timer {
+    readonly schedule = (callback: () => void, milliseconds: number): ScheduledTask => {
         const timeout = setTimeout(callback, milliseconds);
-        return { cancel: () => clearTimeout(timeout) };
+        return {
+            cancel: () => {
+                clearTimeout(timeout);
+            },
+        };
     };
 }
 
-export const systemDaemonTimer: DaemonTimer = new SystemDaemonTimer();
+export const systemTimer: Timer = new SystemTimer();

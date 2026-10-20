@@ -9,18 +9,18 @@ import type { AgentRuntimeManager } from "../../acp/agent-runtime-manager.ts";
 import type { WorkspaceDirectoryService } from "../../authorization/workspace-directory.ts";
 import type { ExternalContentStore } from "../../external-content/local-external-content-store.ts";
 import type { NativeSessionService } from "../../native-sessions/service.ts";
-import type { DaemonSessionEventProjection } from "../../session-event-projection.ts";
-import { createDaemonCommandDispatcher, send } from "../command-dispatcher.ts";
-import type { DaemonConfig } from "../config.ts";
-import type { DaemonTurnRegistry } from "../turn-registry.ts";
-import { reportDaemonUpgrade } from "../upgrades/upgrade.ts";
+import type { RuntimeSessionEventProjection } from "../../session-event-projection.ts";
+import { createRuntimeCommandDispatcher, send } from "../command-dispatcher.ts";
+import type { RuntimeConfig } from "../config.ts";
+import type { RuntimeTurnRegistry } from "../turn-registry.ts";
+import { reportDaemonUpgradeAvailability } from "../upgrades/upgrade.ts";
 import { connectRelay } from "./connect.ts";
-import type { DaemonOperationState } from "./daemon-operation-state.ts";
 import type { RelayConnectionDiagnostics } from "./diagnostics.ts";
 import { RelayConnectionLiveness } from "./liveness.ts";
+import type { RuntimeOperationState } from "./runtime-operation-state.ts";
 import { isRuntimeRelayRevocation, RuntimeRelayRevokedError } from "./runtime-revocation.ts";
-import type { DaemonSessionEventPublisher } from "./session-event-publisher.ts";
-import type { DaemonTimer } from "./timer.ts";
+import type { RuntimeSessionEventPublisher } from "./session-event-publisher.ts";
+import type { Timer } from "./timer.ts";
 
 function closeRelaySocket(socket: WebSocket, code: number, reason: string): void {
     try {
@@ -36,20 +36,20 @@ function closeRelaySocket(socket: WebSocket, code: number, reason: string): void
 }
 
 export interface RelayConnectionOptions {
-    readonly config: DaemonConfig;
+    readonly config: RuntimeConfig;
     readonly directories: WorkspaceDirectoryService;
     readonly sessions: AgentRuntimeManager;
     readonly nativeSessions: NativeSessionService;
-    readonly operations: DaemonOperationState;
-    readonly publisher: DaemonSessionEventPublisher;
-    readonly eventProjection: DaemonSessionEventProjection;
+    readonly operations: RuntimeOperationState;
+    readonly publisher: RuntimeSessionEventPublisher;
+    readonly eventProjection: RuntimeSessionEventProjection;
     readonly externalContent: ExternalContentStore;
-    readonly activeTurns: DaemonTurnRegistry;
+    readonly activeTurns: RuntimeTurnRegistry;
     readonly connectionEpoch: number;
     readonly diagnostics: RelayConnectionDiagnostics;
     readonly onConnected: () => void;
     readonly signal: AbortSignal;
-    readonly timer: DaemonTimer;
+    readonly timer: Timer;
 }
 
 export async function runRelayConnection({
@@ -73,7 +73,7 @@ export async function runRelayConnection({
     const socket = await connectRelay(relayUrl, signal);
     diagnostics.connectionOpened(connectionEpoch);
     const connectionController = new AbortController();
-    const commands = createDaemonCommandDispatcher({
+    const commands = createRuntimeCommandDispatcher({
         config,
         directories,
         sessions,
@@ -87,7 +87,7 @@ export async function runRelayConnection({
         signal: connectionController.signal,
         timer,
     });
-    void reportDaemonUpgrade((result) => {
+    void reportDaemonUpgradeAvailability((result) => {
         if (socket.readyState === WebSocket.OPEN) {
             send(socket, result);
         }
