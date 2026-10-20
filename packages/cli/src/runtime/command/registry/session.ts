@@ -20,10 +20,10 @@ import { resolveSessionDirectories } from "../../../authorization/resolve-sessio
 import type { WorkspaceDirectoryService } from "../../../authorization/workspace-directory.ts";
 import { AccumulatingOperationMetrics } from "../../../infra/operation-metrics.ts";
 import type { NativeSessionService } from "../../../native-sessions/service.ts";
-import { operationErrorCode, reportOperationFailure, send } from "../../command-dispatcher.ts";
 import type { AcpAgentDefinition, RuntimeConfig } from "../../config.ts";
 import type { RelayConnectionDiagnostics } from "../../relay/diagnostics.ts";
 import type { RuntimeCommand } from "../definition.ts";
+import { operationErrorCode, reportOperationFailure, send } from "../dispatcher.ts";
 
 export async function resolveCatalogAgent(
     config: RuntimeConfig,

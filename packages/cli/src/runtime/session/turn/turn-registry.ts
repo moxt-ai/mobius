@@ -5,8 +5,8 @@ import {
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
+import type { RuntimeOperationState } from "../../admission.ts";
 import { ActiveRuntimeTurn, type RecordedSessionEvent } from "./active-turn.ts";
-import type { RuntimeOperationState } from "./relay/runtime-operation-state.ts";
 
 const waitForTurnCompletion = (turn: ActiveRuntimeTurn, waitSignal: AbortSignal): Promise<void> => {
     waitSignal.throwIfAborted();

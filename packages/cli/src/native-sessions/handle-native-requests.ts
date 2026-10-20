@@ -1,9 +1,9 @@
 import type { NativeSessionCancel, NativeSessionCommand } from "@moxt-ai/mobius-sdk/protocol";
 import { WebSocket } from "undici";
 import { AcpExecutionError } from "../acp/agent-runtime-manager.ts";
-import { operationErrorCode, reportOperationFailure, send } from "../daemon/command-dispatcher.ts";
-import type { RelayConnectionDiagnostics } from "../daemon/relay/diagnostics.ts";
-import type { Timer } from "../daemon/relay/timer.ts";
+import { operationErrorCode, reportOperationFailure, send } from "../runtime/command/dispatcher.ts";
+import type { RelayConnectionDiagnostics } from "../runtime/relay/diagnostics.ts";
+import type { Timer } from "../runtime/relay/timer.ts";
 import type { NativeSessionService } from "./service.ts";
 
 type PendingRequest = Readonly<{

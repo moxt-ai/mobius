@@ -1,18 +1,18 @@
 import { type SessionPromptCommand, SessionPromptDisposition } from "@moxt-ai/mobius-sdk/protocol";
-import { AcpExecutionError, type AgentRuntimeManager } from "../../../acp/agent-runtime-manager.ts";
+import { AcpExecutionError, type AgentRuntimeManager } from "../../acp/agent-runtime-manager.ts";
 import {
     agentForSessionConfiguration,
     applyCompleteSessionConfiguration,
     assertAppliedSessionConfiguration,
-} from "../../../acp/session-config/apply-session-configuration.ts";
-import { resolveSessionDirectories } from "../../../authorization/resolve-session-directories.ts";
-import type { WorkspaceDirectoryService } from "../../../authorization/workspace-directory.ts";
-import { resolvePromptArtifacts } from "../../../prompt-artifact-resolver.ts";
-import type { RuntimeSessionEventProjection } from "../../../session-event-projection.ts";
-import { operationErrorCode, operationErrorMessage } from "../../command-dispatcher.ts";
-import type { RuntimeConfig } from "../../config.ts";
-import type { RuntimeOperationState } from "../../relay/runtime-operation-state.ts";
-import { resolveCatalogAgent } from "./session.ts";
+} from "../../acp/session-config/apply-session-configuration.ts";
+import { resolveSessionDirectories } from "../../authorization/resolve-session-directories.ts";
+import type { WorkspaceDirectoryService } from "../../authorization/workspace-directory.ts";
+import { resolvePromptArtifacts } from "../../prompt-artifact-resolver.ts";
+import type { RuntimeSessionEventProjection } from "../../session-event-projection.ts";
+import type { RuntimeOperationState } from "../admission.ts";
+import { operationErrorCode, operationErrorMessage } from "../command/dispatcher.ts";
+import { resolveCatalogAgent } from "../command/registry/session.ts";
+import type { RuntimeConfig } from "../config.ts";
 
 export interface ExecutePromptOptions {
     readonly operations: RuntimeOperationState;

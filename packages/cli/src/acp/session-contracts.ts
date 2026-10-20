@@ -18,7 +18,7 @@ import type {
     SessionPermissionRequestedEvent,
     SessionPermissionResolvedEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
-import type { AcpAgentDefinition } from "../daemon/config.ts";
+import type { AcpAgentDefinition } from "../runtime/config.ts";
 import type { NativeSessionOrigin } from "./native-session.ts";
 
 export interface AcpPrepareOptions {

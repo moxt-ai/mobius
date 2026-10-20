@@ -15,15 +15,15 @@ import { NativeSessionService } from "../native-sessions/service.ts";
 import { RuntimeSessionEventProjection } from "../session-event-projection.ts";
 import { SqliteSessionLiveEventPosition } from "../session-live-event-position.ts";
 import { RuntimeAcpObserver } from "./acp-observer.ts";
+import { RuntimeOperationState } from "./admission.ts";
 import type { RuntimeConfig } from "./config.ts";
 import { RuntimeDiagnosticLog } from "./observability/diagnostic-log.ts";
 import { RelayConnectionDiagnostics } from "./relay/diagnostics.ts";
 import { runRelayConnection } from "./relay/run-relay-connection.ts";
-import { RuntimeOperationState } from "./relay/runtime-operation-state.ts";
 import { RuntimeRelayRevokedError } from "./relay/runtime-revocation.ts";
 import { RuntimeSessionEventPublisher } from "./relay/session-event-publisher.ts";
 import { systemTimer, type Timer } from "./relay/timer.ts";
-import { RuntimeTurnRegistry } from "./turn-registry.ts";
+import { RuntimeTurnRegistry } from "./session/turn/turn-registry.ts";
 
 const RELAY_RECONNECT_DELAY_MILLISECONDS = 500;
 

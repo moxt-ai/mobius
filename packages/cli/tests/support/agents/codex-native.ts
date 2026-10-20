@@ -7,11 +7,11 @@ import { CodexAcpAgent } from "../../../src/acp/harness/codex/agent.ts";
 import { MemoryAcpSessionStore } from "../../../src/acp/session-store.ts";
 import { InProcessAcpAgentDefinition } from "../../../src/agent-catalog/local-agent.ts";
 import { WorkspaceDirectoryService } from "../../../src/authorization/workspace-directory.ts";
-import { createRuntimeConfig } from "../../../src/daemon/config.ts";
-import { systemTimer } from "../../../src/daemon/relay/timer.ts";
 import { AcpContentExternalizer } from "../../../src/external-content/acp-content-externalizer.ts";
 import { UnretainedExternalContentStore } from "../../../src/external-content/local-external-content-store.ts";
 import { NativeSessionService } from "../../../src/native-sessions/service.ts";
+import { createRuntimeConfig } from "../../../src/runtime/config.ts";
+import { systemTimer } from "../../../src/runtime/relay/timer.ts";
 import { FakeOpenAiProvider } from "../llm/openai.ts";
 import { CodexFixture } from "./codex.ts";
 

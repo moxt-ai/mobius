@@ -19,7 +19,7 @@ import {
 import { agentSettingsAdapterForAgent } from "../agent-catalog/agent-settings-adapter.ts";
 import type { AcpAgentDefinition } from "../agent-catalog/local-agent.ts";
 import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
-import type { RuntimeConfig } from "../daemon/config.ts";
+import type { RuntimeConfig } from "../runtime/config.ts";
 
 export interface AgentSettingsDiscovery {
     readonly event: AgentSettingsDiscoveredEvent;

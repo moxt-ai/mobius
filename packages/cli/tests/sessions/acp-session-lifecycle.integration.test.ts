@@ -12,13 +12,13 @@ import { AgentRuntimeManager, acpAdapters, createWritableAcpStream } from "../..
 import { NullAcpSessionObserver } from "../../src/acp/session-contracts.ts";
 import { CachedAcpSessionEventStore } from "../../src/acp/session-event-store.ts";
 import { FoundAcpStoredSession, MemoryAcpSessionStore, SqliteAcpSessionStore } from "../../src/acp/session-store.ts";
-import { LocalAgentDefinition } from "../../src/daemon/config.ts";
-import { systemTimer } from "../../src/daemon/relay/timer.ts";
 import { AcpContentExternalizer } from "../../src/external-content/acp-content-externalizer.ts";
 import { UnretainedExternalContentStore } from "../../src/external-content/local-external-content-store.ts";
 import { acpSessionStoreMigrations } from "../../src/generated/acp-session-store-migrations.ts";
 import { AccumulatingOperationMetrics } from "../../src/infra/operation-metrics.ts";
 import { openAcpSessionDatabase, openSessionEventCacheDatabase } from "../../src/local-databases.ts";
+import { LocalAgentDefinition } from "../../src/runtime/config.ts";
+import { systemTimer } from "../../src/runtime/relay/timer.ts";
 import { SqliteSessionLiveEventPosition } from "../../src/session-live-event-position.ts";
 import { RecordingObserver } from "./acp-feature-fixture.ts";
 

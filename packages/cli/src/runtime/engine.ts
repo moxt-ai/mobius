@@ -185,6 +185,13 @@ export type {
     InProcessAcpEndpointOptions,
 } from "../acp/in-process/acp-endpoint.ts";
 export {
+    type MobiusRuntimePairingOptions,
+    type PairedRuntime,
+    PairingClientError,
+    pairMobiusRuntime,
+    resumeMobiusRuntime,
+} from "../daemon/pairing/pair-local-machine.ts";
+export {
     openRuntimeInstallationStore,
     type RuntimeConnectionInput,
     RuntimeInstallationStore,
@@ -200,10 +207,3 @@ export {
     RuntimeLocalContext,
     RuntimeReconnectTarget,
 } from "./config.ts";
-export {
-    type MobiusRuntimePairingOptions,
-    type PairedRuntime,
-    PairingClientError,
-    pairMobiusRuntime,
-    resumeMobiusRuntime,
-} from "./pairing/pair-local-machine.ts";

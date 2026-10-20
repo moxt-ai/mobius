@@ -7,9 +7,9 @@ import {
     SESSION_QUERY_KIND,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { createNativeSessionRequestHandler } from "../../../native-sessions/handle-native-requests.ts";
-import { reportOperationFailure, send } from "../../command-dispatcher.ts";
 import type { CommandContext } from "../context.ts";
 import type { RuntimeCommand } from "../definition.ts";
+import { reportOperationFailure, send } from "../dispatcher.ts";
 
 export function createNativeSessionCommands(context: CommandContext): readonly RuntimeCommand[] {
     const handler = createNativeSessionRequestHandler({

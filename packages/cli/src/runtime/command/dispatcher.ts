@@ -5,17 +5,17 @@ import {
     type SessionCancelCommand,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { WebSocket } from "undici";
-import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "../acp/agent-runtime-manager.ts";
-import { LocalAgentCatalogError } from "../agent-catalog/local-agent.ts";
-import { LocalAuthorizationError } from "../authorization/local-authorization-error.ts";
-import type { DurationMetric } from "../infra/operation-metrics.ts";
-import { PromptArtifactError } from "../prompt-artifact-resolver.ts";
-import type { RuntimeSessionEventProjection } from "../session-event-projection.ts";
-import type { CommandContext } from "./command/context.ts";
-import { createCommandRegistry } from "./command/registry/index.ts";
-import type { RuntimeOperationState } from "./relay/runtime-operation-state.ts";
+import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "../../acp/agent-runtime-manager.ts";
+import { LocalAgentCatalogError } from "../../agent-catalog/local-agent.ts";
+import { LocalAuthorizationError } from "../../authorization/local-authorization-error.ts";
+import type { DurationMetric } from "../../infra/operation-metrics.ts";
+import { PromptArtifactError } from "../../prompt-artifact-resolver.ts";
+import type { RuntimeSessionEventProjection } from "../../session-event-projection.ts";
+import type { RuntimeOperationState } from "../admission.ts";
+import type { CommandContext } from "./context.ts";
+import { createCommandRegistry } from "./registry/index.ts";
 
-export type { CommandContext } from "./command/context.ts";
+export type { CommandContext } from "./context.ts";
 
 export function createRuntimeCommandDispatcher(options: CommandContext): {
     readonly dispatch: (message: ServiceToDaemonMessage) => void;
