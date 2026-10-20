@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="40" viewBox="0 0 320 40" fill="none">
+  <title>Mobius loop in warm yellow</title>
+  <path d="M48 20H118M202 20H272" stroke="#E4C987" stroke-width="1.5" stroke-linecap="round"/>
+  <path d="M160 20C152 8 138 8 138 20S152 32 160 20C168 8 182 8 182 20S168 32 160 20Z" stroke="#C99C45" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
