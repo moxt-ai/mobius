@@ -2343,15 +2343,15 @@ export class ClaudeAcpAgent {
         // stop_reason "refusal" and structured stop_details. We capture the
         // human-readable explanation so the terminal `result` can surface it.
         let lastRefusalExplanation: string | null = null;
-        // Tracks whether we're inside a compaction. The SDK emits the terminal
-        // `status` (compact_result success/failed) twice for a single failed
-        // compaction, and the two messages are indistinguishable — so we report the
-        // outcome only while a compaction is in progress, then clear this.
-        // `compactionId` holds the Agent-owned ID of the in-flight compaction while
-        // one is open; the daemon always advertises `session.compaction`, so every
-        // client of this adapter receives ID-addressed compaction updates.
-        let compactionInProgress = false;
-        let compactionId: string | null = null;
+        // The in-flight context compaction, if any. The SDK signals the lifecycle
+        // through `status` frames: `status: "compacting"` opens it (and may repeat
+        // within one compaction), and a later frame carrying `compact_result`
+        // settles it — the SDK emits that terminal frame twice for a single
+        // failed compaction, and the two messages are indistinguishable, so a
+        // settle is only honored while a compaction is open. The daemon always
+        // advertises `session.compaction`, so every client of this adapter
+        // receives ID-addressed compaction updates.
+        let compaction: { readonly id: string } | null = null;
         // Anthropic API message id of the assistant message currently being
         // streamed, captured from `message_start` so the streamed chunks that follow
         // (whose delta events don't carry it) can all be tagged with the same,
@@ -2440,12 +2440,12 @@ export class ClaudeAcpAgent {
             lastAssistantModel = null;
             lastAssistantError = undefined;
             lastRefusalExplanation = null;
-            // Do NOT reset compactionInProgress/compactionId here. A compaction's
-            // lifecycle spans the whole turn: the SDK can emit `status: compacting`
-            // both before the turn's user echo activates it and again later in the
-            // same turn, and the echo-time activation must not orphan the open
-            // compaction's identity. Both locals are per-prompt-call and start
-            // fresh on the next prompt regardless.
+            // Do NOT reset compaction here. A compaction's lifecycle spans the
+            // whole turn: the SDK can emit `status: compacting` both before the
+            // turn's user echo activates it and again later in the same turn, and
+            // the echo-time activation must not orphan the open compaction. The
+            // local is per-prompt-call and starts fresh on the next prompt
+            // regardless.
             // Do NOT reset currentStreamMessageId or streamedBlocks here. Turn
             // activation can fire mid-message (the replayed user echo with
             // --replay-user-messages lands between a message's blocks); clearing the
@@ -3101,48 +3101,45 @@ export class ClaudeAcpAgent {
                                 // compaction_summary_chunk (see the compaction content
                                 // block case in toAcpNotifications).
                                 if (message.status === "compacting") {
-                                    compactionInProgress = true;
                                     // The SDK can repeat `status: compacting` within one
                                     // logical compaction (observed against the live API:
                                     // three frames for a single /compact). Each repeated
                                     // frame must not open a new compaction — later updates
                                     // with the same ID patch the retained entity in place,
                                     // so reuse the open ID and only announce the opening.
-                                    if (compactionId === null) {
-                                        compactionId = randomUUID();
+                                    if (compaction === null) {
+                                        compaction = { id: randomUUID() };
                                         await sendUpdate({
                                             sessionId: message.session_id,
                                             update: {
-                                                compactionId,
+                                                compactionId: compaction.id,
                                                 sessionUpdate: "compaction_update",
                                                 status: "in_progress",
                                             },
                                         });
                                     }
-                                } else if (message.compact_result === "success" && compactionInProgress) {
+                                } else if (message.compact_result === "success" && compaction !== null) {
                                     // The SDK signals manual `/compact` completion with a status
                                     // message carrying `compact_result`, not the `compact_boundary`
                                     // message (which only fires when there's content to compact).
-                                    compactionInProgress = false;
-                                    const settledId = compactionId;
-                                    compactionId = null;
+                                    const settled = compaction;
+                                    compaction = null;
                                     await sendUpdate({
                                         sessionId: message.session_id,
                                         update: {
-                                            compactionId: settledId ?? randomUUID(),
+                                            compactionId: settled.id,
                                             sessionUpdate: "compaction_update",
                                             status: "completed",
                                         },
                                     });
-                                } else if (message.compact_result === "failed" && compactionInProgress) {
-                                    compactionInProgress = false;
-                                    const settledId = compactionId;
-                                    compactionId = null;
+                                } else if (message.compact_result === "failed" && compaction !== null) {
+                                    const settled = compaction;
+                                    compaction = null;
                                     const error = message.compact_error ?? null;
                                     await sendUpdate({
                                         sessionId: message.session_id,
                                         update: {
-                                            compactionId: settledId ?? randomUUID(),
+                                            compactionId: settled.id,
                                             error,
                                             sessionUpdate: "compaction_update",
                                             status: "failed",
@@ -4223,7 +4220,7 @@ export class ClaudeAcpAgent {
                                 emittedToolCalls: session.emittedToolCalls,
                                 messageId: currentStreamMessageId,
                                 streamedToolInputs,
-                                compactionId: compactionId ?? undefined,
+                                compactionId: compaction?.id,
                             },
                         )) {
                             // sendUpdate records delivery; a subagent stream's chunks carry
@@ -4536,7 +4533,7 @@ export class ClaudeAcpAgent {
                                     message.type === "user"
                                         ? (message as { tool_result_meta?: unknown }).tool_result_meta
                                         : undefined,
-                                compactionId: compactionId ?? undefined,
+                                compactionId: compaction?.id,
                             },
                         )) {
                             // sendUpdate records delivery. Subagent text/thinking is
