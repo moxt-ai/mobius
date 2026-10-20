@@ -1,5 +1,7 @@
 import type { RuntimeAccessContext } from "../entity/authentication/project-authentication.ts";
 import type { ChannelHostCredential, VerifiedChannelAccess } from "../entity/pairing/pairing.ts";
+import { requestLogContext } from "../infra/log-diagnostics.ts";
+import { logger } from "../infra/logger.ts";
 import { RuntimeStatus } from "../service/channel/channel.ts";
 import type { ChannelGateway } from "./channel-gateway.ts";
 
@@ -64,8 +66,8 @@ export class CloudflareChannelRuntime implements ChannelGateway {
         headers.set(INTERNAL_CHANNEL_ID_HEADER, access.channelId);
         headers.set(INTERNAL_HOST_CREDENTIAL_ID_HEADER, access.credentialId);
         headers.set(INTERNAL_RUNTIME_ID_HEADER, access.runtimeId);
-        const objectId = this.#namespace.idFromName(access.runtimeId);
-        const response = await this.#namespace.get(objectId).fetch(
+        const response = await this.fetchRuntime(
+            access,
             new Request(
                 `https://runtime.internal/projects/${encodeURIComponent(access.projectId)}/host-credentials/revoke`,
                 {
@@ -74,6 +76,7 @@ export class CloudflareChannelRuntime implements ChannelGateway {
                     signal,
                 },
             ),
+            signal,
         );
         signal.throwIfAborted();
         if (response.status !== 204) {
@@ -86,13 +89,14 @@ export class CloudflareChannelRuntime implements ChannelGateway {
         const headers = new Headers();
         headers.set(INTERNAL_CHANNEL_ID_HEADER, access.channelId);
         headers.set(INTERNAL_RUNTIME_ID_HEADER, access.runtimeId);
-        const objectId = this.#namespace.idFromName(access.runtimeId);
-        const response = await this.#namespace.get(objectId).fetch(
+        const response = await this.fetchRuntime(
+            access,
             new Request(`https://runtime.internal/projects/${encodeURIComponent(access.projectId)}/runtime/revoke`, {
                 headers,
                 method: "DELETE",
                 signal,
             }),
+            signal,
         );
         signal.throwIfAborted();
         if (response.status !== 204) {
@@ -136,9 +140,34 @@ export class CloudflareChannelRuntime implements ChannelGateway {
         const endpoint = new URL(request.url);
         endpoint.pathname = `/projects/${encodeURIComponent(access.projectId)}${endpoint.pathname}`;
         const forwarded = new Request(endpoint, { method: request.method, headers, signal });
+        return await this.fetchRuntime(access, forwarded, signal);
+    };
+
+    private readonly fetchRuntime = async (
+        access: VerifiedChannelAccess,
+        request: Request,
+        signal: AbortSignal,
+    ): Promise<Response> => {
         const objectId = this.#namespace.idFromName(access.runtimeId);
-        const response = await this.#namespace.get(objectId).fetch(forwarded.url, forwarded);
-        signal.throwIfAborted();
-        return response;
+        try {
+            const response = await this.#namespace.get(objectId).fetch(request.url, request);
+            signal.throwIfAborted();
+            return response;
+        } catch (error) {
+            logger.error(
+                {
+                    ...requestLogContext(request),
+                    event: "runtime_relay_request_failed",
+                    durableObjectClass: "RuntimeRelay",
+                    durableObjectId: objectId.toString(),
+                    projectId: access.projectId,
+                    channelId: access.channelId,
+                    runtimeId: access.runtimeId,
+                    err: error,
+                },
+                "Runtime Relay request failed",
+            );
+            throw error;
+        }
     };
 }

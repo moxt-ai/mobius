@@ -1,4 +1,5 @@
 import { DatabaseError, type SqlDatabase, type SqlStatement } from "@moxt-ai/mobius-relay-core/database";
+import { logger } from "@moxt-ai/mobius-relay-core/logging";
 import type { ProjectLocationHint } from "@moxt-ai/mobius-sdk/protocol";
 import * as v from "valibot";
 import { encodeProjectDurableObjectPath } from "../entity/project-durable-object-path.ts";
@@ -57,6 +58,17 @@ async function requestDatabase(
         return await response.json();
     } catch (cause) {
         signal.throwIfAborted();
+        logger.error(
+            {
+                event: "project_database_request_failed",
+                durableObjectClass: "ProjectRelay",
+                durableObjectId: namespace.idFromName(projectId).toString(),
+                projectId,
+                operation: operation.kind,
+                err: cause,
+            },
+            "Project database request failed",
+        );
         throw new DatabaseError(
             timeout.signal.aborted ? "database_timeout" : "database_unavailable",
             "Project storage is unavailable",
