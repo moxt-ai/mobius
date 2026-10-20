@@ -297,6 +297,15 @@ export class CodexBorrowedAcpAgent implements CodexSessionAgent {
     };
 
     // A remote Stop must never interrupt another client's owning turn.
+    readonly compact = async (_signal: AbortSignal): Promise<PromptResponse> => {
+        // Borrowed queue access cannot start a compaction on the owning session.
+        throw new AcpExecutionError(
+            "This Codex session is attached read-only and cannot be compacted",
+            {},
+            "native_session_unsupported",
+        );
+    };
+
     readonly cancel = async (): Promise<void> => {
         this.#pending?.completion.resolve({ stopReason: "cancelled" });
     };

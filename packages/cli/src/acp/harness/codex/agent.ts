@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import {
     type AgentApp,
     type AgentConnection,
@@ -6,7 +5,6 @@ import {
     agent as createAgentApp,
     methods,
     PROTOCOL_VERSION,
-    type PromptResponse,
     type SessionNotification,
 } from "@agentclientprotocol/sdk";
 import { z } from "zod";
@@ -209,7 +207,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
             })
             .onRequest(methods.agent.session.prompt, async (context) => {
                 if (isCompactCommand(context.params.prompt)) {
-                    return await this.#compact(context.signal);
+                    return await this.#sessionAgent.compact(context.signal);
                 }
                 return await this.#sessionAgent.prompt(promptInput(context.params.prompt), context.signal);
             })
@@ -417,41 +415,6 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 }
             }
         }
-    };
-
-    /** Runs a manual context compaction through the app-server's dedicated RPC,
-     *  reporting the ACP compaction lifecycle around it. Mirrors how the pi
-     *  adapter serves its `compact` slash command. */
-    readonly #compact = async (signal: AbortSignal): Promise<PromptResponse> => {
-        const compactionId = randomUUID();
-        await this.#emit({
-            compactionId,
-            sessionUpdate: "compaction_update",
-            status: "in_progress",
-        });
-        try {
-            await this.#appServer.request(
-                "thread/compact/start",
-                { threadId: this.#nativeSessionId },
-                AbortSignal.any([signal, AbortSignal.timeout(APPROVAL_TIMEOUT_MILLISECONDS)]),
-            );
-        } catch (cause: unknown) {
-            signal.throwIfAborted();
-            const details = cause instanceof Error ? cause.message : String(cause);
-            await this.#emit({
-                compactionId,
-                error: details,
-                sessionUpdate: "compaction_update",
-                status: "failed",
-            });
-            throw cause;
-        }
-        await this.#emit({
-            compactionId,
-            sessionUpdate: "compaction_update",
-            status: "completed",
-        });
-        return { stopReason: "end_turn" };
     };
 
     readonly #emit = async (update: SessionNotification["update"]): Promise<void> => {
