@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
     type AgentApp,
     type AgentConnection,
@@ -5,6 +6,7 @@ import {
     agent as createAgentApp,
     methods,
     PROTOCOL_VERSION,
+    type PromptResponse,
     type SessionNotification,
 } from "@agentclientprotocol/sdk";
 import { z } from "zod";
@@ -61,6 +63,11 @@ function promptInput(prompt: readonly ContentBlock[]): readonly unknown[] {
         }
     }
     return input;
+}
+
+/** True when the prompt is exactly the manual compaction slash command. */
+function isCompactCommand(prompt: readonly ContentBlock[]): boolean {
+    return prompt.length === 1 && prompt[0]?.type === "text" && prompt[0].text.trim().toLowerCase() === "/compact";
 }
 
 /**
@@ -143,6 +150,21 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 this.#nativeSessionId = created.thread.id;
                 this.#settings.selectNewThread(created);
                 await this.#settings.probeCollaborationMode(this.#nativeSessionId, context.signal);
+                // Needs to happen after the session response so the notification follows
+                // session creation rather than racing it.
+                setTimeout(() => {
+                    void this.#emit({
+                        availableCommands: [
+                            {
+                                description: "Manually compact the session context",
+                                name: "compact",
+                            },
+                        ],
+                        sessionUpdate: "available_commands_update",
+                    }).catch((cause: unknown) => {
+                        console.error("Codex available commands notification failed", cause);
+                    });
+                }, 0);
                 // The settings Mobius discovers come from this response. Without them the Run
                 // settings panel has nothing to render and saved selections cannot be re-applied.
                 return { configOptions: this.#settings.configOptions(), sessionId: created.thread.id };
@@ -186,6 +208,9 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 return { configOptions: this.#settings.configOptions() };
             })
             .onRequest(methods.agent.session.prompt, async (context) => {
+                if (isCompactCommand(context.params.prompt)) {
+                    return await this.#compact(context.signal);
+                }
                 return await this.#sessionAgent.prompt(promptInput(context.params.prompt), context.signal);
             })
             .onRequest(
@@ -392,6 +417,41 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 }
             }
         }
+    };
+
+    /** Runs a manual context compaction through the app-server's dedicated RPC,
+     *  reporting the ACP compaction lifecycle around it. Mirrors how the pi
+     *  adapter serves its `compact` slash command. */
+    readonly #compact = async (signal: AbortSignal): Promise<PromptResponse> => {
+        const compactionId = randomUUID();
+        await this.#emit({
+            compactionId,
+            sessionUpdate: "compaction_update",
+            status: "in_progress",
+        });
+        try {
+            await this.#appServer.request(
+                "thread/compact/start",
+                { threadId: this.#nativeSessionId },
+                AbortSignal.any([signal, AbortSignal.timeout(APPROVAL_TIMEOUT_MILLISECONDS)]),
+            );
+        } catch (cause: unknown) {
+            signal.throwIfAborted();
+            const details = cause instanceof Error ? cause.message : String(cause);
+            await this.#emit({
+                compactionId,
+                error: details,
+                sessionUpdate: "compaction_update",
+                status: "failed",
+            });
+            throw cause;
+        }
+        await this.#emit({
+            compactionId,
+            sessionUpdate: "compaction_update",
+            status: "completed",
+        });
+        return { stopReason: "end_turn" };
     };
 
     readonly #emit = async (update: SessionNotification["update"]): Promise<void> => {
