@@ -7,6 +7,7 @@ import {
     lifecycleCommand,
     type WorkerLaunch,
 } from "../control/protocol.ts";
+import { WorkerLifecycleLog } from "./worker-lifecycle-log.ts";
 import { decodeWorkerLaunch, WorkerProcess, WorkerStartupError } from "./worker-process.ts";
 
 export async function runManager(stateDirectory: string, signal: AbortSignal): Promise<void> {
@@ -16,6 +17,7 @@ export async function runManager(stateDirectory: string, signal: AbortSignal): P
     }
     const shutdown = new AbortController();
     const combined = AbortSignal.any([signal, shutdown.signal]);
+    const lifecycle = new WorkerLifecycleLog(stateDirectory);
     let worker: WorkerProcess | undefined;
     let switchState: DaemonReleaseSwitchState | null = null;
     let queue: Promise<unknown> = Promise.resolve();
@@ -29,13 +31,37 @@ export async function runManager(stateDirectory: string, signal: AbortSignal): P
         await worker?.close();
         const replacement = new WorkerProcess(launch, combined, process.env);
         worker = replacement;
+        // Reading pid throws only when spawn failed outright; ready is rejected
+        // with worker_spawn_failed in that case, so consume it uniformly below.
+        let pid: number | null = null;
+        try {
+            pid = replacement.pid;
+        } catch {
+            // The process never launched; there is no pid to record.
+        }
+        if (pid !== null) {
+            lifecycle.started(pid, launch.version);
+        }
         try {
             await replacement.ready;
         } catch (cause) {
             await replacement.close();
+            await replacement.streamsSettled;
+            const code = cause instanceof WorkerStartupError ? cause.code : "worker_start_failed";
+            const message = cause instanceof WorkerStartupError ? cause.message : "The new daemon could not start";
+            lifecycle.startFailed(launch.version, pid, code, message, replacement.stderr);
             throw cause;
         }
+        if (pid !== null) {
+            lifecycle.ready(pid, launch.version);
+        }
         void replacement.exited.then(async () => {
+            // Wait for the stderr pipe to drain before freezing the tail into
+            // the log; the restart below is not delayed by this.
+            await replacement.streamsSettled;
+            if (pid !== null) {
+                lifecycle.exited(pid, launch.version, replacement.exit, replacement.stderr);
+            }
             try {
                 await setTimeout(1000, undefined, { signal: combined });
                 const restart = queue.then(async () => {
@@ -47,7 +73,9 @@ export async function runManager(stateDirectory: string, signal: AbortSignal): P
                 await restart;
             } catch {
                 if (!combined.aborted) {
-                    process.stderr.write("The working daemon could not be restarted; run mobius start to retry.\n");
+                    const message = "The working daemon could not be restarted; run mobius start to retry";
+                    process.stderr.write(`${message}\n`);
+                    lifecycle.restartFailed(launch.version, message);
                 }
             }
         });
