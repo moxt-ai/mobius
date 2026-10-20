@@ -264,6 +264,43 @@ class ControlledAgentState {
             await active.send(notification);
             return;
         }
+        if (output.kind === "compaction-start") {
+            const started: acp.SessionNotification = {
+                sessionId: active.sessionId,
+                update: {
+                    compactionId: `compaction-${active.turnNumber.toString()}`,
+                    sessionUpdate: "compaction_update",
+                    status: "in_progress",
+                },
+            };
+            this.#record(started);
+            await active.send(started);
+            return;
+        }
+        if (output.kind === "compaction-finish") {
+            const compactionId = `compaction-${active.turnNumber.toString()}`;
+            const chunk: acp.SessionNotification = {
+                sessionId: active.sessionId,
+                update: {
+                    compactionId,
+                    content: { text: output.summary, type: "text" },
+                    sessionUpdate: "compaction_summary_chunk",
+                },
+            };
+            this.#record(chunk);
+            await active.send(chunk);
+            const settled: acp.SessionNotification = {
+                sessionId: active.sessionId,
+                update: {
+                    compactionId,
+                    sessionUpdate: "compaction_update",
+                    status: "completed",
+                },
+            };
+            this.#record(settled);
+            await active.send(settled);
+            return;
+        }
         if (output.kind === "compaction-summary-blocks") {
             // Open, then settle with the summary as terminal content blocks: the
             // patch-replacement path clients must aggregate in order.

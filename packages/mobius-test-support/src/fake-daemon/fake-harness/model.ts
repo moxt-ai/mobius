@@ -10,6 +10,17 @@ export type HarnessOutput =
           readonly summary: string;
       }
     | {
+          /** Opens a compaction (in_progress) that a later compaction-finish
+           *  output settles; other outputs may interleave between them. */
+          readonly kind: "compaction-start";
+      }
+    | {
+          /** Settles the compaction opened by compaction-start, streaming the
+           *  summary as one chunk before the terminal update. */
+          readonly kind: "compaction-finish";
+          readonly summary: string;
+      }
+    | {
           /** Streams no chunks; the terminal completed update carries the summary
            *  as an array of content blocks, exercising the replacement patch. */
           readonly kind: "compaction-summary-blocks";
