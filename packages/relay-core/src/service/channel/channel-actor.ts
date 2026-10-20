@@ -26,7 +26,6 @@ import {
     decodeSessionQueryCommand,
     decodeSessionRenameCommand,
     decodeSessionRestoreCommand,
-    decodeSessionUsageReadCommand,
     decodeWorkspaceListCommand,
     encodeAgentSettingsDiscoveryFailedEvent,
     encodeDaemonToServiceMessage,
@@ -75,8 +74,6 @@ import {
     SESSION_RESTORE_KIND,
     SESSION_RESTORED_KIND,
     SESSION_STATUS_CHANGED_KIND,
-    SESSION_USAGE_READ_KIND,
-    SESSION_USAGE_READ_RESULT_KIND,
     type ServiceToDaemonMessage,
     type SessionPromptCommand,
     UnsupportedProtocolMessageKindError,
@@ -354,8 +351,6 @@ export class ChannelActor {
                 return;
             case SESSION_CONFIG_READ_RESULT_KIND:
                 return;
-            case SESSION_USAGE_READ_RESULT_KIND:
-                return;
             case SESSION_RENAMED_KIND:
                 return;
             case SESSION_STATUS_CHANGED_KIND:
@@ -429,10 +424,6 @@ export class ChannelActor {
             }
             case SESSION_CONFIG_READ_KIND: {
                 const command = decodeSessionConfigReadCommand(message);
-                return { message: command, requestId: command.requestId, sessionId: command.sessionId };
-            }
-            case SESSION_USAGE_READ_KIND: {
-                const command = decodeSessionUsageReadCommand(message);
                 return { message: command, requestId: command.requestId, sessionId: command.sessionId };
             }
             case SESSION_RENAME_KIND: {

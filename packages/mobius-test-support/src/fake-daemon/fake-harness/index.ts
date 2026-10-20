@@ -363,14 +363,12 @@ class ControlledAgentState {
             await active.send(settled);
             return;
         }
-        if (output.kind === "usage") {
+        if (output.kind === "agent-config") {
             const notification: acp.SessionNotification = {
                 sessionId: active.sessionId,
                 update: {
-                    cost: { ...output.cost },
-                    sessionUpdate: "usage_update",
-                    size: output.size,
-                    used: output.used,
+                    configOptions: output.configOptions.map((option) => ({ ...option })),
+                    sessionUpdate: "config_option_update",
                 },
             };
             this.#record(notification);

@@ -1,1 +1,0 @@
-ALTER TABLE `acp_session` ADD `usage` text;

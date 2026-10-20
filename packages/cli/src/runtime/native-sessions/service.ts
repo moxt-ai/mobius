@@ -306,7 +306,6 @@ export class NativeSessionService {
             requestId: command.requestId,
             restored: true,
             sessionId: opened.sessionId,
-            usage: opened.prepared.usage,
         };
         return {
             ...envelope,

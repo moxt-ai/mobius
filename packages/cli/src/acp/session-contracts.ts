@@ -17,7 +17,6 @@ import type {
     SessionLiveEvent,
     SessionPermissionRequestedEvent,
     SessionPermissionResolvedEvent,
-    SessionUsageSnapshot,
 } from "@moxt-ai/mobius-sdk/protocol";
 import type { AcpAgentDefinition } from "../runtime/config.ts";
 import type { NativeSessionOrigin } from "./native-session.ts";
@@ -128,7 +127,6 @@ export class AcpPreparedSession {
     readonly configOptions: readonly SessionConfigOption[];
     readonly prompted: boolean;
     readonly restored: boolean;
-    readonly usage: SessionUsageSnapshot | null;
 
     constructor(
         agentName: string,
@@ -138,7 +136,6 @@ export class AcpPreparedSession {
         configOptions: readonly SessionConfigOption[],
         prompted: boolean,
         restored: boolean,
-        usage: SessionUsageSnapshot | null = null,
     ) {
         this.agentName = agentName;
         this.agentVersion = agentVersion;
@@ -147,7 +144,6 @@ export class AcpPreparedSession {
         this.configOptions = configOptions;
         this.prompted = prompted;
         this.restored = restored;
-        this.usage = usage === null ? null : { ...usage, cost: usage.cost === null ? null : { ...usage.cost } };
     }
 }
 

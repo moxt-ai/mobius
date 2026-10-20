@@ -1014,7 +1014,6 @@ describe.sequential("Platform Session-only boundary", () => {
                         requestId,
                         restored: true,
                         sessionId: action === "import" ? "original-native-session" : targetSessionId,
-                        usage: null,
                     },
                 });
                 daemon.send(result);

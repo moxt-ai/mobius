@@ -20,7 +20,6 @@ import {
     sessionPrepareCommand,
     sessionRenameCommand,
     sessionRestoreCommand,
-    sessionUsageReadCommand,
     workspaceListCommand,
 } from "./session.ts";
 
@@ -43,7 +42,6 @@ export function createCommandRegistry(context: CommandContext): {
         sessionPrepareCommand,
         sessionConfigureCommand,
         sessionConfigReadCommand,
-        sessionUsageReadCommand,
         sessionRenameCommand,
         sessionRestoreCommand,
         permissionRespondCommand,

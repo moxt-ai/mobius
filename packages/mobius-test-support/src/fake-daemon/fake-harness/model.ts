@@ -27,10 +27,9 @@ export type HarnessOutput =
           readonly blocks: readonly string[];
       }
     | {
-          readonly kind: "usage";
-          readonly used: number;
-          readonly size: number;
-          readonly cost: { readonly amount: number; readonly currency: string };
+          /** Pushes agent-side config options as a config_option_update, including an explicit empty list. */
+          readonly kind: "agent-config";
+          readonly configOptions: readonly import("@agentclientprotocol/sdk").SessionConfigOption[];
       }
     | {
           readonly kind: "activity";

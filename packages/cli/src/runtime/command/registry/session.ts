@@ -5,7 +5,6 @@ import type {
     SessionReadyEvent,
     SessionRenameCommand,
     SessionRestoreCommand,
-    SessionUsageReadCommand,
     WorkspaceListCommand,
 } from "@moxt-ai/mobius-sdk/protocol";
 import {
@@ -15,8 +14,6 @@ import {
     SESSION_PREPARE_KIND,
     SESSION_RENAME_KIND,
     SESSION_RESTORE_KIND,
-    SESSION_USAGE_READ_KIND,
-    SESSION_USAGE_READ_RESULT_KIND,
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-sdk/protocol";
 import type { WebSocket } from "undici";
@@ -109,7 +106,6 @@ async function prepareSession(
             requestId: command.requestId,
             restored: prepared.restored,
             sessionId: command.sessionId,
-            usage: prepared.usage,
         };
     });
 }
@@ -401,7 +397,10 @@ export async function executeSessionConfigRead(
                 sessionId: command.sessionId,
                 sessionState: "provisioned",
             },
-            { kind: "history-required" },
+            // A settings read must not force history loading: Agents without
+            // load support would fail even with a live process whose config is
+            // already readable, and prepare reuses the current configuration.
+            { kind: "interactive-only" },
             config,
             directories,
             sessions,
@@ -428,35 +427,6 @@ export async function executeSessionConfigRead(
     }
 }
 
-export async function executeSessionUsageRead(
-    socket: WebSocket,
-    command: SessionUsageReadCommand,
-    sessions: AgentRuntimeManager,
-    diagnostics: RelayConnectionDiagnostics,
-    signal: AbortSignal,
-): Promise<void> {
-    try {
-        const usage = await sessions.readSessionUsage(command.sessionId, signal);
-        send(socket, {
-            kind: SESSION_USAGE_READ_RESULT_KIND,
-            requestId: command.requestId,
-            sessionId: command.sessionId,
-            usage,
-        });
-    } catch (error) {
-        diagnostics.daemonDiagnostic(
-            "session_usage_read_failed",
-            command.requestId,
-            {
-                code: operationErrorCode(error),
-                sessionId: command.sessionId,
-            },
-            error,
-        );
-        reportOperationFailure(socket, command.requestId, command.sessionId, error);
-    }
-}
-
 export const sessionConfigReadCommand: RuntimeCommand = {
     kind: SESSION_CONFIG_READ_KIND,
     handle: (context, message): void => {
@@ -473,15 +443,5 @@ export const sessionConfigReadCommand: RuntimeCommand = {
             context.diagnostics,
             context.signal,
         );
-    },
-};
-
-export const sessionUsageReadCommand: RuntimeCommand = {
-    kind: SESSION_USAGE_READ_KIND,
-    handle: (context, message): void => {
-        if (message.kind !== SESSION_USAGE_READ_KIND) {
-            throw new Error("Command kind mismatch");
-        }
-        void executeSessionUsageRead(context.socket, message, context.sessions, context.diagnostics, context.signal);
     },
 };

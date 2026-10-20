@@ -2,7 +2,6 @@ import { z } from "zod";
 
 import { identifierStringSchema as IDENTIFIER } from "../../shared/identifier.ts";
 import { decodeZodMessage, decodeZodValue, encodeZodMessage } from "../../shared/message-codec.ts";
-import { sessionUsageSnapshotSchema as sessionUsageSnapshotSchemaNullable } from "../lifecycle/index.ts";
 import { configValueSchema, SHORT_TEXT, sessionIdentityFields } from "../shared/index.ts";
 
 export const SESSION_CONFIGURE_KIND = "session.configure";
@@ -188,36 +187,3 @@ export const decodeSessionConfigReadResult = (encoded: string): SessionConfigRea
     decodeZodMessage(encoded, sessionConfigReadResultSchema);
 export const encodeSessionConfigReadResult = (message: SessionConfigReadResult): string =>
     encodeZodMessage(message, sessionConfigReadResultSchema);
-
-export const SESSION_USAGE_READ_KIND = "session.usage.read";
-export const SESSION_USAGE_READ_RESULT_KIND = "session.usage.read.result";
-
-const sessionUsageReadCommandSchema = z
-    .object({
-        kind: z.literal(SESSION_USAGE_READ_KIND),
-        requestId: IDENTIFIER,
-        sessionId: IDENTIFIER,
-    })
-    .readonly();
-
-export type SessionUsageReadCommand = z.infer<typeof sessionUsageReadCommandSchema>;
-
-const sessionUsageReadResultSchema = z
-    .object({
-        kind: z.literal(SESSION_USAGE_READ_RESULT_KIND),
-        requestId: IDENTIFIER,
-        sessionId: IDENTIFIER,
-        usage: sessionUsageSnapshotSchemaNullable.nullable(),
-    })
-    .readonly();
-
-export type SessionUsageReadResult = z.infer<typeof sessionUsageReadResultSchema>;
-
-export const decodeSessionUsageReadCommand = (encoded: string): SessionUsageReadCommand =>
-    decodeZodMessage(encoded, sessionUsageReadCommandSchema);
-export const encodeSessionUsageReadCommand = (message: SessionUsageReadCommand): string =>
-    encodeZodMessage(message, sessionUsageReadCommandSchema);
-export const decodeSessionUsageReadResult = (encoded: string): SessionUsageReadResult =>
-    decodeZodMessage(encoded, sessionUsageReadResultSchema);
-export const encodeSessionUsageReadResult = (message: SessionUsageReadResult): string =>
-    encodeZodMessage(message, sessionUsageReadResultSchema);

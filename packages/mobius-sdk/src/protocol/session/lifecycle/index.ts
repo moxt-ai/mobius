@@ -156,24 +156,6 @@ const runtimeTimingsSchema = z
     .max(16)
     .readonly();
 
-/**
- * The newest agent-reported context usage for a Session. Adapters report
- * snapshots, not deltas, so consumers must not sum successive values.
- */
-export const sessionUsageSnapshotSchema = z
-    .object({
-        cost: z
-            .object({ amount: z.number().finite(), currency: z.string().max(16) })
-            .readonly()
-            .nullable(),
-        size: z.number().int().nonnegative().safe().nullable(),
-        updatedAt: z.iso.datetime({ offset: true }),
-        used: z.number().int().nonnegative().safe(),
-    })
-    .readonly();
-
-export type SessionUsageSnapshot = z.infer<typeof sessionUsageSnapshotSchema>;
-
 export const sessionReadyEventSchema = z
     .object({
         additionalDirectories: z.array(workspaceEntrySchema).max(16).readonly(),
@@ -190,7 +172,6 @@ export const sessionReadyEventSchema = z
         restored: z.boolean(),
         runtimeTimings: runtimeTimingsSchema.optional(),
         sessionId: IDENTIFIER,
-        usage: sessionUsageSnapshotSchema.nullable(),
     })
     .readonly();
 

@@ -48,8 +48,6 @@ export type {
     SessionRenamedEvent,
     SessionStatus,
     SessionStatusChangedEvent,
-    SessionUsageReadResult,
-    SessionUsageSnapshot,
     TurnRequest,
     WorkspaceEntriesEvent,
     WorkspaceEntry,
