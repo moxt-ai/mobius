@@ -521,30 +521,48 @@ export class PiAcpAgent {
                     },
                 });
 
-                const res = await session.proc.compact(customInstructions);
+                try {
+                    const res = await session.proc.compact(customInstructions);
 
-                const r: any = res && typeof res === "object" ? (res as any) : null;
-                const summary = typeof r?.summary === "string" ? r.summary : null;
+                    const r: any = res && typeof res === "object" ? (res as any) : null;
+                    const summary = typeof r?.summary === "string" ? r.summary : null;
 
-                if (summary !== null && summary.length > 0) {
+                    if (summary !== null && summary.length > 0) {
+                        await this.conn.sessionUpdate({
+                            sessionId: session.sessionId,
+                            update: {
+                                compactionId,
+                                content: { text: summary, type: "text" },
+                                sessionUpdate: "compaction_summary_chunk",
+                            },
+                        });
+                    }
+
                     await this.conn.sessionUpdate({
                         sessionId: session.sessionId,
                         update: {
                             compactionId,
-                            content: { text: summary, type: "text" },
-                            sessionUpdate: "compaction_summary_chunk",
+                            sessionUpdate: "compaction_update",
+                            status: "completed",
                         },
                     });
+                } catch (cause: unknown) {
+                    // The compaction opened above must settle even when pi's
+                    // compact RPC fails (e.g. "Nothing to compact"); report the
+                    // failure reason through the update, then let the caller's
+                    // error path surface the failure itself.
+                    const details = cause instanceof Error ? cause.message : String(cause);
+                    await this.conn.sessionUpdate({
+                        sessionId: session.sessionId,
+                        update: {
+                            compactionId,
+                            error: details,
+                            sessionUpdate: "compaction_update",
+                            status: "failed",
+                        },
+                    });
+                    throw cause;
                 }
-
-                await this.conn.sessionUpdate({
-                    sessionId: session.sessionId,
-                    update: {
-                        compactionId,
-                        sessionUpdate: "compaction_update",
-                        status: "completed",
-                    },
-                });
 
                 return { stopReason: "end_turn" };
             }

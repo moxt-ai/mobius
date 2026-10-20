@@ -22,6 +22,7 @@ export class CodexFixture implements AsyncDisposable {
         provider: FakeOpenAiProvider,
         options: {
             readonly approvalPolicy?: "never" | "on-request";
+            readonly autoCompactTokenLimit?: number;
             readonly configuredModel?: string;
         } = {},
     ): Promise<CodexFixture> {
@@ -38,6 +39,9 @@ export class CodexFixture implements AsyncDisposable {
                 ...(options.configuredModel === undefined
                     ? []
                     : [`model = ${JSON.stringify(options.configuredModel)}`]),
+                ...(options.autoCompactTokenLimit === undefined
+                    ? []
+                    : [`model_auto_compact_token_limit = ${options.autoCompactTokenLimit.toString()}`]),
                 'model_provider = "mobius"',
                 'model_reasoning_effort = "low"',
                 'model_reasoning_summary = "none"',
