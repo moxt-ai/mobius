@@ -8,7 +8,7 @@ metadata:
 
 # Engineering Rules
 
-These rules apply to the entire repository. See [DEVELOPMENT.md](./DEVELOPMENT.md) for implementation guidance and [TESTING.md](./TESTING.md) for delivery and testing guidance.
+These rules apply to the entire repository. See [DEVELOPMENT.md](DEVELOPMENT.md) for implementation guidance and [TESTING.md](TESTING.md) for delivery and testing guidance.
 
 ## Trust Boundary
 

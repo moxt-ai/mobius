@@ -103,7 +103,7 @@ not standard ACP content variants.
 
 Content identity or a hash permits reuse, not access. Unavailable media must be
 visible without blocking text or execution. Ordinary text resembling base64 remains
-text. The image-delivery constraints in [DEVELOPMENT.md](../DEVELOPMENT.md#image-delivery-constraints)
+text. The image-delivery constraints in [DEVELOPMENT.md](DEVELOPMENT.md#image-delivery-constraints)
 also apply when images originate inside ACP tool content.
 
 ## Backward compatibility

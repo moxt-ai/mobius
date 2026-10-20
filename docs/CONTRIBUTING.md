@@ -9,19 +9,20 @@ metadata:
 # Contributing to Mobius
 
 This guide is for developing Mobius itself. To integrate Mobius into your own
-application, start with the [README](README.md#start-with-the-sdk).
+application, start with the [README](../README.md#start-with-the-sdk).
 
 ## Set up your development environment
 
-Use the Node and pnpm versions in [`.nvmrc`](.nvmrc) and
-[`package.json`](package.json). From the repository root, install dependencies:
+Use the Node and pnpm versions in [`.nvmrc`](../.nvmrc) and
+[`package.json`](../package.json). From the repository root, install dependencies:
 
 ```sh
 pnpm install
 ```
 
 Read [AGENTS.md](AGENTS.md) for the engineering and contribution rules before making
-changes. See [DEVELOPMENT.md](DEVELOPMENT.md) for design and deployment guidance.
+changes. When working with a coding Agent, provide docs/AGENTS.md as repository
+instructions; the Claude entrypoint is docs/CLAUDE.md. See [DEVELOPMENT.md](DEVELOPMENT.md) for design and deployment guidance.
 
 ## Run locally
 
@@ -39,7 +40,7 @@ pnpm db:codegen
 ```
 
 For an integration workflow that pairs an isolated Runtime and exercises sessions
-without Morty, follow the [mini-client walkthrough](packages/mini-client/README.md).
+without Morty, follow the [mini-client walkthrough](../packages/mini-client/README.md).
 
 ## Verify your changes
 

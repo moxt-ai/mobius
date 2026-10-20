@@ -2,11 +2,15 @@
 
 # Mobius
 
+**English** · [简体中文](README.zh-CN.md)
+
 ### Build on the coding Agents your users already use.
 
 SDK and infrastructure for remote access to Agents on users' machines.
 
-[Start building](GUIDE.md#start-with-the-sdk) · [SDK reference](packages/mobius-sdk/README.md) · [Contributing](CONTRIBUTING.md)
+[Start building](docs/GUIDE.md#start-with-the-sdk) · [SDK reference](packages/mobius-sdk/README.md) · [Contributing](docs/CONTRIBUTING.md)
+
+<img src="docs/assets/readme-accent.svg" width="320" height="40" alt="" />
 
 </div>
 
@@ -31,7 +35,7 @@ Keep Agent history on the connected machine, or enable optional cloud Recording
 for access to recorded history while that machine is offline. Choose the balance of
 privacy and availability that fits your application.
 
-[Explore history and storage options →](GUIDE.md#data-ownership-and-recovery)
+[Explore history and storage options →](docs/GUIDE.md#data-ownership-and-recovery)
 
 ## From your application to their machine
 
@@ -50,15 +54,17 @@ conversations, live replies, and history, built on Mobius.
 
 <a id="start-with-the-sdk"></a>
 
+---
+
 ## Start building
 
 ```sh
 npm install @moxt-ai/mobius-sdk
 ```
 
-**[Follow the integration guide →](GUIDE.md#start-with-the-sdk)**
+**[Follow the integration guide →](docs/GUIDE.md#start-with-the-sdk)**
 
 Set up your connection and make your first SDK request. See the
 [SDK reference](packages/mobius-sdk/README.md) for browser and server integration.
 
-Want to improve Mobius? Read the [contribution guide](CONTRIBUTING.md).
+Want to improve Mobius? Read the [contribution guide](docs/CONTRIBUTING.md).

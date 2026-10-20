@@ -10,7 +10,7 @@ metadata:
 
 This guide covers integration prerequisites, a backend SDK example, local Runtime
 management, and delivery and recovery boundaries. For the product overview, see
-[README.md](README.md). For changes to Mobius itself, see [CONTRIBUTING.md](CONTRIBUTING.md).
+[README.md](../README.md). For changes to Mobius itself, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## How it fits together
 
@@ -54,7 +54,7 @@ with the Project and install and authenticate the Agents on that machine first.
 Installing the SDK alone does not provision these resources.
 
 The [Platform app](https://mobius.moxt.ai/) manages organizations, Apps, and server
-credentials. See the [server provisioning example](packages/mobius-sdk/examples/moxt-server.ts)
+credentials. See the [server provisioning example](../packages/mobius-sdk/examples/moxt-server.ts)
 for creating an App and Project programmatically and storing the returned credential.
 
 This server-side example lists the Project's paired Runtimes and their Agent catalogs:
@@ -91,11 +91,11 @@ empty list means the Project has no paired Runtimes. Keep the AppCredential on y
 server; browser clients must receive credentials scoped to their authorized access.
 
 For a complete development workflow without Morty, follow the
-[mini-client walkthrough](packages/mini-client/README.md). It pairs an isolated Runtime
+[mini-client walkthrough](../packages/mini-client/README.md). It pairs an isolated Runtime
 and exercises sessions against a local Platform. It is a repository development tool,
 not a dependency your application needs to adopt.
 
-The [SDK guide](packages/mobius-sdk/README.md) covers server, Platform, and live-channel
+The [SDK guide](../packages/mobius-sdk/README.md) covers server, Platform, and live-channel
 entrypoints, transport ownership, and credential refresh. Agent catalogs and settings
 are discovered from the selected Runtime rather than assumed to be identical across
 machines.
