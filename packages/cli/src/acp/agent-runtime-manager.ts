@@ -12,7 +12,7 @@ import type {
     SessionStatus,
     SessionStatusChangedEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
-import type { DaemonTimer } from "../daemon/relay/timer.ts";
+import type { Timer } from "../daemon/relay/timer.ts";
 import type { AcpContentExternalizer } from "../external-content/acp-content-externalizer.ts";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
 import { isNativeChatSessionId } from "../native-sessions/chat-agent.ts";
@@ -86,7 +86,7 @@ export class AgentRuntimeManager {
     readonly #sessionIdentity: "assigned" | "native";
     readonly #onSessionStatusChanged: (event: SessionStatusChangedEvent) => void;
     readonly #contentExternalizer: AcpContentExternalizer;
-    readonly #timer: DaemonTimer;
+    readonly #timer: Timer;
     #observer: AcpSessionObserver;
 
     constructor({
@@ -105,7 +105,7 @@ export class AgentRuntimeManager {
         readonly sessionIdentity: "assigned" | "native";
         readonly onSessionStatusChanged: (event: SessionStatusChangedEvent) => void;
         readonly contentExternalizer: AcpContentExternalizer;
-        readonly timer: DaemonTimer;
+        readonly timer: Timer;
         readonly maxProcesses: number | null;
     }) {
         this.#observer = observer;

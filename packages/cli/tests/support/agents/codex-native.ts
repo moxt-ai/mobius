@@ -7,8 +7,8 @@ import { CodexAcpAgent } from "../../../src/acp/harness/codex/agent.ts";
 import { MemoryAcpSessionStore } from "../../../src/acp/session-store.ts";
 import { InProcessAcpAgentDefinition } from "../../../src/agent-catalog/local-agent.ts";
 import { WorkspaceDirectoryService } from "../../../src/authorization/workspace-directory.ts";
-import { createDaemonConfig } from "../../../src/daemon/config.ts";
-import { systemDaemonTimer } from "../../../src/daemon/relay/timer.ts";
+import { createRuntimeConfig } from "../../../src/daemon/config.ts";
+import { systemTimer } from "../../../src/daemon/relay/timer.ts";
 import { AcpContentExternalizer } from "../../../src/external-content/acp-content-externalizer.ts";
 import { UnretainedExternalContentStore } from "../../../src/external-content/local-external-content-store.ts";
 import { NativeSessionService } from "../../../src/native-sessions/service.ts";
@@ -40,10 +40,10 @@ export async function codexFixture(
         sessionIdentity,
         onSessionStatusChanged: () => undefined,
         contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
-        timer: systemDaemonTimer,
+        timer: systemTimer,
         maxProcesses: null,
     });
-    const config = createDaemonConfig(
+    const config = createRuntimeConfig(
         {
             defaultWorkspace: workspace,
             channelId: "test-channel",

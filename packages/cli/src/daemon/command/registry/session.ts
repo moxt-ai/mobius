@@ -21,12 +21,12 @@ import type { WorkspaceDirectoryService } from "../../../authorization/workspace
 import { AccumulatingOperationMetrics } from "../../../infra/operation-metrics.ts";
 import type { NativeSessionService } from "../../../native-sessions/service.ts";
 import { operationErrorCode, reportOperationFailure, send } from "../../command-dispatcher.ts";
-import type { AcpAgentDefinition, DaemonConfig } from "../../config.ts";
+import type { AcpAgentDefinition, RuntimeConfig } from "../../config.ts";
 import type { RelayConnectionDiagnostics } from "../../relay/diagnostics.ts";
-import type { DaemonCommand } from "../definition.ts";
+import type { RuntimeCommand } from "../definition.ts";
 
 export async function resolveCatalogAgent(
-    config: DaemonConfig,
+    config: RuntimeConfig,
     agentId: string,
     signal: AbortSignal,
 ): Promise<AcpAgentDefinition> {
@@ -37,7 +37,7 @@ export async function resolveCatalogAgent(
 async function prepareSession(
     command: SessionPrepareCommand,
     recovery: AcpSessionRecovery,
-    config: DaemonConfig,
+    config: RuntimeConfig,
     directories: WorkspaceDirectoryService,
     sessions: AgentRuntimeManager,
     metrics: AccumulatingOperationMetrics,
@@ -132,7 +132,7 @@ export async function executeWorkspaceList(
 export async function executeSessionPrepare(
     socket: WebSocket,
     command: SessionPrepareCommand,
-    config: DaemonConfig,
+    config: RuntimeConfig,
     directories: WorkspaceDirectoryService,
     sessions: AgentRuntimeManager,
     diagnostics: RelayConnectionDiagnostics,
@@ -171,7 +171,7 @@ export async function executeSessionPrepare(
 export async function executeSessionRestore(
     socket: WebSocket,
     command: SessionRestoreCommand,
-    config: DaemonConfig,
+    config: RuntimeConfig,
     directories: WorkspaceDirectoryService,
     sessions: AgentRuntimeManager,
     nativeSessions: NativeSessionService,
@@ -251,7 +251,7 @@ export async function executeSessionRename(
 export async function executeSessionConfigure(
     socket: WebSocket,
     command: SessionConfigureCommand,
-    config: DaemonConfig,
+    config: RuntimeConfig,
     directories: WorkspaceDirectoryService,
     sessions: AgentRuntimeManager,
     signal: AbortSignal,
@@ -290,7 +290,7 @@ export async function executeSessionConfigure(
     }
 }
 
-export const workspaceListCommand: DaemonCommand = {
+export const workspaceListCommand: RuntimeCommand = {
     kind: WORKSPACE_LIST_KIND,
     handle: (context, message): void => {
         if (message.kind !== WORKSPACE_LIST_KIND) {
@@ -300,7 +300,7 @@ export const workspaceListCommand: DaemonCommand = {
     },
 };
 
-export const sessionPrepareCommand: DaemonCommand = {
+export const sessionPrepareCommand: RuntimeCommand = {
     kind: SESSION_PREPARE_KIND,
     handle: (context, message): void => {
         if (message.kind !== SESSION_PREPARE_KIND) {
@@ -318,7 +318,7 @@ export const sessionPrepareCommand: DaemonCommand = {
     },
 };
 
-export const sessionConfigureCommand: DaemonCommand = {
+export const sessionConfigureCommand: RuntimeCommand = {
     kind: SESSION_CONFIGURE_KIND,
     handle: (context, message): void => {
         if (message.kind !== SESSION_CONFIGURE_KIND) {
@@ -335,7 +335,7 @@ export const sessionConfigureCommand: DaemonCommand = {
     },
 };
 
-export const sessionRestoreCommand: DaemonCommand = {
+export const sessionRestoreCommand: RuntimeCommand = {
     kind: SESSION_RESTORE_KIND,
     handle: (context, message): void => {
         if (message.kind !== SESSION_RESTORE_KIND) {
@@ -354,7 +354,7 @@ export const sessionRestoreCommand: DaemonCommand = {
     },
 };
 
-export const sessionRenameCommand: DaemonCommand = {
+export const sessionRenameCommand: RuntimeCommand = {
     kind: SESSION_RENAME_KIND,
     handle: (context, message): void => {
         if (message.kind !== SESSION_RENAME_KIND) {

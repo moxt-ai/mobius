@@ -6,7 +6,7 @@ import type {
     SessionLiveEvent,
     SessionPromptCommand,
 } from "@moxt-ai/mobius-sdk/protocol";
-import type { DaemonSessionEventPublisher } from "./daemon/relay/session-event-publisher.ts";
+import type { RuntimeSessionEventPublisher } from "./daemon/relay/session-event-publisher.ts";
 
 interface QueuedPromptRequest {
     readonly commandId: string;
@@ -51,8 +51,8 @@ function promptContent(command: SessionPromptCommand): readonly ContentBlock[] {
     return content;
 }
 
-export class DaemonSessionEventProjection {
-    readonly #publisher: DaemonSessionEventPublisher;
+export class RuntimeSessionEventProjection {
+    readonly #publisher: RuntimeSessionEventPublisher;
     readonly #terminal = new Map<string, SessionLiveEvent>();
     readonly #publications = new Map<string, SessionLiveEvent[]>();
     readonly #queued = new Map<string, QueuedPromptRequest>();
@@ -60,7 +60,7 @@ export class DaemonSessionEventProjection {
 
     readonly #recordLifecycle: (sessionId: string, event: SessionEventPayload) => Promise<boolean>;
     constructor(
-        publisher: DaemonSessionEventPublisher,
+        publisher: RuntimeSessionEventPublisher,
         recordLifecycle: (sessionId: string, event: SessionEventPayload) => Promise<boolean>,
         recordActiveTurn: (event: SessionLiveEvent) => void,
     ) {

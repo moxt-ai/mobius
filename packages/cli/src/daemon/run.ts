@@ -12,22 +12,22 @@ import { AcpContentExternalizer } from "../external-content/acp-content-external
 import { LocalExternalContentStore } from "../external-content/local-external-content-store.ts";
 import { openAcpSessionDatabase, openSessionEventCacheDatabase } from "../local-databases.ts";
 import { NativeSessionService } from "../native-sessions/service.ts";
-import { DaemonSessionEventProjection } from "../session-event-projection.ts";
+import { RuntimeSessionEventProjection } from "../session-event-projection.ts";
 import { SqliteSessionLiveEventPosition } from "../session-live-event-position.ts";
-import { DaemonAcpObserver } from "./acp-observer.ts";
-import type { DaemonConfig } from "./config.ts";
-import { DaemonDiagnosticLog } from "./observability/diagnostic-log.ts";
-import { DaemonOperationState } from "./relay/daemon-operation-state.ts";
+import { RuntimeAcpObserver } from "./acp-observer.ts";
+import type { RuntimeConfig } from "./config.ts";
+import { RuntimeDiagnosticLog } from "./observability/diagnostic-log.ts";
 import { RelayConnectionDiagnostics } from "./relay/diagnostics.ts";
 import { runRelayConnection } from "./relay/run-relay-connection.ts";
+import { RuntimeOperationState } from "./relay/runtime-operation-state.ts";
 import { RuntimeRelayRevokedError } from "./relay/runtime-revocation.ts";
-import { DaemonSessionEventPublisher } from "./relay/session-event-publisher.ts";
-import { type DaemonTimer, systemDaemonTimer } from "./relay/timer.ts";
-import { DaemonTurnRegistry } from "./turn-registry.ts";
+import { RuntimeSessionEventPublisher } from "./relay/session-event-publisher.ts";
+import { systemTimer, type Timer } from "./relay/timer.ts";
+import { RuntimeTurnRegistry } from "./turn-registry.ts";
 
 const RELAY_RECONNECT_DELAY_MILLISECONDS = 500;
 
-function waitForRelayRetry(signal: AbortSignal, timer: DaemonTimer): Promise<void> {
+function waitForRelayRetry(signal: AbortSignal, timer: Timer): Promise<void> {
     if (signal.aborted) {
         return Promise.resolve();
     }
@@ -46,10 +46,10 @@ function waitForRelayRetry(signal: AbortSignal, timer: DaemonTimer): Promise<voi
 }
 
 async function publishAgentCatalogUntilAvailable(
-    config: DaemonConfig,
+    config: RuntimeConfig,
     diagnostics: RelayConnectionDiagnostics,
     signal: AbortSignal,
-    timer: DaemonTimer,
+    timer: Timer,
 ): Promise<void> {
     try {
         await publishAgentCatalog(config, signal);
@@ -74,15 +74,15 @@ async function publishAgentCatalogUntilAvailable(
     }
 }
 
-export interface RunDaemonOptions {
+export interface RunRuntimeOptions {
     readonly onConnectionStatus?: (status: "online" | "reconnecting") => void;
 }
 
-export async function runDaemon(
-    config: DaemonConfig,
+export async function runRuntime(
+    config: RuntimeConfig,
     parentSignal: AbortSignal,
-    timer: DaemonTimer = systemDaemonTimer,
-    options: RunDaemonOptions = {},
+    timer: Timer = systemTimer,
+    options: RunRuntimeOptions = {},
 ): Promise<void> {
     const shutdown = new AbortController();
     const signal = AbortSignal.any([parentSignal, shutdown.signal]);
@@ -101,16 +101,16 @@ export async function runDaemon(
     }
     const sessionStore = new SqliteAcpSessionStore(sessionDatabase, events);
     await using externalContent = new LocalExternalContentStore(stateDirectory);
-    const operations = new DaemonOperationState();
-    const publisher = new DaemonSessionEventPublisher(timer);
-    const activeTurns = new DaemonTurnRegistry(operations);
-    const eventProjection = new DaemonSessionEventProjection(
+    const operations = new RuntimeOperationState();
+    const publisher = new RuntimeSessionEventPublisher(timer);
+    const activeTurns = new RuntimeTurnRegistry(operations);
+    const eventProjection = new RuntimeSessionEventProjection(
         publisher,
         (sessionId, event) => agentRuntime.recordLifecycleEvent(sessionId, event),
         activeTurns.recordSessionEvent,
     );
     const agentRuntime = new AgentRuntimeManager({
-        observer: new DaemonAcpObserver(eventProjection.record, publisher.publishInfo),
+        observer: new RuntimeAcpObserver(eventProjection.record, publisher.publishInfo),
         store: sessionStore,
         adapters: harnessAdapters,
         sessionIdentity: "native",
@@ -123,7 +123,7 @@ export async function runDaemon(
     const diagnostics = new RelayConnectionDiagnostics(
         config.channelId,
         config.relayUrl,
-        new DaemonDiagnosticLog(stateDirectory),
+        new RuntimeDiagnosticLog(stateDirectory),
     );
     const nativeSessions = new NativeSessionService(config, directories, agentRuntime, async (request, options) => {
         return await activeTurns.executionSnapshot(async (command) => {
@@ -156,14 +156,14 @@ export async function runDaemon(
             return;
         }
         readinessAnnounced = true;
-        process.stdout.write("Mobius daemon is ready for Agent requests.\n");
+        process.stdout.write("Mobius Runtime is ready for Agent requests.\n");
     };
     const announceConnection = (): void => {
         if (connectionAnnounced) {
             return;
         }
         connectionAnnounced = true;
-        process.stdout.write("Mobius daemon connected to the relay.\n\n");
+        process.stdout.write("Mobius Runtime connected to the relay.\n\n");
         if (config.reconnectTarget !== null) {
             const reconnectCommand = `mobius start ${config.reconnectTarget.commandArgument}`;
             process.stdout.write(

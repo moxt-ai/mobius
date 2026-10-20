@@ -9,8 +9,8 @@ import {
 import { publishAgentCatalog } from "../agent-catalog/publish-agent-catalog.ts";
 import { createCatalogAgentResolver } from "../agent-catalog/resolve-catalog-agent.ts";
 import { readStateDirectory } from "../storage/state-directory.ts";
-import { createDaemonConfig, type DaemonConfig, DaemonLocalContext, loadDefaultWorkspace } from "./config.ts";
-import { runDaemon } from "./run.ts";
+import { createRuntimeConfig, loadDefaultWorkspace, type RuntimeConfig, RuntimeLocalContext } from "./config.ts";
+import { runRuntime } from "./run.ts";
 
 const RUNTIME_CREDENTIAL_PATTERN = /^[a-zA-Z0-9_-]{32,256}$/;
 
@@ -51,7 +51,7 @@ function validateRuntimeRelay(relayUrl: URL): void {
     }
 }
 
-function validateRuntimeConfiguration(config: DaemonConfig): void {
+function validateRuntimeConfiguration(config: RuntimeConfig): void {
     validateRuntimeRelay(config.relayUrl);
 }
 
@@ -114,7 +114,7 @@ export async function createMobiusRuntimeEngine(
     environment: Readonly<NodeJS.ProcessEnv> = process.env,
 ): Promise<MobiusRuntimeEngine> {
     signal.throwIfAborted();
-    const localContext = new DaemonLocalContext(readStateDirectory(environment), environment);
+    const localContext = new RuntimeLocalContext(readStateDirectory(environment), environment);
     const relayUrl = relayUrlFromConnection(connection);
     const defaultWorkspace = await resolveWorkspace(connection.defaultWorkspace);
     const specifications = supportedLocalAgentSpecifications();
@@ -127,7 +127,7 @@ export async function createMobiusRuntimeEngine(
             specifications,
         });
     const inventory = await discover(signal);
-    const config: DaemonConfig = createDaemonConfig(
+    const config: RuntimeConfig = createRuntimeConfig(
         {
             channelId: connection.channelId,
             defaultWorkspace,
@@ -146,11 +146,11 @@ export async function createMobiusRuntimeEngine(
 }
 
 export class MobiusRuntimeEngine {
-    readonly #config: DaemonConfig;
+    readonly #config: RuntimeConfig;
     readonly #options: MobiusRuntimeEngineOptions;
     #state: MobiusRuntimeState = new IdleMobiusRuntimeState();
 
-    constructor(config: DaemonConfig, options: MobiusRuntimeEngineOptions = {}) {
+    constructor(config: RuntimeConfig, options: MobiusRuntimeEngineOptions = {}) {
         validateRuntimeConfiguration(config);
         this.#config = config;
         this.#options = options;
@@ -163,7 +163,7 @@ export class MobiusRuntimeEngine {
         signal.throwIfAborted();
         this.#state = new RunningMobiusRuntimeState();
         try {
-            await runDaemon(this.#config, signal, undefined, {
+            await runRuntime(this.#config, signal, undefined, {
                 ...(this.#options.onConnectionStatus === undefined
                     ? {}
                     : { onConnectionStatus: this.#options.onConnectionStatus }),
@@ -192,17 +192,17 @@ export {
     type RuntimeInstallationStoreOptions,
     VerifiedRuntimeConnection,
 } from "../storage/runtime-installation-store.ts";
-export type { DaemonConfig, DaemonConnectionConfig } from "./config.ts";
+export type { RuntimeConfig, RuntimeConnectionConfig } from "./config.ts";
 export {
-    createDaemonConfig,
-    DaemonLocalContext,
-    DaemonReconnectTarget,
+    createRuntimeConfig,
     InProcessAcpAgentDefinition,
-    OpaqueDaemonReconnectTarget,
+    OpaqueRuntimeReconnectTarget,
+    RuntimeLocalContext,
+    RuntimeReconnectTarget,
 } from "./config.ts";
 export {
     type MobiusRuntimePairingOptions,
-    type PairedDaemon,
+    type PairedRuntime,
     PairingClientError,
     pairMobiusRuntime,
     resumeMobiusRuntime,

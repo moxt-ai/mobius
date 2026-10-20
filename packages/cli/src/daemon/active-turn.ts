@@ -31,7 +31,7 @@ type TurnDispatchState =
     | { readonly kind: "promoted" }
     | { readonly kind: "running" };
 
-export class ActiveDaemonTurn {
+export class ActiveRuntimeTurn {
     readonly attemptId: string;
     readonly command: SessionPromptCommand;
     readonly #controller: AbortController;
@@ -61,7 +61,7 @@ export class ActiveDaemonTurn {
 
     readonly isQueued = (): boolean => this.#dispatch.kind === "queued" && !this.#controller.signal.aborted;
 
-    readonly abortDaemon = (): void => {
+    readonly abortRuntime = (): void => {
         this.#controller.abort();
     };
 

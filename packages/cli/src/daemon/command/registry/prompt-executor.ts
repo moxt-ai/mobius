@@ -8,17 +8,17 @@ import {
 import { resolveSessionDirectories } from "../../../authorization/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "../../../authorization/workspace-directory.ts";
 import { resolvePromptArtifacts } from "../../../prompt-artifact-resolver.ts";
-import type { DaemonSessionEventProjection } from "../../../session-event-projection.ts";
+import type { RuntimeSessionEventProjection } from "../../../session-event-projection.ts";
 import { operationErrorCode, operationErrorMessage } from "../../command-dispatcher.ts";
-import type { DaemonConfig } from "../../config.ts";
-import type { DaemonOperationState } from "../../relay/daemon-operation-state.ts";
+import type { RuntimeConfig } from "../../config.ts";
+import type { RuntimeOperationState } from "../../relay/runtime-operation-state.ts";
 import { resolveCatalogAgent } from "./session.ts";
 
 export interface ExecutePromptOptions {
-    readonly operations: DaemonOperationState;
-    readonly eventProjection: DaemonSessionEventProjection;
+    readonly operations: RuntimeOperationState;
+    readonly eventProjection: RuntimeSessionEventProjection;
     readonly command: SessionPromptCommand;
-    readonly config: DaemonConfig;
+    readonly config: RuntimeConfig;
     readonly directories: WorkspaceDirectoryService;
     readonly sessions: AgentRuntimeManager;
     readonly attemptId: string;

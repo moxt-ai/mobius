@@ -9,7 +9,7 @@ import { findExecutableOnPath, runBoundedProcess } from "../../util/process/exec
 import type { WorkerLaunch } from "../control/protocol.ts";
 import { decodeWorkerLaunch } from "../lifecycle/worker-process.ts";
 
-export class DaemonUpgradeError extends Error {
+export class DaemonReleaseUpgradeError extends Error {
     readonly code: string;
     constructor(code: string, message: string, options?: ErrorOptions) {
         super(message, options);
@@ -17,11 +17,11 @@ export class DaemonUpgradeError extends Error {
     }
 }
 
-export async function installDaemonRelease(version: string, signal: AbortSignal): Promise<WorkerLaunch> {
+export async function installDaemonReleaseVersion(version: string, signal: AbortSignal): Promise<WorkerLaunch> {
     runtimeUpgradeVersionSchema.parse(version);
     const npm = await findExecutableOnPath("npm", process.env);
     if (npm === null) {
-        throw new DaemonUpgradeError("npm_unavailable", "npm is required to download the new daemon");
+        throw new DaemonReleaseUpgradeError("npm_unavailable", "npm is required to download the new daemon");
     }
     // npm owns the package installation; never overwrite the running release.
     const prefix = join(readStateDirectory(), "npm", version);
@@ -63,7 +63,7 @@ export async function installDaemonRelease(version: string, signal: AbortSignal)
         return await decodeWorkerLaunch({ executable: process.execPath, entry, version });
     } catch (cause) {
         signal.throwIfAborted();
-        throw new DaemonUpgradeError(
+        throw new DaemonReleaseUpgradeError(
             "npm_install_failed",
             "npm could not install and verify the requested Mobius version",
             { cause },
@@ -71,10 +71,10 @@ export async function installDaemonRelease(version: string, signal: AbortSignal)
     }
 }
 
-export async function findNewDaemonRelease(currentVersion: string, signal: AbortSignal): Promise<string | null> {
+export async function findNewDaemonReleaseVersion(currentVersion: string, signal: AbortSignal): Promise<string | null> {
     const npm = await findExecutableOnPath("npm", process.env);
     if (npm === null) {
-        throw new DaemonUpgradeError("npm_unavailable", "npm is required to check for a new daemon");
+        throw new DaemonReleaseUpgradeError("npm_unavailable", "npm is required to check for a new daemon");
     }
     try {
         const result = await runBoundedProcess({
@@ -90,7 +90,7 @@ export async function findNewDaemonRelease(currentVersion: string, signal: Abort
         return gt(version, currentVersion) ? version : null;
     } catch (cause) {
         signal.throwIfAborted();
-        throw new DaemonUpgradeError("npm_check_failed", "npm could not return a valid latest Mobius version", {
+        throw new DaemonReleaseUpgradeError("npm_check_failed", "npm could not return a valid latest Mobius version", {
             cause,
         });
     }

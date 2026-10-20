@@ -30,7 +30,7 @@ export const daemonSwitchState = z
         }),
     ])
     .readonly();
-export type DaemonSwitchState = z.infer<typeof daemonSwitchState>;
+export type DaemonReleaseSwitchState = z.infer<typeof daemonSwitchState>;
 
 export const lifecycleCommand = z
     .discriminatedUnion("kind", [

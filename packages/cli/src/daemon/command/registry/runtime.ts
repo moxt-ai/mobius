@@ -1,9 +1,9 @@
 import { RUNTIME_PING_KIND, RUNTIME_PONG_KIND } from "@moxt-ai/mobius-sdk/protocol";
 import packageMetadata from "../../../../package.json" with { type: "json" };
 import { send } from "../../command-dispatcher.ts";
-import type { DaemonCommand } from "../definition.ts";
+import type { RuntimeCommand } from "../definition.ts";
 
-export const runtimeDiagnosticsCommand: DaemonCommand = {
+export const runtimeDiagnosticsCommand: RuntimeCommand = {
     kind: "runtime.diagnostics.read",
     handle: ({ diagnostics, socket }, message): void => {
         if (message.kind !== "runtime.diagnostics.read") {
@@ -28,7 +28,7 @@ export const runtimeDiagnosticsCommand: DaemonCommand = {
     },
 };
 
-export const runtimePingCommand: DaemonCommand = {
+export const runtimePingCommand: RuntimeCommand = {
     kind: RUNTIME_PING_KIND,
     handle: ({ socket }, message): void => {
         if (message.kind !== RUNTIME_PING_KIND) {

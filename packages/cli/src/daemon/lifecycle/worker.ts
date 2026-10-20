@@ -8,7 +8,7 @@ import {
 } from "../pairing/pair-local-machine.ts";
 import { MobiusRuntimeEngine } from "../runtime.ts";
 import { prepareUpgradeData, recordCurrentData } from "../upgrades/data.ts";
-import { runDaemonUpgrades } from "../upgrades/upgrade.ts";
+import { runDaemonReleaseUpgrades } from "../upgrades/upgrade.ts";
 
 class WorkerRuntimeError extends Error {
     readonly code = "worker_runtime_failed";
@@ -149,7 +149,7 @@ async function runWorkerRuntime(version: string, combined: AbortSignal, shutdown
             async () => {
                 combined.throwIfAborted();
                 await recordCurrentData(version, combined);
-                upgrades = runDaemonUpgrades(combined);
+                upgrades = runDaemonReleaseUpgrades(combined);
                 if (process.connected) {
                     process.send?.({ kind: "worker-ready", version }, () => undefined);
                 }

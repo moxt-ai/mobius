@@ -9,9 +9,9 @@ import {
 import { createNativeSessionRequestHandler } from "../../../native-sessions/handle-native-requests.ts";
 import { reportOperationFailure, send } from "../../command-dispatcher.ts";
 import type { CommandContext } from "../context.ts";
-import type { DaemonCommand } from "../definition.ts";
+import type { RuntimeCommand } from "../definition.ts";
 
-export function createNativeSessionCommands(context: CommandContext): readonly DaemonCommand[] {
+export function createNativeSessionCommands(context: CommandContext): readonly RuntimeCommand[] {
     const handler = createNativeSessionRequestHandler({
         diagnostics: context.diagnostics,
         nativeSessions: context.nativeSessions,

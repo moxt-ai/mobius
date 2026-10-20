@@ -1,14 +1,14 @@
 import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-const MAXIMUM_DAEMON_LOG_BYTES = 1 * 1_024 * 1_024;
+const MAXIMUM_RUNTIME_LOG_BYTES = 1 * 1_024 * 1_024;
 
-export class DaemonDiagnosticLog {
+export class RuntimeDiagnosticLog {
     readonly #directory: string;
     readonly #path: string;
     readonly #maximumBytes: number;
 
-    constructor(stateDirectory: string, maximumBytes: number = MAXIMUM_DAEMON_LOG_BYTES) {
+    constructor(stateDirectory: string, maximumBytes: number = MAXIMUM_RUNTIME_LOG_BYTES) {
         this.#directory = join(stateDirectory, "logs");
         this.#path = join(this.#directory, "daemon.log");
         this.#maximumBytes = maximumBytes;

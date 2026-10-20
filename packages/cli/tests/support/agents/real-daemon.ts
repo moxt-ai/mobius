@@ -21,9 +21,9 @@ import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { type WebSocket, WebSocketServer } from "ws";
 import type { LocalAgentSpecification } from "../../../src/agent-catalog/agent-specification.ts";
 import { discoverLocalAgentInventory } from "../../../src/agent-catalog/discover-local-agents.ts";
-import { createDaemonConfig, DaemonLocalContext } from "../../../src/daemon/config.ts";
+import { createRuntimeConfig, RuntimeLocalContext } from "../../../src/daemon/config.ts";
 import { openMobiusCliInstallation } from "../../../src/daemon/pairing/pair-local-machine.ts";
-import { runDaemon } from "../../../src/daemon/run.ts";
+import { runRuntime } from "../../../src/daemon/run.ts";
 
 export interface RealDaemonPeer {
     readonly restart: () => Promise<void>;
@@ -69,7 +69,7 @@ export async function withRealDaemon(
         }
     });
     const server = new WebSocketServer({ server: relay });
-    let daemon: Promise<void> | undefined;
+    let runtime: Promise<void> | undefined;
     let execution = new AbortController();
     const cliEnvironment = { ...process.env, ...environment, MOBIUS_STATE_DIRECTORY: directory };
     const cli = async (args: readonly string[], deadline = signal): Promise<void> => {
@@ -146,10 +146,10 @@ export async function withRealDaemon(
         });
         const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/real-agent/daemon`);
         relayUrl.searchParams.set("token", "r".repeat(43));
-        const config = createDaemonConfig(
+        const config = createRuntimeConfig(
             { channelId: "real-agent", defaultWorkspace: workspace, relayUrl },
             [agent],
-            new DaemonLocalContext(directory, { ...process.env, ...environment }),
+            new RuntimeLocalContext(directory, { ...process.env, ...environment }),
         );
         if (launch === "managed") {
             const installation = await openMobiusCliInstallation(signal, cliEnvironment);
@@ -171,8 +171,8 @@ export async function withRealDaemon(
                 await cli(["start"]);
             } else {
                 execution = new AbortController();
-                daemon = runDaemon(config, AbortSignal.any([signal, execution.signal]));
-                void daemon.catch((error: unknown) => {
+                runtime = runRuntime(config, AbortSignal.any([signal, execution.signal]));
+                void runtime.catch((error: unknown) => {
                     connected.reject(error);
                     waiter?.reject(error);
                 });
@@ -201,7 +201,7 @@ export async function withRealDaemon(
                     await cli(["quit"]);
                 } else {
                     execution.abort();
-                    await daemon;
+                    await runtime;
                 }
                 messages.length = 0;
                 pendingEvents.length = 0;
@@ -246,7 +246,7 @@ export async function withRealDaemon(
         }
         controller.abort();
         signal.removeEventListener("abort", stopWaiting);
-        await daemon?.catch(() => {});
+        await runtime?.catch(() => {});
         for (const connection of server.clients) {
             connection.terminate();
         }

@@ -2,7 +2,7 @@ import { setTimeout } from "node:timers/promises";
 import { acquireManagerLock } from "../control/local-client.ts";
 import { serveLocalControl } from "../control/local-server.ts";
 import {
-    type DaemonSwitchState,
+    type DaemonReleaseSwitchState,
     type LifecycleResponse,
     lifecycleCommand,
     type WorkerLaunch,
@@ -17,7 +17,7 @@ export async function runManager(stateDirectory: string, signal: AbortSignal): P
     const shutdown = new AbortController();
     const combined = AbortSignal.any([signal, shutdown.signal]);
     let worker: WorkerProcess | undefined;
-    let switchState: DaemonSwitchState | null = null;
+    let switchState: DaemonReleaseSwitchState | null = null;
     let queue: Promise<unknown> = Promise.resolve();
     const status = (): LifecycleResponse => ({
         kind: "status",
@@ -52,7 +52,9 @@ export async function runManager(stateDirectory: string, signal: AbortSignal): P
             }
         });
     };
-    const switchWorker = async (transition: Extract<DaemonSwitchState, { kind: "switching" }>): Promise<void> => {
+    const switchWorker = async (
+        transition: Extract<DaemonReleaseSwitchState, { kind: "switching" }>,
+    ): Promise<void> => {
         try {
             await start(transition.next);
             switchState = { ...transition, kind: "switched" };

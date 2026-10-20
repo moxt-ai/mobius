@@ -7,12 +7,12 @@ import { registerStartCommand } from "./start.ts";
 import { registerUpgradeCommand } from "./upgrade.ts";
 import { registerWorkerCommand } from "./worker.ts";
 
-export function registerInternalDaemonHandlers(program: Command, context: CliContext): void {
+export function registerInternalRuntimeHandlers(program: Command, context: CliContext): void {
     registerManagerCommand(program, context);
     registerWorkerCommand(program, context);
 }
 
-export function registerDaemonLifecycleHandlers(program: Command, context: CliContext): void {
+export function registerDaemonProcessLifecycleHandlers(program: Command, context: CliContext): void {
     registerStartCommand(program, context);
     registerQuitCommand(program, context);
     registerUpgradeCommand(program, context);

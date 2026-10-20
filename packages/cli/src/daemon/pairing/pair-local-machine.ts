@@ -16,11 +16,11 @@ import { readStateDirectory } from "../../storage/state-directory.ts";
 import { environmentProxyDispatcher } from "../../util/network/environment-proxy.ts";
 import {
     type AcpAgentDefinition,
-    createDaemonConfig,
-    type DaemonConfig,
-    DaemonLocalContext,
+    createRuntimeConfig,
     loadDefaultWorkspace,
-    OpaqueDaemonReconnectTarget,
+    OpaqueRuntimeReconnectTarget,
+    type RuntimeConfig,
+    RuntimeLocalContext,
 } from "../config.ts";
 import { prepareVersionData } from "../upgrades/data.ts";
 
@@ -52,10 +52,10 @@ export interface MobiusRuntimePairingOptions {
     readonly relayOrigin: string;
 }
 
-export interface PairedDaemon {
+export interface PairedRuntime {
     readonly channelUrl: string;
     readonly connectionId: string;
-    readonly config: DaemonConfig;
+    readonly config: RuntimeConfig;
     readonly connectionPath: string;
 }
 
@@ -289,18 +289,18 @@ async function claimPairing(
         : decodePairingResponse(value, "daemonToken", CLAIM_RESPONSE_KEYS);
 }
 
-function buildPairedDaemon(
+function buildPairedRuntime(
     installation: RuntimeInstallationStore,
     connection: VerifiedRuntimeConnection,
     defaultWorkspace: string,
     inventory: LocalAgentInventory,
-    localContext: DaemonLocalContext,
-): PairedDaemon {
+    localContext: RuntimeLocalContext,
+): PairedRuntime {
     const relayUrl = mobiusApiUrl(connection.relayOrigin, "/v1/runtimes/connect");
     relayUrl.protocol = relayUrl.protocol === "https:" ? "wss:" : "ws:";
     relayUrl.searchParams.set("token", connection.runtimeCredential);
 
-    const config: DaemonConfig = createDaemonConfig(
+    const config: RuntimeConfig = createRuntimeConfig(
         {
             defaultWorkspace,
             channelId: connection.channelId,
@@ -308,7 +308,7 @@ function buildPairedDaemon(
         },
         inventory.readyAgents(),
         localContext,
-        new OpaqueDaemonReconnectTarget(connection.connectionId),
+        new OpaqueRuntimeReconnectTarget(connection.connectionId),
         createCatalogAgentResolver(
             (refreshSignal) =>
                 discoverLocalAgentInventory({
@@ -333,8 +333,8 @@ async function pairRuntime(
     options: PairCommandOptions,
     signal: AbortSignal,
     environment: Readonly<NodeJS.ProcessEnv>,
-): Promise<PairedDaemon> {
-    const localContext = new DaemonLocalContext(installation.stateDirectory, environment);
+): Promise<PairedRuntime> {
+    const localContext = new RuntimeLocalContext(installation.stateDirectory, environment);
     const defaultWorkspace = await resolveDefaultWorkspace(options.workspace);
     const inventory = await discoverLocalAgentInventory({
         defaultWorkspace,
@@ -354,7 +354,7 @@ async function pairRuntime(
         },
         signal,
     );
-    return buildPairedDaemon(installation, connection, defaultWorkspace, inventory, localContext);
+    return buildPairedRuntime(installation, connection, defaultWorkspace, inventory, localContext);
 }
 
 export async function pairMobiusRuntime(
@@ -362,7 +362,7 @@ export async function pairMobiusRuntime(
     options: MobiusRuntimePairingOptions,
     signal: AbortSignal,
     environment: Readonly<NodeJS.ProcessEnv> = process.env,
-): Promise<PairedDaemon> {
+): Promise<PairedRuntime> {
     return await pairRuntime(
         installation,
         {
@@ -381,15 +381,15 @@ async function resumeRuntimeConnection(
     connection: VerifiedRuntimeConnection,
     signal: AbortSignal,
     environment: Readonly<NodeJS.ProcessEnv>,
-): Promise<PairedDaemon> {
-    const localContext = new DaemonLocalContext(installation.stateDirectory, environment);
+): Promise<PairedRuntime> {
+    const localContext = new RuntimeLocalContext(installation.stateDirectory, environment);
     const defaultWorkspace = await resolveDefaultWorkspace(connection.defaultWorkspace);
     const inventory = await discoverLocalAgentInventory({
         defaultWorkspace,
         environment: localContext.environment,
         signal,
     });
-    return buildPairedDaemon(installation, connection, defaultWorkspace, inventory, localContext);
+    return buildPairedRuntime(installation, connection, defaultWorkspace, inventory, localContext);
 }
 
 export async function resumeMobiusRuntime(
@@ -397,7 +397,7 @@ export async function resumeMobiusRuntime(
     connectionId: string,
     signal: AbortSignal,
     environment: Readonly<NodeJS.ProcessEnv> = process.env,
-): Promise<PairedDaemon> {
+): Promise<PairedRuntime> {
     const connection = await installation.readConnection(connectionId, signal);
     return await resumeRuntimeConnection(installation, connection, signal, environment);
 }
@@ -432,10 +432,10 @@ export async function openMobiusCliInstallation(
 export async function pairLocalMachine(
     arguments_: readonly string[],
     signal: AbortSignal = new AbortController().signal,
-): Promise<PairedDaemon> {
+): Promise<PairedRuntime> {
     const requested = parsePairCommand(arguments_, "");
     const installation = await openMobiusCliInstallation(signal, process.env);
-    const localContext = new DaemonLocalContext(installation.stateDirectory, process.env);
+    const localContext = new RuntimeLocalContext(installation.stateDirectory, process.env);
     if (requested.pairingId.length > 0) {
         const existing = await installation.readConnectionForPairing(requested.pairingId, signal);
         if (existing !== null) {
@@ -460,7 +460,7 @@ export async function pairLocalMachine(
 export async function resumeLocalMachine(
     arguments_: readonly string[],
     signal: AbortSignal = new AbortController().signal,
-): Promise<PairedDaemon> {
+): Promise<PairedRuntime> {
     const connectionId = parseResumeConnectionId(arguments_);
     const installation = await openMobiusCliInstallation(signal, process.env);
     return await resumeMobiusRuntime(installation, connectionId, signal, process.env);

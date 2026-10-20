@@ -1,10 +1,10 @@
-import { type DaemonConfig, withDaemonEnvironment } from "../daemon/config.ts";
+import { type RuntimeConfig, withRuntimeEnvironment } from "../daemon/config.ts";
 import { revalidateExecutable } from "../util/process/executable.ts";
 import type { discoverLocalAgentInventory } from "./discover-local-agents.ts";
 import type { AcpAgentDefinition as CatalogAgentDefinition } from "./local-agent.ts";
 
 type DiscoverInventory = (signal: AbortSignal) => Promise<Awaited<ReturnType<typeof discoverLocalAgentInventory>>>;
-type PublishCatalog = (config: DaemonConfig, signal: AbortSignal) => Promise<void>;
+type PublishCatalog = (config: RuntimeConfig, signal: AbortSignal) => Promise<void>;
 
 /**
  * Resolves the Agent definition a command should run against. The cataloged snapshot is served
@@ -16,9 +16,9 @@ type PublishCatalog = (config: DaemonConfig, signal: AbortSignal) => Promise<voi
  */
 export function createCatalogAgentResolver(
     discover: DiscoverInventory,
-    readConfig: () => DaemonConfig,
+    readConfig: () => RuntimeConfig,
     publish: PublishCatalog,
-): NonNullable<DaemonConfig["resolveAgent"]> {
+): NonNullable<RuntimeConfig["resolveAgent"]> {
     const swaps = new Map<string, Promise<void>>();
     return async (agent, signal) => {
         const config = readConfig();
@@ -49,7 +49,7 @@ export function createCatalogAgentResolver(
                 ...inventory
                     .readyAgents()
                     .filter((ready) => ready.id === agent.id)
-                    .map((ready) => withDaemonEnvironment(ready, config.localContext.environment)),
+                    .map((ready) => withRuntimeEnvironment(ready, config.localContext.environment)),
             ]);
             try {
                 await publish(config, signal);
