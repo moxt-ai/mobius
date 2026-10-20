@@ -14,7 +14,7 @@ import type { RuntimeSessionEventProjection } from "../../session-event-projecti
 import type { RuntimeOperationState } from "../admission.ts";
 import { createRuntimeCommandDispatcher, send } from "../command/dispatcher.ts";
 import type { RuntimeConfig } from "../config.ts";
-import type { RuntimeTurnRegistry } from "../session/turn/turn-registry.ts";
+import type { RuntimeSessions } from "../sessions.ts";
 import { connectRelay } from "./connect.ts";
 import type { RelayConnectionDiagnostics } from "./diagnostics.ts";
 import { RelayConnectionLiveness } from "./liveness.ts";
@@ -44,7 +44,7 @@ export interface RelayConnectionOptions {
     readonly publisher: RuntimeSessionEventPublisher;
     readonly eventProjection: RuntimeSessionEventProjection;
     readonly externalContent: ExternalContentStore;
-    readonly activeTurns: RuntimeTurnRegistry;
+    readonly sessionTurns: RuntimeSessions;
     readonly connectionEpoch: number;
     readonly diagnostics: RelayConnectionDiagnostics;
     readonly onConnected: () => void;
@@ -55,13 +55,13 @@ export interface RelayConnectionOptions {
 export async function runRelayConnection({
     config,
     directories,
-    sessions,
+    sessionTurns,
     nativeSessions,
     operations,
     publisher,
     eventProjection,
     externalContent,
-    activeTurns,
+    sessions,
     connectionEpoch,
     diagnostics,
     onConnected,
@@ -81,7 +81,7 @@ export async function runRelayConnection({
         operations,
         eventProjection,
         externalContent,
-        activeTurns,
+        sessionTurns,
         diagnostics,
         socket,
         signal: connectionController.signal,

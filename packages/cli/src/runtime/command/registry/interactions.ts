@@ -11,12 +11,12 @@ import { reportOperationFailure, send, settleAbandonedTurn } from "../dispatcher
 
 export const sessionCancelCommand: RuntimeCommand = {
     kind: SESSION_CANCEL_KIND,
-    handle: ({ activeTurns, eventProjection, operations, sessions }, message): void => {
+    handle: ({ eventProjection, operations, sessions, sessionTurns }, message): void => {
         if (message.kind !== SESSION_CANCEL_KIND) {
             throw new Error("Command kind mismatch");
         }
-        const turn = activeTurns.get(message.commandId);
-        if (turn === undefined || !turn.matches(message)) {
+        const turn = sessionTurns.get(message.commandId, message.sessionId);
+        if (turn === undefined) {
             void settleAbandonedTurn(eventProjection, operations, message).catch((error: unknown) => {
                 console.error("Could not settle abandoned turn", error);
             });
@@ -51,11 +51,11 @@ export const sessionCloseCommand: RuntimeCommand = {
 
 export const promptDispositionCommand: RuntimeCommand = {
     kind: SESSION_PROMPT_DISPOSITION_KIND,
-    handle: ({ activeTurns, socket }, message): void => {
+    handle: ({ sessionTurns, socket }, message): void => {
         if (message.kind !== SESSION_PROMPT_DISPOSITION_KIND) {
             throw new Error("Command kind mismatch");
         }
-        const turn = activeTurns.get(message.commandId);
+        const turn = sessionTurns.get(message.commandId, message.sessionId);
         if (turn === undefined || !turn.promoteQueuedPrompt(message)) {
             reportOperationFailure(
                 socket,

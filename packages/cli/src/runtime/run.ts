@@ -23,7 +23,7 @@ import { runRelayConnection } from "./relay/run-relay-connection.ts";
 import { RuntimeRelayRevokedError } from "./relay/runtime-revocation.ts";
 import { RuntimeSessionEventPublisher } from "./relay/session-event-publisher.ts";
 import { systemTimer, type Timer } from "./relay/timer.ts";
-import { RuntimeTurnRegistry } from "./session/turn/turn-registry.ts";
+import { RuntimeSessions } from "./sessions.ts";
 
 const RELAY_RECONNECT_DELAY_MILLISECONDS = 500;
 
@@ -103,11 +103,11 @@ export async function runRuntime(
     await using externalContent = new LocalExternalContentStore(stateDirectory);
     const operations = new RuntimeOperationState();
     const publisher = new RuntimeSessionEventPublisher(timer);
-    const activeTurns = new RuntimeTurnRegistry(operations);
+    const activeSessions = new RuntimeSessions(operations);
     const eventProjection = new RuntimeSessionEventProjection(
         publisher,
         (sessionId, event) => agentRuntime.recordLifecycleEvent(sessionId, event),
-        activeTurns.recordSessionEvent,
+        activeSessions.recordSessionEvent,
     );
     const agentRuntime = new AgentRuntimeManager({
         observer: new RuntimeAcpObserver(eventProjection.record, publisher.publishInfo),
@@ -126,7 +126,7 @@ export async function runRuntime(
         new RuntimeDiagnosticLog(stateDirectory),
     );
     const nativeSessions = new NativeSessionService(config, directories, agentRuntime, async (request, options) => {
-        return await activeTurns.executionSnapshot(async (command) => {
+        return await activeSessions.executionSnapshot(async (command) => {
             if (command.sessionId !== request.targetSessionId || command.agentId !== request.agentId) {
                 return false;
             }
@@ -194,7 +194,7 @@ export async function runRuntime(
                     publisher,
                     eventProjection,
                     externalContent,
-                    activeTurns,
+                    sessionTurns: activeSessions,
                     connectionEpoch,
                     diagnostics,
                     onConnected: () => {
@@ -221,7 +221,7 @@ export async function runRuntime(
         }
     } finally {
         shutdown.abort();
-        await activeTurns.close();
+        await activeSessions.close();
         try {
             await catalogPublication;
         } finally {
