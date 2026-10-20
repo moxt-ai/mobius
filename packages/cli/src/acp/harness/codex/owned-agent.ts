@@ -277,6 +277,10 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
             completion.reject(signal.reason);
         };
         signal.addEventListener("abort", aborted, { once: true });
+        // The bounded wait is owned by this call and cancelled in the finally below:
+        // a lost delay() timer stays ref'ed and would keep the worker's event loop
+        // alive for the whole window after the compaction already settled.
+        const waitExpired = new AbortController();
         // Armed before the RPC is sent: a short compaction can complete before its
         // own response arrives, and a completion for an unarmed turn would be lost.
         const turn: ActiveTurn = { completion, turn: { id: "" } };
@@ -289,7 +293,7 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
             );
             return await Promise.race([
                 completion.promise,
-                delay(COMPACT_ITEM_WAIT_MILLISECONDS).then(() => {
+                delay(COMPACT_ITEM_WAIT_MILLISECONDS, undefined, { signal: waitExpired.signal }).then(() => {
                     throw new AcpExecutionError(
                         "The Codex compaction did not report a result",
                         {},
@@ -321,6 +325,7 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
             throw cause;
         } finally {
             signal.removeEventListener("abort", aborted);
+            waitExpired.abort();
             if (this.#turn === turn) {
                 this.#turn = null;
             }
