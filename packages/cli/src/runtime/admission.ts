@@ -26,7 +26,7 @@ function isTerminal(state: RuntimeExecutionState): boolean {
 
 export class RuntimeOperationState {
     readonly #executions = new Map<string, StoredExecution>();
-    #terminalCount = 0;
+    readonly #terminalCountBySession = new Map<string, number>();
 
     readonly claimExecution = (commandId: string, sessionId: string, commandJson: string): RuntimeExecutionReceipt => {
         const commandHash = createHash("sha256").update(commandJson).digest("hex");
@@ -58,8 +58,13 @@ export class RuntimeOperationState {
         }
         this.#executions.set(commandId, { ...current, state });
         if (isTerminal(state)) {
-            this.#terminalCount += 1;
-            this.pruneTerminalReceipts();
+            // Retention is per Session: one Session's terminal volume must not
+            // evict another Session's receipts and break its queue targets.
+            this.#terminalCountBySession.set(
+                current.sessionId,
+                (this.#terminalCountBySession.get(current.sessionId) ?? 0) + 1,
+            );
+            this.pruneTerminalReceipts(current.sessionId);
         }
     };
 
@@ -76,18 +81,23 @@ export class RuntimeOperationState {
 
     readonly close = (): void => {
         this.#executions.clear();
-        this.#terminalCount = 0;
+        this.#terminalCountBySession.clear();
     };
 
-    private readonly pruneTerminalReceipts = (): void => {
-        if (this.#terminalCount <= MAX_TERMINAL_RECEIPTS) {
+    private readonly pruneTerminalReceipts = (sessionId: string): void => {
+        if ((this.#terminalCountBySession.get(sessionId) ?? 0) <= MAX_TERMINAL_RECEIPTS) {
             return;
         }
         for (const [commandId, receipt] of this.#executions) {
-            if (isTerminal(receipt.state)) {
+            if (receipt.sessionId === sessionId && isTerminal(receipt.state)) {
                 this.#executions.delete(commandId);
-                this.#terminalCount -= 1;
-                if (this.#terminalCount <= MAX_TERMINAL_RECEIPTS) {
+                const remaining = (this.#terminalCountBySession.get(sessionId) ?? 1) - 1;
+                if (remaining > 0) {
+                    this.#terminalCountBySession.set(sessionId, remaining);
+                } else {
+                    this.#terminalCountBySession.delete(sessionId);
+                }
+                if ((this.#terminalCountBySession.get(sessionId) ?? 0) <= MAX_TERMINAL_RECEIPTS) {
                     return;
                 }
             }
