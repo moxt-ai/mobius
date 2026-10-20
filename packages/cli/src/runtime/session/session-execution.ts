@@ -1,12 +1,16 @@
 import {
     SESSION_ELICITATION_RESOLVED_KIND,
     SESSION_PERMISSION_RESOLVED_KIND,
-    type SessionLiveEvent,
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
-import type { RuntimeOperationState } from "../../admission.ts";
-import { ActiveRuntimeTurn, type RecordedSessionEvent } from "./active-turn.ts";
+import type { RuntimeOperationState } from "../admission.ts";
+import { ActiveRuntimeTurn, type RecordedSessionEvent } from "./turn/active-turn.ts";
+
+export type SessionAdmission =
+    | { readonly kind: "available"; readonly disposition: string }
+    | { readonly kind: "busy" }
+    | { readonly kind: "queue-target-unavailable" };
 
 const waitForTurnCompletion = (turn: ActiveRuntimeTurn, waitSignal: AbortSignal): Promise<void> => {
     waitSignal.throwIfAborted();
@@ -35,38 +39,42 @@ const waitForTurnCompletion = (turn: ActiveRuntimeTurn, waitSignal: AbortSignal)
     });
 };
 
-/** Owns Runtime prompt admission and recovery; Relay connection lifetimes do not own either. */
-export class RuntimeTurnRegistry {
-    readonly #inFlightByCommandId = new Map<string, ActiveRuntimeTurn>();
+/** One session's in-flight turns: FIFO admission, steering, and interaction recording. */
+export class SessionExecutionState {
+    readonly #sessionId: string;
+    readonly #turnsByCommandId = new Map<string, ActiveRuntimeTurn>();
     readonly #operations: RuntimeOperationState;
 
-    constructor(operations: RuntimeOperationState) {
+    constructor(sessionId: string, operations: RuntimeOperationState) {
+        this.#sessionId = sessionId;
         this.#operations = operations;
     }
 
+    readonly isEmpty = (): boolean => this.#turnsByCommandId.size === 0;
+
     readonly start = (command: SessionPromptCommand, attemptId: string): ActiveRuntimeTurn => {
         const turn = new ActiveRuntimeTurn(command, attemptId);
-        this.#inFlightByCommandId.set(command.commandId, turn);
+        this.#turnsByCommandId.set(command.commandId, turn);
         return turn;
     };
 
-    readonly get = (commandId: string): ActiveRuntimeTurn | undefined => this.#inFlightByCommandId.get(commandId);
+    readonly get = (commandId: string): ActiveRuntimeTurn | undefined => this.#turnsByCommandId.get(commandId);
 
     readonly finish = (turn: ActiveRuntimeTurn): void => {
-        this.#inFlightByCommandId.delete(turn.command.commandId);
+        this.#turnsByCommandId.delete(turn.command.commandId);
         turn.finish();
     };
 
     readonly recordEvent = (event: RecordedSessionEvent): RecordedSessionEvent => {
         if ("commandId" in event) {
-            const turn = this.#inFlightByCommandId.get(event.commandId);
-            if (turn !== undefined && turn.command.sessionId === event.sessionId) {
+            const turn = this.#turnsByCommandId.get(event.commandId);
+            if (turn !== undefined) {
                 return turn.recordEvent(event);
             }
         }
         if (event.kind === SESSION_PERMISSION_RESOLVED_KIND || event.kind === SESSION_ELICITATION_RESOLVED_KIND) {
-            for (const turn of this.#inFlightByCommandId.values()) {
-                if (turn.matchesInteraction(event.interactionId, event.sessionId)) {
+            for (const turn of this.#turnsByCommandId.values()) {
+                if (turn.matchesInteraction(event.interactionId, this.#sessionId)) {
                     return turn.recordEvent(event);
                 }
             }
@@ -74,45 +82,15 @@ export class RuntimeTurnRegistry {
         return event;
     };
 
-    readonly recordSessionEvent = (event: SessionLiveEvent): void => {
-        if (
-            event.type === "lifecycle-metadata" &&
-            (event.payload.kind === "session.permission.requested" ||
-                event.payload.kind === "session.permission.resolved" ||
-                event.payload.kind === "session.elicitation.requested" ||
-                event.payload.kind === "session.elicitation.resolved")
-        ) {
-            this.recordEvent(event.payload.event);
-        }
-    };
-
     readonly recordSteeringPrompt = (command: SessionPromptCommand): boolean => {
-        const target = this.#inFlightByCommandId.get(command.targetCommandId);
+        const target = this.#turnsByCommandId.get(command.targetCommandId);
         return target?.recordSteeringPrompt(command) ?? false;
     };
 
-    readonly executionSnapshot = async (matches: (command: SessionPromptCommand) => Promise<boolean>) => {
-        const matching: ActiveRuntimeTurn[] = [];
-        for (const turn of this.#inFlightByCommandId.values()) {
-            if (await matches(turn.command)) {
-                matching.push(turn);
-            }
-        }
-        const current = matching.filter((turn) => this.#inFlightByCommandId.get(turn.command.commandId) === turn);
-        return {
-            turn: current.map((turn) => turn.snapshot()).find((snapshot) => snapshot !== null) ?? null,
-            queued: current
-                .filter((turn) => turn.isQueued())
-                .map(({ command }) => ({
-                    commandId: command.commandId,
-                    prompt: command.prompt,
-                    images: command.images,
-                })),
-        };
-    };
+    readonly turns = (): readonly ActiveRuntimeTurn[] => [...this.#turnsByCommandId.values()];
 
     readonly close = async (): Promise<void> => {
-        const turns = [...this.#inFlightByCommandId.values()];
+        const turns = [...this.#turnsByCommandId.values()];
         for (const turn of turns) {
             turn.abortRuntime();
         }
@@ -123,18 +101,12 @@ export class RuntimeTurnRegistry {
         turn: ActiveRuntimeTurn,
         waitSignal: AbortSignal,
         onQueued: () => void,
-    ): Promise<
-        | { readonly kind: "available"; readonly disposition: string }
-        | { readonly kind: "busy" }
-        | { readonly kind: "queue-target-unavailable" }
-    > => {
+    ): Promise<SessionAdmission> => {
         const command = turn.command;
         waitSignal.throwIfAborted();
         const head = (): ActiveRuntimeTurn | undefined =>
-            [...this.#inFlightByCommandId.values()].find(
-                (turn) =>
-                    turn.command.sessionId === command.sessionId &&
-                    turn.command.disposition !== SessionPromptDisposition.Steer,
+            [...this.#turnsByCommandId.values()].find(
+                (turn) => turn.command.disposition !== SessionPromptDisposition.Steer,
             );
         // The target guards admission only. Accepted work belongs to the Session
         // FIFO and must survive the original target finishing or being cancelled.
@@ -142,7 +114,7 @@ export class RuntimeTurnRegistry {
             const target = head();
             if (
                 (target === turn || target?.command.commandId !== command.targetCommandId) &&
-                !this.#operations.isTerminalExecution(command.targetCommandId, command.sessionId)
+                !this.#operations.isTerminalExecution(command.targetCommandId, this.#sessionId)
             ) {
                 return { kind: "queue-target-unavailable" };
             }

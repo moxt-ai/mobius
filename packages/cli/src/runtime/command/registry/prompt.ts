@@ -31,7 +31,7 @@ export const sessionPromptCommand: RuntimeCommand = {
         if (receipt.kind === "duplicate") {
             return;
         }
-        const turn = context.activeTurns.start(message, receipt.attemptId);
+        const turn = context.sessionTurns.start(message, receipt.attemptId);
         context.eventProjection.requested(message);
         // Queue admission is acknowledged by the V2 session.queue.changed lifecycle
         // event; the relay resolves the pending Turn submission from it, so the
@@ -51,18 +51,18 @@ export const sessionPromptCommand: RuntimeCommand = {
             attemptId: receipt.attemptId,
             activateAttempt: turn.activate,
             waitForSessionAvailability: (signal) =>
-                context.activeTurns.admitAndWait(turn, signal, () => {
+                context.sessionTurns.admitAndWait(turn, signal, () => {
                     queueChanged();
                 }),
             signal: turn.signal,
-            recordSteeringPrompt: () => context.activeTurns.recordSteeringPrompt(message),
+            recordSteeringPrompt: () => context.sessionTurns.recordSteeringPrompt(message),
             cancellationRequested: turn.cancellationRequested,
         })
             .catch((error: unknown) => {
                 console.error("Mobius daemon turn failed", error);
             })
             .finally(() => {
-                context.activeTurns.finish(turn);
+                context.sessionTurns.finish(turn);
                 context.eventProjection.publishTerminal(message.sessionId, message.commandId);
                 if (message.disposition === SessionPromptDisposition.Queue) {
                     queueChanged();

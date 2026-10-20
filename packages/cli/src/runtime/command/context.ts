@@ -8,7 +8,7 @@ import type { RuntimeOperationState } from "../admission.ts";
 import type { RuntimeConfig } from "../config.ts";
 import type { RelayConnectionDiagnostics } from "../relay/diagnostics.ts";
 import type { Timer } from "../relay/timer.ts";
-import type { RuntimeTurnRegistry } from "../session/turn/turn-registry.ts";
+import type { RuntimeSessions } from "../sessions.ts";
 
 export interface CommandContext {
     readonly config: RuntimeConfig;
@@ -18,7 +18,7 @@ export interface CommandContext {
     readonly operations: RuntimeOperationState;
     readonly eventProjection: RuntimeSessionEventProjection;
     readonly externalContent: ExternalContentStore;
-    readonly activeTurns: RuntimeTurnRegistry;
+    readonly sessionTurns: RuntimeSessions;
     readonly diagnostics: RelayConnectionDiagnostics;
     readonly socket: WebSocket;
     readonly signal: AbortSignal;
