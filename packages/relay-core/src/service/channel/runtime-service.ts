@@ -12,6 +12,7 @@ import {
     UnsupportedProtocolMessageKindError,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { ProjectScope } from "../../entity/do/session.ts";
+import { logger } from "../../infra/logger.ts";
 import type { ChannelActor, ChannelPeers, ChannelSocket } from "./channel-actor.ts";
 import type { ChannelCredentialService } from "./channel-credential-service.ts";
 import type { RuntimeConnectionService } from "./runtime-connection-service.ts";
@@ -167,6 +168,7 @@ export class RuntimeService {
         };
         const accepted = this.#cx.gateways.peers.accept(identity);
         this.#cx.services.connections.connected(prepared.identity, Date.now());
+        logger.info({ ...identity, event: "runtime_websocket_accepted" }, "Runtime WebSocket accepted");
         if (liveness) {
             this.deferDaemonAttachment(identity, accepted.socket, scope, previous.length > 0);
             return { kind: "accepted", response: accepted.response };
@@ -212,7 +214,10 @@ export class RuntimeService {
                 socket.send(encodeServiceToDaemonMessage(ready));
             } catch (error) {
                 if (!attachment.controller.signal.aborted) {
-                    console.error("Runtime attachment failed", error);
+                    logger.error(
+                        { ...identity, err: error, event: "runtime_attachment_failed" },
+                        "Runtime attachment failed",
+                    );
                 }
                 if (this.#cx.services.connections.isCurrent(identity)) {
                     socket.close(1011, "Runtime attachment failed");
@@ -387,6 +392,10 @@ export class RuntimeService {
             });
         } catch (error) {
             if (error instanceof RuntimeMessageSchedulerCapacityError) {
+                logger.warn(
+                    { ...identity, err: error, event: "runtime_message_queue_full", closeCode: 1013 },
+                    "Runtime message queue full",
+                );
                 socket.close(1013, error.code);
                 return;
             }
