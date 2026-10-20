@@ -7,6 +7,7 @@ import {
     lifecycleCommand,
     type WorkerLaunch,
 } from "../control/protocol.ts";
+import { surviveUnhandledRejections } from "./unhandled-rejection.ts";
 import { WorkerLifecycleLog } from "./worker-lifecycle-log.ts";
 import { decodeWorkerLaunch, WorkerProcess, WorkerStartupError } from "./worker-process.ts";
 
@@ -15,6 +16,8 @@ export async function runManager(stateDirectory: string, signal: AbortSignal): P
     if (release === null) {
         return;
     }
+    const rejectionGuard = surviveUnhandledRejections("manager");
+    rejectionGuard.bindStateDirectory(stateDirectory);
     const shutdown = new AbortController();
     const combined = AbortSignal.any([signal, shutdown.signal]);
     const lifecycle = new WorkerLifecycleLog(stateDirectory);
@@ -208,6 +211,7 @@ export async function runManager(stateDirectory: string, signal: AbortSignal): P
         shutdown.abort();
         await queue;
         await worker?.close();
+        rejectionGuard.release();
         await release();
     }
 }
