@@ -77,13 +77,21 @@ npm install @moxt-ai/mobius-sdk
 - **[Try the development walkthrough](packages/mini-client/README.md)** to exercise
   Runtime pairing and sessions without Morty.
 
-## Data ownership and recovery
+<a id="data-ownership-and-recovery"></a>
 
-Agents keep their native environment and saved history. Optional cloud Recording
-makes received history accessible without the connected machine. Live delivery and
-Recording are best effort; daemon restarts lose running work and queued prompts.
-See the [delivery, storage, and recovery guide](GUIDE.md#live-output-and-recovery)
-for the boundaries your application should account for.
+## Your history. Your choice.
+
+**Remote Agent access without mandatory cloud Recording.** Keep conversation history
+on the connected machine, or opt into cloud Recording when your application needs
+history to remain accessible while that machine is offline.
+
+- **Keep history local:** use the Agent's saved history without enabling cloud Recording.
+- **Choose cloud history:** enable Recording to retain the conversation content it
+  receives, according to your configured retention policy.
+
+Choose the history experience that fits your application's privacy and availability
+needs. See the [integration guide](GUIDE.md#data-ownership-and-recovery) for storage and
+recovery details.
 
 ## Contributing
 
