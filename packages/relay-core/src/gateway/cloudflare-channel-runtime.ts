@@ -35,7 +35,27 @@ export class CloudflareChannelRuntime implements ChannelGateway {
     ): Promise<Response> => {
         const headers = new Headers(request.headers);
         headers.set(INTERNAL_HOST_CREDENTIAL_ID_HEADER, access.credentialId);
-        return await this.forward(access, new Request(request, { headers, signal }), signal);
+        const endpoint = new URL(request.url);
+        // Public viewers cannot opt into the private request-reply routing mode.
+        endpoint.searchParams.delete("nativeRequestId");
+        return await this.forward(access, new Request(endpoint, { headers, method: request.method, signal }), signal);
+    };
+
+    readonly acceptNativeRequest = async (
+        access: ChannelHostCredential,
+        requestId: string,
+        signal: AbortSignal,
+    ): Promise<Response> => {
+        const endpoint = new URL("https://runtime.internal/host");
+        endpoint.searchParams.set("nativeRequestId", requestId);
+        return await this.forward(
+            access,
+            new Request(endpoint, {
+                headers: { Upgrade: "websocket", [INTERNAL_HOST_CREDENTIAL_ID_HEADER]: access.credentialId },
+                signal,
+            }),
+            signal,
+        );
     };
 
     readonly disconnectHost = async (access: ChannelHostCredential, signal: AbortSignal): Promise<void> => {

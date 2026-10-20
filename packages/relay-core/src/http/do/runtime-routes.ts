@@ -73,6 +73,10 @@ export function createRuntimeRoutes(runtime: RuntimeService) {
             if (credentialId === null) {
                 return unauthorized("Verified host credential access is required");
             }
+            const nativeRequestId = url.searchParams.get("nativeRequestId");
+            if (nativeRequestId !== null && (nativeRequestId.length === 0 || nativeRequestId.length > 128)) {
+                return new Response("A bounded native request identifier is required", { status: 400 });
+            }
             return runtime.acceptHost(
                 {
                     role: "host",
@@ -80,6 +84,7 @@ export function createRuntimeRoutes(runtime: RuntimeService) {
                     credentialId,
                     runtimeId,
                     projectId,
+                    ...(nativeRequestId === null ? {} : { nativeRequestId }),
                 },
                 request.signal,
             );

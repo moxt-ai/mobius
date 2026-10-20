@@ -30,6 +30,7 @@ export type RuntimeSocketIdentity =
           readonly role: "host";
           readonly channelId: string;
           readonly credentialId: string;
+          readonly nativeRequestId?: string;
           readonly runtimeId: string;
           readonly projectId: string;
       }
@@ -441,7 +442,10 @@ export class RuntimeService {
     };
 
     private readonly notifyOffline = (runtimeId: string): void => {
-        for (const host of this.#cx.gateways.peers.hosts()) {
+        for (const host of [
+            ...this.#cx.gateways.peers.hosts(),
+            ...this.#cx.gateways.peers.nativeRequests().map(({ socket }) => socket),
+        ]) {
             if (host.isOpen()) {
                 host.send(encodeRuntimeStatusEvent({ kind: RUNTIME_STATUS_KIND, runtimeId, online: false }));
             }

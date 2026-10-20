@@ -107,6 +107,7 @@ export interface ChannelSocket {
 export interface ChannelPeers {
     readonly daemons: () => readonly ChannelSocket[];
     readonly hosts: () => readonly ChannelSocket[];
+    readonly nativeRequests: () => readonly { readonly requestId: string; readonly socket: ChannelSocket }[];
     readonly historyRecipients: () => readonly ChannelSocket[];
 }
 
@@ -178,8 +179,17 @@ export class ChannelActor {
                 );
                 return;
             }
-            if (kind === NATIVE_SESSION_RESULT_KIND) {
-                this.broadcast(this.#peers.hosts(), encodeDaemonToServiceMessage(message));
+            if (kind === NATIVE_SESSION_RESULT_KIND || kind === SESSION_OPERATION_FAILED_KIND) {
+                this.broadcast(
+                    [
+                        ...this.#peers.hosts(),
+                        ...this.#peers
+                            .nativeRequests()
+                            .filter(({ requestId }) => requestId === message.requestId)
+                            .map(({ socket }) => socket),
+                    ],
+                    encodeDaemonToServiceMessage(message),
+                );
                 return;
             }
             if (kind === AGENT_SETTINGS_DISCOVERED_KIND) {
@@ -597,7 +607,7 @@ export class ChannelActor {
 
     private readonly broadcastRuntimeStatus = (online: boolean): void => {
         this.broadcast(
-            this.#peers.hosts(),
+            [...this.#peers.hosts(), ...this.#peers.nativeRequests().map(({ socket }) => socket)],
             encodeRuntimeStatusEvent({
                 kind: RUNTIME_STATUS_KIND,
                 online,
