@@ -8,12 +8,12 @@ metadata:
 
 # Development
 
-See [AGENTS.md](AGENTS.md) for engineering rules, [README.md](README.md) for setup
+See [AGENTS.md](AGENTS.md) for engineering rules, [README.md](../README.md) for setup
 and hosting, and [TESTING.md](TESTING.md) for verification.
 
 ## Design rationale
 
-The [product goals](README.md#why-mobius-exists) explain why the system exists.
+The [product goals](../README.md#why-mobius-exists) explain why the system exists.
 Implementation choices must serve those goals without turning the README into a
 second protocol specification.
 
@@ -33,7 +33,7 @@ transitions and recovery algorithm belong in code and boundary tests.
 ## Database operations
 
 Generate migrations using the pinned `db:generate:*` commands in
-[package.json](package.json). `pnpm db:codegen` prepares ignored SQL modules for
+[package.json](../package.json). `pnpm db:codegen` prepares ignored SQL modules for
 build targets that cannot import SQL directly. Committed migrations are immutable.
 
 Deployment workflows apply D1 migrations before deploying their consuming Workers.
