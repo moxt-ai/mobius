@@ -27,6 +27,17 @@ keep their projects, tools, and native development environments.
 - **Turn ongoing work into a shared experience.** Stream replies to multiple clients,
   send follow-up instructions, stop execution, and respond to supported permission requests.
 
+## Run locally. Reach globally.
+
+Deploy Mobius locally, or use our **free hosted service on Cloudflare's global network**.
+Nearby edge entry points bring users onto the network, while
+[regional project placement](https://developers.cloudflare.com/durable-objects/reference/data-location/)
+lets you keep shared work closer to its audience and reduce cross-region round trips.
+
+Choose placement preferences across North America, Europe, Asia-Pacific (including
+northeast and southeast Asia), and Oceania. Our hosted storage is configured in
+**Asia-Pacific and western North America**; Cloudflare manages the actual compute locations.
+
 <a id="data-ownership-and-recovery"></a>
 
 ## Your history. Your choice.
