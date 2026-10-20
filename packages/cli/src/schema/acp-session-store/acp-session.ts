@@ -10,4 +10,5 @@ export const acpSession = sqliteTable("acp_session", {
     prompted: integer("prompted", { mode: "boolean" }).notNull(),
     title: text("title").notNull(),
     updatedAt: text("updated_at").notNull(),
+    usage: text("usage"),
 });

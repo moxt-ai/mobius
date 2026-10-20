@@ -1,0 +1,131 @@
+{
+    "dialect": "sqlite",
+    "id": "6550f80e-1327-461c-b133-9fd2d50b0b71",
+    "prevIds": ["64d4639e-86ea-4e5f-bcc8-29e8eb79209a"],
+    "version": "7",
+    "ddl": [
+        {
+            "name": "acp_session",
+            "entityType": "tables"
+        },
+        {
+            "type": "text",
+            "notNull": false,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "session_id",
+            "table": "acp_session",
+            "entityType": "columns"
+        },
+        {
+            "columns": ["session_id"],
+            "nameExplicit": false,
+            "name": "acp_session_pk",
+            "table": "acp_session",
+            "entityType": "pks"
+        },
+        {
+            "type": "text",
+            "notNull": true,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "agent_id",
+            "table": "acp_session",
+            "entityType": "columns"
+        },
+        {
+            "type": "text",
+            "notNull": true,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "native_session_id",
+            "table": "acp_session",
+            "entityType": "columns"
+        },
+        {
+            "type": "text",
+            "notNull": true,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "cwd",
+            "table": "acp_session",
+            "entityType": "columns"
+        },
+        {
+            "type": "text",
+            "notNull": true,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "additional_directories",
+            "table": "acp_session",
+            "entityType": "columns"
+        },
+        {
+            "type": "text",
+            "notNull": false,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "last_terminal_command_id",
+            "table": "acp_session",
+            "entityType": "columns"
+        },
+        {
+            "type": "integer",
+            "notNull": true,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "prompted",
+            "table": "acp_session",
+            "entityType": "columns"
+        },
+        {
+            "type": "text",
+            "notNull": true,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "title",
+            "table": "acp_session",
+            "entityType": "columns"
+        },
+        {
+            "type": "text",
+            "notNull": true,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "updated_at",
+            "table": "acp_session",
+            "entityType": "columns"
+        },
+        {
+            "name": "deleted_acp_session",
+            "entityType": "tables"
+        },
+        {
+            "type": "text",
+            "notNull": false,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "session_id",
+            "table": "deleted_acp_session",
+            "entityType": "columns"
+        },
+        {
+            "columns": ["session_id"],
+            "nameExplicit": false,
+            "name": "deleted_acp_session_pk",
+            "table": "deleted_acp_session",
+            "entityType": "pks"
+        }
+    ],
+    "renames": []
+}

@@ -11,6 +11,7 @@ import type {
     SessionEventPayload,
     SessionStatus,
     SessionStatusChangedEvent,
+    SessionUsageSnapshot,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
 import { isNativeChatSessionId } from "../runtime/native-sessions/chat-agent.ts";
@@ -517,9 +518,29 @@ export class AgentRuntimeManager {
                     normalized,
                     updatedAt,
                     stored.session.configurations,
+                    stored.session.usage,
                 ),
             );
             return { title: normalized, updatedAt };
+        });
+
+    /**
+     * Reads the Session's newest agent-reported usage snapshot. A live process
+     * tracks it in memory; otherwise the persisted row answers without
+     * starting an Agent. Serves `session.usage.read`.
+     */
+    readonly readSessionUsage = async (sessionId: string, signal: AbortSignal): Promise<SessionUsageSnapshot | null> =>
+        await this.#operations.run({ sessionId, signal }, async (options) => {
+            const runtime = this.#executionProcesses.get(options.sessionId);
+            if (runtime !== undefined) {
+                this.#executionProcesses.touch(options.sessionId, runtime);
+                return runtime.prepared().usage;
+            }
+            const stored = this.#store.read(options.sessionId);
+            if (!(stored instanceof FoundAcpStoredSession)) {
+                throw new AcpExecutionError("The Session was not found", {}, "session_not_found");
+            }
+            return stored.session.usage;
         });
 
     readonly cancelPrompt = async (sessionId: string): Promise<void> => {

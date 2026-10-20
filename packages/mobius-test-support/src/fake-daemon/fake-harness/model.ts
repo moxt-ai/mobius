@@ -27,6 +27,12 @@ export type HarnessOutput =
           readonly blocks: readonly string[];
       }
     | {
+          readonly kind: "usage";
+          readonly used: number;
+          readonly size: number;
+          readonly cost: { readonly amount: number; readonly currency: string };
+      }
+    | {
           readonly kind: "activity";
           readonly title: string;
           readonly output: string;

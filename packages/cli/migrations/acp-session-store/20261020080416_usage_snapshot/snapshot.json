@@ -1,0 +1,151 @@
+{
+    "version": "7",
+    "dialect": "sqlite",
+    "id": "c68c07ce-1b15-4963-b316-1b1b7c83b828",
+    "prevIds": ["b856cb80-c22e-463d-b450-c6c2b90e64c7"],
+    "ddl": [
+        {
+            "name": "acp_session",
+            "entityType": "tables"
+        },
+        {
+            "name": "session_live_event_position_allocation",
+            "entityType": "tables"
+        },
+        {
+            "type": "text",
+            "notNull": false,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "session_id",
+            "entityType": "columns",
+            "table": "acp_session"
+        },
+        {
+            "type": "text",
+            "notNull": true,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "agent_id",
+            "entityType": "columns",
+            "table": "acp_session"
+        },
+        {
+            "type": "text",
+            "notNull": true,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "native_session_id",
+            "entityType": "columns",
+            "table": "acp_session"
+        },
+        {
+            "type": "text",
+            "notNull": true,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "cwd",
+            "entityType": "columns",
+            "table": "acp_session"
+        },
+        {
+            "type": "text",
+            "notNull": true,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "additional_directories",
+            "entityType": "columns",
+            "table": "acp_session"
+        },
+        {
+            "type": "text",
+            "notNull": true,
+            "autoincrement": false,
+            "default": "'[]'",
+            "generated": null,
+            "name": "configurations",
+            "entityType": "columns",
+            "table": "acp_session"
+        },
+        {
+            "type": "integer",
+            "notNull": true,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "prompted",
+            "entityType": "columns",
+            "table": "acp_session"
+        },
+        {
+            "type": "text",
+            "notNull": true,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "title",
+            "entityType": "columns",
+            "table": "acp_session"
+        },
+        {
+            "type": "text",
+            "notNull": true,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "updated_at",
+            "entityType": "columns",
+            "table": "acp_session"
+        },
+        {
+            "type": "text",
+            "notNull": false,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "usage",
+            "entityType": "columns",
+            "table": "acp_session"
+        },
+        {
+            "type": "integer",
+            "notNull": true,
+            "autoincrement": false,
+            "default": "10000",
+            "generated": null,
+            "name": "allocated_position",
+            "entityType": "columns",
+            "table": "session_live_event_position_allocation"
+        },
+        {
+            "type": "text",
+            "notNull": false,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "session_id",
+            "entityType": "columns",
+            "table": "session_live_event_position_allocation"
+        },
+        {
+            "columns": ["session_id"],
+            "nameExplicit": false,
+            "name": "acp_session_pk",
+            "table": "acp_session",
+            "entityType": "pks"
+        },
+        {
+            "columns": ["session_id"],
+            "nameExplicit": false,
+            "name": "session_live_event_position_allocation_pk",
+            "table": "session_live_event_position_allocation",
+            "entityType": "pks"
+        }
+    ],
+    "renames": []
+}

@@ -18,6 +18,7 @@ import {
     type SessionCommand,
     type SessionConfigOption,
     type SessionEventPayload,
+    type SessionUsageSnapshot,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
 import type { AcpAgentDefinition } from "../runtime/config.ts";
@@ -128,6 +129,7 @@ export class AgentSession implements AcpClientHandler {
     #restored = false;
     #sessionTitle: string | null = null;
     #sessionUpdatedAt = "";
+    #usage: SessionUsageSnapshot | null = null;
     #turn: AcpTurnState = new IdleAcpTurn();
 
     private constructor(
@@ -283,6 +285,7 @@ export class AgentSession implements AcpClientHandler {
                 this.#sessionTitle ?? "",
                 updatedAt,
                 this.#sessionConfigurations.stored(),
+                this.#usage,
             ),
         );
     };
@@ -366,6 +369,7 @@ export class AgentSession implements AcpClientHandler {
             this.#configOptions,
             this.#prompted,
             this.#restored,
+            this.#usage,
         );
 
     readonly ensureHistoryLoaded = async (signal: AbortSignal): Promise<void> => {
@@ -590,6 +594,7 @@ export class AgentSession implements AcpClientHandler {
             this.#prompted = stored.session.prompted;
             this.#sessionTitle = stored.session.title;
             this.#restored = true;
+            this.#usage = stored.session.usage;
             if (recovery.kind === "history-required") {
                 if (!this.#capabilities.loadSession) {
                     throw new AcpExecutionError(
@@ -1186,6 +1191,18 @@ export class AgentSession implements AcpClientHandler {
             this.#configRevision += 1;
             this.#captureSelectedConfigurationValues();
             await this.emitConfigUpdate();
+            return;
+        }
+        if (update.sessionUpdate === "usage_update") {
+            // Adapters report context occupancy snapshots; retain the newest one
+            // so a later daemon restart still answers usage reads.
+            this.#usage = {
+                cost: update.cost === undefined || update.cost === null ? null : { ...update.cost },
+                size: update.size,
+                updatedAt: new Date().toISOString(),
+                used: update.used,
+            };
+            this.#writeStoredSession(new Date().toISOString());
             return;
         }
         if (update.sessionUpdate === "current_mode_update") {

@@ -1,3 +1,4 @@
+import type { SessionUsageSnapshot } from "@moxt-ai/mobius-sdk/protocol";
 import { and, desc, eq } from "drizzle-orm";
 import type { NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
 import { z } from "zod";
@@ -9,13 +10,14 @@ import { type AcpSessionEventStore, MemoryAcpSessionEventStore } from "./session
 export class AcpStoredSession {
     readonly additionalDirectories: readonly string[];
     readonly agentId: string;
-    readonly cwd: string;
     readonly configurations: readonly AcpStoredSessionConfiguration[];
+    readonly cwd: string;
     readonly nativeSessionId: string;
     readonly prompted: boolean;
     readonly sessionId: string;
     readonly title: string;
     readonly updatedAt: string;
+    readonly usage: SessionUsageSnapshot | null;
 
     constructor(
         sessionId: string,
@@ -27,6 +29,7 @@ export class AcpStoredSession {
         title: string,
         updatedAt = new Date().toISOString(),
         configurations: readonly AcpStoredSessionConfiguration[] = [],
+        usage: SessionUsageSnapshot | null = null,
     ) {
         this.additionalDirectories = [...additionalDirectories];
         this.agentId = agentId;
@@ -37,6 +40,7 @@ export class AcpStoredSession {
         this.sessionId = sessionId;
         this.title = title;
         this.updatedAt = updatedAt;
+        this.usage = usage === null ? null : { ...usage, cost: usage.cost === null ? null : { ...usage.cost } };
     }
 }
 
@@ -114,7 +118,28 @@ const storedSessionRowSchema = z.object({
     sessionId: z.string(),
     title: z.string(),
     updatedAt: z.string(),
+    usage: z.string().nullable(),
 });
+
+const storedUsageSnapshotSchema = z.object({
+    cost: z
+        .object({ amount: z.number().finite(), currency: z.string().max(16) })
+        .readonly()
+        .nullable(),
+    size: z.number().int().nonnegative().nullable(),
+    updatedAt: z.string().min(1),
+    used: z.number().int().nonnegative(),
+});
+
+function decodeStoredUsage(encoded: string): SessionUsageSnapshot | null {
+    const decoded: unknown = JSON.parse(encoded);
+    const parsed = storedUsageSnapshotSchema.nullable().safeParse(decoded);
+    return parsed.success ? parsed.data : null;
+}
+
+function encodeStoredUsage(usage: SessionUsageSnapshot | null): string | null {
+    return JSON.stringify(usage);
+}
 
 function decodeStoredSession(value: unknown): AcpStoredSession {
     const row = storedSessionRowSchema.parse(value);
@@ -132,6 +157,7 @@ function decodeStoredSession(value: unknown): AcpStoredSession {
         row.title,
         row.updatedAt,
         configurations,
+        row.usage === null ? null : decodeStoredUsage(row.usage),
     );
 }
 
@@ -186,6 +212,7 @@ export class SqliteAcpSessionStore implements AcpSessionStore {
             sessionId: session.sessionId,
             title: session.title,
             updatedAt: session.updatedAt,
+            usage: encodeStoredUsage(session.usage),
         };
         this.#database
             .insert(acpSession)

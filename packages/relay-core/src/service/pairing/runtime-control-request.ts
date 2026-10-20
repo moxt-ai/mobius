@@ -13,6 +13,7 @@ import {
     decodeRuntimePongEvent,
     decodeRuntimeStatusEvent,
     decodeSessionClosedEvent,
+    decodeSessionConfigReadResult,
     decodeSessionConfigUpdatedEvent,
     decodeSessionElicitationResolvedEvent,
     decodeSessionEventEnvelope,
@@ -25,6 +26,7 @@ import {
     decodeSessionRestoredEvent,
     decodeSessionsListedEvent,
     decodeSessionsQueriedEvent,
+    decodeSessionUsageReadResult,
     decodeWorkspaceEntriesEvent,
     encodeNativeSessionRequest,
     encodeServiceToDaemonMessage,
@@ -44,6 +46,8 @@ import {
     type SessionCancelCommand,
     type SessionCloseCommand,
     type SessionClosedEvent,
+    type SessionConfigReadCommand,
+    type SessionConfigReadResult,
     type SessionConfigUpdatedEvent,
     type SessionConfigureCommand,
     type SessionElicitationResolvedEvent,
@@ -66,6 +70,8 @@ import {
     type SessionRestoredEvent,
     type SessionsListedEvent,
     type SessionsQueriedEvent,
+    type SessionUsageReadCommand,
+    type SessionUsageReadResult,
     type WorkspaceEntriesEvent,
     type WorkspaceListCommand,
 } from "@moxt-ai/mobius-sdk/protocol";
@@ -77,6 +83,8 @@ export type RuntimeControlCommand =
     | NativeSessionRequest
     | SessionPrepareCommand
     | SessionConfigureCommand
+    | SessionConfigReadCommand
+    | SessionUsageReadCommand
     | SessionRenameCommand
     | SessionCloseCommand
     | SessionCancelCommand
@@ -120,6 +128,8 @@ export type RuntimeControlResult =
     | NativeSessionResult
     | SessionReadyEvent
     | SessionConfigUpdatedEvent
+    | SessionConfigReadResult
+    | SessionUsageReadResult
     | SessionRenamedEvent
     | SessionClosedEvent
     | TurnCompleted
@@ -564,9 +574,15 @@ export async function requestRuntimeControl(
                                           ? decodeSessionReadyEvent(event.data)
                                           : command.kind === "session.configure" && kind === "session.config.updated"
                                             ? decodeSessionConfigUpdatedEvent(event.data)
-                                            : command.kind === "session.rename" && kind === "session.renamed"
-                                              ? decodeSessionRenamedEvent(event.data)
-                                              : null;
+                                            : command.kind === "session.config.read" &&
+                                                kind === "session.config.read.result"
+                                              ? decodeSessionConfigReadResult(event.data)
+                                              : command.kind === "session.usage.read" &&
+                                                  kind === "session.usage.read.result"
+                                                ? decodeSessionUsageReadResult(event.data)
+                                                : command.kind === "session.rename" && kind === "session.renamed"
+                                                  ? decodeSessionRenamedEvent(event.data)
+                                                  : null;
                     const resolved =
                         result ??
                         (command.kind === "session.preview-history.page.load" &&

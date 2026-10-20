@@ -6,6 +6,7 @@ import {
     decodeNativeSessionResult,
     decodeRuntimeDiagnosticsResult,
     decodeSessionClosedEvent,
+    decodeSessionConfigReadResult,
     decodeSessionConfigUpdatedEvent,
     decodeSessionEventLogPage,
     decodeSessionLiveEventBatch,
@@ -14,6 +15,7 @@ import {
     decodeSessionRestoredEvent,
     decodeSessionsListedEvent,
     decodeSessionsQueriedEvent,
+    decodeSessionUsageReadResult,
     decodeWorkspaceEntriesEvent,
     type ExternalAudioContentBlock,
     type ExternalImageContentBlock,
@@ -1126,6 +1128,42 @@ export class MobiusSessionResources {
                       operation[3],
                   );
         return decodeSessionConfigUpdatedEvent(JSON.stringify(result));
+    };
+
+    readonly readConfiguration = async (
+        ...operation:
+            | readonly [sessionId: string, signal: AbortSignal]
+            | readonly [runtimeId: string, sessionId: string, signal: AbortSignal]
+    ) => {
+        const result =
+            operation.length === 2
+                ? await this.#executor.get(sessionPath(this.#projectId, operation[0], "configuration"), operation[1])
+                : await this.#executor.get(
+                      projectPath(
+                          this.#projectId,
+                          `runtimes/${encodeURIComponent(operation[0])}/sessions/${encodeURIComponent(operation[1])}/configuration`,
+                      ),
+                      operation[2],
+                  );
+        return decodeSessionConfigReadResult(JSON.stringify(result));
+    };
+
+    readonly readUsage = async (
+        ...operation:
+            | readonly [sessionId: string, signal: AbortSignal]
+            | readonly [runtimeId: string, sessionId: string, signal: AbortSignal]
+    ) => {
+        const result =
+            operation.length === 2
+                ? await this.#executor.get(sessionPath(this.#projectId, operation[0], "usage"), operation[1])
+                : await this.#executor.get(
+                      projectPath(
+                          this.#projectId,
+                          `runtimes/${encodeURIComponent(operation[0])}/sessions/${encodeURIComponent(operation[1])}/usage`,
+                      ),
+                      operation[2],
+                  );
+        return decodeSessionUsageReadResult(JSON.stringify(result));
     };
 
     readonly rename = async (

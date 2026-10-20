@@ -1,16 +1,22 @@
 import type {
+    SessionConfigReadCommand,
     SessionConfigureCommand,
     SessionPrepareCommand,
     SessionReadyEvent,
     SessionRenameCommand,
     SessionRestoreCommand,
+    SessionUsageReadCommand,
     WorkspaceListCommand,
 } from "@moxt-ai/mobius-sdk/protocol";
 import {
+    SESSION_CONFIG_READ_KIND,
+    SESSION_CONFIG_READ_RESULT_KIND,
     SESSION_CONFIGURE_KIND,
     SESSION_PREPARE_KIND,
     SESSION_RENAME_KIND,
     SESSION_RESTORE_KIND,
+    SESSION_USAGE_READ_KIND,
+    SESSION_USAGE_READ_RESULT_KIND,
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-sdk/protocol";
 import type { WebSocket } from "undici";
@@ -103,6 +109,7 @@ async function prepareSession(
             requestId: command.requestId,
             restored: prepared.restored,
             sessionId: command.sessionId,
+            usage: prepared.usage,
         };
     });
 }
@@ -361,5 +368,120 @@ export const sessionRenameCommand: RuntimeCommand = {
             throw new Error("Command kind mismatch");
         }
         void executeSessionRename(context.socket, message, context.sessions, context.signal);
+    },
+};
+
+export async function executeSessionConfigRead(
+    socket: WebSocket,
+    command: SessionConfigReadCommand,
+    config: RuntimeConfig,
+    directories: WorkspaceDirectoryService,
+    sessions: AgentRuntimeManager,
+    nativeSessions: NativeSessionService,
+    diagnostics: RelayConnectionDiagnostics,
+    signal: AbortSignal,
+): Promise<void> {
+    const metrics = new AccumulatingOperationMetrics();
+    try {
+        const entry = await metrics.measure("session-lookup", async () => {
+            const [found] = await nativeSessions.querySessions([command.sessionId], signal);
+            if (found === undefined) {
+                throw new AcpExecutionError("The Session was not found", {}, "session_not_found");
+            }
+            return found;
+        });
+        const ready = await prepareSession(
+            {
+                additionalDirectoryIds: entry.additionalDirectories.map((directory) => directory.directoryId),
+                agentId: entry.agentId,
+                bindingId: config.bindingId,
+                directoryId: entry.directoryId,
+                kind: "session.prepare",
+                requestId: command.requestId,
+                sessionId: command.sessionId,
+                sessionState: "provisioned",
+            },
+            { kind: "history-required" },
+            config,
+            directories,
+            sessions,
+            metrics,
+            signal,
+        );
+        send(socket, {
+            configOptions: ready.configOptions,
+            kind: SESSION_CONFIG_READ_RESULT_KIND,
+            requestId: command.requestId,
+            sessionId: command.sessionId,
+        });
+    } catch (error) {
+        diagnostics.daemonDiagnostic(
+            "session_config_read_failed",
+            command.requestId,
+            {
+                code: operationErrorCode(error),
+                sessionId: command.sessionId,
+            },
+            error,
+        );
+        reportOperationFailure(socket, command.requestId, command.sessionId, error, metrics.snapshot());
+    }
+}
+
+export async function executeSessionUsageRead(
+    socket: WebSocket,
+    command: SessionUsageReadCommand,
+    sessions: AgentRuntimeManager,
+    diagnostics: RelayConnectionDiagnostics,
+    signal: AbortSignal,
+): Promise<void> {
+    try {
+        const usage = await sessions.readSessionUsage(command.sessionId, signal);
+        send(socket, {
+            kind: SESSION_USAGE_READ_RESULT_KIND,
+            requestId: command.requestId,
+            sessionId: command.sessionId,
+            usage,
+        });
+    } catch (error) {
+        diagnostics.daemonDiagnostic(
+            "session_usage_read_failed",
+            command.requestId,
+            {
+                code: operationErrorCode(error),
+                sessionId: command.sessionId,
+            },
+            error,
+        );
+        reportOperationFailure(socket, command.requestId, command.sessionId, error);
+    }
+}
+
+export const sessionConfigReadCommand: RuntimeCommand = {
+    kind: SESSION_CONFIG_READ_KIND,
+    handle: (context, message): void => {
+        if (message.kind !== SESSION_CONFIG_READ_KIND) {
+            throw new Error("Command kind mismatch");
+        }
+        void executeSessionConfigRead(
+            context.socket,
+            message,
+            context.config,
+            context.directories,
+            context.sessions,
+            context.nativeSessions,
+            context.diagnostics,
+            context.signal,
+        );
+    },
+};
+
+export const sessionUsageReadCommand: RuntimeCommand = {
+    kind: SESSION_USAGE_READ_KIND,
+    handle: (context, message): void => {
+        if (message.kind !== SESSION_USAGE_READ_KIND) {
+            throw new Error("Command kind mismatch");
+        }
+        void executeSessionUsageRead(context.socket, message, context.sessions, context.diagnostics, context.signal);
     },
 };

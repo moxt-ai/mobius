@@ -1,0 +1,141 @@
+{
+    "dialect": "sqlite",
+    "id": "b856cb80-c22e-463d-b450-c6c2b90e64c7",
+    "prevIds": ["509b6df8-9cb9-4c4e-8207-0c93c7094828"],
+    "version": "7",
+    "ddl": [
+        {
+            "name": "acp_session",
+            "entityType": "tables"
+        },
+        {
+            "type": "text",
+            "notNull": false,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "session_id",
+            "table": "acp_session",
+            "entityType": "columns"
+        },
+        {
+            "columns": ["session_id"],
+            "nameExplicit": false,
+            "name": "acp_session_pk",
+            "table": "acp_session",
+            "entityType": "pks"
+        },
+        {
+            "type": "text",
+            "notNull": true,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "agent_id",
+            "table": "acp_session",
+            "entityType": "columns"
+        },
+        {
+            "type": "text",
+            "notNull": true,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "native_session_id",
+            "table": "acp_session",
+            "entityType": "columns"
+        },
+        {
+            "type": "text",
+            "notNull": true,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "cwd",
+            "table": "acp_session",
+            "entityType": "columns"
+        },
+        {
+            "type": "text",
+            "notNull": true,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "additional_directories",
+            "table": "acp_session",
+            "entityType": "columns"
+        },
+        {
+            "type": "text",
+            "notNull": true,
+            "autoincrement": false,
+            "default": "'[]'",
+            "generated": null,
+            "name": "configurations",
+            "table": "acp_session",
+            "entityType": "columns"
+        },
+        {
+            "type": "integer",
+            "notNull": true,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "prompted",
+            "table": "acp_session",
+            "entityType": "columns"
+        },
+        {
+            "type": "text",
+            "notNull": true,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "title",
+            "table": "acp_session",
+            "entityType": "columns"
+        },
+        {
+            "type": "text",
+            "notNull": true,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "updated_at",
+            "table": "acp_session",
+            "entityType": "columns"
+        },
+        {
+            "name": "session_live_event_position_allocation",
+            "entityType": "tables"
+        },
+        {
+            "type": "integer",
+            "notNull": true,
+            "autoincrement": false,
+            "default": "10000",
+            "generated": null,
+            "name": "allocated_position",
+            "table": "session_live_event_position_allocation",
+            "entityType": "columns"
+        },
+        {
+            "type": "text",
+            "notNull": false,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "session_id",
+            "table": "session_live_event_position_allocation",
+            "entityType": "columns"
+        },
+        {
+            "columns": ["session_id"],
+            "nameExplicit": false,
+            "name": "session_live_event_position_allocation_pk",
+            "table": "session_live_event_position_allocation",
+            "entityType": "pks"
+        }
+    ],
+    "renames": []
+}
