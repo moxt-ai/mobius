@@ -18,10 +18,10 @@ const eventWithoutProvenance = {
     sessionId: "session-1",
     type: "acp" as const,
 };
-const sharedEvent = { ...eventWithoutProvenance, provenance: { kind: "original" } as const };
+const sharedEvent = eventWithoutProvenance;
 
 describe("Session Event V2 contracts", () => {
-    it("Given a session event without provenance, When it crosses the protocol boundary, Then it is accepted", () => {
+    it("Given a session event, When it crosses the protocol boundary, Then it is accepted", () => {
         expect(decodeSessionEvent(eventWithoutProvenance)).toEqual(eventWithoutProvenance);
     });
 

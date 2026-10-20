@@ -10,7 +10,6 @@ export const ACCESS_GRANT_LIFETIME_MILLISECONDS = 10 * 60 * 1_000;
 export const MIN_BROWSER_CREDENTIAL_LIFETIME_MILLISECONDS = 60 * 1_000;
 export const MAX_BROWSER_CREDENTIAL_LIFETIME_MILLISECONDS = 60 * 60 * 1_000;
 export const MAX_RUNTIMES_PER_PROJECT = 8;
-const EMPTY_INSTALLABLE_AGENTS: readonly never[] = Object.freeze([]);
 
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const PAIRING_CODE_PATTERN = /^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){4}$/;
@@ -129,7 +128,6 @@ export class ChannelHostCredential extends VerifiedChannelAccess {
 export class ChannelDescriptor {
     readonly agents: readonly AgentDescriptor[];
     readonly channelId: string;
-    readonly installableAgents = EMPTY_INSTALLABLE_AGENTS;
     readonly machineName: string;
     readonly projectId: string;
     readonly runtimeId: string;
@@ -194,7 +192,6 @@ export class ExpiredPairingStatus extends PairingStatus {
 export class PairedPairingStatus extends PairingStatus {
     readonly agents: readonly AgentDescriptor[];
     readonly channelId: string;
-    readonly installableAgents = EMPTY_INSTALLABLE_AGENTS;
     readonly machineName: string;
     readonly projectId: string;
     readonly runtimeId: string;

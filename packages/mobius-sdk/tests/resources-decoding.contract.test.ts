@@ -2,7 +2,6 @@ import {
     decodeMobiusChannelDescriptor,
     decodeMobiusRuntimeList,
     decodeMobiusRuntimePairingStatus,
-    MobiusProtocolError,
     MobiusRuntimePairingLifecycle,
 } from "@moxt-ai/mobius-sdk";
 import { describe, expect, it } from "vitest";
@@ -36,37 +35,21 @@ const pairedStatus = {
 };
 
 describe("Runtime descriptor decoding contracts", () => {
-    it("Given a Runtime list without installable Agents, When it is decoded, Then it is accepted", () => {
+    it("Given a Runtime list, When it is decoded, Then its Agents are available", () => {
         const decoded = decodeMobiusRuntimeList({ runtimes: [runtime] });
-        expect(decoded[0]?.installableAgents).toEqual([]);
+        expect(decoded[0]?.agents[0]?.id).toBe("codex");
     });
 
-    it("Given a Runtime list with a legacy installable Agents directory, When it is decoded, Then it is accepted", () => {
-        const decoded = decodeMobiusRuntimeList({
-            runtimes: [{ ...runtime, installableAgents: [] }],
-        });
-        expect(decoded[0]?.installableAgents).toEqual([]);
+    it("Given a Runtime list from a Relay that still echoes retired fields, When it is decoded, Then it is accepted", () => {
+        expect(() => decodeMobiusRuntimeList({ runtimes: [{ ...runtime, installableAgents: [] }] })).not.toThrow();
     });
 
-    it("Given a Runtime with an invalid installable Agents directory, When it is decoded, Then it is rejected", () => {
-        expect(() => decodeMobiusRuntimeList({ runtimes: [{ ...runtime, installableAgents: 7 }] })).toThrow(
-            MobiusProtocolError,
-        );
-    });
-
-    it("Given a paired status without installable Agents, When it is decoded, Then it is accepted", () => {
+    it("Given a paired status, When it is decoded, Then it is accepted", () => {
         const decoded = decodeMobiusRuntimePairingStatus(pairedStatus);
         expect(decoded.status).toBe(MobiusRuntimePairingLifecycle.Paired);
     });
 
-    it("Given a paired status with a legacy installable Agents directory, When it is decoded, Then it is accepted", () => {
-        const decoded = decodeMobiusRuntimePairingStatus({ ...pairedStatus, installableAgents: [] });
-        expect(decoded.status).toBe(MobiusRuntimePairingLifecycle.Paired);
-    });
-
-    it("Given a channel descriptor without installable Agents, When it is decoded, Then it is accepted", () => {
-        const channel = { ...runtime };
-        delete (channel as { installableAgents?: unknown }).installableAgents;
-        expect(() => decodeMobiusChannelDescriptor(channel)).not.toThrow();
+    it("Given a channel descriptor, When it is decoded, Then it is accepted", () => {
+        expect(() => decodeMobiusChannelDescriptor(runtime)).not.toThrow();
     });
 });
