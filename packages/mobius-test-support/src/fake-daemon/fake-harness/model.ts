@@ -10,6 +10,12 @@ export type HarnessOutput =
           readonly summary: string;
       }
     | {
+          /** Streams no chunks; the terminal completed update carries the summary
+           *  as an array of content blocks, exercising the replacement patch. */
+          readonly kind: "compaction-summary-blocks";
+          readonly blocks: readonly string[];
+      }
+    | {
           readonly kind: "activity";
           readonly title: string;
           readonly output: string;
