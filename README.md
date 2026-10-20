@@ -31,12 +31,14 @@ keep their projects, tools, and native development environments.
 
 Deploy Mobius to **your own Cloudflare account, including the Free plan**, or use
 our **free hosted service**. Both options run on Cloudflare's global network.
-Users connect through nearby edge entry points, with regional placement selected
-automatically across North America, Europe, Asia-Pacific (including northeast and
-southeast Asia), and Oceania to reduce cross-region round trips. No manual region
-selection is needed.
+Your application can automatically select a project's region from user location.
+Mobius uses that selection for project routing, helping keep shared work closer to
+its audience. Cloudflare provides nearby edge entry points and places compute
+according to the regional preference.
 
-Our hosted storage is configured in **Asia-Pacific and western North America**; Cloudflare manages the actual compute locations.
+Regional options include North America, Europe, Asia-Pacific (including northeast
+and southeast Asia), and Oceania. Our hosted storage is configured in
+**Asia-Pacific and western North America**.
 
 <a id="data-ownership-and-recovery"></a>
 
