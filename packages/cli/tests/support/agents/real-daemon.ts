@@ -21,9 +21,9 @@ import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { type WebSocket, WebSocketServer } from "ws";
 import type { LocalAgentSpecification } from "../../../src/agent-catalog/agent-specification.ts";
 import { discoverLocalAgentInventory } from "../../../src/agent-catalog/discover-local-agents.ts";
-import { createRuntimeConfig, RuntimeLocalContext } from "../../../src/daemon/config.ts";
 import { openMobiusCliInstallation } from "../../../src/daemon/pairing/pair-local-machine.ts";
-import { runRuntime } from "../../../src/daemon/run.ts";
+import { createRuntimeConfig, RuntimeLocalContext } from "../../../src/runtime/config.ts";
+import { runRuntime } from "../../../src/runtime/run.ts";
 
 export interface RealDaemonPeer {
     readonly restart: () => Promise<void>;

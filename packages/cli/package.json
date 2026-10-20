@@ -1,6 +1,6 @@
 {
     "name": "@moxt-ai/mobius",
-    "version": "0.0.259",
+    "version": "0.0.260",
     "description": "Mobius CLI for pairing and running local AI agent services.",
     "type": "module",
     "bin": {
@@ -9,7 +9,7 @@
     "types": "./src/index.ts",
     "exports": {
         ".": "./src/index.ts",
-        "./runtime": "./src/daemon/runtime.ts",
+        "./runtime": "./src/runtime/engine.ts",
         "./process": "./src/util/process/executable.ts",
         "./filesystem": "./src/filesystem/private-path.ts"
     },
@@ -52,7 +52,7 @@
     },
     "scripts": {
         "prebuild": "tsc --project src/acp/harness/claude/upstream/tsconfig.json && tsc --project src/acp/harness/pi/upstream/tsconfig.json",
-        "build": "tsc --project tsconfig.build.json && esbuild cli=src/entrypoint/cli.ts src/index.ts runtime=src/daemon/runtime.ts src/util/process/executable.ts src/filesystem/private-path.ts --bundle --platform=node --format=esm --sourcemap --outdir=dist --external:@agentclientprotocol/sdk --external:undici",
+        "build": "tsc --project tsconfig.build.json && esbuild cli=src/entrypoint/cli.ts src/index.ts runtime=src/runtime/engine.ts src/util/process/executable.ts src/filesystem/private-path.ts --bundle --platform=node --format=esm --sourcemap --outdir=dist --external:@agentclientprotocol/sdk --external:undici",
         "dev": "node --watch src/entrypoint/cli.ts",
         "pretypecheck": "tsc --project src/acp/harness/claude/upstream/tsconfig.json && tsc --project src/acp/harness/pi/upstream/tsconfig.json",
         "prepack": "pnpm build",

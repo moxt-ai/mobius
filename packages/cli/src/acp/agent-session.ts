@@ -19,9 +19,9 @@ import {
     type SessionConfigOption,
     type SessionEventPayload,
 } from "@moxt-ai/mobius-sdk/protocol";
-import type { AcpAgentDefinition } from "../daemon/config.ts";
 import type { AcpContentExternalizer } from "../external-content/acp-content-externalizer.ts";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
+import type { AcpAgentDefinition } from "../runtime/config.ts";
 import { revalidateExecutable } from "../util/process/executable.ts";
 import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp-error.ts";
 import { AgentConnection } from "./agent-connection.ts";

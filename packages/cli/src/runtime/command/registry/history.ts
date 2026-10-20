@@ -16,10 +16,10 @@ import { resolveSessionDirectories } from "../../../authorization/resolve-sessio
 import type { WorkspaceDirectoryService } from "../../../authorization/workspace-directory.ts";
 import type { NativeSessionService } from "../../../native-sessions/service.ts";
 import type { RuntimeSessionEventProjection } from "../../../session-event-projection.ts";
-import { operationErrorCode, reportOperationFailure, send } from "../../command-dispatcher.ts";
 import type { RuntimeConfig } from "../../config.ts";
 import type { RelayConnectionDiagnostics } from "../../relay/diagnostics.ts";
 import type { RuntimeCommand } from "../definition.ts";
+import { operationErrorCode, reportOperationFailure, send } from "../dispatcher.ts";
 import { resolveCatalogAgent } from "./session.ts";
 
 function isAgentReasoning(event: SessionEvent | undefined): boolean {

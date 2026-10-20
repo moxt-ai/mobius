@@ -1,4 +1,4 @@
-import type { AcpAgentDefinition } from "../../daemon/config.ts";
+import type { AcpAgentDefinition } from "../../runtime/config.ts";
 import { AcpExecutionError } from "../acp-error.ts";
 import { ClaudeAdapter } from "./claude/adapter.ts";
 import { CodexAdapter } from "./codex/adapter.ts";

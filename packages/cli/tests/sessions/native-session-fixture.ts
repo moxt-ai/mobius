@@ -10,11 +10,11 @@ import {
 } from "../../src/acp/agent-runtime-manager.ts";
 import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
 import { WorkspaceDirectoryService } from "../../src/authorization/workspace-directory.ts";
-import { createRuntimeConfig, LocalAgentDefinition } from "../../src/daemon/config.ts";
-import { systemTimer } from "../../src/daemon/relay/timer.ts";
 import { AcpContentExternalizer } from "../../src/external-content/acp-content-externalizer.ts";
 import { UnretainedExternalContentStore } from "../../src/external-content/local-external-content-store.ts";
 import { NativeSessionService } from "../../src/native-sessions/service.ts";
+import { createRuntimeConfig, LocalAgentDefinition } from "../../src/runtime/config.ts";
+import { systemTimer } from "../../src/runtime/relay/timer.ts";
 
 const acpUrl = new URL("./fixtures/acp-peer.ts", import.meta.url).toString();
 

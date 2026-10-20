@@ -8,20 +8,20 @@ import { discoverLocalAgentInventory, type LocalAgentInventory } from "../../age
 import { publishAgentCatalog } from "../../agent-catalog/publish-agent-catalog.ts";
 import { createCatalogAgentResolver } from "../../agent-catalog/resolve-catalog-agent.ts";
 import {
-    openRuntimeInstallationStore,
-    type RuntimeInstallationStore,
-    type VerifiedRuntimeConnection,
-} from "../../storage/runtime-installation-store.ts";
-import { readStateDirectory } from "../../storage/state-directory.ts";
-import { environmentProxyDispatcher } from "../../util/network/environment-proxy.ts";
-import {
     type AcpAgentDefinition,
     createRuntimeConfig,
     loadDefaultWorkspace,
     OpaqueRuntimeReconnectTarget,
     type RuntimeConfig,
     RuntimeLocalContext,
-} from "../config.ts";
+} from "../../runtime/config.ts";
+import {
+    openRuntimeInstallationStore,
+    type RuntimeInstallationStore,
+    type VerifiedRuntimeConnection,
+} from "../../storage/runtime-installation-store.ts";
+import { readStateDirectory } from "../../storage/state-directory.ts";
+import { environmentProxyDispatcher } from "../../util/network/environment-proxy.ts";
 import { prepareVersionData } from "../upgrades/data.ts";
 
 const PAIRING_TIMEOUT_MILLISECONDS = 20_000;
