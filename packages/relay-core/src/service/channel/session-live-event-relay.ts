@@ -16,8 +16,30 @@ export class SessionLiveEventRelay {
     }
 
     readonly receive = (envelope: SessionEventEnvelope): void => {
-        const message = encodeSessionEventEnvelope(envelope);
+        const eventsBySession = new Map<string, (typeof envelope.events)[number][]>();
+        for (const event of envelope.events) {
+            const events = eventsBySession.get(event.sessionId) ?? [];
+            events.push(event);
+            eventsBySession.set(event.sessionId, events);
+        }
+        let runtimeMessage: string | undefined;
+        const sessionMessages = new Map<string, string>();
         for (const host of this.#peers.hosts()) {
+            const sessionFilter = host.sessionFilter;
+            let message: string;
+            if (sessionFilter === undefined) {
+                runtimeMessage ??= encodeSessionEventEnvelope(envelope);
+                message = runtimeMessage;
+            } else {
+                const events = eventsBySession.get(sessionFilter);
+                if (events === undefined) {
+                    continue;
+                }
+                const encoded =
+                    sessionMessages.get(sessionFilter) ?? encodeSessionEventEnvelope({ events, kind: envelope.kind });
+                sessionMessages.set(sessionFilter, encoded);
+                message = encoded;
+            }
             try {
                 host.send(message);
             } catch {
@@ -25,12 +47,6 @@ export class SessionLiveEventRelay {
             }
         }
         // Recording is another consumer, including when no browsers are watching.
-        const eventsBySession = new Map<string, (typeof envelope.events)[number][]>();
-        for (const event of envelope.events) {
-            const events = eventsBySession.get(event.sessionId) ?? [];
-            events.push(event);
-            eventsBySession.set(event.sessionId, events);
-        }
         for (const [sessionId, events] of eventsBySession) {
             this.#recording.publish(
                 { projectId: this.#projectId, runtimeId: this.#runtimeId, sessionId },

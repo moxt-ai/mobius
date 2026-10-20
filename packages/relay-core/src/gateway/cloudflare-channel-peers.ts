@@ -1,4 +1,4 @@
-import { ProtocolMessageError } from "@moxt-ai/mobius-sdk/protocol";
+import { isIdentifier, ProtocolMessageError } from "@moxt-ai/mobius-sdk/protocol";
 import * as v from "valibot";
 import type { ChannelSocket, HistoryRequestKind } from "../service/channel/channel-actor.ts";
 import type { RuntimePeers, RuntimeSocket, RuntimeSocketIdentity } from "../service/channel/runtime-service.ts";
@@ -21,6 +21,12 @@ const attachmentSchema = v.union([
         channelId: v.string(),
         credentialId: v.string(),
         nativeRequestId: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(128))),
+        sessionFilter: v.optional(
+            v.pipe(
+                v.string(),
+                v.check((value: string) => isIdentifier(value)),
+            ),
+        ),
         runtimeId: v.string(),
         projectId: v.string(),
         historyRequest: v.optional(historyRequestSchema),
@@ -49,6 +55,11 @@ export class CloudflareChannelSocket implements RuntimeSocket {
         this.#socket = socket;
     }
 
+    get sessionFilter(): string | undefined {
+        const identity = this.identity();
+        return identity.role === "host" ? identity.sessionFilter : undefined;
+    }
+
     readonly identity = (): RuntimeSocketIdentity => {
         const attachment = v.parse(attachmentSchema, this.#socket.deserializeAttachment());
         if (attachment.role === "host") {
@@ -56,6 +67,7 @@ export class CloudflareChannelSocket implements RuntimeSocket {
                 channelId: attachment.channelId,
                 credentialId: attachment.credentialId,
                 ...(attachment.nativeRequestId === undefined ? {} : { nativeRequestId: attachment.nativeRequestId }),
+                ...(attachment.sessionFilter === undefined ? {} : { sessionFilter: attachment.sessionFilter }),
                 projectId: attachment.projectId,
                 role: attachment.role,
                 runtimeId: attachment.runtimeId,

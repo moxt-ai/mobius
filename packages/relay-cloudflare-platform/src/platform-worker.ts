@@ -745,6 +745,7 @@ export function createPlatformApplication(
             const host = await context.var.relay.services.runtimePairings.openProjectSessionEventHost(
                 new ProjectScope(target.projectId),
                 target.runtimeId,
+                context.req.param("sessionId"),
                 context.req.raw.signal,
             );
             const pair = new WebSocketPair();
