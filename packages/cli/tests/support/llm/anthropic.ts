@@ -5,8 +5,11 @@ import {
     type FakeProviderScenario,
     fakeProviderPrompts,
     fakeProviderResponse,
+    latestUserPrompt,
     responseChunks,
+    type SubagentScript,
     selectFakeProviderScenario,
+    selectSubagentDispatchTool,
 } from "./scenarios.ts";
 
 type JsonObject = Record<string, unknown>;
@@ -103,6 +106,47 @@ function message(model: string, content: readonly JsonObject[], stopReason: "end
     };
 }
 
+/** One scripted step of the subagent round trip, keyed by the request's latest
+ *  user prompt (the harness wraps it in system reminders, so the script's
+ *  prompts are matched at the tail) and its completed tool-call count. The main
+ *  thread's dispatch prompt with no completed calls emits the subagent dispatch
+ *  tool; the inner prompt with no completed calls defers to the shell scenario
+ *  (returns null); the inner prompt after its shell result reports in text; the
+ *  dispatch prompt after the dispatch tool's result returns null so the default
+ *  answer path applies. */
+function subagentStep(
+    script: SubagentScript,
+    tools: readonly { readonly name: string }[],
+    prompt: string,
+    completedToolCalls: number,
+):
+    | {
+          readonly text?: string;
+          readonly tool?: { readonly id: string; readonly input: JsonObject; readonly name: string };
+      }
+    | undefined {
+    if (prompt.endsWith(script.dispatchPrompt) && completedToolCalls === 0) {
+        const dispatch = selectSubagentDispatchTool(tools);
+        if (dispatch === undefined) {
+            throw new Error("The real Agent did not advertise a subagent dispatch tool");
+        }
+        return {
+            tool: {
+                id: "toolu_mobius_subagent",
+                input: {
+                    description: script.dispatchDescription,
+                    prompt: script.innerPrompt,
+                },
+                name: dispatch.name,
+            },
+        };
+    }
+    if (prompt.endsWith(script.innerPrompt) && completedToolCalls > 0) {
+        return { text: script.innerReport };
+    }
+    return undefined;
+}
+
 function event(response: ServerResponse, type: string, payload: JsonObject): void {
     response.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...payload })}\n\n`);
 }
@@ -195,6 +239,7 @@ export class FakeAnthropicProvider implements AsyncDisposable {
             readonly beforeFirstText?: () => Promise<void>;
             readonly disconnectsBeforeSuccess?: number;
             readonly readPath?: string;
+            readonly subagent?: SubagentScript;
         } = {},
     ): Promise<FakeAnthropicProvider> {
         const requests: ProviderRequestDiagnostic[] = [];
@@ -220,11 +265,17 @@ export class FakeAnthropicProvider implements AsyncDisposable {
             const tools = availableTools(payload);
             const scenario = selectFakeProviderScenario(payload);
             const completedToolCalls = toolResultCount(payload);
-            const tool =
-                completedToolCalls < scenario.toolCalls
-                    ? selectTool(tools, scenario, completedToolCalls, options.readPath)
+            const prompt = latestUserPrompt(payload);
+            const scripted =
+                options.subagent !== undefined
+                    ? subagentStep(options.subagent, tools, prompt, completedToolCalls)
                     : undefined;
-            const selectedAnswer = fakeProviderResponse(answer, scenario);
+            const tool =
+                scripted?.tool ??
+                (completedToolCalls < scenario.toolCalls
+                    ? selectTool(tools, scenario, completedToolCalls, options.readPath)
+                    : undefined);
+            const selectedAnswer = scripted?.text ?? fakeProviderResponse(answer, scenario);
             requests.push({
                 scenario,
                 selectedTool: tool?.name,
