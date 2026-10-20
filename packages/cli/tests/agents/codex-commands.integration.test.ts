@@ -123,3 +123,68 @@ test("Given a real Codex conversation with content, When the user sends /compact
         expect(compactAdvertised).toBe(true);
     });
 });
+
+test("Given a real Codex conversation with content, When the manual /compact's summarization call fails, Then the opened compaction settles failed under the same id and the prompt fails", async () => {
+    await using provider = await FakeOpenAiProvider.start("mobius-test-model", "REAL_PROMPT_REPLY", {
+        failPromptContaining: "CONTEXT CHECKPOINT COMPACTION",
+    });
+    await using codex = await CodexFixture.create(provider);
+    await withRealDaemon(new CodexAgentSpecification(), codex.environment, async (peer) => {
+        const sendPrompt = (prompt: string): void => {
+            peer.send(
+                encodeSessionPromptCommand({
+                    kind: "session.prompt",
+                    commandId: randomUUID(),
+                    sessionId: peer.sessionId,
+                    agentId: "codex",
+                    bindingId: peer.bindingId,
+                    directoryId: "default",
+                    additionalDirectoryIds: [],
+                    images: [],
+                    resources: [],
+                    prompt,
+                    disposition: SessionPromptDisposition.Reject,
+                    targetCommandId: "",
+                }),
+            );
+        };
+
+        // Seed a turn so compaction has content to summarize.
+        sendPrompt("Talk about something first");
+        for (;;) {
+            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
+                break;
+            }
+        }
+
+        sendPrompt("/compact");
+        const statuses: string[] = [];
+        const compactionIds: string[] = [];
+        let promptFailed = false;
+        for (;;) {
+            const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
+            if (event.type === "lifecycle-metadata") {
+                if (event.payload.kind === "prompt.failed") {
+                    promptFailed = true;
+                    break;
+                }
+                if (event.payload.kind === "prompt.completed") {
+                    break;
+                }
+                continue;
+            }
+            const update = event.payload;
+            if (update.sessionUpdate === "compaction_update") {
+                compactionIds.push(update.compactionId);
+                statuses.push(update.status);
+            }
+        }
+        // The compaction the client saw open (item/started) must close under the
+        // same id as failed, and the turn must fail rather than time out or report
+        // an unobserved success.
+        expect(promptFailed).toBe(true);
+        expect(statuses).toEqual(["in_progress", "failed"]);
+        expect(new Set(compactionIds).size).toBe(1);
+    });
+});

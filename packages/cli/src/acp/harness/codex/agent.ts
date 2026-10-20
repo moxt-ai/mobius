@@ -148,21 +148,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 this.#nativeSessionId = created.thread.id;
                 this.#settings.selectNewThread(created);
                 await this.#settings.probeCollaborationMode(this.#nativeSessionId, context.signal);
-                // Needs to happen after the session response so the notification follows
-                // session creation rather than racing it.
-                setTimeout(() => {
-                    void this.#emit({
-                        availableCommands: [
-                            {
-                                description: "Manually compact the session context",
-                                name: "compact",
-                            },
-                        ],
-                        sessionUpdate: "available_commands_update",
-                    }).catch((cause: unknown) => {
-                        console.error("Codex available commands notification failed", cause);
-                    });
-                }, 0);
+                this.#advertiseCompactCommand();
                 // The settings Mobius discovers come from this response. Without them the Run
                 // settings panel has nothing to render and saved selections cannot be re-applied.
                 return { configOptions: this.#settings.configOptions(), sessionId: created.thread.id };
@@ -180,6 +166,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
             .onRequest(methods.agent.session.load, async (context) => {
                 await this.#resume(context.params.sessionId, context.params.cwd, context.signal);
                 await this.#replaySavedHistory(context.signal);
+                this.#advertiseCompactCommand();
                 return { configOptions: this.#settings.configOptions() };
             })
             .onRequest(methods.agent.session.fork, async (context) => {
@@ -199,10 +186,12 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 this.#nativeSessionId = forked.thread.id;
                 this.#settings.selectRestoredThread(forked);
                 await this.#settings.probeCollaborationMode(this.#nativeSessionId, context.signal);
+                this.#advertiseCompactCommand();
                 return { configOptions: this.#settings.configOptions(), sessionId: forked.thread.id };
             })
             .onRequest(methods.agent.session.resume, async (context) => {
                 await this.#resume(context.params.sessionId, context.params.cwd, context.signal);
+                this.#advertiseCompactCommand();
                 return { configOptions: this.#settings.configOptions() };
             })
             .onRequest(methods.agent.session.prompt, async (context) => {
@@ -415,6 +404,26 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 }
             }
         }
+    };
+
+    /** Announces the manual compact command after every session entry point —
+     *  new, load, resume, and fork — so clients on restored sessions discover
+     *  it too. Deferred past the session response so the notification follows
+     *  session establishment rather than racing it. */
+    readonly #advertiseCompactCommand = (): void => {
+        setTimeout(() => {
+            void this.#emit({
+                availableCommands: [
+                    {
+                        description: "Manually compact the session context",
+                        name: "compact",
+                    },
+                ],
+                sessionUpdate: "available_commands_update",
+            }).catch((cause: unknown) => {
+                console.error("Codex available commands notification failed", cause);
+            });
+        }, 0);
     };
 
     readonly #emit = async (update: SessionNotification["update"]): Promise<void> => {

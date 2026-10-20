@@ -54,6 +54,8 @@ type AdvertisedModel = {
 
 const MODEL_CONFIG_ID = "model";
 const THOUGHT_LEVEL_CONFIG_ID = "thought_level";
+// Compaction summarizes the session with one model call; generous but finite.
+const COMPACT_TIMEOUT_MILLISECONDS = 3_600_000;
 
 const contentBlockSchema: z.ZodType<ContentBlock> = z.discriminatedUnion("type", [
     z.object({ type: z.literal("text"), text: z.string() }),
@@ -522,7 +524,11 @@ export class PiAcpAgent {
                 });
 
                 try {
-                    const res = await session.proc.compact(customInstructions);
+                    // One model call to summarize the session: finite but generous,
+                    // and cancellable like every external-system wait.
+                    const res = await session.proc.compact(customInstructions, {
+                        timeoutMs: COMPACT_TIMEOUT_MILLISECONDS,
+                    });
 
                     const r: any = res && typeof res === "object" ? (res as any) : null;
                     const summary = typeof r?.summary === "string" ? r.summary : null;

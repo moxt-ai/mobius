@@ -186,9 +186,17 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
     #turn: ActiveTurn | null = null;
     #nativeTurnId: string | null = null;
     #updateTail: Promise<void> = Promise.resolve();
-    // Resolved by the contextCompaction item and thread/compacted handlers while a
-    // manual /compact keeps its turn open until the compaction is reported.
-    #onCompactionItemSettled: (() => void) | null = null;
+    // The compaction whose contextCompaction item/started has been reported but whose
+    // terminal state has not. Exactly one may be open: Codex compacts sequentially,
+    // and a second start cannot begin before the first settles. Cleared only through
+    // #finishCompaction, which emits the terminal update — turn failure,
+    // interruption, and endpoint loss all settle it so no client is left with a
+    // compaction stuck in_progress.
+    #openCompaction: { readonly compactionId: string } | null = null;
+    // Set when the turn machinery (turn/completed or cancel) settled this turn's
+    // compaction, so the compact error path does not report a second terminal
+    // update for the same failure.
+    #turnSettledCompaction = false;
 
     constructor(context: OwnedAgentContext) {
         this.#context = context;
@@ -199,44 +207,124 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
     readonly nativeTurnId = (): string | null => this.#nativeTurnId;
     readonly onTerminated = (termination: AcpEndpointTermination): void => {
         this.#turn?.completion.reject(acpEndpointTerminationError(termination));
+        this.#settleCompaction("cancelled");
     };
     readonly close = async (): Promise<void> => {
         this.#turn?.completion.reject(new AcpExecutionError("The Codex endpoint is closed", {}, "acp_endpoint_closed"));
+        this.#settleCompaction("cancelled");
     };
 
-    /** Manual /compact: drives thread/compact/start directly (no turn is created).
-     *  The app-server then reports the compaction as a contextCompaction item whose
-     *  started/completed pair is the lifecycle clients see, so the turn stays open
-     *  until that pair settles (bounded and cancellable). Only the RPC's failure is
-     *  mapped here; success is never synthesized, so the compaction is reported
-     *  exactly once. */
+    /** Emits the terminal compaction update for the open compaction, if any, and
+     *  wakes a manual /compact waiting on it. A terminal update may patch an
+     *  already-terminal entity (the app-server can race an item/completed past a
+     *  cancellation), which clients merge idempotently. The wake rides the enqueued
+     *  emission so the waiting prompt's response never precedes the update. */
+    readonly #settleCompaction = (
+        status: "cancelled" | "completed" | "failed",
+        error?: string,
+    ): { readonly compactionId: string } | null => {
+        const open = this.#openCompaction;
+        if (open === null) {
+            return null;
+        }
+        const update: SessionNotification["update"] = {
+            compactionId: open.compactionId,
+            ...(status === "failed" && error !== undefined ? { error } : {}),
+            sessionUpdate: "compaction_update",
+            status,
+        };
+        this.#finishCompaction(async () => {
+            await this.#context.emit(update);
+        });
+        return open;
+    };
+
+    /** Clears the tracked compaction and emits the terminal update. Used by both
+     *  #settleCompaction and the item/completed handler, which emits its own
+     *  terminal update. */
+    readonly #finishCompaction = (emit: () => Promise<void>): void => {
+        this.#openCompaction = null;
+        void this.#enqueue(emit).catch((cause: unknown) => {
+            console.error("The Codex compaction settlement could not be delivered", cause);
+        });
+    };
+
+    /** Manual /compact: drives thread/compact/start, which the app-server executes
+     *  as its own turn. The turn is registered like a prompt's so every terminal
+     *  path is owned: turn/completed(failed) settles the open compaction as failed
+     *  and rejects, turn/completed(interrupted) and Stop settle it as cancelled,
+     *  and endpoint loss settles it through onTerminated. The contextCompaction
+     *  item the server streams is the lifecycle clients see — started/completed
+     *  under the item's id — and its completed resolves the wait. A bounded wait
+     *  guards servers that accept the compact but never report a result; expiry is
+     *  a failure, never a success. */
     readonly compact = async (signal: AbortSignal): Promise<PromptResponse> => {
-        const reported = Promise.withResolvers<void>();
-        this.#onCompactionItemSettled = () => reported.resolve();
+        signal.throwIfAborted();
+        if (this.#turn !== null) {
+            throw new AcpExecutionError("Another prompt is already running in this conversation", {}, "session_busy");
+        }
+        if (this.#openCompaction !== null) {
+            throw new AcpExecutionError(
+                "Another compaction is already running in this conversation",
+                {},
+                "session_busy",
+            );
+        }
+        const completion = Promise.withResolvers<PromptResponse>();
+        // A failure can arrive before thread/compact/start responds.
+        void completion.promise.catch(() => {});
+        const aborted = (): void => {
+            completion.reject(signal.reason);
+        };
+        signal.addEventListener("abort", aborted, { once: true });
+        // Armed before the RPC is sent: a short compaction can complete before its
+        // own response arrives, and a completion for an unarmed turn would be lost.
+        const turn: ActiveTurn = { completion, turn: { id: "" } };
+        this.#turn = turn;
         try {
             await this.#appServer.request(
                 "thread/compact/start",
                 { threadId: this.#context.threadId() },
                 AbortSignal.any([signal, AbortSignal.timeout(COMPACT_TIMEOUT_MILLISECONDS)]),
             );
-            await Promise.race([reported.promise, delay(COMPACT_ITEM_WAIT_MILLISECONDS, undefined, { signal })]);
+            return await Promise.race([
+                completion.promise,
+                delay(COMPACT_ITEM_WAIT_MILLISECONDS).then(() => {
+                    throw new AcpExecutionError(
+                        "The Codex compaction did not report a result",
+                        {},
+                        "codex_compaction_unreported",
+                    );
+                }),
+            ]);
         } catch (cause: unknown) {
             signal.throwIfAborted();
-            const details = cause instanceof Error ? cause.message : String(cause);
-            const compactionId = randomUUID();
-            await this.#enqueue(async () => {
-                await this.#context.emit({
-                    compactionId,
-                    error: details,
-                    sessionUpdate: "compaction_update",
-                    status: "failed",
+            // Close whatever the client saw open. The turn machinery settles the
+            // tracked compaction on failure, so a null here may mean "already
+            // settled" — a terminal update has been emitted under the item id and
+            // nothing more may be reported. Only a compaction that never opened
+            // (the start RPC itself failed; no item streamed, nothing emitted) gets
+            // a fresh-id failed update here.
+            const open = this.#settleCompaction("failed", cause instanceof Error ? cause.message : String(cause));
+            if (open === null && !this.#turnSettledCompaction) {
+                const compactionId = randomUUID();
+                await this.#enqueue(async () => {
+                    await this.#context.emit({
+                        compactionId,
+                        error: cause instanceof Error ? cause.message : String(cause),
+                        sessionUpdate: "compaction_update",
+                        status: "failed",
+                    });
                 });
-            });
+            }
+            this.#turnSettledCompaction = false;
             throw cause;
         } finally {
-            this.#onCompactionItemSettled = null;
+            signal.removeEventListener("abort", aborted);
+            if (this.#turn === turn) {
+                this.#turn = null;
+            }
         }
-        return { stopReason: "end_turn" };
     };
 
     /** Pushes the current settings so a mode change Codex applied reaches the Run settings panel. */
@@ -287,16 +375,12 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
         }
         if (method === "thread/compacted") {
             // Older app-servers report compaction through this notification instead
-            // of a contextCompaction item. It carries no summary, so a lone
-            // completed update (fresh id) is the faithful mapping.
-            await this.#enqueue(async () => {
-                await this.#context.emit({
-                    compactionId: randomUUID(),
-                    sessionUpdate: "compaction_update",
-                    status: "completed",
-                });
-                this.#onCompactionItemSettled?.();
-            });
+            // of a contextCompaction item. It may only settle a compaction that
+            // already opened (item/started tracked it): with nothing open there is
+            // no entity to patch, and emitting a completed under a fabricated id
+            // would report a compaction the client never saw open — the same
+            // discipline as the pi adapter's unopened auto_compaction_end.
+            this.#settleCompaction("completed");
             return;
         }
         if (method === "thread/settings/updated") {
@@ -393,16 +477,29 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
             // The item id doubles as the ACP compaction id: started opens the
             // compaction, completed settles it. Codex exposes no streamed summary,
             // so no compaction_summary_chunk follows. Both automatic compactions
-            // and manual /compact surface here exactly once.
+            // and manual /compact surface here exactly once; the open id is tracked
+            // so failure, interruption, or endpoint loss can settle it.
+            if (method === "item/started") {
+                this.#openCompaction = { compactionId: item.id };
+            }
+            if (method === "item/completed") {
+                // The item's own terminal update is the settlement; #finishCompaction
+                // clears the tracked state and wakes the waiter after it drains.
+                this.#finishCompaction(async () => {
+                    await this.#context.emit({
+                        compactionId: item.id,
+                        sessionUpdate: "compaction_update",
+                        status: "completed",
+                    });
+                });
+                return;
+            }
             await this.#enqueue(async () => {
                 await this.#context.emit({
                     compactionId: item.id,
                     sessionUpdate: "compaction_update",
-                    status: method === "item/completed" ? "completed" : "in_progress",
+                    status: "in_progress",
                 });
-                if (method === "item/completed") {
-                    this.#onCompactionItemSettled?.();
-                }
             });
             return;
         }
@@ -675,6 +772,9 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
                 // Turn completion below remains authoritative.
             }
         }
+        // The interrupted turn's terminal notification may never arrive; its open
+        // compaction must not outlive it.
+        this.#turnSettledCompaction = this.#settleCompaction("cancelled") !== null;
         turn.completion.resolve({ stopReason: "cancelled" });
     };
 
@@ -693,11 +793,21 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
         // the activity that belongs to it.
         await this.#updateTail;
         if (turn.status === "failed") {
+            // The app-server reports a failed turn's compaction as never-completed:
+            // settle the open compaction under the same failure before the turn
+            // rejects, so the client is not left with a compaction stuck in_progress.
+            this.#turnSettledCompaction =
+                this.#settleCompaction("failed", turn.error?.message ?? "The Codex turn failed") !== null;
             active.completion.reject(
                 new AcpExecutionError(turn.error?.message ?? "The Codex turn failed", {}, "codex_turn_failed"),
             );
             return;
         }
-        active.completion.resolve({ stopReason: turn.status === "interrupted" ? "cancelled" : "end_turn" });
+        if (turn.status === "interrupted") {
+            this.#turnSettledCompaction = this.#settleCompaction("cancelled") !== null;
+            active.completion.resolve({ stopReason: "cancelled" });
+            return;
+        }
+        active.completion.resolve({ stopReason: "end_turn" });
     };
 }

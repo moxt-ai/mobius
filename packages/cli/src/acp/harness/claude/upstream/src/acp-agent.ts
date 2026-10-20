@@ -2444,8 +2444,9 @@ export class ClaudeAcpAgent {
             // whole turn: the SDK can emit `status: compacting` both before the
             // turn's user echo activates it and again later in the same turn, and
             // the echo-time activation must not orphan the open compaction. The
-            // local is per-prompt-call and starts fresh on the next prompt
-            // regardless.
+            // consumer is per-session, so the turn's terminal result — not this
+            // scratch reset — closes a compaction that never saw its settle
+            // frame (see the result handler).
             // Do NOT reset currentStreamMessageId or streamedBlocks here. Turn
             // activation can fire mid-message (the replayed user echo with
             // --replay-user-messages lands between a message's blocks); clearing the
@@ -3096,8 +3097,8 @@ export class ClaudeAcpAgent {
                                 // frame carrying `compact_result` settles it. The SDK
                                 // emits the terminal status twice for a single failed
                                 // compaction and the two messages are indistinguishable,
-                                // so `compactionInProgress` gates the settle. The
-                                // generated summary streams ahead of the settle as
+                                // so the settle only runs while a compaction is open.
+                                // The generated summary streams ahead of the settle as
                                 // compaction_summary_chunk (see the compaction content
                                 // block case in toAcpNotifications).
                                 if (message.status === "compacting") {
@@ -3151,8 +3152,7 @@ export class ClaudeAcpAgent {
                             case "compact_boundary": {
                                 // Refresh the displayed usage immediately so the client doesn't
                                 // keep showing the stale pre-compaction size (e.g. "944k/1m")
-                                // right after the user sees "Compacting completed", which is
-                                // confusing and wrong.
+                                // after compaction completed, which is confusing and wrong.
                                 //
                                 // Prefer the SDK's authoritative post-compaction `used` via
                                 // getContextUsage — it reflects the real retained context
@@ -3167,9 +3167,8 @@ export class ClaudeAcpAgent {
                                 // compaction frees occupancy, it doesn't change the model's
                                 // window.
                                 //
-                                // The "Compacting completed." text is emitted from the `status`
-                                // handler (keyed on `compact_result`), not here, so the failure
-                                // path gets a message too.
+                                // The compaction lifecycle update itself is emitted from the
+                                // `status` handler (keyed on `compact_result`), not here.
                                 const usedTokens = await fetchContextUsedTokens(session.query, this.logger);
                                 lastAssistantUsage = null;
                                 lastAssistantTotalUsage = usedTokens ?? 0;
@@ -4068,6 +4067,30 @@ export class ClaudeAcpAgent {
                             // trailing `idle` (which can lag while background work runs — issue
                             // #773). The consumer keeps draining afterward (absorbing idle and
                             // forwarding any background output).
+                            //
+                            // Close a compaction that never saw its terminal `status`
+                            // frame here — the SDK anomalies this adapter already
+                            // defends against (repeated `compacting` frames,
+                            // doubled terminal frames) make a missing settle
+                            // plausible, and a stale-open id would otherwise merge
+                            // the next compaction into this one. A user-turn result
+                            // is the safe boundary: the turn is over, so any
+                            // compaction still open cannot produce further summary
+                            // chunks or a real settle. `cancelled`, not `failed`:
+                            // nothing errored, the settle frame simply never came.
+                            // Autonomous results never touch it.
+                            if (!isAutonomousResult && compaction !== null) {
+                                const abandoned = compaction;
+                                compaction = null;
+                                await sendUpdate({
+                                    sessionId: message.session_id,
+                                    update: {
+                                        compactionId: abandoned.id,
+                                        sessionUpdate: "compaction_update",
+                                        status: "cancelled",
+                                    },
+                                });
+                            }
                             //
                             // One exception: while background subagents this turn spawned are
                             // still live, settling now would strand their remaining work
