@@ -2440,8 +2440,12 @@ export class ClaudeAcpAgent {
             lastAssistantModel = null;
             lastAssistantError = undefined;
             lastRefusalExplanation = null;
-            compactionInProgress = false;
-            compactionId = null;
+            // Do NOT reset compactionInProgress/compactionId here. A compaction's
+            // lifecycle spans the whole turn: the SDK can emit `status: compacting`
+            // both before the turn's user echo activates it and again later in the
+            // same turn, and the echo-time activation must not orphan the open
+            // compaction's identity. Both locals are per-prompt-call and start
+            // fresh on the next prompt regardless.
             // Do NOT reset currentStreamMessageId or streamedBlocks here. Turn
             // activation can fire mid-message (the replayed user echo with
             // --replay-user-messages lands between a message's blocks); clearing the
@@ -3098,15 +3102,23 @@ export class ClaudeAcpAgent {
                                 // block case in toAcpNotifications).
                                 if (message.status === "compacting") {
                                     compactionInProgress = true;
-                                    compactionId = randomUUID();
-                                    await sendUpdate({
-                                        sessionId: message.session_id,
-                                        update: {
-                                            compactionId,
-                                            sessionUpdate: "compaction_update",
-                                            status: "in_progress",
-                                        },
-                                    });
+                                    // The SDK can repeat `status: compacting` within one
+                                    // logical compaction (observed against the live API:
+                                    // three frames for a single /compact). Each repeated
+                                    // frame must not open a new compaction — later updates
+                                    // with the same ID patch the retained entity in place,
+                                    // so reuse the open ID and only announce the opening.
+                                    if (compactionId === null) {
+                                        compactionId = randomUUID();
+                                        await sendUpdate({
+                                            sessionId: message.session_id,
+                                            update: {
+                                                compactionId,
+                                                sessionUpdate: "compaction_update",
+                                                status: "in_progress",
+                                            },
+                                        });
+                                    }
                                 } else if (message.compact_result === "success" && compactionInProgress) {
                                     // The SDK signals manual `/compact` completion with a status
                                     // message carrying `compact_result`, not the `compact_boundary`
