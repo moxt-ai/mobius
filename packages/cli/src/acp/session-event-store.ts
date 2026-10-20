@@ -262,7 +262,8 @@ export class CachedAcpSessionEventStore implements AcpSessionEventStore {
             event,
         );
         const projected = session.apply(recorded);
-        if (projected.kind === "replace") {
+        if (projected.kind === "replace" && !session.hot.includes(projected.item)) {
+            // Hot items already contain the latest text and have no SQLite row to update.
             this.#updateProjectedEvent(sessionId, session, projected.item);
         }
         this.#sessions.set(sessionId, session);

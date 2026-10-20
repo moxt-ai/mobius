@@ -3,12 +3,15 @@ import { execFileSync, fork } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EventEmitter, once } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import { cpus, tmpdir, totalmem } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
+import { setTimeout as delay, setInterval } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { inspect } from "node:util";
 import { encodeSessionPromptCommand } from "../../../mobius-sdk/src/protocol/index.ts";
 
 // @no-uc: Performance; concurrent output must preserve transport, cancellation and durable Recording.
@@ -25,6 +28,10 @@ const { WebSocket } = require("ws");
 const output = resolve(process.argv[2] ?? (await mkdtemp(join(tmpdir(), "mobius-pressure-evidence-"))));
 await mkdir(output, { recursive: true });
 const counts = process.argv.slice(3).map(Number);
+const durationSeconds = Number(process.env["MOBIUS_PRESSURE_DURATION_SECONDS"] ?? 60);
+assert.ok(Number.isSafeInteger(durationSeconds) && durationSeconds > 0);
+const expectBatches = process.env["MOBIUS_PRESSURE_EXPECT_BATCH"] !== "0";
+const bundledWorkers = new Map();
 const report = {
     revision: execFileSync("git", ["rev-parse", "HEAD"], { cwd: repository, encoding: "utf8" }).trim(),
     node: process.version,
@@ -35,7 +42,30 @@ const report = {
     cases: [],
 };
 
+async function requestJson(url, options) {
+    return await new Promise((resolve, reject) => {
+        // Keep each observation independent of pooled sockets from disposed workerd instances.
+        const request = httpRequest(url, { ...options, agent: false }, (response) => {
+            const chunks = [];
+            response.on("data", (chunk) => chunks.push(chunk));
+            response.on("error", reject);
+            response.on("end", () => {
+                try {
+                    resolve({ status: response.statusCode, value: JSON.parse(Buffer.concat(chunks).toString("utf8")) });
+                } catch (cause) {
+                    reject(new Error(`Invalid JSON from ${url.pathname}`, { cause }));
+                }
+            });
+        });
+        request.on("error", reject);
+        request.end(options.body);
+    });
+}
+
 async function bundle(path) {
+    if (bundledWorkers.has(path)) {
+        return bundledWorkers.get(path);
+    }
     const result = await build({
         entryPoints: [join(repository, path)],
         bundle: true,
@@ -43,10 +73,40 @@ async function bundle(path) {
         platform: "browser",
         external: ["cloudflare:workers"],
         write: false,
+        plugins:
+            process.env["MOBIUS_PRESSURE_SOURCE_OVERRIDES"] === undefined
+                ? []
+                : [
+                      {
+                          name: "source-snapshot",
+                          setup(builder) {
+                              builder.onLoad({ filter: /\.ts$/ }, async ({ path }) => {
+                                  const source = relative(repository, path);
+                                  if (source.startsWith("..")) {
+                                      return;
+                                  }
+                                  try {
+                                      return {
+                                          contents: await readFile(
+                                              join(process.env["MOBIUS_PRESSURE_SOURCE_OVERRIDES"], source),
+                                              "utf8",
+                                          ),
+                                          loader: "ts",
+                                      };
+                                  } catch (error) {
+                                      if (error.code !== "ENOENT") {
+                                          throw error;
+                                      }
+                                  }
+                              });
+                          },
+                      },
+                  ],
         banner: {
             js: "for (const level of ['info','warn','error','debug']) { const write=console[level].bind(console); console[level]=(...values)=>write(...values.map(value=>JSON.stringify(value))); }",
         },
     });
+    bundledWorkers.set(path, result.outputFiles[0].text);
     return result.outputFiles[0].text;
 }
 
@@ -60,7 +120,7 @@ async function exercise(count) {
     const logs = [];
     const notifications = new EventEmitter();
     let fatal;
-    const deadline = AbortSignal.timeout(120_000);
+    const deadline = AbortSignal.timeout((durationSeconds + 180) * 1000);
     const check = async (predicate, label) => {
         while (!predicate()) {
             if (fatal !== undefined) {
@@ -175,7 +235,7 @@ async function exercise(count) {
             );
         }
         const api = async (path, method = "GET", body, token, status = 200) => {
-            const response = await fetch(`${origin}/mobius/api${path}`, {
+            const response = await requestJson(new URL(`${origin}/mobius/api${path}`), {
                 method,
                 headers: {
                     authorization: `Bearer ${token ?? "pressure-developer"}`,
@@ -185,9 +245,8 @@ async function exercise(count) {
                 ...(body === undefined ? {} : { body: JSON.stringify(body) }),
                 signal: deadline,
             });
-            const value = await response.json();
-            assert.equal(response.status, status, JSON.stringify({ path, value }));
-            return value;
+            assert.equal(response.status, status, JSON.stringify({ path, value: response.value }));
+            return response.value;
         };
         stage("provisioning through public APIs");
         const tenant = (await api("/dashboard/v1/platform/tenants")).tenants[0];
@@ -379,13 +438,17 @@ async function exercise(count) {
                 const stream = streams.get(`${phase}/${id}`);
                 assert.ok(stream, `The controlled Agent stream disappeared: ${id}`);
                 stream.write(
-                    `${JSON.stringify({ kind: "emit", round, chunks, bytes, pattern: index % 2 === 0 ? '"\\λ' : "x" })}\n`,
+                    `${JSON.stringify({ kind: "emit", round, chunks, bytes, messageId: round >= 2 ? `${phase}-stream-${Math.floor((round - 2) / 50)}` : `${phase}-${round}`, pattern: index % 2 === 0 ? '"\\λ' : "x" })}\n`,
                 );
             }
         };
         const textEvents = (id, phase, round) =>
             (live.get(id) ?? []).filter(
-                (event) => event.type === "acp" && event.payload.messageId === `${phase}-${round}`,
+                (event) =>
+                    event.type === "acp" &&
+                    event.payload.sessionUpdate === "agent_message_chunk" &&
+                    event.payload.content.type === "text" &&
+                    event.payload.content.text.startsWith(`${phase}:${round}:`),
             );
         const ping = async (name) => {
             const start = performance.now();
@@ -402,6 +465,84 @@ async function exercise(count) {
             () => sessions.every((id) => streams.has(`first/${id}`)),
             "all Sessions concurrently waiting to output",
         );
+        const ingestMetrics = () => {
+            const totals = {
+                recordingRequests: 0,
+                policyQueries: 0,
+                sessionRequests: 0,
+                directoryRequests: 0,
+                sessionSqlReads: 0,
+                sessionSqlWrites: 0,
+                directorySqlReads: 0,
+                directorySqlWrites: 0,
+                indexedSessions: 0,
+                indexedEvents: 0,
+            };
+            for (const message of logs) {
+                let value = message;
+                for (let depth = 0; depth < 3 && typeof value === "string"; depth += 1) {
+                    try {
+                        value = JSON.parse(value);
+                    } catch {
+                        break;
+                    }
+                }
+                if (value?.event === "recording_ingest") {
+                    totals.recordingRequests += 1;
+                    totals.sessionRequests += value.sessionRequests;
+                    totals.directoryRequests += value.directoryRequests;
+                } else if (value?.event === "recording_policy_read") {
+                    totals.policyQueries += 1;
+                } else if (value?.event === "recording_directory_write") {
+                    totals.directorySqlReads += value.sqlReads;
+                    totals.directorySqlWrites += value.sqlWrites;
+                    totals.indexedSessions += value.sessions;
+                    totals.indexedEvents += value.events;
+                } else if (value?.event === "recording_session_write") {
+                    totals.sessionSqlReads += value.sqlReads;
+                    totals.sessionSqlWrites += value.sqlWrites;
+                }
+            }
+            return totals;
+        };
+        const convergeDirectory = async (status, label, since, minimumTimes = new Map()) => {
+            const visible = new Map();
+            let reads = 0;
+            do {
+                deadline.throwIfAborted();
+                if (fatal !== undefined) {
+                    throw fatal;
+                }
+                const directory = await api(
+                    `${base}/recording/sessions?runtimeId=${claimed.runtimeId}`,
+                    "GET",
+                    undefined,
+                    credential,
+                );
+                reads += 1;
+                for (const entry of directory.sessions) {
+                    if (
+                        entry.status === status &&
+                        Date.parse(entry.updatedAt) >= (minimumTimes.get(entry.sessionId) ?? 0) &&
+                        !visible.has(entry.sessionId)
+                    ) {
+                        visible.set(entry.sessionId, performance.now() - since);
+                    }
+                }
+                if (sessions.every((id) => visible.has(id))) {
+                    break;
+                }
+                await delay(20, undefined, { signal: deadline });
+            } while (sessions.some((id) => !visible.has(id)));
+            const latencies = sessions.map((id) => visible.get(id)).sort((a, b) => a - b);
+            const summary = {
+                maximumMilliseconds: latencies.at(-1),
+                p95Milliseconds: latencies[Math.ceil(latencies.length * 0.95) - 1],
+                publicReadRequests: reads,
+            };
+            result.directoryConvergence ??= {};
+            result.directoryConvergence[label] = summary;
+        };
         const started = performance.now();
         stage("emitting simultaneous large output");
         wave("first", 0, 2, Math.floor((12 * 1024 * 1024) / count / 2));
@@ -417,6 +558,102 @@ async function exercise(count) {
             "The daemon disconnected during simultaneous output",
         );
         result.outputPingMilliseconds = await ping("during-output");
+        await convergeDirectory(
+            "running",
+            "initialRunning",
+            started,
+            new Map(sessions.map((id) => [id, Date.parse(live.get(id).at(-1).recordedAt)])),
+        );
+        stage(`sustained output for ${durationSeconds} seconds at 20 events per Session per second`);
+        const beforeMetrics = ingestMetrics();
+        const sustainedStarted = performance.now();
+        const activityProbes = [];
+        const activityLags = [];
+        const activityAges = [];
+        let round = 2;
+        for await (const _tick of setInterval(100, undefined, { signal: deadline })) {
+            wave("first", round, 2, 1024);
+            if ((round - 2) % 10 === 0) {
+                const latest = new Map(sessions.map((id) => [id, Date.parse(live.get(id).at(-1).recordedAt)]));
+                const probe = api(
+                    `${base}/recording/sessions?runtimeId=${claimed.runtimeId}`,
+                    "GET",
+                    undefined,
+                    credential,
+                )
+                    .then((directory) => {
+                        for (const entry of directory.sessions) {
+                            assert.equal(entry.status, "running", `Directory status during output: ${entry.sessionId}`);
+                            activityLags.push(Math.max(0, latest.get(entry.sessionId) - Date.parse(entry.updatedAt)));
+                            activityAges.push(Math.max(0, Date.now() - Date.parse(entry.updatedAt)));
+                        }
+                        assert.equal(directory.sessions.length, sessions.length);
+                    })
+                    .catch((error) => {
+                        fatal = error;
+                        notifications.emit("changed");
+                    });
+                activityProbes.push(probe);
+            }
+            round += 1;
+            if (round === durationSeconds * 10 + 2) {
+                break;
+            }
+        }
+        const emittedUntil = performance.now();
+        const finalRound = round - 1;
+        await check(
+            () => sessions.every((id) => textEvents(id, "first", finalRound).length === 2),
+            "all sustained output arrived",
+        );
+        for (const [sessionIndex, id] of sessions.entries()) {
+            const chunks = live
+                .get(id)
+                .filter(
+                    (event) =>
+                        event.type === "acp" &&
+                        event.payload.sessionUpdate === "agent_message_chunk" &&
+                        event.payload.messageId?.startsWith("first-stream-"),
+                );
+            assert.equal(chunks.length, durationSeconds * 20, `Every controlled steady output chunk arrived: ${id}`);
+            for (const [index, event] of chunks.entries()) {
+                const marker = `first:${2 + Math.floor(index / 2)}:${index % 2}:`;
+                assert.equal(
+                    event.payload.content.text,
+                    marker.padEnd(1024, sessionIndex % 2 === 0 ? '"\\λ' : "x"),
+                    `Steady output contents: ${id}/${index}`,
+                );
+            }
+        }
+        const tailObserved = performance.now();
+        await convergeDirectory(
+            "running",
+            "sustainedActivity",
+            tailObserved,
+            new Map(sessions.map((id) => [id, Date.parse(textEvents(id, "first", finalRound).at(-1).recordedAt)])),
+        );
+        await Promise.all(activityProbes);
+        assert.equal(fatal, undefined);
+        const distribution = (values) => {
+            values.sort((a, b) => a - b);
+            return {
+                samples: values.length,
+                p95Milliseconds: values[Math.ceil(values.length * 0.95) - 1],
+                maximumMilliseconds: values.at(-1),
+            };
+        };
+        const afterMetrics = ingestMetrics();
+        result.sustained = {
+            configuredSeconds: durationSeconds,
+            directoryLagBehindLive: distribution(activityLags),
+            directoryActivityAge: distribution(activityAges),
+            injectionMilliseconds: emittedUntil - sustainedStarted,
+            eventsPerSession: durationSeconds * 20,
+            events: durationSeconds * 20 * count,
+            metrics: Object.fromEntries(
+                Object.keys(afterMetrics).map((key) => [key, afterMetrics[key] - beforeMetrics[key]]),
+            ),
+        };
         wave("first", 1, 128, 256);
         await check(
             () =>
@@ -433,19 +670,24 @@ async function exercise(count) {
         await check(() => sessions.every((id) => terminals.has(`first-${id}`)), "all stop requests settled");
         result.stopMaximumMilliseconds = Math.max(...sessions.map((id) => terminals.get(`first-${id}`).at - stopped));
         assert.equal(sessions.filter((id) => terminals.get(`first-${id}`).stopReason === "cancelled").length, count);
+        await convergeDirectory("idle", "stopped", stopped);
+        const followUpStarted = performance.now();
         for (const id of sessions) {
             sendPrompt(id, "next");
         }
         stage("sending follow-up messages");
         await check(() => sessions.every((id) => streams.has(`next/${id}`)), "all follow-up prompts started");
+        await convergeDirectory("running", "followUpRunning", followUpStarted);
         wave("next", 0, 2, 1024);
         await check(() => sessions.every((id) => emitted.has(`next/${id}/0`)), "follow-up output emitted");
+        const followUpFinishing = performance.now();
         for (const id of sessions) {
             streams.get(`next/${id}`).write('{"kind":"finish"}\n');
         }
         await check(() => sessions.every((id) => terminals.has(`next-${id}`)), "all follow-up prompts completed");
         assert.equal(sessions.filter((id) => terminals.get(`next-${id}`).stopReason === "end_turn").length, count);
         result.followUpPingMilliseconds = await ping("after-follow-up");
+        await convergeDirectory("idle", "followUpCompleted", followUpFinishing);
         await check(
             () => sessions.every((id) => sessionViewers.get(id).events === live.get(id).length),
             "scoped viewers received exactly their Session events",
@@ -516,6 +758,22 @@ async function exercise(count) {
         assert.equal(fatal, undefined);
         assert.equal(hostClosed, undefined);
         assert.deepEqual(connectionStates, ["online"]);
+        result.ingestMetrics = ingestMetrics();
+        assert.ok(result.ingestMetrics.recordingRequests > 0, "Production Recording request counters are required");
+        assert.ok(
+            result.ingestMetrics.directorySqlReads > 0 && result.ingestMetrics.directorySqlWrites > 0,
+            "Real Directory SQL counters are required",
+        );
+        if (expectBatches) {
+            assert.ok(
+                result.ingestMetrics.directoryRequests < result.ingestMetrics.sessionRequests / 2,
+                "Directory requests must be shared across Sessions",
+            );
+            assert.ok(
+                result.ingestMetrics.directorySqlWrites <= result.ingestMetrics.indexedSessions,
+                "Each Session is written at most once per Directory batch",
+            );
+        }
         result.status = "passed";
         result.stopped = count;
         result.followUpsCompleted = count;
@@ -527,7 +785,7 @@ async function exercise(count) {
         await writeFile(join(output, `${count}-runtime.log`), childOutput.join(""));
     } catch (error) {
         result.status = "failed";
-        result.error = String(error.stack ?? error);
+        result.error = inspect(error, { depth: 8 });
         process.exitCode = 1;
         console.error(JSON.stringify(result));
     } finally {

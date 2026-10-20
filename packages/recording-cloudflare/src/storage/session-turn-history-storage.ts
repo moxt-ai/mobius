@@ -16,6 +16,7 @@ import {
     storedTurnSchema,
 } from "../entity/session-turn-history.ts";
 import { sessionRecordingDurableObjectMigrations } from "../generated/session-recording-do-migrations.ts";
+import { RecordingSqlMetrics } from "../infra/recording-sql-metrics.ts";
 import * as schema from "../schema/session-recording-do/index.ts";
 import {
     recordedInteraction,
@@ -41,9 +42,9 @@ function decodeJson<T>(encoded: string, decode: (value: unknown) => T): T {
 export class SessionTurnHistoryStorage {
     readonly #database;
     readonly #storage: DurableObjectStorage;
-    constructor(storage: DurableObjectStorage) {
+    constructor(storage: DurableObjectStorage, metrics: RecordingSqlMetrics = new RecordingSqlMetrics()) {
         applyDurableObjectMigrations(storage, sessionRecordingDurableObjectMigrations);
-        this.#database = drizzle(storage, { schema });
+        this.#database = drizzle(storage, { schema, logger: metrics });
         this.#storage = storage;
     }
 
@@ -51,7 +52,11 @@ export class SessionTurnHistoryStorage {
     readonly transaction = <T>(operation: () => T): T => this.#storage.transactionSync(operation);
 
     readonly projection = (): StoredProjection | null => {
-        const row = this.#database.select().from(recordingProjection).where(eq(recordingProjection.singleton, 1)).get();
+        const row = this.#database
+            .select()
+            .from(recordingProjection)
+            .where(eq(recordingProjection.singleton, 1))
+            .all()[0];
         return row === undefined
             ? null
             : {
@@ -71,7 +76,7 @@ export class SessionTurnHistoryStorage {
             .select({ failureJson: recordingProjection.failureJson })
             .from(recordingProjection)
             .where(eq(recordingProjection.singleton, 1))
-            .get();
+            .all()[0];
         if (row === undefined || row.failureJson === null) {
             return null;
         }
@@ -180,7 +185,7 @@ export class SessionTurnHistoryStorage {
             .select({ turnJson: recordedTurn.turnJson })
             .from(recordedTurn)
             .where(eq(recordedTurn.commandId, commandId))
-            .get();
+            .all()[0];
         return row === undefined ? null : decodeTurn(row.turnJson);
     };
 
@@ -190,7 +195,7 @@ export class SessionTurnHistoryStorage {
             .from(recordedTurn)
             .where(eq(recordedTurn.commandId, commandId))
             .limit(1)
-            .get() !== undefined;
+            .all()[0] !== undefined;
 
     readonly openTurns = (): readonly StoredTurn[] =>
         this.#database
@@ -217,7 +222,7 @@ export class SessionTurnHistoryStorage {
             .from(recordedTurn)
             .where(lt(recordedTurn.turnOrder, order))
             .limit(1)
-            .get() !== undefined;
+            .all()[0] !== undefined;
 
     /** Reads an item's fields without its text, which folding only ever appends to. */
     readonly item = (commandId: string, itemId: string): StoredTurnItem | null => {
@@ -225,7 +230,7 @@ export class SessionTurnHistoryStorage {
             .select({ itemJson: recordedTurnItem.itemJson })
             .from(recordedTurnItem)
             .where(and(eq(recordedTurnItem.commandId, commandId), eq(recordedTurnItem.itemId, itemId)))
-            .get();
+            .all()[0];
         return row === undefined ? null : decodeItem(row.itemJson);
     };
 
@@ -235,7 +240,7 @@ export class SessionTurnHistoryStorage {
             .select(itemReadColumns(textCharacters))
             .from(recordedTurnItem)
             .where(and(eq(recordedTurnItem.commandId, commandId), eq(recordedTurnItem.itemId, itemId)))
-            .get();
+            .all()[0];
         return row === undefined ? null : decodeItemRead(row);
     };
 
@@ -294,7 +299,7 @@ export class SessionTurnHistoryStorage {
             .from(recordedTurnItem)
             .where(and(eq(recordedTurnItem.commandId, commandId), lt(recordedTurnItem.sequence, sequence)))
             .limit(1)
-            .get() !== undefined;
+            .all()[0] !== undefined;
 
     /** The command of a Turn holding an item with this identifier, if any. */
     readonly itemOwner = (itemId: string): string | null =>
@@ -303,7 +308,7 @@ export class SessionTurnHistoryStorage {
             .from(recordedTurnItem)
             .where(eq(recordedTurnItem.itemId, itemId))
             .limit(1)
-            .get()?.commandId ?? null;
+            .all()[0]?.commandId ?? null;
 
     readonly hasItemAfter = (commandId: string, sequence: number): boolean =>
         this.#database
@@ -311,7 +316,7 @@ export class SessionTurnHistoryStorage {
             .from(recordedTurnItem)
             .where(and(eq(recordedTurnItem.commandId, commandId), gt(recordedTurnItem.sequence, sequence)))
             .limit(1)
-            .get() !== undefined;
+            .all()[0] !== undefined;
 
     readonly interaction = (interactionId: string): StoredInteractionRecord | null => {
         const row = this.#database
@@ -322,7 +327,7 @@ export class SessionTurnHistoryStorage {
             })
             .from(recordedInteraction)
             .where(eq(recordedInteraction.interactionId, interactionId))
-            .get();
+            .all()[0];
         return row === undefined ? null : decodeInteractionRecord(row);
     };
 

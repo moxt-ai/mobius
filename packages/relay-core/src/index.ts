@@ -72,7 +72,9 @@ export { instrumentD1Database, RequestAccessMetrics } from "./infra/request-acce
 export {
     DisabledSessionRecording,
     type SessionRecording,
+    type SessionRecordingBatchResult,
     type SessionRecordingDeliveryResult,
+    type SessionRecordingScope,
     type SessionRecordingTarget,
 } from "./infra/session-recording.ts";
 export * from "./service/authentication/oidc-authentication.ts";
@@ -81,4 +83,5 @@ export type {
     ChannelPeers,
     ChannelSocket,
 } from "./service/channel/channel-actor.ts";
+export { RuntimeMessageScheduler } from "./service/channel/runtime-message-scheduler.ts";
 export type { RuntimePeers, RuntimeSocket, RuntimeSocketIdentity } from "./service/channel/runtime-service.ts";

@@ -47,11 +47,6 @@ export class SessionLiveEventRelay {
             }
         }
         // Recording is another consumer, including when no browsers are watching.
-        for (const [sessionId, events] of eventsBySession) {
-            this.#recording.publish(
-                { projectId: this.#projectId, runtimeId: this.#runtimeId, sessionId },
-                { events, kind: envelope.kind },
-            );
-        }
+        this.#recording.publish({ projectId: this.#projectId, runtimeId: this.#runtimeId }, envelope);
     };
 }

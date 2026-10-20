@@ -49,7 +49,7 @@ agent.onRequest(acp.methods.agent.session.prompt, async (context) => {
                         sessionId: context.params.sessionId,
                         update: {
                             sessionUpdate: "agent_message_chunk",
-                            messageId: `${phase}-${command.round}`,
+                            messageId: command.messageId ?? `${phase}-${command.round}`,
                             content: { type: "text", text: marker.padEnd(command.bytes, command.pattern ?? "x") },
                         },
                     });

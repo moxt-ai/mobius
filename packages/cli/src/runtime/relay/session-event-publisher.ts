@@ -13,6 +13,8 @@ import type { ScheduledTask, Timer } from "./timer.ts";
 const MAX_BUFFERED_BYTES = 32 * 1024 * 1024;
 const MAX_EVENT_BATCH_BYTES = 1024 * 1024;
 const MAX_FRAME_BYTES = 8 * 1024 * 1024;
+// Browser-compatible WebSocket clients may initiate only 1000 or application close codes.
+const LOCAL_BACKPRESSURE_CLOSE_CODE = 4009;
 const EMPTY_ENVELOPE_BYTES = Buffer.byteLength(JSON.stringify({ events: [], kind: SESSION_EVENT_KIND }));
 export const SESSION_EVENT_BATCH_WINDOW_MILLISECONDS = 100;
 
@@ -58,7 +60,7 @@ export class RuntimeSessionEventPublisher {
         }
         const encoded = encodeDaemonToServiceMessage(message);
         if (socket.bufferedAmount + Buffer.byteLength(encoded, "utf8") > MAX_BUFFERED_BYTES) {
-            socket.close(1013, "Live event transport overloaded");
+            socket.close(LOCAL_BACKPRESSURE_CLOSE_CODE, "Live event transport overloaded");
             return;
         }
         try {
@@ -119,7 +121,7 @@ export class RuntimeSessionEventPublisher {
         }
         const encoded = encodeDaemonToServiceMessage({ events, kind: SESSION_EVENT_KIND });
         if (socket.bufferedAmount + Buffer.byteLength(encoded, "utf8") > MAX_BUFFERED_BYTES) {
-            socket.close(1013, "Live event transport overloaded");
+            socket.close(LOCAL_BACKPRESSURE_CLOSE_CODE, "Live event transport overloaded");
             return;
         }
         try {

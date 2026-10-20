@@ -44,7 +44,8 @@ class ControlledRecording implements SessionRecording {
     readonly contents: string[] = [];
     #first = true;
 
-    readonly deliver: SessionRecording["deliver"] = async (_target, envelope, signal) => {
+    readonly deliverBatch: SessionRecording["deliverBatch"] = async (_target, envelope, signal) => {
+        const sessions = [...new Set(envelope.events.map((event) => event.sessionId))];
         signal.throwIfAborted();
         if (this.#first) {
             this.#first = false;
@@ -58,10 +59,10 @@ class ControlledRecording implements SessionRecording {
                 signal.removeEventListener("abort", cancel);
             }
             signal.throwIfAborted();
-            return { kind: "failed", code: "write_failed" };
+            return sessions.map((sessionId) => ({ sessionId, kind: "failed", code: "write_failed" }));
         }
         this.contents.push(...envelope.events.map((event) => JSON.stringify(event)));
-        return { kind: "recorded" };
+        return sessions.map((sessionId) => ({ sessionId, kind: "recorded" }));
     };
 }
 

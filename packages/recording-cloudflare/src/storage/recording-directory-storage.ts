@@ -6,22 +6,23 @@ import {
 import { and, desc, eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/durable-sqlite";
 import { recordingDirectoryDurableObjectMigrations } from "../generated/recording-directory-do-migrations.ts";
+import { RecordingSqlMetrics } from "../infra/recording-sql-metrics.ts";
 import * as schema from "../schema/recording-directory-do/index.ts";
 import { recordingSessionSummary } from "../schema/recording-directory-do/index.ts";
 import { applyDurableObjectMigrations } from "./durable-object-migrations.ts";
 
 export class RecordingDirectoryStorage {
     readonly #database;
-    constructor(storage: DurableObjectStorage) {
+    constructor(storage: DurableObjectStorage, metrics: RecordingSqlMetrics = new RecordingSqlMetrics()) {
         applyDurableObjectMigrations(storage, recordingDirectoryDurableObjectMigrations);
-        this.#database = drizzle(storage, { schema });
+        this.#database = drizzle(storage, { schema, logger: metrics });
     }
     readonly find = (sessionId: string): SessionRecordingSummary | null => {
         const row = this.#database
             .select()
             .from(recordingSessionSummary)
             .where(eq(recordingSessionSummary.sessionId, sessionId))
-            .get();
+            .all()[0];
         return row === undefined ? null : decodeSummary(row);
     };
     readonly save = (summary: SessionRecordingSummary): void => {

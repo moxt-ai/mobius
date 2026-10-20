@@ -7,6 +7,7 @@ import {
 import { and, asc, desc, eq, gt, gte, lt } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/durable-sqlite";
 import { sessionRecordingDurableObjectMigrations } from "../generated/session-recording-do-migrations.ts";
+import { RecordingSqlMetrics } from "../infra/recording-sql-metrics.ts";
 import * as schema from "../schema/session-recording-do/index.ts";
 import { recordedSessionEvent, recordingMetadata } from "../schema/session-recording-do/index.ts";
 import { applyDurableObjectMigrations } from "./durable-object-migrations.ts";
@@ -62,9 +63,9 @@ interface RecordedSessionHistoryPage extends RecordedSessionHistory {
 export class SessionRecordingStorage {
     readonly #database;
     readonly #storage: DurableObjectStorage;
-    constructor(storage: DurableObjectStorage) {
+    constructor(storage: DurableObjectStorage, metrics: RecordingSqlMetrics = new RecordingSqlMetrics()) {
         applyDurableObjectMigrations(storage, sessionRecordingDurableObjectMigrations);
-        this.#database = drizzle(storage, { schema });
+        this.#database = drizzle(storage, { schema, logger: metrics });
         this.#storage = storage;
     }
 
@@ -91,7 +92,7 @@ export class SessionRecordingStorage {
             })
             .from(recordedSessionEvent)
             .where(eq(recordedSessionEvent.ordinal, ordinal))
-            .get();
+            .all()[0];
         return row === undefined ? undefined : this.#batch(row);
     };
 
@@ -161,7 +162,7 @@ export class SessionRecordingStorage {
             .from(recordedSessionEvent)
             .orderBy(desc(recordedSessionEvent.ordinal))
             .limit(1)
-            .get();
+            .all()[0];
 
     readonly #tailCursor = (): string => {
         const tail = this.#tail();
@@ -196,7 +197,7 @@ export class SessionRecordingStorage {
                 .select()
                 .from(recordingMetadata)
                 .where(eq(recordingMetadata.singleton, 1))
-                .get();
+                .all()[0];
             if (
                 metadata !== undefined &&
                 (metadata.projectId !== write.projectId ||
@@ -227,7 +228,10 @@ export class SessionRecordingStorage {
                     sessionGenerationId: event.sessionGenerationId,
                 })
                 .returning({ ordinal: recordedSessionEvent.ordinal })
-                .get();
+                .all()[0];
+            if (inserted === undefined) {
+                throw new Error("The recorded batch did not return an append ordinal");
+            }
             project(inserted.ordinal, write.envelope.events);
             return true;
         });
@@ -246,7 +250,7 @@ export class SessionRecordingStorage {
             .from(recordedSessionEvent)
             .where(and(gt(recordedSessionEvent.ordinal, afterOrdinal), lt(recordedSessionEvent.ordinal, beforeOrdinal)))
             .limit(1)
-            .get() !== undefined;
+            .all()[0] !== undefined;
 
     readonly latestOrdinal = (): number => this.#tail()?.ordinal ?? 0;
 
@@ -398,7 +402,7 @@ export class SessionRecordingStorage {
                     eq(recordingMetadata.sessionId, sessionId),
                 ),
             )
-            .get();
+            .all()[0];
     /** Returns the stored batches, or null when this Session has no recording here. */
     readonly #requireMetadata = (projectId: string, runtimeId: string, sessionId: string) => {
         const metadata = this.#metadata(projectId, runtimeId, sessionId);
