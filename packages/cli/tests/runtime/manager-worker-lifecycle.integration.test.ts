@@ -3,6 +3,7 @@ import { type FSWatcher, watch } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { afterEach, expect, it } from "vitest";
 
@@ -169,6 +170,58 @@ it("Given a running daemon, When its worker is killed by an unhandled signal, Th
         const entries = await complete;
         expect(entries).toContain(`"pid":${workerPid}`);
         expect(await readFile(join(control.stateDirectory, "worker.lock"), "utf8")).not.toBe(`${workerPid}\n`);
+    } finally {
+        await runCli(["quit"], environment, AbortSignal.timeout(20_000)).catch(() => undefined);
+    }
+}, 90_000);
+
+it("Given a running daemon, When an unhandled rejection escapes inside its worker, Then the worker survives and the rejection is recorded", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "mobius-worker-unhandled-rejection-"));
+    temporaryDirectories.push(directory);
+    const environment = { ...process.env, MOBIUS_STATE_DIRECTORY: directory };
+    const deadline = AbortSignal.timeout(60_000);
+    try {
+        expect((await runCli(["start"], environment, deadline)).code).toBe(0);
+        const control = await openMobiusControlInstallation(deadline, environment);
+        const workerPid = Number(await readFile(join(control.stateDirectory, "worker.lock"), "utf8"));
+        // A controlled worker entry that composes the production runWorker and
+        // then lets a promise reject with nothing waiting on it.
+        const entry = join(directory, "unhandled-rejection-worker.mjs");
+        await writeFile(
+            entry,
+            [
+                `import { runWorker } from ${JSON.stringify(pathToFileURL(resolve(import.meta.dirname, "../../src/daemon/lifecycle/worker.ts")).href)};`,
+                `void runWorker("99.0.1", AbortSignal.timeout(60_000));`,
+                `Promise.reject(new Error("controlled-unhandled-rejection-marker"));`,
+                `process.on("SIGTERM", () => process.exit(0));`,
+                "",
+            ].join("\n"),
+        );
+        const rejectionLogPath = join(control.stateDirectory, "logs", "unhandled-rejections.log");
+        const recorded = waitForLogEntries(rejectionLogPath, deadline, (content) =>
+            content.includes("controlled-unhandled-rejection-marker"),
+        );
+        const replacement = await sendLocalRequest(
+            control.stateDirectory,
+            "manager",
+            {
+                kind: "ensure",
+                launch: { executable: process.execPath, entry, version: "99.0.1" },
+            },
+            deadline,
+        );
+        const status = replacement as { kind: string; worker: { pid: number } | null };
+        expect(status.kind).toBe("status");
+        expect(status.worker).not.toBeNull();
+        expect(status.worker?.pid).not.toBe(workerPid);
+        const committedWorkerPid = status.worker?.pid;
+        // The rejection is observable in the dedicated local log while the
+        // worker keeps answering control requests with the same pid.
+        expect(await recorded).toContain("controlled-unhandled-rejection-marker");
+        const after = (await sendLocalRequest(control.stateDirectory, "manager", { kind: "status" }, deadline)) as {
+            worker: { pid: number } | null;
+        };
+        expect(after.worker?.pid).toBe(committedWorkerPid);
     } finally {
         await runCli(["quit"], environment, AbortSignal.timeout(20_000)).catch(() => undefined);
     }
