@@ -8,19 +8,19 @@ import {
     type SessionStatusChangedEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { WebSocket } from "undici";
-import type { DaemonScheduledTask, DaemonTimer } from "./timer.ts";
+import type { ScheduledTask, Timer } from "./timer.ts";
 
 const MAX_BUFFERED_BYTES = 32 * 1024 * 1024;
 export const SESSION_EVENT_BATCH_WINDOW_MILLISECONDS = 100;
 
 /** Live delivery is best-effort. Recovery snapshots are owned by the daemon's local Session cache. */
-export class DaemonSessionEventPublisher {
+export class RuntimeSessionEventPublisher {
     #pendingEvents: SessionLiveEvent[] = [];
-    #pendingTask: DaemonScheduledTask | null = null;
+    #pendingTask: ScheduledTask | null = null;
     #socket: WebSocket | null = null;
-    readonly #timer: DaemonTimer;
+    readonly #timer: Timer;
 
-    constructor(timer: DaemonTimer) {
+    constructor(timer: Timer) {
         this.#timer = timer;
     }
 

@@ -24,8 +24,8 @@ import { DirectAcpAgentDefinition } from "../../src/agent-catalog/agent-specific
 import { discoverLocalAgentInventory } from "../../src/agent-catalog/discover-local-agents.ts";
 import { publishAgentCatalog } from "../../src/agent-catalog/publish-agent-catalog.ts";
 import { createCatalogAgentResolver } from "../../src/agent-catalog/resolve-catalog-agent.ts";
-import { createDaemonConfig, DaemonLocalContext } from "../../src/daemon/config.ts";
-import { runDaemon } from "../../src/daemon/run.ts";
+import { createRuntimeConfig, RuntimeLocalContext } from "../../src/daemon/config.ts";
+import { runRuntime } from "../../src/daemon/run.ts";
 
 const websocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
@@ -252,10 +252,10 @@ test("Given the local Agent executable is upgraded after the daemon started, Whe
         await rm(stateDirectory, { force: true, recursive: true });
         throw new Error(`Controlled agent was not discovered: ${JSON.stringify(inventory.unavailable)}`);
     }
-    const config: ReturnType<typeof createDaemonConfig> = createDaemonConfig(
+    const config: ReturnType<typeof createRuntimeConfig> = createRuntimeConfig(
         { channelId: "channel_alpha", defaultWorkspace: workspace, relayUrl },
         inventory.readyAgents(),
-        new DaemonLocalContext(stateDirectory, environment),
+        new RuntimeLocalContext(stateDirectory, environment),
         null,
         createCatalogAgentResolver(
             (refreshSignal) =>
@@ -270,7 +270,7 @@ test("Given the local Agent executable is upgraded after the daemon started, Whe
         ),
     );
     const cancellation = new AbortController();
-    const daemon = runDaemon(config, cancellation.signal);
+    const runtime = runRuntime(config, cancellation.signal);
 
     try {
         const frames = new ClientFrames(await socketReady.promise);
@@ -329,7 +329,7 @@ test("Given the local Agent executable is upgraded after the daemon started, Whe
             socket.destroy();
         }
         relay.close();
-        await daemon.catch(() => {});
+        await runtime.catch(() => {});
         await rm(stateDirectory, { force: true, recursive: true });
     }
 });

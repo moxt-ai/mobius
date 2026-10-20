@@ -1,11 +1,11 @@
 import { sendLocalRequest } from "./local-client.ts";
-import { type DaemonSwitchState, lifecycleResponse } from "./protocol.ts";
+import { type DaemonReleaseSwitchState, lifecycleResponse } from "./protocol.ts";
 
 export async function readSwitchStatus(
     directory: string,
     signal: AbortSignal,
     wait = false,
-): Promise<DaemonSwitchState | null> {
+): Promise<DaemonReleaseSwitchState | null> {
     const response = lifecycleResponse.parse(
         await sendLocalRequest(directory, "manager", { kind: "switch-status", wait }, signal),
     );

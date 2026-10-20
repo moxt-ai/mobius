@@ -19,7 +19,7 @@ import {
 import { agentSettingsAdapterForAgent } from "../agent-catalog/agent-settings-adapter.ts";
 import type { AcpAgentDefinition } from "../agent-catalog/local-agent.ts";
 import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
-import type { DaemonConfig } from "../daemon/config.ts";
+import type { RuntimeConfig } from "../daemon/config.ts";
 
 export interface AgentSettingsDiscovery {
     readonly event: AgentSettingsDiscoveredEvent;
@@ -44,7 +44,7 @@ function unsupportedModelIds(unsupportedModels: readonly AcpConfigurationValueUn
 
 export async function discoverAgentSettings(
     command: AgentSettingsDiscoverCommand,
-    config: DaemonConfig,
+    config: RuntimeConfig,
     directories: WorkspaceDirectoryService,
     sessions: AgentRuntimeManager,
     signal: AbortSignal,

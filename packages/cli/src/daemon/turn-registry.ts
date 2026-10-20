@@ -5,10 +5,10 @@ import {
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
-import { ActiveDaemonTurn, type RecordedSessionEvent } from "./active-turn.ts";
-import type { DaemonOperationState } from "./relay/daemon-operation-state.ts";
+import { ActiveRuntimeTurn, type RecordedSessionEvent } from "./active-turn.ts";
+import type { RuntimeOperationState } from "./relay/runtime-operation-state.ts";
 
-const waitForTurnCompletion = (turn: ActiveDaemonTurn, waitSignal: AbortSignal): Promise<void> => {
+const waitForTurnCompletion = (turn: ActiveRuntimeTurn, waitSignal: AbortSignal): Promise<void> => {
     waitSignal.throwIfAborted();
     return new Promise<void>((resolve, reject) => {
         let settled = false;
@@ -36,23 +36,23 @@ const waitForTurnCompletion = (turn: ActiveDaemonTurn, waitSignal: AbortSignal):
 };
 
 /** Owns Runtime prompt admission and recovery; Relay connection lifetimes do not own either. */
-export class DaemonTurnRegistry {
-    readonly #inFlightByCommandId = new Map<string, ActiveDaemonTurn>();
-    readonly #operations: DaemonOperationState;
+export class RuntimeTurnRegistry {
+    readonly #inFlightByCommandId = new Map<string, ActiveRuntimeTurn>();
+    readonly #operations: RuntimeOperationState;
 
-    constructor(operations: DaemonOperationState) {
+    constructor(operations: RuntimeOperationState) {
         this.#operations = operations;
     }
 
-    readonly start = (command: SessionPromptCommand, attemptId: string): ActiveDaemonTurn => {
-        const turn = new ActiveDaemonTurn(command, attemptId);
+    readonly start = (command: SessionPromptCommand, attemptId: string): ActiveRuntimeTurn => {
+        const turn = new ActiveRuntimeTurn(command, attemptId);
         this.#inFlightByCommandId.set(command.commandId, turn);
         return turn;
     };
 
-    readonly get = (commandId: string): ActiveDaemonTurn | undefined => this.#inFlightByCommandId.get(commandId);
+    readonly get = (commandId: string): ActiveRuntimeTurn | undefined => this.#inFlightByCommandId.get(commandId);
 
-    readonly finish = (turn: ActiveDaemonTurn): void => {
+    readonly finish = (turn: ActiveRuntimeTurn): void => {
         this.#inFlightByCommandId.delete(turn.command.commandId);
         turn.finish();
     };
@@ -92,7 +92,7 @@ export class DaemonTurnRegistry {
     };
 
     readonly executionSnapshot = async (matches: (command: SessionPromptCommand) => Promise<boolean>) => {
-        const matching: ActiveDaemonTurn[] = [];
+        const matching: ActiveRuntimeTurn[] = [];
         for (const turn of this.#inFlightByCommandId.values()) {
             if (await matches(turn.command)) {
                 matching.push(turn);
@@ -114,13 +114,13 @@ export class DaemonTurnRegistry {
     readonly close = async (): Promise<void> => {
         const turns = [...this.#inFlightByCommandId.values()];
         for (const turn of turns) {
-            turn.abortDaemon();
+            turn.abortRuntime();
         }
         await Promise.all(turns.map((turn) => turn.completion));
     };
 
     readonly admitAndWait = async (
-        turn: ActiveDaemonTurn,
+        turn: ActiveRuntimeTurn,
         waitSignal: AbortSignal,
         onQueued: () => void,
     ): Promise<
@@ -130,7 +130,7 @@ export class DaemonTurnRegistry {
     > => {
         const command = turn.command;
         waitSignal.throwIfAborted();
-        const head = (): ActiveDaemonTurn | undefined =>
+        const head = (): ActiveRuntimeTurn | undefined =>
             [...this.#inFlightByCommandId.values()].find(
                 (turn) =>
                     turn.command.sessionId === command.sessionId &&

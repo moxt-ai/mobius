@@ -39,8 +39,8 @@ import { expect, test } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { CodexAcpAgent } from "../../src/acp/harness/codex/agent.ts";
 import { InProcessAcpAgentDefinition } from "../../src/agent-catalog/local-agent.ts";
-import { createDaemonConfig, DaemonLocalContext } from "../../src/daemon/config.ts";
-import { runDaemon } from "../../src/daemon/run.ts";
+import { createRuntimeConfig, RuntimeLocalContext } from "../../src/daemon/config.ts";
+import { runRuntime } from "../../src/daemon/run.ts";
 import { CodexFixture } from "../support/agents/codex.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
 
@@ -113,13 +113,13 @@ test("Given real Codex starts a tool, When clients watch and reopen the complete
         (options) => new CodexAcpAgent(options),
         codex.environment,
     );
-    const config = createDaemonConfig(
+    const config = createRuntimeConfig(
         { channelId: "real-codex", defaultWorkspace: workspace, relayUrl },
         [agent],
-        new DaemonLocalContext(stateDirectory),
+        new RuntimeLocalContext(stateDirectory),
     );
     const cancellation = new AbortController();
-    const daemon = runDaemon(config, cancellation.signal);
+    const runtime = runRuntime(config, cancellation.signal);
 
     try {
         const socket = await connected.promise;
@@ -424,7 +424,7 @@ test("Given real Codex starts a tool, When clients watch and reopen the complete
     } finally {
         releaseProvider.resolve();
         cancellation.abort();
-        await daemon;
+        await runtime;
         for (const socket of websocketServer.clients) {
             socket.terminate();
         }

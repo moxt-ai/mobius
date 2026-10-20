@@ -1,7 +1,7 @@
 import { fetch } from "undici";
 
-import type { DaemonConfig } from "../daemon/config.ts";
-import { relayHttpEndpoint, runtimeAuthorization } from "../daemon/relay/runtime-authentication.ts";
+import type { RuntimeConfig } from "../daemon/config.ts";
+import { relayAuthorization, relayHttpEndpoint } from "../daemon/relay/relay-authentication.ts";
 import { environmentProxyDispatcher } from "../util/network/environment-proxy.ts";
 
 const CATALOG_UPDATE_TIMEOUT_MILLISECONDS = 20_000;
@@ -59,7 +59,7 @@ async function rejectedCatalogError(response: FetchResponse): Promise<AgentCatal
     );
 }
 
-function catalogEndpoint(config: DaemonConfig): URL {
+function catalogEndpoint(config: RuntimeConfig): URL {
     const endpoint = relayHttpEndpoint(config.relayUrl);
     if (endpoint.pathname.endsWith("/daemon")) {
         endpoint.pathname = `${endpoint.pathname.slice(0, -"/daemon".length)}/catalog`;
@@ -73,7 +73,7 @@ function catalogEndpoint(config: DaemonConfig): URL {
     throw new AgentCatalogPublishError("The Relay URL is invalid");
 }
 
-export async function publishAgentCatalog(config: DaemonConfig, signal: AbortSignal): Promise<void> {
+export async function publishAgentCatalog(config: RuntimeConfig, signal: AbortSignal): Promise<void> {
     signal.throwIfAborted();
     const timeoutSignal = AbortSignal.timeout(CATALOG_UPDATE_TIMEOUT_MILLISECONDS);
     const requestSignal = AbortSignal.any([signal, timeoutSignal]);
@@ -91,10 +91,9 @@ export async function publishAgentCatalog(config: DaemonConfig, signal: AbortSig
                     label: agent.label,
                     sessionTurnConfiguration: true,
                 })),
-                installableAgents: [],
             }),
             dispatcher: environmentProxyDispatcher,
-            headers: { ...runtimeAuthorization(config.relayUrl), "content-type": "application/json" },
+            headers: { ...relayAuthorization(config.relayUrl), "content-type": "application/json" },
             method: "PUT",
             signal: requestSignal,
         });

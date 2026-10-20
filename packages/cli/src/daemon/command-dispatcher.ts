@@ -10,14 +10,14 @@ import { LocalAgentCatalogError } from "../agent-catalog/local-agent.ts";
 import { LocalAuthorizationError } from "../authorization/local-authorization-error.ts";
 import type { DurationMetric } from "../infra/operation-metrics.ts";
 import { PromptArtifactError } from "../prompt-artifact-resolver.ts";
-import type { DaemonSessionEventProjection } from "../session-event-projection.ts";
+import type { RuntimeSessionEventProjection } from "../session-event-projection.ts";
 import type { CommandContext } from "./command/context.ts";
 import { createCommandRegistry } from "./command/registry/index.ts";
-import type { DaemonOperationState } from "./relay/daemon-operation-state.ts";
+import type { RuntimeOperationState } from "./relay/runtime-operation-state.ts";
 
 export type { CommandContext } from "./command/context.ts";
 
-export function createDaemonCommandDispatcher(options: CommandContext): {
+export function createRuntimeCommandDispatcher(options: CommandContext): {
     readonly dispatch: (message: ServiceToDaemonMessage) => void;
     readonly settle: () => Promise<void>;
 } {
@@ -32,8 +32,8 @@ export function send(socket: WebSocket, message: DaemonToServiceMessage): void {
 }
 
 export async function settleAbandonedTurn(
-    projection: DaemonSessionEventProjection,
-    operations: DaemonOperationState,
+    projection: RuntimeSessionEventProjection,
+    operations: RuntimeOperationState,
     cancellation: SessionCancelCommand,
 ): Promise<void> {
     const attemptId = operations.findUnsettledAttemptId(cancellation.commandId, cancellation.sessionId);

@@ -6,7 +6,7 @@ import {
     type RuntimeHeartbeatEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
 
-import type { DaemonScheduledTask, DaemonTimer } from "./timer.ts";
+import type { ScheduledTask, Timer } from "./timer.ts";
 
 const HEARTBEAT_ACK_TIMEOUT_MILLISECONDS = 10_000;
 const HEARTBEAT_INTERVAL_MILLISECONDS = 20_000;
@@ -17,9 +17,9 @@ class UnsupportedRelayLivenessState extends RelayLivenessState {}
 
 class AwaitingHeartbeatAckState extends RelayLivenessState {
     readonly heartbeatId: string;
-    readonly timeout: DaemonScheduledTask;
+    readonly timeout: ScheduledTask;
 
-    constructor(heartbeatId: string, timeout: DaemonScheduledTask) {
+    constructor(heartbeatId: string, timeout: ScheduledTask) {
         super();
         this.heartbeatId = heartbeatId;
         this.timeout = timeout;
@@ -27,9 +27,9 @@ class AwaitingHeartbeatAckState extends RelayLivenessState {
 }
 
 class WaitingForHeartbeatState extends RelayLivenessState {
-    readonly schedule: DaemonScheduledTask;
+    readonly schedule: ScheduledTask;
 
-    constructor(schedule: DaemonScheduledTask) {
+    constructor(schedule: ScheduledTask) {
         super();
         this.schedule = schedule;
     }
@@ -43,11 +43,11 @@ export interface RelayLivenessTransport {
 }
 
 export class RelayConnectionLiveness {
-    readonly #timer: DaemonTimer;
+    readonly #timer: Timer;
     readonly #transport: RelayLivenessTransport;
     #state: RelayLivenessState = new UnsupportedRelayLivenessState();
 
-    constructor(timer: DaemonTimer, transport: RelayLivenessTransport) {
+    constructor(timer: Timer, transport: RelayLivenessTransport) {
         this.#timer = timer;
         this.#transport = transport;
     }

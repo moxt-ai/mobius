@@ -14,7 +14,7 @@ import { NullAcpSessionObserver } from "../../src/acp/session-contracts.ts";
 import { CachedAcpSessionEventStore } from "../../src/acp/session-event-store.ts";
 import { FoundAcpStoredSession, MemoryAcpSessionStore, SqliteAcpSessionStore } from "../../src/acp/session-store.ts";
 import { LocalAgentDefinition } from "../../src/daemon/config.ts";
-import { systemDaemonTimer } from "../../src/daemon/relay/timer.ts";
+import { systemTimer } from "../../src/daemon/relay/timer.ts";
 import { AcpContentExternalizer } from "../../src/external-content/acp-content-externalizer.ts";
 import { UnretainedExternalContentStore } from "../../src/external-content/local-external-content-store.ts";
 import { acpSessionStoreMigrations } from "../../src/generated/acp-session-store-migrations.ts";
@@ -71,7 +71,7 @@ describe("ACP conversation sessions", () => {
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
             contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
-            timer: systemDaemonTimer,
+            timer: systemTimer,
             maxProcesses: null,
         });
         const signal = new AbortController().signal;
@@ -103,7 +103,7 @@ describe("ACP conversation sessions", () => {
                 sessionIdentity: "assigned",
                 onSessionStatusChanged: () => undefined,
                 contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
-                timer: systemDaemonTimer,
+                timer: systemTimer,
                 maxProcesses: null,
             });
             try {
@@ -479,7 +479,7 @@ describe("ACP conversation sessions", () => {
             sessionIdentity: "native",
             onSessionStatusChanged: () => undefined,
             contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
-            timer: systemDaemonTimer,
+            timer: systemTimer,
             maxProcesses: null,
         });
 
@@ -508,7 +508,7 @@ describe("ACP conversation sessions", () => {
             sessionIdentity: "native",
             onSessionStatusChanged: () => undefined,
             contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
-            timer: systemDaemonTimer,
+            timer: systemTimer,
             maxProcesses: null,
         });
         try {
@@ -556,7 +556,7 @@ child.once("exit", (code) => process.exit(code ?? 84));
                 sessionIdentity: "assigned",
                 onSessionStatusChanged: () => undefined,
                 contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
-                timer: systemDaemonTimer,
+                timer: systemTimer,
                 maxProcesses: null,
             });
             const adapterBaseline = new LocalAgentDefinition("pi", "Pi", adapterPath, []);
@@ -639,7 +639,7 @@ child.once("exit", (code) => process.exit(code ?? 84));
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
             contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
-            timer: systemDaemonTimer,
+            timer: systemTimer,
             maxProcesses: null,
         });
         const codex = new LocalAgentDefinition("codex", "Codex", process.execPath, [
@@ -709,7 +709,7 @@ child.once("exit", (code) => process.exit(code ?? 84));
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
             contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
-            timer: systemDaemonTimer,
+            timer: systemTimer,
             maxProcesses: null,
         });
         const agent = new LocalAgentDefinition("controlled-acp", "Controlled ACP", process.execPath, [
@@ -779,7 +779,7 @@ child.once("exit", (code) => process.exit(code ?? 84));
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
             contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
-            timer: systemDaemonTimer,
+            timer: systemTimer,
             maxProcesses: 10,
         });
         const agent = new LocalAgentDefinition(
@@ -859,7 +859,7 @@ child.once("exit", (code) => process.exit(code ?? 84));
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
             contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
-            timer: systemDaemonTimer,
+            timer: systemTimer,
             maxProcesses: null,
         });
         const agent = new LocalAgentDefinition("controlled-acp", "Controlled ACP", process.execPath, [
@@ -893,7 +893,7 @@ child.once("exit", (code) => process.exit(code ?? 84));
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
             contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
-            timer: systemDaemonTimer,
+            timer: systemTimer,
             maxProcesses: null,
         });
         const agent = new LocalAgentDefinition("controlled-acp", "Controlled ACP", process.execPath, [
@@ -924,7 +924,7 @@ child.once("exit", (code) => process.exit(code ?? 84));
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
             contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
-            timer: systemDaemonTimer,
+            timer: systemTimer,
             maxProcesses: null,
         });
         const agent = new LocalAgentDefinition("controlled-acp", "Controlled ACP", process.execPath, [
@@ -963,7 +963,7 @@ child.once("exit", (code) => process.exit(code ?? 84));
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
             contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
-            timer: systemDaemonTimer,
+            timer: systemTimer,
             maxProcesses: null,
         });
         const agent = new LocalAgentDefinition("codex", "Codex", process.execPath, [
@@ -1004,7 +1004,7 @@ child.once("exit", (code) => process.exit(code ?? 84));
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
             contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
-            timer: systemDaemonTimer,
+            timer: systemTimer,
             maxProcesses: null,
         });
         const adapterPath = join(temporaryDirectory, "codex-acp.mjs");
@@ -1099,7 +1099,7 @@ agent.once("exit", (code) => process.exit(code ?? 84));
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
             contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
-            timer: systemDaemonTimer,
+            timer: systemTimer,
             maxProcesses: null,
         });
         const codex = new LocalAgentDefinition("codex", "Codex", process.execPath, [fakeAgentPath]);
@@ -1143,7 +1143,7 @@ agent.once("exit", (code) => process.exit(code ?? 84));
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
             contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
-            timer: systemDaemonTimer,
+            timer: systemTimer,
             maxProcesses: null,
         });
         const agent = new LocalAgentDefinition("codex", "Codex", process.execPath, [

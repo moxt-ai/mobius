@@ -7,7 +7,7 @@ import { AgentRuntimeManager } from "../../src/acp/agent-runtime-manager.ts";
 import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
 import { CodexAgentSpecification } from "../../src/agent-catalog/agents/codex-agent.ts";
 import { discoverLocalAgentInventory } from "../../src/agent-catalog/discover-local-agents.ts";
-import { systemDaemonTimer } from "../../src/daemon/relay/timer.ts";
+import { systemTimer } from "../../src/daemon/relay/timer.ts";
 import { AcpContentExternalizer } from "../../src/external-content/acp-content-externalizer.ts";
 import { UnretainedExternalContentStore } from "../../src/external-content/local-external-content-store.ts";
 import { RecordingObserver } from "../sessions/acp-feature-fixture.ts";
@@ -68,7 +68,7 @@ test.skipIf(process.platform === "win32")(
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
             contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
-            timer: systemDaemonTimer,
+            timer: systemTimer,
             maxProcesses: null,
         });
         try {

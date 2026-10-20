@@ -27,15 +27,15 @@ import {
 import { listen, port, sendText } from "@moxt-ai/mobius-test/websocket";
 import { describe, expect, it } from "vitest";
 import { LocalAgentDefinition } from "../../src/agent-catalog/local-agent.ts";
-import { createDaemonConfig, DaemonLocalContext } from "../../src/daemon/config.ts";
+import { createRuntimeConfig, RuntimeLocalContext } from "../../src/daemon/config.ts";
 import { SESSION_EVENT_BATCH_WINDOW_MILLISECONDS } from "../../src/daemon/relay/session-event-publisher.ts";
-import type { DaemonScheduledTask, DaemonTimer } from "../../src/daemon/relay/timer.ts";
-import { runDaemon } from "../../src/daemon/run.ts";
+import type { ScheduledTask, Timer } from "../../src/daemon/relay/timer.ts";
+import { runRuntime } from "../../src/daemon/run.ts";
 
 const websocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
 
-class ControllableDaemonTask implements DaemonScheduledTask {
+class ControllableDaemonTask implements ScheduledTask {
     #cancelled = false;
     readonly #callback: () => void;
 
@@ -55,12 +55,12 @@ class ControllableDaemonTask implements DaemonScheduledTask {
     };
 }
 
-class ControllableDaemonTimer implements DaemonTimer {
+class ControllableTimer implements Timer {
     readonly batchWindowMilliseconds: number[] = [];
     readonly #scheduled: ControllableDaemonTask[] = [];
     readonly #waiters: Array<(task: ControllableDaemonTask) => void> = [];
 
-    readonly schedule = (callback: () => void, milliseconds: number): DaemonScheduledTask => {
+    readonly schedule = (callback: () => void, milliseconds: number): ScheduledTask => {
         const task = new ControllableDaemonTask(callback);
         if (milliseconds !== SESSION_EVENT_BATCH_WINDOW_MILLISECONDS) {
             return task;
@@ -169,11 +169,11 @@ class ClientFrames {
 async function startControlledDaemon(options: { readonly stateDirectory?: string } = {}): Promise<{
     readonly agent: LocalAgentDefinition;
     readonly close: () => Promise<void>;
-    readonly config: ReturnType<typeof createDaemonConfig>;
+    readonly config: ReturnType<typeof createRuntimeConfig>;
     readonly frames: ClientFrames;
     readonly liveBatchSizes: number[];
     readonly socket: Duplex;
-    readonly timer: ControllableDaemonTimer;
+    readonly timer: ControllableTimer;
 }> {
     const ownsStateDirectory = options.stateDirectory === undefined;
     const stateDirectory = options.stateDirectory ?? (await mkdtemp(join(tmpdir(), "mobius-daemon-timeline-")));
@@ -217,14 +217,14 @@ async function startControlledDaemon(options: { readonly stateDirectory?: string
         [fakeAgentPath, "--agent-name", "Controlled ACP"],
         { MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory },
     );
-    const config = createDaemonConfig(
+    const config = createRuntimeConfig(
         { channelId: "channel_alpha", defaultWorkspace: workspace, relayUrl },
         [agent],
-        new DaemonLocalContext(stateDirectory),
+        new RuntimeLocalContext(stateDirectory),
     );
     const cancellation = new AbortController();
-    const timer = new ControllableDaemonTimer();
-    const daemon = runDaemon(config, cancellation.signal, timer);
+    const timer = new ControllableTimer();
+    const runtime = runRuntime(config, cancellation.signal, timer);
     const socket = await socketReady.promise;
     return {
         agent,
@@ -235,7 +235,7 @@ async function startControlledDaemon(options: { readonly stateDirectory?: string
         timer,
         close: async () => {
             cancellation.abort();
-            await daemon;
+            await runtime;
             for (const relaySocket of relaySockets) {
                 relaySocket.destroy();
             }

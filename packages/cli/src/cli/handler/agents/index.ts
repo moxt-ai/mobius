@@ -2,7 +2,7 @@ import { mkdir } from "node:fs/promises";
 import type { Command } from "commander";
 
 import { discoverLocalAgentInventory } from "../../../agent-catalog/discover-local-agents.ts";
-import { DaemonLocalContext, loadDefaultWorkspace } from "../../../daemon/config.ts";
+import { loadDefaultWorkspace, RuntimeLocalContext } from "../../../daemon/config.ts";
 import { openMobiusCliInstallation } from "../../../daemon/pairing/pair-local-machine.ts";
 import type { CliContext } from "../../context.ts";
 import { formatAgentDiagnostics } from "./logic/agent-diagnostics.ts";
@@ -20,7 +20,7 @@ export function registerAgentsHandler(program: Command, context: CliContext): vo
         .option("--verbose", "include per-Agent detection timing")
         .action(async (options: AgentOptions) => {
             const installation = await openMobiusCliInstallation(context.shutdownSignal, process.env);
-            const localContext = new DaemonLocalContext(installation.stateDirectory, process.env);
+            const localContext = new RuntimeLocalContext(installation.stateDirectory, process.env);
             const defaultWorkspace = loadDefaultWorkspace(localContext.environment);
             await mkdir(defaultWorkspace, { recursive: true, mode: 0o700 });
             const inventory = await discoverLocalAgentInventory({

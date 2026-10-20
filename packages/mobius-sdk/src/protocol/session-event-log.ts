@@ -436,32 +436,12 @@ export const sessionEventPayloadSchema = z.discriminatedUnion("type", [
 ]);
 export type SessionEventPayload = z.infer<typeof sessionEventPayloadSchema>;
 const positionSchema = z.string().regex(/^(0|[1-9][0-9]*)$/);
-const provenanceSchema = z.discriminatedUnion("kind", [
-    z.object({ kind: z.literal("original") }).readonly(),
-    z
-        .object({
-            kind: z.literal("imported"),
-            sourceEventId: identifier,
-            sourcePosition: positionSchema,
-            sourceSessionId: identifier,
-        })
-        .readonly(),
-    z
-        .object({
-            kind: z.literal("forked"),
-            sourceEventId: identifier,
-            sourcePosition: positionSchema,
-            sourceSessionId: identifier,
-        })
-        .readonly(),
-]);
 const sharedSessionEventFields = {
     eventId: identifier,
     mobiusMetadata: z
         .object({ omitted: z.literal(true).optional() })
         .readonly()
         .optional(),
-    provenance: provenanceSchema.optional(),
     recordedAt: z.iso.datetime({ offset: true }),
     sessionGenerationId: identifier,
     sessionId: identifier,

@@ -3,7 +3,7 @@ import { acpAdapters } from "../../src/acp/adapter/registry.ts";
 import { AgentRuntimeManager } from "../../src/acp/agent-runtime-manager.ts";
 import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
 import { LocalAgentDefinition } from "../../src/daemon/config.ts";
-import { systemDaemonTimer } from "../../src/daemon/relay/timer.ts";
+import { systemTimer } from "../../src/daemon/relay/timer.ts";
 import { AcpContentExternalizer } from "../../src/external-content/acp-content-externalizer.ts";
 import { UnretainedExternalContentStore } from "../../src/external-content/local-external-content-store.ts";
 import { fakeAgentPath, RecordingObserver } from "./acp-feature-fixture.ts";
@@ -38,7 +38,7 @@ async function run(
         sessionIdentity: "assigned",
         onSessionStatusChanged: () => undefined,
         contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
-        timer: systemDaemonTimer,
+        timer: systemTimer,
         maxProcesses: null,
     });
     try {

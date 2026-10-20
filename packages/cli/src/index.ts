@@ -2,14 +2,14 @@ export { createAcpClient } from "./acp/create-client.ts";
 export { AcpExecutionError, runAcpPrompt } from "./acp/run-prompt.ts";
 export { LocalAuthorizationError } from "./authorization/local-authorization-error.ts";
 export {
-    DaemonLocalContext,
-    DaemonReconnectTarget,
-    loadDaemonConfig,
-    OpaqueDaemonReconnectTarget,
+    loadRuntimeConfig,
+    OpaqueRuntimeReconnectTarget,
+    RuntimeLocalContext,
+    RuntimeReconnectTarget,
 } from "./daemon/config.ts";
 export {
     type MobiusRuntimePairingOptions,
-    type PairedDaemon,
+    type PairedRuntime,
     PairingClientError,
     pairLocalMachine,
     pairMobiusRuntime,
@@ -17,7 +17,7 @@ export {
     resumeMobiusRuntime,
 } from "./daemon/pairing/pair-local-machine.ts";
 export { RuntimeRelayRevokedError } from "./daemon/relay/runtime-revocation.ts";
-export { runDaemon } from "./daemon/run.ts";
+export { runRuntime } from "./daemon/run.ts";
 export {
     createMobiusRuntimeEngine,
     loadMobiusRuntimeConnection,
