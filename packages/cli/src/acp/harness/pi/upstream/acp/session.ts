@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { isAbsolute, resolve as resolvePath } from "node:path";
 import type {
@@ -342,6 +343,33 @@ export class PiAcpSession {
     // Ensure `session/update` notifications are sent in order and can be awaited
     // before completing a `session/prompt` request.
     private lastEmit: Promise<void> = Promise.resolve();
+
+    // Agent-owned ID of the in-flight context compaction, if any. pi reports only
+    // lifecycle boundaries (no streamed summary), so one slot suffices.
+    private activeCompactionId: string | null = null;
+
+    /** Allocates (or clears) the compaction ID for the ACP compaction lifecycle.
+     *  Opening always yields an id (allocating one if none is open); closing
+     *  returns null when no compaction was open — an `auto_compaction_end`
+     *  without a matching start (e.g. replayed from a persisted session) has no
+     *  entity to patch, and fabricating an id would report a compaction the
+     *  client never saw open. */
+    private compactionId(open: boolean): string | null {
+        if (!open) {
+            const settled = this.activeCompactionId;
+            this.activeCompactionId = null;
+            return settled;
+        }
+        if (this.activeCompactionId === null) {
+            this.activeCompactionId = randomUUID();
+        }
+        return this.activeCompactionId;
+    }
+
+    /** Opening half of compactionId: always returns an id. */
+    private openCompactionId(): string {
+        return this.compactionId(true) ?? randomUUID();
+    }
 
     constructor(opts: {
         sessionId: string;
@@ -908,23 +936,22 @@ export class PiAcpSession {
 
             case "auto_compaction_start": {
                 this.emit({
-                    sessionUpdate: "agent_message_chunk",
-                    content: {
-                        type: "text",
-                        text: "Context nearing limit, running automatic compaction...",
-                    } satisfies ContentBlock,
+                    compactionId: this.openCompactionId(),
+                    sessionUpdate: "compaction_update",
+                    status: "in_progress",
                 });
                 break;
             }
 
             case "auto_compaction_end": {
-                this.emit({
-                    sessionUpdate: "agent_message_chunk",
-                    content: {
-                        type: "text",
-                        text: "Automatic compaction finished; context was summarized to continue the session.",
-                    } satisfies ContentBlock,
-                });
+                const settled = this.compactionId(false);
+                if (settled !== null) {
+                    this.emit({
+                        compactionId: settled,
+                        sessionUpdate: "compaction_update",
+                        status: "completed",
+                    });
+                }
                 break;
             }
 

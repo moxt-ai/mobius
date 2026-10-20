@@ -154,7 +154,14 @@ export const threadItemSchema = z.discriminatedUnion("type", [
         summary: z.array(boundedText(1_000_000)).max(1_000),
         type: z.literal("reasoning"),
     }),
-    z.object({ id: boundedText(256), text: boundedText(1_000_000), type: z.literal("plan") }),
+    z.object({
+        id: boundedText(256),
+        text: boundedText(1_000_000),
+        type: z.literal("plan"),
+    }),
+    // A context compaction: Codex summarized the thread to continue within its
+    // window. The item itself carries only an id; clients render the lifecycle.
+    z.object({ id: boundedText(256), type: z.literal("contextCompaction") }),
     z.object({
         agentPath: boundedText(4_096),
         agentThreadId: boundedText(256),

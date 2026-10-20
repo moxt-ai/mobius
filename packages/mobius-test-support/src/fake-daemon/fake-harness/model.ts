@@ -6,6 +6,10 @@ export type HarnessOutput =
     | { readonly kind: "file"; readonly name: string }
     | { readonly kind: "session-title"; readonly title: string }
     | {
+          readonly kind: "compaction";
+          readonly summary: string;
+      }
+    | {
           readonly kind: "activity";
           readonly title: string;
           readonly output: string;

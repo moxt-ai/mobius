@@ -374,8 +374,8 @@ export class PiRpcProcess {
         }
     }
 
-    async compact(customInstructions?: string): Promise<unknown> {
-        const res = await this.request({ type: "compact", customInstructions });
+    async compact(customInstructions?: string, opts?: { signal?: AbortSignal; timeoutMs?: number }): Promise<unknown> {
+        const res = await this.request({ type: "compact", customInstructions }, opts);
         if (!res.success) {
             throw new Error(`pi compact failed: ${res.error ?? JSON.stringify(res.data)}`);
         }

@@ -264,6 +264,41 @@ class ControlledAgentState {
             await active.send(notification);
             return;
         }
+        if (output.kind === "compaction") {
+            // One compaction per reply turn: open, stream the summary, settle.
+            const compactionId = `compaction-${active.turnNumber.toString()}`;
+            const started: acp.SessionNotification = {
+                sessionId: active.sessionId,
+                update: {
+                    compactionId,
+                    sessionUpdate: "compaction_update",
+                    status: "in_progress",
+                },
+            };
+            this.#record(started);
+            await active.send(started);
+            const chunk: acp.SessionNotification = {
+                sessionId: active.sessionId,
+                update: {
+                    compactionId,
+                    content: { text: output.summary, type: "text" },
+                    sessionUpdate: "compaction_summary_chunk",
+                },
+            };
+            this.#record(chunk);
+            await active.send(chunk);
+            const settled: acp.SessionNotification = {
+                sessionId: active.sessionId,
+                update: {
+                    compactionId,
+                    sessionUpdate: "compaction_update",
+                    status: "completed",
+                },
+            };
+            this.#record(settled);
+            await active.send(settled);
+            return;
+        }
         if (output.activityType === "reasoning") {
             const notification: acp.SessionNotification = {
                 sessionId: active.sessionId,
