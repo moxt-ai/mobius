@@ -2,90 +2,63 @@
 
 # Mobius
 
-### Bring coding Agents into your product.
+### Build on the coding Agents your users already use.
 
-SDK and infrastructure for connecting applications to coding Agents on users' machines.
+SDK and infrastructure for remote access to Agents on users' machines.
 
-[SDK](packages/mobius-sdk/README.md) · [Integration guide](GUIDE.md) · [Platform](https://mobius.moxt.ai/) · [Contributing](CONTRIBUTING.md)
+[Start building](GUIDE.md#start-with-the-sdk) · [SDK reference](packages/mobius-sdk/README.md) · [Contributing](CONTRIBUTING.md)
 
 </div>
 
-Your users already have coding Agents, projects, and tools on their computers.
-Mobius lets you build applications around that work: discover Agents, interact with
-sessions, stream results, and bring people into the loop through a shared TypeScript SDK.
-
-**Build the experience. Mobius connects it to the Agent.**
+Add coding Agent sessions to your application, with live output, remote instructions,
+and shared conversation views. Mobius handles Agent connectivity while your users
+keep their projects, tools, and native development environments.
 
 ## Why Mobius exists
 
-Adding remote Agent interaction to a product means more than sending a prompt. You
-need to reach the user's machine, adapt different Agents, follow ongoing work, and
-route instructions and permission responses back to the right session.
+- **One integration across Agents.** Use a shared TypeScript SDK instead of building
+  remote access and session interaction separately for each Agent.
+- **Work on the user's machine.** Connect to the environment where their code,
+  tools, and Agent history already live.
+- **Turn ongoing work into a shared experience.** Stream replies to multiple clients,
+  send follow-up instructions, stop execution, and respond to supported permission requests.
 
-Mobius provides that foundation so you can focus on what makes your application useful.
+<a id="data-ownership-and-recovery"></a>
 
-- **Integrate across Agents.** Build against a shared SDK for discovery, sessions,
-  settings, and interaction instead of implementing remote access for each Agent.
-- **Work where the project lives.** Agents use their existing models, tools, and
-  native development environments on the connected machine.
-- **Make ongoing work visible.** Stream output as it grows, let multiple clients
-  watch the same conversation, and show instructions sent from elsewhere.
-- **Keep users involved.** Send instructions, queue follow-up work, stop execution,
-  and handle permission requests where the Agent supports them.
-- **Own your application.** Choose your interface and access policies, and integrate
-  Mobius from browser or server clients without adopting a particular chat product.
+## Your history. Your choice.
 
-## What will you build?
+Keep Agent history on the connected machine, or enable optional cloud Recording
+for access to recorded history while that machine is offline. Choose the balance of
+privacy and availability that fits your application.
 
-| Build | Add with Mobius |
-| --- | --- |
-| An Agent interface in your product | Connect your own UI to sessions, live replies, settings, and results |
-| A remote control client | Let users check work and give the next instruction from another device |
-| A shared workspace for Agent work | Let multiple clients watch a session and see interaction from elsewhere |
+[Explore history and storage options →](GUIDE.md#data-ownership-and-recovery)
 
-## One foundation, from your app to the Agent
+## From your application to their machine
 
 ```text
 Your application  →  Mobius SDK  →  Relay  →  Local daemon  →  Coding Agent
 ```
 
-The SDK gives your application the integration surface. The Relay routes authorized
-requests and live output. The daemon connects to Agents on the user's machine.
-Together, they let you build remote Agent experiences while local actions remain
-authorized at the machine where they execute.
-
-Agent capabilities vary by Runtime and configuration. Discover the available operations
-rather than assuming every Agent supports the same features.
+You own the interface and access policies. Agent execution stays on the connected
+machine, where local actions are authorized. Available capabilities depend on the Agent
+and its configuration.
 
 ## Built with Mobius
 
-[**Morty**](https://github.com/moxt-ai/morty) uses Mobius to provide browser chat with
-coding Agents, live replies, and conversation history. Its Bot model and chat
-interface belong to Morty; Mobius supplies the underlying Agent connectivity.
+[**Morty**](https://github.com/moxt-ai/morty) — a browser client for remote coding Agent
+conversations, live replies, and history, built on Mobius.
 
-Use Morty as an example of what you can build, or bring Mobius into your own application.
+<a id="start-with-the-sdk"></a>
 
-## Start with the SDK
+## Start building
 
 ```sh
 npm install @moxt-ai/mobius-sdk
 ```
 
-- **[Read the integration guide](GUIDE.md#start-with-the-sdk)** for prerequisites,
-  credentials, and a backend example.
-- **[Explore the SDK](packages/mobius-sdk/README.md)** for server, Platform, and live-channel integration.
-- **[Try the development walkthrough](packages/mini-client/README.md)** to exercise
-  Runtime pairing and sessions without Morty.
+**[Follow the integration guide →](GUIDE.md#start-with-the-sdk)**
 
-## Data ownership and recovery
+Set up your connection and make your first SDK request. See the
+[SDK reference](packages/mobius-sdk/README.md) for browser and server integration.
 
-Agents keep their native environment and saved history. Optional cloud Recording
-makes received history accessible without the connected machine. Live delivery and
-Recording are best effort; daemon restarts lose running work and queued prompts.
-See the [delivery, storage, and recovery guide](GUIDE.md#live-output-and-recovery)
-for the boundaries your application should account for.
-
-## Contributing
-
-Help improve the SDK and infrastructure. See [CONTRIBUTING.md](CONTRIBUTING.md) for
-local development, verification, and submission guidance.
+Want to improve Mobius? Read the [contribution guide](CONTRIBUTING.md).
