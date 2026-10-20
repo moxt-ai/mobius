@@ -27,6 +27,19 @@ keep their projects, tools, and native development environments.
 - **Turn ongoing work into a shared experience.** Stream replies to multiple clients,
   send follow-up instructions, stop execution, and respond to supported permission requests.
 
+## Your Cloudflare account. Or ours.
+
+Deploy Mobius to **your own Cloudflare account, including the Free plan**, or use
+our **free hosted service**. Both options run on Cloudflare's global network.
+Your application can automatically select a project's region from user location.
+Mobius uses that selection for project routing, helping keep shared work closer to
+its audience. Cloudflare provides nearby edge entry points and places compute
+according to the regional preference.
+
+Regional options include North America, Europe, Asia-Pacific (including northeast
+and southeast Asia), and Oceania. Our hosted storage is configured in
+**Asia-Pacific and western North America**.
+
 <a id="data-ownership-and-recovery"></a>
 
 ## Your history. Your choice.
