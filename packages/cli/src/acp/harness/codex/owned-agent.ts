@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import type {
     AgentConnection,
     ContentBlock,
@@ -31,6 +32,9 @@ const APPROVAL_REASON_CHARACTER_LIMIT = 500;
 const APPROVAL_TIMEOUT_MILLISECONDS = 3_600_000;
 // Compaction summarizes the thread with one model call; generous but finite.
 const COMPACT_TIMEOUT_MILLISECONDS = 3_600_000;
+// How long a manual /compact keeps its turn open for the contextCompaction item
+// before ending the turn without a compaction report (older servers).
+const COMPACT_ITEM_WAIT_MILLISECONDS = 600_000;
 
 interface OwnedAgentContext {
     readonly client: CodexAppServerClient;
@@ -182,10 +186,9 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
     #turn: ActiveTurn | null = null;
     #nativeTurnId: string | null = null;
     #updateTail: Promise<void> = Promise.resolve();
-    // Set while a manual /compact reports its own lifecycle: the app-server
-    // represents that same compaction as a contextCompaction item, which must not
-    // open a second (orphaned) ACP compaction.
-    #compactionItemSuppressed = false;
+    // Resolved by the contextCompaction item and thread/compacted handlers while a
+    // manual /compact keeps its turn open until the compaction is reported.
+    #onCompactionItemSettled: (() => void) | null = null;
 
     constructor(context: OwnedAgentContext) {
         this.#context = context;
@@ -201,28 +204,26 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
         this.#turn?.completion.reject(new AcpExecutionError("The Codex endpoint is closed", {}, "acp_endpoint_closed"));
     };
 
-    /** Manual /compact: drives thread/compact/start directly (no turn is created)
-     *  and reports the ACP compaction lifecycle around it, suppressing the
-     *  duplicate contextCompaction item representation. */
+    /** Manual /compact: drives thread/compact/start directly (no turn is created).
+     *  The app-server then reports the compaction as a contextCompaction item whose
+     *  started/completed pair is the lifecycle clients see, so the turn stays open
+     *  until that pair settles (bounded and cancellable). Only the RPC's failure is
+     *  mapped here; success is never synthesized, so the compaction is reported
+     *  exactly once. */
     readonly compact = async (signal: AbortSignal): Promise<PromptResponse> => {
-        const compactionId = randomUUID();
-        await this.#enqueue(async () => {
-            await this.#context.emit({
-                compactionId,
-                sessionUpdate: "compaction_update",
-                status: "in_progress",
-            });
-        });
-        this.#compactionItemSuppressed = true;
+        const reported = Promise.withResolvers<void>();
+        this.#onCompactionItemSettled = () => reported.resolve();
         try {
             await this.#appServer.request(
                 "thread/compact/start",
                 { threadId: this.#context.threadId() },
                 AbortSignal.any([signal, AbortSignal.timeout(COMPACT_TIMEOUT_MILLISECONDS)]),
             );
+            await Promise.race([reported.promise, delay(COMPACT_ITEM_WAIT_MILLISECONDS, undefined, { signal })]);
         } catch (cause: unknown) {
             signal.throwIfAborted();
             const details = cause instanceof Error ? cause.message : String(cause);
+            const compactionId = randomUUID();
             await this.#enqueue(async () => {
                 await this.#context.emit({
                     compactionId,
@@ -233,15 +234,8 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
             });
             throw cause;
         } finally {
-            this.#compactionItemSuppressed = false;
+            this.#onCompactionItemSettled = null;
         }
-        await this.#enqueue(async () => {
-            await this.#context.emit({
-                compactionId,
-                sessionUpdate: "compaction_update",
-                status: "completed",
-            });
-        });
         return { stopReason: "end_turn" };
     };
 
@@ -301,6 +295,7 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
                     sessionUpdate: "compaction_update",
                     status: "completed",
                 });
+                this.#onCompactionItemSettled?.();
             });
             return;
         }
@@ -397,18 +392,17 @@ export class CodexOwnedAcpAgent implements CodexSessionAgent {
         if (item.type === "contextCompaction") {
             // The item id doubles as the ACP compaction id: started opens the
             // compaction, completed settles it. Codex exposes no streamed summary,
-            // so no compaction_summary_chunk follows. A manual /compact reports its
-            // own lifecycle around thread/compact/start and then suppresses the
-            // duplicate item representation of that same compaction.
-            if (this.#compactionItemSuppressed) {
-                return;
-            }
+            // so no compaction_summary_chunk follows. Both automatic compactions
+            // and manual /compact surface here exactly once.
             await this.#enqueue(async () => {
                 await this.#context.emit({
                     compactionId: item.id,
                     sessionUpdate: "compaction_update",
                     status: method === "item/completed" ? "completed" : "in_progress",
                 });
+                if (method === "item/completed") {
+                    this.#onCompactionItemSettled?.();
+                }
             });
             return;
         }
