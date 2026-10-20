@@ -42,7 +42,7 @@ export async function runWorker(version: string, signal: AbortSignal): Promise<v
     }
     // Install before any await: an unhandled rejection during startup itself
     // must not kill the worker before the guard exists.
-    const rejectionGuard = surviveUnhandledRejections();
+    const rejectionGuard = surviveUnhandledRejections("worker");
     const shutdown = new AbortController();
     const combined = AbortSignal.any([signal, shutdown.signal]);
     const disconnect = (): void => shutdown.abort();
@@ -66,8 +66,6 @@ async function runWorkerRuntime(
     rejectionGuard: UnhandledRejectionGuard,
 ): Promise<void> {
     const control = await openMobiusControlInstallation(combined, process.env);
-    // Record unhandled rejections beside the other daemon logs.
-    rejectionGuard.bindStateDirectory(control.stateDirectory);
     await prepareUpgradeData(control.stateDirectory, version, combined);
     const installation = await openMobiusCliInstallation(combined, process.env);
     const deadline = AbortSignal.any([combined, AbortSignal.timeout(15_000)]);
@@ -79,6 +77,9 @@ async function runWorkerRuntime(
             await setTimeout(25, undefined, { signal: deadline });
         }
     }
+    // The lock makes this process the only worker, and therefore the only
+    // writer of the worker's rejection log; buffered startup entries flush now.
+    rejectionGuard.bindStateDirectory(control.stateDirectory);
     const active = new Map<
         string,
         {

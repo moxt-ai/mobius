@@ -16,7 +16,7 @@ export async function runManager(stateDirectory: string, signal: AbortSignal): P
     if (release === null) {
         return;
     }
-    const rejectionGuard = surviveUnhandledRejections();
+    const rejectionGuard = surviveUnhandledRejections("manager");
     rejectionGuard.bindStateDirectory(stateDirectory);
     const shutdown = new AbortController();
     const combined = AbortSignal.any([signal, shutdown.signal]);

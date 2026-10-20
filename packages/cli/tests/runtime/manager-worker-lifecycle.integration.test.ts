@@ -197,7 +197,7 @@ it("Given a running daemon, When an unhandled rejection escapes inside its worke
                 "",
             ].join("\n"),
         );
-        const rejectionLogPath = join(control.stateDirectory, "logs", "unhandled-rejections.log");
+        const rejectionLogPath = join(control.stateDirectory, "logs", "unhandled-rejections-worker.log");
         const recorded = waitForLogEntries(rejectionLogPath, deadline, (content) =>
             content.includes("controlled-unhandled-rejection-marker"),
         );

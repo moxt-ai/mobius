@@ -6,6 +6,8 @@ const MAXIMUM_REJECTION_LOG_BYTES = 512 * 1_024;
 const MAXIMUM_REJECTION_TEXT_BYTES = 2_048;
 const MAXIMUM_PENDING_REJECTIONS = 100;
 
+export type DaemonProcessRole = "manager" | "worker";
+
 // Diagnostic text only: names, messages, and codes. Local rejection payloads
 // can carry user content, so keep the same single-line, bounded treatment as
 // the other local lifecycle logs.
@@ -38,7 +40,12 @@ export interface UnhandledRejectionGuard {
 // supervised worker's captured tail, a bounded local log beside the other
 // daemon logs once its directory is bound. Recording is best-effort: a broken
 // log must never become the failure that kills the daemon.
-export function surviveUnhandledRejections(): UnhandledRejectionGuard {
+//
+// Each role writes its own file: BoundedLineLog rotation is not safe across
+// processes, so a file must have exactly one writer. The manager owns its file
+// through manager.lock; the worker must bind only after acquiring worker.lock,
+// which makes it the sole writer of its own file.
+export function surviveUnhandledRejections(role: DaemonProcessRole): UnhandledRejectionGuard {
     let log: BoundedLineLog | null = null;
     const pending: string[] = [];
     const record = (reason: unknown): void => {
@@ -69,7 +76,7 @@ export function surviveUnhandledRejections(): UnhandledRejectionGuard {
             }
             log = new BoundedLineLog(
                 join(stateDirectory, "logs"),
-                "unhandled-rejections.log",
+                `unhandled-rejections-${role}.log`,
                 MAXIMUM_REJECTION_LOG_BYTES,
                 (cause) => {
                     process.stderr.write(`The unhandled rejection log could not be written: ${String(cause)}\n`);
