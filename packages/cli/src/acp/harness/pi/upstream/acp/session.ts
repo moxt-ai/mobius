@@ -325,6 +325,10 @@ export class PiAcpSession {
     // Applies to the currently running turn.
     private cancelRequested = false;
 
+    // Final model error reported by pi's auto_retry_end after retries were exhausted.
+    // Cleared when a turn starts; settleTurn() rejects the ACP prompt with it.
+    private turnRetryFailure: string | null = null;
+
     // Current in-flight turn (if any). Additional prompts are queued.
     private pendingTurn: PendingTurn | null = null;
     private readonly turnQueue: QueuedTurn[] = [];
@@ -539,8 +543,28 @@ export class PiAcpSession {
         // delivered before we resolve the ACP `session/prompt` request.
         await this.publishContextUsage();
 
-        const reason: StopReason = this.cancelRequested ? "cancelled" : "end_turn";
-        this.pendingTurn?.resolve(reason);
+        // Exhausted retries terminated the turn with a model error. Reject the ACP
+        // prompt with that error (mirroring the Claude harness's failActive and
+        // Codex's failed-turn contract) instead of reporting a normal end_turn.
+        // pi itself settled normally, so queued prompts still proceed; only the
+        // model call failed, not the agent. A cancellation that raced the
+        // exhaustion still settles as cancelled.
+        const retryFailure = this.turnRetryFailure;
+        this.turnRetryFailure = null;
+        if (retryFailure !== null && !this.cancelRequested) {
+            this.pendingTurn?.reject(
+                // The message rides in `data.details` so clients that unwrap the
+                // JSON-RPC internal-error envelope (like Mobius) surface the real
+                // model error; `code` keeps the failure machine-readable.
+                RequestError.internalError({
+                    code: "pi_retries_exhausted",
+                    details: `Pi retries exhausted: ${retryFailure}`,
+                }),
+            );
+        } else {
+            const reason: StopReason = this.cancelRequested ? "cancelled" : "end_turn";
+            this.pendingTurn?.resolve(reason);
+        }
         this.pendingTurn = null;
 
         // Start next queued prompt, if any.
@@ -606,6 +630,7 @@ export class PiAcpSession {
 
     private startTurn(t: QueuedTurn): void {
         this.cancelRequested = false;
+        this.turnRetryFailure = null;
 
         this.pendingTurn = { resolve: t.resolve, reject: t.reject };
 
@@ -650,6 +675,21 @@ export class PiAcpSession {
         switch (type) {
             case "message_update": {
                 const ame = (ev as any).assistantMessageEvent;
+
+                // Assistant content streaming means the current model call succeeded.
+                // Exhaustion does not end pi's run — it may still recover through a
+                // later retry, compaction continuation, queued input, or steering —
+                // and pi 1.1.0 resets its retry counter at exhaustion, so a later
+                // success emits no auto_retry_end at all. Any mid-run retry failure
+                // is therefore superseded the moment a recovered response streams,
+                // and the turn settles by its final outcome instead of an error it
+                // already recovered from.
+                if (
+                    this.turnRetryFailure !== null &&
+                    (ame?.type === "text_delta" || ame?.type === "thinking_delta" || ame?.type === "toolcall_start")
+                ) {
+                    this.turnRetryFailure = null;
+                }
 
                 // Stream assistant text.
                 if (ame?.type === "text_delta" && typeof ame.delta === "string") {
@@ -919,18 +959,36 @@ export class PiAcpSession {
             }
 
             case "auto_retry_start": {
-                this.emit({
-                    sessionUpdate: "agent_message_chunk",
-                    content: { type: "text", text: formatAutoRetryMessage(ev) } satisfies ContentBlock,
-                });
+                // Retry lifecycle is not model output; like the Claude and Codex
+                // harnesses, it never enters the transcript. The retried attempt's
+                // own assistant text (when it eventually streams) is the only thing
+                // a client should see.
                 break;
             }
 
             case "auto_retry_end": {
-                this.emit({
-                    sessionUpdate: "agent_message_chunk",
-                    content: { type: "text", text: "Retry finished, resuming." } satisfies ContentBlock,
-                });
+                // pi emits auto_retry_end for successful recovery (success: true),
+                // exhausted retries (success: false with the final model error), and
+                // a retry the user cancelled mid-backoff. Exhaustion does not end the
+                // ACP turn by itself: pi keeps running (compaction, queued input,
+                // pre-settle extension continuations), so the turn only fails when it
+                // settles with no later success. Record the final error, and clear it
+                // whenever a later attempt recovers, so a turn that ultimately answers
+                // settles normally instead of being branded by a mid-run retry
+                // failure. The failure itself is reported through the prompt error —
+                // like the Claude and Codex harnesses, never through transcript
+                // chunks. A cancelled retry settles as cancelled.
+                if (ev.success === true) {
+                    this.turnRetryFailure = null;
+                    break;
+                }
+                if (!this.cancelRequested) {
+                    const finalError = stringProp(ev, "finalError");
+                    this.turnRetryFailure =
+                        finalError !== null && finalError.length > 0
+                            ? finalError
+                            : "The Pi turn failed with a model error";
+                }
                 break;
             }
 
@@ -1117,23 +1175,6 @@ function optionIndex(optionId: string): number | null {
 
     const index = Number(rawIndex);
     return Number.isSafeInteger(index) && index >= 0 && String(index) === rawIndex ? index : null;
-}
-
-function formatAutoRetryMessage(ev: PiRpcEvent): string {
-    const attempt = Number((ev as any).attempt);
-    const maxAttempts = Number((ev as any).maxAttempts);
-    const delayMs = Number((ev as any).delayMs);
-
-    if (!Number.isFinite(attempt) || !Number.isFinite(maxAttempts) || !Number.isFinite(delayMs)) {
-        return "Retrying...";
-    }
-
-    let delaySeconds = Math.round(delayMs / 1000);
-    if (delayMs > 0 && delaySeconds === 0) {
-        delaySeconds = 1;
-    }
-
-    return `Retrying (attempt ${attempt}/${maxAttempts}, waiting ${delaySeconds}s)...`;
 }
 
 function toToolKind(toolName: string): ToolKind {
