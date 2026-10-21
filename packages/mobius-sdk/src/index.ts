@@ -91,6 +91,7 @@ export {
     SESSION_RECORDING_TURN_PAGE_MAX_LIMIT,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
+export * from "./conversation-title.ts";
 export * from "./errors.ts";
 export * from "./project-authentication.ts";
 export * from "./resources.ts";
