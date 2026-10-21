@@ -23,7 +23,7 @@ import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { expect, test } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { CodexAcpAgent } from "../../src/acp/harness/codex/agent.ts";
-import { InProcessAcpAgentDefinition } from "../../src/agent-catalog/local-agent.ts";
+import { InProcessAcpAgentDefinition } from "../../src/runtime/agent-catalog/local-agent.ts";
 import { createRuntimeConfig, RuntimeLocalContext } from "../../src/runtime/config.ts";
 import { runRuntime } from "../../src/runtime/run.ts";
 import { CodexFixture } from "../support/agents/codex.ts";

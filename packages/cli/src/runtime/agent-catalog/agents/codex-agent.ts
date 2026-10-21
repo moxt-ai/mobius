@@ -1,5 +1,5 @@
-import { CodexAcpAgent } from "../../acp/harness/codex/agent.ts";
-import type { InProcessAcpEndpointFactory } from "../../acp/in-process/acp-endpoint.ts";
+import { CodexAcpAgent } from "../../../acp/harness/codex/agent.ts";
+import type { InProcessAcpEndpointFactory } from "../../../acp/in-process/acp-endpoint.ts";
 import { InProcessAcpAgentDefinition } from "../agent-specification.ts";
 
 // Codex speaks its own app-server protocol rather than ACP, so Mobius hosts the ACP Agent in-process

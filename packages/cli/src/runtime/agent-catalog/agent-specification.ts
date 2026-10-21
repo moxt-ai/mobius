@@ -1,7 +1,7 @@
 import type { ClientConnection, InitializeResponse } from "@agentclientprotocol/sdk";
 
-import type { InProcessAcpEndpointFactory } from "../acp/in-process/acp-endpoint.ts";
-import type { ResolvedExecutable } from "../util/process/executable.ts";
+import type { InProcessAcpEndpointFactory } from "../../acp/in-process/acp-endpoint.ts";
+import type { ResolvedExecutable } from "../../util/process/executable.ts";
 import type { LocalAgentDiscoveryContext } from "./agent-discovery-context.ts";
 import { normalizeVersionOutput } from "./version-output.ts";
 

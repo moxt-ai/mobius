@@ -5,7 +5,7 @@ import {
     type ResolvedExecutable,
     resolveExecutablePath,
     runBoundedProcess,
-} from "../util/process/executable.ts";
+} from "../../util/process/executable.ts";
 import type { LocalAgentDiscoveryContext } from "./agent-discovery-context.ts";
 import {
     DirectAcpAgentDefinition,

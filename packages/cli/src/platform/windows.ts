@@ -2,7 +2,7 @@ import { type ChildProcess, execFile } from "node:child_process";
 import { readFile, realpath } from "node:fs/promises";
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
-import { LocalPathError } from "../filesystem/path-error.ts";
+import { LocalPathError } from "../util/filesystem/path-error.ts";
 import { ProcessExecutionError } from "../util/process/process-error.ts";
 import { claudeDesktopExecutablePaths, installedDirectories } from "./claude-desktop.ts";
 import type { PlatformSupport, ProcessLaunch, ProcessTableEntry, ProcessTreeIdentity } from "./contracts.ts";

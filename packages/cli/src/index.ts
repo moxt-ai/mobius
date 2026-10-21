@@ -1,6 +1,5 @@
 export { createAcpClient } from "./acp/create-client.ts";
 export { AcpExecutionError, runAcpPrompt } from "./acp/run-prompt.ts";
-export { LocalAuthorizationError } from "./authorization/local-authorization-error.ts";
 export {
     type MobiusRuntimePairingOptions,
     type PairedRuntime,
@@ -25,6 +24,7 @@ export {
 } from "./runtime/engine.ts";
 export { RuntimeRelayRevokedError } from "./runtime/relay/runtime-revocation.ts";
 export { runRuntime } from "./runtime/run.ts";
+export { LocalAuthorizationError } from "./runtime/workspace/local-authorization-error.ts";
 export {
     openRuntimeInstallationStore,
     type RuntimeConnectionInput,

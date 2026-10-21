@@ -19,9 +19,9 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { type WebSocket, WebSocketServer } from "ws";
-import type { LocalAgentSpecification } from "../../../src/agent-catalog/agent-specification.ts";
-import { discoverLocalAgentInventory } from "../../../src/agent-catalog/discover-local-agents.ts";
 import { openMobiusCliInstallation } from "../../../src/daemon/pairing/pair-local-machine.ts";
+import type { LocalAgentSpecification } from "../../../src/runtime/agent-catalog/agent-specification.ts";
+import { discoverLocalAgentInventory } from "../../../src/runtime/agent-catalog/discover-local-agents.ts";
 import { createRuntimeConfig, RuntimeLocalContext } from "../../../src/runtime/config.ts";
 import { runRuntime } from "../../../src/runtime/run.ts";
 

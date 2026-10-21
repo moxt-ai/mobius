@@ -3,7 +3,7 @@ import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { decodeSessionReadyEvent, encodeSessionPrepareCommand } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
-import { ClaudeCodeAgentSpecification } from "../../src/agent-catalog/agents/claude-code-agent.ts";
+import { ClaudeCodeAgentSpecification } from "../../src/runtime/agent-catalog/agents/claude-code-agent.ts";
 import { ClaudeFixture } from "../support/agents/claude.ts";
 import { withRealDaemon } from "../support/agents/real-daemon.ts";
 import { FakeAnthropicProvider } from "../support/llm/anthropic.ts";

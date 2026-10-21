@@ -3,7 +3,7 @@ import { constants } from "node:fs";
 import { access, chmod, lstat, realpath, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LocalPathError } from "../filesystem/path-error.ts";
+import { LocalPathError } from "../util/filesystem/path-error.ts";
 import type { PlatformSupport, ProcessTableEntry, ProcessTreeIdentity } from "./contracts.ts";
 
 const PROCESS_TABLE_TIMEOUT_MILLISECONDS = 1_000;

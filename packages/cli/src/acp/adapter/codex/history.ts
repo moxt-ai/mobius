@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { SESSION_HISTORY_CHARACTER_LIMIT, SESSION_HISTORY_MESSAGE_LIMIT } from "@moxt-ai/mobius-sdk/protocol";
 import { z } from "zod";
-import type { AcpAgentDefinition } from "../../../agent-catalog/local-agent.ts";
+import type { AcpAgentDefinition } from "../../../runtime/agent-catalog/local-agent.ts";
 import {
     executableLaunch,
     platformSpawnOptions,

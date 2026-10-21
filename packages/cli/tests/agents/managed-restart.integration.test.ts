@@ -10,9 +10,9 @@ import {
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
-import { ClaudeCodeAgentSpecification } from "../../src/agent-catalog/agents/claude-code-agent.ts";
-import { CodexAgentSpecification } from "../../src/agent-catalog/agents/codex-agent.ts";
-import { PiAgentSpecification } from "../../src/agent-catalog/agents/pi-agent.ts";
+import { ClaudeCodeAgentSpecification } from "../../src/runtime/agent-catalog/agents/claude-code-agent.ts";
+import { CodexAgentSpecification } from "../../src/runtime/agent-catalog/agents/codex-agent.ts";
+import { PiAgentSpecification } from "../../src/runtime/agent-catalog/agents/pi-agent.ts";
 import { ClaudeFixture } from "../support/agents/claude.ts";
 import { CodexFixture } from "../support/agents/codex.ts";
 import { PiFixture } from "../support/agents/pi.ts";

@@ -13,9 +13,9 @@ import { AcpExecutionError, type AcpPrepareOptions, type AgentRuntimeManager } f
 import type { NativeSessionInfo } from "../acp/native-session.ts";
 import { nativeSessionIdSchema } from "../acp/native-session.ts";
 import type { AcpStoredSession } from "../acp/session-store.ts";
-import { LocalAuthorizationError } from "../authorization/local-authorization-error.ts";
-import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
 import type { RuntimeConfig } from "../runtime/config.ts";
+import { LocalAuthorizationError } from "../runtime/workspace/local-authorization-error.ts";
+import type { WorkspaceDirectoryService } from "../runtime/workspace/workspace-directory.ts";
 
 interface ListedTarget {
     readonly scope: string;

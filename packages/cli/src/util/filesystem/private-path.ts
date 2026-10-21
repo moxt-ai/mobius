@@ -1,5 +1,5 @@
 import { lstat } from "node:fs/promises";
-import { platformSupportFor } from "../platform/index.ts";
+import { platformSupportFor } from "../../platform/index.ts";
 import { LocalPathError } from "./path-error.ts";
 
 export { LocalPathError } from "./path-error.ts";
