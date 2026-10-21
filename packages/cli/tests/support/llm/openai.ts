@@ -489,6 +489,17 @@ export class FakeOpenAiProvider implements AsyncDisposable {
             /** Fails every request whose prompt contains this text (HTTP 500), for
              *  guard paths such as a compaction whose summarization call errors. */
             readonly failPromptContaining?: string;
+            /** The provider error message returned for requests matched by
+             *  `failPromptContaining`. */
+            readonly failureMessage?: string;
+            /** When set with `failPromptContaining`, only the first N matching
+             *  requests fail; later matches are answered normally, so an
+             *  agent-level retry of the same prompt can recover. */
+            readonly failMatchCount?: number;
+            /** Awaited before a request matched by `failPromptContaining` receives
+             *  its failure, giving a test a window to act while the request is in
+             *  flight (for example to steer the running turn). */
+            readonly holdBeforeFailure?: () => Promise<void>;
         } = {},
     ): Promise<FakeOpenAiProvider> {
         const requests: ProviderRequestDiagnostic[] = [];
@@ -497,6 +508,7 @@ export class FakeOpenAiProvider implements AsyncDisposable {
                 ? undefined
                 : selectFakeProviderScenario({ input: options.fallbackPrompt });
         let activeScenario: FakeProviderScenario | undefined;
+        let failedMarkerRequests = 0;
         const server = createServer(async (request, response) => {
             if (request.method === "GET" && request.url?.endsWith("/models") === true) {
                 response.writeHead(200, { "content-type": "application/json" });
@@ -562,9 +574,19 @@ export class FakeOpenAiProvider implements AsyncDisposable {
                 url: request.url ?? "",
             });
             if (options.failPromptContaining !== undefined && userPrompt.includes(options.failPromptContaining)) {
-                response.writeHead(500, { "content-type": "application/json" });
-                response.end(JSON.stringify({ error: { message: "fake compaction summarization failure" } }));
-                return;
+                failedMarkerRequests += 1;
+                const shouldFail =
+                    options.failMatchCount === undefined || failedMarkerRequests <= options.failMatchCount;
+                if (shouldFail) {
+                    await options.holdBeforeFailure?.();
+                    response.writeHead(500, { "content-type": "application/json" });
+                    response.end(
+                        JSON.stringify({
+                            error: { message: options.failureMessage ?? "fake compaction summarization failure" },
+                        }),
+                    );
+                    return;
+                }
             }
 
             if (request.url?.endsWith("/responses") === true) {
