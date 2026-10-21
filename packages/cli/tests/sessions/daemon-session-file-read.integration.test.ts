@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
     decodeFileBeginEvent,
@@ -93,6 +93,15 @@ if (process.argv.includes("--version")) {
     await mkdir(join(workspace, "assets", "каталог résumé"), { recursive: true });
     await writeFile(join(workspace, "index.html"), "<!doctype html>\n<title>Todo</title>\n");
     await writeFile(join(workspace, "assets", "каталог résumé", "app.js"), "export const todo = true;\n");
+    // Explicit file URL targets outside the workspace, each with a decoy at the
+    // path a working-directory-first interpretation of the URL would select.
+    const outsideTarget = join(directory, "report.html");
+    await writeFile(outsideTarget, "<!doctype html>\n<title>Outside</title>\n");
+    const absentTarget = join(directory, "absent.html");
+    const decoyDirectory = join(workspace, directory);
+    await mkdir(decoyDirectory, { recursive: true });
+    await writeFile(join(decoyDirectory, "report.html"), "<!doctype html>\n<title>Workspace decoy</title>\n");
+    await writeFile(join(decoyDirectory, "absent.html"), "<!doctype html>\n<title>Decoy</title>\n");
     try {
         await withRealDaemon(
             new ControlledAcpAgentSpecification(),
@@ -137,6 +146,19 @@ if (process.argv.includes("--version")) {
                 // Missing references fail without inventing a target.
                 const missing = await readSessionFile(peer, peer.sessionId, "/missing-file.html");
                 expect(missing.kind).toBe("failed");
+
+                // Explicit file URLs always mean their machine-absolute target,
+                // even when a working-directory-first interpretation would
+                // select a different existing file.
+                const urlRead = await readSessionFile(peer, peer.sessionId, pathToFileURL(outsideTarget).href);
+                expect(urlRead.kind).toBe("streamed");
+                expect(urlRead.bytes.toString("utf8")).toContain("<title>Outside</title>");
+                expect(urlRead.bytes.toString("utf8")).not.toContain("Workspace decoy");
+
+                // An explicit file URL to a missing target fails; the decoy at
+                // the working-directory interpretation is not a substitute.
+                const absentUrlRead = await readSessionFile(peer, peer.sessionId, pathToFileURL(absentTarget).href);
+                expect(absentUrlRead.kind).toBe("failed");
             },
             "embedded",
             workspace,
