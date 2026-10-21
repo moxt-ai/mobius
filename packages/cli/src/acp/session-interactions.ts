@@ -29,6 +29,7 @@ import { readString, truncate } from "./value-utils.ts";
 
 interface SessionInteractionContext {
     readonly sessionId: () => string;
+    readonly cwd: () => string;
     readonly commandId: () => string;
     readonly assertNativeSession: (sessionId: string) => void;
     readonly observer: () => AcpSessionObserver;
@@ -171,6 +172,11 @@ export class AcpSessionInteractions {
         try {
             await this.#notifyPermissionRequested({
                 commandId: this.#context.commandId(),
+                details: {
+                    cwd: this.#context.cwd(),
+                    rawInput: request.toolCall.rawInput,
+                    locations: request.toolCall.locations ?? [],
+                },
                 interactionId,
                 kind: SESSION_PERMISSION_REQUESTED_KIND,
                 options,

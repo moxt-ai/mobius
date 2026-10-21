@@ -153,6 +153,7 @@ export class AgentSession implements AcpClientHandler {
         this.#store = store;
         this.#verifiedAgentVersion = agent.agentVersion;
         this.#interactions = new AcpSessionInteractions({
+            cwd: () => this.#cwd,
             sessionId: () => this.#mobiusSessionId,
             commandId: () => this.#turn.commandId,
             assertNativeSession: (sessionId) => this.assertNativeSession(sessionId),

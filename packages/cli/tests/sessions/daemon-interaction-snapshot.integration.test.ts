@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -189,6 +189,13 @@ test("Given an Agent was inspected transiently, When its first Turn materializes
         const permission = decodeSessionPermissionRequestedEvent(
             await messages.nextKind(SESSION_PERMISSION_REQUESTED_KIND),
         );
+        expect(permission).toMatchObject({
+            details: {
+                cwd: await realpath(workspace),
+                rawInput: { command: "pnpm test -- --reporter=verbose", target: "src/<entry>.ts" },
+                locations: [{ path: "src/<entry>.ts", line: 12 }],
+            },
+        });
         expect(await snapshot("permission_snapshot")).toMatchObject({
             action: "active-turn",
             turn: { interaction: permission },

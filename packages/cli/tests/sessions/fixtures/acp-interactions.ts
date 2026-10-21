@@ -28,6 +28,8 @@ export async function runInteractionScenario(
                 status: "pending",
                 title: "Run the verification command",
                 toolCallId: "permission-tool",
+                rawInput: { command: "pnpm test -- --reporter=verbose", target: "src/<entry>.ts" },
+                locations: [{ path: "src/<entry>.ts", line: 12 }],
             },
         });
         if (permission.outcome.outcome !== "selected") {
