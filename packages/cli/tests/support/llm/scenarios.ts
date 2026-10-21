@@ -6,6 +6,18 @@ export interface FakeProviderScenario {
     readonly toolCalls: number;
 }
 
+/** A scripted Task-tool round trip: the main thread dispatches a subagent, the
+ *  subagent runs one shell tool and reports back, and the main thread then
+ *  answers in text. The prompts are the conversation keys the fake provider
+ *  distinguishes requests by (the subagent's conversation carries only its own
+ *  prompt). */
+export interface SubagentScript {
+    readonly dispatchDescription: string;
+    readonly dispatchPrompt: string;
+    readonly innerPrompt: string;
+    readonly innerReport: string;
+}
+
 export const fakeProviderPrompts = {
     failedTool: "Use a shell tool that fails, then explain the result using the configured model",
     streamedTool: "Use a shell tool successfully, then stream a Unicode reply using the configured model",
@@ -118,4 +130,12 @@ export function countMatchingObjects(value: unknown, predicate: (object: JsonObj
         count += countMatchingObjects(item, predicate);
     }
     return count;
+}
+
+/** Selects the subagent-dispatch tool the real Agent advertised (the subagent
+ *  spawner is named "Task" or "Agent" depending on the CLI version). */
+export function selectSubagentDispatchTool(
+    tools: readonly { readonly name: string }[],
+): { readonly name: string } | undefined {
+    return tools.find((tool) => /^(?:task|agent)$/iu.test(tool.name));
 }

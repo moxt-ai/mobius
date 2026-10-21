@@ -1063,19 +1063,6 @@ function parentToolUseIdOf(message: { parent_tool_use_id?: unknown }): string | 
     return typeof message.parent_tool_use_id === "string" ? message.parent_tool_use_id : null;
 }
 
-function stripSubagentTextAndThinking(content: unknown): unknown {
-    if (!Array.isArray(content)) {
-        return content;
-    }
-    return content.filter(
-        (item) =>
-            !item ||
-            typeof item !== "object" ||
-            !("type" in item) ||
-            (item.type !== "text" && item.type !== "thinking"),
-    );
-}
-
 export type ToolUseCache = {
     [key: string]: {
         type: "tool_use" | "server_tool_use" | "mcp_tool_use";
@@ -4122,6 +4109,19 @@ export class ClaudeAcpAgent {
                         break;
                     }
                     case "stream_event": {
+                        // A stream from inside a subagent (parent_tool_use_id set). Without
+                        // the subagent-transcript opt-in the subagent is visible only
+                        // through the Agent/Task call that spawned it, so its streamed
+                        // chunks (text, thinking, tool input deltas) are dropped rather
+                        // than leaking into the top-level feed. Dropped before the
+                        // message-id capture so a subagent stream cannot clobber the
+                        // top-level message id either.
+                        if (
+                            message.parent_tool_use_id !== null &&
+                            !(session.forwardSubagentText || supportsSubagentTranscript(this.clientCapabilities))
+                        ) {
+                            break;
+                        }
                         // `message_start` carries the Anthropic API message id; capture it
                         // so the streamed chunks that follow (whose delta events don't carry
                         // it) can all be tagged with the same, replay-stable id.
@@ -4254,6 +4254,21 @@ export class ClaudeAcpAgent {
                     }
                     case "user":
                     case "assistant": {
+                        // A frame from inside a subagent (parent_tool_use_id set). Clients
+                        // that have not opted into nested transcripts see the subagent
+                        // only through the Agent/Task call that spawned it — its dispatch,
+                        // its progress beats, and its final report as the tool result —
+                        // so its own frames (text, thinking, tool_use, tool_result) are
+                        // dropped from the top-level feed entirely, matching the flat
+                        // Codex treatment. The turn-echo bookkeeping below keys on uuids
+                        // the top-level client supplied, which a subagent's internal
+                        // messages never carry, so dropping here cannot strand a turn.
+                        if (
+                            message.parent_tool_use_id !== null &&
+                            !(session.forwardSubagentText || supportsSubagentTranscript(this.clientCapabilities))
+                        ) {
+                            break;
+                        }
                         // Record the ACP messageId -> SDK uuid mapping for this message
                         // (including replays). The consolidated message carries both ids, so
                         // this is where we learn the uuid the SDK's rewind/resume APIs key on
@@ -4517,18 +4532,6 @@ export class ClaudeAcpAgent {
                             // Consumed: reset so the next message's blocks accumulate fresh and
                             // the record stays bounded to the in-flight message.
                             streamedBlocks.length = 0;
-                        } else if (
-                            message.type === "assistant" &&
-                            !(session.forwardSubagentText || supportsSubagentTranscript(this.clientCapabilities))
-                        ) {
-                            // Legacy clients don't understand nested transcripts. Keep the
-                            // historical behavior for them: subagent text/thinking remains
-                            // internal to the tool call instead of leaking into the top-level
-                            // feed. Capable clients opt into the branch above unchanged, with
-                            // `parentToolUseId` stamped by toAcpNotifications.
-                            content = message.message.content.filter(
-                                (item) => item.type !== "text" && item.type !== "thinking",
-                            );
                         } else {
                             content = message.message.content;
                         }
@@ -5160,12 +5163,18 @@ export class ClaudeAcpAgent {
                 continue;
             }
 
+            // Subagent frames replay the same way the live loop now drops them:
+            // without the nested-transcript opt-in the subagent is visible only
+            // through its Agent/Task call, so none of its own messages replay.
+            // The messageIdToUuid backfill above still records them — it keys on
+            // ids the SDK may yet reference, and an unused entry is inert.
+            const parentToolUseId = parentToolUseIdOf(message);
+            if (parentToolUseId !== null && !forwardSubagentText) {
+                continue;
+            }
+
             // @ts-expect-error - untyped in SDK but we handle all of these
             let content: unknown = message.message.content;
-            const parentToolUseId = parentToolUseIdOf(message);
-            if (message.type === "assistant" && parentToolUseId && !forwardSubagentText) {
-                content = stripSubagentTextAndThinking(content);
-            }
             // @ts-expect-error - untyped in SDK but we handle all of these
             if (message.message.role === "user") {
                 content = stripLocalCommandMetadata(content);
@@ -5283,7 +5292,11 @@ export class ClaudeAcpAgent {
      *  always resolve. Since the streamed path never completes those calls, they
      *  are resolved at tool_result time instead (see `toAcpNotifications`).
      *  `parentToolUseId` attributes a subagent's tool call to the Agent/Task call
-     *  that spawned it, matching the streamed path's `_meta`. */
+     *  that spawned it, matching the streamed path's `_meta`. Subagent-attributed
+     *  calls are NOT emitted for clients without the subagent-transcript opt-in:
+     *  those clients see the subagent only through its spawning Agent/Task call,
+     *  and the permission request itself is self-contained (its card renders from
+     *  the request payload, not from a surfaced tool_call). */
     private async ensureToolCallEmitted(
         sessionId: string,
         toolName: string,
@@ -5294,6 +5307,12 @@ export class ClaudeAcpAgent {
     ): Promise<void> {
         const session = this.sessions[sessionId];
         if (!session) {
+            return;
+        }
+        if (
+            parentToolUseId !== undefined &&
+            !(session.forwardSubagentText || supportsSubagentTranscript(this.clientCapabilities))
+        ) {
             return;
         }
         if (session.emittedToolCalls.has(toolCallId)) {
@@ -5358,8 +5377,16 @@ export class ClaudeAcpAgent {
             // emitted tool_call (and the permission request itself) to the Agent/Task
             // tool call that spawned the subagent, mirroring the streamed subagent
             // path's `_meta.claudeCode.parentToolUseId` (see `liveBackgroundTasks`).
-            const parentToolUseId = agentID ? session.liveBackgroundTasks.get(agentID)?.parentToolUseId : undefined;
-            if (agentID && !parentToolUseId) {
+            // agentID presence — NOT a resolved parent mapping — is what marks
+            // subagent origin: canUseTool can fire before the consumer processes
+            // task_started (the registry race this path has always tolerated), and
+            // suppression must not depend on winning it. The empty string stands in
+            // for "subagent origin, parent unknown" so every consumer of the
+            // parameter keeps treating undefined as top-level.
+            const parentToolUseId = agentID
+                ? (session.liveBackgroundTasks.get(agentID)?.parentToolUseId ?? "")
+                : undefined;
+            if (agentID && parentToolUseId === "") {
                 // The attribution rests on an undocumented SDK invariant
                 // (task_started.task_id === canUseTool's agentID for subagent tasks;
                 // verified against the bundled CLI). Should an SDK bump break it — or
