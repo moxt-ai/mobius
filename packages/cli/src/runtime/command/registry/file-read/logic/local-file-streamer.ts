@@ -1,6 +1,6 @@
 import { createReadStream } from "node:fs";
 import { realpath, stat } from "node:fs/promises";
-import { basename, extname, isAbsolute, normalize, resolve } from "node:path";
+import { basename, extname, isAbsolute, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
     type DaemonToServiceMessage,
@@ -38,18 +38,34 @@ async function resolveFile(
     if (path === null || (!isAbsolute(path) && workingDirectory === null)) {
         return null;
     }
-    const requested = workingDirectory === null ? path : resolve(workingDirectory, path);
-    if (!isAbsolute(requested) || (isAbsolute(path) && normalize(path) !== path)) {
+    if (isAbsolute(path) && normalize(path) !== path) {
         return null;
     }
-    try {
-        const target = await realpath(requested);
-        signal.throwIfAborted();
-        return isAbsolute(target) && normalize(target) === target ? target : null;
-    } catch {
-        signal.throwIfAborted();
-        return null;
+    // Agents link their output with workspace-root-relative references such as
+    // "/index.html", which collide with machine-absolute paths. Interpret the
+    // reference against the session working directory first, and fall back to
+    // the machine-absolute interpretation, so both keep resolving.
+    const candidates =
+        workingDirectory === null
+            ? [path]
+            : isAbsolute(path)
+              ? [join(workingDirectory, path), path]
+              : [resolve(workingDirectory, path)];
+    for (const requested of candidates) {
+        if (!isAbsolute(requested) || normalize(requested) !== requested) {
+            continue;
+        }
+        try {
+            const target = await realpath(requested);
+            signal.throwIfAborted();
+            if (isAbsolute(target) && normalize(target) === target) {
+                return target;
+            }
+        } catch {
+            signal.throwIfAborted();
+        }
     }
+    return null;
 }
 
 export async function streamLocalFile(
