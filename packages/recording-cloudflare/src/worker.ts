@@ -17,7 +17,10 @@ import {
     type SessionRecordingWrite,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { Hono } from "hono";
+import { directoryUpdateSchema } from "./entity/recording-directory-update.ts";
+import { RecordingSqlMetrics } from "./infra/recording-sql-metrics.ts";
 import { RecordingDirectory } from "./service/recording-directory.ts";
+import { projectDirectoryUpdate } from "./service/recording-directory-update.ts";
 import { SessionTurnHistory, type TurnHistoryRead } from "./service/session-turn-history.ts";
 import { RecordingDirectoryStorage } from "./storage/recording-directory-storage.ts";
 import { SessionRecordingStorage } from "./storage/session-recording-storage.ts";
@@ -81,6 +84,7 @@ function sessionRecordingRoutes(
     storage: SessionRecordingRoutes,
     history: TurnHistoryRoutes,
     scheduleBackfill: (at?: Date) => Promise<void>,
+    metrics: RecordingSqlMetrics,
 ): Hono<RecordingEnvironment> {
     return new Hono<RecordingEnvironment>()
         .onError((cause, context): Response => internalErrorResponse(cause, context.req.raw))
@@ -91,6 +95,7 @@ function sessionRecordingRoutes(
             } catch (cause) {
                 return envelopeError(cause);
             }
+            const before = metrics.snapshot();
             let projected = true;
             let recorded: boolean;
             try {
@@ -107,6 +112,15 @@ function sessionRecordingRoutes(
             if (!projected) {
                 await scheduleBackfill();
             }
+            const after = metrics.snapshot();
+            console.info(
+                JSON.stringify({
+                    event: "recording_session_write",
+                    events: write.envelope.events.length,
+                    sqlReads: after.reads - before.reads,
+                    sqlWrites: after.writes - before.writes,
+                }),
+            );
             return context.json({ recorded: true }, 201);
         })
         .get("/turns", async (context): Promise<Response> => {
@@ -200,16 +214,49 @@ function sessionRecordingRoutes(
 function recordingDirectoryRoutes(
     storage: RecordingDirectoryStorage,
     directory: RecordingDirectory,
+    metrics: RecordingSqlMetrics,
 ): Hono<RecordingEnvironment> {
     return new Hono<RecordingEnvironment>()
         .onError((cause, context): Response => internalErrorResponse(cause, context.req.raw))
         .post("/events", async (context): Promise<Response> => {
             try {
-                directory.record(await decode(context.req.raw));
+                const write = await decode(context.req.raw);
+                const before = metrics.snapshot();
+                directory.record(write);
+                const after = metrics.snapshot();
+                console.info(
+                    JSON.stringify({
+                        event: "recording_directory_write",
+                        events: write.envelope.events.length,
+                        sessions: new Set(write.envelope.events.map((event) => event.sessionId)).size,
+                        sqlReads: after.reads - before.reads,
+                        sqlWrites: after.writes - before.writes,
+                    }),
+                );
                 return context.body(null, 204);
             } catch (cause) {
                 return envelopeError(cause);
             }
+        })
+        .post("/updates", async (context): Promise<Response> => {
+            const decoded = directoryUpdateSchema.safeParse(await context.req.json<unknown>());
+            if (!decoded.success) {
+                return errorResponse("invalid_envelope", 400);
+            }
+            const write = decoded.data;
+            const before = metrics.snapshot();
+            directory.apply(write);
+            const after = metrics.snapshot();
+            console.info(
+                JSON.stringify({
+                    event: "recording_directory_write",
+                    events: write.events,
+                    sessions: write.updates.length,
+                    sqlReads: after.reads - before.reads,
+                    sqlWrites: after.writes - before.writes,
+                }),
+            );
+            return context.body(null, 204);
         })
         .get("/sessions", (context): Response => {
             const runtimeId = decodedIdentifier(context.req.query("runtimeId"));
@@ -400,11 +447,131 @@ function durableObjectFetch(namespace: DurableObjectNamespace, name: string, req
     return namespace.getByName(name).fetch(request);
 }
 
+type BatchResult =
+    | { readonly sessionId: string; readonly kind: "recorded" }
+    | { readonly sessionId: string; readonly kind: "failed"; readonly code: "write_failed" };
+
+async function recordSessionBatch(
+    environment: RecordingWorkerBindings,
+    write: SessionRecordingWrite,
+    signal: AbortSignal,
+): Promise<readonly BatchResult[]> {
+    const grouped = new Map<string, SessionRecordingWrite["envelope"]["events"][number][]>();
+    for (const event of write.envelope.events) {
+        const events = grouped.get(event.sessionId) ?? [];
+        events.push(event);
+        grouped.set(event.sessionId, events);
+    }
+    const entries = [...grouped];
+    const results = new Map<string, BatchResult>();
+    let next = 0;
+    let sessionRequests = 0;
+    let directoryRequests = 0;
+    let directoryBodyBytes = 0;
+    let pending: typeof entries = [];
+    let indexed = Promise.resolve();
+    const flush = (): Promise<void> => {
+        const batch = pending;
+        pending = [];
+        if (batch.length === 0) {
+            return indexed;
+        }
+        indexed = indexed.then(async () => {
+            const update = projectDirectoryUpdate({
+                ...write,
+                envelope: { kind: "session.event.v2", events: batch.flatMap(([, events]) => events) },
+            });
+            const body = JSON.stringify(update);
+            directoryBodyBytes += new TextEncoder().encode(body).byteLength;
+            directoryRequests += 1;
+            let succeeded = false;
+            try {
+                const response = await durableObjectFetch(
+                    environment.RECORDING_DIRECTORY,
+                    JSON.stringify([write.projectId, write.runtimeId]),
+                    new Request("https://directory.internal/updates", { method: "POST", body, signal }),
+                );
+                succeeded = response.ok;
+                await response.body?.cancel();
+            } catch {
+                signal.throwIfAborted();
+            }
+            for (const [sessionId] of batch) {
+                results.set(
+                    sessionId,
+                    succeeded ? { sessionId, kind: "recorded" } : { sessionId, kind: "failed", code: "write_failed" },
+                );
+            }
+        });
+        return indexed;
+    };
+    await Promise.all(
+        Array.from({ length: Math.min(4, entries.length) }, async () => {
+            for (;;) {
+                const item = entries[next++];
+                if (item === undefined) {
+                    return;
+                }
+                const [sessionId, events] = item;
+                let succeeded = false;
+                sessionRequests += 1;
+                try {
+                    const response = await durableObjectFetch(
+                        environment.SESSION_RECORDING,
+                        JSON.stringify([write.projectId, sessionId]),
+                        new Request("https://recording.internal/events", {
+                            method: "POST",
+                            body: JSON.stringify({ ...write, envelope: { kind: "session.event.v2", events } }),
+                            signal,
+                        }),
+                    );
+                    succeeded = response.ok;
+                    await response.body?.cancel();
+                } catch {
+                    signal.throwIfAborted();
+                }
+                if (succeeded) {
+                    pending.push(item);
+                } else {
+                    results.set(sessionId, { sessionId, kind: "failed", code: "write_failed" });
+                }
+                // Bound indexing delay by a cohort, and flush the tail without waiting for other in-flight Sessions.
+                if (pending.length >= 32 || next >= entries.length) {
+                    await flush();
+                }
+            }
+        }),
+    );
+    await flush();
+    console.info(
+        JSON.stringify({
+            event: "recording_ingest",
+            events: write.envelope.events.length,
+            sessionRequests,
+            directoryRequests,
+            directoryBodyBytes,
+        }),
+    );
+    return entries.map(([sessionId]) => results.get(sessionId) ?? { sessionId, kind: "failed", code: "write_failed" });
+}
+
 export function createRecordingWorker(): RecordingWorker {
     const application = new Hono<RecordingEnvironment>()
         // Durable Object fetches reject rather than returning an error Response, and every route
         // passes a Durable Object response straight through, so the envelope has to be added here.
         .onError((cause, context): Response => internalErrorResponse(cause, context.req.raw))
+        .post("/v1/session-event-batches", async (context): Promise<Response> => {
+            let write: SessionRecordingWrite;
+            try {
+                write = await decode(context.req.raw);
+            } catch (cause) {
+                return envelopeError(cause);
+            }
+            if (new Set(write.envelope.events.map((event) => event.sessionId)).size > 256) {
+                return errorResponse("invalid_envelope", 400);
+            }
+            return context.json({ results: await recordSessionBatch(context.env, write, context.req.raw.signal) }, 201);
+        })
         .post("/v1/session-events", async (context): Promise<Response> => {
             let write: SessionRecordingWrite;
             try {
@@ -441,6 +608,14 @@ export function createRecordingWorker(): RecordingWorker {
                     method: "POST",
                     body,
                     signal: context.req.raw.signal,
+                }),
+            );
+            console.info(
+                JSON.stringify({
+                    event: "recording_ingest",
+                    events: write.envelope.events.length,
+                    sessionRequests: 1,
+                    directoryRequests: 1,
                 }),
             );
             return indexed.ok ? context.json({ recorded: true }, 201) : errorResponse("storage_unavailable", 503);
@@ -550,9 +725,10 @@ export class SessionRecordingDurableObject extends DurableObject<RecordingWorker
     readonly #routes: Hono<RecordingEnvironment>;
     constructor(state: DurableObjectState, _environment: RecordingWorkerBindings) {
         super(state, _environment);
-        const recording = new SessionRecordingStorage(state.storage);
-        this.#history = new SessionTurnHistory(recording, new SessionTurnHistoryStorage(state.storage));
-        this.#routes = sessionRecordingRoutes(recording, this.#history, this.#scheduleBackfill);
+        const metrics = new RecordingSqlMetrics();
+        const recording = new SessionRecordingStorage(state.storage, metrics);
+        this.#history = new SessionTurnHistory(recording, new SessionTurnHistoryStorage(state.storage, metrics));
+        this.#routes = sessionRecordingRoutes(recording, this.#history, this.#scheduleBackfill, metrics);
     }
     override async fetch(request: Request): Promise<Response> {
         return await this.#routes.fetch(request);
@@ -583,8 +759,9 @@ export class RecordingDirectoryDurableObject extends DurableObject<RecordingWork
     readonly #routes: Hono<RecordingEnvironment>;
     constructor(state: DurableObjectState, _environment: RecordingWorkerBindings) {
         super(state, _environment);
-        const storage = new RecordingDirectoryStorage(state.storage);
-        this.#routes = recordingDirectoryRoutes(storage, new RecordingDirectory(storage));
+        const metrics = new RecordingSqlMetrics();
+        const storage = new RecordingDirectoryStorage(state.storage, metrics);
+        this.#routes = recordingDirectoryRoutes(storage, new RecordingDirectory(storage), metrics);
     }
     override async fetch(request: Request): Promise<Response> {
         return await this.#routes.fetch(request);

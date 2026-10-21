@@ -2,6 +2,7 @@ import type { AgentSession } from "./agent-session.ts";
 import { AcpProcessCapacityLock, waitForAcpProcessCapacity } from "./process-capacity.ts";
 
 const DEFAULT_MAX_ACP_PROCESSES = 1000;
+const MAX_CONCURRENT_STARTS = 8;
 // Retired Sessions stay resumable through their stored row, so the cap bounds
 // live Agent processes only. Operators and tests may shrink it per daemon.
 const MAX_ACP_PROCESSES_ENVIRONMENT_KEY = "MOBIUS_MAX_ACP_PROCESSES";
@@ -33,6 +34,7 @@ export class AgentProcessPool {
     readonly #maxProcesses: number;
     readonly #slots = new Map<symbol, ProcessSlot>();
     readonly #lock = new AcpProcessCapacityLock();
+    #starting = 0;
     #changed = Promise.withResolvers<void>();
 
     constructor(maxProcesses: number = DEFAULT_MAX_ACP_PROCESSES) {
@@ -100,9 +102,14 @@ export class AgentProcessPool {
         try {
             for (;;) {
                 signal.throwIfAborted();
+                if (this.#starting >= MAX_CONCURRENT_STARTS) {
+                    await waitForAcpProcessCapacity(this.#changed.promise, signal);
+                    continue;
+                }
                 if (this.#slots.size < this.#maxProcesses) {
                     const id = Symbol("ACP process slot");
                     this.#slots.set(id, { kind: "starting" });
+                    this.#starting += 1;
                     return id;
                 }
                 const candidate = [...this.#slots.values()].find(
@@ -136,6 +143,7 @@ export class AgentProcessPool {
             this.#slots.delete(id);
             throw error;
         } finally {
+            this.#starting -= 1;
             this.notifyChanged();
         }
     };

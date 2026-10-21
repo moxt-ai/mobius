@@ -237,13 +237,16 @@ export class PairingService {
     readonly openProjectSessionEventHost = async (
         scope: ProjectScope,
         runtimeId: string,
+        sessionId: string,
         signal: AbortSignal,
     ): Promise<{ readonly close: () => Promise<void>; readonly socket: WebSocket }> => {
         const access = await this.#pairings.openProjectScopeControlHost(scope, runtimeId, signal);
         try {
+            const endpoint = new URL("https://runtime.internal/host");
+            endpoint.searchParams.set("sessionId", sessionId);
             const response = await this.#channels.acceptHost(
                 access,
-                new Request("https://runtime.internal/host", { headers: { Upgrade: "websocket" } }),
+                new Request(endpoint, { headers: { Upgrade: "websocket" } }),
                 signal,
             );
             const socket = response.webSocket;

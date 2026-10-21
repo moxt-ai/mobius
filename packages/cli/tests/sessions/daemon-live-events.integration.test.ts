@@ -370,9 +370,11 @@ async function activeTurn(fixture: Fixture, command: SessionPromptCommand) {
     }
 }
 describe("daemon V2 live delivery", () => {
-    it("Given a Session emits events before a daemon restart, When Sessions emit after restart, Then event ID counters restart per Session generation", async () => {
+    it("Given a Session emits events before a daemon restart, When Sessions emit after restart, Then event IDs restart per generation and positions stay monotonic per Session", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-event-id-"));
         let firstGenerationId = "";
+        let firstPosition = "";
+        let lastPosition = 0;
         const first = await startControlledDaemon({ stateDirectory });
         try {
             const command = { ...prompt(first, "first allocation"), commandId: "first-allocation" };
@@ -380,9 +382,12 @@ describe("daemon V2 live delivery", () => {
             let firstEvent = true;
             for (;;) {
                 const event = await nextLive(first);
+                expect(Number(event.position)).toBeGreaterThan(lastPosition);
+                lastPosition = Number(event.position);
                 if (firstEvent) {
                     firstEvent = false;
                     firstGenerationId = event.sessionGenerationId;
+                    firstPosition = event.position;
                     expect(event.eventId.endsWith("-0000000000000001")).toBe(true);
                 }
                 if (event.type === "lifecycle-metadata" && event.payload.kind === "prompt.completed") {
@@ -400,8 +405,11 @@ describe("daemon V2 live delivery", () => {
             let event = await nextLive(restarted);
             expect(event.sessionGenerationId).not.toBe(firstGenerationId);
             expect(event.eventId.startsWith(`event-${event.sessionGenerationId}-`)).toBe(true);
+            expect(Number(event.position)).toBeGreaterThan(lastPosition);
             while (event.type !== "lifecycle-metadata" || event.payload.kind !== "prompt.completed") {
+                const previousPosition = Number(event.position);
                 event = await nextLive(restarted);
+                expect(Number(event.position)).toBeGreaterThan(previousPosition);
             }
 
             const otherSessionCommand = {
@@ -412,6 +420,7 @@ describe("daemon V2 live delivery", () => {
             sendText(restarted.socket, encodeSessionPromptCommand(otherSessionCommand));
             const otherSessionEvent = await nextLive(restarted);
             expect(otherSessionEvent.eventId.endsWith("-0000000000000001")).toBe(true);
+            expect(otherSessionEvent.position).toBe(firstPosition);
         } finally {
             await restarted.close();
             await rm(stateDirectory, { force: true, recursive: true });

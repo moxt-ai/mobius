@@ -11,17 +11,27 @@ export type SessionRecordingDeliveryResult =
     | { readonly kind: "skipped" }
     | { readonly kind: "failed"; readonly code: "policy_unavailable" | "provider_unavailable" | "write_failed" };
 
+export interface SessionRecordingScope {
+    readonly projectId: string;
+    readonly runtimeId: string;
+}
+
+export type SessionRecordingBatchResult = SessionRecordingDeliveryResult & { readonly sessionId: string };
+
 export interface SessionRecording {
-    readonly deliver: (
-        target: SessionRecordingTarget,
+    readonly deliverBatch: (
+        target: SessionRecordingScope,
         envelope: SessionEventEnvelope,
         signal: AbortSignal,
-    ) => Promise<SessionRecordingDeliveryResult>;
+    ) => Promise<readonly SessionRecordingBatchResult[]>;
 }
 
 export class DisabledSessionRecording implements SessionRecording {
-    readonly deliver: SessionRecording["deliver"] = async (_target, _envelope, signal) => {
+    readonly deliverBatch: SessionRecording["deliverBatch"] = async (_target, envelope, signal) => {
         signal.throwIfAborted();
-        return { kind: "skipped" };
+        return [...new Set(envelope.events.map((event) => event.sessionId))].map((sessionId) => ({
+            sessionId,
+            kind: "skipped",
+        }));
     };
 }

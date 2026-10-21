@@ -4,37 +4,43 @@ import {
     type SessionEventEnvelope,
     type SessionLiveEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
-import type { SessionRecording, SessionRecordingTarget } from "../../infra/session-recording.ts";
-import { RuntimeMessageScheduler } from "./runtime-message-scheduler.ts";
+import type {
+    SessionRecording,
+    SessionRecordingBatchResult,
+    SessionRecordingScope,
+    SessionRecordingTarget,
+} from "../../infra/session-recording.ts";
 
 const MAX_PENDING_BYTES = 32 * 1024 * 1024;
 const DEADLINE_MILLISECONDS = 10_000;
+const DELIVERY_CONCURRENCY = 4;
+const MAX_DELIVERY_BYTES = 1024 * 1024;
+const MAX_DELIVERY_SESSIONS = 256;
 
+interface BufferedEvent {
+    readonly event: SessionLiveEvent;
+    readonly bytes: number;
+}
 interface SessionLane {
     readonly target: SessionRecordingTarget;
-    readonly events: SessionLiveEvent[];
-    /** Events were lost since the last delivery; the next delivered event carries the omission marker. */
+    readonly events: BufferedEvent[];
+    /** The next recorded event exposes any earlier capacity or delivery loss. */
     gap: boolean;
-    draining: boolean;
+    state: "idle" | "ready" | "delivering";
+}
+interface Delivery {
+    readonly lane: SessionLane;
+    readonly events: readonly SessionLiveEvent[];
+    readonly bytes: number;
 }
 
-function eventBytes(event: SessionLiveEvent): number {
-    return new TextEncoder().encode(JSON.stringify(event)).byteLength;
-}
-
-/**
- * An isolated, bounded recording consumer. Failure never holds up the live broadcast.
- *
- * A streaming answer arrives as hundreds of tiny envelopes. Each Session owns one lane that coalesces
- * consecutive envelopes into a single delivery, so a slow write grows a byte-bounded buffer instead of a
- * queue of per-envelope tasks that overflows and drops text. Events that are still lost (capacity,
- * deadline, write failure) mark the next recorded event as `omitted` so readers can see the hole.
- */
+/** Recording never blocks live fanout. Lanes preserve Session order across bounded multi-Session writes. */
 export class BestEffortRecording {
-    readonly #messages = new RuntimeMessageScheduler(4, 128);
     readonly #recording: SessionRecording;
     readonly #waitUntil: (operation: Promise<void>) => void;
     readonly #lanes = new Map<string, SessionLane>();
+    readonly #ready = new Set<SessionLane>();
+    #active = 0;
     #pendingBytes = 0;
 
     constructor(recording: SessionRecording, waitUntil: (operation: Promise<void>) => void) {
@@ -42,88 +48,138 @@ export class BestEffortRecording {
         this.#waitUntil = waitUntil;
     }
 
-    readonly publish = (target: SessionRecordingTarget, envelope: SessionEventEnvelope): void => {
-        const laneKey = JSON.stringify([target.projectId, target.runtimeId, target.sessionId]);
-        const lane = this.#lanes.get(laneKey) ?? { target, events: [], gap: false, draining: false };
-        this.#lanes.set(laneKey, lane);
-        const bytes = envelope.events.reduce((total, event) => total + eventBytes(event), 0);
-        if (this.#pendingBytes + bytes > MAX_PENDING_BYTES) {
-            console.warn("Recording event dropped", { code: "recording_capacity_exceeded" });
-            lane.gap = true;
-            return;
+    readonly publish = (scope: SessionRecordingScope, envelope: SessionEventEnvelope): void => {
+        const grouped = new Map<string, BufferedEvent[]>();
+        for (const event of envelope.events) {
+            const events = grouped.get(event.sessionId) ?? [];
+            events.push({ event, bytes: new TextEncoder().encode(JSON.stringify(event)).byteLength });
+            grouped.set(event.sessionId, events);
         }
-        this.#pendingBytes += bytes;
-        lane.events.push(...envelope.events);
-        if (lane.draining) {
-            return;
+        for (const [sessionId, events] of grouped) {
+            const laneKey = JSON.stringify([scope.projectId, scope.runtimeId, sessionId]);
+            const lane: SessionLane = this.#lanes.get(laneKey) ?? {
+                target: { ...scope, sessionId },
+                events: [],
+                gap: false,
+                state: "idle",
+            };
+            this.#lanes.set(laneKey, lane);
+            const bytes = events.reduce((sum, item) => sum + item.bytes, 0);
+            if (this.#pendingBytes + bytes > MAX_PENDING_BYTES) {
+                console.warn("Recording event dropped", { code: "recording_capacity_exceeded" });
+                lane.gap = true;
+                continue;
+            }
+            this.#pendingBytes += bytes;
+            lane.events.push(...events);
+            this.#enqueue(lane);
         }
-        lane.draining = true;
-        // Each delivery has its own deadline; waiting in the lane is bounded by the pending byte cap.
-        const drain = this.#messages
-            .run(laneKey, new AbortController().signal, async () => {
-                await this.#drain(lane);
-            })
-            .catch(() => {
-                // The scheduler refused or aborted the drain: nothing in the lane will be delivered.
-                console.warn("Recording event dropped", { code: "recording_incomplete" });
-                this.#discard(lane);
-            })
-            .finally(() => {
-                if (lane.events.length === 0 && !lane.gap && this.#lanes.get(laneKey) === lane) {
-                    this.#lanes.delete(laneKey);
-                }
-            });
-        this.#waitUntil(drain);
+        // All Sessions from the incoming envelope are ready before any delivery starts. No extra timer.
+        this.#pump();
     };
 
-    #discard(lane: SessionLane): void {
-        const dropped = lane.events.splice(0);
-        this.#pendingBytes -= dropped.reduce((total, event) => total + eventBytes(event), 0);
-        lane.gap = true;
-        lane.draining = false;
-    }
-
-    async #drain(lane: SessionLane): Promise<void> {
-        while (lane.events.length > 0) {
-            const batch = lane.events.splice(0, SESSION_EVENT_BATCH_MAX_SIZE);
-            const batchBytes = batch.reduce((total, event) => total + eventBytes(event), 0);
-            const [first, ...rest] = lane.gap ? batch : [];
-            const events =
-                first === undefined ? batch : [{ ...first, mobiusMetadata: { omitted: true as const } }, ...rest];
-            lane.gap = false;
-            try {
-                if (!(await this.#deliver(lane.target, events))) {
-                    lane.gap = true;
-                }
-            } finally {
-                this.#pendingBytes -= batchBytes;
-            }
+    #enqueue(lane: SessionLane): void {
+        if (lane.state !== "idle" || lane.events.length === 0) {
+            return;
         }
-        // Cleared in the same synchronous step as the empty check so a publish cannot append to a
-        // lane that no drain will visit again.
-        lane.draining = false;
+        lane.state = "ready";
+        this.#ready.add(lane);
     }
 
-    async #deliver(target: SessionRecordingTarget, events: readonly SessionLiveEvent[]): Promise<boolean> {
+    #pump(): void {
+        while (this.#active < DELIVERY_CONCURRENCY) {
+            const first = this.#ready.values().next().value;
+            if (first === undefined) {
+                return;
+            }
+            const scope: SessionRecordingScope = first.target;
+            const deliveries: Delivery[] = [];
+            let bytes = 0;
+            let count = 0;
+            for (const lane of this.#ready) {
+                if (lane.target.projectId !== scope.projectId || lane.target.runtimeId !== scope.runtimeId) {
+                    continue;
+                }
+                if (
+                    deliveries.length >= MAX_DELIVERY_SESSIONS ||
+                    count >= SESSION_EVENT_BATCH_MAX_SIZE ||
+                    bytes >= MAX_DELIVERY_BYTES
+                ) {
+                    break;
+                }
+                let length = 0;
+                let laneBytes = 0;
+                for (const item of lane.events) {
+                    if (
+                        count + length >= SESSION_EVENT_BATCH_MAX_SIZE ||
+                        (count + length > 0 && bytes + laneBytes + item.bytes > MAX_DELIVERY_BYTES)
+                    ) {
+                        break;
+                    }
+                    laneBytes += item.bytes;
+                    length += 1;
+                }
+                if (length === 0) {
+                    break;
+                }
+                const batch = lane.events.splice(0, length).map((item) => item.event);
+                const [head, ...tail] = lane.gap ? batch : [];
+                const events: readonly SessionLiveEvent[] =
+                    head === undefined ? batch : [{ ...head, mobiusMetadata: { omitted: true } }, ...tail];
+                lane.gap = false;
+                lane.state = "delivering";
+                this.#ready.delete(lane);
+                deliveries.push({ lane, events, bytes: laneBytes });
+                bytes += laneBytes;
+                count += length;
+            }
+            this.#active += 1;
+            const delivery = this.#deliver(
+                scope,
+                deliveries.flatMap((item) => item.events),
+            )
+                .then((results) => {
+                    for (const { lane } of deliveries) {
+                        const result = results.find((item) => item.sessionId === lane.target.sessionId);
+                        if (result === undefined || result.kind === "failed") {
+                            lane.gap = true;
+                            console.warn("Recording event dropped", {
+                                code: result?.kind === "failed" ? result.code : "recording_incomplete",
+                            });
+                        }
+                    }
+                })
+                .finally(() => {
+                    this.#active -= 1;
+                    for (const { lane, bytes } of deliveries) {
+                        this.#pendingBytes -= bytes;
+                        lane.state = "idle";
+                        this.#enqueue(lane);
+                        if (lane.events.length === 0 && !lane.gap) {
+                            this.#lanes.delete(
+                                JSON.stringify([lane.target.projectId, lane.target.runtimeId, lane.target.sessionId]),
+                            );
+                        }
+                    }
+                    this.#pump();
+                });
+            this.#waitUntil(delivery);
+        }
+    }
+
+    async #deliver(
+        scope: SessionRecordingScope,
+        events: readonly SessionLiveEvent[],
+    ): Promise<readonly SessionRecordingBatchResult[]> {
         const controller = new AbortController();
         const timer = setTimeout(
             () => controller.abort(new DOMException("Recording deadline expired", "TimeoutError")),
             DEADLINE_MILLISECONDS,
         );
         try {
-            const result = await this.#recording.deliver(
-                target,
-                { events, kind: SESSION_EVENT_KIND },
-                controller.signal,
-            );
-            if (result.kind === "failed") {
-                console.warn("Recording event dropped", { code: result.code });
-                return false;
-            }
-            return true;
+            return await this.#recording.deliverBatch(scope, { events, kind: SESSION_EVENT_KIND }, controller.signal);
         } catch {
-            console.warn("Recording event dropped", { code: "recording_incomplete" });
-            return false;
+            return [];
         } finally {
             clearTimeout(timer);
         }
