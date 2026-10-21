@@ -5377,8 +5377,16 @@ export class ClaudeAcpAgent {
             // emitted tool_call (and the permission request itself) to the Agent/Task
             // tool call that spawned the subagent, mirroring the streamed subagent
             // path's `_meta.claudeCode.parentToolUseId` (see `liveBackgroundTasks`).
-            const parentToolUseId = agentID ? session.liveBackgroundTasks.get(agentID)?.parentToolUseId : undefined;
-            if (agentID && !parentToolUseId) {
+            // agentID presence — NOT a resolved parent mapping — is what marks
+            // subagent origin: canUseTool can fire before the consumer processes
+            // task_started (the registry race this path has always tolerated), and
+            // suppression must not depend on winning it. The empty string stands in
+            // for "subagent origin, parent unknown" so every consumer of the
+            // parameter keeps treating undefined as top-level.
+            const parentToolUseId = agentID
+                ? (session.liveBackgroundTasks.get(agentID)?.parentToolUseId ?? "")
+                : undefined;
+            if (agentID && parentToolUseId === "") {
                 // The attribution rests on an undocumented SDK invariant
                 // (task_started.task_id === canUseTool's agentID for subagent tasks;
                 // verified against the bundled CLI). Should an SDK bump break it — or
