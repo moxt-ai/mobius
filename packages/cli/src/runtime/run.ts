@@ -9,12 +9,12 @@ import { LocalExternalContentStore } from "../acp/external-content/local-externa
 import { CachedAcpSessionEventStore } from "../acp/session-event-store.ts";
 import { SqliteSessionLiveEventPosition } from "../acp/session-live-event-position.ts";
 import { SqliteAcpSessionStore } from "../acp/session-store.ts";
-import { NativeSessionService } from "../native-sessions/service.ts";
 import { openAcpSessionDatabase, openSessionEventCacheDatabase } from "../storage/local-databases.ts";
 import { RuntimeAcpObserver } from "./acp-observer.ts";
 import { RuntimeOperationState } from "./admission.ts";
 import { publishAgentCatalog } from "./agent-catalog/publish-agent-catalog.ts";
 import type { RuntimeConfig } from "./config.ts";
+import { NativeSessionService } from "./native-sessions/service.ts";
 import { RuntimeDiagnosticLog } from "./observability/diagnostic-log.ts";
 import { RelayConnectionDiagnostics } from "./relay/diagnostics.ts";
 import { runRelayConnection } from "./relay/run-relay-connection.ts";

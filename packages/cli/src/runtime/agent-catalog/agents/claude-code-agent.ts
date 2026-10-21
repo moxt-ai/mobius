@@ -1,6 +1,6 @@
 import { ClaudeAcpEndpoint } from "../../../acp/harness/claude/endpoint.ts";
 import type { InProcessAcpEndpointFactory } from "../../../acp/in-process/acp-endpoint.ts";
-import { platformSupportFor } from "../../../platform/index.ts";
+import { platformSupportFor } from "../../../util/platform/index.ts";
 import { type ResolvedExecutable, resolveExecutablePath } from "../../../util/process/executable.ts";
 import type { LocalAgentDiscoveryContext } from "../agent-discovery-context.ts";
 import { InProcessAcpAgentDefinition } from "../agent-specification.ts";

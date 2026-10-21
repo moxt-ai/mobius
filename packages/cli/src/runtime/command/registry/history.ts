@@ -12,8 +12,8 @@ import {
 import type { WebSocket } from "undici";
 import { AcpExecutionError, type AgentRuntimeManager } from "../../../acp/agent-runtime-manager.ts";
 import type { AcpSessionEventPage } from "../../../acp/session-event-store.ts";
-import type { NativeSessionService } from "../../../native-sessions/service.ts";
 import type { RuntimeConfig } from "../../config.ts";
+import type { NativeSessionService } from "../../native-sessions/service.ts";
 import type { RelayConnectionDiagnostics } from "../../relay/diagnostics.ts";
 import type { RuntimeSessionEventProjection } from "../../session/session-event-projection.ts";
 import { resolveSessionDirectories } from "../../workspace/resolve-session-directories.ts";

@@ -13,7 +13,7 @@ import type {
     SessionStatusChangedEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
-import { isNativeChatSessionId } from "../native-sessions/chat-agent.ts";
+import { isNativeChatSessionId } from "../runtime/native-sessions/chat-agent.ts";
 import type { Timer } from "../runtime/relay/timer.ts";
 import { AcpExecutionError } from "./acp-error.ts";
 import { AgentProcessPool, type AgentProcessRetention } from "./agent-process-pool.ts";

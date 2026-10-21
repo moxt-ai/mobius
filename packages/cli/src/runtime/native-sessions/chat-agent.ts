@@ -1,4 +1,4 @@
-import { nativeSessionIdSchema } from "../acp/native-session.ts";
+import { nativeSessionIdSchema } from "../../acp/native-session.ts";
 
 /** Agents with native Sessions that can back a Bot conversation. */
 export function supportsNativeChat(agentId: string): boolean {

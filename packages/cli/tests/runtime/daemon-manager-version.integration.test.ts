@@ -17,7 +17,7 @@ import {
     openMobiusCliInstallation,
     openMobiusControlInstallation,
 } from "../../src/daemon/pairing/pair-local-machine.ts";
-import { platformSupportFor } from "../../src/platform/index.ts";
+import { platformSupportFor } from "../../src/util/platform/index.ts";
 
 const temporaryDirectories: string[] = [];
 
