@@ -1,7 +1,12 @@
 import { isIdentifier, ProtocolMessageError } from "@moxt-ai/mobius-sdk/protocol";
 import * as v from "valibot";
 import type { ChannelSocket, HistoryRequestKind } from "../service/channel/channel-actor.ts";
-import type { RuntimePeers, RuntimeSocket, RuntimeSocketIdentity } from "../service/channel/runtime-service.ts";
+import type {
+    DaemonHeartbeat,
+    RuntimePeers,
+    RuntimeSocket,
+    RuntimeSocketIdentity,
+} from "../service/channel/runtime-service.ts";
 
 // Four maximum-length routes fit alongside connection identity within the attachment budget.
 const MAX_SETTINGS_DISCOVERY_ROUTES = 4;
@@ -45,6 +50,7 @@ const attachmentSchema = v.union([
         connectionId: v.pipe(v.string(), v.minLength(1)),
         runtimeId: v.string(),
         projectId: v.string(),
+        heartbeatAt: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(0))),
     }),
 ]);
 
@@ -68,6 +74,15 @@ export class CloudflareChannelSocket implements RuntimeSocket {
                 credentialId: attachment.credentialId,
                 ...(attachment.nativeRequestId === undefined ? {} : { nativeRequestId: attachment.nativeRequestId }),
                 ...(attachment.sessionFilter === undefined ? {} : { sessionFilter: attachment.sessionFilter }),
+                projectId: attachment.projectId,
+                role: attachment.role,
+                runtimeId: attachment.runtimeId,
+            };
+        }
+        if (attachment.role === "daemon" || attachment.role === "replaced-daemon") {
+            return {
+                connectionEpoch: attachment.connectionEpoch,
+                connectionId: attachment.connectionId,
                 projectId: attachment.projectId,
                 role: attachment.role,
                 runtimeId: attachment.runtimeId,
@@ -142,6 +157,13 @@ export class CloudflareChannelSocket implements RuntimeSocket {
     readonly isOpen = (): boolean => this.#socket.readyState === WebSocket.OPEN;
     readonly isSame = (socket: ChannelSocket): boolean =>
         socket instanceof CloudflareChannelSocket && socket.#socket === this.#socket;
+    readonly lastHeartbeat = (): DaemonHeartbeat => {
+        const { heartbeatAt } = this.daemonAttachment();
+        return heartbeatAt === undefined ? { kind: "none" } : { kind: "received", at: heartbeatAt };
+    };
+    readonly recordHeartbeat = (at: number): void => {
+        this.#socket.serializeAttachment({ ...this.daemonAttachment(), heartbeatAt: at });
+    };
     readonly permitsSessionHistory = (): boolean => {
         const identity = this.identity();
         return identity.role === "relay" || (identity.role === "host" && identity.credentialId.startsWith("ctl_"));
@@ -169,6 +191,14 @@ export class CloudflareChannelSocket implements RuntimeSocket {
         }
         this.#socket.serializeAttachment({ ...identity, role: "replaced-daemon" });
         this.#socket.close(1012, "Daemon connection replaced");
+    };
+
+    private readonly daemonAttachment = () => {
+        const attachment = v.parse(attachmentSchema, this.#socket.deserializeAttachment());
+        if (attachment.role !== "daemon" && attachment.role !== "replaced-daemon") {
+            throw new Error("Only a daemon socket carries heartbeats");
+        }
+        return attachment;
     };
 
     private readonly hostAttachment = () => {

@@ -12,6 +12,7 @@ import {
     decodeSessionEventEnvelope,
     decodeSessionPromptCommand,
     decodeSessionRecordingHistory,
+    encodeDaemonToServiceMessage,
     encodeNativeSessionRequest,
     encodeNativeSessionResult,
     encodeSessionClosedEvent,
@@ -1866,6 +1867,184 @@ describe.sequential("Platform Recording policy configuration", () => {
     });
 });
 
+/** Pairs a Runtime, connects its daemon with liveness, and grants Chat access to one Session. */
+async function connectRuntimeDaemon(slug: string) {
+    const worker = createTestMobiusPlatformApp(
+        new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
+        createPlatformGateways,
+    );
+    const environment = bindings();
+    const tenants = await responseJson(
+        await worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/platform/tenants`, {
+                headers: developerHeaders(),
+            }),
+            environment,
+        ),
+        200,
+    );
+    const tenantValues = tenants["tenants"];
+    if (!Array.isArray(tenantValues) || tenantValues.length === 0) {
+        throw new Error("Expected a Platform tenant");
+    }
+    const app = await responseJson(
+        await worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps`, {
+                body: JSON.stringify({
+                    displayName: `${slug} App`,
+                    tenantId: text(record(tenantValues[0]), "tenantId"),
+                }),
+                headers: developerHeaders(),
+                method: "POST",
+            }),
+            environment,
+        ),
+        201,
+    );
+    const appCredential = text(record(app["defaultCredential"]), "credential");
+    const project = await responseJson(
+        await worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${text(app, "appId")}/projects`, {
+                body: JSON.stringify({
+                    displayName: `${slug} Project`,
+                    idempotencyKey: `${slug}-project`,
+                    locationHint: "apac",
+                }),
+                headers: developerHeaders(),
+                method: "POST",
+            }),
+            environment,
+        ),
+        201,
+    );
+    const projectId = text(project, "projectId");
+    const pairing = await responseJson(
+        await worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtime-pairings`, {
+                body: JSON.stringify({ idempotencyKey: `${slug}-runtime` }),
+                headers: credentialHeaders(appCredential),
+                method: "POST",
+            }),
+            environment,
+        ),
+        201,
+    );
+    const claimed = await responseJson(
+        await worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtime-pairings/${text(pairing, "pairingId")}/redeem`, {
+                body: JSON.stringify({
+                    agents: readyAgents,
+                    machineName: `${slug} Runtime`,
+                    pairingCode: text(pairing, "pairingCode"),
+                    workspaceName: `${slug}-workspace`,
+                }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+            environment,
+        ),
+        200,
+    );
+    const runtimeId = text(claimed, "runtimeId");
+    const sessionId = `${slug}-session`;
+    const daemonResponse = await worker.fetch(
+        new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect?liveness=1`, {
+            headers: { authorization: `Bearer ${text(claimed, "runtimeCredential")}`, Upgrade: "websocket" },
+        }),
+        environment,
+    );
+    if (daemonResponse.webSocket === null) {
+        throw new Error("Expected the Runtime socket");
+    }
+    const daemon = daemonResponse.webSocket;
+    const daemonMessages = new SocketMessages(daemon);
+    const daemonClosed = new Promise<CloseEvent>((resolve) => {
+        daemon.addEventListener("close", resolve, { once: true });
+    });
+    daemon.accept();
+    expect(decodeServiceToDaemonMessage(await daemonMessages.next()).kind).toBe("runtime.liveness.ready");
+    const sessionAccess = await responseJson(
+        await worker.fetch(
+            new Request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/access-credentials`,
+                {
+                    body: JSON.stringify({ expiresInSeconds: 900, runtimeId }),
+                    headers: credentialHeaders(appCredential),
+                    method: "POST",
+                },
+            ),
+            environment,
+        ),
+        201,
+    );
+    return {
+        daemon,
+        daemonClosed,
+        daemonMessages,
+        heartbeat: async (heartbeatId: string) => {
+            daemon.send(encodeDaemonToServiceMessage({ heartbeatId, kind: "runtime.heartbeat" }));
+            expect(decodeServiceToDaemonMessage(await daemonMessages.next())).toMatchObject({
+                heartbeatId,
+                kind: "runtime.heartbeat.ack",
+            });
+        },
+        readOnline: async () =>
+            (
+                await responseJson(
+                    await worker.fetch(
+                        new Request(
+                            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtimes/${runtimeId}/agents`,
+                            {
+                                headers: credentialHeaders(appCredential),
+                            },
+                        ),
+                        environment,
+                    ),
+                    200,
+                )
+            )["online"],
+        startTurn: (commandId: string, position: string) =>
+            daemon.send(
+                encodeSessionEventEnvelope({
+                    kind: "session.event.v2",
+                    events: [
+                        {
+                            eventId: `${commandId}-started`,
+                            position,
+                            recordedAt: new Date().toISOString(),
+                            sessionGenerationId: "session-generation-1",
+                            sessionId,
+                            type: "lifecycle-metadata",
+                            payload: {
+                                attemptId: `${commandId}-attempt`,
+                                commandId,
+                                epoch: `${slug}-epoch`,
+                                kind: "prompt.started",
+                            },
+                        },
+                    ],
+                }),
+            ),
+        submitTurn: (idempotencyKey: string) =>
+            worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/turns`, {
+                    body: JSON.stringify({
+                        additionalDirectoryIds: [],
+                        agentId: "codex",
+                        content: `Run ${idempotencyKey}`,
+                        directoryId: "root",
+                        idempotencyKey,
+                        images: [],
+                        resources: [],
+                    }),
+                    headers: credentialHeaders(text(sessionAccess, "credential")),
+                    method: "POST",
+                }),
+                environment,
+            ),
+    };
+}
+
 describe.sequential("Platform Turn submission", () => {
     it("Given a linked Runtime, When Chat submits a first Turn longer than 10,000 characters or an invalid Turn, Then the long Turn reaches the Runtime and the invalid Turn is rejected as a client error", async () => {
         const worker = createTestMobiusPlatformApp(
@@ -2560,5 +2739,76 @@ describe.sequential("Platform Turn submission", () => {
             ],
             runtimeId: text(claimed, "runtimeId"),
         });
+    });
+
+    it("Given a daemon that heartbeats and then falls silent, When Chat submits Turns, Then they reach it while it heartbeats and are refused as runtime_offline once the silence outlasts the heartbeat deadline", async () => {
+        const runtime = await connectRuntimeDaemon("silent-daemon");
+        try {
+            const connectedAt = Date.now();
+            // Heartbeats 20 seconds apart keep the daemon live for longer than one silence deadline.
+            await runtime.heartbeat("heartbeat-1");
+            vi.setSystemTime(connectedAt + 20_000);
+            await runtime.heartbeat("heartbeat-2");
+            vi.setSystemTime(connectedAt + 40_000);
+            await runtime.heartbeat("heartbeat-3");
+            const delivered = runtime.submitTurn("heartbeating-turn");
+            expect(decodeServiceToDaemonMessage(await runtime.daemonMessages.next())).toMatchObject({
+                commandId: "heartbeating-turn",
+                kind: "session.prompt",
+            });
+            runtime.startTurn("heartbeating-turn", "1");
+            expect(await responseJson(await delivered, 200)).toMatchObject({ turnId: "heartbeating-turn" });
+
+            // A Turn sent before the deadline still reaches the connection, which never answers it.
+            vi.setSystemTime(connectedAt + 60_000);
+            const stranded = runtime.submitTurn("stranded-turn");
+            expect(decodeServiceToDaemonMessage(await runtime.daemonMessages.next())).toMatchObject({
+                commandId: "stranded-turn",
+                kind: "session.prompt",
+            });
+
+            // Once the silence outlasts the deadline, the next Turn is refused at once and releases the stranded one.
+            vi.setSystemTime(connectedAt + 76_000);
+            expect(await responseJson(await runtime.submitTurn("after-silence-turn"), 503)).toMatchObject({
+                error: { code: "runtime_offline" },
+            });
+            expect(await responseJson(await stranded, 503)).toMatchObject({ error: { code: "runtime_offline" } });
+            expect(await runtime.daemonClosed).toMatchObject({ code: 4001, reason: "Runtime heartbeat timed out" });
+        } finally {
+            runtime.daemon.close();
+        }
+    });
+
+    it("Given a daemon whose heartbeats stopped, When an app reads the Runtime, Then it is reported offline and its connection is closed", async () => {
+        const runtime = await connectRuntimeDaemon("silent-presence");
+        try {
+            const connectedAt = Date.now();
+            await runtime.heartbeat("presence-heartbeat");
+            vi.setSystemTime(connectedAt + 30_000);
+            expect(await runtime.readOnline()).toBe(true);
+
+            vi.setSystemTime(connectedAt + 36_000);
+            expect(await runtime.readOnline()).toBe(false);
+            expect(await runtime.daemonClosed).toMatchObject({ code: 4001, reason: "Runtime heartbeat timed out" });
+        } finally {
+            runtime.daemon.close();
+        }
+    });
+
+    it("Given a daemon that has never sent a heartbeat, When Chat submits a Turn long after it connected, Then the Relay still delivers the Turn to it", async () => {
+        const runtime = await connectRuntimeDaemon("unproven-daemon");
+        try {
+            vi.setSystemTime(Date.now() + 10 * 60_000);
+            expect(await runtime.readOnline()).toBe(true);
+            const delivered = runtime.submitTurn("unproven-turn");
+            expect(decodeServiceToDaemonMessage(await runtime.daemonMessages.next())).toMatchObject({
+                commandId: "unproven-turn",
+                kind: "session.prompt",
+            });
+            runtime.startTurn("unproven-turn", "1");
+            expect(await responseJson(await delivered, 200)).toMatchObject({ turnId: "unproven-turn" });
+        } finally {
+            runtime.daemon.close();
+        }
     });
 });
