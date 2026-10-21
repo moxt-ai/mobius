@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DIRECTORY_IDENTIFIER as directoryId, MAX_WORKSPACE_PATH_LENGTH } from "../../shared/directory.ts";
 import { identifierStringSchema as identifier } from "../../shared/identifier.ts";
 import { ProtocolMessageError } from "../../shared/message-codec.ts";
 import {
@@ -17,7 +18,6 @@ export const NATIVE_SESSION_CANCEL_KIND = "native.session.cancel";
 export const SESSION_HISTORY_CHARACTER_LIMIT = 256_000;
 export const SESSION_HISTORY_MESSAGE_LIMIT = 1_000;
 
-const directoryId = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/);
 const envelope = {
     requestId: identifier,
     sessionId: identifier,
@@ -92,7 +92,7 @@ const nativeSessionEntrySchema = z
         nativeSessionId: identifier,
         title: z.string().max(500),
         directoryId,
-        directoryLabel: z.string().min(1).max(2_048),
+        directoryLabel: z.string().min(1).max(MAX_WORKSPACE_PATH_LENGTH),
         updatedAt: z.iso.datetime({ offset: true }).nullable(),
         additionalDirectories: z
             .array(z.object({ directoryId, name: z.string().min(1).max(255) }).readonly())

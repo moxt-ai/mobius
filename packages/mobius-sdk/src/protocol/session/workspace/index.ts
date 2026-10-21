@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MAX_DIRECTORY_IDENTIFIER_LENGTH, MAX_WORKSPACE_PATH_LENGTH } from "../../shared/directory.ts";
 
 import { identifierStringSchema as IDENTIFIER } from "../../shared/identifier.ts";
 import { decodeZodMessage as decode, encodeZodMessage as encode } from "../../shared/message-codec.ts";
@@ -23,10 +24,10 @@ const workspaceEntriesEventSchema = z
     .object({
         bindingId: IDENTIFIER,
         directoryId: DIRECTORY_IDENTIFIER,
-        directoryLabel: z.string().min(1).max(2_048),
+        directoryLabel: z.string().min(1).max(MAX_WORKSPACE_PATH_LENGTH),
         entries: z.array(workspaceEntrySchema).max(500).readonly(),
         kind: z.literal(WORKSPACE_ENTRIES_KIND),
-        parentDirectoryId: z.string().max(2_048),
+        parentDirectoryId: z.string().max(MAX_DIRECTORY_IDENTIFIER_LENGTH),
         requestId: IDENTIFIER,
     })
     .readonly();

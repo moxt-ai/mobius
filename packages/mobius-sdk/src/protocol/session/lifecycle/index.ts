@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MAX_WORKSPACE_PATH_LENGTH } from "../../shared/directory.ts";
 
 import { identifierStringSchema as IDENTIFIER } from "../../shared/identifier.ts";
 import { decodeZodMessage as decode, encodeZodMessage as encode } from "../../shared/message-codec.ts";
@@ -42,7 +43,7 @@ const sessionMetadataSchema = z
         additionalDirectories: z.array(workspaceEntrySchema).max(16).readonly(),
         agentId: IDENTIFIER,
         directoryId: DIRECTORY_IDENTIFIER,
-        directoryLabel: z.string().min(1).max(2_048),
+        directoryLabel: z.string().min(1).max(MAX_WORKSPACE_PATH_LENGTH),
         prompted: z.boolean(),
         sessionId: IDENTIFIER,
         status: sessionStatusSchema.default({ kind: "idle" }),
@@ -166,7 +167,7 @@ export const sessionReadyEventSchema = z
         commands: z.array(sessionCommandSchema).max(500).readonly(),
         configOptions: sessionConfigOptionsSchema,
         directoryId: DIRECTORY_IDENTIFIER,
-        directoryLabel: z.string().min(1).max(2_048),
+        directoryLabel: z.string().min(1).max(MAX_WORKSPACE_PATH_LENGTH),
         kind: z.literal(SESSION_READY_KIND),
         requestId: IDENTIFIER,
         restored: z.boolean(),

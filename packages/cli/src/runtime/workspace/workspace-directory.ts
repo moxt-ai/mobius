@@ -1,7 +1,11 @@
 import { readdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, normalize, relative } from "node:path";
-import type { WorkspaceEntry } from "@moxt-ai/mobius-sdk/protocol";
+import {
+    MAX_DIRECTORY_IDENTIFIER_LENGTH,
+    MAX_WORKSPACE_PATH_LENGTH,
+    type WorkspaceEntry,
+} from "@moxt-ai/mobius-sdk/protocol";
 import { LocalAuthorizationError } from "./local-authorization-error.ts";
 
 export class WorkspaceDirectoryListing {
@@ -24,7 +28,11 @@ export class WorkspaceDirectoryListing {
 
 function encodePath(path: string): string {
     const encoded = Buffer.from(path, "utf8").toString("base64url");
-    if (encoded.length === 0 || encoded.length > 2_000) {
+    if (
+        path.length === 0 ||
+        path.length > MAX_WORKSPACE_PATH_LENGTH ||
+        encoded.length + "path-".length > MAX_DIRECTORY_IDENTIFIER_LENGTH
+    ) {
         throw new LocalAuthorizationError("The local directory path is too long to select");
     }
     return `path-${encoded}`;
@@ -37,7 +45,7 @@ function expandCurrentUserHome(path: string): string {
 
 function decodePath(value: string, prefix: string): string {
     const encoded = value.slice(prefix.length);
-    if (encoded.length === 0 || encoded.length > 2_000 || !/^[a-zA-Z0-9_-]+$/.test(encoded)) {
+    if (encoded.length === 0 || value.length > MAX_DIRECTORY_IDENTIFIER_LENGTH || !/^[a-zA-Z0-9_-]+$/.test(encoded)) {
         throw new LocalAuthorizationError("The directory identifier is invalid");
     }
     const decoded = Buffer.from(encoded, "base64url").toString("utf8");
@@ -47,6 +55,7 @@ function decodePath(value: string, prefix: string): string {
             : normalize(decoded);
     if (
         Buffer.from(decoded, "utf8").toString("base64url") !== encoded ||
+        decoded.length > MAX_WORKSPACE_PATH_LENGTH ||
         decoded.includes("\0") ||
         normalized !== decoded
     ) {

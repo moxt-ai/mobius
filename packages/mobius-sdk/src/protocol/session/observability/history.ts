@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DIRECTORY_IDENTIFIER as directoryIdentifier } from "../../shared/directory.ts";
 import { identifierStringSchema as identifier } from "../../shared/identifier.ts";
 import { ProtocolMessageError } from "../../shared/message-codec.ts";
 import { nativeSessionEventsSchema, sessionEventOmissionSchema } from "./event-log.ts";
@@ -7,8 +8,6 @@ export const SESSION_HISTORY_PAGE_LOAD_KIND = "session.live-history.v2.page.load
 export const SESSION_HISTORY_PAGE_LOADED_KIND = "session.live-history.v2.page.loaded";
 export const SESSION_PREVIEW_HISTORY_PAGE_LOAD_KIND = "session.preview-history.page.load";
 export const SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND = "session.preview-history.page.loaded";
-
-const directoryIdentifier = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/);
 
 const pageRequestFields = {
     cursor: z.string().min(1).max(512).nullable(),

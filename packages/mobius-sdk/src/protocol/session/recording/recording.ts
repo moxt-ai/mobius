@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DIRECTORY_IDENTIFIER } from "../../shared/directory.ts";
 
 import { identifierStringSchema } from "../../shared/identifier.ts";
 import { decodeZodMessage as decode, encodeZodMessage as encode } from "../../shared/message-codec.ts";
@@ -46,9 +47,9 @@ const sessionRecordingHistoryPageSchema = z
 
 const sessionRecordingSummarySchema = z
     .object({
-        additionalDirectoryIds: z.array(identifierStringSchema).max(16).readonly(),
+        additionalDirectoryIds: z.array(DIRECTORY_IDENTIFIER).max(16).readonly(),
         agentId: identifierStringSchema,
-        directoryId: z.string().min(1).max(2_048),
+        directoryId: DIRECTORY_IDENTIFIER,
         runtimeId: identifierStringSchema,
         sessionId: identifierStringSchema,
         status: sessionRecordingStatusSchema,
