@@ -16,6 +16,10 @@ export class PiAgentSpecification extends InProcessAcpAgentDefinition {
     override readonly acpProbeTimeoutMilliseconds = ACP_PROBE_TIMEOUT_MILLISECONDS;
     readonly agentExecutable = "pi";
     readonly createEndpoint: InProcessAcpEndpointFactory = (options) => new PiAcpEndpoint(options);
+    // The Pi ACP fork inlines embedded prompt resources into the turn message, so Mobius
+    // keeps the adapter's opt-in capability flag enabled for every launch it owns.
+    override readonly createLaunchEnvironment = async (): Promise<Readonly<Record<string, string>>> =>
+        Object.freeze({ PI_ACP_ENABLE_EMBEDDED_CONTEXT: "true" });
     readonly id = "pi";
     readonly label = "Pi";
     override readonly minimumSupportedAgentVersion = "0.85.0";
