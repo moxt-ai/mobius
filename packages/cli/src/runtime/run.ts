@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { styleText } from "node:util";
 import { harnessAdapters } from "../acp/adapter/registry.ts";
-import { resolveMaxAcpProcesses } from "../acp/agent-process-pool.ts";
+import { resolveAcpProcessIdleMilliseconds, resolveMaxAcpProcesses } from "../acp/agent-process-pool.ts";
 import { AgentRuntimeManager } from "../acp/agent-runtime-manager.ts";
 import { AcpContentExternalizer } from "../acp/external-content/acp-content-externalizer.ts";
 import { LocalExternalContentStore } from "../acp/external-content/local-external-content-store.ts";
@@ -124,6 +124,7 @@ export async function runRuntime(
         contentExternalizer: new AcpContentExternalizer(externalContent),
         timer,
         maxProcesses: resolveMaxAcpProcesses(config.localContext.environment),
+        processIdleMilliseconds: resolveAcpProcessIdleMilliseconds(config.localContext.environment),
     });
     const directories = new WorkspaceDirectoryService(config.bindingId, config.defaultWorkspace);
     const diagnostics = new RelayConnectionDiagnostics(

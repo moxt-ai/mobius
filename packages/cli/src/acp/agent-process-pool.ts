@@ -1,3 +1,4 @@
+import type { ScheduledTask, Timer } from "../runtime/relay/timer.ts";
 import type { AgentSession } from "./agent-session.ts";
 import { AcpProcessCapacityLock, waitForAcpProcessCapacity } from "./process-capacity.ts";
 
@@ -6,6 +7,13 @@ const MAX_CONCURRENT_STARTS = 8;
 // Retired Sessions stay resumable through their stored row, so the cap bounds
 // live Agent processes only. Operators and tests may shrink it per daemon.
 const MAX_ACP_PROCESSES_ENVIRONMENT_KEY = "MOBIUS_MAX_ACP_PROCESSES";
+// A retained process that nothing touched for this long is closed; the next
+// request resumes its Session in a new process. Operators and tests may
+// shorten it per daemon.
+const DEFAULT_ACP_PROCESS_IDLE_SECONDS = 24 * 60 * 60;
+const ACP_PROCESS_IDLE_SECONDS_ENVIRONMENT_KEY = "MOBIUS_ACP_PROCESS_IDLE_SECONDS";
+// Node fires longer timer delays after one millisecond instead.
+const MAX_ACP_PROCESS_IDLE_SECONDS = Math.floor(2_147_483_647 / 1_000);
 
 export function resolveMaxAcpProcesses(environment: Readonly<Record<string, string | undefined>>): number {
     const configured = environment[MAX_ACP_PROCESSES_ENVIRONMENT_KEY];
@@ -19,27 +27,91 @@ export function resolveMaxAcpProcesses(environment: Readonly<Record<string, stri
     return parsed;
 }
 
+export function resolveAcpProcessIdleMilliseconds(environment: Readonly<Record<string, string | undefined>>): number {
+    const configured = environment[ACP_PROCESS_IDLE_SECONDS_ENVIRONMENT_KEY];
+    if (configured === undefined || configured === "") {
+        return DEFAULT_ACP_PROCESS_IDLE_SECONDS * 1_000;
+    }
+    const parsed = Number(configured);
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > MAX_ACP_PROCESS_IDLE_SECONDS) {
+        throw new Error(
+            `${ACP_PROCESS_IDLE_SECONDS_ENVIRONMENT_KEY} must be an integer from 1 to ${MAX_ACP_PROCESS_IDLE_SECONDS.toString()}`,
+        );
+    }
+    return parsed * 1_000;
+}
+
 export interface AgentProcessRetention {
     readonly isBusy: () => boolean;
+    /** Stops the process to free capacity for another one. */
     readonly retire: (runtime: AgentSession) => Promise<void>;
+    /** Stops the process after it stayed idle for the whole idle period. */
+    readonly expire: (runtime: AgentSession) => Promise<void>;
 }
 
 type ProcessSlot =
     | { readonly kind: "starting" }
-    | { readonly kind: "retained"; readonly runtime: AgentSession; readonly retention: AgentProcessRetention }
+    | {
+          readonly kind: "retained";
+          readonly runtime: AgentSession;
+          readonly retention: AgentProcessRetention;
+          readonly idleExpiry: ScheduledTask;
+      }
     | { readonly kind: "transient" | "retiring"; readonly runtime: AgentSession };
 
 /** Owns each capacity slot from reservation until the process has stopped. */
 export class AgentProcessPool {
     readonly #maxProcesses: number;
+    readonly #idleMilliseconds: number;
+    readonly #timer: Timer;
     readonly #slots = new Map<symbol, ProcessSlot>();
     readonly #lock = new AcpProcessCapacityLock();
     #starting = 0;
     #changed = Promise.withResolvers<void>();
 
-    constructor(maxProcesses: number = DEFAULT_MAX_ACP_PROCESSES) {
+    constructor(
+        timer: Timer,
+        maxProcesses: number = DEFAULT_MAX_ACP_PROCESSES,
+        idleMilliseconds: number = DEFAULT_ACP_PROCESS_IDLE_SECONDS * 1_000,
+    ) {
+        this.#timer = timer;
         this.#maxProcesses = maxProcesses;
+        this.#idleMilliseconds = idleMilliseconds;
     }
+
+    readonly #retained = (id: symbol, runtime: AgentSession, retention: AgentProcessRetention): ProcessSlot => ({
+        kind: "retained",
+        runtime,
+        retention,
+        idleExpiry: this.#timer.schedule(() => this.#expire(id), this.#idleMilliseconds),
+    });
+
+    readonly #replace = (id: symbol, slot: ProcessSlot | null): void => {
+        const current = this.#slots.get(id);
+        if (current?.kind === "retained") {
+            current.idleExpiry.cancel();
+        }
+        if (slot === null) {
+            this.#slots.delete(id);
+        } else {
+            this.#slots.set(id, slot);
+        }
+    };
+
+    readonly #expire = (id: symbol): void => {
+        const slot = this.#slots.get(id);
+        if (slot?.kind !== "retained") {
+            return;
+        }
+        if (slot.retention.isBusy()) {
+            // Work that outlasts the idle period starts a new one.
+            this.#slots.set(id, this.#retained(id, slot.runtime, slot.retention));
+            return;
+        }
+        void slot.retention.expire(slot.runtime).catch((error: unknown) => {
+            console.error("Mobius daemon could not close an idle Agent process", error);
+        });
+    };
 
     readonly notifyChanged = (): void => {
         const changed = this.#changed;
@@ -65,8 +137,8 @@ export class AgentProcessPool {
         if (slot?.kind !== "retained") {
             return;
         }
-        this.#slots.delete(id);
-        this.#slots.set(id, slot);
+        this.#replace(id, null);
+        this.#slots.set(id, this.#retained(id, runtime, slot.retention));
     };
 
     readonly retain = (runtime: AgentSession, retention: AgentProcessRetention): void => {
@@ -74,13 +146,13 @@ export class AgentProcessPool {
         if (id === undefined) {
             throw new Error("Cannot retain an unowned ACP process");
         }
-        this.#slots.set(id, { kind: "retained", runtime, retention });
+        this.#replace(id, this.#retained(id, runtime, retention));
     };
 
     readonly releaseClosed = (runtime: AgentSession): void => {
         const id = this.#find(runtime);
         if (id !== undefined) {
-            this.#slots.delete(id);
+            this.#replace(id, null);
         }
         this.notifyChanged();
     };
@@ -88,7 +160,7 @@ export class AgentProcessPool {
     readonly retire = async (runtime: AgentSession, close: () => Promise<void>): Promise<void> => {
         const id = this.#find(runtime);
         if (id !== undefined) {
-            this.#slots.set(id, { kind: "retiring", runtime });
+            this.#replace(id, { kind: "retiring", runtime });
         }
         try {
             await close();
@@ -136,7 +208,7 @@ export class AgentProcessPool {
             const runtime = await start();
             this.#slots.set(
                 id,
-                retention === null ? { kind: "transient", runtime } : { kind: "retained", runtime, retention },
+                retention === null ? { kind: "transient", runtime } : this.#retained(id, runtime, retention),
             );
             return runtime;
         } catch (error) {

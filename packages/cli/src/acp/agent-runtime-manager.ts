@@ -88,6 +88,20 @@ export class AgentRuntimeManager {
     readonly #contentExternalizer: AcpContentExternalizer;
     readonly #timer: Timer;
     #observer: AcpSessionObserver;
+    // Agent output counts as Session activity, so a Session that keeps
+    // reporting updates is not closed as idle.
+    readonly #activityObserver: AcpSessionObserver = {
+        onSessionEvent: (event) => this.#deliverActivity(event, (observer) => observer.onSessionEvent?.(event)),
+        onCommands: (event) => this.#deliverActivity(event, (observer) => observer.onCommands(event)),
+        onConfig: (event) => this.#deliverActivity(event, (observer) => observer.onConfig(event)),
+        onElicitation: (event) => this.#deliverActivity(event, (observer) => observer.onElicitation(event)),
+        onElicitationResolved: (event) =>
+            this.#deliverActivity(event, (observer) => observer.onElicitationResolved(event)),
+        onInfo: (event) => this.#deliverActivity(event, (observer) => observer.onInfo(event)),
+        onPermission: (event) => this.#deliverActivity(event, (observer) => observer.onPermission(event)),
+        onPermissionResolved: (event) =>
+            this.#deliverActivity(event, (observer) => observer.onPermissionResolved(event)),
+    };
 
     constructor({
         observer,
@@ -98,6 +112,7 @@ export class AgentRuntimeManager {
         contentExternalizer,
         timer,
         maxProcesses,
+        processIdleMilliseconds,
     }: {
         readonly observer: AcpSessionObserver;
         readonly store: AcpSessionStore;
@@ -107,9 +122,11 @@ export class AgentRuntimeManager {
         readonly contentExternalizer: AcpContentExternalizer;
         readonly timer: Timer;
         readonly maxProcesses: number | null;
+        /** How long a retained Agent process may go without Session activity; defaults to a day. */
+        readonly processIdleMilliseconds?: number;
     }) {
         this.#observer = observer;
-        this.#processes = new AgentProcessPool(maxProcesses ?? undefined);
+        this.#processes = new AgentProcessPool(timer, maxProcesses ?? undefined, processIdleMilliseconds);
         this.#store = store;
         this.#adapters = adapters;
         this.#sessionIdentity = sessionIdentity;
@@ -131,6 +148,14 @@ export class AgentRuntimeManager {
         this.#observer = observer;
     };
 
+    async #deliverActivity(
+        event: { readonly sessionId: string },
+        deliver: (observer: AcpSessionObserver) => Promise<void> | undefined,
+    ): Promise<void> {
+        this.#executionProcesses.touch(event.sessionId);
+        await deliver(this.#observer);
+    }
+
     #isNativeSessionOperationActive(sessionId: string): boolean {
         const stored = this.#store.read(sessionId);
         return (
@@ -146,6 +171,7 @@ export class AgentRuntimeManager {
                 this.#executionProcesses.isBusy(sessionId) ||
                 this.#isNativeSessionOperationActive(sessionId),
             retire: (runtime) => this.#retireSessionProcess(sessionId, runtime, () => runtime.close()),
+            expire: () => this.#closeSession(sessionId),
         };
     }
 
@@ -193,7 +219,7 @@ export class AgentRuntimeManager {
                             ? { ...options, origin: { kind: "import", nativeSessionId: options.sessionId, title: "" } }
                             : options,
                         recovery,
-                        () => this.#observer,
+                        () => this.#activityObserver,
                         this.#store,
                         metrics,
                         this.#contentExternalizer,
@@ -221,7 +247,7 @@ export class AgentRuntimeManager {
                     await AgentSession.start(
                         options,
                         recovery,
-                        () => this.#observer,
+                        () => this.#activityObserver,
                         this.#store,
                         metrics,
                         this.#contentExternalizer,
@@ -240,7 +266,7 @@ export class AgentRuntimeManager {
                     await AgentSession.start(
                         options,
                         { kind: "interactive-only" },
-                        () => this.#observer,
+                        () => this.#activityObserver,
                         this.#store,
                         unmeasuredOperationMetrics,
                         this.#contentExternalizer,
@@ -672,40 +698,44 @@ export class AgentRuntimeManager {
 
     readonly closeSession = async (sessionId: string, signal: AbortSignal): Promise<void> =>
         this.#operations.run({ sessionId, signal }, async (options) => {
-            const existing = this.#sessionClosures.get(options.sessionId);
-            if (existing !== undefined) {
-                await waitForSharedOperation(existing, options.signal);
-                return;
-            }
-            const release = (async (): Promise<void> => {
-                const pending = this.#executionProcesses.pending(options.sessionId);
-                const runtime = pending === undefined ? this.#executionProcesses.get(options.sessionId) : await pending;
-                if (runtime !== undefined) {
-                    await this.#retireSessionProcess(options.sessionId, runtime, async () => await runtime.close());
-                }
-            })();
-            const deadline = Promise.withResolvers<void>();
-            const timeout = this.#timer.schedule(
-                () =>
-                    deadline.reject(
-                        new AcpExecutionError(
-                            "The Session could not close before its deadline",
-                            {},
-                            "session_close_timeout",
-                        ),
-                    ),
-                SESSION_CLOSE_TIMEOUT_MILLISECONDS,
-            );
-            const completion = Promise.race([release, deadline.promise]).finally(timeout.cancel);
-            this.#sessionClosures.set(options.sessionId, completion);
-            const releaseFinished = (): void => {
-                if (this.#sessionClosures.get(options.sessionId) === completion) {
-                    this.#sessionClosures.delete(options.sessionId);
-                }
-            };
-            void release.then(releaseFinished, releaseFinished);
-            await waitForSharedOperation(completion, options.signal);
+            await waitForSharedOperation(this.#closeSession(options.sessionId), options.signal);
         });
+
+    /** Shares one bounded close per Session; preparing the Session again waits for it. */
+    #closeSession(sessionId: string): Promise<void> {
+        const existing = this.#sessionClosures.get(sessionId);
+        if (existing !== undefined) {
+            return existing;
+        }
+        const release = (async (): Promise<void> => {
+            const pending = this.#executionProcesses.pending(sessionId);
+            const runtime = pending === undefined ? this.#executionProcesses.get(sessionId) : await pending;
+            if (runtime !== undefined) {
+                await this.#retireSessionProcess(sessionId, runtime, async () => await runtime.close());
+            }
+        })();
+        const deadline = Promise.withResolvers<void>();
+        const timeout = this.#timer.schedule(
+            () =>
+                deadline.reject(
+                    new AcpExecutionError(
+                        "The Session could not close before its deadline",
+                        {},
+                        "session_close_timeout",
+                    ),
+                ),
+            SESSION_CLOSE_TIMEOUT_MILLISECONDS,
+        );
+        const completion = Promise.race([release, deadline.promise]).finally(timeout.cancel);
+        this.#sessionClosures.set(sessionId, completion);
+        const releaseFinished = (): void => {
+            if (this.#sessionClosures.get(sessionId) === completion) {
+                this.#sessionClosures.delete(sessionId);
+            }
+        };
+        void release.then(releaseFinished, releaseFinished);
+        return completion;
+    }
 
     readonly close = async (): Promise<void> =>
         this.#operations.close(async () => {
