@@ -25,11 +25,11 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { listen, port as readPort, sendText as writeServerTextFrame } from "@moxt-ai/mobius-test/websocket";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createRuntimeConfig, LocalAgentDefinition } from "../../src/daemon/config.ts";
-import { RuntimeRelayRevokedError } from "../../src/daemon/relay/runtime-revocation.ts";
-import { SESSION_EVENT_BATCH_WINDOW_MILLISECONDS } from "../../src/daemon/relay/session-event-publisher.ts";
-import type { ScheduledTask, Timer } from "../../src/daemon/relay/timer.ts";
-import { runRuntime } from "../../src/daemon/run.ts";
+import { createRuntimeConfig, LocalAgentDefinition } from "../../src/runtime/config.ts";
+import { RuntimeRelayRevokedError } from "../../src/runtime/relay/runtime-revocation.ts";
+import { SESSION_EVENT_BATCH_WINDOW_MILLISECONDS } from "../../src/runtime/relay/session-event-publisher.ts";
+import type { ScheduledTask, Timer } from "../../src/runtime/relay/timer.ts";
+import { runRuntime } from "../../src/runtime/run.ts";
 
 const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const fakeAgentPath = fileURLToPath(new URL("../sessions/fixtures/acp-peer.ts", import.meta.url));

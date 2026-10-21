@@ -768,7 +768,7 @@ describe.sequential("Platform Session-only boundary", () => {
         );
         const hostResponse = await worker.fetch(
             new Request(
-                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtimes/${runtimeId}/host?token=${appCredential}`,
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtimes/${runtimeId}/host?token=${appCredential}&nativeRequestId=viewer-must-stay-live`,
                 {
                     headers: { Upgrade: "websocket" },
                 },
@@ -840,6 +840,50 @@ describe.sequential("Platform Session-only boundary", () => {
                 requestId: closeCommand.requestId,
                 sessionId: "session-to-close",
             });
+            // Native HTTP probes use request-reply connections, while this viewer keeps its live subscription.
+            for (const outcome of ["idle", "busy"] as const) {
+                const activeTurnResponse = worker.fetch(
+                    new Request(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtimes/${runtimeId}/sessions/${sessionId}/active-turn`,
+                        {
+                            body: JSON.stringify({ additionalDirectoryIds: [], agentId: "codex", directoryId: "root" }),
+                            headers: credentialHeaders(appCredential),
+                            method: "POST",
+                        },
+                    ),
+                    environment,
+                );
+                const query = decodeServiceToDaemonMessage(await daemonMessages.next());
+                if (query.kind !== "native.session.request" || query.action !== "active-turn") {
+                    throw new Error("Expected the HTTP active Turn query to reach the daemon");
+                }
+                expect(decodeServiceToDaemonMessage(await hostMessages.next())).toMatchObject(query);
+                const reply =
+                    outcome === "idle"
+                        ? encodeNativeSessionResult({
+                              kind: "native.session.result",
+                              action: "active-turn",
+                              requestId: query.requestId,
+                              sessionId,
+                              targetSessionId: sessionId,
+                              turn: null,
+                              queued: [],
+                          })
+                        : encodeSessionOperationFailedEvent({
+                              kind: "session.operation.failed",
+                              requestId: query.requestId,
+                              sessionId,
+                              code: "native_session_busy",
+                              message: "Another native session operation is running",
+                          });
+                daemon.send(reply);
+                expect(JSON.parse(await hostMessages.next())).toMatchObject({ requestId: query.requestId });
+                expect(await responseJson(await activeTurnResponse, outcome === "idle" ? 200 : 503)).toMatchObject(
+                    outcome === "idle"
+                        ? { action: "active-turn", turn: null, queued: [] }
+                        : { error: { code: "native_session_busy" } },
+                );
+            }
             // A Host can multiplex discovery, but routing must remain bounded and reject overload explicitly.
             const discoveryRequests = Array.from({ length: 4 }, (_, index) => ({
                 kind: "agent.settings.discover",

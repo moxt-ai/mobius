@@ -41,8 +41,8 @@ import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { expect, test } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { LocalAgentDefinition } from "../../src/agent-catalog/local-agent.ts";
-import { createRuntimeConfig, RuntimeLocalContext } from "../../src/daemon/config.ts";
-import { runRuntime } from "../../src/daemon/run.ts";
+import { createRuntimeConfig, RuntimeLocalContext } from "../../src/runtime/config.ts";
+import { runRuntime } from "../../src/runtime/run.ts";
 
 class Messages {
     readonly #buffered: string[] = [];
@@ -447,6 +447,120 @@ test("Given a real daemon persisted a Session, When Platform restores it by iden
             await restored.completion;
         }
     } finally {
+        for (const socket of websocketServer.clients) {
+            socket.terminate();
+        }
+        await new Promise<void>((resolve) => websocketServer.close(() => resolve()));
+        await new Promise<void>((resolve) => relay.close(() => resolve()));
+        await rm(stateDirectory, { recursive: true, force: true });
+    }
+}, 30_000);
+
+test("Given a queued prompt with a different Agent identity, When an active-turn snapshot is taken for the running identity, Then the foreign queued prompt is not included", async () => {
+    const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-queued-identity-"));
+    const workspace = join(stateDirectory, "workspace");
+    await mkdir(workspace);
+    const relay = createServer((_request, response) => response.writeHead(404).end());
+    const websocketServer = new WebSocketServer({ server: relay });
+    const connected = Promise.withResolvers<WebSocket>();
+    websocketServer.on("connection", (socket) => connected.resolve(socket));
+    await listen(relay);
+    const relayUrl = new URL(
+        `ws://127.0.0.1:${port(relay).toString()}${MOBIUS_API_PREFIX}/channels/queued-identity/daemon`,
+    );
+    relayUrl.searchParams.set("token", "r".repeat(43));
+    const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
+    const agent = new LocalAgentDefinition(
+        "claude",
+        "Claude Code",
+        process.execPath,
+        [fakeAgentPath, "--agent-name", "Claude Code"],
+        {
+            MOBIUS_FAKE_ACP_PAUSE_AFTER_PERMISSION: "1",
+            MOBIUS_FAKE_ACP_STATE_DIRECTORY: join(stateDirectory, "agent"),
+        },
+    );
+    const otherAgent = new LocalAgentDefinition(
+        "codex",
+        "Codex",
+        process.execPath,
+        [fakeAgentPath, "--agent-name", "Codex"],
+        {
+            MOBIUS_FAKE_ACP_PAUSE_AFTER_PERMISSION: "1",
+            MOBIUS_FAKE_ACP_STATE_DIRECTORY: join(stateDirectory, "agent"),
+        },
+    );
+    const config = createRuntimeConfig(
+        { channelId: "queued-identity", defaultWorkspace: workspace, relayUrl },
+        [agent, otherAgent],
+        new RuntimeLocalContext(stateDirectory),
+    );
+    const cancellation = new AbortController();
+    const runtime = runRuntime(config, cancellation.signal);
+    try {
+        const socket = await connected.promise;
+        const messages = new Messages(socket);
+        socket.send(JSON.stringify({ kind: "runtime.liveness.ready" }));
+        const sessionId = "queued_identity";
+        socket.send(
+            encodeSessionPromptCommand({
+                additionalDirectoryIds: [],
+                agentId: "claude",
+                bindingId: config.bindingId,
+                commandId: "running_turn",
+                directoryId: "default",
+                disposition: SessionPromptDisposition.Reject,
+                images: [],
+                kind: "session.prompt",
+                prompt: "exercise ACP controls",
+                resources: [],
+                sessionId,
+                targetCommandId: "",
+            }),
+        );
+        expect(decodeSessionStatusChangedEvent(await messages.nextKind(SESSION_STATUS_CHANGED_KIND))).toMatchObject({
+            status: { commandId: "running_turn", kind: "working" },
+        });
+        // A different Agent identity queues behind the running turn in the same Session.
+        socket.send(
+            encodeSessionPromptCommand({
+                additionalDirectoryIds: [],
+                agentId: "codex",
+                bindingId: config.bindingId,
+                commandId: "foreign_queued_turn",
+                directoryId: "default",
+                disposition: SessionPromptDisposition.Queue,
+                images: [],
+                kind: "session.prompt",
+                prompt: "queued for another agent",
+                resources: [],
+                sessionId,
+                targetCommandId: "running_turn",
+            }),
+        );
+        // The snapshot for the Claude identity must not report the Codex queued prompt.
+        socket.send(
+            encodeNativeSessionRequest({
+                action: "active-turn",
+                additionalDirectoryIds: [],
+                agentId: "claude",
+                bindingId: config.bindingId,
+                directoryId: "default",
+                kind: "native.session.request",
+                requestId: "claude_snapshot",
+                sessionId,
+                targetSessionId: sessionId,
+            }),
+        );
+        const result = decodeNativeSessionResult(await messages.nextKind(NATIVE_SESSION_RESULT_KIND));
+        expect(result.action).toBe("active-turn");
+        if (result.action === "active-turn") {
+            expect(result.queued.every((queued) => queued.commandId !== "foreign_queued_turn")).toBe(true);
+            expect(result.turn?.commandId).toBe("running_turn");
+        }
+    } finally {
+        cancellation.abort();
+        await runtime;
         for (const socket of websocketServer.clients) {
             socket.terminate();
         }

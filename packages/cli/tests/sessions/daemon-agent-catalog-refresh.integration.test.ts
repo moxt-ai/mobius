@@ -24,8 +24,8 @@ import { DirectAcpAgentDefinition } from "../../src/agent-catalog/agent-specific
 import { discoverLocalAgentInventory } from "../../src/agent-catalog/discover-local-agents.ts";
 import { publishAgentCatalog } from "../../src/agent-catalog/publish-agent-catalog.ts";
 import { createCatalogAgentResolver } from "../../src/agent-catalog/resolve-catalog-agent.ts";
-import { createRuntimeConfig, RuntimeLocalContext } from "../../src/daemon/config.ts";
-import { runRuntime } from "../../src/daemon/run.ts";
+import { createRuntimeConfig, RuntimeLocalContext } from "../../src/runtime/config.ts";
+import { runRuntime } from "../../src/runtime/run.ts";
 
 const websocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));

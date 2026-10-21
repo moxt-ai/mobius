@@ -18,9 +18,11 @@ const DISPATCH_PROMPT = "Delegate the verification to a helper agent and then su
 const INNER_PROMPT = "Use a shell tool successfully, then reply with your findings";
 /** The subagent's final report text. */
 const INNER_REPORT = "SUBAGENT_REPORT: shell verified";
+/** The fixture's answer prefix, used to count assistant deliveries. */
+const ANSWER_PREFIX = "CLAUDE_SUBAGENT_DONE";
 
-test("Given Claude Code dispatches a subagent that runs tools, When the turn streams through the daemon, Then only the Agent call and its report surface", async () => {
-    await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-6", "CLAUDE_SUBAGENT_DONE", {
+test("Given Claude Code dispatches a subagent that runs tools, When the turn streams through the daemon, Then only the Agent dispatch call surfaces", async () => {
+    await using provider = await FakeAnthropicProvider.start("claude-sonnet-4-6", ANSWER_PREFIX, {
         subagent: {
             dispatchDescription: "Verify via helper",
             dispatchPrompt: DISPATCH_PROMPT,
@@ -48,15 +50,19 @@ test("Given Claude Code dispatches a subagent that runs tools, When the turn str
             }),
         );
         const observed = await observeTurn(peer, commandId);
-        // The subagent's only visible footprint is its dispatch call — refined
-        // with the dispatch prompt once its input assembles — completed with the
-        // harness's dispatch result. The doubled final answer proves the subagent
-        // ran to completion and woke the main thread inside the turn, so its own
-        // tool calls and text had every chance to surface — and none did.
+        // The subagent's only visible footprint is its dispatch call: opened
+        // with the dispatch description, refined with the dispatch prompt once
+        // its input assembles, and completed by the harness's own tool result
+        // (the dispatch ack, rendered as any tool result). The subagent's
+        // running details — its inner tool calls and text — never surface.
         expect(observed.toolCalls.length).toBe(1);
         expect(observed.toolCalls[0]?.title).toBe("Verify via helper");
         expect(observed.toolCalls[0]?.rawInputContains).toContain(INNER_PROMPT);
-        expect(observed.answerRepeats).toBe(2);
+        // The subagent ran to completion and woke the main thread inside the
+        // turn (a second assistant delivery), so its own output had every
+        // chance to surface — and none did.
+        const deliveries = observed.agentText.split(ANSWER_PREFIX).length - 1;
+        expect(deliveries).toBe(2);
         expect(observed.completion?.stopReason).toBe("end_turn");
     });
 });
@@ -68,21 +74,21 @@ interface ObservedToolCall {
 
 interface ObservedTurn {
     readonly toolCalls: readonly ObservedToolCall[];
-    /** How many times the provider's answer text was delivered — once for the
-     *  pre-wake reply and once for the post-wake continuation. */
-    readonly answerRepeats: number;
+    /** All assistant text concatenated across the turn, used to count full
+     *  answer deliveries regardless of how the provider chunked them. */
+    readonly agentText: string;
     readonly completion: { stopReason: string } | undefined;
 }
 
 /** Drains the session event stream until the prompt settles, recording the
  *  latest surfaced tool call presentation (a tool_call and its refinements are
- *  one logical call), the answer deliveries, and the turn outcome — answering
+ *  one logical call), the assistant text, and the turn outcome — answering
  *  every permission request with its one-time allowance. */
 async function observeTurn(peer: RealDaemonPeer, commandId: string): Promise<ObservedTurn> {
     const titles = new Map<string, string>();
     const rawInputs = new Map<string, unknown>();
     const toolStatus = new Map<string, string>();
-    let answerRepeats = 0;
+    let agentText = "";
     let completion: { stopReason: string } | undefined;
     for (;;) {
         const event = decodeSessionEvent(JSON.parse(await peer.nextEvent()));
@@ -124,12 +130,8 @@ async function observeTurn(peer: RealDaemonPeer, commandId: string): Promise<Obs
                     toolStatus.set(update.toolCallId, status);
                 }
             }
-        } else if (
-            update.sessionUpdate === "agent_message_chunk" &&
-            update.content.type === "text" &&
-            update.content.text.includes("héllo 🌍")
-        ) {
-            answerRepeats += 1;
+        } else if (update.sessionUpdate === "agent_message_chunk" && update.content.type === "text") {
+            agentText += update.content.text;
         }
     }
     const toolCalls: ObservedToolCall[] = [];
@@ -140,5 +142,5 @@ async function observeTurn(peer: RealDaemonPeer, commandId: string): Promise<Obs
             title,
         });
     }
-    return { answerRepeats, completion, toolCalls };
+    return { agentText, completion, toolCalls };
 }

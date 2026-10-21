@@ -1,4 +1,4 @@
-import { type RuntimeConfig, withRuntimeEnvironment } from "../daemon/config.ts";
+import { type RuntimeConfig, withRuntimeEnvironment } from "../runtime/config.ts";
 import { revalidateExecutable } from "../util/process/executable.ts";
 import type { discoverLocalAgentInventory } from "./discover-local-agents.ts";
 import type { AcpAgentDefinition as CatalogAgentDefinition } from "./local-agent.ts";

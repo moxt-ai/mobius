@@ -11,10 +11,10 @@ import {
     operationErrorCode,
     operationErrorMessage,
     send,
-} from "../daemon/command-dispatcher.ts";
-import type { RuntimeConfig } from "../daemon/config.ts";
-import type { RelayConnectionDiagnostics } from "../daemon/relay/diagnostics.ts";
-import type { Timer } from "../daemon/relay/timer.ts";
+} from "../runtime/command/dispatcher.ts";
+import type { RuntimeConfig } from "../runtime/config.ts";
+import type { RelayConnectionDiagnostics } from "../runtime/relay/diagnostics.ts";
+import type { Timer } from "../runtime/relay/timer.ts";
 import { discoverAgentSettings } from "./discover-agent-settings.ts";
 
 interface SettingsDiscoveryDependencies {

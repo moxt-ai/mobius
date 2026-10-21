@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -64,5 +64,12 @@ export class PiFixture implements AsyncDisposable {
 
     async [Symbol.asyncDispose](): Promise<void> {
         await rm(this.#directory, { force: true, recursive: true });
+    }
+
+    /** Merges a pi settings override into `.pi/agent/settings.json` under HOME. */
+    async overrideSettings(settings: Record<string, unknown>): Promise<void> {
+        const settingsPath = join(this.#directory, ".pi", "agent", "settings.json");
+        const current = JSON.parse(await readFile(settingsPath, "utf8")) as Record<string, unknown>;
+        await writeFile(settingsPath, `${JSON.stringify({ ...current, ...settings }, null, 2)}\n`, { mode: 0o600 });
     }
 }

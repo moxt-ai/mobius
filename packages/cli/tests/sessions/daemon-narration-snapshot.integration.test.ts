@@ -18,8 +18,8 @@ import {
 import { listen, port, sendText } from "@moxt-ai/mobius-test/websocket";
 import { describe, expect, it } from "vitest";
 import { LocalAgentDefinition } from "../../src/agent-catalog/local-agent.ts";
-import { createRuntimeConfig, RuntimeLocalContext } from "../../src/daemon/config.ts";
-import { runRuntime } from "../../src/daemon/run.ts";
+import { createRuntimeConfig, RuntimeLocalContext } from "../../src/runtime/config.ts";
+import { runRuntime } from "../../src/runtime/run.ts";
 
 const websocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));

@@ -12,6 +12,7 @@ import {
     UnsupportedProtocolMessageKindError,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { ProjectScope } from "../../entity/do/session.ts";
+import { logger } from "../../infra/logger.ts";
 import type { ChannelActor, ChannelPeers, ChannelSocket } from "./channel-actor.ts";
 import type { ChannelCredentialService } from "./channel-credential-service.ts";
 import type { RuntimeConnectionService } from "./runtime-connection-service.ts";
@@ -30,6 +31,7 @@ export type RuntimeSocketIdentity =
           readonly role: "host";
           readonly channelId: string;
           readonly credentialId: string;
+          readonly nativeRequestId?: string;
           readonly runtimeId: string;
           readonly projectId: string;
       }
@@ -166,6 +168,7 @@ export class RuntimeService {
         };
         const accepted = this.#cx.gateways.peers.accept(identity);
         this.#cx.services.connections.connected(prepared.identity, Date.now());
+        logger.info({ ...identity, event: "runtime_websocket_accepted" }, "Runtime WebSocket accepted");
         if (liveness) {
             this.deferDaemonAttachment(identity, accepted.socket, scope, previous.length > 0);
             return { kind: "accepted", response: accepted.response };
@@ -211,7 +214,10 @@ export class RuntimeService {
                 socket.send(encodeServiceToDaemonMessage(ready));
             } catch (error) {
                 if (!attachment.controller.signal.aborted) {
-                    console.error("Runtime attachment failed", error);
+                    logger.error(
+                        { ...identity, err: error, event: "runtime_attachment_failed" },
+                        "Runtime attachment failed",
+                    );
                 }
                 if (this.#cx.services.connections.isCurrent(identity)) {
                     socket.close(1011, "Runtime attachment failed");
@@ -386,6 +392,10 @@ export class RuntimeService {
             });
         } catch (error) {
             if (error instanceof RuntimeMessageSchedulerCapacityError) {
+                logger.warn(
+                    { ...identity, err: error, event: "runtime_message_queue_full", closeCode: 1013 },
+                    "Runtime message queue full",
+                );
                 socket.close(1013, error.code);
                 return;
             }
@@ -441,7 +451,10 @@ export class RuntimeService {
     };
 
     private readonly notifyOffline = (runtimeId: string): void => {
-        for (const host of this.#cx.gateways.peers.hosts()) {
+        for (const host of [
+            ...this.#cx.gateways.peers.hosts(),
+            ...this.#cx.gateways.peers.nativeRequests().map(({ socket }) => socket),
+        ]) {
             if (host.isOpen()) {
                 host.send(encodeRuntimeStatusEvent({ kind: RUNTIME_STATUS_KIND, runtimeId, online: false }));
             }

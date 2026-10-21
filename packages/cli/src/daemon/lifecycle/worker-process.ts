@@ -45,13 +45,27 @@ export class WorkerStartupError extends Error {
     }
 }
 
+// How a worker process terminated: `exitCode` for a normal exit, `signal` for a
+// termination by signal (SIGKILL, SIGHUP, OOM-killer), both null when the
+// process never launched.
+export interface WorkerExit {
+    readonly code: number | null;
+    readonly signal: NodeJS.Signals | null;
+}
+
 export class WorkerProcess {
     readonly #child: ChildProcess;
     #stdout = "";
     #stderr = "";
     readonly #started = Promise.withResolvers<unknown>();
     readonly #closed = Promise.withResolvers<void>();
+    readonly #drained = Promise.withResolvers<void>();
+    #exit: WorkerExit | null = null;
     readonly exited = this.#closed.promise;
+    // Resolves once the child's stdio streams are closed, so the captured stderr
+    // tail is final. Bounded: if an orphaned grandchild inherits the pipes and
+    // keeps them open, the fallback timer still resolves it.
+    readonly streamsSettled: Promise<void> = this.#drained.promise;
     readonly launch: WorkerLaunch;
     readonly ready: Promise<unknown>;
 
@@ -70,6 +84,9 @@ export class WorkerProcess {
         this.#child.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
             this.#stderr = (this.#stderr + chunk).slice(-4096);
             process.stderr.write(chunk);
+        });
+        this.#child.once("close", () => {
+            this.#drained.resolve();
         });
         this.#child.on("message", (value: unknown) => {
             if (isRecord(value) && value["kind"] === "worker-ready") {
@@ -93,10 +110,14 @@ export class WorkerProcess {
                 }),
             );
             if (this.#child.pid === undefined) {
+                this.#exit = { code: null, signal: null };
+                this.#boundStreamsSettled();
                 this.#closed.resolve();
             }
         });
-        this.#child.once("exit", () => {
+        this.#child.once("exit", (code, signal) => {
+            this.#exit = { code, signal };
+            this.#boundStreamsSettled();
             this.#started.reject(
                 new WorkerStartupError(
                     "worker_exited",
@@ -111,6 +132,11 @@ export class WorkerProcess {
         this.ready = this.#waitForStart(signal);
     }
 
+    #boundStreamsSettled(): void {
+        const giveUp = setTimeout(() => this.#drained.resolve(), 2_000);
+        void this.#drained.promise.then(() => clearTimeout(giveUp));
+    }
+
     get running(): boolean {
         return this.#child.exitCode === null && this.#child.signalCode === null && this.#child.connected;
     }
@@ -121,6 +147,19 @@ export class WorkerProcess {
             throw new Error("The working process did not start");
         }
         return pid;
+    }
+
+    // How the child terminated, available once `exited` settles. `code` and `signal`
+    // are null when the process could not be launched at all.
+    get exit(): WorkerExit {
+        if (this.#exit === null) {
+            throw new Error("The working process has not exited");
+        }
+        return this.#exit;
+    }
+
+    get stderr(): string {
+        return this.#stderr;
     }
 
     readonly close = async (): Promise<void> => {

@@ -486,6 +486,9 @@ export class FakeOpenAiProvider implements AsyncDisposable {
             readonly mcpImage?: boolean;
             readonly toolPrompt?: string;
             readonly toolSequence?: readonly RequestedTool[];
+            /** Fails every request whose prompt contains this text (HTTP 500), for
+             *  guard paths such as a compaction whose summarization call errors. */
+            readonly failPromptContaining?: string;
         } = {},
     ): Promise<FakeOpenAiProvider> {
         const requests: ProviderRequestDiagnostic[] = [];
@@ -521,10 +524,9 @@ export class FakeOpenAiProvider implements AsyncDisposable {
             }
             const tools = availableTools(payload);
             const completedToolCalls = toolResultCount(payload);
+            const userPrompt = latestUserPrompt(payload);
             const requestedTool =
-                options.toolPrompt === latestUserPrompt(payload)
-                    ? options.toolSequence?.[completedToolCalls]
-                    : undefined;
+                options.toolPrompt === userPrompt ? options.toolSequence?.[completedToolCalls] : undefined;
             const detectedScenario = selectFakeProviderScenario(payload);
             const selectedScenario =
                 detectedScenario.toolCalls === 0 && fallbackScenario !== undefined
@@ -559,6 +561,11 @@ export class FakeOpenAiProvider implements AsyncDisposable {
                 tools: tools.map(({ kind, name }) => ({ kind, name })),
                 url: request.url ?? "",
             });
+            if (options.failPromptContaining !== undefined && userPrompt.includes(options.failPromptContaining)) {
+                response.writeHead(500, { "content-type": "application/json" });
+                response.end(JSON.stringify({ error: { message: "fake compaction summarization failure" } }));
+                return;
+            }
 
             if (request.url?.endsWith("/responses") === true) {
                 response.writeHead(200, responseHeaders());

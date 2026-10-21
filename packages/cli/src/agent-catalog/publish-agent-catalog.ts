@@ -1,7 +1,7 @@
 import { fetch } from "undici";
 
-import type { RuntimeConfig } from "../daemon/config.ts";
-import { relayAuthorization, relayHttpEndpoint } from "../daemon/relay/relay-authentication.ts";
+import type { RuntimeConfig } from "../runtime/config.ts";
+import { relayAuthorization, relayHttpEndpoint } from "../runtime/relay/relay-authentication.ts";
 import { environmentProxyDispatcher } from "../util/network/environment-proxy.ts";
 
 const CATALOG_UPDATE_TIMEOUT_MILLISECONDS = 20_000;

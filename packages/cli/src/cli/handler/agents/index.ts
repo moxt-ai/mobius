@@ -2,8 +2,8 @@ import { mkdir } from "node:fs/promises";
 import type { Command } from "commander";
 
 import { discoverLocalAgentInventory } from "../../../agent-catalog/discover-local-agents.ts";
-import { loadDefaultWorkspace, RuntimeLocalContext } from "../../../daemon/config.ts";
 import { openMobiusCliInstallation } from "../../../daemon/pairing/pair-local-machine.ts";
+import { loadDefaultWorkspace, RuntimeLocalContext } from "../../../runtime/config.ts";
 import type { CliContext } from "../../context.ts";
 import { formatAgentDiagnostics } from "./logic/agent-diagnostics.ts";
 

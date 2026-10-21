@@ -3,8 +3,8 @@ import { createHash } from "node:crypto";
 import { isIdentifier, type PromptImage, type PromptResource } from "@moxt-ai/mobius-sdk/protocol";
 import { fetch } from "undici";
 
-import type { RuntimeConfig } from "./daemon/config.ts";
-import { relayAuthorization, relayHttpEndpoint } from "./daemon/relay/relay-authentication.ts";
+import type { RuntimeConfig } from "./runtime/config.ts";
+import { relayAuthorization, relayHttpEndpoint } from "./runtime/relay/relay-authentication.ts";
 import { environmentProxyDispatcher } from "./util/network/environment-proxy.ts";
 
 const ARTIFACT_SCHEME = "mobius-artifact:";

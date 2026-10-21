@@ -12,6 +12,9 @@ export interface CodexSessionAgent {
     readonly cancel: () => Promise<void>;
     readonly close: () => Promise<void>;
     readonly nativeTurnId: () => string | null;
+    /** Reports a manual compaction through thread/compact/start. Unsupported session
+     *  agents (borrowed queue access) reject with an execution error. */
+    readonly compact: (signal: AbortSignal) => Promise<PromptResponse>;
     readonly onNotification: (method: string, params: unknown) => Promise<void>;
     readonly onServerRequest: (request: CodexAppServerServerRequest) => Promise<void>;
     readonly onTerminated: (termination: AcpEndpointTermination) => void;

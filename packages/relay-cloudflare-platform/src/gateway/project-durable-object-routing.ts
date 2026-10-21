@@ -1,4 +1,5 @@
 import type { SqlDatabase } from "@moxt-ai/mobius-relay-core/database";
+import { logger } from "@moxt-ai/mobius-relay-core/logging";
 import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-sdk/protocol";
 import { decodePlatformProjectPlacement, projectIdFromPrefixedValue } from "../entity/platform-project-id.ts";
 import { encodeProjectDurableObjectPath } from "../entity/project-durable-object-path.ts";
@@ -122,14 +123,31 @@ export async function routeProjectDurableObject(
     durableObjectUrl.pathname = encodeProjectDurableObjectPath(projectId, durableObjectUrl.pathname);
     const body = request.body === null ? undefined : await request.arrayBuffer();
     request.signal.throwIfAborted();
-    return await bindings.PROJECT_RELAY.getByName(projectId, { locationHint: placement.locationHint }).fetch(
-        durableObjectUrl,
-        {
-            method: request.method,
-            headers: request.headers,
-            ...(body === undefined ? {} : { body }),
-            signal: request.signal,
-            redirect: request.redirect,
-        },
-    );
+    try {
+        return await bindings.PROJECT_RELAY.getByName(projectId, { locationHint: placement.locationHint }).fetch(
+            durableObjectUrl,
+            {
+                method: request.method,
+                headers: request.headers,
+                ...(body === undefined ? {} : { body }),
+                signal: request.signal,
+                redirect: request.redirect,
+            },
+        );
+    } catch (error) {
+        logger.error(
+            {
+                event: "project_relay_request_failed",
+                durableObjectClass: "ProjectRelay",
+                durableObjectId: bindings.PROJECT_RELAY.idFromName(projectId).toString(),
+                projectId,
+                cfRay: request.headers.get("cf-ray")?.slice(0, 128) ?? null,
+                method: request.method,
+                path: durableObjectUrl.pathname,
+                err: error,
+            },
+            "Project Relay request failed",
+        );
+        throw error;
+    }
 }

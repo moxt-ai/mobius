@@ -112,15 +112,14 @@ export class PairingService {
                 ),
         );
         try {
-            const response = await timing.measure(
-                "control-connect",
-                "Connect Runtime control host",
-                async () =>
-                    await this.#channels.acceptHost(
-                        access,
-                        new Request("https://runtime.internal/host", { headers: { Upgrade: "websocket" } }),
-                        deadline,
-                    ),
+            const response = await timing.measure("control-connect", "Connect Runtime control host", async () =>
+                command.kind === "native.session.request"
+                    ? await this.#channels.acceptNativeRequest(access, command.requestId, deadline)
+                    : await this.#channels.acceptHost(
+                          access,
+                          new Request("https://runtime.internal/host", { headers: { Upgrade: "websocket" } }),
+                          deadline,
+                      ),
             );
             const socket = response.webSocket;
             if (socket === null) {

@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync, unlinkSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import {
@@ -53,6 +54,8 @@ type AdvertisedModel = {
 
 const MODEL_CONFIG_ID = "model";
 const THOUGHT_LEVEL_CONFIG_ID = "thought_level";
+// Compaction summarizes the session with one model call; generous but finite.
+const COMPACT_TIMEOUT_MILLISECONDS = 3_600_000;
 
 const contentBlockSchema: z.ZodType<ContentBlock> = z.discriminatedUnion("type", [
     z.object({ type: z.literal("text"), text: z.string() }),
@@ -510,26 +513,62 @@ export class PiAcpAgent {
 
             if (cmd === "compact") {
                 const customInstructions = args.join(" ").trim() || undefined;
-                const res = await session.proc.compact(customInstructions);
-
-                const r: any = res && typeof res === "object" ? (res as any) : null;
-                const tokensBefore = typeof r?.tokensBefore === "number" ? r.tokensBefore : null;
-                const summary = typeof r?.summary === "string" ? r.summary : null;
-
-                const headerLines = [
-                    `Compaction completed.${customInstructions ? " (custom instructions applied)" : ""}`,
-                    tokensBefore !== null ? `Tokens before: ${tokensBefore}` : null,
-                ].filter(Boolean);
-
-                const text = headerLines.join("\n") + (summary ? `\n\n${summary}` : "");
-
+                const compactionId = randomUUID();
                 await this.conn.sessionUpdate({
                     sessionId: session.sessionId,
                     update: {
-                        sessionUpdate: "agent_message_chunk",
-                        content: { type: "text", text },
+                        compactionId,
+                        sessionUpdate: "compaction_update",
+                        status: "in_progress",
                     },
                 });
+
+                try {
+                    // One model call to summarize the session: finite but generous,
+                    // and cancellable like every external-system wait.
+                    const res = await session.proc.compact(customInstructions, {
+                        timeoutMs: COMPACT_TIMEOUT_MILLISECONDS,
+                    });
+
+                    const r: any = res && typeof res === "object" ? (res as any) : null;
+                    const summary = typeof r?.summary === "string" ? r.summary : null;
+
+                    if (summary !== null && summary.length > 0) {
+                        await this.conn.sessionUpdate({
+                            sessionId: session.sessionId,
+                            update: {
+                                compactionId,
+                                content: { text: summary, type: "text" },
+                                sessionUpdate: "compaction_summary_chunk",
+                            },
+                        });
+                    }
+
+                    await this.conn.sessionUpdate({
+                        sessionId: session.sessionId,
+                        update: {
+                            compactionId,
+                            sessionUpdate: "compaction_update",
+                            status: "completed",
+                        },
+                    });
+                } catch (cause: unknown) {
+                    // The compaction opened above must settle even when pi's
+                    // compact RPC fails (e.g. "Nothing to compact"); report the
+                    // failure reason through the update, then let the caller's
+                    // error path surface the failure itself.
+                    const details = cause instanceof Error ? cause.message : String(cause);
+                    await this.conn.sessionUpdate({
+                        sessionId: session.sessionId,
+                        update: {
+                            compactionId,
+                            error: details,
+                            sessionUpdate: "compaction_update",
+                            status: "failed",
+                        },
+                    });
+                    throw cause;
+                }
 
                 return { stopReason: "end_turn" };
             }

@@ -1,4 +1,4 @@
-import type { AcpAgentDefinition } from "../../daemon/config.ts";
+import type { AcpAgentDefinition } from "../../runtime/config.ts";
 import type { AcpNativeEventReplay, AcpPrepareOptions } from "../session-contracts.ts";
 import type { AcpSessionEventStore } from "../session-event-store.ts";
 

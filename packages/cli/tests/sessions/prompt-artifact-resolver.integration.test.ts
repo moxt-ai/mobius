@@ -4,8 +4,8 @@ import { gzipSync } from "node:zlib";
 import { MOBIUS_API_PREFIX, SESSION_PROMPT_KIND, type SessionPromptCommand } from "@moxt-ai/mobius-sdk/protocol";
 import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { afterEach, describe, expect, it } from "vitest";
-import { createRuntimeConfig } from "../../src/daemon/config.ts";
 import { resolvePromptArtifacts } from "../../src/prompt-artifact-resolver.ts";
+import { createRuntimeConfig } from "../../src/runtime/config.ts";
 
 function digest(bytes: Uint8Array): string {
     return createHash("sha256").update(bytes).digest("hex");

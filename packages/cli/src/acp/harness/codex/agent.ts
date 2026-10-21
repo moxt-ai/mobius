@@ -63,6 +63,11 @@ function promptInput(prompt: readonly ContentBlock[]): readonly unknown[] {
     return input;
 }
 
+/** True when the prompt is exactly the manual compaction slash command. */
+function isCompactCommand(prompt: readonly ContentBlock[]): boolean {
+    return prompt.length === 1 && prompt[0]?.type === "text" && prompt[0].text.trim().toLowerCase() === "/compact";
+}
+
 /**
  * One in-process Codex ACP agent: an ACP `AgentApp` bound to one `codex app-server` child process.
  * Mobius connects its normal ACP client to this app in-process, so every ACP behavior the daemon
@@ -143,6 +148,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 this.#nativeSessionId = created.thread.id;
                 this.#settings.selectNewThread(created);
                 await this.#settings.probeCollaborationMode(this.#nativeSessionId, context.signal);
+                this.#advertiseCompactCommand();
                 // The settings Mobius discovers come from this response. Without them the Run
                 // settings panel has nothing to render and saved selections cannot be re-applied.
                 return { configOptions: this.#settings.configOptions(), sessionId: created.thread.id };
@@ -160,6 +166,7 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
             .onRequest(methods.agent.session.load, async (context) => {
                 await this.#resume(context.params.sessionId, context.params.cwd, context.signal);
                 await this.#replaySavedHistory(context.signal);
+                this.#advertiseCompactCommand();
                 return { configOptions: this.#settings.configOptions() };
             })
             .onRequest(methods.agent.session.fork, async (context) => {
@@ -179,13 +186,18 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 this.#nativeSessionId = forked.thread.id;
                 this.#settings.selectRestoredThread(forked);
                 await this.#settings.probeCollaborationMode(this.#nativeSessionId, context.signal);
+                this.#advertiseCompactCommand();
                 return { configOptions: this.#settings.configOptions(), sessionId: forked.thread.id };
             })
             .onRequest(methods.agent.session.resume, async (context) => {
                 await this.#resume(context.params.sessionId, context.params.cwd, context.signal);
+                this.#advertiseCompactCommand();
                 return { configOptions: this.#settings.configOptions() };
             })
             .onRequest(methods.agent.session.prompt, async (context) => {
+                if (isCompactCommand(context.params.prompt)) {
+                    return await this.#sessionAgent.compact(context.signal);
+                }
                 return await this.#sessionAgent.prompt(promptInput(context.params.prompt), context.signal);
             })
             .onRequest(
@@ -376,12 +388,42 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                     await this.#emit(agentMessageUpdate(item.id, item.text, item.phase));
                     continue;
                 }
+                if (item.type === "contextCompaction") {
+                    // Replay settles the persisted compaction as completed — its
+                    // summary (if any) is not part of the turn items surface.
+                    await this.#emit({
+                        compactionId: item.id,
+                        sessionUpdate: "compaction_update",
+                        status: "completed",
+                    });
+                    continue;
+                }
                 const update = toolCallUpdate(item, "snapshot");
                 if (update !== null) {
                     await this.#emit({ ...update, sessionUpdate: "tool_call" });
                 }
             }
         }
+    };
+
+    /** Announces the manual compact command after every session entry point —
+     *  new, load, resume, and fork — so clients on restored sessions discover
+     *  it too. Deferred past the session response so the notification follows
+     *  session establishment rather than racing it. */
+    readonly #advertiseCompactCommand = (): void => {
+        setTimeout(() => {
+            void this.#emit({
+                availableCommands: [
+                    {
+                        description: "Manually compact the session context",
+                        name: "compact",
+                    },
+                ],
+                sessionUpdate: "available_commands_update",
+            }).catch((cause: unknown) => {
+                console.error("Codex available commands notification failed", cause);
+            });
+        }, 0);
     };
 
     readonly #emit = async (update: SessionNotification["update"]): Promise<void> => {
