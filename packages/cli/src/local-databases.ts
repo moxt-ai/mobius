@@ -9,4 +9,5 @@ export const openSessionEventCacheDatabase = (path: string): LocalSqliteDatabase
     new LocalSqliteDatabase(path, "V2 Session event cache", sessionEventCacheMigrations, [
         "PRAGMA journal_mode = WAL",
         "PRAGMA synchronous = OFF",
+        "PRAGMA auto_vacuum = FULL",
     ]);

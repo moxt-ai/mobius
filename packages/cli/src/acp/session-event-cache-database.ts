@@ -1,22 +1,21 @@
 import { decodeSessionEvent, type SessionEvent } from "@moxt-ai/mobius-sdk/protocol";
-import { and, asc, eq, gte, lte } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import type { NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
 import { z } from "zod";
 import type { LocalSqliteDatabase } from "../infra/local-sqlite-database.ts";
 import { sessionEvent } from "../schema/session-event-cache/index.ts";
 
-const cachedEventRowSchema = z.object({ eventJson: z.string(), ordinal: z.number().int().positive() });
+const cachedEventRowSchema = z.object({ eventJson: z.string() });
+const cachedEventOrdinalRowSchema = z.object({ eventJson: z.string(), ordinal: z.number().int().positive() });
 
 interface SessionEventCacheBatch {
-    readonly events: readonly SessionEvent[];
-    readonly firstOrdinal: number;
+    readonly events: readonly { readonly event: SessionEvent; readonly ordinal: number }[];
     readonly sessionGenerationId: string;
     readonly sessionId: string;
 }
 
 export class SessionEventCacheDatabase {
     readonly #database: NodeSQLiteDatabase;
-    readonly #databaseOrdinalsBySession = new Map<string, Map<string, number>>();
     readonly #ignoredPersistedSessions = new Set<string>();
     readonly #localDatabase: LocalSqliteDatabase;
     #isAvailable = true;
@@ -26,6 +25,10 @@ export class SessionEventCacheDatabase {
         this.#database = localDatabase.orm;
         try {
             this.#localDatabase.transaction(() => this.#database.delete(sessionEvent).run());
+            // Reclaim the space left by the previous process so the cache file
+            // tracks live rows instead of its historical high-water mark.
+            this.#localDatabase.exec("VACUUM");
+            this.#checkpoint();
         } catch (error) {
             this.#localDatabase.close();
             throw error;
@@ -36,40 +39,20 @@ export class SessionEventCacheDatabase {
         return this.#isAvailable;
     }
 
-    readonly replace = (sessionId: string, sessionGenerationId: string, event: SessionEvent): void => {
-        if (!this.#isAvailable) {
-            return;
-        }
-        const ordinal = this.#databaseOrdinalsBySession.get(sessionId)?.get(event.eventId);
-        if (ordinal === undefined) {
-            return;
-        }
-        try {
-            this.#database
-                .update(sessionEvent)
-                .set({ eventJson: JSON.stringify(event) })
-                .where(
-                    and(
-                        eq(sessionEvent.generationId, sessionGenerationId),
-                        eq(sessionEvent.sessionId, sessionId),
-                        eq(sessionEvent.ordinal, ordinal),
-                    ),
-                )
-                .run();
-        } catch (cause) {
-            this.#disableWrites(cause);
-        }
-    };
-
+    /**
+     * Persists materialized events, overwriting rows that were read back into
+     * memory and merged since they were last written.
+     */
     readonly insert = (batches: readonly SessionEventCacheBatch[]): boolean => {
         if (!this.#isAvailable) {
             return false;
         }
         const values = batches.flatMap((batch) =>
-            batch.events.map((event, index) => ({
+            batch.events.map(({ event, ordinal }) => ({
                 eventJson: JSON.stringify(event),
+                eventId: event.eventId,
                 generationId: batch.sessionGenerationId,
-                ordinal: batch.firstOrdinal + index,
+                ordinal,
                 sessionId: batch.sessionId,
             })),
         );
@@ -82,21 +65,61 @@ export class SessionEventCacheDatabase {
                     this.#database
                         .insert(sessionEvent)
                         .values(values.slice(offset, offset + 200))
+                        .onConflictDoUpdate({
+                            target: [sessionEvent.sessionId, sessionEvent.eventId],
+                            set: { eventJson: sql`excluded.event_json` },
+                        })
                         .run();
                 }
             });
-            for (const batch of batches) {
-                const ordinals = this.#databaseOrdinalsBySession.get(batch.sessionId) ?? new Map<string, number>();
-                for (const [index, event] of batch.events.entries()) {
-                    ordinals.set(event.eventId, batch.firstOrdinal + index);
-                }
-                this.#databaseOrdinalsBySession.set(batch.sessionId, ordinals);
-            }
             return true;
         } catch (cause) {
             this.#disableWrites(cause);
             return false;
         }
+    };
+
+    /**
+     * Reads persisted events back by identifier so merges can target events
+     * whose payloads were dropped from memory. The rows stay in place; the
+     * next flush overwrites them with the merged payloads.
+     */
+    readonly readByEventIds = (
+        sessionId: string,
+        sessionGenerationId: string,
+        eventIds: readonly string[],
+    ): ReadonlyMap<string, SessionEvent> => {
+        if (eventIds.length === 0 || this.#ignoredPersistedSessions.has(sessionId)) {
+            return new Map();
+        }
+        let rows: { readonly eventId: string; readonly eventJson: string }[];
+        try {
+            rows = this.#database
+                .select({ eventId: sessionEvent.eventId, eventJson: sessionEvent.eventJson })
+                .from(sessionEvent)
+                .where(
+                    and(
+                        eq(sessionEvent.generationId, sessionGenerationId),
+                        eq(sessionEvent.sessionId, sessionId),
+                        inArray(sessionEvent.eventId, eventIds),
+                    ),
+                )
+                .all();
+        } catch (cause) {
+            this.#disableWrites(cause);
+            return new Map();
+        }
+        const resolved = new Map<string, SessionEvent>();
+        for (const row of rows) {
+            // A row that no longer decodes is reported as missing so a single
+            // incompatible row degrades one merge instead of all persistence.
+            try {
+                resolved.set(row.eventId, decodeSessionEvent(JSON.parse(cachedEventRowSchema.parse(row).eventJson)));
+            } catch {
+                // Keep the undecodable row unresolved.
+            }
+        }
+        return resolved;
     };
 
     readonly read = (
@@ -122,13 +145,12 @@ export class SessionEventCacheDatabase {
             .orderBy(asc(sessionEvent.ordinal))
             .all()
             .map((value) => {
-                const row = cachedEventRowSchema.parse(value);
+                const row = cachedEventOrdinalRowSchema.parse(value);
                 return { event: decodeSessionEvent(JSON.parse(row.eventJson)), ordinal: row.ordinal };
             });
     };
 
     readonly delete = (sessionId: string, sessionGenerationId?: string): void => {
-        this.#databaseOrdinalsBySession.delete(sessionId);
         if (!this.#isAvailable) {
             this.#ignoredPersistedSessions.add(sessionId);
             return;
@@ -154,9 +176,21 @@ export class SessionEventCacheDatabase {
     };
 
     readonly close = (): void => {
+        if (this.#isAvailable) {
+            // Truncating the write-ahead log is best effort; closing the
+            // database handle must happen even when it fails.
+            try {
+                this.#checkpoint();
+            } catch (cause) {
+                console.warn("Mobius V2 Session event cache checkpoint on close failed", cause);
+            }
+        }
         this.#localDatabase.close();
-        this.#databaseOrdinalsBySession.clear();
         this.#ignoredPersistedSessions.clear();
+    };
+
+    readonly #checkpoint = (): void => {
+        this.#localDatabase.exec("PRAGMA wal_checkpoint(TRUNCATE)");
     };
 
     readonly #disableWrites = (cause: unknown): void => {

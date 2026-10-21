@@ -1,0 +1,92 @@
+{
+    "version": "7",
+    "dialect": "sqlite",
+    "id": "3a2f50a4-7681-4865-9bf5-8ecd0abd19ca",
+    "prevIds": ["ce4ccd1d-4dac-465d-8361-98ca807519f8"],
+    "ddl": [
+        {
+            "name": "session_event_cache",
+            "entityType": "tables"
+        },
+        {
+            "type": "text",
+            "notNull": true,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "event_id",
+            "entityType": "columns",
+            "table": "session_event_cache"
+        },
+        {
+            "type": "text",
+            "notNull": true,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "event_json",
+            "entityType": "columns",
+            "table": "session_event_cache"
+        },
+        {
+            "type": "text",
+            "notNull": true,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "generation_id",
+            "entityType": "columns",
+            "table": "session_event_cache"
+        },
+        {
+            "type": "integer",
+            "notNull": true,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "position",
+            "entityType": "columns",
+            "table": "session_event_cache"
+        },
+        {
+            "type": "text",
+            "notNull": true,
+            "autoincrement": false,
+            "default": null,
+            "generated": null,
+            "name": "session_id",
+            "entityType": "columns",
+            "table": "session_event_cache"
+        },
+        {
+            "columns": ["session_id", "event_id"],
+            "nameExplicit": false,
+            "name": "session_event_cache_pk",
+            "entityType": "pks",
+            "table": "session_event_cache"
+        },
+        {
+            "columns": [
+                {
+                    "value": "generation_id",
+                    "isExpression": false
+                },
+                {
+                    "value": "session_id",
+                    "isExpression": false
+                },
+                {
+                    "value": "position",
+                    "isExpression": false
+                }
+            ],
+            "isUnique": false,
+            "where": null,
+            "origin": "manual",
+            "name": "session_event_cache_generation_session_position_index",
+            "entityType": "indexes",
+            "table": "session_event_cache"
+        }
+    ],
+    "renames": []
+}
