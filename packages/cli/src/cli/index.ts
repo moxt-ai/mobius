@@ -11,7 +11,6 @@ function createProgram(cliContext: CliContext): Command {
     const program = new Command()
         .name("mobius")
         .description("Pair and run local AI agent services.")
-        .version(cliContext.version, "-v, --version", "print the installed Mobius CLI version")
         .showHelpAfterError()
         .exitOverride()
         .addHelpText(
