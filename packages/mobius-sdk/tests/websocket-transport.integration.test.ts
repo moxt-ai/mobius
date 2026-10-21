@@ -267,3 +267,36 @@ it("Given a live Session stream cannot reconnect, When its retry budget expires,
     );
     transport.close();
 });
+
+it("Given caller-owned Session recovery, When its live stream disconnects, Then a zero retry budget reports the failure without waiting for an SDK backoff", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "clearTimeout", "setTimeout"] });
+    vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
+    const connector = new BrowserWebSocketConnector();
+    const transport = new WsTransport({ connector });
+    const client = new MobiusClient({
+        credentialProvider: new StaticMobiusCredentialProvider("test-credential"),
+        endpoint: "https://relay.example.test",
+        maxStreamReconnectAttempts: 0,
+        projectId: "project-1",
+        transport,
+    });
+    try {
+        const subscription = await client.events.subscribeLive(
+            "session-1",
+            { receive: async () => true, reconcile: async () => undefined },
+            new AbortController().signal,
+        );
+        const failure = expect(subscription.completed).rejects.toThrow(
+            "The live V2 Session event stream could not recover",
+        );
+        const socket = connector.sockets[0];
+        if (socket === undefined) {
+            throw new Error("Expected the connected relay socket");
+        }
+        socket.dispatchEvent(new Event("error"));
+        await failure;
+    } finally {
+        client.close();
+        transport.close();
+    }
+});
