@@ -9,6 +9,7 @@ import {
 } from "../pairing/pair-local-machine.ts";
 import { prepareUpgradeData, recordCurrentData } from "../upgrades/data.ts";
 import { runDaemonReleaseUpgrades } from "../upgrades/upgrade.ts";
+import { surviveUnhandledRejections, type UnhandledRejectionGuard } from "./unhandled-rejection.ts";
 
 class WorkerRuntimeError extends Error {
     readonly code = "worker_runtime_failed";
@@ -39,22 +40,31 @@ export async function runWorker(version: string, signal: AbortSignal): Promise<v
     if (!process.connected) {
         throw new Error("The daemon must be started by its manager");
     }
+    // Install before any await: an unhandled rejection during startup itself
+    // must not kill the worker before the guard exists.
+    const rejectionGuard = surviveUnhandledRejections("worker");
     const shutdown = new AbortController();
     const combined = AbortSignal.any([signal, shutdown.signal]);
     const disconnect = (): void => shutdown.abort();
     process.once("disconnect", disconnect);
     try {
-        await runWorkerRuntime(version, combined, shutdown);
+        await runWorkerRuntime(version, combined, shutdown, rejectionGuard);
     } finally {
         shutdown.abort();
         process.off("disconnect", disconnect);
+        rejectionGuard.release();
         if (process.connected) {
             process.disconnect();
         }
     }
 }
 
-async function runWorkerRuntime(version: string, combined: AbortSignal, shutdown: AbortController): Promise<void> {
+async function runWorkerRuntime(
+    version: string,
+    combined: AbortSignal,
+    shutdown: AbortController,
+    rejectionGuard: UnhandledRejectionGuard,
+): Promise<void> {
     const control = await openMobiusControlInstallation(combined, process.env);
     await prepareUpgradeData(control.stateDirectory, version, combined);
     const installation = await openMobiusCliInstallation(combined, process.env);
@@ -67,6 +77,9 @@ async function runWorkerRuntime(version: string, combined: AbortSignal, shutdown
             await setTimeout(25, undefined, { signal: deadline });
         }
     }
+    // The lock makes this process the only worker, and therefore the only
+    // writer of the worker's rejection log; buffered startup entries flush now.
+    rejectionGuard.bindStateDirectory(control.stateDirectory);
     const active = new Map<
         string,
         {

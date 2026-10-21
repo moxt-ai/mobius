@@ -8,6 +8,7 @@
         "./contracts": "./src/contracts.ts",
         "./gateway": "./src/gateway/index.ts",
         "./database": "./src/infra/sql-database.ts",
+        "./logging": "./src/infra/logger.ts",
         "./schema": "./src/schema/d1/index.ts"
     },
     "scripts": {

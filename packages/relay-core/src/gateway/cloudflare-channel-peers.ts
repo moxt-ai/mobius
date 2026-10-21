@@ -20,6 +20,7 @@ const attachmentSchema = v.union([
         role: v.literal("host"),
         channelId: v.string(),
         credentialId: v.string(),
+        nativeRequestId: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(128))),
         runtimeId: v.string(),
         projectId: v.string(),
         historyRequest: v.optional(historyRequestSchema),
@@ -54,6 +55,7 @@ export class CloudflareChannelSocket implements RuntimeSocket {
             return {
                 channelId: attachment.channelId,
                 credentialId: attachment.credentialId,
+                ...(attachment.nativeRequestId === undefined ? {} : { nativeRequestId: attachment.nativeRequestId }),
                 projectId: attachment.projectId,
                 role: attachment.role,
                 runtimeId: attachment.runtimeId,
@@ -187,6 +189,16 @@ export class CloudflareChannelPeers implements RuntimePeers {
     readonly hosts = (): readonly ChannelSocket[] =>
         this.#state.getWebSockets("host").map((socket) => new CloudflareChannelSocket(socket));
 
+    readonly nativeRequests = (): readonly { readonly requestId: string; readonly socket: ChannelSocket }[] =>
+        this.#state.getWebSockets("native-request").map((webSocket) => {
+            const socket = new CloudflareChannelSocket(webSocket);
+            const identity = socket.identity();
+            if (identity.role !== "host" || identity.nativeRequestId === undefined) {
+                throw new Error("A native request connection requires a reply address");
+            }
+            return { requestId: identity.nativeRequestId, socket };
+        });
+
     readonly historyRecipients = (): readonly ChannelSocket[] =>
         this.sockets()
             .filter(({ socket }) => socket.permitsSessionHistory())
@@ -196,7 +208,9 @@ export class CloudflareChannelPeers implements RuntimePeers {
         const pair = new WebSocketPair();
         const server = pair[1];
         server.serializeAttachment(identity);
-        this.#state.acceptWebSocket(server, [identity.role]);
+        this.#state.acceptWebSocket(server, [
+            identity.role === "host" && identity.nativeRequestId !== undefined ? "native-request" : identity.role,
+        ]);
         return {
             socket: new CloudflareChannelSocket(server),
             response: new Response(null, { status: 101, webSocket: pair[0] }),

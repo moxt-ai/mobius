@@ -1,5 +1,9 @@
 import { DurableObject } from "cloudflare:workers";
-import { DurableObjectSqlDatabase, RuntimeRelay as RuntimeRelayImplementation } from "@moxt-ai/mobius-relay-core";
+import {
+    DurableObjectSqlDatabase,
+    logger,
+    RuntimeRelay as RuntimeRelayImplementation,
+} from "@moxt-ai/mobius-relay-core";
 import {
     createPlatformDurableObjectContext,
     type PlatformDurableObjectEnvironment,
@@ -14,6 +18,7 @@ export class RuntimeRelay extends DurableObject<PlatformDurableObjectEnvironment
             createPlatformDurableObjectContext(state, environment, {
                 database: new DurableObjectSqlDatabase(state.storage),
             }),
+            logger.child({ durableObjectClass: "RuntimeRelay", durableObjectId: state.id.toString() }),
         );
     }
 
@@ -25,11 +30,11 @@ export class RuntimeRelay extends DurableObject<PlatformDurableObjectEnvironment
         await this.#runtime.webSocketMessage(socket, message);
     }
 
-    override async webSocketClose(socket: WebSocket): Promise<void> {
-        await this.#runtime.webSocketClose(socket);
+    override async webSocketClose(socket: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
+        await this.#runtime.webSocketClose(socket, { code, reason, wasClean });
     }
 
-    override webSocketError(socket: WebSocket): void {
-        this.#runtime.webSocketError(socket);
+    override webSocketError(socket: WebSocket, error: unknown): void {
+        this.#runtime.webSocketError(socket, error);
     }
 }
