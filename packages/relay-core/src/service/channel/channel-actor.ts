@@ -91,6 +91,7 @@ function sessionErrorCloseCode(error: SessionRuntimeError): 1008 | 1013 {
 export type HistoryRequestKind = "live" | "preview";
 
 export interface ChannelSocket {
+    readonly sessionFilter?: string | undefined;
     readonly close: (code: number, reason: string) => void;
     readonly consumeAgentSettingsDiscovery: (requestId: string, agentId: string) => boolean;
     readonly consumeAgentSettingsDiscoveryFailure: (requestId: string) => boolean;
@@ -176,6 +177,7 @@ export class ChannelActor {
                 this.broadcast(
                     this.#peers.hosts(),
                     encodeDaemonToServiceMessage({ ...message, projectId: this.#projectId }),
+                    message.sessionId,
                 );
                 return;
             }
@@ -189,6 +191,7 @@ export class ChannelActor {
                             .map(({ socket }) => socket),
                     ],
                     encodeDaemonToServiceMessage(message),
+                    message.sessionId,
                 );
                 return;
             }
@@ -213,7 +216,11 @@ export class ChannelActor {
                 return;
             }
             this.validateDaemonControl(message);
-            this.broadcast(this.#peers.hosts(), encodeDaemonToServiceMessage(message));
+            this.broadcast(
+                this.#peers.hosts(),
+                encodeDaemonToServiceMessage(message),
+                "sessionId" in message ? message.sessionId : undefined,
+            );
         } catch (error) {
             if (signal.aborted) {
                 throw error;
@@ -466,7 +473,11 @@ export class ChannelActor {
             );
             return;
         }
-        this.broadcast(this.#peers.hosts(), encodeServiceToDaemonMessage(broadcastMessage));
+        this.broadcast(
+            this.#peers.hosts(),
+            encodeServiceToDaemonMessage(broadcastMessage),
+            sessionId.length === 0 ? undefined : sessionId,
+        );
     };
 
     private readonly forwardPrompt = (socket: ChannelSocket, command: SessionPromptCommand): void => {
@@ -616,8 +627,11 @@ export class ChannelActor {
         );
     };
 
-    private readonly broadcast = (sockets: readonly ChannelSocket[], message: string): void => {
+    private readonly broadcast = (sockets: readonly ChannelSocket[], message: string, sessionId?: string): void => {
         for (const socket of sockets) {
+            if (sessionId !== undefined && socket.sessionFilter !== undefined && socket.sessionFilter !== sessionId) {
+                continue;
+            }
             if (socket.isOpen()) {
                 socket.send(message);
             }

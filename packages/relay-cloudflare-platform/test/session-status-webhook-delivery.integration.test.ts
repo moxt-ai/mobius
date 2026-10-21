@@ -180,6 +180,7 @@ async function deliver(projectId: string, events: SessionEventEnvelope["events"]
     const environment = bindings();
     const webhookStorage = new AppSessionStatusWebhookStorage(environment.PLATFORM_DIRECTORY_DATABASE);
     const transport = new RecordedWebhookTransport();
+    const notifications: Promise<void>[] = [];
     const recording = new PlatformSessionRecording(
         new RecordingPolicyStorage(environment.PLATFORM_DIRECTORY_DATABASE),
         platformRecordingProvider(environment),
@@ -189,13 +190,15 @@ async function deliver(projectId: string, events: SessionEventEnvelope["events"]
             webhookStorage,
             environment.MOBIUS_SESSION_WEBHOOK_SECRET_ENCRYPTION_KEY,
         ),
+        (operation) => notifications.push(operation),
         transport.fetch,
     );
-    await recording.deliver(
-        { projectId, runtimeId: projectId, sessionId: "session-status-delivery-session" },
+    await recording.deliverBatch(
+        { projectId, runtimeId: projectId },
         { events, kind: "session.event.v2" },
         new AbortController().signal,
     );
+    await Promise.all(notifications);
     return transport;
 }
 

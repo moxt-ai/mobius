@@ -32,6 +32,7 @@ export type RuntimeSocketIdentity =
           readonly channelId: string;
           readonly credentialId: string;
           readonly nativeRequestId?: string;
+          readonly sessionFilter?: string;
           readonly runtimeId: string;
           readonly projectId: string;
       }
