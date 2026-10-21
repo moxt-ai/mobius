@@ -188,6 +188,7 @@ export interface MobiusEndpointOptions {
     readonly authenticationProviderId?: string;
     readonly credentialProvider: MobiusCredentialProvider;
     readonly endpoint: string;
+    /** Set to zero when the caller owns live-stream recovery. */
     readonly maxStreamReconnectAttempts?: number;
     readonly observeResponse?: (metadata: MobiusResponseMetadata) => void;
     readonly operationTimeoutMilliseconds?: number;
@@ -1636,10 +1637,10 @@ export class MobiusClient {
 
     constructor(options: MobiusClientOptions) {
         const executor = new MobiusRequestExecutor(options);
-        const reconnectAttempts = validatePositiveInteger(
-            options.maxStreamReconnectAttempts ?? DEFAULT_STREAM_RECONNECT_ATTEMPTS,
-            "stream reconnect attempt limit",
-        );
+        const reconnectAttempts = options.maxStreamReconnectAttempts ?? DEFAULT_STREAM_RECONNECT_ATTEMPTS;
+        if (!Number.isSafeInteger(reconnectAttempts) || reconnectAttempts < 0) {
+            throw new MobiusValidationError("The stream reconnect attempt limit is invalid");
+        }
         this.channels = new MobiusChannelResources(executor);
         this.credentials = new MobiusCredentialResources(executor, options.projectId);
         this.events = new MobiusEventResources(executor, options.projectId, reconnectAttempts);
