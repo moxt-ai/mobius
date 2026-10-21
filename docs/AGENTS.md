@@ -8,7 +8,7 @@ metadata:
 
 # Engineering Rules
 
-These rules apply to the entire repository. See [DEVELOPMENT.md](DEVELOPMENT.md) for implementation guidance and [TESTING.md](TESTING.md) for delivery and testing guidance.
+These rules apply to the entire repository. You must read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request; it defines contribution and implementation requirements. See [TESTING.md](TESTING.md) for delivery and testing guidance.
 
 ## Trust Boundary
 
@@ -80,7 +80,6 @@ Make illegal states unrepresentable.
 - Tests involving time must use fake timers with an explicit system time. Every test is prohibited from using real sleeps, wall-clock time, polling delays, or timing tolerances.
 - Assert externally observable results, not private control flow, collaborator calls, or implementation details.
 - Documentation-only and mechanical refactoring changes do not require new tests when behavior is unchanged.
-- Format pull request titles as Conventional Commits: `<type>(<optional-scope>): <imperative summary>`, omitting the parentheses when no scope is needed (for example, `feat(platform): add project routing` or `chore: update dependencies`).
 
 ## Abstraction
 
