@@ -15,15 +15,15 @@ import {
 } from "@agentclientprotocol/sdk";
 import type { SessionCapabilities } from "@moxt-ai/mobius-sdk/protocol";
 
-import { type AcpClientHandler, createAcpClient } from "../acp/create-client.ts";
-import { acpEndpointTerminationError } from "../acp/in-process/acp-endpoint.ts";
-import { normalizeAcpCapabilities } from "../acp/session-capabilities.ts";
+import { type AcpClientHandler, createAcpClient } from "../../acp/create-client.ts";
+import { acpEndpointTerminationError } from "../../acp/in-process/acp-endpoint.ts";
+import { normalizeAcpCapabilities } from "../../acp/session-capabilities.ts";
 import {
     captureProcessTree,
     executableLaunch,
     platformSpawnOptions,
     stopProcessTree,
-} from "../util/process/executable.ts";
+} from "../../util/process/executable.ts";
 import { AgentProbeError } from "./agent-probe-error.ts";
 import type { LocalAgentSpecification } from "./agent-specification.ts";
 import type { AcpAgentDefinition, InProcessAcpAgentDefinition } from "./local-agent.ts";

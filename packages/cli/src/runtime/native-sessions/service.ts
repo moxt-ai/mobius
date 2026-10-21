@@ -9,13 +9,17 @@ import {
     type SessionReadyEvent,
     type WorkspaceEntry,
 } from "@moxt-ai/mobius-sdk/protocol";
-import { AcpExecutionError, type AcpPrepareOptions, type AgentRuntimeManager } from "../acp/agent-runtime-manager.ts";
-import type { NativeSessionInfo } from "../acp/native-session.ts";
-import { nativeSessionIdSchema } from "../acp/native-session.ts";
-import type { AcpStoredSession } from "../acp/session-store.ts";
-import { LocalAuthorizationError } from "../authorization/local-authorization-error.ts";
-import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
-import type { RuntimeConfig } from "../runtime/config.ts";
+import {
+    AcpExecutionError,
+    type AcpPrepareOptions,
+    type AgentRuntimeManager,
+} from "../../acp/agent-runtime-manager.ts";
+import type { NativeSessionInfo } from "../../acp/native-session.ts";
+import { nativeSessionIdSchema } from "../../acp/native-session.ts";
+import type { AcpStoredSession } from "../../acp/session-store.ts";
+import type { RuntimeConfig } from "../config.ts";
+import { LocalAuthorizationError } from "../workspace/local-authorization-error.ts";
+import type { WorkspaceDirectoryService } from "../workspace/workspace-directory.ts";
 
 interface ListedTarget {
     readonly scope: string;

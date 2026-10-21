@@ -5,8 +5,8 @@ import {
     methods,
 } from "@agentclientprotocol/sdk";
 
-import { PiAcpEndpoint } from "../../acp/harness/pi/endpoint.ts";
-import type { InProcessAcpEndpointFactory } from "../../acp/in-process/acp-endpoint.ts";
+import { PiAcpEndpoint } from "../../../acp/harness/pi/endpoint.ts";
+import type { InProcessAcpEndpointFactory } from "../../../acp/in-process/acp-endpoint.ts";
 import { AgentProbeError } from "../agent-probe-error.ts";
 import { InProcessAcpAgentDefinition } from "../agent-specification.ts";
 

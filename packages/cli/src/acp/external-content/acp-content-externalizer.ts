@@ -1,6 +1,6 @@
 import type { ContentBlock, SessionUpdate, ToolCallContent } from "@agentclientprotocol/sdk";
 import { z } from "zod";
-import { sniffRasterMime } from "../acp/resource/local-raster.ts";
+import { sniffRasterMime } from "../resource/local-raster.ts";
 import type { ExternalContentStore } from "./local-external-content-store.ts";
 
 const MAXIMUM_ENCODED_CONTENT_CHARACTERS = 4_000_000;

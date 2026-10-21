@@ -3,9 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { acpAdapters } from "../../src/acp/adapter/registry.ts";
 import { AgentRuntimeManager } from "../../src/acp/agent-runtime-manager.ts";
+import { AcpContentExternalizer } from "../../src/acp/external-content/acp-content-externalizer.ts";
+import { UnretainedExternalContentStore } from "../../src/acp/external-content/local-external-content-store.ts";
 import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
-import { AcpContentExternalizer } from "../../src/external-content/acp-content-externalizer.ts";
-import { UnretainedExternalContentStore } from "../../src/external-content/local-external-content-store.ts";
 import { systemTimer } from "../../src/runtime/relay/timer.ts";
 import { fakeAgent, RecordingObserver } from "./acp-feature-fixture.ts";
 

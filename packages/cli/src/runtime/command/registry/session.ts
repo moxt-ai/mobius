@@ -16,12 +16,12 @@ import {
 import type { WebSocket } from "undici";
 import { AcpExecutionError } from "../../../acp/acp-error.ts";
 import type { AcpSessionRecovery, AgentRuntimeManager } from "../../../acp/agent-runtime-manager.ts";
-import { resolveSessionDirectories } from "../../../authorization/resolve-session-directories.ts";
-import type { WorkspaceDirectoryService } from "../../../authorization/workspace-directory.ts";
 import { AccumulatingOperationMetrics } from "../../../infra/operation-metrics.ts";
-import type { NativeSessionService } from "../../../native-sessions/service.ts";
 import type { AcpAgentDefinition, RuntimeConfig } from "../../config.ts";
+import type { NativeSessionService } from "../../native-sessions/service.ts";
 import type { RelayConnectionDiagnostics } from "../../relay/diagnostics.ts";
+import { resolveSessionDirectories } from "../../workspace/resolve-session-directories.ts";
+import type { WorkspaceDirectoryService } from "../../workspace/workspace-directory.ts";
 import type { RuntimeCommand } from "../definition.ts";
 import { operationErrorCode, reportOperationFailure, send } from "../dispatcher.ts";
 

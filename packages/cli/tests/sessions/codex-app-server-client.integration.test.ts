@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { readCodexFullHistory } from "../../src/acp/adapter/codex/history.ts";
 import { CodexAppServerClient } from "../../src/acp/harness/codex/app-server-client.ts";
-import { LocalAgentDefinition } from "../../src/agent-catalog/local-agent.ts";
+import { LocalAgentDefinition } from "../../src/runtime/agent-catalog/local-agent.ts";
 import { stopProcessTree } from "../../src/util/process/executable.ts";
 
 const temporaryDirectories: string[] = [];

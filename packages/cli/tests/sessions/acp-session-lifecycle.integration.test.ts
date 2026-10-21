@@ -9,17 +9,17 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 import { AgentRuntimeManager, acpAdapters, createWritableAcpStream } from "../../src/acp/agent-runtime-manager.ts";
+import { AcpContentExternalizer } from "../../src/acp/external-content/acp-content-externalizer.ts";
+import { UnretainedExternalContentStore } from "../../src/acp/external-content/local-external-content-store.ts";
 import { NullAcpSessionObserver } from "../../src/acp/session-contracts.ts";
 import { CachedAcpSessionEventStore } from "../../src/acp/session-event-store.ts";
+import { SqliteSessionLiveEventPosition } from "../../src/acp/session-live-event-position.ts";
 import { FoundAcpStoredSession, MemoryAcpSessionStore, SqliteAcpSessionStore } from "../../src/acp/session-store.ts";
-import { AcpContentExternalizer } from "../../src/external-content/acp-content-externalizer.ts";
-import { UnretainedExternalContentStore } from "../../src/external-content/local-external-content-store.ts";
 import { acpSessionStoreMigrations } from "../../src/generated/acp-session-store-migrations.ts";
 import { AccumulatingOperationMetrics } from "../../src/infra/operation-metrics.ts";
-import { openAcpSessionDatabase, openSessionEventCacheDatabase } from "../../src/local-databases.ts";
 import { LocalAgentDefinition } from "../../src/runtime/config.ts";
 import { systemTimer } from "../../src/runtime/relay/timer.ts";
-import { SqliteSessionLiveEventPosition } from "../../src/session-live-event-position.ts";
+import { openAcpSessionDatabase, openSessionEventCacheDatabase } from "../../src/storage/local-databases.ts";
 import { RecordingObserver } from "./acp-feature-fixture.ts";
 
 const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));

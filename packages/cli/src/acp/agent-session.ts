@@ -19,7 +19,6 @@ import {
     type SessionConfigOption,
     type SessionEventPayload,
 } from "@moxt-ai/mobius-sdk/protocol";
-import type { AcpContentExternalizer } from "../external-content/acp-content-externalizer.ts";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
 import type { AcpAgentDefinition } from "../runtime/config.ts";
 import { revalidateExecutable } from "../util/process/executable.ts";
@@ -28,6 +27,7 @@ import { AgentConnection } from "./agent-connection.ts";
 import { type AcpTurnState, IdleAcpTurn, RunningAcpTurn } from "./agent-turn.ts";
 import { AgentUpdateStream } from "./agent-update-stream.ts";
 import type { AcpClientHandler } from "./create-client.ts";
+import type { AcpContentExternalizer } from "./external-content/acp-content-externalizer.ts";
 import {
     type NativeSessionOrigin,
     type NativeSessionPage,

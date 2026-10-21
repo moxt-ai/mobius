@@ -15,11 +15,11 @@ import {
     AcpConfigurationValueUnavailableError,
     AcpExecutionError,
     type AgentRuntimeManager,
-} from "../acp/agent-runtime-manager.ts";
-import { agentSettingsAdapterForAgent } from "../agent-catalog/agent-settings-adapter.ts";
-import type { AcpAgentDefinition } from "../agent-catalog/local-agent.ts";
-import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
-import type { RuntimeConfig } from "../runtime/config.ts";
+} from "../../acp/agent-runtime-manager.ts";
+import type { RuntimeConfig } from "../config.ts";
+import type { WorkspaceDirectoryService } from "../workspace/workspace-directory.ts";
+import { agentSettingsAdapterForAgent } from "./agent-settings-adapter.ts";
+import type { AcpAgentDefinition } from "./local-agent.ts";
 
 export interface AgentSettingsDiscovery {
     readonly event: AgentSettingsDiscoveredEvent;

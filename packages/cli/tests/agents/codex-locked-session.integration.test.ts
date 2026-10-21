@@ -9,7 +9,7 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
 import { CodexAppServerClient } from "../../src/acp/harness/codex/app-server-client.ts";
-import { CodexAgentSpecification } from "../../src/agent-catalog/agents/codex-agent.ts";
+import { CodexAgentSpecification } from "../../src/runtime/agent-catalog/agents/codex-agent.ts";
 import { stopProcessTree } from "../../src/util/process/executable.ts";
 import { CodexFixture } from "../support/agents/codex.ts";
 import { withRealDaemon } from "../support/agents/real-daemon.ts";

@@ -5,14 +5,14 @@ import {
     applyCompleteSessionConfiguration,
     assertAppliedSessionConfiguration,
 } from "../../acp/session-config/apply-session-configuration.ts";
-import { resolveSessionDirectories } from "../../authorization/resolve-session-directories.ts";
-import type { WorkspaceDirectoryService } from "../../authorization/workspace-directory.ts";
-import { resolvePromptArtifacts } from "../../prompt-artifact-resolver.ts";
-import type { RuntimeSessionEventProjection } from "../../session-event-projection.ts";
 import type { RuntimeOperationState } from "../admission.ts";
 import { operationErrorCode, operationErrorMessage } from "../command/dispatcher.ts";
 import { resolveCatalogAgent } from "../command/registry/session.ts";
 import type { RuntimeConfig } from "../config.ts";
+import { resolveSessionDirectories } from "../workspace/resolve-session-directories.ts";
+import type { WorkspaceDirectoryService } from "../workspace/workspace-directory.ts";
+import { resolvePromptArtifacts } from "./prompt-artifact-resolver.ts";
+import type { RuntimeSessionEventProjection } from "./session-event-projection.ts";
 
 export interface ExecutePromptOptions {
     readonly operations: RuntimeOperationState;

@@ -2,12 +2,12 @@ import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
-import type { ProcessLaunch, ProcessTableEntry, ProcessTreeIdentity } from "../../platform/contracts.ts";
-import { platformSupportFor } from "../../platform/index.ts";
+import type { ProcessLaunch, ProcessTableEntry, ProcessTreeIdentity } from "../platform/contracts.ts";
+import { platformSupportFor } from "../platform/index.ts";
 
 import { ProcessExecutionError } from "./process-error.ts";
 
-export type { ProcessTreeIdentity } from "../../platform/contracts.ts";
+export type { ProcessTreeIdentity } from "../platform/contracts.ts";
 export { ProcessExecutionError } from "./process-error.ts";
 
 const hostPlatform = platformSupportFor(process.platform);

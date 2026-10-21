@@ -4,17 +4,12 @@ import {
     AcpConfigurationValueUnavailableError,
     AcpExecutionError,
     type AgentRuntimeManager,
-} from "../acp/agent-runtime-manager.ts";
-import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
-import {
-    agentSettingsFailureDetails,
-    operationErrorCode,
-    operationErrorMessage,
-    send,
-} from "../runtime/command/dispatcher.ts";
-import type { RuntimeConfig } from "../runtime/config.ts";
-import type { RelayConnectionDiagnostics } from "../runtime/relay/diagnostics.ts";
-import type { Timer } from "../runtime/relay/timer.ts";
+} from "../../acp/agent-runtime-manager.ts";
+import { agentSettingsFailureDetails, operationErrorCode, operationErrorMessage, send } from "../command/dispatcher.ts";
+import type { RuntimeConfig } from "../config.ts";
+import type { RelayConnectionDiagnostics } from "../relay/diagnostics.ts";
+import type { Timer } from "../relay/timer.ts";
+import type { WorkspaceDirectoryService } from "../workspace/workspace-directory.ts";
 import { discoverAgentSettings } from "./discover-agent-settings.ts";
 
 interface SettingsDiscoveryDependencies {

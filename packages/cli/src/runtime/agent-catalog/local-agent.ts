@@ -1,9 +1,9 @@
 import { realpathSync, statSync } from "node:fs";
 import type { SessionCapabilities } from "@moxt-ai/mobius-sdk/protocol";
 
-import type { InProcessAcpEndpointFactory } from "../acp/in-process/acp-endpoint.ts";
-import { unsupportedSessionCapabilities } from "../acp/session-capabilities.ts";
-import { ExecutableIdentity } from "../util/process/executable.ts";
+import type { InProcessAcpEndpointFactory } from "../../acp/in-process/acp-endpoint.ts";
+import { unsupportedSessionCapabilities } from "../../acp/session-capabilities.ts";
+import { ExecutableIdentity } from "../../util/process/executable.ts";
 
 function readTrustedIdentity(path: string): ExecutableIdentity {
     const resolvedPath = realpathSync(path);

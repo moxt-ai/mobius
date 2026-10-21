@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { type FileHandle, mkdir, open, readdir, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { isIdentifier } from "@moxt-ai/mobius-sdk/protocol";
-import { validateLocalPath } from "../filesystem/private-path.ts";
+import { validateLocalPath } from "../util/filesystem/private-path.ts";
 
 const APPLICATION_ID_PATTERN = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+){1,31}$/;
 const CONNECTION_ID_PATTERN = /^mcn_[a-f0-9]{32}$/;

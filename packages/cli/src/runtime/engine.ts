@@ -1,14 +1,13 @@
 import { mkdir, realpath, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { isIdentifier } from "@moxt-ai/mobius-sdk/protocol";
-
+import { readStateDirectory } from "../storage/state-directory.ts";
 import {
     discoverLocalAgentInventory,
     supportedLocalAgentSpecifications,
-} from "../agent-catalog/discover-local-agents.ts";
-import { publishAgentCatalog } from "../agent-catalog/publish-agent-catalog.ts";
-import { createCatalogAgentResolver } from "../agent-catalog/resolve-catalog-agent.ts";
-import { readStateDirectory } from "../storage/state-directory.ts";
+} from "./agent-catalog/discover-local-agents.ts";
+import { publishAgentCatalog } from "./agent-catalog/publish-agent-catalog.ts";
+import { createCatalogAgentResolver } from "./agent-catalog/resolve-catalog-agent.ts";
 import { createRuntimeConfig, loadDefaultWorkspace, type RuntimeConfig, RuntimeLocalContext } from "./config.ts";
 import { runRuntime } from "./run.ts";
 
