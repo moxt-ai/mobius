@@ -1,7 +1,9 @@
-import type {
-    SessionRecording,
-    SessionRecordingDeliveryResult,
-    SessionRecordingTarget,
+import {
+    RuntimeMessageScheduler,
+    type SessionRecording,
+    type SessionRecordingBatchResult,
+    type SessionRecordingScope,
+    type SessionRecordingTarget,
 } from "@moxt-ai/mobius-relay-core";
 import {
     encodeSessionRecordingWrite,
@@ -11,12 +13,44 @@ import {
     type SessionEventEnvelope,
     type SessionStatusWebhookCommand,
 } from "@moxt-ai/mobius-sdk/protocol";
+import * as v from "valibot";
 import type { AppSessionStatusWebhookService } from "../service/app-session-status-webhook-service.ts";
 import type { AppSessionStatusWebhookStorage } from "../storage/app-session-status-webhook-storage.ts";
 import type { RecordingPolicyStorage } from "../storage/recording-policy-storage.ts";
 
+const batchResponseSchema = v.object({
+    results: v.pipe(
+        v.array(
+            v.variant("kind", [
+                v.object({
+                    sessionId: v.pipe(
+                        v.string(),
+                        v.check((value: string) => isIdentifier(value)),
+                    ),
+                    kind: v.literal("recorded"),
+                }),
+                v.object({
+                    sessionId: v.pipe(
+                        v.string(),
+                        v.check((value: string) => isIdentifier(value)),
+                    ),
+                    kind: v.literal("failed"),
+                    code: v.literal("write_failed"),
+                }),
+            ]),
+        ),
+        v.minLength(1),
+        v.maxLength(256),
+    ),
+});
+
 const RECORDING_REQUEST_TIMEOUT_MILLISECONDS = 10_000;
 const SESSION_STATUS_WEBHOOK_TIMEOUT_MILLISECONDS = 2_000;
+
+interface TerminalStatusNotification {
+    readonly commands: readonly SessionStatusWebhookCommand[];
+    readonly status: "running" | "idle" | "failed";
+}
 
 export type RecordingProvider =
     | { readonly kind: "absent" }
@@ -28,12 +62,15 @@ export class PlatformSessionRecording implements SessionRecording {
     readonly #transport: typeof fetch;
     readonly #webhooks: AppSessionStatusWebhookStorage;
     readonly #webhookService: AppSessionStatusWebhookService;
+    readonly #waitUntil: (operation: Promise<void>) => void;
+    readonly #webhookMessages = new RuntimeMessageScheduler(4, 512);
 
     constructor(
         policies: RecordingPolicyStorage,
         provider: RecordingProvider,
         webhooks: AppSessionStatusWebhookStorage,
         webhookService: AppSessionStatusWebhookService,
+        waitUntil: (operation: Promise<void>) => void,
         transport: typeof fetch = globalThis.fetch.bind(globalThis),
     ) {
         if (provider.kind === "available" && !isIdentifier(provider.providerId)) {
@@ -44,26 +81,32 @@ export class PlatformSessionRecording implements SessionRecording {
         this.#transport = transport;
         this.#webhooks = webhooks;
         this.#webhookService = webhookService;
+        this.#waitUntil = waitUntil;
     }
 
-    readonly deliver = async (
-        target: SessionRecordingTarget,
+    readonly deliverBatch = async (
+        target: SessionRecordingScope,
         envelope: SessionEventEnvelope,
         signal: AbortSignal,
-    ): Promise<SessionRecordingDeliveryResult> => {
+    ): Promise<readonly SessionRecordingBatchResult[]> => {
+        const sessions = [...new Set(envelope.events.map((event) => event.sessionId))];
+        const failed = (
+            code: "policy_unavailable" | "provider_unavailable" | "write_failed",
+        ): readonly SessionRecordingBatchResult[] => sessions.map((sessionId) => ({ sessionId, kind: "failed", code }));
+        console.info(JSON.stringify({ event: "recording_policy_read" }));
         const policy = await this.#policies.readProject(target.projectId, signal);
         if (policy === null) {
-            return { kind: "failed", code: "policy_unavailable" };
+            return failed("policy_unavailable");
         }
         if (policy.effectiveMode === "disabled") {
-            return { kind: "skipped" };
+            return sessions.map((sessionId) => ({ sessionId, kind: "skipped" }));
         }
         if (this.#provider.kind === "absent") {
-            return { kind: "failed", code: "provider_unavailable" };
+            return failed("provider_unavailable");
         }
         try {
             const response = await this.#provider.fetcher.fetch(
-                new Request("https://recording.internal/v1/session-events", {
+                new Request("https://recording.internal/v1/session-event-batches", {
                     body: encodeSessionRecordingWrite({
                         envelope,
                         projectId: target.projectId,
@@ -75,41 +118,144 @@ export class PlatformSessionRecording implements SessionRecording {
                 }),
             );
             signal.throwIfAborted();
-            await response.body?.cancel();
-            if (!response.ok) {
-                return { kind: "failed", code: "write_failed" };
+            let results: readonly SessionRecordingBatchResult[];
+            if (response.status === 404) {
+                // An older Recording Worker has not appended anything at the missing batch route.
+                // This compatibility path is safe during rolling deployment; uncertain writes are never retried.
+                await response.body?.cancel();
+                results = await this.#deliverLegacy(target, envelope, signal);
+            } else {
+                if (!response.ok) {
+                    await response.body?.cancel();
+                    return failed("write_failed");
+                }
+                results = v.parse(batchResponseSchema, await response.json()).results;
             }
-            await this.#publishTerminalStatus(target, envelope, signal);
-            return { kind: "recorded" };
+            const decoded = { results };
+            const identifiers = new Set(decoded.results.map((result) => result.sessionId));
+            if (
+                identifiers.size !== sessions.length ||
+                decoded.results.length !== sessions.length ||
+                sessions.some((id) => !identifiers.has(id))
+            ) {
+                return failed("write_failed");
+            }
+            const eventsBySession = new Map<string, SessionEventEnvelope["events"][number][]>();
+            for (const event of envelope.events) {
+                const events = eventsBySession.get(event.sessionId) ?? [];
+                events.push(event);
+                eventsBySession.set(event.sessionId, events);
+            }
+            for (const result of decoded.results) {
+                const events = eventsBySession.get(result.sessionId) ?? [];
+                const commands = terminatedCommands(events);
+                if (result.kind !== "recorded" || commands.length === 0) {
+                    continue;
+                }
+                const notification: TerminalStatusNotification = { commands, status: terminalStatus(events) ?? "idle" };
+                // A slow webhook must not hold every Session in an already committed Recording batch.
+                const publication = this.#webhookMessages
+                    .run(
+                        JSON.stringify([target.projectId, target.runtimeId, result.sessionId]),
+                        signal,
+                        async () =>
+                            await this.#publishTerminalStatus(
+                                { ...target, sessionId: result.sessionId },
+                                notification,
+                                signal,
+                            ),
+                    )
+                    .catch(() => {
+                        console.warn("Session status webhook failed", {
+                            code: "session_status_webhook_failed",
+                            sessionId: result.sessionId,
+                        });
+                    });
+                this.#waitUntil(publication);
+            }
+            return decoded.results;
         } catch {
             signal.throwIfAborted();
-            return { kind: "failed", code: "write_failed" };
+            return failed("write_failed");
         }
     };
 
-    async #publishTerminalStatus(
-        target: SessionRecordingTarget,
+    async #deliverLegacy(
+        target: SessionRecordingScope,
         envelope: SessionEventEnvelope,
         signal: AbortSignal,
-    ): Promise<void> {
-        const commands = terminatedCommands(envelope.events);
-        if (commands.length === 0) {
-            return;
+    ): Promise<readonly SessionRecordingBatchResult[]> {
+        if (this.#provider.kind !== "available") {
+            throw new Error("The Recording provider is unavailable");
         }
+        const provider = this.#provider.fetcher;
+        const grouped = new Map<string, SessionEventEnvelope["events"][number][]>();
+        for (const event of envelope.events) {
+            const events = grouped.get(event.sessionId) ?? [];
+            events.push(event);
+            grouped.set(event.sessionId, events);
+        }
+        const entries = [...grouped];
+        const results = new Map<string, SessionRecordingBatchResult>();
+        let next = 0;
+        await Promise.all(
+            Array.from({ length: Math.min(4, entries.length) }, async () => {
+                for (;;) {
+                    const item = entries[next++];
+                    if (item === undefined) {
+                        return;
+                    }
+                    const [sessionId, events] = item;
+                    let recorded = false;
+                    try {
+                        const response = await provider.fetch(
+                            new Request("https://recording.internal/v1/session-events", {
+                                method: "POST",
+                                headers: { "content-type": "application/json" },
+                                body: encodeSessionRecordingWrite({
+                                    ...target,
+                                    envelope: { kind: envelope.kind, events },
+                                }),
+                                signal,
+                            }),
+                        );
+                        recorded = response.ok;
+                        await response.body?.cancel();
+                    } catch {
+                        signal.throwIfAborted();
+                    }
+                    results.set(
+                        sessionId,
+                        recorded
+                            ? { sessionId, kind: "recorded" }
+                            : { sessionId, kind: "failed", code: "write_failed" },
+                    );
+                }
+            }),
+        );
+        return entries.map(
+            ([sessionId]) => results.get(sessionId) ?? { sessionId, kind: "failed", code: "write_failed" },
+        );
+    }
+
+    async #publishTerminalStatus(
+        target: SessionRecordingTarget,
+        notification: TerminalStatusNotification,
+        signal: AbortSignal,
+    ): Promise<void> {
         const webhook = await this.#webhooks.read(target.projectId);
         if (webhook === null || !webhook.enabled || signal.aborted) {
             return;
         }
-        const status = terminalStatus(envelope.events) ?? "idle";
         const secret = await this.#webhookService.decryptSecret(webhook);
         const timestamp = Math.floor(Date.now() / 1_000).toString();
         const body = encodeSessionStatusWebhookBody({
             appId: webhook.appId,
-            commands,
+            commands: notification.commands,
             projectId: target.projectId,
             runtimeId: target.runtimeId,
             sessionId: target.sessionId,
-            status,
+            status: notification.status,
         });
         try {
             const signature = `v1.${await hmacSha256Hex(secret, `${timestamp}.${body}`)}`;

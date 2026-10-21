@@ -41,6 +41,7 @@ export function createPlatformDurableObjectContext(
             platformRecordingProvider(environment),
             webhookStorage,
             webhookService,
+            (operation) => state.waitUntil(operation),
         ),
     });
 }

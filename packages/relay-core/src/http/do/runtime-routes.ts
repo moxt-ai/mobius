@@ -1,3 +1,4 @@
+import { isIdentifier } from "@moxt-ai/mobius-sdk/protocol";
 import { Hono } from "hono";
 import { ProjectScope } from "../../entity/do/session.ts";
 import type { RuntimeService } from "../../service/channel/runtime-service.ts";
@@ -77,6 +78,10 @@ export function createRuntimeRoutes(runtime: RuntimeService) {
             if (nativeRequestId !== null && (nativeRequestId.length === 0 || nativeRequestId.length > 128)) {
                 return new Response("A bounded native request identifier is required", { status: 400 });
             }
+            const sessionFilter = url.searchParams.get("sessionId");
+            if (sessionFilter !== null && !isIdentifier(sessionFilter)) {
+                return new Response("A valid Session identifier is required", { status: 400 });
+            }
             return runtime.acceptHost(
                 {
                     role: "host",
@@ -85,6 +90,7 @@ export function createRuntimeRoutes(runtime: RuntimeService) {
                     runtimeId,
                     projectId,
                     ...(nativeRequestId === null ? {} : { nativeRequestId }),
+                    ...(sessionFilter === null ? {} : { sessionFilter }),
                 },
                 request.signal,
             );

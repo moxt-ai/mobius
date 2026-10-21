@@ -1,6 +1,6 @@
 {
     "name": "@moxt-ai/mobius",
-    "version": "0.0.267",
+    "version": "0.0.269",
     "description": "Mobius CLI for pairing and running local AI agent services.",
     "type": "module",
     "bin": {
@@ -61,7 +61,9 @@
         "pretest:controlled": "tsc --project src/acp/harness/claude/upstream/tsconfig.json && tsc --project src/acp/harness/pi/upstream/tsconfig.json",
         "test:controlled": "vitest run tests/sessions tests/runtime --maxWorkers=4",
         "pretest:agents": "tsc --project src/acp/harness/claude/upstream/tsconfig.json && tsc --project src/acp/harness/pi/upstream/tsconfig.json",
-        "test:agents": "vitest run tests/agents --maxWorkers=2"
+        "test:agents": "vitest run tests/agents --maxWorkers=2",
+        "pretest:pressure": "tsc --project src/acp/harness/claude/upstream/tsconfig.json && tsc --project src/acp/harness/pi/upstream/tsconfig.json",
+        "test:pressure": "node tests/pressure/concurrent-sessions.mjs"
     },
     "dependencies": {
         "@agentclientprotocol/sdk": "^1.4.0",

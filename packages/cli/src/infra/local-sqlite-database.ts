@@ -65,5 +65,13 @@ export class LocalSqliteDatabase {
         }
     };
 
+    /**
+     * Runs one raw SQL statement outside any transaction. Intended for PRAGMA
+     * and VACUUM statements the ORM cannot express.
+     */
+    readonly exec = (sql: string): void => {
+        this.#sqlite.exec(sql);
+    };
+
     readonly close = (): void => this.#sqlite.close();
 }

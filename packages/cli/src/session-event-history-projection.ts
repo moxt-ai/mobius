@@ -7,6 +7,13 @@ export type SessionEventHistoryProjectionMutation =
     | { readonly event: SessionEvent; readonly kind: "append" }
     | { readonly event: SessionEvent; readonly kind: "replace"; readonly replacedEventId: string };
 
+/**
+ * Resolves the current projected payloads of events by their identifiers, in
+ * batch. The resolver materializes events whose payloads are no longer held in
+ * memory, so merge targets can live on a slower tier.
+ */
+export type MaterializedEventsResolver = (eventIds: readonly string[]) => ReadonlyMap<string, SessionEvent>;
+
 function projectNewEvent(liveEvent: SessionLiveEvent, eventId: string): SessionEvent {
     const { position: _position, eventId: _liveEventId, ...event } = liveEvent;
     return { ...event, eventId };
@@ -82,12 +89,16 @@ function mergeTextChunk(previous: AcpSessionUpdate, incoming: AcpSessionUpdate):
 }
 
 export class SessionEventHistoryProjection {
-    readonly #toolCalls = new Map<string, SessionEvent>();
+    readonly #toolCallEventIds = new Map<string, string>();
     #latestEvent: SessionEvent | null = null;
 
-    readonly apply = (liveEvent: SessionLiveEvent): SessionEventHistoryProjectionMutation => {
+    readonly apply = (
+        liveEvent: SessionLiveEvent,
+        resolve: MaterializedEventsResolver,
+    ): SessionEventHistoryProjectionMutation => {
         if (liveEvent.type === "acp" && liveEvent.payload.sessionUpdate === "tool_call_update") {
-            const current = this.#toolCalls.get(liveEvent.payload.toolCallId);
+            const targetEventId = this.#toolCallEventIds.get(liveEvent.payload.toolCallId);
+            const current = targetEventId === undefined ? undefined : resolve([targetEventId]).get(targetEventId);
             if (
                 current?.type === "acp" &&
                 (current.payload.sessionUpdate === "tool_call" || current.payload.sessionUpdate === "tool_call_update")
@@ -97,6 +108,8 @@ export class SessionEventHistoryProjection {
                     replaceAcpPayload(current, mergeToolCall(current.payload, liveEvent.payload)),
                 );
             }
+            // The target cannot be materialized (for example an undecodable
+            // cache row), so the update is recorded as its own event instead.
         }
 
         const latest = this.#latestEvent;
@@ -113,10 +126,6 @@ export class SessionEventHistoryProjection {
         return { event, kind: "append" };
     };
 
-    readonly canReplace = (eventId: string): boolean =>
-        this.#latestEvent?.eventId === eventId ||
-        [...this.#toolCalls.values()].some((event) => event.eventId === eventId);
-
     readonly #replace = (current: SessionEvent, replacement: SessionEvent): SessionEventHistoryProjectionMutation => {
         if (this.#latestEvent?.eventId === current.eventId) {
             this.#latestEvent = replacement;
@@ -130,7 +139,7 @@ export class SessionEventHistoryProjection {
             event.type === "acp" &&
             (event.payload.sessionUpdate === "tool_call" || event.payload.sessionUpdate === "tool_call_update")
         ) {
-            this.#toolCalls.set(event.payload.toolCallId, event);
+            this.#toolCallEventIds.set(event.payload.toolCallId, event.eventId);
         }
     };
 }

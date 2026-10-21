@@ -11,11 +11,17 @@ import { WebSocket } from "undici";
 import type { ScheduledTask, Timer } from "./timer.ts";
 
 const MAX_BUFFERED_BYTES = 32 * 1024 * 1024;
+const MAX_EVENT_BATCH_BYTES = 1024 * 1024;
+const MAX_FRAME_BYTES = 8 * 1024 * 1024;
+// Browser-compatible WebSocket clients may initiate only 1000 or application close codes.
+const LOCAL_BACKPRESSURE_CLOSE_CODE = 4009;
+const EMPTY_ENVELOPE_BYTES = Buffer.byteLength(JSON.stringify({ events: [], kind: SESSION_EVENT_KIND }));
 export const SESSION_EVENT_BATCH_WINDOW_MILLISECONDS = 100;
 
 /** Live delivery is best-effort. Recovery snapshots are owned by the daemon's local Session cache. */
 export class RuntimeSessionEventPublisher {
     #pendingEvents: SessionLiveEvent[] = [];
+    #pendingBytes = EMPTY_ENVELOPE_BYTES;
     #pendingTask: ScheduledTask | null = null;
     #socket: WebSocket | null = null;
     readonly #timer: Timer;
@@ -54,7 +60,7 @@ export class RuntimeSessionEventPublisher {
         }
         const encoded = encodeDaemonToServiceMessage(message);
         if (socket.bufferedAmount + Buffer.byteLength(encoded, "utf8") > MAX_BUFFERED_BYTES) {
-            socket.close(1013, "Live event transport overloaded");
+            socket.close(LOCAL_BACKPRESSURE_CLOSE_CODE, "Live event transport overloaded");
             return;
         }
         try {
@@ -69,8 +75,25 @@ export class RuntimeSessionEventPublisher {
         if (socket === null || socket.readyState !== WebSocket.OPEN) {
             return;
         }
+        const bytes = Buffer.byteLength(JSON.stringify(event), "utf8") + 1;
+        if (bytes + EMPTY_ENVELOPE_BYTES > MAX_FRAME_BYTES) {
+            console.warn("Live Session event exceeds the Relay frame limit", {
+                code: "live_event_too_large",
+                sessionId: event.sessionId,
+                eventId: event.eventId,
+                bytes,
+            });
+            return;
+        }
+        if (this.#pendingEvents.length > 0 && this.#pendingBytes + bytes > MAX_EVENT_BATCH_BYTES) {
+            this.flushEvents(socket);
+            if (socket.readyState !== WebSocket.OPEN) {
+                return;
+            }
+        }
         this.#pendingEvents.push(event);
-        if (this.#pendingEvents.length >= SESSION_EVENT_BATCH_MAX_SIZE) {
+        this.#pendingBytes += bytes;
+        if (this.#pendingEvents.length >= SESSION_EVENT_BATCH_MAX_SIZE || this.#pendingBytes >= MAX_EVENT_BATCH_BYTES) {
             this.flushEvents(socket);
             return;
         }
@@ -84,6 +107,7 @@ export class RuntimeSessionEventPublisher {
         this.#pendingTask?.cancel();
         this.#pendingTask = null;
         this.#pendingEvents = [];
+        this.#pendingBytes = EMPTY_ENVELOPE_BYTES;
     };
 
     private readonly flushEvents = (socket: WebSocket): void => {
@@ -91,12 +115,13 @@ export class RuntimeSessionEventPublisher {
         this.#pendingTask = null;
         const events = this.#pendingEvents;
         this.#pendingEvents = [];
+        this.#pendingBytes = EMPTY_ENVELOPE_BYTES;
         if (events.length === 0 || this.#socket !== socket || socket.readyState !== WebSocket.OPEN) {
             return;
         }
         const encoded = encodeDaemonToServiceMessage({ events, kind: SESSION_EVENT_KIND });
         if (socket.bufferedAmount + Buffer.byteLength(encoded, "utf8") > MAX_BUFFERED_BYTES) {
-            socket.close(1013, "Live event transport overloaded");
+            socket.close(LOCAL_BACKPRESSURE_CLOSE_CODE, "Live event transport overloaded");
             return;
         }
         try {
