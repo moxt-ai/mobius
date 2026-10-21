@@ -228,6 +228,10 @@ describe("Mobius logs command", () => {
                 process.env,
                 AbortSignal.timeout(30_000),
             );
+            // JSON mode is the machine-consumable path, so it has to carry the same
+            // failure status; a collector keying on the exit code cannot be fooled
+            // by the format flag.
+            expect(reported.code).toBe(1);
             const parsed = JSON.parse(reported.stdout) as {
                 readonly entries: unknown[];
                 readonly unreadable: string[];
@@ -238,6 +242,41 @@ describe("Mobius logs command", () => {
             ]);
         } finally {
             await chmod(logPath, 0o600);
+        }
+    }, 60_000);
+
+    // @no-uc: Technical regression; an unlistable log directory must count as a collection failure.
+    it("Given a log directory this user cannot list, When the user collects logs, Then the directory is reported unreadable instead of being treated as holding no logs", async () => {
+        const directory = await mkdtemp(join(tmpdir(), "mobius-logs-command-"));
+        temporaryDirectories.push(directory);
+        const stateDirectory = join(directory, "state");
+        await writeInstallationLog(stateDirectory, "dev.mobius.cli", "daemon.log", [
+            '{"event":"relay_connection_opened"}',
+        ]);
+        // The logs directory exists and holds a readable file, but cannot be
+        // enumerated: an owner-writable, not owner-readable mode (0o300). Treating
+        // this as "no logs here" is what hid the evidence before.
+        const logsDirectory = join(
+            stateDirectory,
+            "installations",
+            "dev.mobius.cli",
+            "min_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "logs",
+        );
+        await chmod(logsDirectory, 0o300);
+        try {
+            const result = await runCli(
+                ["logs", "--state-directory", stateDirectory],
+                process.env,
+                AbortSignal.timeout(30_000),
+            );
+
+            expect(result.code).toBe(1);
+            expect(result.stdout).toContain("The local daemon logs could not be read.");
+            expect(result.stdout).not.toContain("No local daemon logs were found.");
+            expect(result.stderr).toContain("installations/dev.mobius.cli/min_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/logs");
+        } finally {
+            await chmod(logsDirectory, 0o700);
         }
     }, 60_000);
 

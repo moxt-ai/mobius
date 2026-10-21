@@ -29,6 +29,13 @@ export function registerLogsCommand(program: Command, context: CliContext): void
             const json = options.json === true;
             const stateDirectory = options.stateDirectory?.trim() ?? defaultStateDirectory(process.env);
             const collected = await collectLocalDaemonLogs(stateDirectory, tailLines, context.shutdownSignal);
+            // A read failure is not an empty report. Set the status before
+            // branching on format, or a script collecting evidence through
+            // `--json` would treat a total read failure as success.
+            const collectionFailed = collected.entries.length === 0 && collected.unreadable.length > 0;
+            if (collectionFailed) {
+                process.exitCode = 1;
+            }
             // Keep stdout machine-parseable in JSON mode: the sharing notice and
             // any read failures are human warnings, so they go to stderr where
             // they cannot corrupt a pipe.
@@ -44,14 +51,11 @@ export function registerLogsCommand(program: Command, context: CliContext): void
                 return;
             }
             if (collected.entries.length === 0) {
-                // A read failure is not an empty report: say which it was, and fail
-                // so a script collecting evidence does not treat it as "no logs".
                 process.stdout.write(
-                    collected.unreadable.length > 0
+                    collectionFailed
                         ? "The local daemon logs could not be read.\n"
                         : "No local daemon logs were found.\n",
                 );
-                process.exitCode = collected.unreadable.length > 0 ? 1 : 0;
                 return;
             }
             process.stdout.write(formatText(collected.entries));

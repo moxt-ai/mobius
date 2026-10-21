@@ -180,17 +180,18 @@ export async function executePrompt({
         // The daemon runs detached with its stdio ignored, so a failure recorded
         // only here would leave no trace for a later bug report. The local log is
         // the durable copy; the in-band failure event above stays the live signal.
-        diagnostics.daemonDiagnostic(
-            "session_prompt_failed",
-            command.commandId,
-            {
-                agentId: command.agentId,
-                code: failureCode,
-                commandId: command.commandId,
-                sessionId: command.sessionId,
-            },
-            error,
-        );
+        //
+        // Only the controlled code and correlation identifiers are persisted. An
+        // Agent rejection can quote the prompt it refused, and local diagnostics
+        // must not contain prompt text, so the Agent's free text and the cause
+        // chain deliberately stay out of the log. The message still reaches the
+        // user through the failure event above.
+        diagnostics.daemonDiagnostic("session_prompt_failed", command.commandId, {
+            agentId: command.agentId,
+            code: failureCode,
+            commandId: command.commandId,
+            sessionId: command.sessionId,
+        });
         console.error("Mobius daemon command failed", error);
     }
 }

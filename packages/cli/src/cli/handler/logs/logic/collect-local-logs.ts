@@ -1,3 +1,4 @@
+import type { Stats } from "node:fs";
 import { lstat, readdir, readFile } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 
@@ -16,7 +17,12 @@ export interface LocalLogEntry {
 
 export interface CollectedLocalLogs {
     readonly entries: readonly LocalLogEntry[];
-    /** Logs that exist on disk but could not be read, as state-relative paths. */
+    /**
+     * Logs and log directories that could not be read, as state-relative paths.
+     * A directory entry means it could not be listed, so its files are unknown.
+     * Deliberately distinct from "absent": only ENOENT counts as absent, so a
+     * permission or I/O failure is never reported as an empty machine.
+     */
     readonly unreadable: readonly string[];
 }
 
@@ -30,7 +36,7 @@ export interface CollectedLocalLogs {
  * rejection logs under the control installation.
  *
  * This is a read-only forensic path, so it never repairs anything: permissions
- * are checked without `chmod`, and a file that cannot be read is reported as
+ * are checked without `chmod`, and anything that cannot be read is reported as
  * unreadable instead of being skipped, because silently dropping evidence would
  * make a report from a read-only mount or a failing disk look empty.
  */
@@ -43,24 +49,34 @@ export async function collectLocalDaemonLogs(
     const root = resolve(stateDirectory);
     const entries: LocalLogEntry[] = [];
     const unreadable: string[] = [];
-    for (const directory of await findLogDirectories(root, signal)) {
-        for (const name of await listLogFiles(directory)) {
+    const directories = await findLogDirectories(root, unreadable, signal);
+    for (const directory of directories) {
+        const names = await listLogFiles(directory, root, unreadable);
+        for (const name of names) {
             const path = join(directory, name);
             const reported = relative(root, path);
             const read = await readLog(path, tailLines, signal);
-            if (read === null) {
+            if (read === "unreadable") {
                 unreadable.push(reported);
+                continue;
+            }
+            if (read === null) {
                 continue;
             }
             entries.push({ ...read, path: reported });
         }
     }
     entries.sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
-    return { entries, unreadable: unreadable.sort() };
+    return { entries, unreadable: [...unreadable].sort() };
 }
 
 export function defaultStateDirectory(environment: Readonly<NodeJS.ProcessEnv> = process.env): string {
     return resolve(readStateDirectory(environment));
+}
+
+/** True when a path is legitimately absent, rather than present and unreadable. */
+function isAbsent(cause: unknown): boolean {
+    return typeof cause === "object" && cause !== null && Reflect.get(cause, "code") === "ENOENT";
 }
 
 /**
@@ -70,20 +86,23 @@ export function defaultStateDirectory(environment: Readonly<NodeJS.ProcessEnv> =
  * scoped CLI installation. These are enumerated instead of walked, because the
  * state root also holds Agent adapters with their own node_modules trees.
  */
-async function findLogDirectories(root: string, signal: AbortSignal): Promise<readonly string[]> {
+async function findLogDirectories(root: string, unreadable: string[], signal: AbortSignal): Promise<readonly string[]> {
     const versions = join(root, VERSIONS_DIRECTORY);
     const installationsRoots: string[] = [join(root, INSTALLATIONS_DIRECTORY)];
-    for (const version of await listDirectories(versions, signal)) {
+    for (const version of await listDirectories(versions, root, unreadable, signal)) {
         installationsRoots.push(join(versions, version, INSTALLATIONS_DIRECTORY));
     }
     const found: string[] = [];
     for (const installations of installationsRoots) {
-        for (const applicationId of await listDirectories(installations, signal)) {
+        for (const applicationId of await listDirectories(installations, root, unreadable, signal)) {
             const application = join(installations, applicationId);
-            for (const installationId of await listDirectories(application, signal)) {
+            for (const installationId of await listDirectories(application, root, unreadable, signal)) {
                 const logs = join(application, installationId, "logs");
-                if (await isOwnedDirectory(logs)) {
+                const status = await directoryStatus(logs);
+                if (status === "listed") {
                     found.push(logs);
+                } else if (status === "unreadable") {
+                    unreadable.push(relative(root, logs));
                 }
             }
         }
@@ -91,60 +110,88 @@ async function findLogDirectories(root: string, signal: AbortSignal): Promise<re
     return found;
 }
 
-async function listLogFiles(directory: string): Promise<readonly string[]> {
+async function listDirectories(
+    path: string,
+    root: string,
+    unreadable: string[],
+    signal: AbortSignal,
+): Promise<readonly string[]> {
+    signal.throwIfAborted();
+    try {
+        const entries = await readdir(path, { withFileTypes: true });
+        return entries.filter((entry) => entry.isDirectory() && !entry.isSymbolicLink()).map((entry) => entry.name);
+    } catch (cause) {
+        // A state root that has never been used has no installations directory;
+        // anything else is a failure to collect from, not an absence of logs.
+        if (!isAbsent(cause)) {
+            unreadable.push(relative(root, path));
+        }
+        return [];
+    }
+}
+
+async function listLogFiles(directory: string, root: string, unreadable: string[]): Promise<readonly string[]> {
     try {
         const entries = await readdir(directory, { withFileTypes: true });
         return entries
             .filter((entry) => entry.isFile() && !entry.isSymbolicLink() && LOG_FILE_NAME_PATTERN.test(entry.name))
             .map((entry) => entry.name)
             .sort();
-    } catch {
+    } catch (cause) {
+        if (!isAbsent(cause)) {
+            unreadable.push(relative(root, directory));
+        }
         return [];
     }
 }
 
-async function listDirectories(path: string, signal: AbortSignal): Promise<readonly string[]> {
-    signal.throwIfAborted();
-    try {
-        const entries = await readdir(path, { withFileTypes: true });
-        return entries.filter((entry) => entry.isDirectory() && !entry.isSymbolicLink()).map((entry) => entry.name);
-    } catch {
-        return [];
-    }
-}
+type DirectoryStatus = "listed" | "skipped" | "unreadable";
 
 /**
- * Confirm a directory this user owns, without changing it. Symlinks are rejected
- * so a planted link cannot redirect the report outside the state root, and the
- * owner check keeps another user's files out of it.
+ * Classify a directory without changing it. Symlinks are rejected so a planted
+ * link cannot redirect the report outside the state root, and the owner check
+ * keeps another user's files out of it; both are deliberate exclusions rather
+ * than collection failures.
  */
-async function isOwnedDirectory(path: string): Promise<boolean> {
+async function directoryStatus(path: string): Promise<DirectoryStatus> {
+    let metadata: Stats;
     try {
-        const metadata = await lstat(path);
-        return metadata.isDirectory() && !metadata.isSymbolicLink() && ownedByCurrentUser(metadata);
-    } catch {
-        return false;
+        metadata = await lstat(path);
+    } catch (cause) {
+        return isAbsent(cause) ? "skipped" : "unreadable";
     }
+    if (!metadata.isDirectory() || metadata.isSymbolicLink() || !ownedByCurrentUser(metadata)) {
+        return "skipped";
+    }
+    return "listed";
 }
 
-async function readLog(
-    path: string,
-    tailLines: number,
-    signal: AbortSignal,
-): Promise<Omit<LocalLogEntry, "path"> | null> {
+type LogRead = Omit<LocalLogEntry, "path"> | "unreadable" | null;
+
+async function readLog(path: string, tailLines: number, signal: AbortSignal): Promise<LogRead> {
+    let metadata: Stats;
     try {
-        const metadata = await lstat(path);
-        if (!metadata.isFile() || metadata.isSymbolicLink() || !ownedByCurrentUser(metadata)) {
-            return null;
-        }
+        metadata = await lstat(path);
+    } catch (cause) {
+        return isAbsent(cause) ? null : "unreadable";
+    }
+    if (!metadata.isFile() || metadata.isSymbolicLink() || !ownedByCurrentUser(metadata)) {
+        return null;
+    }
+    try {
         const content = await readFile(path, { encoding: "utf8", signal });
         const lines = content.split("\n").filter((line) => line.length > 0);
         return {
             lines: lines.slice(-tailLines),
             omittedLines: Math.max(0, lines.length - tailLines),
         };
-    } catch {
-        return null;
+    } catch (cause) {
+        // Cancellation is not evidence about the file: let it propagate so the
+        // command fails as aborted rather than reporting a healthy log as broken.
+        if (signal.aborted) {
+            throw cause;
+        }
+        return "unreadable";
     }
 }
 
