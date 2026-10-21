@@ -9,6 +9,7 @@ import type { RuntimeOperationState } from "../admission.ts";
 import { operationErrorCode, operationErrorMessage } from "../command/dispatcher.ts";
 import { resolveCatalogAgent } from "../command/registry/session.ts";
 import type { RuntimeConfig } from "../config.ts";
+import type { RelayConnectionDiagnostics } from "../relay/diagnostics.ts";
 import { resolveSessionDirectories } from "../workspace/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "../workspace/workspace-directory.ts";
 import { resolvePromptArtifacts } from "./prompt-artifact-resolver.ts";
@@ -19,6 +20,7 @@ export interface ExecutePromptOptions {
     readonly eventProjection: RuntimeSessionEventProjection;
     readonly command: SessionPromptCommand;
     readonly config: RuntimeConfig;
+    readonly diagnostics: RelayConnectionDiagnostics;
     readonly directories: WorkspaceDirectoryService;
     readonly sessions: AgentRuntimeManager;
     readonly attemptId: string;
@@ -40,6 +42,7 @@ export async function executePrompt({
     eventProjection,
     command,
     config,
+    diagnostics,
     directories,
     sessions,
     attemptId,
@@ -174,6 +177,20 @@ export async function executePrompt({
                 : operationErrorMessage(error);
         await eventProjection.failed(command.sessionId, command.commandId, failureCode, failureMessage);
         operations.transitionExecution(command.commandId, "failed");
+        // The daemon runs detached with its stdio ignored, so a failure recorded
+        // only here would leave no trace for a later bug report. The local log is
+        // the durable copy; the in-band failure event above stays the live signal.
+        diagnostics.daemonDiagnostic(
+            "session_prompt_failed",
+            command.commandId,
+            {
+                agentId: command.agentId,
+                code: failureCode,
+                commandId: command.commandId,
+                sessionId: command.sessionId,
+            },
+            error,
+        );
         console.error("Mobius daemon command failed", error);
     }
 }
