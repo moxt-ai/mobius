@@ -1,6 +1,6 @@
 import { createReadStream } from "node:fs";
 import { realpath, stat } from "node:fs/promises";
-import { basename, extname, isAbsolute, normalize, resolve } from "node:path";
+import { basename, extname, isAbsolute, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
     type DaemonToServiceMessage,
@@ -14,19 +14,25 @@ import type { ExternalContentStore } from "../../../../../external-content/local
 
 const CHUNK_BYTES = 192 * 1024;
 
-function requestedPath(value: string): string | null {
+type RequestedFileTarget =
+    | { readonly explicitUrl: true; readonly path: string }
+    | { readonly explicitUrl: false; readonly path: string };
+
+function requestedPath(value: string): RequestedFileTarget | null {
     if (value.includes("\0")) {
         return null;
     }
     if (value.startsWith("file:")) {
         try {
             const url = new URL(value);
-            return url.protocol === "file:" && url.host.length === 0 ? fileURLToPath(url) : null;
+            return url.protocol === "file:" && url.host.length === 0
+                ? { explicitUrl: true, path: fileURLToPath(url) }
+                : null;
         } catch {
             return null;
         }
     }
-    return value;
+    return { explicitUrl: false, path: value };
 }
 
 async function resolveFile(
@@ -34,22 +40,39 @@ async function resolveFile(
     workingDirectory: string | null,
     signal: AbortSignal,
 ): Promise<string | null> {
-    const path = requestedPath(value);
-    if (path === null || (!isAbsolute(path) && workingDirectory === null)) {
+    const requested = requestedPath(value);
+    if (requested === null || (!isAbsolute(requested.path) && workingDirectory === null)) {
         return null;
     }
-    const requested = workingDirectory === null ? path : resolve(workingDirectory, path);
-    if (!isAbsolute(requested) || (isAbsolute(path) && normalize(path) !== path)) {
+    if (isAbsolute(requested.path) && normalize(requested.path) !== requested.path) {
         return null;
     }
-    try {
-        const target = await realpath(requested);
-        signal.throwIfAborted();
-        return isAbsolute(target) && normalize(target) === target ? target : null;
-    } catch {
-        signal.throwIfAborted();
-        return null;
+    // Agents link their output with workspace-root-relative references such as
+    // "/index.html", which collide with machine-absolute paths. Interpret a
+    // plain reference against the session working directory first, and fall
+    // back to the machine-absolute interpretation, so both keep resolving. An
+    // explicit file URL always means its machine-absolute target.
+    const candidates =
+        requested.explicitUrl || workingDirectory === null
+            ? [requested.path]
+            : isAbsolute(requested.path)
+              ? [join(workingDirectory, requested.path), requested.path]
+              : [resolve(workingDirectory, requested.path)];
+    for (const candidate of candidates) {
+        if (!isAbsolute(candidate) || normalize(candidate) !== candidate) {
+            continue;
+        }
+        try {
+            const target = await realpath(candidate);
+            signal.throwIfAborted();
+            if (isAbsolute(target) && normalize(target) === target) {
+                return target;
+            }
+        } catch {
+            signal.throwIfAborted();
+        }
     }
+    return null;
 }
 
 export async function streamLocalFile(
