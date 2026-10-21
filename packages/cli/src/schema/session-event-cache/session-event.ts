@@ -1,16 +1,19 @@
 import { index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
 
 export const sessionEvent = sqliteTable(
-    "session_event_v2",
+    "session_event_cache",
     {
+        eventId: text("event_id").notNull(),
         eventJson: text("event_json").notNull(),
         generationId: text("generation_id").notNull(),
         ordinal: integer("position").notNull(),
         sessionId: text("session_id").notNull(),
     },
     (table) => [
-        primaryKey({ columns: [table.generationId, table.sessionId, table.ordinal] }),
-        index("session_event_v2_generation_session_position_index").on(
+        // Deterministic native-history generations replay identical event IDs
+        // into different conversations, so rows are scoped per Session.
+        primaryKey({ columns: [table.sessionId, table.eventId] }),
+        index("session_event_cache_generation_session_position_index").on(
             table.generationId,
             table.sessionId,
             table.ordinal,

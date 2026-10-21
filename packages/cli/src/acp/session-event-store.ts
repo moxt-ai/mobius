@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { SessionEvent, SessionEventPayload, SessionLiveEvent } from "@moxt-ai/mobius-sdk/protocol";
 import type { LocalSqliteDatabase } from "../infra/local-sqlite-database.ts";
-import { SessionEventHistoryProjection } from "../session-event-history-projection.ts";
+import { type MaterializedEventsResolver, SessionEventHistoryProjection } from "../session-event-history-projection.ts";
 import {
     InMemorySessionEventIdAllocator,
     type SessionEventIdAllocator,
@@ -28,11 +28,18 @@ class ProjectedSessionEvent {
     };
 }
 
+/**
+ * Projected history for one Session generation.
+ *
+ * The projected order lives entirely in the {@link SessionEvents.#eventIds}
+ * metadata array; event payloads are only materialized while they sit inside
+ * the retention window or have been adopted back for a merge. Dropped payloads
+ * are served from the cache database and written back after merges.
+ */
 class SessionEvents {
-    readonly hot: ProjectedSessionEvent[] = [];
+    readonly #eventIds: string[] = [];
     readonly #eventIndexById = new Map<string, number>();
-    readonly #itemsByEventId = new Map<string, ProjectedSessionEvent>();
-    readonly #projectedEventIds: string[] = [];
+    readonly #cachedItemsByEventId = new Map<string, ProjectedSessionEvent>();
     readonly #projection: SessionEventHistoryProjection;
     readonly sessionGenerationId: string;
 
@@ -41,33 +48,29 @@ class SessionEvents {
         this.#projection = new SessionEventHistoryProjection();
     }
 
-    readonly apply = (
-        event: SessionLiveEvent,
-    ): { readonly item: ProjectedSessionEvent; readonly kind: "append" | "replace" } => {
-        const projected = this.#projection.apply(event);
+    readonly apply = (event: SessionLiveEvent, resolve: MaterializedEventsResolver): void => {
+        const projected = this.#projection.apply(event, resolve);
         if (projected.kind === "replace") {
-            const current = this.#itemsByEventId.get(projected.replacedEventId);
+            const current = this.#cachedItemsByEventId.get(projected.replacedEventId);
             if (current === undefined) {
                 throw new Error("The projected Session event is unavailable");
             }
             current.replaceEvent(projected.event);
-            return { item: current, kind: "replace" };
+            return;
         }
         const item = new ProjectedSessionEvent(projected.event);
-        this.hot.push(item);
-        this.#eventIndexById.set(projected.event.eventId, this.#projectedEventIds.length);
-        this.#itemsByEventId.set(projected.event.eventId, item);
-        this.#projectedEventIds.push(projected.event.eventId);
-        return { item, kind: "append" };
+        this.#eventIndexById.set(projected.event.eventId, this.#eventIds.length);
+        this.#cachedItemsByEventId.set(projected.event.eventId, item);
+        this.#eventIds.push(projected.event.eventId);
     };
 
-    get projectedEventCount(): number {
-        return this.#projectedEventIds.length;
+    get materializedCount(): number {
+        return this.#cachedItemsByEventId.size;
     }
 
     readonly endIndex = (cursor: string | null): number => {
         if (cursor === null) {
-            return this.projectedEventCount;
+            return this.#eventIds.length;
         }
         const index = this.#eventIndexById.get(cursor);
         if (index === undefined) {
@@ -77,19 +80,69 @@ class SessionEvents {
     };
 
     readonly cursorAt = (index: number): string => {
-        const cursor = this.#projectedEventIds[index];
+        const cursor = this.#eventIds[index];
         if (cursor === undefined) {
             throw new Error("The native event cursor is unavailable");
         }
         return cursor;
     };
 
-    readonly removeHotHead = (count: number): void => {
-        const removed = this.hot.splice(0, count);
-        for (const item of removed) {
-            if (!this.#projection.canReplace(item.event.eventId)) {
-                this.#itemsByEventId.delete(item.event.eventId);
+    readonly item = (eventId: string): SessionEvent | undefined => this.#cachedItemsByEventId.get(eventId)?.event;
+
+    /**
+     * Materializes an event that was previously dropped to the cache database.
+     * Its payload stays materialized until the next flush persists the merged
+     * form and drops it again.
+     */
+    readonly adopt = (event: SessionEvent): boolean => {
+        if (!this.#eventIndexById.has(event.eventId) || this.#cachedItemsByEventId.has(event.eventId)) {
+            return false;
+        }
+        this.#cachedItemsByEventId.set(event.eventId, new ProjectedSessionEvent(event));
+        return true;
+    };
+
+    /**
+     * Fills the ordinal-keyed merge view with materialized events, overriding
+     * stale persisted rows for the same ordinals.
+     */
+    readonly eventsInRange = (startIndex: number, endIndex: number, into: Map<number, SessionEvent>): void => {
+        for (let index = startIndex; index < endIndex; index += 1) {
+            const eventId = this.#eventIds[index];
+            if (eventId === undefined) {
+                throw new Error("The projected Session event is unavailable");
             }
+            const item = this.#cachedItemsByEventId.get(eventId);
+            if (item !== undefined) {
+                into.set(index + 1, item.event);
+            }
+        }
+    };
+
+    /**
+     * Collects the materialized events that fall outside the retention window,
+     * including adopted merge targets behind it, so a successful flush can
+     * persist them before they are dropped.
+     */
+    readonly pendingDrops = (
+        includeHotTail: boolean,
+    ): readonly { readonly event: SessionEvent; readonly ordinal: number }[] => {
+        const windowStart = includeHotTail
+            ? this.#eventIds.length
+            : Math.max(0, this.#eventIds.length - HOT_EVENT_RETENTION);
+        const drops: { readonly event: SessionEvent; readonly ordinal: number }[] = [];
+        for (const [eventId, item] of this.#cachedItemsByEventId) {
+            const index = this.#eventIndexById.get(eventId);
+            if (index !== undefined && index < windowStart) {
+                drops.push({ event: item.event, ordinal: index + 1 });
+            }
+        }
+        return drops;
+    };
+
+    readonly commitDrops = (drops: readonly { readonly event: SessionEvent }[]): void => {
+        for (const { event } of drops) {
+            this.#cachedItemsByEventId.delete(event.eventId);
         }
     };
 }
@@ -109,6 +162,12 @@ export interface AcpSessionEventPage {
 export interface AcpSessionEventStore {
     readonly append: (sessionId: string, event: SessionEventPayload) => SessionLiveEvent;
     readonly close: () => void;
+    /**
+     * Number of projected events whose payloads are currently held in memory.
+     * The store keeps this bounded by its retention window; it is the
+     * observable memory footprint of the Session event tier.
+     */
+    readonly materializedEventCount: (sessionId: string) => number;
     readonly materialize: (
         sessionId: string,
         sessionGenerationId: string,
@@ -183,7 +242,16 @@ export class MemoryAcpSessionEventStore implements AcpSessionEventStore {
             position,
             event,
         );
-        session.apply(recorded);
+        session.apply(recorded, (eventIds) => {
+            const resolved = new Map<string, SessionEvent>();
+            for (const eventId of eventIds) {
+                const current = session.item(eventId);
+                if (current !== undefined) {
+                    resolved.set(eventId, current);
+                }
+            }
+            return resolved;
+        });
         return recorded;
     };
 
@@ -191,6 +259,9 @@ export class MemoryAcpSessionEventStore implements AcpSessionEventStore {
         this.#allocatedPositionBySession.clear();
         this.#events.clear();
     };
+
+    readonly materializedEventCount = (sessionId: string): number =>
+        this.#events.get(sessionId)?.materializedCount ?? 0;
 
     readonly materialize = (
         sessionId: string,
@@ -209,9 +280,11 @@ export class MemoryAcpSessionEventStore implements AcpSessionEventStore {
     readonly page = (sessionId: string, eventLimit: number, cursor: string | null): AcpSessionEventPage => {
         const session = this.#session(sessionId);
         const endIndex = session.endIndex(cursor);
-        return eventPage(session, session.sessionGenerationId, endIndex, eventLimit, (start, end) =>
-            session.hot.slice(start, end).map(({ event }) => event),
-        );
+        return eventPage(session, session.sessionGenerationId, endIndex, eventLimit, (start, end) => {
+            const merged = new Map<number, SessionEvent>();
+            session.eventsInRange(start, end, merged);
+            return [...merged.entries()].toSorted((left, right) => left[0] - right[0]).map(([, event]) => event);
+        });
     };
 
     readonly remove = (sessionId: string): void => {
@@ -261,20 +334,33 @@ export class CachedAcpSessionEventStore implements AcpSessionEventStore {
             position,
             event,
         );
-        const projected = session.apply(recorded);
-        if (projected.kind === "replace" && !session.hot.includes(projected.item)) {
-            // Hot items already contain the latest text and have no SQLite row to update.
-            this.#updateProjectedEvent(sessionId, session, projected.item);
-        }
+        session.apply(recorded, (eventIds) => {
+            const resolved = new Map<string, SessionEvent>();
+            const missing: string[] = [];
+            for (const eventId of eventIds) {
+                const current = session.item(eventId);
+                if (current !== undefined) {
+                    resolved.set(eventId, current);
+                } else {
+                    missing.push(eventId);
+                }
+            }
+            for (const [eventId, stored] of this.#cacheDatabase.readByEventIds(
+                sessionId,
+                session.sessionGenerationId,
+                missing,
+            )) {
+                if (session.adopt(stored)) {
+                    resolved.set(eventId, stored);
+                }
+            }
+            return resolved;
+        });
         this.#sessions.set(sessionId, session);
-        if (session.hot.length > HOT_EVENT_HIGH_WATER_MARK) {
+        if (session.materializedCount > HOT_EVENT_HIGH_WATER_MARK) {
             this.#scheduleFlush();
         }
         return recorded;
-    };
-
-    readonly #updateProjectedEvent = (sessionId: string, session: SessionEvents, item: ProjectedSessionEvent): void => {
-        this.#cacheDatabase.replace(sessionId, session.sessionGenerationId, item.event);
     };
 
     readonly #scheduleFlush = (): void => {
@@ -311,14 +397,12 @@ export class CachedAcpSessionEventStore implements AcpSessionEventStore {
             return;
         }
         const batches = [...this.#sessions.entries()].flatMap(([sessionId, session]) => {
-            const count = includeHotTail ? session.hot.length : Math.max(0, session.hot.length - HOT_EVENT_RETENTION);
-            return count === 0
+            const drops = session.pendingDrops(includeHotTail);
+            return drops.length === 0
                 ? []
                 : [
                       {
-                          count,
-                          events: session.hot.slice(0, count).map(({ event }) => event),
-                          firstOrdinal: session.projectedEventCount - session.hot.length + 1,
+                          events: drops,
                           sessionGenerationId: session.sessionGenerationId,
                           sessionId,
                       },
@@ -329,10 +413,7 @@ export class CachedAcpSessionEventStore implements AcpSessionEventStore {
         }
         if (this.#cacheDatabase.insert(batches)) {
             for (const batch of batches) {
-                const session = this.#sessions.get(batch.sessionId);
-                if (session !== undefined) {
-                    session.removeHotHead(batch.count);
-                }
+                this.#sessions.get(batch.sessionId)?.commitDrops(batch.events);
             }
         }
     };
@@ -342,22 +423,17 @@ export class CachedAcpSessionEventStore implements AcpSessionEventStore {
         const current = session ?? this.#session(sessionId);
         const endIndex = current.endIndex(cursor);
         return eventPage(current, current.sessionGenerationId, endIndex, eventLimit, (startIndex, endIndex) => {
-            const startOrdinal = startIndex + 1;
-            const endOrdinal = endIndex;
-            const persisted = this.#cacheDatabase.read(
+            const merged = new Map<number, SessionEvent>();
+            for (const { event, ordinal } of this.#cacheDatabase.read(
                 sessionId,
                 current.sessionGenerationId,
-                startOrdinal,
-                endOrdinal,
-            );
-            const firstHotOrdinal = current.projectedEventCount - current.hot.length + 1;
-            const hot = current.hot.flatMap((item, index) => {
-                const ordinal = firstHotOrdinal + index;
-                return ordinal >= startOrdinal && ordinal <= endOrdinal ? [{ event: item.event, ordinal }] : [];
-            });
-            return [...persisted, ...hot]
-                .toSorted((left, right) => left.ordinal - right.ordinal)
-                .map(({ event }) => event);
+                startIndex + 1,
+                endIndex,
+            )) {
+                merged.set(ordinal, event);
+            }
+            current.eventsInRange(startIndex, endIndex, merged);
+            return [...merged.entries()].toSorted((left, right) => left[0] - right[0]).map(([, event]) => event);
         });
     };
 
@@ -376,6 +452,9 @@ export class CachedAcpSessionEventStore implements AcpSessionEventStore {
         const sessionGenerationId = randomUUID();
         this.#sessions.set(sessionId, new SessionEvents(sessionGenerationId));
     };
+
+    readonly materializedEventCount = (sessionId: string): number =>
+        this.#sessions.get(sessionId)?.materializedCount ?? 0;
 
     readonly close = (): void => {
         if (this.#flushSchedule.kind === "closed") {

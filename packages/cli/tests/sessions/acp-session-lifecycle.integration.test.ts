@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { chmod, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -215,6 +215,149 @@ describe("ACP conversation sessions", () => {
                 type: "acp",
             });
             expect(liveEvents.map((event) => event.eventId)).toContain(toolEvents[0]?.eventId);
+        } finally {
+            store.close();
+            sessionDatabase.close();
+            vi.useRealTimers();
+            await rm(temporaryDirectory, { force: true, recursive: true });
+        }
+    });
+
+    it("Given projected history far beyond the memory tier, When terminal tool calls accumulate across flushes, Then materialized event payloads stay bounded", async () => {
+        vi.useFakeTimers({ toFake: ["clearImmediate", "setImmediate"] });
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-bounded-"));
+        const sessionDatabase = openAcpSessionDatabase(join(temporaryDirectory, "sessions.sqlite"));
+        const store = new CachedAcpSessionEventStore(
+            openSessionEventCacheDatabase(join(temporaryDirectory, "events.sqlite")),
+            new SqliteSessionLiveEventPosition(sessionDatabase),
+        );
+        try {
+            for (let number = 1; number <= 3000; number += 1) {
+                if (number % 10 === 1) {
+                    store.append("session-1", {
+                        payload: {
+                            sessionUpdate: "tool_call",
+                            title: "Run command",
+                            toolCallId: `tool-${number.toString()}`,
+                        },
+                        type: "acp",
+                    });
+                    store.append("session-1", {
+                        payload: {
+                            sessionUpdate: "tool_call_update",
+                            status: "completed",
+                            toolCallId: `tool-${number.toString()}`,
+                        },
+                        type: "acp",
+                    });
+                } else {
+                    store.append("session-1", {
+                        payload: { kind: "session.queue.changed" },
+                        type: "lifecycle-metadata",
+                    });
+                }
+            }
+            await vi.runAllTimersAsync();
+
+            expect(store.materializedEventCount("session-1")).toBeLessThanOrEqual(256);
+
+            const page = store.page("session-1", 4000, null);
+            const eventIds = page.events.map((event) => event.eventId);
+            expect(new Set(eventIds).size).toBe(page.events.length);
+            expect(page.events).toHaveLength(3000);
+            const toolEvents = page.events.filter((event) => event.type === "acp");
+            expect(toolEvents).toHaveLength(300);
+            for (const event of toolEvents) {
+                if (event.type !== "acp" || event.payload.sessionUpdate !== "tool_call") {
+                    throw new Error("Expected merged terminal tool calls");
+                }
+                expect(event.payload.status).toBe("completed");
+            }
+        } finally {
+            store.close();
+            sessionDatabase.close();
+            vi.useRealTimers();
+            await rm(temporaryDirectory, { force: true, recursive: true });
+        }
+    });
+
+    it("Given a previous process filled the event cache database, When a new process opens it, Then the cache file is compact again", async () => {
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-cache-vacuum-"));
+        const databasePath = join(temporaryDirectory, "events.sqlite");
+        const sessionDatabasePath = join(temporaryDirectory, "sessions.sqlite");
+        const firstSessionDatabase = openAcpSessionDatabase(sessionDatabasePath);
+        const first = new CachedAcpSessionEventStore(
+            openSessionEventCacheDatabase(databasePath),
+            new SqliteSessionLiveEventPosition(firstSessionDatabase),
+        );
+        try {
+            for (let number = 1; number <= 2000; number += 1) {
+                first.append("session-1", {
+                    payload: {
+                        commandId: `command-${number.toString()}`,
+                        content: [{ text: "x".repeat(600), type: "text" }],
+                        kind: "prompt.requested",
+                    },
+                    type: "lifecycle-metadata",
+                });
+            }
+        } finally {
+            first.close();
+            firstSessionDatabase.close();
+        }
+        expect((await stat(databasePath)).size).toBeGreaterThan(512 * 1024);
+
+        const secondSessionDatabase = openAcpSessionDatabase(sessionDatabasePath);
+        const second = new CachedAcpSessionEventStore(
+            openSessionEventCacheDatabase(databasePath),
+            new SqliteSessionLiveEventPosition(secondSessionDatabase),
+        );
+        try {
+            second.append("session-1", {
+                payload: { kind: "session.queue.changed" },
+                type: "lifecycle-metadata",
+            });
+        } finally {
+            second.close();
+            secondSessionDatabase.close();
+        }
+        expect((await stat(databasePath)).size).toBeLessThan(256 * 1024);
+        await rm(temporaryDirectory, { force: true, recursive: true });
+    });
+
+    it("Given two conversations replay the same deterministic native history, When both page history after flushing, Then each keeps its own full event tier", async () => {
+        vi.useFakeTimers({ toFake: ["clearImmediate", "setImmediate"] });
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-shared-generation-"));
+        const sessionDatabase = openAcpSessionDatabase(join(temporaryDirectory, "sessions.sqlite"));
+        const store = new CachedAcpSessionEventStore(
+            openSessionEventCacheDatabase(join(temporaryDirectory, "events.sqlite")),
+            new SqliteSessionLiveEventPosition(sessionDatabase),
+        );
+        const sharedGeneration = "11111111-2222-3333-4444-555555555555";
+        const history = Array.from(
+            { length: 300 },
+            (_unused, index) =>
+                ({
+                    payload: {
+                        commandId: `command-${(index + 1).toString()}`,
+                        content: [{ text: `prompt ${(index + 1).toString()}`, type: "text" }],
+                        kind: "prompt.requested",
+                    },
+                    type: "lifecycle-metadata",
+                }) as const,
+        );
+        try {
+            store.materialize("conversation-a", sharedGeneration, history);
+            store.materialize("conversation-b", sharedGeneration, history);
+            await vi.runAllTimersAsync();
+
+            for (const conversation of ["conversation-a", "conversation-b"]) {
+                const page = store.page(conversation, 300, null);
+                expect(page.events).toHaveLength(300);
+                expect(page.sessionGenerationId).toBe(sharedGeneration);
+                expect(page.events[0]).toMatchObject({ payload: { commandId: "command-1" } });
+                expect(page.events.at(-1)).toMatchObject({ payload: { commandId: "command-300" } });
+            }
         } finally {
             store.close();
             sessionDatabase.close();
