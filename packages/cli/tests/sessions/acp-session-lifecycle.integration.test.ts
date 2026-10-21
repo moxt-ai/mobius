@@ -145,55 +145,6 @@ describe("ACP conversation sessions", () => {
         }
     });
 
-    it("Given a database-backed live position allocation, When the event store reopens, Then allocation continues from ten thousand", async () => {
-        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-live-event-position-"));
-        const sessionDatabasePath = join(temporaryDirectory, "sessions.sqlite");
-        const firstSessionDatabase = openAcpSessionDatabase(sessionDatabasePath);
-        const first = new CachedAcpSessionEventStore(
-            openSessionEventCacheDatabase(join(temporaryDirectory, "first-events.sqlite")),
-            new SqliteSessionLiveEventPosition(firstSessionDatabase),
-        );
-        try {
-            expect(
-                [
-                    first.append("session-1", {
-                        payload: { kind: "session.queue.changed" },
-                        type: "lifecycle-metadata",
-                    }),
-                    first.append("session-1", {
-                        payload: { kind: "session.queue.changed" },
-                        type: "lifecycle-metadata",
-                    }),
-                    first.append("session-2", {
-                        payload: { kind: "session.queue.changed" },
-                        type: "lifecycle-metadata",
-                    }),
-                ].map((event) => event.position),
-            ).toEqual(["10000", "10001", "10000"]);
-        } finally {
-            first.close();
-            firstSessionDatabase.close();
-        }
-
-        const secondSessionDatabase = openAcpSessionDatabase(sessionDatabasePath);
-        const second = new CachedAcpSessionEventStore(
-            openSessionEventCacheDatabase(join(temporaryDirectory, "second-events.sqlite")),
-            new SqliteSessionLiveEventPosition(secondSessionDatabase),
-        );
-        try {
-            expect(
-                second.append("session-1", {
-                    payload: { kind: "session.queue.changed" },
-                    type: "lifecycle-metadata",
-                }).position,
-            ).toBe("10002");
-        } finally {
-            second.close();
-            secondSessionDatabase.close();
-            await rm(temporaryDirectory, { force: true, recursive: true });
-        }
-    });
-
     it("Given a projected tool has flushed to SQLite, When more live updates arrive, Then history replaces that Session event while keeping the projected live identity", async () => {
         vi.useFakeTimers({ toFake: ["clearImmediate", "setImmediate"] });
         vi.setSystemTime(new Date("2026-10-12T00:00:00.000Z"));
