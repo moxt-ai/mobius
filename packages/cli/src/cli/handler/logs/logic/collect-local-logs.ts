@@ -1,7 +1,7 @@
-import { readdir, readFile } from "node:fs/promises";
+import { lstat, readdir, readFile } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
+
 import { readStateDirectory } from "../../../../storage/state-directory.ts";
-import { validateLocalPath } from "../../../../util/filesystem/private-path.ts";
 
 const LOG_FILE_NAME_PATTERN = /^[\w.-]{1,128}\.log$/u;
 const INSTALLATIONS_DIRECTORY = "installations";
@@ -14,6 +14,12 @@ export interface LocalLogEntry {
     readonly omittedLines: number;
 }
 
+export interface CollectedLocalLogs {
+    readonly entries: readonly LocalLogEntry[];
+    /** Logs that exist on disk but could not be read, as state-relative paths. */
+    readonly unreadable: readonly string[];
+}
+
 /**
  * Read the bounded local diagnostic logs of every installation under the state
  * root. Works with the daemon stopped: a report about a daemon that will not
@@ -21,26 +27,36 @@ export interface LocalLogEntry {
  *
  * Covers both log owners: the Runtime's own `daemon.log` under the version-scoped
  * CLI installation, and the manager-written worker lifecycle and unhandled
- * rejection logs under the control installation. Files are read, never rotated
- * or rewritten, and an unreadable one is skipped rather than failing the report.
+ * rejection logs under the control installation.
+ *
+ * This is a read-only forensic path, so it never repairs anything: permissions
+ * are checked without `chmod`, and a file that cannot be read is reported as
+ * unreadable instead of being skipped, because silently dropping evidence would
+ * make a report from a read-only mount or a failing disk look empty.
  */
 export async function collectLocalDaemonLogs(
     stateDirectory: string,
     tailLines: number,
     signal: AbortSignal,
-): Promise<readonly LocalLogEntry[]> {
+): Promise<CollectedLocalLogs> {
     signal.throwIfAborted();
     const root = resolve(stateDirectory);
-    const collected: LocalLogEntry[] = [];
+    const entries: LocalLogEntry[] = [];
+    const unreadable: string[] = [];
     for (const directory of await findLogDirectories(root, signal)) {
         for (const name of await listLogFiles(directory)) {
-            const entry = await readLog(join(directory, name), root, tailLines, signal);
-            if (entry !== null) {
-                collected.push(entry);
+            const path = join(directory, name);
+            const reported = relative(root, path);
+            const read = await readLog(path, tailLines, signal);
+            if (read === null) {
+                unreadable.push(reported);
+                continue;
             }
+            entries.push({ ...read, path: reported });
         }
     }
-    return collected.sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
+    entries.sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
+    return { entries, unreadable: unreadable.sort() };
 }
 
 export function defaultStateDirectory(environment: Readonly<NodeJS.ProcessEnv> = process.env): string {
@@ -66,7 +82,7 @@ async function findLogDirectories(root: string, signal: AbortSignal): Promise<re
             const application = join(installations, applicationId);
             for (const installationId of await listDirectories(application, signal)) {
                 const logs = join(application, installationId, "logs");
-                if (await isPrivateDirectory(logs, signal)) {
+                if (await isOwnedDirectory(logs)) {
                     found.push(logs);
                 }
             }
@@ -97,10 +113,15 @@ async function listDirectories(path: string, signal: AbortSignal): Promise<reado
     }
 }
 
-async function isPrivateDirectory(path: string, signal: AbortSignal): Promise<boolean> {
+/**
+ * Confirm a directory this user owns, without changing it. Symlinks are rejected
+ * so a planted link cannot redirect the report outside the state root, and the
+ * owner check keeps another user's files out of it.
+ */
+async function isOwnedDirectory(path: string): Promise<boolean> {
     try {
-        await validateLocalPath(path, true, true, signal);
-        return true;
+        const metadata = await lstat(path);
+        return metadata.isDirectory() && !metadata.isSymbolicLink() && ownedByCurrentUser(metadata);
     } catch {
         return false;
     }
@@ -108,20 +129,26 @@ async function isPrivateDirectory(path: string, signal: AbortSignal): Promise<bo
 
 async function readLog(
     path: string,
-    root: string,
     tailLines: number,
     signal: AbortSignal,
-): Promise<LocalLogEntry | null> {
+): Promise<Omit<LocalLogEntry, "path"> | null> {
     try {
-        await validateLocalPath(path, false, true, signal);
+        const metadata = await lstat(path);
+        if (!metadata.isFile() || metadata.isSymbolicLink() || !ownedByCurrentUser(metadata)) {
+            return null;
+        }
         const content = await readFile(path, { encoding: "utf8", signal });
         const lines = content.split("\n").filter((line) => line.length > 0);
         return {
             lines: lines.slice(-tailLines),
             omittedLines: Math.max(0, lines.length - tailLines),
-            path: relative(root, path),
         };
     } catch {
         return null;
     }
+}
+
+function ownedByCurrentUser(metadata: { readonly uid: number }): boolean {
+    // Windows reports uid 0 for every file, so ownership is not a signal there.
+    return process.getuid === undefined || metadata.uid === process.getuid();
 }

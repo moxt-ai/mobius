@@ -14,6 +14,7 @@ describe("Runtime diagnostics SDK", () => {
         servers.length = 0;
     });
 
+    // @no-uc: Technical regression; the diagnostics route must be reachable through the SDK at the production HTTP boundary.
     it("Given a Relay that returns a Runtime's local diagnostic log, When a consumer reads it through the SDK, Then the report crosses the production HTTP boundary as correlation metadata", async () => {
         const report = {
             entries: [
@@ -60,6 +61,7 @@ describe("Runtime diagnostics SDK", () => {
         ]);
     });
 
+    // @no-uc: Technical regression; an unvalidated identifier must be rejected before any request path is built.
     it("Given an invalid Runtime identifier, When a consumer reads diagnostics, Then the SDK rejects it before making a request", async () => {
         const received: string[] = [];
         const server = createServer((request: IncomingMessage, response: ServerResponse) => {

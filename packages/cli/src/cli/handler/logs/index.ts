@@ -28,19 +28,33 @@ export function registerLogsCommand(program: Command, context: CliContext): void
             const tailLines = parseTailLines(options.tail);
             const json = options.json === true;
             const stateDirectory = options.stateDirectory?.trim() ?? defaultStateDirectory(process.env);
-            const logs = await collectLocalDaemonLogs(stateDirectory, tailLines, context.shutdownSignal);
-            // Keep stdout machine-parseable in JSON mode: the sharing notice is a
-            // human warning, so it goes to stderr where it cannot corrupt a pipe.
+            const collected = await collectLocalDaemonLogs(stateDirectory, tailLines, context.shutdownSignal);
+            // Keep stdout machine-parseable in JSON mode: the sharing notice and
+            // any read failures are human warnings, so they go to stderr where
+            // they cannot corrupt a pipe.
+            if (collected.unreadable.length > 0) {
+                process.stderr.write(
+                    `${collected.unreadable.length.toString()} log file(s) could not be read and are missing from ` +
+                        `this report:\n${collected.unreadable.map((path) => `  ${path}`).join("\n")}\n`,
+                );
+            }
             if (json) {
                 process.stderr.write(SHARING_NOTICE);
-                process.stdout.write(`${JSON.stringify(logs, null, 2)}\n`);
+                process.stdout.write(`${JSON.stringify(collected, null, 2)}\n`);
                 return;
             }
-            if (logs.length === 0) {
-                process.stdout.write("No local daemon logs were found.\n");
+            if (collected.entries.length === 0) {
+                // A read failure is not an empty report: say which it was, and fail
+                // so a script collecting evidence does not treat it as "no logs".
+                process.stdout.write(
+                    collected.unreadable.length > 0
+                        ? "The local daemon logs could not be read.\n"
+                        : "No local daemon logs were found.\n",
+                );
+                process.exitCode = collected.unreadable.length > 0 ? 1 : 0;
                 return;
             }
-            process.stdout.write(formatText(logs));
+            process.stdout.write(formatText(collected.entries));
         });
 }
 

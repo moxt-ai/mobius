@@ -16,6 +16,7 @@ import { ControlledAcpAgentSpecification } from "../support/agents/controlled-ac
 import { withRealDaemon } from "../support/agents/real-daemon.ts";
 import { writeControlledAcpExecutable } from "../support/controlled-acp-executable.ts";
 
+// @no-uc: Technical regression; a failed turn must leave a correlated local trace without exporting message text.
 test("Given an Agent rejects a turn, When the turn fails, Then the local diagnostic log keeps the correlated failure with its reason while the exported report stays free of message text", async () => {
     const directory = await mkdtemp(join(tmpdir(), "mobius-prompt-diagnostics-"));
     const executableDirectory = await writeControlledAcpExecutable(directory);

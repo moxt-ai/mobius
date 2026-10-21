@@ -8,6 +8,7 @@ import { ControlledAcpAgentSpecification } from "../support/agents/controlled-ac
 import { withRealDaemon } from "../support/agents/real-daemon.ts";
 import { writeControlledAcpExecutable } from "../support/controlled-acp-executable.ts";
 
+// @no-uc: Technical regression; only the manager witnesses a silent worker death, so its log must reach the exported report.
 test("Given a managed daemon, When a bug report is read through the Runtime, Then it carries the manager's worker lifecycle record that explains how this worker started", async () => {
     const directory = await mkdtemp(join(tmpdir(), "mobius-lifecycle-diagnostics-"));
     const executableDirectory = await writeControlledAcpExecutable(directory);
