@@ -263,7 +263,7 @@ it("Given a live Session stream cannot reconnect, When its retry budget expires,
     await vi.advanceTimersByTimeAsync(250);
 
     await expect(subscription.completed).rejects.toThrow(
-        "The live V2 Session event stream could not recover. Cause: The Mobius WebSocket transport could not connect. Caused by: The controlled WebSocket reconnect failed because the network is unavailable",
+        "The live session event stream could not recover. Cause: The Mobius WebSocket transport could not connect. Caused by: The controlled WebSocket reconnect failed because the network is unavailable",
     );
     transport.close();
 });
@@ -287,7 +287,7 @@ it("Given caller-owned Session recovery, When its live stream disconnects, Then 
             new AbortController().signal,
         );
         const failure = expect(subscription.completed).rejects.toThrow(
-            "The live V2 Session event stream could not recover",
+            "The live session event stream could not recover",
         );
         const socket = connector.sockets[0];
         if (socket === undefined) {
