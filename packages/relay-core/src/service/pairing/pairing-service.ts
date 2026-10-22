@@ -18,14 +18,17 @@ import {
 export class PairingService {
     readonly #channels: ChannelGateway;
     readonly #pairings: PairingOperations;
+    readonly #runtimeOperations: import("../channel/local-session-operations.ts").LocalSessionOperations | undefined;
 
     constructor(cx: {
         readonly services: { readonly pairings: PairingOperations };
         readonly gateways: {
             readonly channelGateway: ChannelGateway;
+            readonly runtimeOperations?: import("../channel/local-session-operations.ts").LocalSessionOperations;
         };
     }) {
         this.#channels = cx.gateways.channelGateway;
+        this.#runtimeOperations = cx.gateways.runtimeOperations;
         this.#pairings = cx.services.pairings;
     }
 
@@ -92,7 +95,20 @@ export class PairingService {
         signal: AbortSignal,
         timing: OperationTiming = unmeasuredOperationTiming,
     ) => {
-        const deadline = AbortSignal.any([signal, AbortSignal.timeout(120000)]);
+        const deadline =
+            this.#runtimeOperations === undefined ? AbortSignal.any([signal, AbortSignal.timeout(120000)]) : signal;
+        if (this.#runtimeOperations !== undefined) {
+            const permission =
+                (command.kind === "native.session.request" && command.action === "list") ||
+                command.kind === "session.list" ||
+                command.kind === "session.query" ||
+                command.kind === "session.preview-history.page.load" ||
+                command.kind === "session.live-history.v2.page.load"
+                    ? ProjectPermission.RuntimeRead
+                    : ProjectPermission.SessionWrite;
+            const access = await this.#pairings.authorizeProject(projectId, token, permission, deadline);
+            return await this.#runtimeOperations.requestProjectScopeControl(access.scope, runtimeId, command, deadline);
+        }
         const access = await timing.measure(
             "control-authorize",
             "Authorize Runtime control host",
@@ -145,7 +161,24 @@ export class PairingService {
         token: string,
         signal: AbortSignal,
     ) => {
-        const deadline = AbortSignal.any([signal, AbortSignal.timeout(8_000)]);
+        const deadline =
+            this.#runtimeOperations === undefined ? AbortSignal.any([signal, AbortSignal.timeout(8_000)]) : signal;
+        if (this.#runtimeOperations !== undefined) {
+            const access = await this.#pairings.authorizeProject(
+                projectId,
+                token,
+                ProjectPermission.RuntimeRead,
+                deadline,
+            );
+            return await this.#runtimeOperations.requestProjectScopeControl(
+                access.scope,
+                runtimeId,
+                decodeRuntimeDiagnosticsRequest(
+                    JSON.stringify({ kind: "runtime.diagnostics.read", requestId: crypto.randomUUID() }),
+                ),
+                deadline,
+            );
+        }
         const access = await this.#pairings.openControlHost(
             projectId,
             runtimeId,
@@ -180,7 +213,24 @@ export class PairingService {
         token: string,
         signal: AbortSignal,
     ): Promise<number> => {
-        const deadline = AbortSignal.any([signal, AbortSignal.timeout(15_000)]);
+        const deadline =
+            this.#runtimeOperations === undefined ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : signal;
+        if (this.#runtimeOperations !== undefined) {
+            const access = await this.#pairings.authorizeProject(
+                projectId,
+                token,
+                ProjectPermission.RuntimeRead,
+                deadline,
+            );
+            const started = performance.now();
+            await this.#runtimeOperations.requestProjectScopeControl(
+                access.scope,
+                runtimeId,
+                { kind: "runtime.ping", requestId: `ping_${crypto.randomUUID()}` },
+                deadline,
+            );
+            return Math.max(0, Math.round(performance.now() - started));
+        }
         const access = await this.#pairings.openControlHost(
             projectId,
             runtimeId,
@@ -216,7 +266,11 @@ export class PairingService {
         command: RuntimeControlCommand,
         signal: AbortSignal,
     ) => {
-        const deadline = AbortSignal.any([signal, AbortSignal.timeout(120000)]);
+        if (this.#runtimeOperations !== undefined) {
+            return await this.#runtimeOperations.requestProjectScopeControl(scope, runtimeId, command, signal);
+        }
+        const deadline =
+            this.#runtimeOperations === undefined ? AbortSignal.any([signal, AbortSignal.timeout(120000)]) : signal;
         const access = await this.#pairings.openProjectScopeControlHost(scope, runtimeId, deadline);
         try {
             const response = await this.#channels.acceptHost(
@@ -240,6 +294,9 @@ export class PairingService {
         sessionId: string,
         signal: AbortSignal,
     ): Promise<{ readonly close: () => Promise<void>; readonly socket: WebSocket }> => {
+        if (this.#runtimeOperations !== undefined) {
+            return await this.#runtimeOperations.openProjectSessionEventHost(scope, runtimeId, sessionId, signal);
+        }
         const access = await this.#pairings.openProjectScopeControlHost(scope, runtimeId, signal);
         try {
             const endpoint = new URL("https://runtime.internal/host");
@@ -277,7 +334,11 @@ export class PairingService {
         command: FileReadCommand,
         signal: AbortSignal,
     ): Promise<Response> => {
-        const deadline = AbortSignal.any([signal, AbortSignal.timeout(120000)]);
+        if (this.#runtimeOperations !== undefined) {
+            return await this.#runtimeOperations.readProjectSessionFile(scope, runtimeId, command, signal);
+        }
+        const deadline =
+            this.#runtimeOperations === undefined ? AbortSignal.any([signal, AbortSignal.timeout(120000)]) : signal;
         const access = await this.#pairings.openProjectScopeControlHost(scope, runtimeId, deadline);
         try {
             const response = await this.#channels.acceptHost(
@@ -311,7 +372,17 @@ export class PairingService {
         command: WorkspaceListCommand,
         signal: AbortSignal,
     ) => {
-        const deadline = AbortSignal.any([signal, AbortSignal.timeout(120000)]);
+        const deadline =
+            this.#runtimeOperations === undefined ? AbortSignal.any([signal, AbortSignal.timeout(120000)]) : signal;
+        if (this.#runtimeOperations !== undefined) {
+            const access = await this.#pairings.authorizeProject(
+                projectId,
+                token,
+                ProjectPermission.RuntimeRead,
+                deadline,
+            );
+            return await this.#runtimeOperations.requestWorkspace(access.scope, runtimeId, command, deadline);
+        }
         const access = await this.#pairings.openControlHost(
             projectId,
             runtimeId,
@@ -341,7 +412,8 @@ export class PairingService {
         command: AgentSettingsDiscoverCommand,
         signal: AbortSignal,
     ) => {
-        const deadline = AbortSignal.any([signal, AbortSignal.timeout(120000)]);
+        const deadline =
+            this.#runtimeOperations === undefined ? AbortSignal.any([signal, AbortSignal.timeout(120000)]) : signal;
         const runtimes = await this.#pairings.listProjectRuntimes(projectId, token, deadline);
         const runtime = runtimes.find((candidate) => candidate.runtimeId === runtimeId);
         if (runtime === undefined) {
@@ -356,6 +428,15 @@ export class PairingService {
                 "agent_settings_discovery_unsupported",
                 "The selected local Agent does not support settings discovery",
             );
+        }
+        if (this.#runtimeOperations !== undefined) {
+            const access = await this.#pairings.authorizeProject(
+                projectId,
+                token,
+                ProjectPermission.RuntimeRead,
+                deadline,
+            );
+            return await this.#runtimeOperations.requestAgentSettings(access.scope, runtimeId, command, deadline);
         }
         const access = await this.#pairings.openControlHost(
             projectId,

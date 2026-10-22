@@ -138,7 +138,7 @@ export async function routeProjectDurableObject(
         logger.error(
             {
                 event: "project_relay_request_failed",
-                durableObjectClass: "ProjectRelay",
+                durableObjectClass: "ProjectDO",
                 durableObjectId: bindings.PROJECT_RELAY.idFromName(projectId).toString(),
                 projectId,
                 cfRay: request.headers.get("cf-ray")?.slice(0, 128) ?? null,

@@ -8,6 +8,7 @@ import { createRelayDependencies } from "./create-relay-dependencies.ts";
 
 export interface WorkerRuntimeGateways {
     readonly channel: ChannelGateway;
+    readonly runtimeOperations?: import("../service/channel/local-session-operations.ts").LocalSessionOperations;
 }
 
 export function createWorkerContext(options: {
@@ -29,6 +30,9 @@ export function createWorkerContext(options: {
         logger: console,
         gateways: {
             channelGateway: options.gateways.channel,
+            ...(options.gateways.runtimeOperations === undefined
+                ? {}
+                : { runtimeOperations: options.gateways.runtimeOperations }),
             nowEpochMilliseconds: () => Date.now(),
         },
     });

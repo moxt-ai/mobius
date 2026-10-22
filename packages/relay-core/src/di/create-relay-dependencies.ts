@@ -24,6 +24,7 @@ export interface RelayInfrastructure extends PairingInfrastructure {
     readonly authentication: { readonly projects: ProjectAccessAuthorizer };
     readonly gateways: {
         readonly channelGateway: ChannelGateway;
+        readonly runtimeOperations?: import("../service/channel/local-session-operations.ts").LocalSessionOperations;
         readonly nowEpochMilliseconds: () => number;
     };
     readonly config: { readonly apiPrefix: string };

@@ -12,6 +12,7 @@ import {
     UnsupportedProtocolMessageKindError,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { ProjectScope } from "../../entity/do/session.ts";
+import { PairingDirectoryError } from "../../entity/pairing/pairing.ts";
 import { logger } from "../../infra/logger.ts";
 import type { ChannelActor, ChannelPeers, ChannelSocket } from "./channel-actor.ts";
 import type { ChannelCredentialService } from "./channel-credential-service.ts";
@@ -31,6 +32,14 @@ const DAEMON_HEARTBEAT_SILENCE_LIMIT_MILLISECONDS = 35_000;
 export type DaemonHeartbeat = { readonly kind: "none" } | { readonly kind: "received"; readonly at: number };
 
 export type RuntimeSocketIdentity =
+    | {
+          readonly role: "viewer";
+          readonly expiresAt: number;
+          readonly eventFormat: "events" | "envelope";
+          readonly projectId: string;
+          readonly runtimeId: string;
+          readonly sessionFilter: string;
+      }
     | {
           readonly role: "relay";
           readonly channelId: string;
@@ -302,7 +311,7 @@ export class RuntimeService {
             }
             if (identity.role === "daemon") {
                 socket.close(1008, "Runtime revoked");
-            } else if (identity.role === "host" && identity.channelId === channelId) {
+            } else if (identity.role === "viewer" || (identity.role === "host" && identity.channelId === channelId)) {
                 socket.close(1008, "Runtime revoked");
             }
         }
@@ -340,6 +349,37 @@ export class RuntimeService {
     readonly attachHost = (runtimeId: string, scope: ProjectScope, socket: ChannelSocket, signal: AbortSignal) =>
         this.channel(runtimeId, scope).attachHost(socket, signal);
 
+    /** The public HTTP handler already authorized this operation; no host credential is involved. */
+    readonly receiveOperation = async (
+        scope: ProjectScope,
+        runtimeId: string,
+        socket: ChannelSocket,
+        message: string,
+        signal: AbortSignal,
+    ): Promise<void> => {
+        signal.throwIfAborted();
+        const silent = this.closeSilentDaemons();
+        try {
+            const daemon = this.#cx.gateways.peers
+                .sockets()
+                .find(
+                    ({ identity, socket: peer }) =>
+                        identity.role === "daemon" &&
+                        peer.isOpen() &&
+                        this.#cx.services.connections.isCurrent(identity),
+                );
+            if (
+                daemon !== undefined &&
+                (daemon.identity.projectId !== scope.projectId || daemon.identity.runtimeId !== runtimeId)
+            ) {
+                throw new PairingDirectoryError("runtime_access_denied", "The selected Runtime is unavailable");
+            }
+            await this.channel(runtimeId, scope).receiveHostMessage(socket, message, signal);
+        } finally {
+            await this.detachDaemons(silent);
+        }
+    };
+
     readonly receiveMessage = async (
         identity: RuntimeSocketIdentity,
         socket: RuntimeSocket,
@@ -348,7 +388,7 @@ export class RuntimeService {
     ): Promise<void> => {
         signal.throwIfAborted();
         const scope = new ProjectScope(identity.projectId);
-        if (identity.role === "host" || identity.role === "relay") {
+        if (identity.role === "host" || identity.role === "relay" || identity.role === "viewer") {
             // Closing first makes this command see the Runtime as offline and fail at once; detaching
             // afterwards releases commands already sent into the silent connection.
             const silentDaemons = this.closeSilentDaemons();
@@ -356,6 +396,10 @@ export class RuntimeService {
                 if (identity.role === "relay") {
                     const channel = this.channel(identity.runtimeId, scope);
                     await channel.receiveHostMessage(socket, message, signal);
+                    return;
+                }
+                if (identity.role === "viewer") {
+                    socket.close(1008, "A live subscription cannot send commands");
                     return;
                 }
                 if (!(await this.#cx.services.credentials.isActive(identity, signal))) {
@@ -517,6 +561,7 @@ export class RuntimeService {
     private readonly notifyOffline = (runtimeId: string): void => {
         for (const host of [
             ...this.#cx.gateways.peers.hosts(),
+            ...this.#cx.gateways.peers.operations().map(({ socket }) => socket),
             ...this.#cx.gateways.peers.nativeRequests().map(({ socket }) => socket),
         ]) {
             if (host.isOpen()) {

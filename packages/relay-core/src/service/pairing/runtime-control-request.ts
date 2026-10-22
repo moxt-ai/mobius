@@ -71,6 +71,15 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { SessionRuntimeError } from "../../entity/do/session.ts";
 
+export interface RuntimeReplyConnection {
+    readonly readyState: number;
+    readonly accept: () => void;
+    readonly send: (message: string) => void;
+    readonly close: (code?: number, reason?: string) => void;
+    readonly addEventListener: EventTarget["addEventListener"];
+    readonly removeEventListener: EventTarget["removeEventListener"];
+}
+
 export type RuntimeControlCommand =
     | RuntimeDiagnosticsRequest
     | RuntimePingCommand
@@ -249,11 +258,16 @@ export interface RuntimeFileStream {
 }
 
 export async function requestRuntimeFile(
-    socket: WebSocket,
+    socket: RuntimeReplyConnection,
     command: FileReadCommand,
     signal: AbortSignal,
 ): Promise<RuntimeFileStream> {
-    const deadline = AbortSignal.any([signal, AbortSignal.timeout(120000)]);
+    const timeout = new AbortController();
+    const timer = setTimeout(
+        () => timeout.abort(new DOMException("Runtime request timed out", "TimeoutError")),
+        120_000,
+    );
+    const deadline = AbortSignal.any([signal, timeout.signal]);
     let settleFinished = () => {};
     const finished = new Promise<void>((resolve) => {
         settleFinished = resolve;
@@ -271,6 +285,7 @@ export async function requestRuntimeFile(
                 return;
             }
             transferFinished = true;
+            clearTimeout(timer);
             cleanup();
             socket.close(1000, "Operation finished");
             settleFinished();
@@ -288,7 +303,10 @@ export async function requestRuntimeFile(
         };
         const onClose = (): void => fail(new SessionRuntimeError("runtime_offline", "The Runtime connection closed"));
         const onAbort = (): void => fail(deadline.reason);
-        const onMessage = (event: MessageEvent): void => {
+        const onMessage = (event: Event): void => {
+            if (!(event instanceof MessageEvent)) {
+                return;
+            }
             try {
                 if (typeof event.data !== "string") {
                     return;
@@ -400,18 +418,26 @@ export async function requestRuntimeFile(
 }
 
 export async function requestRuntimeAgentSettings(
-    socket: WebSocket,
+    socket: RuntimeReplyConnection,
     command: AgentSettingsDiscoverCommand,
     signal: AbortSignal,
 ): Promise<AgentSettingsDiscoveredEvent> {
-    const deadline = AbortSignal.any([signal, AbortSignal.timeout(120000)]);
+    const timeout = new AbortController();
+    const timer = setTimeout(
+        () => timeout.abort(new DOMException("Runtime request timed out", "TimeoutError")),
+        120_000,
+    );
+    const deadline = AbortSignal.any([signal, timeout.signal]);
     let cleanup = () => {};
     try {
         deadline.throwIfAborted();
         return await new Promise<AgentSettingsDiscoveredEvent>((resolve, reject) => {
             const onClose = () => reject(new SessionRuntimeError("runtime_offline", "The Runtime connection closed"));
             const onAbort = () => reject(deadline.reason);
-            const onMessage = (event: MessageEvent) => {
+            const onMessage = (event: Event) => {
+                if (!(event instanceof MessageEvent)) {
+                    return;
+                }
                 try {
                     if (typeof event.data !== "string") {
                         return;
@@ -459,17 +485,23 @@ export async function requestRuntimeAgentSettings(
             socket.send(encodeServiceToDaemonMessage(command));
         });
     } finally {
+        clearTimeout(timer);
         cleanup();
         socket.close(1000, "Operation finished");
     }
 }
 
 export async function requestRuntimeControl(
-    socket: WebSocket,
+    socket: RuntimeReplyConnection,
     command: RuntimeControlCommand,
     signal: AbortSignal,
 ): Promise<RuntimeControlResult> {
-    const deadline = AbortSignal.any([signal, AbortSignal.timeout(120000)]);
+    const timeout = new AbortController();
+    const timer = setTimeout(
+        () => timeout.abort(new DOMException("Runtime request timed out", "TimeoutError")),
+        120_000,
+    );
+    const deadline = AbortSignal.any([signal, timeout.signal]);
     const requestId =
         command.kind === "session.prompt" ||
         command.kind === "session.prompt.disposition" ||
@@ -495,7 +527,10 @@ export async function requestRuntimeControl(
                 }
                 reject(deadline.reason);
             };
-            const onMessage = (event: MessageEvent) => {
+            const onMessage = (event: Event) => {
+                if (!(event instanceof MessageEvent)) {
+                    return;
+                }
                 try {
                     if (typeof event.data !== "string") {
                         return;
@@ -614,24 +649,33 @@ export async function requestRuntimeControl(
             );
         });
     } finally {
+        clearTimeout(timer);
         cleanup();
         socket.close(1000, "Operation finished");
     }
 }
 
 export async function requestRuntimeWorkspace(
-    socket: WebSocket,
+    socket: RuntimeReplyConnection,
     command: WorkspaceListCommand,
     signal: AbortSignal,
 ): Promise<WorkspaceEntriesEvent> {
-    const deadline = AbortSignal.any([signal, AbortSignal.timeout(120000)]);
+    const timeout = new AbortController();
+    const timer = setTimeout(
+        () => timeout.abort(new DOMException("Runtime request timed out", "TimeoutError")),
+        120_000,
+    );
+    const deadline = AbortSignal.any([signal, timeout.signal]);
     let cleanup = () => {};
     try {
         deadline.throwIfAborted();
         return await new Promise<WorkspaceEntriesEvent>((resolve, reject) => {
             const onClose = () => reject(new SessionRuntimeError("runtime_offline", "The Runtime connection closed"));
             const onAbort = () => reject(deadline.reason);
-            const onMessage = (event: MessageEvent) => {
+            const onMessage = (event: Event) => {
+                if (!(event instanceof MessageEvent)) {
+                    return;
+                }
                 try {
                     if (typeof event.data !== "string") {
                         return;
@@ -677,6 +721,7 @@ export async function requestRuntimeWorkspace(
             socket.send(encodeServiceToDaemonMessage(command));
         });
     } finally {
+        clearTimeout(timer);
         cleanup();
         socket.close(1000, "Operation finished");
     }
