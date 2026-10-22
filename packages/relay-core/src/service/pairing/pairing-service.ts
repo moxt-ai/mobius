@@ -100,13 +100,14 @@ export class PairingService {
             this.#runtimeOperations === undefined ? AbortSignal.any([signal, AbortSignal.timeout(120000)]) : signal;
         if (this.#runtimeOperations !== undefined) {
             const permission =
-                (command.kind === "native.session.request" && command.action === "list") ||
-                command.kind === "session.list" ||
-                command.kind === "session.query" ||
-                command.kind === "session.preview-history.page.load" ||
                 command.kind === "session.live-history.v2.page.load"
-                    ? ProjectPermission.RuntimeRead
-                    : ProjectPermission.SessionWrite;
+                    ? ProjectPermission.SessionRead
+                    : (command.kind === "native.session.request" && command.action === "list") ||
+                        command.kind === "session.list" ||
+                        command.kind === "session.query" ||
+                        command.kind === "session.preview-history.page.load"
+                      ? ProjectPermission.RuntimeRead
+                      : ProjectPermission.SessionWrite;
             const access = await this.#pairings.authorizeProject(projectId, token, permission, deadline);
             return await this.#runtimeOperations.requestProjectScopeControl(access.scope, runtimeId, command, deadline);
         }
@@ -118,14 +119,15 @@ export class PairingService {
                     projectId,
                     runtimeId,
                     token,
-                    (command.kind === "native.session.request" && command.action === "list") ||
-                        command.kind === "session.list" ||
-                        command.kind === "session.query" ||
-                        command.kind === "session.config.read" ||
-                        command.kind === "session.preview-history.page.load" ||
-                        command.kind === "session.live-history.v2.page.load"
-                        ? ProjectPermission.RuntimeRead
-                        : ProjectPermission.SessionWrite,
+                    command.kind === "session.live-history.v2.page.load"
+                        ? ProjectPermission.SessionRead
+                        : (command.kind === "native.session.request" && command.action === "list") ||
+                            command.kind === "session.list" ||
+                            command.kind === "session.query" ||
+                            command.kind === "session.config.read" ||
+                            command.kind === "session.preview-history.page.load"
+                          ? ProjectPermission.RuntimeRead
+                          : ProjectPermission.SessionWrite,
                     deadline,
                 ),
         );
