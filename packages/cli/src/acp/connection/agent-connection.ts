@@ -178,7 +178,6 @@ export class AgentConnection {
     };
 
     readonly race = async <T>(operation: Promise<T>, exitMessage: string, signal: AbortSignal): Promise<T> => {
-        signal.throwIfAborted();
         let removeAbortListener = (): void => {};
         const aborted = new Promise<never>((_resolve, reject) => {
             const rejectAbort = (): void => {
@@ -188,16 +187,21 @@ export class AgentConnection {
             removeAbortListener = (): void => {
                 signal.removeEventListener("abort", rejectAbort);
             };
+            if (signal.aborted) {
+                rejectAbort();
+            }
         });
         try {
             try {
                 return await Promise.race([
+                    // The caller has already started operation. Even when cancellation
+                    // won before entry, observe its later rejection during endpoint cleanup.
+                    aborted,
                     operation,
                     this.termination.then((termination) => {
                         const cause = acpEndpointTerminationError(termination);
                         throw new AcpExecutionError(exitMessage, { cause }, cause.code);
                     }),
-                    aborted,
                 ]);
             } catch (error) {
                 signal.throwIfAborted();
