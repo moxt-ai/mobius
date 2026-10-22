@@ -2433,6 +2433,48 @@ describe.sequential("Platform Turn submission", () => {
         }
     });
 
+    // @no-uc: Compatibility; malformed control requests must be distinguishable from retryable server failures.
+    it.each([
+        { label: "missing cancellation key", path: "/turns/app-command/cancel", method: "POST", body: {} },
+        {
+            label: "numeric cancellation key",
+            path: "/turns/app-command/cancel",
+            method: "POST",
+            body: { idempotencyKey: 123 },
+        },
+        {
+            label: "unsupported queue disposition",
+            path: "/turns/app-command/disposition",
+            method: "PUT",
+            body: { disposition: "queue" },
+        },
+        {
+            label: "invalid permission decision",
+            path: "/interactions/app-interaction/responses",
+            method: "POST",
+            body: { kind: "permission", responderId: "member-1", outcome: "unknown", optionId: "allow_once" },
+        },
+        {
+            label: "invalid elicitation decision",
+            path: "/interactions/app-interaction/responses",
+            method: "POST",
+            body: { kind: "elicitation", responderId: "member-1", action: "unknown", content: "" },
+        },
+        { label: "empty event page", path: "/events-v2?limit=0", method: "GET" },
+        { label: "empty event cursor", path: "/events-v2?cursor=", method: "GET" },
+        { label: "unknown event omission", path: "/events-v2?omit=unknown", method: "GET" },
+        { label: "malformed Runtime target", path: "/events-v2", method: "GET", runtimeId: "invalid%24runtime" },
+    ])("App access reports $label as an invalid request", async (operation) => {
+        const runtime = await connectRuntimeDaemon("app-invalid-request");
+        try {
+            expect(await responseJson(await runtime.appSessionRequest(operation.path, operation), 400)).toMatchObject({
+                error: { code: "invalid_request" },
+            });
+        } finally {
+            runtime.daemon.close(1000, "Test complete");
+        }
+    });
+
     // @no-uc: Technical regression; independent Durable Object clocks must not reject newly issued credentials.
     it.each([900, 30_000])(
         "accepts a Session credential issued %i milliseconds ahead of RuntimeRelay",

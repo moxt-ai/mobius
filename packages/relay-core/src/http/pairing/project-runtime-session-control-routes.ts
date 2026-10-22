@@ -34,10 +34,20 @@ const interactionResponse = v.variant("kind", [
     }),
 ]);
 
+function validated<TSchema extends v.GenericSchema>(schema: TSchema, value: unknown): v.InferOutput<TSchema> {
+    const result = v.safeParse(schema, value);
+    if (!result.success) {
+        throw new PairingDirectoryError("invalid_request", "The Runtime Session request is invalid", {
+            cause: result.issues,
+        });
+    }
+    return result.output;
+}
+
 async function requestControl(context: Context<RelayHttpEnvironment>, command: RuntimeControlCommand) {
     return await context.env.services.runtimePairings.requestControl(
-        v.parse(identifier, context.req.param("projectId")),
-        v.parse(identifier, context.req.param("runtimeId")),
+        validated(identifier, context.req.param("projectId")),
+        validated(identifier, context.req.param("runtimeId")),
         bearerToken(context.req.raw),
         command,
         context.req.raw.signal,
@@ -52,7 +62,7 @@ export function createProjectRuntimeSessionControlRoutes() {
             "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/turns/:turnId/cancel",
             bodyParser<RelayHttpEnvironment>(),
             async (context) => {
-                const body = v.parse(cancellation, context.req.valid("json"));
+                const body = validated(cancellation, context.req.valid("json"));
                 const sessionId = validateIdentifier(context.req.param("sessionId"), "session_id");
                 const turnId = validateIdentifier(context.req.param("turnId"), "turn_id");
                 const completed = await requestControl(
@@ -81,7 +91,7 @@ export function createProjectRuntimeSessionControlRoutes() {
             "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/turns/:turnId/disposition",
             bodyParser<RelayHttpEnvironment>(),
             async (context) => {
-                const body = v.parse(disposition, context.req.valid("json"));
+                const body = validated(disposition, context.req.valid("json"));
                 const sessionId = validateIdentifier(context.req.param("sessionId"), "session_id");
                 const turnId = validateIdentifier(context.req.param("turnId"), "turn_id");
                 const started = await requestControl(
@@ -106,7 +116,7 @@ export function createProjectRuntimeSessionControlRoutes() {
             "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/interactions/:interactionId/responses",
             bodyParser<RelayHttpEnvironment>(),
             async (context) => {
-                const body = v.parse(interactionResponse, context.req.valid("json"));
+                const body = validated(interactionResponse, context.req.valid("json"));
                 const sessionId = validateIdentifier(context.req.param("sessionId"), "session_id");
                 const interactionId = validateIdentifier(context.req.param("interactionId"), "interaction_id");
                 const command =
@@ -145,15 +155,15 @@ export function createProjectRuntimeSessionControlRoutes() {
                         cursor:
                             cursor === undefined
                                 ? null
-                                : v.parse(v.pipe(v.string(), v.minLength(1), v.maxLength(512)), cursor),
-                        eventLimit: v.parse(
+                                : validated(v.pipe(v.string(), v.minLength(1), v.maxLength(512)), cursor),
+                        eventLimit: validated(
                             v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(10_000)),
                             Number(context.req.query("limit") ?? "50"),
                         ),
                         kind: "session.live-history.v2.page.load",
                         ...(omit === undefined
                             ? {}
-                            : { omit: v.parse(v.pipe(v.array(v.literal("agent-reasoning")), v.maxLength(1)), omit) }),
+                            : { omit: validated(v.pipe(v.array(v.literal("agent-reasoning")), v.maxLength(1)), omit) }),
                         requestId: crypto.randomUUID(),
                         sessionId,
                     }),
