@@ -86,6 +86,7 @@ export class AgentRuntimeManager {
     readonly #agentSettingsObserver = new NullAcpSessionObserver();
     readonly #nativeOperations = new Set<string>();
     readonly #sessionClosures = new Map<string, Promise<void>>();
+    readonly #sessionRetirements = new Map<string, Promise<void>>();
     /** Sessions that were closed and not reopened since. Only a prepare or restore of the Session reopens it. */
     readonly #closedSessions = new Set<string>();
     readonly #store: AcpSessionStore;
@@ -120,7 +121,7 @@ export class AgentRuntimeManager {
         readonly maxProcesses: number | null;
     }) {
         this.#observer = observer;
-        this.#processes = new AgentProcessPool(maxProcesses ?? undefined);
+        this.#processes = new AgentProcessPool(maxProcesses ?? undefined, timer);
         this.#store = store;
         this.#adapters = adapters;
         this.#sessionIdentity = sessionIdentity;
@@ -144,6 +145,9 @@ export class AgentRuntimeManager {
     };
 
     #isNativeSessionOperationActive(sessionId: string): boolean {
+        if (this.#nativeOperations.size === 0) {
+            return false;
+        }
         const stored = this.#store.read(sessionId);
         return (
             stored instanceof FoundAcpStoredSession &&
@@ -158,6 +162,7 @@ export class AgentRuntimeManager {
                 this.#executionProcesses.isBusy(sessionId) ||
                 this.#isNativeSessionOperationActive(sessionId),
             retire: (runtime) => this.#retireSessionProcess(sessionId, runtime, () => runtime.close()),
+            retireIdle: (runtime) => this.#stopSessionProcess(sessionId, runtime),
         };
     }
 
@@ -180,12 +185,20 @@ export class AgentRuntimeManager {
     }
 
     /**
-     * Stops the process of a Session that is being closed. Unlike retiring it, this keeps the stored Session,
-     * so the closed Session stays listed with its title and settings and can be reopened.
+     * Releases a closed or idle Session's process while keeping its title, settings and native
+     * identity available for the next preparation. This does not mark the Session closed.
      */
     async #stopSessionProcess(sessionId: string, runtime: AgentSession): Promise<void> {
         this.#executionProcesses.detach(sessionId, runtime);
-        await this.#processes.retire(runtime, () => runtime.close());
+        const retirement = this.#processes.retire(runtime, () => runtime.close());
+        this.#sessionRetirements.set(sessionId, retirement);
+        try {
+            await retirement;
+        } finally {
+            if (this.#sessionRetirements.get(sessionId) === retirement) {
+                this.#sessionRetirements.delete(sessionId);
+            }
+        }
     }
 
     #isKnownSession(sessionId: string): boolean {
@@ -219,6 +232,11 @@ export class AgentRuntimeManager {
         options: AcpPrepareOptions,
         start: () => Promise<AgentSession>,
     ): Promise<AgentSession> {
+        const retiring = this.#sessionRetirements.get(options.sessionId);
+        if (retiring !== undefined) {
+            // The old process may still own the native writer while graceful teardown runs.
+            await waitForSharedOperation(retiring, options.signal);
+        }
         const runtime = await this.#processes.startRetained(options.signal, start, this.#retention(options.sessionId));
         this.#executionProcesses.retain(options.sessionId, runtime);
         return runtime;
@@ -341,68 +359,70 @@ export class AgentRuntimeManager {
         closed: ClosedSessionHandling,
         metrics: OperationMetrics = unmeasuredOperationMetrics,
     ): Promise<AcpPreparedSession> {
-        return await this.#operations.run(options, async (options) => {
-            const closing = this.#sessionClosures.get(options.sessionId);
-            if (closing !== undefined) {
-                await waitForSharedOperation(closing, options.signal);
-            }
-            if (closed === "reopen") {
-                // Preparing or restoring a Session is how a client reopens it.
-                this.#closedSessions.delete(options.sessionId);
-            } else {
-                this.#assertOpen(options.sessionId);
-            }
-            const stored = metrics.measureSync("session-state-read", () => this.#store.read(options.sessionId));
+        return await this.#executionProcesses.use(options.sessionId, async () =>
+            this.#operations.run(options, async (options) => {
+                const closing = this.#sessionClosures.get(options.sessionId);
+                if (closing !== undefined) {
+                    await waitForSharedOperation(closing, options.signal);
+                }
+                if (closed === "reopen") {
+                    // Preparing or restoring a Session is how a client reopens it.
+                    this.#closedSessions.delete(options.sessionId);
+                } else {
+                    this.#assertOpen(options.sessionId);
+                }
+                const stored = metrics.measureSync("session-state-read", () => this.#store.read(options.sessionId));
 
-            if (
-                stored instanceof FoundAcpStoredSession &&
-                this.#nativeOperations.has(`${stored.session.agentId}:${stored.session.nativeSessionId}`)
-            ) {
-                throw new AcpExecutionError("The native session is being managed", {}, "session_busy");
-            }
-            const pending = this.#executionProcesses.pending(options.sessionId);
-            if (pending !== undefined) {
-                const runtime = await metrics.measure(
-                    "session-preparation-wait",
-                    async () => await waitForSharedOperation(pending, options.signal),
-                );
-                if (runtime.belongsTo(options.agent.id, options.cwd, options.additionalDirectories)) {
-                    this.#executionProcesses.touch(options.sessionId, runtime);
-                    if (recovery.kind === "history-required") {
-                        await metrics.measure(
-                            "session-load",
-                            async () => await runtime.ensureHistoryLoaded(options.signal),
+                if (
+                    stored instanceof FoundAcpStoredSession &&
+                    this.#nativeOperations.has(`${stored.session.agentId}:${stored.session.nativeSessionId}`)
+                ) {
+                    throw new AcpExecutionError("The native session is being managed", {}, "session_busy");
+                }
+                const pending = this.#executionProcesses.pending(options.sessionId);
+                if (pending !== undefined) {
+                    const runtime = await metrics.measure(
+                        "session-preparation-wait",
+                        async () => await waitForSharedOperation(pending, options.signal),
+                    );
+                    if (runtime.belongsTo(options.agent.id, options.cwd, options.additionalDirectories)) {
+                        this.#executionProcesses.touch(options.sessionId, runtime);
+                        if (recovery.kind === "history-required") {
+                            await metrics.measure(
+                                "session-load",
+                                async () => await runtime.ensureHistoryLoaded(options.signal),
+                            );
+                        }
+                        return runtime.prepared();
+                    }
+                    return await this.#prepareSession(options, recovery, closed, metrics);
+                }
+                const existing = this.#executionProcesses.get(options.sessionId);
+                if (existing !== undefined) {
+                    if (existing.belongsTo(options.agent.id, options.cwd, options.additionalDirectories)) {
+                        this.#executionProcesses.touch(options.sessionId, existing);
+                        if (recovery.kind === "history-required") {
+                            await metrics.measure(
+                                "session-load",
+                                async () => await existing.ensureHistoryLoaded(options.signal),
+                            );
+                        }
+                        return existing.prepared();
+                    }
+                    if (!existing.canRebind()) {
+                        throw new AcpExecutionError(
+                            "The agent or workspace cannot change after a conversation has started",
+                            {},
+                            "session_identity_mismatch",
                         );
                     }
+                    const runtime = await this.#replacePreparation(existing, options, recovery, metrics);
                     return runtime.prepared();
                 }
-                return await this.#prepareSession(options, recovery, closed, metrics);
-            }
-            const existing = this.#executionProcesses.get(options.sessionId);
-            if (existing !== undefined) {
-                if (existing.belongsTo(options.agent.id, options.cwd, options.additionalDirectories)) {
-                    this.#executionProcesses.touch(options.sessionId, existing);
-                    if (recovery.kind === "history-required") {
-                        await metrics.measure(
-                            "session-load",
-                            async () => await existing.ensureHistoryLoaded(options.signal),
-                        );
-                    }
-                    return existing.prepared();
-                }
-                if (!existing.canRebind()) {
-                    throw new AcpExecutionError(
-                        "The agent or workspace cannot change after a conversation has started",
-                        {},
-                        "session_identity_mismatch",
-                    );
-                }
-                const runtime = await this.#replacePreparation(existing, options, recovery, metrics);
+                const runtime = await this.#startPreparation(options, recovery, metrics);
                 return runtime.prepared();
-            }
-            const runtime = await this.#startPreparation(options, recovery, metrics);
-            return runtime.prepared();
-        });
+            }),
+        );
     }
 
     readonly prepareSession = async (
@@ -556,33 +576,35 @@ export class AgentRuntimeManager {
         title: string,
         signal: AbortSignal,
     ): Promise<{ readonly title: string; readonly updatedAt: string }> =>
-        await this.#operations.run({ sessionId, signal }, async (options) => {
-            this.#assertOpen(options.sessionId);
-            const runtime = this.#executionProcesses.get(options.sessionId);
-            if (runtime !== undefined) {
-                return await runtime.renameSession(title, options.signal);
-            }
-            const stored = this.#store.read(options.sessionId);
-            if (!(stored instanceof FoundAcpStoredSession)) {
-                throw new AcpExecutionError("The Session was not found", {}, "session_not_found");
-            }
-            const normalized = title.slice(0, 500);
-            const updatedAt = new Date().toISOString();
-            this.#store.write(
-                new AcpStoredSession(
-                    stored.session.sessionId,
-                    stored.session.agentId,
-                    stored.session.nativeSessionId,
-                    stored.session.cwd,
-                    stored.session.additionalDirectories,
-                    stored.session.prompted,
-                    normalized,
-                    updatedAt,
-                    stored.session.configurations,
-                ),
-            );
-            return { title: normalized, updatedAt };
-        });
+        await this.#executionProcesses.use(sessionId, async () =>
+            this.#operations.run({ sessionId, signal }, async (options) => {
+                this.#assertOpen(options.sessionId);
+                const runtime = this.#executionProcesses.get(options.sessionId);
+                if (runtime !== undefined) {
+                    return await runtime.renameSession(title, options.signal);
+                }
+                const stored = this.#store.read(options.sessionId);
+                if (!(stored instanceof FoundAcpStoredSession)) {
+                    throw new AcpExecutionError("The Session was not found", {}, "session_not_found");
+                }
+                const normalized = title.slice(0, 500);
+                const updatedAt = new Date().toISOString();
+                this.#store.write(
+                    new AcpStoredSession(
+                        stored.session.sessionId,
+                        stored.session.agentId,
+                        stored.session.nativeSessionId,
+                        stored.session.cwd,
+                        stored.session.additionalDirectories,
+                        stored.session.prompted,
+                        normalized,
+                        updatedAt,
+                        stored.session.configurations,
+                    ),
+                );
+                return { title: normalized, updatedAt };
+            }),
+        );
 
     readonly cancelPrompt = async (sessionId: string): Promise<void> => {
         await this.#executions.cancel(sessionId, async () => {
@@ -745,6 +767,10 @@ export class AgentRuntimeManager {
             // Announce first: clients must learn of the closing while its process is still going down.
             this.#announceClosed(options.sessionId, "This Session was closed on request.");
             const release = (async (): Promise<void> => {
+                const retiring = this.#sessionRetirements.get(options.sessionId);
+                if (retiring !== undefined) {
+                    await retiring;
+                }
                 const pending = this.#executionProcesses.pending(options.sessionId);
                 const runtime = pending === undefined ? this.#executionProcesses.get(options.sessionId) : await pending;
                 if (runtime !== undefined) {
@@ -774,8 +800,10 @@ export class AgentRuntimeManager {
             await waitForSharedOperation(completion, options.signal);
         });
 
-    readonly close = async (): Promise<void> =>
-        this.#operations.close(async () => {
+    readonly close = async (): Promise<void> => {
+        const retiring = this.#processes.stopIdleReclamation();
+        await this.#operations.close(async () => {
+            await retiring;
             const sessions = [...this.#executionProcesses.entries()];
             await Promise.all([
                 ...sessions.map(
@@ -786,6 +814,7 @@ export class AgentRuntimeManager {
                 this.#queryProcesses.close(),
             ]);
         });
+    };
 
     readonly findSessions = (sessionIds: readonly string[]) =>
         sessionIds.flatMap((sessionId) => {
@@ -906,6 +935,7 @@ export class AgentRuntimeManager {
                 );
             }
             this.#nativeOperations.add(key);
+            this.#processes.notifyChanged();
             try {
                 const context: AdapterContext = {
                     options,
@@ -924,6 +954,7 @@ export class AgentRuntimeManager {
                 );
             } finally {
                 this.#nativeOperations.delete(key);
+                this.#processes.notifyChanged();
             }
         });
 

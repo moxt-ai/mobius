@@ -53,6 +53,7 @@ export class AgentQueryProcesses {
             {
                 isBusy: () => this.#processesByQuery.isBusy(options.sessionId),
                 retire: (runtime) => this.retire(options.sessionId, runtime),
+                retireIdle: (runtime) => this.retire(options.sessionId, runtime),
             },
         );
         this.#processesByQuery.retain(options.sessionId, runtime);
