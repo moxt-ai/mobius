@@ -8,9 +8,8 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { AgentRuntimeManager, acpAdapters, createWritableAcpStream } from "../../src/acp/agent-runtime-manager.ts";
+import { AgentRuntimeManager, createWritableAcpStream } from "../../src/acp/agent-runtime-manager.ts";
 import { AcpContentExternalizer } from "../../src/acp/external-content/acp-content-externalizer.ts";
-import { UnretainedExternalContentStore } from "../../src/acp/external-content/local-external-content-store.ts";
 import { NullAcpSessionObserver } from "../../src/acp/session-contracts.ts";
 import { CachedAcpSessionEventStore } from "../../src/acp/session-event-store.ts";
 import { SqliteSessionLiveEventPosition } from "../../src/acp/session-live-event-position.ts";
@@ -20,6 +19,8 @@ import { AccumulatingOperationMetrics } from "../../src/infra/operation-metrics.
 import { LocalAgentDefinition } from "../../src/runtime/config.ts";
 import { systemTimer } from "../../src/runtime/relay/timer.ts";
 import { openAcpSessionDatabase, openSessionEventCacheDatabase } from "../../src/storage/local-databases.ts";
+import { acpAdapters } from "../support/acp-adapters.ts";
+import { UnretainedExternalContentStore } from "../support/unretained-external-content-store.ts";
 import { RecordingObserver } from "./acp-feature-fixture.ts";
 
 const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
