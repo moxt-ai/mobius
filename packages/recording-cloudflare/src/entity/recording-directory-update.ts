@@ -1,13 +1,14 @@
-import { isIdentifier } from "@moxt-ai/mobius-sdk/protocol";
+import { isDirectoryIdentifier, isIdentifier } from "@moxt-ai/mobius-sdk/protocol";
 import { z } from "zod";
 
 const identifier = z.string().refine((value: string): boolean => isIdentifier(value));
+const directoryIdentifier = z.string().refine(isDirectoryIdentifier);
 const recordedAt = z.iso.datetime({ offset: true });
 const context = z
     .object({
         agentId: identifier,
-        directoryId: z.string().min(1).max(2048),
-        additionalDirectoryIds: z.array(identifier).max(16).readonly(),
+        directoryId: directoryIdentifier,
+        additionalDirectoryIds: z.array(directoryIdentifier).max(16).readonly(),
     })
     .readonly();
 export const directoryOperationSchema = z.discriminatedUnion("kind", [

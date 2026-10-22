@@ -1,5 +1,5 @@
 import {
-    isIdentifier,
+    isDirectoryIdentifier,
     type SessionRecordingDirectory,
     type SessionRecordingSummary,
 } from "@moxt-ai/mobius-sdk/protocol";
@@ -55,7 +55,7 @@ export class RecordingDirectoryStorage {
 }
 function decodeSummary(row: typeof recordingSessionSummary.$inferSelect): SessionRecordingSummary {
     const directories: unknown = JSON.parse(row.additionalDirectoryIdsJson);
-    if (!Array.isArray(directories) || !directories.every(isIdentifier)) {
+    if (!Array.isArray(directories) || !directories.every(isDirectoryIdentifier)) {
         throw new Error("Invalid recorded directory identifiers");
     }
     return {

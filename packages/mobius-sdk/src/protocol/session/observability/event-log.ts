@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DIRECTORY_IDENTIFIER } from "../../shared/directory.ts";
 import { boundedJsonSchema, toolCallLocationSchema } from "../../shared/tool-input.ts";
 
 export { boundedJsonSchema, toolCallLocationSchema } from "../../shared/tool-input.ts";
@@ -324,8 +325,8 @@ export interface PromptExecutionContext {
 const promptExecutionContextSchema: z.ZodType<PromptExecutionContext> = z
     .object({
         agentId: identifier,
-        directoryId: shortString,
-        additionalDirectoryIds: z.array(identifier).max(16).readonly(),
+        directoryId: DIRECTORY_IDENTIFIER,
+        additionalDirectoryIds: z.array(DIRECTORY_IDENTIFIER).max(16).readonly(),
     })
     .readonly();
 

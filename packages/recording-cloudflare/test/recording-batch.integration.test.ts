@@ -1,5 +1,9 @@
 import { env } from "cloudflare:workers";
-import { encodeSessionRecordingWrite, type SessionLiveEvent } from "@moxt-ai/mobius-sdk/protocol";
+import {
+    decodeSessionRecordingDirectory,
+    encodeSessionRecordingWrite,
+    type SessionLiveEvent,
+} from "@moxt-ai/mobius-sdk/protocol";
 import { describe, expect, it } from "vitest";
 import { createRecordingWorker } from "../src/worker.ts";
 
@@ -55,12 +59,12 @@ async function write(
 }
 
 async function directory(projectId: string, runtimeId: string) {
-    return await (
-        await worker.fetch(
-            new Request(`https://recording.test/v1/projects/${projectId}/runtimes/${runtimeId}/sessions`),
-            env,
-        )
-    ).json();
+    const response = await worker.fetch(
+        new Request(`https://recording.test/v1/projects/${projectId}/runtimes/${runtimeId}/sessions`),
+        env,
+    );
+    expect(response.status).toBe(200);
+    return decodeSessionRecordingDirectory(await response.text());
 }
 
 // @no-uc: Performance; bounded multi-Session ingestion must preserve each history and directory lifecycle.
@@ -168,3 +172,39 @@ describe("Recording multi-Session batches", () => {
         });
     });
 });
+
+it.each(["session-events", "session-event-batches"])(
+    "Given long primary and additional directory references, When %s records a turn, Then the directory and history retain the complete references",
+    async (endpoint) => {
+        const id = `long-${endpoint}`;
+        const bytes = new TextEncoder().encode(`/project/${"\u00e9/".repeat(700)}`);
+        const directoryId = `path-${btoa(String.fromCharCode(...bytes))
+            .replaceAll("+", "-")
+            .replaceAll("/", "_")
+            .replace(/=+$/u, "")}`;
+        const additionalDirectoryIds = [`${directoryId}YQ`];
+        expect(directoryId.length).toBeGreaterThan(2048);
+        const longContext = { agentId: "codex", directoryId, additionalDirectoryIds };
+        const event: SessionLiveEvent = {
+            ...requested(id),
+            type: "lifecycle-metadata",
+            payload: {
+                kind: "prompt.requested",
+                commandId: `${id}-turn`,
+                content: [{ type: "text", text: "Long workspace recording" }],
+                context: longContext,
+            },
+        };
+        const response = await write(id, "long-runtime", [event, completed(id, 2)], endpoint);
+        expect(response.status).toBe(201);
+        expect(await directory(id, "long-runtime")).toMatchObject({
+            sessions: [{ ...longContext, sessionId: id, status: "idle", title: "Long workspace recording" }],
+        });
+        const history = await worker.fetch(
+            new Request(`https://recording.test/v1/projects/${id}/runtimes/long-runtime/sessions/${id}/events`),
+            env,
+        );
+        expect(history.status).toBe(200);
+        expect(await history.json()).toMatchObject({ events: [event, completed(id, 2)] });
+    },
+);
