@@ -1,4 +1,4 @@
-import { evictDurableObject, runInDurableObject } from "cloudflare:test";
+import { abortAllDurableObjects, evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
     DurableObjectDatabaseAdapter,
@@ -9,6 +9,7 @@ import {
 import {
     decodeDaemonToServiceMessage,
     decodeServiceToDaemonMessage,
+    decodeSessionAccessCredential,
     decodeSessionEventEnvelope,
     decodeSessionPromptCommand,
     decodeSessionRecordingHistory,
@@ -28,7 +29,7 @@ import {
     encodeSessionStatusChangedEvent,
     MOBIUS_API_PREFIX,
 } from "@moxt-ai/mobius-sdk/protocol";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDurableObjectDependencies } from "../../relay-core/src/di/create-durable-object-dependencies.ts";
 import { createTestMobiusPlatformApp } from "../../test-support/src/app.ts";
 import { FakeClerk } from "../../test-support/src/clerk.ts";
@@ -228,6 +229,10 @@ beforeEach(() => {
 
 afterEach(() => {
     vi.useRealTimers();
+});
+
+afterAll(async () => {
+    await abortAllDurableObjects();
 });
 
 describe.sequential("Platform Session-only boundary", () => {
@@ -2011,6 +2016,34 @@ async function connectRuntimeDaemon(slug: string) {
         201,
     );
     return {
+        rewriteCredentialLifetime: async (lifetimeMilliseconds: number) => {
+            // Sign adversarial claims outside the SDK issuer, which refuses invalid lifetimes.
+            const decoded = decodeSessionAccessCredential(text(sessionAccess, "credential"));
+            const claims = {
+                ...decoded.claims,
+                expiresAtEpochMilliseconds: decoded.claims.issuedAtEpochMilliseconds + lifetimeMilliseconds,
+            };
+            const encode = (bytes: Uint8Array) =>
+                btoa(String.fromCharCode(...bytes))
+                    .replaceAll("+", "-")
+                    .replaceAll("/", "_")
+                    .replace(/=+$/u, "");
+            const payload = encode(new TextEncoder().encode(JSON.stringify(claims)));
+            const signedValue = `msession_${decoded.publicCredentialId}_${payload}`;
+            const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(appCredential));
+            const secretDigest = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(
+                "",
+            );
+            const key = await crypto.subtle.importKey(
+                "raw",
+                new TextEncoder().encode(secretDigest),
+                { hash: "SHA-256", name: "HMAC" },
+                false,
+                ["sign"],
+            );
+            const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(signedValue));
+            return `${signedValue}_${encode(new Uint8Array(signature))}`;
+        },
         daemon,
         daemonClosed,
         daemonMessages,
@@ -2135,6 +2168,65 @@ async function connectRuntimeDaemon(slug: string) {
 }
 
 describe.sequential("Platform Turn submission", () => {
+    // @no-uc: Technical regression; independent Durable Object clocks must not reject newly issued credentials.
+    it.each([900, 30_000])(
+        "accepts a Session credential issued %i milliseconds ahead of RuntimeRelay",
+        async (skew) => {
+            const runtime = await connectRuntimeDaemon(`clock-skew-${skew}`);
+            try {
+                vi.setSystemTime(Date.now() - skew);
+                const submitted = runtime.submitRuntimeTurn("skewed-command");
+                const first = await Promise.race([
+                    runtime.daemonMessages.next().then((message) => ({ kind: "command" as const, message })),
+                    submitted.then((response) => ({ kind: "response" as const, response })),
+                ]);
+                if (first.kind === "response") {
+                    throw new Error(
+                        `Expected a daemon command, received ${first.response.status}: ${await first.response.text()}`,
+                    );
+                }
+                expect(decodeServiceToDaemonMessage(first.message)).toMatchObject({
+                    kind: "session.prompt",
+                    commandId: "skewed-command",
+                });
+                runtime.startTurn("skewed-command", "1");
+                expect(await responseJson(await submitted, 200)).toMatchObject({
+                    idempotencyKey: "skewed-command",
+                    state: { kind: "running" },
+                });
+            } finally {
+                runtime.daemon.close(1000, "Test complete");
+            }
+        },
+    );
+    // @no-uc: Technical regression; issuance tolerance must remain bounded and never extend expiry.
+    it.each([
+        { offset: -30_001, code: "project_credential_invalid" },
+        { offset: 900_000, code: "credential_expired" },
+    ])("refuses a credential at verifier offset $offset with $code", async ({ offset, code }) => {
+        const runtime = await connectRuntimeDaemon(`clock-rejected-${Math.abs(offset)}`);
+        try {
+            vi.setSystemTime(Date.now() + offset);
+            expect(await responseJson(await runtime.submitRuntimeTurn("invalid-time"), 401)).toMatchObject({
+                error: { code },
+            });
+        } finally {
+            runtime.daemon.close(1000, "Test complete");
+        }
+    });
+    // @no-uc: Technical regression; future-time tolerance must not admit correctly signed invalid lifetimes.
+    it.each([0, -1, 900_001])("refuses a signed credential with lifetime %i", async (lifetime) => {
+        const runtime = await connectRuntimeDaemon(`invalid-lifetime-${Math.abs(lifetime)}`);
+        try {
+            const credential = await runtime.rewriteCredentialLifetime(lifetime);
+            vi.setSystemTime(Date.now() - 900);
+            expect(
+                await responseJson(await runtime.submitRuntimeTurn("invalid-lifetime", () => credential), 401),
+            ).toMatchObject({ error: { code: "project_credential_invalid" } });
+        } finally {
+            runtime.daemon.close(1000, "Test complete");
+        }
+    });
     it("Given an authorized token for another Project, When it selects an existing Runtime, Then that Runtime refuses the Project mismatch", async () => {
         const owner = await connectRuntimeDaemon("direct-owner");
         const other = await connectRuntimeDaemon("direct-other-project");
@@ -2182,7 +2274,7 @@ describe.sequential("Platform Turn submission", () => {
                     await runtime.submitRuntimeTurn("forged", (credential) => `${credential.slice(0, -6)}AAAAAA`),
                     401,
                 ),
-            ).toMatchObject({ error: { code: "credential_expired" } });
+            ).toMatchObject({ error: { code: "project_credential_invalid" } });
             expect(
                 await responseJson(
                     await runtime.submitRuntimeTurn("wrong-session", (credential) => credential, "different-session"),

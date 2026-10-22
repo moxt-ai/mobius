@@ -5,6 +5,14 @@ import { ProtocolMessageError } from "../../shared/message-codec.ts";
 const APP_CREDENTIAL_PATTERN = /^mapp_([A-Za-z0-9_-]{22})_[A-Za-z0-9_-]{43}$/u;
 const SESSION_ACCESS_PATTERN = /^msession_([A-Za-z0-9_-]{22})_([A-Za-z0-9_-]+)_([A-Za-z0-9_-]{43})$/u;
 const MAXIMUM_LIFETIME_MILLISECONDS = 15 * 60 * 1_000;
+const MAXIMUM_ISSUANCE_CLOCK_SKEW_MILLISECONDS = 30_000;
+
+export class SessionAccessCredentialExpiredError extends ProtocolMessageError {
+    constructor(expiredByMilliseconds: number) {
+        super(`The Session credential expired ${expiredByMilliseconds} milliseconds ago`);
+        this.name = "SessionAccessCredentialExpiredError";
+    }
+}
 
 const claimsSchema = z
     .object({
@@ -52,7 +60,7 @@ function exactBuffer(value: Uint8Array): ArrayBuffer {
 
 async function signingKey(secretDigest: string): Promise<CryptoKey> {
     if (!/^[a-f0-9]{64}$/u.test(secretDigest)) {
-        throw new ProtocolMessageError("The Session credential signing key is invalid");
+        throw new Error("The Session credential signing key is invalid");
     }
     return await crypto.subtle.importKey(
         "raw",
@@ -129,6 +137,9 @@ export async function verifySessionAccessCredential(
     secretDigest: string,
     nowEpochMilliseconds: number,
 ): Promise<SessionAccessClaims> {
+    if (!Number.isSafeInteger(nowEpochMilliseconds) || nowEpochMilliseconds < 0) {
+        throw new RangeError("The Session credential verification time is invalid");
+    }
     const decoded = decodeSessionAccessCredential(credential);
     const valid = await crypto.subtle.verify(
         "HMAC",
@@ -136,15 +147,22 @@ export async function verifySessionAccessCredential(
         decoded.signature,
         new TextEncoder().encode(decoded.signedValue),
     );
-    if (
-        !valid ||
-        !Number.isSafeInteger(nowEpochMilliseconds) ||
-        decoded.claims.issuedAtEpochMilliseconds > nowEpochMilliseconds ||
-        decoded.claims.expiresAtEpochMilliseconds <= nowEpochMilliseconds ||
-        decoded.claims.expiresAtEpochMilliseconds - decoded.claims.issuedAtEpochMilliseconds >
-            MAXIMUM_LIFETIME_MILLISECONDS
-    ) {
-        throw new ProtocolMessageError("The Session credential is invalid or expired");
+    if (!valid) {
+        throw new ProtocolMessageError("The Session credential signature is invalid");
+    }
+    const lifetimeMilliseconds = decoded.claims.expiresAtEpochMilliseconds - decoded.claims.issuedAtEpochMilliseconds;
+    if (lifetimeMilliseconds <= 0 || lifetimeMilliseconds > MAXIMUM_LIFETIME_MILLISECONDS) {
+        throw new ProtocolMessageError("The Session credential lifetime is invalid");
+    }
+    const issuedAheadMilliseconds = decoded.claims.issuedAtEpochMilliseconds - nowEpochMilliseconds;
+    // ProjectDO issues credentials that RuntimeRelay verifies using an independent Worker clock.
+    if (issuedAheadMilliseconds > MAXIMUM_ISSUANCE_CLOCK_SKEW_MILLISECONDS) {
+        throw new ProtocolMessageError(
+            `The Session credential was issued ${issuedAheadMilliseconds} milliseconds ahead of the verifier`,
+        );
+    }
+    if (decoded.claims.expiresAtEpochMilliseconds <= nowEpochMilliseconds) {
+        throw new SessionAccessCredentialExpiredError(nowEpochMilliseconds - decoded.claims.expiresAtEpochMilliseconds);
     }
     return decoded.claims;
 }
