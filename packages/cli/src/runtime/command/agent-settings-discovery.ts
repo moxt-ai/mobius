@@ -4,7 +4,7 @@ import { operationErrorCode, operationErrorMessage } from "../../infra/operation
 import {
     AcpConfigurationValueUnavailableError,
     AcpExecutionError,
-    type AgentRuntimeManager,
+    type SessionManager,
 } from "../../session/manager/session-manager.ts";
 import { discoverAgentSettings } from "../../session/settings/discover-agent-settings.ts";
 import type { WorkspaceDirectoryService } from "../../session/workspace/workspace-directory.ts";
@@ -16,7 +16,7 @@ import { agentSettingsFailureDetails, send } from "./transport.ts";
 interface SettingsDiscoveryDependencies {
     readonly config: RuntimeConfig;
     readonly directories: WorkspaceDirectoryService;
-    readonly sessions: AgentRuntimeManager;
+    readonly sessions: SessionManager;
     readonly diagnostics: RelayConnectionDiagnostics;
     readonly socket: WebSocket;
     readonly signal: AbortSignal;

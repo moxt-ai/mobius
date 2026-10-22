@@ -1,5 +1,5 @@
-import type { AcpNativeEventReplay, AcpPrepareOptions } from "../../session/api/session-api.ts";
-import type { AcpSessionEventStore } from "../../session/history/session-event-store.ts";
+import type { SessionPrepareOptions } from "../../session/api/session-api.ts";
+import type { SessionEventPage, SessionEventStore } from "../../session/history/session-event-store.ts";
 import type { AcpAgentDefinition } from "../agent/agent-definition.ts";
 
 /** What a caller wants to preview from a saved native session. */
@@ -11,14 +11,14 @@ export interface NativeSessionPreviewRequest {
 
 /** Per-preview services an Adapter may use. */
 export interface AdapterContext {
-    readonly options: AcpPrepareOptions;
+    readonly options: SessionPrepareOptions;
     /** The session's event store, for adapters that materialize projected history. */
-    readonly events: AcpSessionEventStore;
+    readonly events: SessionEventStore;
     /**
      * Previews by resuming the native session over ACP `session/load` through a transient
      * agent process. Adapters whose harness replays history only on resume use this.
      */
-    readonly previewThroughAcp: (request: NativeSessionPreviewRequest) => Promise<AcpNativeEventReplay>;
+    readonly previewThroughAcp: (request: NativeSessionPreviewRequest) => Promise<SessionEventPage>;
 }
 
 /**
@@ -30,7 +30,7 @@ export interface Adapter {
     readonly previewSessionEvents: (
         request: NativeSessionPreviewRequest,
         context: AdapterContext,
-    ) => Promise<AcpNativeEventReplay>;
+    ) => Promise<SessionEventPage>;
 }
 
 /** Resolves the adapter that owns a preview for the given agent. */

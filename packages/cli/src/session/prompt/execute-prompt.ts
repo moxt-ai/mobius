@@ -3,8 +3,8 @@ import { operationErrorCode, operationErrorMessage } from "../../infra/operation
 import { resolveCatalogAgent } from "../../runtime/command/registry/session.ts";
 import type { RuntimeConfig } from "../../runtime/config.ts";
 import type { RelayConnectionDiagnostics } from "../../runtime/relay/diagnostics.ts";
-import { AcpExecutionError, type AgentRuntimeManager } from "../manager/session-manager.ts";
-import type { RuntimeOperationState } from "../turn/execution-receipts.ts";
+import { AcpExecutionError, type SessionManager } from "../manager/session-manager.ts";
+import type { ExecutionReceipts } from "../turn/execution-receipts.ts";
 import { resolveSessionDirectories } from "../workspace/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "../workspace/workspace-directory.ts";
 import {
@@ -13,16 +13,16 @@ import {
     assertAppliedSessionConfiguration,
 } from "./apply-session-configuration.ts";
 import { resolvePromptArtifacts } from "./prompt-artifacts.ts";
-import type { RuntimeSessionEventProjection } from "./prompt-lifecycle.ts";
+import type { PromptLifecycle } from "./prompt-lifecycle.ts";
 
 export interface ExecutePromptOptions {
-    readonly operations: RuntimeOperationState;
-    readonly eventProjection: RuntimeSessionEventProjection;
+    readonly operations: ExecutionReceipts;
+    readonly eventProjection: PromptLifecycle;
     readonly command: SessionPromptCommand;
     readonly config: RuntimeConfig;
     readonly diagnostics: RelayConnectionDiagnostics;
     readonly directories: WorkspaceDirectoryService;
-    readonly sessions: AgentRuntimeManager;
+    readonly sessions: SessionManager;
     readonly attemptId: string;
     readonly activateAttempt: () => { readonly epoch: string; readonly sequence: 0 };
     readonly waitForSessionAvailability: (

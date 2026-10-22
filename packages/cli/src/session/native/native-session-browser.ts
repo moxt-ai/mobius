@@ -12,8 +12,8 @@ import {
 import type { NativeSessionInfo } from "../../acp/protocol/native-session.ts";
 import { nativeSessionIdSchema } from "../../acp/protocol/native-session.ts";
 import type { RuntimeConfig } from "../../runtime/config.ts";
-import { AcpExecutionError, type AcpPrepareOptions, type AgentRuntimeManager } from "../manager/session-manager.ts";
-import type { AcpStoredSession } from "../record/session-store.ts";
+import { AcpExecutionError, type SessionManager, type SessionPrepareOptions } from "../manager/session-manager.ts";
+import type { StoredSession } from "../record/session-store.ts";
 import { LocalAuthorizationError } from "../workspace/local-authorization-error.ts";
 import type { WorkspaceDirectoryService } from "../workspace/workspace-directory.ts";
 
@@ -39,7 +39,7 @@ interface AuthorizedNativeSession {
 const MAXIMUM_SESSION_TITLE_LENGTH = 500;
 const forkSuffixPattern = / \(Fork #([1-9][0-9]*)\)$/u;
 
-function nextForkTitle(sourceTitle: string, sessions: readonly AcpStoredSession[]): string {
+function nextForkTitle(sourceTitle: string, sessions: readonly StoredSession[]): string {
     let highest = 0;
     for (const session of sessions) {
         const match = forkSuffixPattern.exec(session.title);
@@ -66,19 +66,19 @@ export class NativeSessionService {
     readonly #cursors = new Map<string, ListedCursor>();
     readonly #config: RuntimeConfig;
     readonly #directories: WorkspaceDirectoryService;
-    readonly #sessions: AgentRuntimeManager;
+    readonly #sessions: SessionManager;
     readonly #activeTurn: (
         command: Extract<NativeSessionCommand, { readonly action: "active-turn" }>,
-        options: AcpPrepareOptions,
+        options: SessionPrepareOptions,
     ) => Promise<Pick<Extract<NativeSessionResult, { readonly action: "active-turn" }>, "turn" | "queued">>;
 
     constructor(
         config: RuntimeConfig,
         directories: WorkspaceDirectoryService,
-        sessions: AgentRuntimeManager,
+        sessions: SessionManager,
         activeTurn: (
             command: Extract<NativeSessionCommand, { readonly action: "active-turn" }>,
-            options: AcpPrepareOptions,
+            options: SessionPrepareOptions,
         ) => Promise<Pick<Extract<NativeSessionResult, { readonly action: "active-turn" }>, "turn" | "queued">>,
     ) {
         this.#config = config;
@@ -97,7 +97,7 @@ export class NativeSessionService {
         );
         signal.throwIfAborted();
         const cataloged = this.#config.catalog.find(command.agentId);
-        const options: AcpPrepareOptions = {
+        const options: SessionPrepareOptions = {
             additionalDirectories,
             agent:
                 this.#config.resolveAgent === undefined
@@ -322,7 +322,7 @@ export class NativeSessionService {
         await this.describeSessions(this.#sessions.findSessions(sessionIds), signal);
 
     private readonly describeSessions = async (
-        sessions: readonly AcpStoredSession[],
+        sessions: readonly StoredSession[],
         signal: AbortSignal,
     ): Promise<readonly SessionMetadata[]> => {
         const entries: SessionMetadata[] = [];
@@ -351,7 +351,7 @@ export class NativeSessionService {
 
     private readonly authorizeEntry = async (
         command: NativeSessionCommand,
-        options: AcpPrepareOptions,
+        options: SessionPrepareOptions,
         info: NativeSessionInfo,
     ): Promise<AuthorizedNativeSession | null> => {
         try {
@@ -390,7 +390,7 @@ export class NativeSessionService {
 
     private readonly resolveTarget = async (
         command: NativeSessionCommand,
-        options: AcpPrepareOptions,
+        options: SessionPrepareOptions,
         selected: ListedTarget,
     ): Promise<AuthorizedNativeSession> => {
         let cursor: string | null = null;

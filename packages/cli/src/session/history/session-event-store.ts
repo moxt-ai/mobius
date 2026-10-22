@@ -153,14 +153,14 @@ type FlushSchedule =
     | { readonly kind: "idle" }
     | { readonly handle: NodeJS.Immediate; readonly kind: "scheduled" };
 
-export interface AcpSessionEventPage {
+export interface SessionEventPage {
     readonly events: readonly SessionEvent[];
     readonly nextCursor: string | null;
     readonly sessionGenerationId: string;
     readonly truncated: boolean;
 }
 
-export interface AcpSessionEventStore {
+export interface SessionEventStore {
     readonly append: (sessionId: string, event: SessionEventPayload) => SessionLiveEvent;
     readonly close: () => void;
     /**
@@ -179,7 +179,7 @@ export interface AcpSessionEventStore {
         sessionGenerationId: string,
         events: readonly SessionEventPayload[],
     ) => void;
-    readonly page: (sessionId: string, eventLimit: number, cursor: string | null) => AcpSessionEventPage;
+    readonly page: (sessionId: string, eventLimit: number, cursor: string | null) => SessionEventPage;
     readonly remove: (sessionId: string) => void;
     readonly reset: (sessionId: string) => void;
 }
@@ -207,7 +207,7 @@ function eventPage(
     endIndex: number,
     eventLimit: number,
     read: (startIndex: number, endIndex: number) => readonly SessionEvent[],
-): AcpSessionEventPage {
+): SessionEventPage {
     const startIndex = Math.max(0, endIndex - eventLimit);
     return {
         events: read(startIndex, endIndex),
@@ -217,7 +217,7 @@ function eventPage(
     };
 }
 
-export class MemoryAcpSessionEventStore implements AcpSessionEventStore {
+export class MemorySessionEventStore implements SessionEventStore {
     readonly #allocatedPositionBySession = new Map<string, number>();
     readonly #events = new Map<string, SessionEvents>();
     readonly #eventIds: SessionEventIdAllocator;
@@ -292,7 +292,7 @@ export class MemoryAcpSessionEventStore implements AcpSessionEventStore {
         }
     };
 
-    readonly page = (sessionId: string, eventLimit: number, cursor: string | null): AcpSessionEventPage => {
+    readonly page = (sessionId: string, eventLimit: number, cursor: string | null): SessionEventPage => {
         const session = this.#session(sessionId);
         const endIndex = session.endIndex(cursor);
         return eventPage(session, session.sessionGenerationId, endIndex, eventLimit, (start, end) => {
@@ -312,7 +312,7 @@ export class MemoryAcpSessionEventStore implements AcpSessionEventStore {
     };
 }
 
-export class CachedAcpSessionEventStore implements AcpSessionEventStore {
+export class CachedSessionEventStore implements SessionEventStore {
     readonly #cacheTable: SessionEventCacheTable;
     readonly #eventIds: SessionEventIdAllocator;
     readonly #liveEventPositions: SessionLiveEventPosition;
@@ -442,7 +442,7 @@ export class CachedAcpSessionEventStore implements AcpSessionEventStore {
         }
     };
 
-    readonly page = (sessionId: string, eventLimit: number, cursor: string | null): AcpSessionEventPage => {
+    readonly page = (sessionId: string, eventLimit: number, cursor: string | null): SessionEventPage => {
         const session = this.#sessions.get(sessionId);
         const current = session ?? this.#session(sessionId);
         const endIndex = current.endIndex(cursor);

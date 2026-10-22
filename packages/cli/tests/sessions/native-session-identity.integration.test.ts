@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
-import { AgentRuntimeManager, NullAcpSessionObserver } from "../../src/session/manager/session-manager.ts";
-import { MemoryAcpSessionStore } from "../../src/session/record/session-store.ts";
+import { NullSessionObserver, SessionManager } from "../../src/session/manager/session-manager.ts";
+import { MemorySessionStore } from "../../src/session/record/session-store.ts";
 import { systemTimer } from "../../src/util/timer.ts";
 import { acpAdapters } from "../support/acp-adapters.ts";
 import { UnretainedExternalContentStore } from "../support/unretained-external-content-store.ts";
@@ -211,9 +211,9 @@ describe("native session identity", () => {
                 sessionId: f.identity.sessionId,
                 signal,
             });
-            const restarted = new AgentRuntimeManager({
-                observer: new NullAcpSessionObserver(),
-                store: new MemoryAcpSessionStore(),
+            const restarted = new SessionManager({
+                observer: new NullSessionObserver(),
+                store: new MemorySessionStore(),
                 adapters: acpAdapters,
                 sessionIdentity: "native",
                 onSessionStatusChanged: () => undefined,

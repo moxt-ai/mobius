@@ -46,25 +46,25 @@ import { type OperationMetrics, unmeasuredOperationMetrics } from "../../infra/o
 import { revalidateExecutable } from "../../util/process/executable.ts";
 import { isRecord, truncate } from "../../util/value-utils.ts";
 import {
-    type AcpConfigureOptions,
-    type AcpElicitationResponseOptions,
-    type AcpNativeEventReplay,
-    type AcpPermissionResponseOptions,
-    AcpPreparedSession,
-    type AcpPrepareOptions,
-    type AcpPromptContentOptions,
-    type AcpPromptResult,
-    type AcpSessionObserver,
-    type AcpSessionRecovery,
-    type AcpSteerOptions,
-    type AcpTurnOptions,
+    type ElicitationResponseOptions,
+    type PermissionResponseOptions,
+    PreparedSession,
+    type PromptContentOptions,
+    type PromptResult,
+    type SessionConfigureOptions,
+    type SessionObserver,
+    type SessionPrepareOptions,
+    type SessionRecovery,
+    type SessionSteerOptions,
+    type SessionTurnOptions,
 } from "../api/session-api.ts";
-import { AcpHistoryReplay } from "../history/session-history.ts";
-import { AcpSessionInteractions } from "../interaction/session-interactions.ts";
+import type { SessionEventPage } from "../history/session-event-store.ts";
+import { HistoryReplayCapture } from "../history/session-history.ts";
+import { SessionInteractions } from "../interaction/session-interactions.ts";
 import { waitForSharedOperation } from "../manager/operation-drain.ts";
-import { type AcpSessionStore, AcpStoredSession, FoundAcpStoredSession } from "../record/session-store.ts";
-import { type AcpTurnState, IdleAcpTurn, RunningAcpTurn } from "./agent-turn.ts";
-import { AcpSessionConfigurations } from "./session-configurations.ts";
+import { FoundStoredSession, type SessionStore, StoredSession } from "../record/session-store.ts";
+import { type AgentTurnState, IdleAgentTurn, RunningAgentTurn } from "./agent-turn.ts";
+import { SessionConfigurations } from "./session-configurations.ts";
 
 const PROCESS_STOP_TIMEOUT_MILLISECONDS = 1_000;
 
@@ -81,7 +81,7 @@ type SessionLoadState =
     | { readonly kind: "not-requested" }
     | {
           readonly completion: Promise<LoadedSession>;
-          readonly history: AcpHistoryReplay;
+          readonly history: HistoryReplayCapture;
           readonly kind: "capturing";
       }
     | LoadedSession;
@@ -92,7 +92,7 @@ type NativeHistoryOwnership =
     | { readonly kind: "agent-owned" };
 
 interface LoadedSession {
-    readonly history: AcpHistoryReplay;
+    readonly history: HistoryReplayCapture;
     readonly kind: "loaded";
     readonly response: unknown;
 }
@@ -110,17 +110,17 @@ export function recordsEqual(left: Readonly<Record<string, string>>, right: Read
 export class AgentSession implements AcpClientHandler {
     readonly #connection: AgentConnection;
     readonly #contentExternalizer: AcpContentExternalizer;
-    readonly #interactions: AcpSessionInteractions;
+    readonly #interactions: SessionInteractions;
     readonly #additionalDirectories: readonly string[];
     readonly #agentId: string;
     readonly #cwd: string;
     readonly #environment: Readonly<Record<string, string>>;
-    readonly #getObserver: () => AcpSessionObserver;
+    readonly #getObserver: () => SessionObserver;
     #mobiusSessionId: string;
     readonly #updates: AgentUpdateStream;
     readonly #metrics: OperationMetrics;
     readonly #sessionConfigProtocol: SessionConfigProtocol;
-    readonly #store: AcpSessionStore;
+    readonly #store: SessionStore;
     readonly #verifiedAgentVersion: string;
     #agentName = "";
     #agentVersion = "";
@@ -128,7 +128,7 @@ export class AgentSession implements AcpClientHandler {
     #commands: readonly SessionCommand[] = [];
     #configRevision = 0;
     #configOptions: readonly SessionConfigOption[] = [];
-    readonly #sessionConfigurations = new AcpSessionConfigurations();
+    readonly #sessionConfigurations = new SessionConfigurations();
     #nativeHistoryOwnership: NativeHistoryOwnership = { kind: "unbound" };
     #prompted = false;
     #nativePrompt: { readonly commandId: string; readonly previousTurnId: string | null } | null = null;
@@ -136,15 +136,15 @@ export class AgentSession implements AcpClientHandler {
     #restored = false;
     #sessionTitle: string | null = null;
     #sessionUpdatedAt = "";
-    #turn: AcpTurnState = new IdleAcpTurn();
+    #turn: AgentTurnState = new IdleAgentTurn();
 
     private constructor(
         agent: AcpAgentDefinition,
         cwd: string,
         additionalDirectories: readonly string[],
         mobiusSessionId: string,
-        getObserver: () => AcpSessionObserver,
-        store: AcpSessionStore,
+        getObserver: () => SessionObserver,
+        store: SessionStore,
         metrics: OperationMetrics,
         contentExternalizer: AcpContentExternalizer,
     ) {
@@ -160,7 +160,7 @@ export class AgentSession implements AcpClientHandler {
         this.#sessionConfigProtocol = sessionConfigProtocolForAgent(agent.id);
         this.#store = store;
         this.#verifiedAgentVersion = agent.agentVersion;
-        this.#interactions = new AcpSessionInteractions({
+        this.#interactions = new SessionInteractions({
             cwd: () => this.#cwd,
             getToolCall: (toolCallId) => this.#store.events.getToolCall(this.#mobiusSessionId, toolCallId),
             sessionId: () => this.#mobiusSessionId,
@@ -174,9 +174,9 @@ export class AgentSession implements AcpClientHandler {
     }
 
     static async #start(
-        options: AcpPrepareOptions,
-        getObserver: () => AcpSessionObserver,
-        store: AcpSessionStore,
+        options: SessionPrepareOptions,
+        getObserver: () => SessionObserver,
+        store: SessionStore,
         initialize: (runtime: AgentSession) => Promise<void>,
         metrics: OperationMetrics,
         contentExternalizer: AcpContentExternalizer,
@@ -238,10 +238,10 @@ export class AgentSession implements AcpClientHandler {
     }
 
     static readonly start = async (
-        options: AcpPrepareOptions,
-        recovery: AcpSessionRecovery,
-        getObserver: () => AcpSessionObserver,
-        store: AcpSessionStore,
+        options: SessionPrepareOptions,
+        recovery: SessionRecovery,
+        getObserver: () => SessionObserver,
+        store: SessionStore,
         metrics: OperationMetrics,
         contentExternalizer: AcpContentExternalizer,
     ): Promise<AgentSession> =>
@@ -255,9 +255,9 @@ export class AgentSession implements AcpClientHandler {
         );
 
     static readonly startNativeSessionBrowser = async (
-        options: AcpPrepareOptions,
-        getObserver: () => AcpSessionObserver,
-        store: AcpSessionStore,
+        options: SessionPrepareOptions,
+        getObserver: () => SessionObserver,
+        store: SessionStore,
         contentExternalizer: AcpContentExternalizer,
     ): Promise<AgentSession> =>
         await AgentSession.#start(
@@ -283,7 +283,7 @@ export class AgentSession implements AcpClientHandler {
 
     readonly #writeStoredSession = (updatedAt: string): void => {
         this.#store.write(
-            new AcpStoredSession(
+            new StoredSession(
                 this.#mobiusSessionId,
                 this.#agentId,
                 this.#updates.sessionId(),
@@ -351,7 +351,7 @@ export class AgentSession implements AcpClientHandler {
         }
     };
 
-    readonly #restoreStoredConfigurations = async (session: AcpStoredSession, signal: AbortSignal): Promise<void> => {
+    readonly #restoreStoredConfigurations = async (session: StoredSession, signal: AbortSignal): Promise<void> => {
         await this.#sessionConfigurations.restore(
             session.configurations,
             this.#configOptions,
@@ -367,8 +367,8 @@ export class AgentSession implements AcpClientHandler {
         );
     };
 
-    readonly prepared = (): AcpPreparedSession =>
-        new AcpPreparedSession(
+    readonly prepared = (): PreparedSession =>
+        new PreparedSession(
             this.#agentName,
             this.#agentVersion,
             this.#capabilities,
@@ -393,7 +393,7 @@ export class AgentSession implements AcpClientHandler {
         eventLimit: number,
         cursor: string | null,
         signal: AbortSignal,
-    ): Promise<AcpNativeEventReplay> => {
+    ): Promise<SessionEventPage> => {
         if (!this.#capabilities.loadSession) {
             throw new AcpExecutionError(
                 "This Agent restores context but does not provide message history.",
@@ -405,12 +405,12 @@ export class AgentSession implements AcpClientHandler {
         return history.eventPage(eventLimit, cursor);
     };
 
-    async #completedHistory(signal: AbortSignal, exitMessage: string): Promise<AcpHistoryReplay> {
+    async #completedHistory(signal: AbortSignal, exitMessage: string): Promise<HistoryReplayCapture> {
         if (!this.#prompted && this.#nativeHistoryOwnership.kind === "fresh-session") {
             if (this.#sessionLoad.kind === "not-requested") {
                 this.#store.events.reset(this.#mobiusSessionId);
                 this.#sessionLoad = {
-                    history: new AcpHistoryReplay(this.#store.events, this.#mobiusSessionId),
+                    history: new HistoryReplayCapture(this.#store.events, this.#mobiusSessionId),
                     kind: "loaded",
                     response: {},
                 };
@@ -430,7 +430,7 @@ export class AgentSession implements AcpClientHandler {
             return await waitForSharedOperation(this.#sessionLoad.completion, signal);
         }
         this.#store.events.reset(this.#mobiusSessionId);
-        const history = new AcpHistoryReplay(this.#store.events, this.#mobiusSessionId);
+        const history = new HistoryReplayCapture(this.#store.events, this.#mobiusSessionId);
         const completion = Promise.resolve().then(async (): Promise<LoadedSession> => {
             try {
                 const response = await this.race(
@@ -515,7 +515,7 @@ export class AgentSession implements AcpClientHandler {
 
     readonly initialize = async (
         signal: AbortSignal,
-        recovery: AcpSessionRecovery,
+        recovery: SessionRecovery,
         origin?: NativeSessionOrigin,
     ): Promise<void> => {
         if (origin !== undefined) {
@@ -524,8 +524,8 @@ export class AgentSession implements AcpClientHandler {
         await this.#initializeAgent(signal);
         let stored = this.#metrics.measureSync("session-state-read", () =>
             origin?.kind === "import"
-                ? new FoundAcpStoredSession(
-                      new AcpStoredSession(
+                ? new FoundStoredSession(
+                      new StoredSession(
                           this.#mobiusSessionId,
                           this.#agentId,
                           nativeSessionIdSchema.parse(origin.nativeSessionId),
@@ -537,7 +537,7 @@ export class AgentSession implements AcpClientHandler {
                   )
                 : this.#store.read(this.#mobiusSessionId),
         );
-        if (stored instanceof FoundAcpStoredSession && !stored.session.prompted) {
+        if (stored instanceof FoundStoredSession && !stored.session.prompted) {
             this.#store.remove(this.#mobiusSessionId);
             stored = this.#metrics.measureSync("session-state-read", () => this.#store.read(this.#mobiusSessionId));
         }
@@ -591,7 +591,7 @@ export class AgentSession implements AcpClientHandler {
             this.#restored = true;
             lifecycleResponse = forked;
         } else if (
-            stored instanceof FoundAcpStoredSession &&
+            stored instanceof FoundStoredSession &&
             stored.session.agentId === this.#agentId &&
             stored.session.cwd === this.#cwd &&
             arraysEqual(stored.session.additionalDirectories, this.#additionalDirectories)
@@ -644,7 +644,7 @@ export class AgentSession implements AcpClientHandler {
                 );
             }
         } else {
-            if (stored instanceof FoundAcpStoredSession) {
+            if (stored instanceof FoundStoredSession) {
                 if (stored.session.prompted) {
                     throw new AcpExecutionError(
                         "The agent or workspace cannot change after a conversation has started",
@@ -676,13 +676,13 @@ export class AgentSession implements AcpClientHandler {
             lifecycleResponse = created;
         }
         this.#configOptions = this.#sessionConfigProtocol.normalizeLifecycle(lifecycleResponse);
-        if (stored instanceof FoundAcpStoredSession && this.#restored) {
+        if (stored instanceof FoundStoredSession && this.#restored) {
             await this.#restoreStoredConfigurations(stored.session, signal);
         }
         await this.#updates.drained();
         signal.throwIfAborted();
         this.#writeStoredSession(
-            stored instanceof FoundAcpStoredSession && this.#restored
+            stored instanceof FoundStoredSession && this.#restored
                 ? stored.session.updatedAt
                 : new Date().toISOString(),
         );
@@ -722,7 +722,7 @@ export class AgentSession implements AcpClientHandler {
         }
         const previousSessionId = this.#mobiusSessionId;
         this.#store.write(
-            new AcpStoredSession(
+            new StoredSession(
                 sessionId,
                 this.#agentId,
                 sessionId,
@@ -811,7 +811,7 @@ export class AgentSession implements AcpClientHandler {
         }
     };
 
-    readonly configure = async (options: AcpConfigureOptions): Promise<readonly SessionConfigOption[]> => {
+    readonly configure = async (options: SessionConfigureOptions): Promise<readonly SessionConfigOption[]> => {
         await this.#applyConfiguration(
             options.configId,
             options.value,
@@ -828,7 +828,7 @@ export class AgentSession implements AcpClientHandler {
         return this.#configOptions;
     };
 
-    readonly buildPrompt = (options: AcpPromptContentOptions): ContentBlock[] => {
+    readonly buildPrompt = (options: PromptContentOptions): ContentBlock[] => {
         if (options.images.length > 0 && !this.#capabilities.imagePrompt) {
             throw new AcpExecutionError(
                 "The selected agent does not accept image prompts",
@@ -891,14 +891,14 @@ export class AgentSession implements AcpClientHandler {
             : { commandId: prompt.commandId, nativeTurnId };
     };
 
-    readonly prompt = async (options: AcpTurnOptions): Promise<AcpPromptResult> => {
+    readonly prompt = async (options: SessionTurnOptions): Promise<PromptResult> => {
         if (this.#turn.running) {
             throw new AcpExecutionError("Another prompt is already running in this conversation", {}, "session_busy");
         }
         if (!this.#capabilities.loadSession && this.#sessionLoad.kind === "not-requested") {
             this.#sessionLoad = {
                 kind: "loaded",
-                history: new AcpHistoryReplay(this.#store.events, this.#mobiusSessionId),
+                history: new HistoryReplayCapture(this.#store.events, this.#mobiusSessionId),
                 response: {},
             };
         }
@@ -911,7 +911,7 @@ export class AgentSession implements AcpClientHandler {
         }
         this.#prompted = true;
         this.#writeStoredSession(new Date().toISOString());
-        const running = new RunningAcpTurn(options.commandId);
+        const running = new RunningAgentTurn(options.commandId);
         this.#turn = running;
         const lifecycle = options.lifecycle;
         if (lifecycle !== undefined) {
@@ -951,7 +951,7 @@ export class AgentSession implements AcpClientHandler {
                 options.signal,
             );
             await this.#updates.drained();
-            let result: AcpPromptResult;
+            let result: PromptResult;
             try {
                 result = decodeAgentPromptResponse(response);
             } catch (cause) {
@@ -994,11 +994,11 @@ export class AgentSession implements AcpClientHandler {
             }
             throw failure;
         } finally {
-            this.#turn = new IdleAcpTurn();
+            this.#turn = new IdleAgentTurn();
         }
     };
 
-    readonly steer = async (options: AcpSteerOptions): Promise<string> => {
+    readonly steer = async (options: SessionSteerOptions): Promise<string> => {
         if (!this.#capabilities.steering) {
             throw new AcpExecutionError(
                 "The selected agent does not support mid-turn steering",
@@ -1105,9 +1105,8 @@ export class AgentSession implements AcpClientHandler {
         }
     };
 
-    readonly respondPermission = (options: AcpPermissionResponseOptions) =>
-        this.#interactions.respondPermission(options);
-    readonly respondElicitation = (options: AcpElicitationResponseOptions) =>
+    readonly respondPermission = (options: PermissionResponseOptions) => this.#interactions.respondPermission(options);
+    readonly respondElicitation = (options: ElicitationResponseOptions) =>
         this.#interactions.respondElicitation(options);
     readonly onPermission = async (request: RequestPermissionRequest, signal: AbortSignal) => {
         // The ACP connection dispatches incoming messages concurrently, so this

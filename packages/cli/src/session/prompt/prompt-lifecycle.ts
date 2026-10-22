@@ -8,7 +8,7 @@ import type {
     SessionPromptCommand,
 } from "@moxt-ai/mobius-sdk/protocol";
 import type { RuntimeSessionEventPublisher } from "../../runtime/relay/session-event-publisher.ts";
-import type { RuntimeOperationState } from "../turn/execution-receipts.ts";
+import type { ExecutionReceipts } from "../turn/execution-receipts.ts";
 
 interface QueuedPromptRequest {
     readonly commandId: string;
@@ -53,7 +53,7 @@ function promptContent(command: SessionPromptCommand): readonly ContentBlock[] {
     return content;
 }
 
-export class RuntimeSessionEventProjection {
+export class PromptLifecycle {
     readonly #publisher: RuntimeSessionEventPublisher;
     readonly #terminal = new Map<string, SessionLiveEvent>();
     readonly #publications = new Map<string, SessionLiveEvent[]>();
@@ -220,8 +220,8 @@ export class RuntimeSessionEventProjection {
 }
 
 export async function settleAbandonedTurn(
-    projection: RuntimeSessionEventProjection,
-    operations: RuntimeOperationState,
+    projection: PromptLifecycle,
+    operations: ExecutionReceipts,
     cancellation: SessionCancelCommand,
 ): Promise<void> {
     const attemptId = operations.findUnsettledAttemptId(cancellation.commandId, cancellation.sessionId);

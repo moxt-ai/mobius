@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { SessionConfigOption, SessionConfigurationSelection } from "@moxt-ai/mobius-sdk/protocol";
 import type { AcpAgentDefinition } from "../../acp/agent/agent-definition.ts";
 import { applyAgentLaunchSettings } from "../../agent/settings/agent-settings-adapter.ts";
-import { AcpExecutionError, type AgentRuntimeManager } from "../manager/session-manager.ts";
+import { AcpExecutionError, type SessionManager } from "../manager/session-manager.ts";
 
 function invalidSessionConfiguration(message: string): AcpExecutionError {
     return new AcpExecutionError(message, {}, "invalid_session_configuration");
@@ -107,7 +107,7 @@ function unavailableSessionConfigurationCategory(selection: SessionConfiguration
 }
 
 async function applySessionConfigurationSelection(
-    sessions: AgentRuntimeManager,
+    sessions: SessionManager,
     options: readonly SessionConfigOption[],
     selection: SessionConfigurationSelection,
     agent: AcpAgentDefinition,
@@ -187,7 +187,7 @@ async function applySessionConfigurationSelection(
 }
 
 export async function applyCompleteSessionConfiguration(
-    sessions: AgentRuntimeManager,
+    sessions: SessionManager,
     initialOptions: readonly SessionConfigOption[],
     selections: readonly SessionConfigurationSelection[],
     agent: AcpAgentDefinition,

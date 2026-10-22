@@ -1,17 +1,17 @@
 import type { NativeSessionResult, SessionLiveEvent, SessionPromptCommand } from "@moxt-ai/mobius-sdk/protocol";
 import type { ActiveRuntimeTurn, RecordedSessionEvent } from "./active-turn.ts";
-import type { RuntimeOperationState } from "./execution-receipts.ts";
+import type { ExecutionReceipts } from "./execution-receipts.ts";
 import type { SessionAdmission } from "./session-execution.ts";
 import { SessionExecutionState } from "./session-execution.ts";
 
 type QueuedTurnSnapshot = Extract<NativeSessionResult, { readonly action: "active-turn" }>["queued"];
 
 /** Runtime-owned index over per-session execution state; owns no session state itself. */
-export class RuntimeSessions {
+export class SessionTurns {
     readonly #bySessionId = new Map<string, SessionExecutionState>();
-    readonly #operations: RuntimeOperationState;
+    readonly #operations: ExecutionReceipts;
 
-    constructor(operations: RuntimeOperationState) {
+    constructor(operations: ExecutionReceipts) {
         this.#operations = operations;
     }
 

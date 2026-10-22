@@ -11,10 +11,10 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import type { WebSocket } from "undici";
 import { operationErrorCode } from "../../../infra/operation-error.ts";
-import type { AcpSessionEventPage } from "../../../session/history/session-event-store.ts";
-import { AcpExecutionError, type AgentRuntimeManager } from "../../../session/manager/session-manager.ts";
+import type { SessionEventPage } from "../../../session/history/session-event-store.ts";
+import { AcpExecutionError, type SessionManager } from "../../../session/manager/session-manager.ts";
 import type { NativeSessionService } from "../../../session/native/native-session-browser.ts";
-import type { RuntimeSessionEventProjection } from "../../../session/prompt/prompt-lifecycle.ts";
+import type { PromptLifecycle } from "../../../session/prompt/prompt-lifecycle.ts";
 import { resolveSessionDirectories } from "../../../session/workspace/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "../../../session/workspace/workspace-directory.ts";
 import type { RuntimeConfig } from "../../config.ts";
@@ -64,7 +64,7 @@ async function loadHistoryPage(
     initialCursor: string | null,
     omitReasoning: boolean,
     queuedPromptRequests: readonly QueuedPromptRequestEventLog[],
-    load: (eventLimit: number, cursor: string | null) => Promise<AcpSessionEventPage>,
+    load: (eventLimit: number, cursor: string | null) => Promise<SessionEventPage>,
 ): Promise<NativeSessionEvents> {
     let cursor = initialCursor;
     let loaded: readonly OrderedHistoryEvent[] = [];
@@ -126,9 +126,9 @@ export async function executeSessionHistoryPageLoad(
     config: RuntimeConfig,
     directories: WorkspaceDirectoryService,
     diagnostics: RelayConnectionDiagnostics,
-    sessions: AgentRuntimeManager,
+    sessions: SessionManager,
     nativeSessions: NativeSessionService,
-    eventProjection: RuntimeSessionEventProjection,
+    eventProjection: PromptLifecycle,
     signal: AbortSignal,
 ): Promise<void> {
     let agentId: string | undefined;
@@ -191,7 +191,7 @@ export async function executeSessionPreviewHistoryPageLoad(
     config: RuntimeConfig,
     directories: WorkspaceDirectoryService,
     diagnostics: RelayConnectionDiagnostics,
-    sessions: AgentRuntimeManager,
+    sessions: SessionManager,
     signal: AbortSignal,
 ): Promise<void> {
     try {

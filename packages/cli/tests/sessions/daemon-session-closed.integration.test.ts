@@ -23,7 +23,7 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
 import type { InProcessAcpEndpointFactory } from "../../src/acp/agent/in-process-endpoint.ts";
-import { InProcessAcpAgentDefinition } from "../../src/agent/specification/agent-specification.ts";
+import { InProcessAcpAgentSpecification } from "../../src/agent/specification/agent-specification.ts";
 import { ControlledSessionAgent } from "../support/agents/controlled-session-agent.ts";
 import { type RealDaemonPeer, withRealDaemon } from "../support/agents/real-daemon.ts";
 
@@ -32,7 +32,7 @@ import { type RealDaemonPeer, withRealDaemon } from "../support/agents/real-daem
 const NATIVE_AGENT_ID = "claude";
 
 /** Endpoint 0 serves discovery; each Agent process the daemon starts later gets the next index. */
-class ClosableAgentSpecification extends InProcessAcpAgentDefinition {
+class ClosableAgentSpecification extends InProcessAcpAgentSpecification {
     readonly agentExecutable = "node";
     readonly id = NATIVE_AGENT_ID;
     readonly label = "Controlled Claude";

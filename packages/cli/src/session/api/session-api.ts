@@ -12,7 +12,6 @@ import type {
     SessionConfigUpdatedEvent,
     SessionElicitationRequestedEvent,
     SessionElicitationResolvedEvent,
-    SessionEvent,
     SessionInfoUpdatedEvent,
     SessionLiveEvent,
     SessionPermissionRequestedEvent,
@@ -21,7 +20,7 @@ import type {
 import type { AcpAgentDefinition } from "../../acp/agent/agent-definition.ts";
 import type { NativeSessionOrigin } from "../../acp/protocol/native-session.ts";
 
-export interface AcpPrepareOptions {
+export interface SessionPrepareOptions {
     readonly additionalDirectories: readonly string[];
     readonly agent: AcpAgentDefinition;
     readonly cwd: string;
@@ -30,16 +29,9 @@ export interface AcpPrepareOptions {
     readonly origin?: NativeSessionOrigin;
 }
 
-export type AcpSessionRecovery = { readonly kind: "history-required" } | { readonly kind: "interactive-only" };
+export type SessionRecovery = { readonly kind: "history-required" } | { readonly kind: "interactive-only" };
 
-export interface AcpNativeEventReplay {
-    readonly nextCursor: string | null;
-    readonly sessionGenerationId: string;
-    readonly truncated: boolean;
-    readonly events: readonly SessionEvent[];
-}
-
-export interface AcpAgentSettingsInspectionOptions {
+export interface AgentSettingsInspectionOptions {
     readonly additionalDirectories: readonly string[];
     readonly agent: AcpAgentDefinition;
     readonly cwd: string;
@@ -47,7 +39,7 @@ export interface AcpAgentSettingsInspectionOptions {
     readonly signal: AbortSignal;
 }
 
-export interface AcpConfigureOptions extends AcpPrepareOptions {
+export interface SessionConfigureOptions extends SessionPrepareOptions {
     readonly booleanValue: boolean;
     readonly configId: string;
     readonly requestId: string;
@@ -55,7 +47,7 @@ export interface AcpConfigureOptions extends AcpPrepareOptions {
     readonly valueType: SessionConfigOption["type"];
 }
 
-export interface AcpPromptContentOptions {
+export interface PromptContentOptions {
     readonly images: readonly PromptImage[];
     readonly lifecycle?: {
         readonly context?: PromptExecutionContext;
@@ -69,35 +61,35 @@ export interface AcpPromptContentOptions {
     readonly resources: readonly PromptResource[];
 }
 
-export interface AcpTurnOptions extends AcpPrepareOptions, AcpPromptContentOptions {
+export interface SessionTurnOptions extends SessionPrepareOptions, PromptContentOptions {
     readonly cancellationRequested?: () => boolean;
     readonly commandId: string;
     readonly disposition?: string;
     readonly targetCommandId?: string;
 }
 
-export interface AcpSteerOptions extends AcpPrepareOptions, AcpPromptContentOptions {
+export interface SessionSteerOptions extends SessionPrepareOptions, PromptContentOptions {
     readonly commandId: string;
     readonly targetCommandId: string;
 }
 
-export interface AcpPermissionResponseOptions {
+export interface PermissionResponseOptions {
     readonly interactionId: string;
     readonly optionId: string;
     readonly outcome: SessionPermissionResolvedEvent["outcome"];
     readonly sessionId: string;
 }
 
-export interface AcpElicitationResponseOptions {
+export interface ElicitationResponseOptions {
     readonly action: SessionElicitationResolvedEvent["action"];
     readonly content: string;
     readonly interactionId: string;
     readonly sessionId: string;
 }
 
-export type AcpPromptResult = AgentPromptResponse;
+export type PromptResult = AgentPromptResponse;
 
-export interface AcpSessionObserver {
+export interface SessionObserver {
     readonly onSessionEvent?: (event: SessionLiveEvent) => Promise<void>;
     readonly onCommands: (event: SessionCommandsUpdatedEvent) => Promise<void>;
     readonly onConfig: (event: SessionConfigUpdatedEvent) => Promise<void>;
@@ -108,7 +100,7 @@ export interface AcpSessionObserver {
     readonly onPermissionResolved: (event: SessionPermissionResolvedEvent) => Promise<void>;
 }
 
-export class NullAcpSessionObserver implements AcpSessionObserver {
+export class NullSessionObserver implements SessionObserver {
     readonly onSessionEvent = (_event: SessionLiveEvent): Promise<void> => Promise.resolve();
     readonly onCommands = (): Promise<void> => Promise.resolve();
     readonly onConfig = (): Promise<void> => Promise.resolve();
@@ -119,7 +111,7 @@ export class NullAcpSessionObserver implements AcpSessionObserver {
     readonly onPermissionResolved = (): Promise<void> => Promise.resolve();
 }
 
-export class AcpPreparedSession {
+export class PreparedSession {
     readonly agentName: string;
     readonly agentVersion: string;
     readonly capabilities: SessionCapabilities;
@@ -147,21 +139,21 @@ export class AcpPreparedSession {
     }
 }
 
-export type AcpAgentSettingsModelEffort =
+export type AgentSettingsModelEffort =
     | { readonly kind: "complete"; readonly value: AgentModelEffort }
     | { readonly kind: "unavailable" };
 
-export class AcpAgentSettingsSnapshot {
+export class AgentSettingsSnapshot {
     readonly agentName: string;
     readonly agentVersion: string;
     readonly configOptions: readonly SessionConfigOption[];
-    readonly modelEffort: AcpAgentSettingsModelEffort;
+    readonly modelEffort: AgentSettingsModelEffort;
 
     constructor(
         agentName: string,
         agentVersion: string,
         configOptions: readonly SessionConfigOption[],
-        modelEffort: AcpAgentSettingsModelEffort,
+        modelEffort: AgentSettingsModelEffort,
     ) {
         this.agentName = agentName;
         this.agentVersion = agentVersion;

@@ -1,15 +1,12 @@
 import { z } from "zod";
 import type { AcpSessionRow, AcpSessionTable } from "../../storage/session/acp-session-table.ts";
-import { type AcpSessionEventStore, MemoryAcpSessionEventStore } from "../history/session-event-store.ts";
-import {
-    type AcpStoredSessionConfiguration,
-    decodeStoredSessionConfigurations,
-} from "../live/session-configurations.ts";
+import { MemorySessionEventStore, type SessionEventStore } from "../history/session-event-store.ts";
+import { decodeStoredSessionConfigurations, type StoredSessionConfiguration } from "../live/session-configurations.ts";
 
-export class AcpStoredSession {
+export class StoredSession {
     readonly additionalDirectories: readonly string[];
     readonly agentId: string;
-    readonly configurations: readonly AcpStoredSessionConfiguration[];
+    readonly configurations: readonly StoredSessionConfiguration[];
     readonly cwd: string;
     readonly nativeSessionId: string;
     readonly prompted: boolean;
@@ -26,7 +23,7 @@ export class AcpStoredSession {
         prompted: boolean,
         title: string,
         updatedAt = new Date().toISOString(),
-        configurations: readonly AcpStoredSessionConfiguration[] = [],
+        configurations: readonly StoredSessionConfiguration[] = [],
     ) {
         this.additionalDirectories = [...additionalDirectories];
         this.agentId = agentId;
@@ -40,39 +37,39 @@ export class AcpStoredSession {
     }
 }
 
-export abstract class AcpStoredSessionLookup {
+export abstract class StoredSessionLookup {
     abstract readonly found: boolean;
 }
 
-export class MissingAcpStoredSession extends AcpStoredSessionLookup {
+export class MissingStoredSession extends StoredSessionLookup {
     readonly found = false;
 }
 
-export class FoundAcpStoredSession extends AcpStoredSessionLookup {
+export class FoundStoredSession extends StoredSessionLookup {
     readonly found = true;
-    readonly session: AcpStoredSession;
+    readonly session: StoredSession;
 
-    constructor(session: AcpStoredSession) {
+    constructor(session: StoredSession) {
         super();
         this.session = session;
     }
 }
 
-export interface AcpSessionStore {
+export interface SessionStore {
     readonly close: () => void;
-    readonly events: AcpSessionEventStore;
-    readonly findNative: (agentId: string, nativeSessionId: string) => readonly AcpStoredSession[];
-    readonly list: () => readonly AcpStoredSession[];
-    readonly read: (sessionId: string) => AcpStoredSessionLookup;
+    readonly events: SessionEventStore;
+    readonly findNative: (agentId: string, nativeSessionId: string) => readonly StoredSession[];
+    readonly list: () => readonly StoredSession[];
+    readonly read: (sessionId: string) => StoredSessionLookup;
     readonly remove: (sessionId: string) => void;
-    readonly write: (session: AcpStoredSession) => void;
+    readonly write: (session: StoredSession) => void;
 }
 
-export class MemoryAcpSessionStore implements AcpSessionStore {
-    readonly events: AcpSessionEventStore;
-    readonly #sessions = new Map<string, AcpStoredSession>();
+export class MemorySessionStore implements SessionStore {
+    readonly events: SessionEventStore;
+    readonly #sessions = new Map<string, StoredSession>();
 
-    constructor(events: AcpSessionEventStore = new MemoryAcpSessionEventStore()) {
+    constructor(events: SessionEventStore = new MemorySessionEventStore()) {
         this.events = events;
     }
 
@@ -81,17 +78,17 @@ export class MemoryAcpSessionStore implements AcpSessionStore {
         this.events.close();
     };
 
-    readonly findNative = (agentId: string, nativeSessionId: string): readonly AcpStoredSession[] =>
+    readonly findNative = (agentId: string, nativeSessionId: string): readonly StoredSession[] =>
         [...this.#sessions.values()].filter(
             (session) => session.agentId === agentId && session.nativeSessionId === nativeSessionId,
         );
 
-    readonly list = (): readonly AcpStoredSession[] =>
+    readonly list = (): readonly StoredSession[] =>
         [...this.#sessions.values()].toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 
-    readonly read = (sessionId: string): AcpStoredSessionLookup => {
+    readonly read = (sessionId: string): StoredSessionLookup => {
         const session = this.#sessions.get(sessionId);
-        return session === undefined ? new MissingAcpStoredSession() : new FoundAcpStoredSession(session);
+        return session === undefined ? new MissingStoredSession() : new FoundStoredSession(session);
     };
 
     readonly remove = (sessionId: string): void => {
@@ -99,17 +96,17 @@ export class MemoryAcpSessionStore implements AcpSessionStore {
         this.events.remove(sessionId);
     };
 
-    readonly write = (session: AcpStoredSession): void => {
+    readonly write = (session: StoredSession): void => {
         this.#sessions.set(session.sessionId, session);
     };
 }
 
-function decodeStoredSession(row: AcpSessionRow): AcpStoredSession {
+function decodeStoredSession(row: AcpSessionRow): StoredSession {
     const decodedAdditionalDirectories: unknown = JSON.parse(row.additionalDirectories);
     const additionalDirectories = z.array(z.string()).parse(decodedAdditionalDirectories);
     const decodedConfigurations: unknown = JSON.parse(row.configurations);
     const configurations = decodeStoredSessionConfigurations(decodedConfigurations);
-    return new AcpStoredSession(
+    return new StoredSession(
         row.sessionId,
         row.agentId,
         row.nativeSessionId,
@@ -122,11 +119,11 @@ function decodeStoredSession(row: AcpSessionRow): AcpStoredSession {
     );
 }
 
-export class SqliteAcpSessionStore implements AcpSessionStore {
-    readonly events: AcpSessionEventStore;
+export class SqliteSessionStore implements SessionStore {
+    readonly events: SessionEventStore;
     readonly #table: AcpSessionTable;
 
-    constructor(table: AcpSessionTable, events: AcpSessionEventStore = new MemoryAcpSessionEventStore()) {
+    constructor(table: AcpSessionTable, events: SessionEventStore = new MemorySessionEventStore()) {
         this.events = events;
         this.#table = table;
     }
@@ -139,14 +136,14 @@ export class SqliteAcpSessionStore implements AcpSessionStore {
         }
     };
 
-    readonly findNative = (agentId: string, nativeSessionId: string): readonly AcpStoredSession[] =>
+    readonly findNative = (agentId: string, nativeSessionId: string): readonly StoredSession[] =>
         this.#table.findNative(agentId, nativeSessionId).map(decodeStoredSession);
 
-    readonly list = (): readonly AcpStoredSession[] => this.#table.list().map(decodeStoredSession);
+    readonly list = (): readonly StoredSession[] => this.#table.list().map(decodeStoredSession);
 
-    readonly read = (sessionId: string): AcpStoredSessionLookup => {
+    readonly read = (sessionId: string): StoredSessionLookup => {
         const row = this.#table.read(sessionId);
-        return row === undefined ? new MissingAcpStoredSession() : new FoundAcpStoredSession(decodeStoredSession(row));
+        return row === undefined ? new MissingStoredSession() : new FoundStoredSession(decodeStoredSession(row));
     };
 
     readonly remove = (sessionId: string): void => {
@@ -154,7 +151,7 @@ export class SqliteAcpSessionStore implements AcpSessionStore {
         this.events.remove(sessionId);
     };
 
-    readonly write = (session: AcpStoredSession): void => {
+    readonly write = (session: StoredSession): void => {
         this.#table.upsert({
             additionalDirectories: JSON.stringify(session.additionalDirectories),
             agentId: session.agentId,

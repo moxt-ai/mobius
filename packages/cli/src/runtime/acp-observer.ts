@@ -1,7 +1,7 @@
 import type { SessionInfoUpdatedEvent, SessionLiveEvent } from "@moxt-ai/mobius-sdk/protocol";
-import { NullAcpSessionObserver } from "../session/api/session-api.ts";
+import { NullSessionObserver } from "../session/api/session-api.ts";
 
-export class RuntimeAcpObserver extends NullAcpSessionObserver {
+export class RuntimeAcpObserver extends NullSessionObserver {
     readonly #publishInfo: (event: SessionInfoUpdatedEvent) => void;
     readonly #record: (event: SessionLiveEvent) => void;
 

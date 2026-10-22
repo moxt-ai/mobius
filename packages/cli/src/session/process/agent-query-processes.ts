@@ -1,14 +1,10 @@
 import { AcpExecutionError } from "../../acp/acp-error.ts";
 import type { AcpContentExternalizer } from "../../acp/content/content-externalizer.ts";
-import {
-    type AcpNativeEventReplay,
-    type AcpPreparedSession,
-    type AcpPrepareOptions,
-    NullAcpSessionObserver,
-} from "../api/session-api.ts";
+import { NullSessionObserver, type PreparedSession, type SessionPrepareOptions } from "../api/session-api.ts";
+import type { SessionEventPage } from "../history/session-event-store.ts";
 import { AgentSession } from "../live/agent-session.ts";
 import { waitForSharedOperation } from "../manager/operation-drain.ts";
-import { MemoryAcpSessionStore } from "../record/session-store.ts";
+import { MemorySessionStore } from "../record/session-store.ts";
 import type { AgentProcessPool } from "./agent-process-pool.ts";
 import { RetainedAgentProcesses } from "./retained-agent-processes.ts";
 
@@ -16,12 +12,12 @@ import { RetainedAgentProcesses } from "./retained-agent-processes.ts";
 export class AgentQueryProcesses {
     readonly #eventPreviewsBySession = new Map<
         string,
-        { readonly nativeSessionId: string; readonly store: MemoryAcpSessionStore }
+        { readonly nativeSessionId: string; readonly store: MemorySessionStore }
     >();
     readonly #processesByQuery: RetainedAgentProcesses;
     readonly #processes: AgentProcessPool;
-    readonly #observer = new NullAcpSessionObserver();
-    readonly #store = new MemoryAcpSessionStore();
+    readonly #observer = new NullSessionObserver();
+    readonly #store = new MemorySessionStore();
     readonly #contentExternalizer: AcpContentExternalizer;
 
     constructor(processes: AgentProcessPool, contentExternalizer: AcpContentExternalizer) {
@@ -40,7 +36,7 @@ export class AgentQueryProcesses {
         await this.#processes.retire(runtime, () => runtime.close());
     };
 
-    async #startRetained(options: AcpPrepareOptions): Promise<AgentSession> {
+    async #startRetained(options: SessionPrepareOptions): Promise<AgentSession> {
         const runtime = await this.#processes.startRetained(
             options.signal,
             () =>
@@ -60,20 +56,20 @@ export class AgentQueryProcesses {
         return runtime;
     }
 
-    async #startPreparation(options: AcpPrepareOptions): Promise<AgentSession> {
+    async #startPreparation(options: SessionPrepareOptions): Promise<AgentSession> {
         return await this.#processesByQuery.prepare(options.sessionId, async () => {
             return await this.#startRetained(options);
         });
     }
 
-    async #replacePreparation(existing: AgentSession, options: AcpPrepareOptions): Promise<AgentSession> {
+    async #replacePreparation(existing: AgentSession, options: SessionPrepareOptions): Promise<AgentSession> {
         return await this.#processesByQuery.prepare(options.sessionId, async () => {
             await this.retire(options.sessionId, existing);
             return await this.#startRetained(options);
         });
     }
 
-    readonly prepare = async (options: AcpPrepareOptions): Promise<AcpPreparedSession> => {
+    readonly prepare = async (options: SessionPrepareOptions): Promise<PreparedSession> => {
         const pending = this.#processesByQuery.pending(options.sessionId);
         if (pending !== undefined) {
             const runtime = await waitForSharedOperation(pending, options.signal);
@@ -103,7 +99,7 @@ export class AgentQueryProcesses {
         return runtime.prepared();
     };
 
-    async #ensure(options: AcpPrepareOptions): Promise<AgentSession> {
+    async #ensure(options: SessionPrepareOptions): Promise<AgentSession> {
         const existing = this.#processesByQuery.get(options.sessionId);
         if (existing !== undefined) {
             if (!existing.belongsTo(options.agent.id, options.cwd, options.additionalDirectories)) {
@@ -125,17 +121,17 @@ export class AgentQueryProcesses {
     }
 
     readonly use = async <T>(
-        options: AcpPrepareOptions,
+        options: SessionPrepareOptions,
         operation: (runtime: AgentSession) => Promise<T>,
     ): Promise<T> =>
         await this.#processesByQuery.use(options.sessionId, async () => await operation(await this.#ensure(options)));
 
     readonly previewEvents = async (
-        options: AcpPrepareOptions,
+        options: SessionPrepareOptions,
         nativeSessionId: string,
         eventLimit: number,
         cursor: string | null,
-    ): Promise<AcpNativeEventReplay> => {
+    ): Promise<SessionEventPage> => {
         if (cursor !== null) {
             const preview = this.#eventPreviewsBySession.get(options.sessionId);
             if (preview === undefined || preview.nativeSessionId !== nativeSessionId) {
@@ -143,7 +139,7 @@ export class AgentQueryProcesses {
             }
             return preview.store.events.page(options.sessionId, eventLimit, cursor);
         }
-        const store = new MemoryAcpSessionStore();
+        const store = new MemorySessionStore();
         const previous = this.#eventPreviewsBySession.get(options.sessionId);
         previous?.store.close();
         this.#eventPreviewsBySession.set(options.sessionId, { nativeSessionId, store });

@@ -3,14 +3,14 @@ import { harnessAdapters } from "../acp/adapter/registry.ts";
 import { AcpContentExternalizer } from "../acp/content/content-externalizer.ts";
 import { LocalExternalContentStore } from "../session/content/external-content-store.ts";
 import { SqliteSessionLiveEventPosition } from "../session/history/live-event-positions.ts";
-import { CachedAcpSessionEventStore } from "../session/history/session-event-store.ts";
-import { AgentRuntimeManager } from "../session/manager/session-manager.ts";
+import { CachedSessionEventStore } from "../session/history/session-event-store.ts";
+import { SessionManager } from "../session/manager/session-manager.ts";
 import { NativeSessionService } from "../session/native/native-session-browser.ts";
 import { resolveMaxAcpProcesses } from "../session/process/agent-process-pool.ts";
-import { RuntimeSessionEventProjection } from "../session/prompt/prompt-lifecycle.ts";
-import { SqliteAcpSessionStore } from "../session/record/session-store.ts";
-import { RuntimeOperationState } from "../session/turn/execution-receipts.ts";
-import { RuntimeSessions } from "../session/turn/session-turns.ts";
+import { PromptLifecycle } from "../session/prompt/prompt-lifecycle.ts";
+import { SqliteSessionStore } from "../session/record/session-store.ts";
+import { ExecutionReceipts } from "../session/turn/execution-receipts.ts";
+import { SessionTurns } from "../session/turn/session-turns.ts";
 import { WorkspaceDirectoryService } from "../session/workspace/workspace-directory.ts";
 import { AcpSessionTable } from "../storage/session/acp-session-table.ts";
 import { LiveEventPositionTable } from "../storage/session/live-event-position-table.ts";
@@ -100,9 +100,9 @@ export async function runRuntime(
     const stateDirectory = config.localContext.stateDirectory;
     const databases = channelSessionDatabasePaths(stateDirectory, config.channelId);
     const sessionDatabase = openAcpSessionDatabase(databases.sessions);
-    let events: CachedAcpSessionEventStore;
+    let events: CachedSessionEventStore;
     try {
-        events = new CachedAcpSessionEventStore(
+        events = new CachedSessionEventStore(
             new SessionEventCacheTable(openSessionEventCacheDatabase(databases.events)),
             new SqliteSessionLiveEventPosition(new LiveEventPositionTable(sessionDatabase)),
         );
@@ -110,17 +110,17 @@ export async function runRuntime(
         sessionDatabase.close();
         throw error;
     }
-    const sessionStore = new SqliteAcpSessionStore(new AcpSessionTable(sessionDatabase), events);
+    const sessionStore = new SqliteSessionStore(new AcpSessionTable(sessionDatabase), events);
     await using externalContent = new LocalExternalContentStore(stateDirectory);
-    const operations = new RuntimeOperationState();
+    const operations = new ExecutionReceipts();
     const publisher = new RuntimeSessionEventPublisher(timer);
-    const activeSessions = new RuntimeSessions(operations);
-    const eventProjection = new RuntimeSessionEventProjection(
+    const activeSessions = new SessionTurns(operations);
+    const eventProjection = new PromptLifecycle(
         publisher,
         (sessionId, event) => agentRuntime.recordLifecycleEvent(sessionId, event),
         activeSessions.recordSessionEvent,
     );
-    const agentRuntime = new AgentRuntimeManager({
+    const agentRuntime = new SessionManager({
         observer: new RuntimeAcpObserver(eventProjection.record, publisher.publishInfo),
         store: sessionStore,
         adapters: harnessAdapters,

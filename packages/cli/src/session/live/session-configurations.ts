@@ -1,7 +1,7 @@
 import type { SessionConfigOption } from "@moxt-ai/mobius-sdk/protocol";
 import { z } from "zod";
 
-export type AcpStoredSessionConfiguration =
+export type StoredSessionConfiguration =
     | {
           readonly booleanValue: boolean;
           readonly configId: string;
@@ -22,18 +22,18 @@ const storedSessionConfigurationsSchema = z
     )
     .max(100);
 
-export const decodeStoredSessionConfigurations = (value: unknown): readonly AcpStoredSessionConfiguration[] =>
+export const decodeStoredSessionConfigurations = (value: unknown): readonly StoredSessionConfiguration[] =>
     storedSessionConfigurationsSchema.parse(value);
 
 export type ApplyStoredSessionConfiguration = (
-    configuration: AcpStoredSessionConfiguration,
+    configuration: StoredSessionConfiguration,
     signal: AbortSignal,
 ) => Promise<void>;
 
-export class AcpSessionConfigurations {
-    #selected: readonly AcpStoredSessionConfiguration[] = [];
+export class SessionConfigurations {
+    #selected: readonly StoredSessionConfiguration[] = [];
 
-    readonly stored = (): readonly AcpStoredSessionConfiguration[] => this.#selected;
+    readonly stored = (): readonly StoredSessionConfiguration[] => this.#selected;
 
     readonly capture = (options: readonly SessionConfigOption[]): void => {
         this.#selected = this.#selected.map((selection) => {
@@ -50,7 +50,7 @@ export class AcpSessionConfigurations {
     };
 
     readonly select = (option: SessionConfigOption): void => {
-        const selected: AcpStoredSessionConfiguration =
+        const selected: StoredSessionConfiguration =
             option.type === "boolean"
                 ? { booleanValue: option.booleanValue, configId: option.id, type: "boolean" }
                 : { configId: option.id, type: "select", value: option.currentValue };
@@ -58,7 +58,7 @@ export class AcpSessionConfigurations {
     };
 
     readonly restore = async (
-        stored: readonly AcpStoredSessionConfiguration[],
+        stored: readonly StoredSessionConfiguration[],
         options: readonly SessionConfigOption[],
         apply: ApplyStoredSessionConfiguration,
         signal: AbortSignal,

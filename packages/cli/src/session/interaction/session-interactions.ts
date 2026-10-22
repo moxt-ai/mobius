@@ -21,11 +21,7 @@ import { AcpExecutionError } from "../../acp/acp-error.ts";
 import type { ProjectedToolCall } from "../../acp/tool-call-projection.ts";
 import { normalizeElicitationFields, validateElicitationContent } from "../../acp/protocol/elicitation.ts";
 import { readString, truncate } from "../../util/value-utils.ts";
-import type {
-    AcpElicitationResponseOptions,
-    AcpPermissionResponseOptions,
-    AcpSessionObserver,
-} from "../api/session-api.ts";
+import type { ElicitationResponseOptions, PermissionResponseOptions, SessionObserver } from "../api/session-api.ts";
 
 interface SessionInteractionContext {
     readonly sessionId: () => string;
@@ -39,10 +35,10 @@ interface SessionInteractionContext {
     readonly getToolCall: (toolCallId: string) => ProjectedToolCall | undefined;
     readonly commandId: () => string;
     readonly assertNativeSession: (sessionId: string) => void;
-    readonly observer: () => AcpSessionObserver;
+    readonly observer: () => SessionObserver;
     readonly recordSessionEvent: (event: SessionEventPayload) => Promise<void>;
 }
-export class AcpSessionInteractions {
+export class SessionInteractions {
     readonly #pendingPermissions = new Map<string, PendingPermission>();
     readonly #pendingElicitations = new Map<string, PendingElicitation>();
     readonly #acceptedUrlElicitations = new Map<string, string>();
@@ -78,7 +74,7 @@ export class AcpSessionInteractions {
         });
         await this.#context.observer().onElicitationResolved(event);
     };
-    readonly respondPermission = async (options: AcpPermissionResponseOptions): Promise<void> => {
+    readonly respondPermission = async (options: PermissionResponseOptions): Promise<void> => {
         const pending = this.#pendingPermissions.get(options.interactionId);
         if (pending === undefined) {
             throw new AcpExecutionError(
@@ -112,7 +108,7 @@ export class AcpSessionInteractions {
         });
     };
 
-    readonly respondElicitation = async (options: AcpElicitationResponseOptions): Promise<void> => {
+    readonly respondElicitation = async (options: ElicitationResponseOptions): Promise<void> => {
         const pending = this.#pendingElicitations.get(options.interactionId);
         if (pending === undefined) {
             throw new AcpExecutionError(

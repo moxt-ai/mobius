@@ -23,11 +23,11 @@ import type { Timer } from "../../util/timer.ts";
 import { isNativeChatSessionId } from "../native/native-chat-agent.ts";
 import { AgentProcessPool, type AgentProcessRetention } from "../process/agent-process-pool.ts";
 import {
-    type AcpSessionStore,
-    AcpStoredSession,
-    FoundAcpStoredSession,
-    MemoryAcpSessionStore,
-    MissingAcpStoredSession,
+    FoundStoredSession,
+    MemorySessionStore,
+    MissingStoredSession,
+    type SessionStore,
+    StoredSession,
 } from "../record/session-store.ts";
 
 const SESSION_CONTROL_TIMEOUT_MILLISECONDS = 30_000;
@@ -39,42 +39,42 @@ export type ClosedSessionHandling = "reopen" | "keep-closed";
 export { AcpConfigurationValueUnavailableError, AcpExecutionError } from "../../acp/acp-error.ts";
 export type { Adapter, AdapterResolver } from "../../acp/adapter/context.ts";
 export {
-    type AcpAgentSettingsInspectionOptions,
-    type AcpAgentSettingsModelEffort,
-    AcpAgentSettingsSnapshot,
-    type AcpConfigureOptions,
-    type AcpElicitationResponseOptions,
-    type AcpNativeEventReplay,
-    type AcpPermissionResponseOptions,
-    AcpPreparedSession,
-    type AcpPrepareOptions,
-    type AcpPromptResult,
-    type AcpSessionObserver,
-    type AcpSessionRecovery,
-    type AcpSteerOptions,
-    type AcpTurnOptions,
-    NullAcpSessionObserver,
+    type AgentSettingsInspectionOptions,
+    type AgentSettingsModelEffort,
+    AgentSettingsSnapshot,
+    type ElicitationResponseOptions,
+    NullSessionObserver,
+    type PermissionResponseOptions,
+    PreparedSession,
+    type PromptResult,
+    type SessionConfigureOptions,
+    type SessionObserver,
+    type SessionPrepareOptions,
+    type SessionRecovery,
+    type SessionSteerOptions,
+    type SessionTurnOptions,
 } from "../api/session-api.ts";
+export type { SessionEventPage } from "../history/session-event-store.ts";
 
 import type { AdapterContext, AdapterResolver, NativeSessionPreviewRequest } from "../../acp/adapter/context.ts";
 import {
-    type AcpAgentSettingsInspectionOptions,
-    AcpAgentSettingsSnapshot,
-    type AcpConfigureOptions,
-    type AcpElicitationResponseOptions,
-    type AcpNativeEventReplay,
-    type AcpPermissionResponseOptions,
-    type AcpPreparedSession,
-    type AcpPrepareOptions,
-    type AcpPromptResult,
-    type AcpSessionObserver,
-    type AcpSessionRecovery,
-    type AcpSteerOptions,
-    type AcpTurnOptions,
-    NullAcpSessionObserver,
+    type AgentSettingsInspectionOptions,
+    AgentSettingsSnapshot,
+    type ElicitationResponseOptions,
+    NullSessionObserver,
+    type PermissionResponseOptions,
+    type PreparedSession,
+    type PromptResult,
+    type SessionConfigureOptions,
+    type SessionObserver,
+    type SessionPrepareOptions,
+    type SessionRecovery,
+    type SessionSteerOptions,
+    type SessionTurnOptions,
 } from "../api/session-api.ts";
+import type { SessionEventPage } from "../history/session-event-store.ts";
 
-export class AgentRuntimeManager {
+export class SessionManager {
     readonly #operations = new RuntimeOperations();
     readonly #processes: AgentProcessPool;
     readonly #executionProcesses = new RetainedAgentProcesses({
@@ -83,20 +83,20 @@ export class AgentRuntimeManager {
     });
     readonly #queryProcesses: AgentQueryProcesses;
     readonly #executions = new ActiveExecutions();
-    readonly #agentSettingsObserver = new NullAcpSessionObserver();
+    readonly #agentSettingsObserver = new NullSessionObserver();
     readonly #nativeOperations = new Set<string>();
     readonly #sessionClosures = new Map<string, Promise<void>>();
     readonly #sessionRetirements = new Map<string, Promise<void>>();
     /** Sessions that were closed and not reopened since. Only a prepare or restore of the Session reopens it. */
     readonly #closedSessions = new Set<string>();
-    readonly #store: AcpSessionStore;
+    readonly #store: SessionStore;
     readonly #adapters: AdapterResolver;
     readonly #sessionIdentity: "assigned" | "native";
     readonly #onSessionStatusChanged: (event: SessionStatusChangedEvent) => void;
     readonly #onSessionClosed: (event: SessionCloseNoticeEvent) => void;
     readonly #contentExternalizer: AcpContentExternalizer;
     readonly #timer: Timer;
-    #observer: AcpSessionObserver;
+    #observer: SessionObserver;
 
     constructor({
         observer,
@@ -109,8 +109,8 @@ export class AgentRuntimeManager {
         timer,
         maxProcesses,
     }: {
-        readonly observer: AcpSessionObserver;
-        readonly store: AcpSessionStore;
+        readonly observer: SessionObserver;
+        readonly store: SessionStore;
         readonly adapters: AdapterResolver;
         readonly sessionIdentity: "assigned" | "native";
         readonly onSessionStatusChanged: (event: SessionStatusChangedEvent) => void;
@@ -140,7 +140,7 @@ export class AgentRuntimeManager {
         return await runtime.recordControlEvent(event);
     };
 
-    readonly setObserver = (observer: AcpSessionObserver): void => {
+    readonly setObserver = (observer: SessionObserver): void => {
         this.#observer = observer;
     };
 
@@ -150,7 +150,7 @@ export class AgentRuntimeManager {
         }
         const stored = this.#store.read(sessionId);
         return (
-            stored instanceof FoundAcpStoredSession &&
+            stored instanceof FoundStoredSession &&
             this.#nativeOperations.has(`${stored.session.agentId}:${stored.session.nativeSessionId}`)
         );
     }
@@ -174,7 +174,7 @@ export class AgentRuntimeManager {
             if (retained && this.#sessionIdentity === "native") {
                 const stored = this.#store.read(sessionId);
                 if (
-                    stored instanceof FoundAcpStoredSession &&
+                    stored instanceof FoundStoredSession &&
                     stored.session.nativeSessionId === sessionId &&
                     isNativeChatSessionId(stored.session.agentId, sessionId)
                 ) {
@@ -205,7 +205,7 @@ export class AgentRuntimeManager {
         return (
             this.#executionProcesses.get(sessionId) !== undefined ||
             this.#executionProcesses.pending(sessionId) !== undefined ||
-            this.#store.read(sessionId) instanceof FoundAcpStoredSession
+            this.#store.read(sessionId) instanceof FoundStoredSession
         );
     }
 
@@ -229,7 +229,7 @@ export class AgentRuntimeManager {
     }
 
     async #startRetainedSessionProcess(
-        options: AcpPrepareOptions,
+        options: SessionPrepareOptions,
         start: () => Promise<AgentSession>,
     ): Promise<AgentSession> {
         const retiring = this.#sessionRetirements.get(options.sessionId);
@@ -243,8 +243,8 @@ export class AgentRuntimeManager {
     }
 
     async #startPreparation(
-        options: AcpPrepareOptions,
-        recovery: AcpSessionRecovery,
+        options: SessionPrepareOptions,
+        recovery: SessionRecovery,
         metrics: OperationMetrics = unmeasuredOperationMetrics,
     ): Promise<AgentSession> {
         return await this.#executionProcesses.prepare(options.sessionId, async () => {
@@ -255,7 +255,7 @@ export class AgentRuntimeManager {
                         options.origin === undefined &&
                             this.#sessionIdentity === "native" &&
                             isNativeChatSessionId(options.agent.id, options.sessionId) &&
-                            this.#store.read(options.sessionId) instanceof MissingAcpStoredSession
+                            this.#store.read(options.sessionId) instanceof MissingStoredSession
                             ? { ...options, origin: { kind: "import", nativeSessionId: options.sessionId, title: "" } }
                             : options,
                         recovery,
@@ -270,8 +270,8 @@ export class AgentRuntimeManager {
 
     async #replacePreparation(
         existing: AgentSession,
-        options: AcpPrepareOptions,
-        recovery: AcpSessionRecovery,
+        options: SessionPrepareOptions,
+        recovery: SessionRecovery,
         metrics: OperationMetrics,
     ): Promise<AgentSession> {
         return await this.#executionProcesses.prepare(options.sessionId, async () => {
@@ -296,7 +296,7 @@ export class AgentRuntimeManager {
         });
     }
 
-    async #replaceExecutionPreparation(existing: AgentSession, options: AcpPrepareOptions): Promise<AgentSession> {
+    async #replaceExecutionPreparation(existing: AgentSession, options: SessionPrepareOptions): Promise<AgentSession> {
         const desiredConfigOptions = existing.prepared().configOptions;
         return await this.#executionProcesses.prepare(options.sessionId, async () => {
             await this.#retireSessionProcess(options.sessionId, existing, async () => await existing.close());
@@ -354,11 +354,11 @@ export class AgentRuntimeManager {
     }
 
     async #prepareSession(
-        options: AcpPrepareOptions,
-        recovery: AcpSessionRecovery,
+        options: SessionPrepareOptions,
+        recovery: SessionRecovery,
         closed: ClosedSessionHandling,
         metrics: OperationMetrics = unmeasuredOperationMetrics,
-    ): Promise<AcpPreparedSession> {
+    ): Promise<PreparedSession> {
         return await this.#executionProcesses.use(options.sessionId, async () =>
             this.#operations.run(options, async (options) => {
                 const closing = this.#sessionClosures.get(options.sessionId);
@@ -374,7 +374,7 @@ export class AgentRuntimeManager {
                 const stored = metrics.measureSync("session-state-read", () => this.#store.read(options.sessionId));
 
                 if (
-                    stored instanceof FoundAcpStoredSession &&
+                    stored instanceof FoundStoredSession &&
                     this.#nativeOperations.has(`${stored.session.agentId}:${stored.session.nativeSessionId}`)
                 ) {
                     throw new AcpExecutionError("The native session is being managed", {}, "session_busy");
@@ -426,27 +426,23 @@ export class AgentRuntimeManager {
     }
 
     readonly prepareSession = async (
-        options: AcpPrepareOptions,
+        options: SessionPrepareOptions,
         metrics: OperationMetrics = unmeasuredOperationMetrics,
         closed: ClosedSessionHandling = "reopen",
-    ): Promise<AcpPreparedSession> =>
-        await this.#prepareSession(options, { kind: "interactive-only" }, closed, metrics);
+    ): Promise<PreparedSession> => await this.#prepareSession(options, { kind: "interactive-only" }, closed, metrics);
 
     readonly restoreSession = async (
-        options: AcpPrepareOptions,
+        options: SessionPrepareOptions,
         metrics: OperationMetrics = unmeasuredOperationMetrics,
         closed: ClosedSessionHandling = "reopen",
-    ): Promise<AcpPreparedSession> =>
-        await this.#prepareSession(options, { kind: "history-required" }, closed, metrics);
+    ): Promise<PreparedSession> => await this.#prepareSession(options, { kind: "history-required" }, closed, metrics);
 
     /**
      * Opens a short-lived native ACP session only to read the local Agent's
      * authoritative settings. Its identity and store are private to this
      * operation and never become a Mobius Session.
      */
-    readonly inspectAgentSettings = async (
-        options: AcpAgentSettingsInspectionOptions,
-    ): Promise<AcpAgentSettingsSnapshot> =>
+    readonly inspectAgentSettings = async (options: AgentSettingsInspectionOptions): Promise<AgentSettingsSnapshot> =>
         this.#operations.run(options, async (options) => {
             return await this.#processes.runTransient(
                 options.signal,
@@ -458,7 +454,7 @@ export class AgentRuntimeManager {
                         },
                         { kind: "interactive-only" },
                         () => this.#agentSettingsObserver,
-                        new MemoryAcpSessionStore(),
+                        new MemorySessionStore(),
                         unmeasuredOperationMetrics,
                         this.#contentExternalizer,
                     ),
@@ -481,7 +477,7 @@ export class AgentRuntimeManager {
                                   value: model,
                                   valueType: "select",
                               });
-                    return new AcpAgentSettingsSnapshot(
+                    return new AgentSettingsSnapshot(
                         prepared.agentName,
                         prepared.agentVersion,
                         configOptions,
@@ -499,9 +495,9 @@ export class AgentRuntimeManager {
      * Use inspectAgentSettings for Agent-scoped settings discovery.
      */
     readonly inspectSession = async (
-        options: AcpPrepareOptions,
+        options: SessionPrepareOptions,
         metrics: OperationMetrics = unmeasuredOperationMetrics,
-    ): Promise<AcpPreparedSession> =>
+    ): Promise<PreparedSession> =>
         this.#operations.run(options, async (options) => {
             if (
                 this.#executionProcesses.pending(options.sessionId) !== undefined ||
@@ -527,7 +523,7 @@ export class AgentRuntimeManager {
             });
         });
 
-    readonly prepareExecutionSession = async (options: AcpPrepareOptions): Promise<AcpPreparedSession> =>
+    readonly prepareExecutionSession = async (options: SessionPrepareOptions): Promise<PreparedSession> =>
         this.#operations.run(options, async (options) => {
             this.#assertOpen(options.sessionId);
             const pending = this.#executionProcesses.pending(options.sessionId);
@@ -560,10 +556,10 @@ export class AgentRuntimeManager {
             return (await this.#replaceExecutionPreparation(existing, options)).prepared();
         });
 
-    readonly prepareNativeSessionBrowser = (options: AcpPrepareOptions): Promise<AcpPreparedSession> =>
+    readonly prepareNativeSessionBrowser = (options: SessionPrepareOptions): Promise<PreparedSession> =>
         this.#operations.run(options, (scoped) => this.#queryProcesses.prepare(scoped));
 
-    readonly configureSession = async (options: AcpConfigureOptions): Promise<readonly SessionConfigOption[]> =>
+    readonly configureSession = async (options: SessionConfigureOptions): Promise<readonly SessionConfigOption[]> =>
         this.#operations.run(options, async (options) => {
             return await this.#executionProcesses.use(options.sessionId, async () => {
                 const runtime = await this.ensureSession(options);
@@ -584,13 +580,13 @@ export class AgentRuntimeManager {
                     return await runtime.renameSession(title, options.signal);
                 }
                 const stored = this.#store.read(options.sessionId);
-                if (!(stored instanceof FoundAcpStoredSession)) {
+                if (!(stored instanceof FoundStoredSession)) {
                     throw new AcpExecutionError("The Session was not found", {}, "session_not_found");
                 }
                 const normalized = title.slice(0, 500);
                 const updatedAt = new Date().toISOString();
                 this.#store.write(
-                    new AcpStoredSession(
+                    new StoredSession(
                         stored.session.sessionId,
                         stored.session.agentId,
                         stored.session.nativeSessionId,
@@ -615,7 +611,7 @@ export class AgentRuntimeManager {
         });
     };
 
-    readonly steerPrompt = async (options: AcpSteerOptions): Promise<string> =>
+    readonly steerPrompt = async (options: SessionSteerOptions): Promise<string> =>
         this.#operations.run(options, async (options) => {
             if (this.#executions.command(options.sessionId) !== options.targetCommandId) {
                 throw new AcpExecutionError("The target turn is no longer active", {}, "steering_target_unavailable");
@@ -662,13 +658,13 @@ export class AgentRuntimeManager {
             }
         });
 
-    readonly runPrompt = async (options: AcpTurnOptions): Promise<AcpPromptResult> =>
+    readonly runPrompt = async (options: SessionTurnOptions): Promise<PromptResult> =>
         this.#operations.run(options, async (options) => {
             // A close can land after the prompt was prepared; fail before the Session is reported working.
             this.#assertOpen(options.sessionId);
             const stored = this.#store.read(options.sessionId);
             if (
-                stored instanceof FoundAcpStoredSession &&
+                stored instanceof FoundStoredSession &&
                 this.#nativeOperations.has(`${stored.session.agentId}:${stored.session.nativeSessionId}`)
             ) {
                 throw new AcpExecutionError("The native session is being managed", {}, "session_busy");
@@ -739,7 +735,7 @@ export class AgentRuntimeManager {
             }
         });
 
-    readonly respondPermission = async (options: AcpPermissionResponseOptions): Promise<void> => {
+    readonly respondPermission = async (options: PermissionResponseOptions): Promise<void> => {
         this.#assertOpen(options.sessionId);
         const runtime = this.#executionProcesses.get(options.sessionId);
         if (runtime === undefined) {
@@ -748,7 +744,7 @@ export class AgentRuntimeManager {
         await runtime.respondPermission(options);
     };
 
-    readonly respondElicitation = async (options: AcpElicitationResponseOptions): Promise<void> => {
+    readonly respondElicitation = async (options: ElicitationResponseOptions): Promise<void> => {
         this.#assertOpen(options.sessionId);
         const runtime = this.#executionProcesses.get(options.sessionId);
         if (runtime === undefined) {
@@ -819,7 +815,7 @@ export class AgentRuntimeManager {
     readonly findSessions = (sessionIds: readonly string[]) =>
         sessionIds.flatMap((sessionId) => {
             const stored = this.#store.read(sessionId);
-            return stored instanceof FoundAcpStoredSession ? [stored.session] : [];
+            return stored instanceof FoundStoredSession ? [stored.session] : [];
         });
 
     readonly sessionStatus = (sessionId: string): SessionStatus => {
@@ -843,7 +839,7 @@ export class AgentRuntimeManager {
         additionalDirectories: readonly string[],
     ): boolean => this.#executionProcesses.get(sessionId)?.belongsTo(agentId, cwd, additionalDirectories) === true;
 
-    readonly createNativeSession = async (options: AcpPrepareOptions): Promise<string> =>
+    readonly createNativeSession = async (options: SessionPrepareOptions): Promise<string> =>
         this.#operations.run(options, async (options) => {
             const temporarySessionId = `new-${crypto.randomUUID()}`;
             const temporaryOptions = { ...options, sessionId: temporarySessionId };
@@ -856,7 +852,7 @@ export class AgentRuntimeManager {
                         if (
                             !isNativeChatSessionId(options.agent.id, nativeSessionId) ||
                             this.#executionProcesses.get(nativeSessionId) !== undefined ||
-                            !(this.#store.read(nativeSessionId) instanceof MissingAcpStoredSession)
+                            !(this.#store.read(nativeSessionId) instanceof MissingStoredSession)
                         ) {
                             throw new AcpExecutionError(
                                 "The Agent returned an invalid new Session ID",
@@ -885,7 +881,7 @@ export class AgentRuntimeManager {
             });
         });
 
-    readonly ensureSession = async (options: AcpPrepareOptions): Promise<AgentSession> =>
+    readonly ensureSession = async (options: SessionPrepareOptions): Promise<AgentSession> =>
         this.#operations.run(options, async (options) => {
             this.#assertOpen(options.sessionId);
             const existing = this.#executionProcesses.get(options.sessionId);
@@ -909,7 +905,7 @@ export class AgentRuntimeManager {
         });
 
     readonly listNativeSessions = async (
-        options: AcpPrepareOptions,
+        options: SessionPrepareOptions,
         cursor: string | null,
     ): Promise<NativeSessionPage> =>
         this.#operations.run(options, async (options) => {
@@ -920,11 +916,11 @@ export class AgentRuntimeManager {
         });
 
     readonly previewNativeSessionEvents = async (
-        options: AcpPrepareOptions,
+        options: SessionPrepareOptions,
         nativeSessionId: string,
         eventLimit: number,
         cursor: string | null,
-    ): Promise<AcpNativeEventReplay> =>
+    ): Promise<SessionEventPage> =>
         this.#operations.run(options, async (options) => {
             const key = `${options.agent.id}:${nativeSessionId}`;
             if (this.#nativeOperations.has(key)) {
@@ -959,10 +955,10 @@ export class AgentRuntimeManager {
         });
 
     readonly loadSessionEvents = async (
-        options: AcpPrepareOptions,
+        options: SessionPrepareOptions,
         eventLimit: number,
         cursor: string | null,
-    ): Promise<AcpNativeEventReplay> =>
+    ): Promise<SessionEventPage> =>
         this.#operations.run(options, async (options) => {
             return await this.#executionProcesses.use(options.sessionId, async () => {
                 const runtime = await this.ensureSession(options);
@@ -971,11 +967,11 @@ export class AgentRuntimeManager {
         });
 
     readonly openNativeSession = async (
-        options: AcpPrepareOptions,
+        options: SessionPrepareOptions,
         origin: NativeSessionOrigin,
     ): Promise<{
         readonly sessionId: string;
-        readonly prepared: AcpPreparedSession;
+        readonly prepared: PreparedSession;
     }> =>
         this.#operations.run(options, async (options) => {
             const key = `${options.agent.id}:${origin.nativeSessionId}`;
@@ -1027,7 +1023,7 @@ export class AgentRuntimeManager {
             if (
                 this.#executionProcesses.get(options.sessionId) !== undefined ||
                 this.#executionProcesses.pending(options.sessionId) !== undefined ||
-                this.#store.read(options.sessionId) instanceof FoundAcpStoredSession
+                this.#store.read(options.sessionId) instanceof FoundStoredSession
             ) {
                 throw new AcpExecutionError(
                     "The destination conversation already exists",

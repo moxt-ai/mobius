@@ -21,9 +21,9 @@ import { AcpExecutionError } from "../../../acp/acp-error.ts";
 import { operationErrorCode } from "../../../infra/operation-error.ts";
 import { AccumulatingOperationMetrics } from "../../../infra/operation-metrics.ts";
 import type {
-    AcpSessionRecovery,
-    AgentRuntimeManager,
     ClosedSessionHandling,
+    SessionManager,
+    SessionRecovery,
 } from "../../../session/manager/session-manager.ts";
 import type { NativeSessionService } from "../../../session/native/native-session-browser.ts";
 import { resolveSessionDirectories } from "../../../session/workspace/resolve-session-directories.ts";
@@ -44,11 +44,11 @@ export async function resolveCatalogAgent(
 
 async function prepareSession(
     command: SessionPrepareCommand,
-    recovery: AcpSessionRecovery,
+    recovery: SessionRecovery,
     closed: ClosedSessionHandling,
     config: RuntimeConfig,
     directories: WorkspaceDirectoryService,
-    sessions: AgentRuntimeManager,
+    sessions: SessionManager,
     metrics: AccumulatingOperationMetrics,
     signal: AbortSignal,
 ): Promise<SessionReadyEvent> {
@@ -143,7 +143,7 @@ export async function executeSessionPrepare(
     command: SessionPrepareCommand,
     config: RuntimeConfig,
     directories: WorkspaceDirectoryService,
-    sessions: AgentRuntimeManager,
+    sessions: SessionManager,
     diagnostics: RelayConnectionDiagnostics,
     signal: AbortSignal,
 ): Promise<void> {
@@ -183,7 +183,7 @@ export async function executeSessionRestore(
     command: SessionRestoreCommand,
     config: RuntimeConfig,
     directories: WorkspaceDirectoryService,
-    sessions: AgentRuntimeManager,
+    sessions: SessionManager,
     nativeSessions: NativeSessionService,
     diagnostics: RelayConnectionDiagnostics,
     signal: AbortSignal,
@@ -239,7 +239,7 @@ export async function executeSessionRestore(
 export async function executeSessionRename(
     socket: WebSocket,
     command: SessionRenameCommand,
-    sessions: AgentRuntimeManager,
+    sessions: SessionManager,
     signal: AbortSignal,
 ): Promise<void> {
     try {
@@ -264,7 +264,7 @@ export async function executeSessionConfigure(
     command: SessionConfigureCommand,
     config: RuntimeConfig,
     directories: WorkspaceDirectoryService,
-    sessions: AgentRuntimeManager,
+    sessions: SessionManager,
     signal: AbortSignal,
 ): Promise<void> {
     try {
@@ -380,7 +380,7 @@ export async function executeSessionConfigRead(
     command: SessionConfigReadCommand,
     config: RuntimeConfig,
     directories: WorkspaceDirectoryService,
-    sessions: AgentRuntimeManager,
+    sessions: SessionManager,
     nativeSessions: NativeSessionService,
     diagnostics: RelayConnectionDiagnostics,
     signal: AbortSignal,

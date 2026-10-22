@@ -24,7 +24,7 @@ function isTerminal(state: RuntimeExecutionState): boolean {
     return state === "succeeded" || state === "failed" || state === "cancelled";
 }
 
-export class RuntimeOperationState {
+export class ExecutionReceipts {
     readonly #executions = new Map<string, StoredExecution>();
     readonly #terminalCountBySession = new Map<string, number>();
 

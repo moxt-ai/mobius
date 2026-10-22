@@ -13,12 +13,12 @@ import type {
     SessionPermissionResolvedEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { LocalAgentDefinition } from "../../src/runtime/config.ts";
-import type { AcpSessionObserver } from "../../src/session/manager/session-manager.ts";
+import type { SessionObserver } from "../../src/session/manager/session-manager.ts";
 
 export const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
 
 /** Folds the live session event stream into the shapes integration tests assert on. */
-export class RecordingObserver implements AcpSessionObserver {
+export class RecordingObserver implements SessionObserver {
     readonly commands: SessionCommandsUpdatedEvent[] = [];
     readonly config: SessionConfigUpdatedEvent[] = [];
     readonly elicitations: SessionElicitationRequestedEvent[] = [];

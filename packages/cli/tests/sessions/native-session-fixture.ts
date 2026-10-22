@@ -6,11 +6,11 @@ import { AcpContentExternalizer } from "../../src/acp/content/content-externaliz
 import { createRuntimeConfig, LocalAgentDefinition } from "../../src/runtime/config.ts";
 import {
     type AdapterResolver,
-    AgentRuntimeManager,
-    NullAcpSessionObserver,
+    NullSessionObserver,
+    SessionManager,
 } from "../../src/session/manager/session-manager.ts";
 import { NativeSessionService } from "../../src/session/native/native-session-browser.ts";
-import { MemoryAcpSessionStore } from "../../src/session/record/session-store.ts";
+import { MemorySessionStore } from "../../src/session/record/session-store.ts";
 import { WorkspaceDirectoryService } from "../../src/session/workspace/workspace-directory.ts";
 import { systemTimer } from "../../src/util/timer.ts";
 import { acpAdapters } from "../support/acp-adapters.ts";
@@ -20,7 +20,7 @@ const acpUrl = new URL("./fixtures/acp-peer.ts", import.meta.url).toString();
 
 // Real providers cannot deterministically supply destructive test sessions or stalled
 // loads. These ACP subprocesses maintain their own disposable session files.
-class NativeSessionObserver extends NullAcpSessionObserver {
+class NativeSessionObserver extends NullSessionObserver {
     readonly updates: AcpSessionUpdate[] = [];
     readonly loading = Promise.withResolvers<void>();
     override readonly onSessionEvent = (event: SessionLiveEvent): Promise<void> => {
@@ -73,9 +73,9 @@ export async function fixture(
                   ? ["--persist-after-first-prompt"]
                   : []),
     ]);
-    const store = new MemoryAcpSessionStore();
+    const store = new MemorySessionStore();
     const observer = new NativeSessionObserver();
-    let sessions = new AgentRuntimeManager({
+    let sessions = new SessionManager({
         observer,
         store,
         adapters,
@@ -112,9 +112,9 @@ export async function fixture(
         additionalDirectories: readonly string[] = [],
         cwd = workspace,
     ): Promise<string> => {
-        const external = new AgentRuntimeManager({
-            observer: new NullAcpSessionObserver(),
-            store: new MemoryAcpSessionStore(),
+        const external = new SessionManager({
+            observer: new NullSessionObserver(),
+            store: new MemorySessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
@@ -178,7 +178,7 @@ export async function fixture(
         },
         restart: async () => {
             await sessions.close();
-            sessions = new AgentRuntimeManager({
+            sessions = new SessionManager({
                 observer,
                 store,
                 adapters,

@@ -1,4 +1,4 @@
-import type { AcpNativeEventReplay } from "../../../session/api/session-api.ts";
+import type { SessionEventPage } from "../../../session/history/session-event-store.ts";
 import { AcpExecutionError } from "../../acp-error.ts";
 import { readCodexFullHistory } from "../../native-history/codex/codex-history.ts";
 import { nativeHistoryEvents } from "../../native-history/codex/native-history-events.ts";
@@ -13,7 +13,7 @@ export class CodexAdapter implements Adapter {
     readonly previewSessionEvents = async (
         request: NativeSessionPreviewRequest,
         context: AdapterContext,
-    ): Promise<AcpNativeEventReplay> => {
+    ): Promise<SessionEventPage> => {
         const { agent, cwd, signal, sessionId } = context.options;
         const snapshot = await readCodexFullHistory(agent, cwd, request.nativeSessionId, signal);
         if (snapshot.history.status === "unavailable") {

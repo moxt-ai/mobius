@@ -6,9 +6,9 @@ import { InProcessAcpAgentDefinition } from "../../../src/acp/agent/agent-defini
 import { AcpContentExternalizer } from "../../../src/acp/content/content-externalizer.ts";
 import { CodexAcpAgent } from "../../../src/acp/harness/codex/agent.ts";
 import { createRuntimeConfig } from "../../../src/runtime/config.ts";
-import { AgentRuntimeManager, NullAcpSessionObserver } from "../../../src/session/manager/session-manager.ts";
+import { NullSessionObserver, SessionManager } from "../../../src/session/manager/session-manager.ts";
 import { NativeSessionService } from "../../../src/session/native/native-session-browser.ts";
-import { MemoryAcpSessionStore } from "../../../src/session/record/session-store.ts";
+import { MemorySessionStore } from "../../../src/session/record/session-store.ts";
 import { WorkspaceDirectoryService } from "../../../src/session/workspace/workspace-directory.ts";
 import { systemTimer } from "../../../src/util/timer.ts";
 import { acpAdapters } from "../acp-adapters.ts";
@@ -33,9 +33,9 @@ export async function codexFixture(
         (options) => new CodexAcpAgent(options),
         codex.environment,
     );
-    const store = new MemoryAcpSessionStore();
-    const sessions = new AgentRuntimeManager({
-        observer: new NullAcpSessionObserver(),
+    const store = new MemorySessionStore();
+    const sessions = new SessionManager({
+        observer: new NullSessionObserver(),
         store,
         adapters: acpAdapters,
         sessionIdentity,

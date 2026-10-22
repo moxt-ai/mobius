@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
-import { AgentRuntimeManager } from "../../src/session/manager/session-manager.ts";
-import { MemoryAcpSessionStore } from "../../src/session/record/session-store.ts";
+import { SessionManager } from "../../src/session/manager/session-manager.ts";
+import { MemorySessionStore } from "../../src/session/record/session-store.ts";
 import { systemTimer } from "../../src/util/timer.ts";
 import { acpAdapters } from "../support/acp-adapters.ts";
 import { UnretainedExternalContentStore } from "../support/unretained-external-content-store.ts";
@@ -14,9 +14,9 @@ import { fakeAgent, RecordingObserver } from "./acp-feature-fixture.ts";
 describe("acp content limits", () => {
     it("Given an ACP tool returns inline image bytes, When Mobius records the tool update, Then the live event exposes an external image reference without inline bytes", async () => {
         const observer = new RecordingObserver();
-        const manager = new AgentRuntimeManager({
+        const manager = new SessionManager({
             observer,
-            store: new MemoryAcpSessionStore(),
+            store: new MemorySessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
@@ -62,9 +62,9 @@ describe("acp content limits", () => {
 
     it("Given two Turns reuse a tool ID, When each Turn produces an image, Then each turn records its own external image event", async () => {
         const observer = new RecordingObserver();
-        const manager = new AgentRuntimeManager({
+        const manager = new SessionManager({
             observer,
-            store: new MemoryAcpSessionStore(),
+            store: new MemorySessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
@@ -105,9 +105,9 @@ describe("acp content limits", () => {
 
     it("Given an ACP tool returns more than 500,000 characters, When Mobius records the tool update, Then the raw output stays intact in the event log", async () => {
         const observer = new RecordingObserver();
-        const manager = new AgentRuntimeManager({
+        const manager = new SessionManager({
             observer,
-            store: new MemoryAcpSessionStore(),
+            store: new MemorySessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
@@ -139,9 +139,9 @@ describe("acp content limits", () => {
 
     it("Given an Agent streams a long reasoning turn, When it completes, Then every reasoning chunk lands in the event log", async () => {
         const observer = new RecordingObserver();
-        const manager = new AgentRuntimeManager({
+        const manager = new SessionManager({
             observer,
-            store: new MemoryAcpSessionStore(),
+            store: new MemorySessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
@@ -182,9 +182,9 @@ describe("acp content limits", () => {
     it("Given an ACP agent links a local image in Markdown, When Mobius records the reply, Then the reply text preserves the original path", async () => {
         const directory = await mkdtemp(join(tmpdir(), "mobius-markdown-image-"));
         const observer = new RecordingObserver();
-        const manager = new AgentRuntimeManager({
+        const manager = new SessionManager({
             observer,
-            store: new MemoryAcpSessionStore(),
+            store: new MemorySessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
@@ -218,9 +218,9 @@ describe("acp content limits", () => {
         const workspace = await mkdtemp(join(tmpdir(), "mobius-agent-workspace-"));
         const generatedImages = await mkdtemp(join(tmpdir(), "mobius-agent-generated-images-"));
         const observer = new RecordingObserver();
-        const manager = new AgentRuntimeManager({
+        const manager = new SessionManager({
             observer,
-            store: new MemoryAcpSessionStore(),
+            store: new MemorySessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,
@@ -256,9 +256,9 @@ describe("acp content limits", () => {
     it("Given an ACP agent returns image and video output, When Mobius records the reply, Then the image stays referenced in text and the video is externalized", async () => {
         const directory = await mkdtemp(join(tmpdir(), "mobius-media-output-"));
         const observer = new RecordingObserver();
-        const manager = new AgentRuntimeManager({
+        const manager = new SessionManager({
             observer,
-            store: new MemoryAcpSessionStore(),
+            store: new MemorySessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,

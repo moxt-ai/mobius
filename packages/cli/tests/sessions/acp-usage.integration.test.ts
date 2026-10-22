@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
 import { LocalAgentDefinition } from "../../src/runtime/config.ts";
-import { AgentRuntimeManager } from "../../src/session/manager/session-manager.ts";
-import { MemoryAcpSessionStore } from "../../src/session/record/session-store.ts";
+import { SessionManager } from "../../src/session/manager/session-manager.ts";
+import { MemorySessionStore } from "../../src/session/record/session-store.ts";
 import { systemTimer } from "../../src/util/timer.ts";
 import { acpAdapters } from "../support/acp-adapters.ts";
 import { UnretainedExternalContentStore } from "../support/unretained-external-content-store.ts";
@@ -31,9 +31,9 @@ async function run(
     observer: RecordingObserver,
     context?: typeof contextUsage,
 ) {
-    const manager = new AgentRuntimeManager({
+    const manager = new SessionManager({
         observer,
-        store: new MemoryAcpSessionStore(),
+        store: new MemorySessionStore(),
         adapters: acpAdapters,
         sessionIdentity: "assigned",
         onSessionStatusChanged: () => undefined,

@@ -5,7 +5,7 @@ import {
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { ActiveRuntimeTurn, type RecordedSessionEvent } from "./active-turn.ts";
-import type { RuntimeOperationState } from "./execution-receipts.ts";
+import type { ExecutionReceipts } from "./execution-receipts.ts";
 
 export type SessionAdmission =
     | { readonly kind: "available"; readonly disposition: string }
@@ -43,9 +43,9 @@ const waitForTurnCompletion = (turn: ActiveRuntimeTurn, waitSignal: AbortSignal)
 export class SessionExecutionState {
     readonly #sessionId: string;
     readonly #turnsByCommandId = new Map<string, ActiveRuntimeTurn>();
-    readonly #operations: RuntimeOperationState;
+    readonly #operations: ExecutionReceipts;
 
-    constructor(sessionId: string, operations: RuntimeOperationState) {
+    constructor(sessionId: string, operations: ExecutionReceipts) {
         this.#sessionId = sessionId;
         this.#operations = operations;
     }

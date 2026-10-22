@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import type { AcpSessionUpdate, ContentBlock, SessionEventPayload } from "@moxt-ai/mobius-sdk/protocol";
-import type { AcpNativeEventReplay } from "../../../session/api/session-api.ts";
-import type { AcpSessionEventStore } from "../../../session/history/session-event-store.ts";
+import type { SessionEventPage, SessionEventStore } from "../../../session/history/session-event-store.ts";
 import type { NativeHistoryActivity, NativeHistoryEntry } from "./history-images.ts";
 
 function toolKind(value: string): Extract<AcpSessionUpdate, { readonly sessionUpdate: "tool_call" }>["kind"] {
@@ -94,8 +93,8 @@ export function nativeHistoryEvents(
     history: AvailableNativeHistory,
     eventLimit: number,
     cursor: string | null,
-    eventStore: AcpSessionEventStore,
-): AcpNativeEventReplay {
+    eventStore: SessionEventStore,
+): SessionEventPage {
     const events = historyEvents(history);
     const generationId = createHash("sha256")
         .update(nativeSessionId)

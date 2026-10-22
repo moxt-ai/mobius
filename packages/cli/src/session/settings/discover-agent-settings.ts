@@ -14,10 +14,10 @@ import type { AcpAgentDefinition } from "../../acp/agent/agent-definition.ts";
 import { agentSettingsAdapterForAgent } from "../../agent/settings/agent-settings-adapter.ts";
 import type { RuntimeConfig } from "../../runtime/config.ts";
 import {
-    type AcpAgentSettingsModelEffort,
     AcpConfigurationValueUnavailableError,
     AcpExecutionError,
-    type AgentRuntimeManager,
+    type AgentSettingsModelEffort,
+    type SessionManager,
 } from "../manager/session-manager.ts";
 import type { WorkspaceDirectoryService } from "../workspace/workspace-directory.ts";
 
@@ -46,7 +46,7 @@ export async function discoverAgentSettings(
     command: AgentSettingsDiscoverCommand,
     config: RuntimeConfig,
     directories: WorkspaceDirectoryService,
-    sessions: AgentRuntimeManager,
+    sessions: SessionManager,
     signal: AbortSignal,
 ): Promise<AgentSettingsDiscovery> {
     const cataloged = config.catalog.find(command.agentId);
@@ -220,9 +220,9 @@ async function discoverModelEffort(
     initialOptions: readonly SessionConfigOption[],
     selectedOptions: readonly SessionConfigOption[],
     initiallyUnsupportedModels: AcpConfigurationValueUnavailableError[],
-    discoveredModelEffort: AcpAgentSettingsModelEffort,
+    discoveredModelEffort: AgentSettingsModelEffort,
     cwd: string,
-    sessions: AgentRuntimeManager,
+    sessions: SessionManager,
     signal: AbortSignal,
 ): Promise<AgentModelEffort> {
     const model = modelOption(initialOptions);

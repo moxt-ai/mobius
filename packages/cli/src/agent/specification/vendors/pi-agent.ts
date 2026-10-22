@@ -7,11 +7,11 @@ import {
 import type { InProcessAcpEndpointFactory } from "../../../acp/agent/in-process-endpoint.ts";
 import { PiAcpEndpoint } from "../../../acp/harness/pi/endpoint.ts";
 import { AgentProbeError } from "../../discovery/agent-probe-error.ts";
-import { InProcessAcpAgentDefinition } from "../agent-specification.ts";
+import { InProcessAcpAgentSpecification } from "../agent-specification.ts";
 
 const ACP_PROBE_TIMEOUT_MILLISECONDS = 30_000;
 
-export class PiAgentSpecification extends InProcessAcpAgentDefinition {
+export class PiAgentSpecification extends InProcessAcpAgentSpecification {
     override readonly acpProbeTimeoutMilliseconds = ACP_PROBE_TIMEOUT_MILLISECONDS;
     readonly agentExecutable = "pi";
     readonly createEndpoint: InProcessAcpEndpointFactory = (options) => new PiAcpEndpoint(options);

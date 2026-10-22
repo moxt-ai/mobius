@@ -1,17 +1,16 @@
 import type { SessionNotification } from "@agentclientprotocol/sdk";
 import type { AcpSessionUpdate, SessionEventPayload, SessionLiveEvent } from "@moxt-ai/mobius-sdk/protocol";
-import type { AcpNativeEventReplay } from "../api/session-api.ts";
-import type { AcpSessionEventStore } from "./session-event-store.ts";
+import type { SessionEventPage, SessionEventStore } from "./session-event-store.ts";
 
 /**
  * Captures ACP load replay into the V2 session event log without turning
  * historical updates into live turns.
  */
-export class AcpHistoryReplay {
-    readonly #events: AcpSessionEventStore;
+export class HistoryReplayCapture {
+    readonly #events: SessionEventStore;
     readonly #sessionId: string;
 
-    constructor(events: AcpSessionEventStore, sessionId: string) {
+    constructor(events: SessionEventStore, sessionId: string) {
         this.#events = events;
         this.#sessionId = sessionId;
     }
@@ -32,6 +31,6 @@ export class AcpHistoryReplay {
         return this.#events.append(this.#sessionId, event);
     };
 
-    readonly eventPage = (eventLimit: number, cursor: string | null): AcpNativeEventReplay =>
+    readonly eventPage = (eventLimit: number, cursor: string | null): SessionEventPage =>
         this.#events.page(this.#sessionId, eventLimit, cursor);
 }
