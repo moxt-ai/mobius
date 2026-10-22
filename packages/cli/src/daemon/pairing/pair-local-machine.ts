@@ -22,6 +22,7 @@ import {
 import { ensureCanonicalDirectory } from "../../storage/files/local-files.ts";
 import { readStateDirectory } from "../../storage/state-directory.ts";
 import { environmentProxyDispatcher } from "../../util/network/environment-proxy.ts";
+import { isRecord } from "../../util/value-utils.ts";
 import { prepareVersionData } from "../upgrades/data.ts";
 
 const PAIRING_TIMEOUT_MILLISECONDS = 20_000;
@@ -67,10 +68,6 @@ export class PairingClientError extends Error {
         this.code = code;
         this.name = "PairingClientError";
     }
-}
-
-function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-    return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function hasExactKeys(value: Readonly<Record<string, unknown>>, expectedKeys: readonly string[]): boolean {
