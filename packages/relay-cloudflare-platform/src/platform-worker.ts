@@ -1,3 +1,4 @@
+import type { LocalSessionOperations, SessionRuntimeOperations } from "@moxt-ai/mobius-relay-core";
 import {
     acceptWebSocketHttpTransport,
     CloudflareChannelRuntime,
@@ -13,6 +14,7 @@ import {
     requestTimeoutMiddleware,
     type WorkerRuntimeGateways,
 } from "@moxt-ai/mobius-relay-core";
+import type { SqlDatabase } from "@moxt-ai/mobius-relay-core/database";
 import {
     decodeFileReadCommand,
     decodeMessageKind,
@@ -49,6 +51,7 @@ import {
     type ProjectWorkerRoutingBindings,
     routeProjectDurableObject,
 } from "./gateway/project-durable-object-routing.ts";
+import { routeRuntimeSessionRequest } from "./gateway/runtime-session-routing.ts";
 import { createPlatformControlApplication } from "./http/platform-routes.ts";
 import { createProjectApplication } from "./http/project-routes.ts";
 import { recordingReadRoutes, recordingSessionStatusRoutes } from "./http/recording-read-routes.ts";
@@ -93,9 +96,25 @@ export interface PlatformRelayBindings extends PlatformStorageBindings, ProjectW
 
 export interface ProjectPlatformRelayBindings extends PlatformRelayBindings, ProjectDurableObjectExecutionBindings {}
 
-type PlatformApplicationBindings = PlatformRelayBindings | ProjectPlatformRelayBindings;
+export interface RuntimeExecutionBindings extends PlatformRelayBindings {
+    readonly MOBIUS_RUNTIME_EXECUTION: {
+        readonly projectId: string;
+        readonly runtimeId: string;
+        readonly operations: LocalSessionOperations;
+    };
+}
+type PlatformApplicationBindings = PlatformRelayBindings | ProjectPlatformRelayBindings | RuntimeExecutionBindings;
 
 export interface ConfiguredPlatformRelayBindings extends PlatformRelayBindings, PlatformAuthenticationEnvironment {}
+
+function sessionOperations(context: {
+    readonly env: PlatformApplicationBindings;
+    readonly var: { readonly relay: RelayContext };
+}) {
+    return "MOBIUS_RUNTIME_EXECUTION" in context.env
+        ? context.env.MOBIUS_RUNTIME_EXECUTION.operations
+        : context.var.relay.services.runtimePairings;
+}
 
 const projectApplication = createMobiusApplication();
 const scopedProjectApplication = createProjectApplication();
@@ -149,7 +168,7 @@ type DispatchEnvironment = {
         readonly appAuthentication: AppCredentialAuthenticationService;
         readonly databases: PlatformDatabaseResolver;
         readonly storageRegistry: PlatformStorageRegistry;
-        readonly projectDatabases: import("@moxt-ai/mobius-relay-core/database").SqlDatabase[];
+        readonly projectDatabases: SqlDatabase[];
         readonly relay: RelayContext;
         readonly recordingPolicies: RecordingPolicyService;
         readonly appSessionStatusWebhooks: AppSessionStatusWebhookService;
@@ -168,11 +187,11 @@ function optionalExecutionContext(context: Pick<Context, "executionCtx">): Conte
 }
 
 async function runtimeSessionIdentity(
-    relay: RelayContext,
+    relay: SessionRuntimeOperations,
     target: { readonly projectId: string; readonly runtimeId: string; readonly sessionId: string },
     signal: AbortSignal,
 ) {
-    const queried = await relay.services.runtimePairings.requestProjectScopeControl(
+    const queried = await relay.requestProjectScopeControl(
         new ProjectScope(target.projectId),
         target.runtimeId,
         decodeSessionQueryCommand(
@@ -192,7 +211,7 @@ async function runtimeSessionIdentity(
 
 export function createPlatformApplication(
     authentication: PlatformAuthenticationConfiguration,
-    gateways: (environment: PlatformRelayBindings) => WorkerRuntimeGateways,
+    gateways: (environment: PlatformApplicationBindings) => WorkerRuntimeGateways,
     organizations: (environment: PlatformRelayBindings) => OrganizationMembershipGateway = (environment) =>
         new ClerkOrganizationGateway(environment.CLERK_SECRET_KEY),
 ): Hono<{ Bindings: PlatformApplicationBindings }> {
@@ -311,7 +330,7 @@ export function createPlatformApplication(
                 v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(10_000)),
                 Number(context.req.query("eventLimit") ?? "50"),
             );
-            const result = await context.var.relay.services.runtimePairings.requestProjectScopeControl(
+            const result = await sessionOperations(context).requestProjectScopeControl(
                 new ProjectScope(access.projectId),
                 access.runtimeId,
                 decodeSessionPreviewHistoryPageLoad(
@@ -405,7 +424,7 @@ export function createPlatformApplication(
                 v.pipe(v.string(), v.minLength(1), v.maxLength(2048)),
                 context.req.query("directoryId"),
             );
-            const result = await context.var.relay.services.runtimePairings.requestProjectScopeControl(
+            const result = await sessionOperations(context).requestProjectScopeControl(
                 new ProjectScope(access.projectId),
                 access.runtimeId,
                 decodeNativeSessionRequest(
@@ -454,7 +473,7 @@ export function createPlatformApplication(
             const identity =
                 body.agentId === undefined || body.directoryId === undefined
                     ? await runtimeSessionIdentity(
-                          context.var.relay,
+                          sessionOperations(context),
                           { projectId: access.projectId, runtimeId: access.runtimeId, sessionId },
                           context.req.raw.signal,
                       )
@@ -485,7 +504,7 @@ export function createPlatformApplication(
                 }
                 throw error;
             }
-            const accepted = await context.var.relay.services.runtimePairings.requestProjectScopeControl(
+            const accepted = await sessionOperations(context).requestProjectScopeControl(
                 new ProjectScope(access.projectId),
                 access.runtimeId,
                 command,
@@ -530,7 +549,7 @@ export function createPlatformApplication(
             const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
             const turnId = v.parse(sessionIdentifier, context.req.param("turnId"));
             const body = v.parse(sessionPromptDispositionBody, await context.req.json());
-            const started = await context.var.relay.services.runtimePairings.requestProjectScopeControl(
+            const started = await sessionOperations(context).requestProjectScopeControl(
                 new ProjectScope(access.projectId),
                 access.runtimeId,
                 decodeSessionPromptDispositionCommand(
@@ -568,7 +587,7 @@ export function createPlatformApplication(
                 v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(128 * 1024 * 1024)),
                 Number(context.req.query("maxBytes") ?? String(32 * 1024 * 1024)),
             );
-            return await context.var.relay.services.runtimePairings.readProjectSessionFile(
+            return await sessionOperations(context).readProjectSessionFile(
                 new ProjectScope(access.projectId),
                 access.runtimeId,
                 decodeFileReadCommand(
@@ -593,7 +612,7 @@ export function createPlatformApplication(
             );
             const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
             const body = v.parse(sessionConfigurationBody, await context.req.json());
-            const result = await context.var.relay.services.runtimePairings.requestProjectScopeControl(
+            const result = await sessionOperations(context).requestProjectScopeControl(
                 new ProjectScope(access.projectId),
                 access.runtimeId,
                 decodeSessionConfigureCommand(
@@ -629,7 +648,7 @@ export function createPlatformApplication(
             );
             const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
             const body = v.parse(sessionRenameBody, await context.req.json());
-            const result = await context.var.relay.services.runtimePairings.requestProjectScopeControl(
+            const result = await sessionOperations(context).requestProjectScopeControl(
                 new ProjectScope(access.projectId),
                 access.runtimeId,
                 decodeSessionRenameCommand(
@@ -661,7 +680,7 @@ export function createPlatformApplication(
             const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
             const turnId = v.parse(sessionIdentifier, context.req.param("turnId"));
             const body = v.parse(v.strictObject({ idempotencyKey: sessionIdentifier }), await context.req.json());
-            const completed = await context.var.relay.services.runtimePairings.requestProjectScopeControl(
+            const completed = await sessionOperations(context).requestProjectScopeControl(
                 new ProjectScope(access.projectId),
                 access.runtimeId,
                 decodeSessionCancelCommand(JSON.stringify({ commandId: turnId, kind: "session.cancel", sessionId })),
@@ -719,7 +738,7 @@ export function createPlatformApplication(
                               sessionId,
                           }),
                       );
-            await context.var.relay.services.runtimePairings.requestProjectScopeControl(
+            await sessionOperations(context).requestProjectScopeControl(
                 new ProjectScope(access.projectId),
                 access.runtimeId,
                 command,
@@ -742,7 +761,7 @@ export function createPlatformApplication(
                 context.req.raw.signal,
             );
             if (context.req.header("upgrade")?.toLowerCase() !== "websocket") {
-                const result = await context.var.relay.services.runtimePairings.requestProjectScopeControl(
+                const result = await sessionOperations(context).requestProjectScopeControl(
                     new ProjectScope(target.projectId),
                     target.runtimeId,
                     decodeSessionHistoryPageLoad(
@@ -776,7 +795,16 @@ export function createPlatformApplication(
                 context.header("Cache-Control", "no-store");
                 return context.json(result.events.events);
             }
-            const host = await context.var.relay.services.runtimePairings.openProjectSessionEventHost(
+            if ("MOBIUS_RUNTIME_EXECUTION" in context.env) {
+                return await context.env.MOBIUS_RUNTIME_EXECUTION.operations.openPublicSessionEvents(
+                    new ProjectScope(target.projectId),
+                    target.runtimeId,
+                    context.req.param("sessionId"),
+                    target.expiresAtEpochMilliseconds,
+                    context.req.raw.signal,
+                );
+            }
+            const host = await sessionOperations(context).openProjectSessionEventHost(
                 new ProjectScope(target.projectId),
                 target.runtimeId,
                 context.req.param("sessionId"),
@@ -850,7 +878,14 @@ export function createPlatformApplication(
         .use("*", errorMiddleware)
         .use("*", requestTimeoutMiddleware<DispatchEnvironment>(PLATFORM_REQUEST_TIMEOUT_MILLISECONDS))
         .use("*", async (context, next) => {
-            const routed = await routeProjectDurableObject(context.req.raw, context.env, authentication.allowedOrigins);
+            const runtimeRoute = await routeRuntimeSessionRequest(context.req.raw, context.env);
+            if (runtimeRoute !== null) {
+                return runtimeRoute;
+            }
+            const routed =
+                "MOBIUS_RUNTIME_EXECUTION" in context.env
+                    ? null
+                    : await routeProjectDurableObject(context.req.raw, context.env, authentication.allowedOrigins);
             if (routed !== null) {
                 return routed;
             }
@@ -971,16 +1006,19 @@ function instrumentPlatformDatabases(
     };
 }
 
-export function createPlatformGateways(environment: PlatformRelayBindings): WorkerRuntimeGateways {
+export function createPlatformGateways(environment: PlatformApplicationBindings): WorkerRuntimeGateways {
     return {
         channel: new CloudflareChannelRuntime({ gateways: { runtimeRelay: environment.RUNTIME_RELAY } }),
+        ...("MOBIUS_RUNTIME_EXECUTION" in environment
+            ? { runtimeOperations: environment.MOBIUS_RUNTIME_EXECUTION.operations }
+            : {}),
     };
 }
 
 export function createPlatformWorker(): {
     readonly fetch: (
         request: Request,
-        environment: ConfiguredPlatformRelayBindings,
+        environment: ConfiguredPlatformRelayBindings | (ConfiguredPlatformRelayBindings & RuntimeExecutionBindings),
         executionContext?: ExecutionContext,
     ) => Promise<Response>;
 } {
@@ -988,7 +1026,7 @@ export function createPlatformWorker(): {
     return {
         fetch: async (
             request: Request,
-            environment: ConfiguredPlatformRelayBindings,
+            environment: ConfiguredPlatformRelayBindings | (ConfiguredPlatformRelayBindings & RuntimeExecutionBindings),
             executionContext?: ExecutionContext,
         ): Promise<Response> => {
             const key = `${environment.MOBIUS_PLATFORM_ALLOWED_ORIGINS}\u0000${environment.MOBIUS_PLATFORM_OIDC_PROVIDERS}\u0000${environment.MOBIUS_PLATFORM_OPERATOR_SUBJECTS}`;

@@ -187,7 +187,7 @@ async function exercise(count) {
                     compatibilityDate: "2026-09-03",
                     durableObjects: {
                         RUNTIME_RELAY: { className: "RuntimeRelay", useSQLite: true },
-                        PROJECT_RELAY: { className: "ProjectRelay", useSQLite: true },
+                        PROJECT_RELAY: { className: "ProjectDO", useSQLite: true },
                     },
                     d1Databases: ["PLATFORM_DIRECTORY_DATABASE"],
                     kvNamespaces: ["APP_CREDENTIAL_CACHE"],

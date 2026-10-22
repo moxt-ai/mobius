@@ -22,6 +22,14 @@ const historyRequestSchema = v.object({
 
 const attachmentSchema = v.union([
     v.object({
+        role: v.literal("viewer"),
+        expiresAt: v.number(),
+        eventFormat: v.picklist(["events", "envelope"]),
+        projectId: v.string(),
+        runtimeId: v.string(),
+        sessionFilter: v.string(),
+    }),
+    v.object({
         role: v.literal("host"),
         channelId: v.string(),
         credentialId: v.string(),
@@ -63,7 +71,7 @@ export class CloudflareChannelSocket implements RuntimeSocket {
 
     get sessionFilter(): string | undefined {
         const identity = this.identity();
-        return identity.role === "host" ? identity.sessionFilter : undefined;
+        return identity.role === "host" || identity.role === "viewer" ? identity.sessionFilter : undefined;
     }
 
     readonly identity = (): RuntimeSocketIdentity => {
@@ -92,6 +100,9 @@ export class CloudflareChannelSocket implements RuntimeSocket {
     };
     readonly close = (code: number, reason: string): void => this.#socket.close(code, reason);
     readonly consumeAgentSettingsDiscovery = (requestId: string, agentId: string): boolean => {
+        if (this.identity().role === "viewer") {
+            return false;
+        }
         const attachment = this.hostAttachment();
         let consumed = false;
         const pendingAgentSettingsDiscoveries = attachment.pendingAgentSettingsDiscoveries.filter((pending) => {
@@ -107,6 +118,9 @@ export class CloudflareChannelSocket implements RuntimeSocket {
         return consumed;
     };
     readonly consumeAgentSettingsDiscoveryFailure = (requestId: string): boolean => {
+        if (this.identity().role === "viewer") {
+            return false;
+        }
         const attachment = this.hostAttachment();
         let consumed = false;
         const pendingAgentSettingsDiscoveries = attachment.pendingAgentSettingsDiscoveries.filter((pending) => {
@@ -122,6 +136,9 @@ export class CloudflareChannelSocket implements RuntimeSocket {
         return consumed;
     };
     readonly takeAgentSettingsDiscoveries = (): readonly string[] => {
+        if (this.identity().role === "viewer") {
+            return [];
+        }
         const attachment = this.hostAttachment();
         const requests = attachment.pendingAgentSettingsDiscoveries.map((pending) => pending.requestId);
         if (attachment.pendingAgentSettingsDiscoveries.length > 0) {
@@ -230,6 +247,22 @@ export class CloudflareChannelPeers implements RuntimePeers {
 
     readonly hosts = (): readonly ChannelSocket[] =>
         this.#state.getWebSockets("host").map((socket) => new CloudflareChannelSocket(socket));
+
+    readonly viewers = () =>
+        this.sockets().flatMap(({ socket, identity }) =>
+            identity.role === "viewer"
+                ? [
+                      {
+                          socket,
+                          sessionId: identity.sessionFilter,
+                          expiresAt: identity.expiresAt,
+                          eventFormat: identity.eventFormat,
+                      },
+                  ]
+                : [],
+        );
+
+    readonly operations: RuntimePeers["operations"] = () => [];
 
     readonly nativeRequests = (): readonly { readonly requestId: string; readonly socket: ChannelSocket }[] =>
         this.#state.getWebSockets("native-request").map((webSocket) => {

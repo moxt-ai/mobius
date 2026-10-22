@@ -1242,7 +1242,7 @@ describe.sequential("Platform Session-only boundary", () => {
                 throw new Error("Expected history loading without a preceding Session query");
             }
             expect(historyLoad.omit).toEqual(["agent-reasoning"]);
-            await evictDurableObject(environment.RUNTIME_RELAY.getByName(runtimeId), { webSockets: "hibernate" });
+
             daemon.send(
                 encodeSessionStatusChangedEvent({
                     kind: "session.status.changed",
@@ -1295,6 +1295,8 @@ describe.sequential("Platform Session-only boundary", () => {
                 truncated: false,
                 version: 2,
             });
+            // Direct Runtime HTTP owns the response until it completes; hibernate between requests.
+            await evictDurableObject(environment.RUNTIME_RELAY.getByName(runtimeId), { webSockets: "hibernate" });
             // A delayed result after the caller has finished must not disconnect the Runtime.
             daemon.send(historyPage);
             const previewHistoryResponse = worker.fetch(
@@ -1308,7 +1310,7 @@ describe.sequential("Platform Session-only boundary", () => {
             if (previewHistoryLoad.kind !== "session.preview-history.page.load") {
                 throw new Error("Expected a native Session preview history request");
             }
-            await evictDurableObject(environment.RUNTIME_RELAY.getByName(runtimeId), { webSockets: "hibernate" });
+
             const previewHistoryPage = encodeSessionPreviewHistoryPageLoaded({
                 events: {
                     events: {
@@ -1337,6 +1339,7 @@ describe.sequential("Platform Session-only boundary", () => {
                 },
                 queuedPromptRequests: [],
             });
+            await evictDurableObject(environment.RUNTIME_RELAY.getByName(runtimeId), { webSockets: "hibernate" });
             // A delayed result after the caller has finished must not disconnect the Runtime.
             daemon.send(previewHistoryPage);
             const failedPreviewHistoryResponse = worker.fetch(
@@ -2025,6 +2028,62 @@ async function connectRuntimeDaemon(slug: string) {
                     ],
                 }),
             ),
+        runtimeId,
+        issueRuntimeCredential: async (targetRuntimeId: string) =>
+            text(
+                await responseJson(
+                    await worker.fetch(
+                        new Request(
+                            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/access-credentials`,
+                            {
+                                method: "POST",
+                                headers: credentialHeaders(appCredential),
+                                body: JSON.stringify({ expiresInSeconds: 900, runtimeId: targetRuntimeId }),
+                            },
+                        ),
+                        environment,
+                    ),
+                    201,
+                ),
+                "credential",
+            ),
+        queryActiveTurn: async (signal: AbortSignal) =>
+            worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtimes/${runtimeId}/sessions/${sessionId}/active-turn`,
+                    {
+                        method: "POST",
+                        headers: credentialHeaders(appCredential),
+                        signal,
+                        body: JSON.stringify({ additionalDirectoryIds: [], agentId: "codex", directoryId: "root" }),
+                    },
+                ),
+                environment,
+            ),
+        submitRuntimeTurn: (
+            idempotencyKey: string,
+            credentialTransform: (credential: string) => string = (credential) => credential,
+            requestedSessionId: string = sessionId,
+            destinationRuntimeId: string = runtimeId,
+        ) =>
+            env.RUNTIME_RELAY.getByName(destinationRuntimeId).fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${requestedSessionId}/turns`,
+                    {
+                        method: "POST",
+                        headers: credentialHeaders(credentialTransform(text(sessionAccess, "credential"))),
+                        body: JSON.stringify({
+                            additionalDirectoryIds: [],
+                            agentId: "codex",
+                            content: "Direct execution",
+                            directoryId: "root",
+                            idempotencyKey,
+                            images: [],
+                            resources: [],
+                        }),
+                    },
+                ),
+            ),
         submitTurn: (idempotencyKey: string) =>
             worker.fetch(
                 new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/turns`, {
@@ -2046,6 +2105,87 @@ async function connectRuntimeDaemon(slug: string) {
 }
 
 describe.sequential("Platform Turn submission", () => {
+    it("Given an authorized token for another Project, When it selects an existing Runtime, Then that Runtime refuses the Project mismatch", async () => {
+        const owner = await connectRuntimeDaemon("direct-owner");
+        const other = await connectRuntimeDaemon("direct-other-project");
+        try {
+            const credential = await other.issueRuntimeCredential(owner.runtimeId);
+            expect(
+                await responseJson(
+                    await other.submitRuntimeTurn("foreign-project", () => credential, undefined, owner.runtimeId),
+                    403,
+                ),
+            ).toMatchObject({ error: { code: "runtime_access_denied" } });
+        } finally {
+            owner.daemon.close(1000, "Test complete");
+            other.daemon.close(1000, "Test complete");
+        }
+    });
+    it("Given an executing native query, When its HTTP caller cancels, Then cancellation reaches the daemon", async () => {
+        const runtime = await connectRuntimeDaemon("direct-cancellation");
+        const controller = new AbortController();
+        try {
+            const pending = runtime.queryActiveTurn(controller.signal).then(
+                (response) => response.status,
+                (cause: unknown) => cause,
+            );
+            const command = decodeServiceToDaemonMessage(await runtime.daemonMessages.next());
+            if (command.kind !== "native.session.request") {
+                throw new Error("Expected a native query");
+            }
+            controller.abort(new DOMException("Caller left", "AbortError"));
+            expect(decodeServiceToDaemonMessage(await runtime.daemonMessages.next())).toMatchObject({
+                kind: "native.session.cancel",
+                requestId: command.requestId,
+            });
+            expect(await pending).toBeInstanceOf(DOMException);
+        } finally {
+            controller.abort();
+            runtime.daemon.close(1000, "Test complete");
+        }
+    });
+    it("Given a Session credential, When direct Runtime HTTP receives a forged, wrong-Session, or expired credential, Then it rejects the request before execution", async () => {
+        const runtime = await connectRuntimeDaemon("direct-authorization");
+        try {
+            expect(
+                await responseJson(
+                    await runtime.submitRuntimeTurn("forged", (credential) => `${credential.slice(0, -6)}AAAAAA`),
+                    401,
+                ),
+            ).toMatchObject({ error: { code: "credential_expired" } });
+            expect(
+                await responseJson(
+                    await runtime.submitRuntimeTurn("wrong-session", (credential) => credential, "different-session"),
+                    403,
+                ),
+            ).toMatchObject({ error: { code: "project_permission_denied" } });
+            vi.setSystemTime(new Date("2026-09-18T00:16:00.000Z"));
+            expect(await responseJson(await runtime.submitRuntimeTurn("expired"), 401)).toMatchObject({
+                error: { code: "credential_expired" },
+            });
+        } finally {
+            runtime.daemon.close(1000, "Test complete");
+        }
+    });
+    it("Given a Session credential, When HTTP reaches RuntimeRelay directly, Then the command executes without a project relay hop and remains correlated", async () => {
+        const runtime = await connectRuntimeDaemon("direct-runtime");
+        try {
+            const submitted = runtime.submitRuntimeTurn("direct-command");
+            const first = await Promise.race([
+                runtime.daemonMessages.next().then((message) => ({ kind: "command", message })),
+                submitted.then((response) => ({ kind: "response", message: String(response.status) })),
+            ]);
+            expect(first.kind).toBe("command");
+            expect(decodeServiceToDaemonMessage(first.message)).toMatchObject({
+                kind: "session.prompt",
+                commandId: "direct-command",
+            });
+            runtime.startTurn("direct-command", "1");
+            expect(await responseJson(await submitted, 200)).toMatchObject({ state: { kind: "running" } });
+        } finally {
+            runtime.daemon.close(1000, "Test complete");
+        }
+    });
     it("Given a linked Runtime, When Chat submits a first Turn longer than 10,000 characters or an invalid Turn, Then the long Turn reaches the Runtime and the invalid Turn is rejected as a client error", async () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),

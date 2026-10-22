@@ -10,7 +10,12 @@ export function requestTimeoutMiddleware<TEnvironment extends RequestSignalEnvir
 ): MiddlewareHandler<TEnvironment> {
     return async (context, next) => {
         const requestSignal = context.req.raw.signal;
-        const signal = AbortSignal.any([requestSignal, AbortSignal.timeout(timeoutMilliseconds)]);
+        const timeout = new AbortController();
+        const timer = setTimeout(
+            () => timeout.abort(new DOMException("Request timed out", "TimeoutError")),
+            timeoutMilliseconds,
+        );
+        const signal = AbortSignal.any([requestSignal, timeout.signal]);
         context.set("signal", signal);
         try {
             await next();
@@ -19,6 +24,8 @@ export function requestTimeoutMiddleware<TEnvironment extends RequestSignalEnvir
                 throw error;
             }
             throw timeoutError(error);
+        } finally {
+            clearTimeout(timer);
         }
     };
 }

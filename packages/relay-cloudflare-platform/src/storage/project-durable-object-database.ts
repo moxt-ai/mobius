@@ -61,7 +61,7 @@ async function requestDatabase(
         logger.error(
             {
                 event: "project_database_request_failed",
-                durableObjectClass: "ProjectRelay",
+                durableObjectClass: "ProjectDO",
                 durableObjectId: namespace.idFromName(projectId).toString(),
                 projectId,
                 operation: operation.kind,

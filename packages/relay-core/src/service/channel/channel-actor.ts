@@ -109,6 +109,18 @@ export interface ChannelSocket {
 }
 
 export interface ChannelPeers {
+    readonly viewers: () => readonly {
+        readonly socket: ChannelSocket;
+        readonly sessionId: string;
+        readonly expiresAt: number;
+        readonly eventFormat: "events" | "envelope";
+    }[];
+    readonly operations: () => readonly {
+        readonly socket: ChannelSocket;
+        readonly requestId: string;
+        readonly sessionId: string;
+        readonly queueAcknowledgement: boolean;
+    }[];
     readonly daemons: () => readonly ChannelSocket[];
     readonly hosts: () => readonly ChannelSocket[];
     readonly nativeRequests: () => readonly { readonly requestId: string; readonly socket: ChannelSocket }[];
@@ -189,6 +201,10 @@ export class ChannelActor {
                     [
                         ...this.#peers.hosts(),
                         ...this.#peers
+                            .operations()
+                            .filter((route) => route.requestId === message.requestId)
+                            .map(({ socket }) => socket),
+                        ...this.#peers
                             .nativeRequests()
                             .filter(({ requestId }) => requestId === message.requestId)
                             .map(({ socket }) => socket),
@@ -219,6 +235,16 @@ export class ChannelActor {
                 return;
             }
             this.validateDaemonControl(message);
+            if ("requestId" in message || "interactionId" in message) {
+                const id = "requestId" in message ? message.requestId : message.interactionId;
+                this.broadcast(
+                    this.#peers
+                        .operations()
+                        .filter((route) => route.requestId === id)
+                        .map(({ socket }) => socket),
+                    encodeDaemonToServiceMessage(message),
+                );
+            }
             this.broadcast(
                 this.#peers.hosts(),
                 encodeDaemonToServiceMessage(message),
@@ -543,16 +569,18 @@ export class ChannelActor {
         agentId: string,
         message: string,
     ): void => {
-        const recipient = this.#peers
-            .hosts()
-            .find((socket) => socket.consumeAgentSettingsDiscovery(requestId, agentId));
+        const recipient = [...this.#peers.hosts(), ...this.#peers.operations().map(({ socket }) => socket)].find(
+            (socket) => socket.consumeAgentSettingsDiscovery(requestId, agentId),
+        );
         if (recipient?.isOpen()) {
             recipient.send(message);
         }
     };
 
     private readonly returnAgentSettingsDiscoveryFailure = (requestId: string, message: string): void => {
-        const recipient = this.#peers.hosts().find((socket) => socket.consumeAgentSettingsDiscoveryFailure(requestId));
+        const recipient = [...this.#peers.hosts(), ...this.#peers.operations().map(({ socket }) => socket)].find(
+            (socket) => socket.consumeAgentSettingsDiscoveryFailure(requestId),
+        );
         if (recipient?.isOpen()) {
             recipient.send(message);
         }
@@ -594,7 +622,7 @@ export class ChannelActor {
     };
 
     private readonly failPendingAgentSettingsDiscoveries = (): void => {
-        for (const socket of this.#peers.hosts()) {
+        for (const socket of [...this.#peers.hosts(), ...this.#peers.operations().map(({ socket }) => socket)]) {
             for (const requestId of socket.takeAgentSettingsDiscoveries()) {
                 if (socket.isOpen()) {
                     socket.send(
@@ -626,8 +654,17 @@ export class ChannelActor {
     private readonly hasOnlineDaemon = (): boolean => this.#peers.daemons().some((socket) => socket.isOpen());
 
     private readonly broadcastRuntimeStatus = (online: boolean): void => {
+        if (!online) {
+            for (const { socket } of this.#peers.viewers()) {
+                socket.close(1000, "Runtime offline");
+            }
+        }
         this.broadcast(
-            [...this.#peers.hosts(), ...this.#peers.nativeRequests().map(({ socket }) => socket)],
+            [
+                ...this.#peers.hosts(),
+                ...this.#peers.operations().map(({ socket }) => socket),
+                ...this.#peers.nativeRequests().map(({ socket }) => socket),
+            ],
             encodeRuntimeStatusEvent({
                 kind: RUNTIME_STATUS_KIND,
                 online,
