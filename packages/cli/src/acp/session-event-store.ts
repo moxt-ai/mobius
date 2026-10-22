@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { SessionEvent, SessionEventPayload, SessionLiveEvent } from "@moxt-ai/mobius-sdk/protocol";
-import type { LocalSqliteDatabase } from "../storage/sqlite/local-sqlite-database.ts";
-import { SessionEventCacheDatabase } from "./session-event-cache-database.ts";
+import type { SessionEventCacheTable } from "../storage/session/session-event-cache-table.ts";
 import { type MaterializedEventsResolver, SessionEventHistoryProjection } from "./session-event-history-projection.ts";
 import { InMemorySessionEventIdAllocator, type SessionEventIdAllocator } from "./session-event-id-allocator.ts";
 import type { SessionLiveEventPosition } from "./session-live-event-position.ts";
@@ -314,20 +313,20 @@ export class MemoryAcpSessionEventStore implements AcpSessionEventStore {
 }
 
 export class CachedAcpSessionEventStore implements AcpSessionEventStore {
-    readonly #cacheDatabase: SessionEventCacheDatabase;
+    readonly #cacheTable: SessionEventCacheTable;
     readonly #eventIds: SessionEventIdAllocator;
     readonly #liveEventPositions: SessionLiveEventPosition;
     readonly #sessions = new Map<string, SessionEvents>();
     #flushSchedule: FlushSchedule = { kind: "idle" };
 
     constructor(
-        localDatabase: LocalSqliteDatabase,
+        cacheTable: SessionEventCacheTable,
         liveEventPositions: SessionLiveEventPosition,
         eventIds: SessionEventIdAllocator = new InMemorySessionEventIdAllocator(),
     ) {
         this.#eventIds = eventIds;
         this.#liveEventPositions = liveEventPositions;
-        this.#cacheDatabase = new SessionEventCacheDatabase(localDatabase);
+        this.#cacheTable = cacheTable;
     }
 
     readonly #session = (sessionId: string): SessionEvents => {
@@ -350,7 +349,7 @@ export class CachedAcpSessionEventStore implements AcpSessionEventStore {
                     missing.push(eventId);
                 }
             }
-            for (const [eventId, stored] of this.#cacheDatabase.readByEventIds(
+            for (const [eventId, stored] of this.#cacheTable.readByEventIds(
                 sessionId,
                 session.sessionGenerationId,
                 missing,
@@ -389,7 +388,7 @@ export class CachedAcpSessionEventStore implements AcpSessionEventStore {
     };
 
     readonly #scheduleFlush = (): void => {
-        if (!this.#cacheDatabase.isAvailable || this.#flushSchedule.kind !== "idle") {
+        if (!this.#cacheTable.isAvailable || this.#flushSchedule.kind !== "idle") {
             return;
         }
         const handle = setImmediate(() => {
@@ -418,7 +417,7 @@ export class CachedAcpSessionEventStore implements AcpSessionEventStore {
     };
 
     readonly #flush = (includeHotTail: boolean): void => {
-        if (!this.#cacheDatabase.isAvailable || this.#flushSchedule.kind === "closed") {
+        if (!this.#cacheTable.isAvailable || this.#flushSchedule.kind === "closed") {
             return;
         }
         const batches = [...this.#sessions.entries()].flatMap(([sessionId, session]) => {
@@ -436,7 +435,7 @@ export class CachedAcpSessionEventStore implements AcpSessionEventStore {
         if (batches.length === 0) {
             return;
         }
-        if (this.#cacheDatabase.insert(batches)) {
+        if (this.#cacheTable.insert(batches)) {
             for (const batch of batches) {
                 this.#sessions.get(batch.sessionId)?.commitDrops(batch.events);
             }
@@ -449,7 +448,7 @@ export class CachedAcpSessionEventStore implements AcpSessionEventStore {
         const endIndex = current.endIndex(cursor);
         return eventPage(current, current.sessionGenerationId, endIndex, eventLimit, (startIndex, endIndex) => {
             const merged = new Map<number, SessionEvent>();
-            for (const { event, ordinal } of this.#cacheDatabase.read(
+            for (const { event, ordinal } of this.#cacheTable.read(
                 sessionId,
                 current.sessionGenerationId,
                 startIndex + 1,
@@ -463,7 +462,7 @@ export class CachedAcpSessionEventStore implements AcpSessionEventStore {
     };
 
     readonly #deletePersisted = (sessionId: string, sessionGenerationId?: string): void => {
-        this.#cacheDatabase.delete(sessionId, sessionGenerationId);
+        this.#cacheTable.delete(sessionId, sessionGenerationId);
     };
 
     readonly remove = (sessionId: string): void => {
@@ -491,7 +490,7 @@ export class CachedAcpSessionEventStore implements AcpSessionEventStore {
         this.#flushSchedule = { kind: "idle" };
         this.#flush(true);
         this.#flushSchedule = { kind: "closed" };
-        this.#cacheDatabase.close();
+        this.#cacheTable.close();
         this.#sessions.clear();
     };
 }

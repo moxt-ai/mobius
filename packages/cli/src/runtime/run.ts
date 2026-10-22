@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-import { join } from "node:path";
 import { styleText } from "node:util";
 import { harnessAdapters } from "../acp/adapter/registry.ts";
 import { resolveMaxAcpProcesses } from "../acp/agent-process-pool.ts";
@@ -9,7 +7,14 @@ import { LocalExternalContentStore } from "../acp/external-content/local-externa
 import { CachedAcpSessionEventStore } from "../acp/session-event-store.ts";
 import { SqliteSessionLiveEventPosition } from "../acp/session-live-event-position.ts";
 import { SqliteAcpSessionStore } from "../acp/session-store.ts";
-import { openAcpSessionDatabase, openSessionEventCacheDatabase } from "../storage/sqlite/local-databases.ts";
+import { AcpSessionTable } from "../storage/session/acp-session-table.ts";
+import { LiveEventPositionTable } from "../storage/session/live-event-position-table.ts";
+import { SessionEventCacheTable } from "../storage/session/session-event-cache-table.ts";
+import {
+    channelSessionDatabasePaths,
+    openAcpSessionDatabase,
+    openSessionEventCacheDatabase,
+} from "../storage/sqlite/local-databases.ts";
 import { systemTimer, type Timer } from "../util/timer.ts";
 import { RuntimeAcpObserver } from "./acp-observer.ts";
 import { RuntimeOperationState } from "./admission.ts";
@@ -93,19 +98,19 @@ export async function runRuntime(
     const shutdown = new AbortController();
     const signal = AbortSignal.any([parentSignal, shutdown.signal]);
     const stateDirectory = config.localContext.stateDirectory;
-    const channelHash = createHash("sha256").update(config.channelId).digest("hex");
-    const sessionDatabase = openAcpSessionDatabase(join(stateDirectory, "sessions", `${channelHash}.sqlite`));
+    const databases = channelSessionDatabasePaths(stateDirectory, config.channelId);
+    const sessionDatabase = openAcpSessionDatabase(databases.sessions);
     let events: CachedAcpSessionEventStore;
     try {
         events = new CachedAcpSessionEventStore(
-            openSessionEventCacheDatabase(join(stateDirectory, "sessions", `${channelHash}.events.sqlite`)),
-            new SqliteSessionLiveEventPosition(sessionDatabase),
+            new SessionEventCacheTable(openSessionEventCacheDatabase(databases.events)),
+            new SqliteSessionLiveEventPosition(new LiveEventPositionTable(sessionDatabase)),
         );
     } catch (error) {
         sessionDatabase.close();
         throw error;
     }
-    const sessionStore = new SqliteAcpSessionStore(sessionDatabase, events);
+    const sessionStore = new SqliteAcpSessionStore(new AcpSessionTable(sessionDatabase), events);
     await using externalContent = new LocalExternalContentStore(stateDirectory);
     const operations = new RuntimeOperationState();
     const publisher = new RuntimeSessionEventPublisher(timer);

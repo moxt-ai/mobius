@@ -18,6 +18,9 @@ import { FoundAcpStoredSession, MemoryAcpSessionStore, SqliteAcpSessionStore } f
 import { acpSessionStoreMigrations } from "../../src/generated/acp-session-store-migrations.ts";
 import { AccumulatingOperationMetrics } from "../../src/infra/operation-metrics.ts";
 import { LocalAgentDefinition } from "../../src/runtime/config.ts";
+import { AcpSessionTable } from "../../src/storage/session/acp-session-table.ts";
+import { LiveEventPositionTable } from "../../src/storage/session/live-event-position-table.ts";
+import { SessionEventCacheTable } from "../../src/storage/session/session-event-cache-table.ts";
 import { openAcpSessionDatabase, openSessionEventCacheDatabase } from "../../src/storage/sqlite/local-databases.ts";
 import { systemTimer } from "../../src/util/timer.ts";
 import { acpAdapters } from "../support/acp-adapters.ts";
@@ -153,8 +156,8 @@ describe("ACP conversation sessions", () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-tool-projection-"));
         const sessionDatabase = openAcpSessionDatabase(join(temporaryDirectory, "sessions.sqlite"));
         const store = new CachedAcpSessionEventStore(
-            openSessionEventCacheDatabase(join(temporaryDirectory, "events.sqlite")),
-            new SqliteSessionLiveEventPosition(sessionDatabase),
+            new SessionEventCacheTable(openSessionEventCacheDatabase(join(temporaryDirectory, "events.sqlite"))),
+            new SqliteSessionLiveEventPosition(new LiveEventPositionTable(sessionDatabase)),
         );
         try {
             const liveEvents = [
@@ -230,8 +233,8 @@ describe("ACP conversation sessions", () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-bounded-"));
         const sessionDatabase = openAcpSessionDatabase(join(temporaryDirectory, "sessions.sqlite"));
         const store = new CachedAcpSessionEventStore(
-            openSessionEventCacheDatabase(join(temporaryDirectory, "events.sqlite")),
-            new SqliteSessionLiveEventPosition(sessionDatabase),
+            new SessionEventCacheTable(openSessionEventCacheDatabase(join(temporaryDirectory, "events.sqlite"))),
+            new SqliteSessionLiveEventPosition(new LiveEventPositionTable(sessionDatabase)),
         );
         try {
             for (let number = 1; number <= 3000; number += 1) {
@@ -289,8 +292,8 @@ describe("ACP conversation sessions", () => {
         const sessionDatabasePath = join(temporaryDirectory, "sessions.sqlite");
         const firstSessionDatabase = openAcpSessionDatabase(sessionDatabasePath);
         const first = new CachedAcpSessionEventStore(
-            openSessionEventCacheDatabase(databasePath),
-            new SqliteSessionLiveEventPosition(firstSessionDatabase),
+            new SessionEventCacheTable(openSessionEventCacheDatabase(databasePath)),
+            new SqliteSessionLiveEventPosition(new LiveEventPositionTable(firstSessionDatabase)),
         );
         try {
             for (let number = 1; number <= 2000; number += 1) {
@@ -311,8 +314,8 @@ describe("ACP conversation sessions", () => {
 
         const secondSessionDatabase = openAcpSessionDatabase(sessionDatabasePath);
         const second = new CachedAcpSessionEventStore(
-            openSessionEventCacheDatabase(databasePath),
-            new SqliteSessionLiveEventPosition(secondSessionDatabase),
+            new SessionEventCacheTable(openSessionEventCacheDatabase(databasePath)),
+            new SqliteSessionLiveEventPosition(new LiveEventPositionTable(secondSessionDatabase)),
         );
         try {
             second.append("session-1", {
@@ -332,8 +335,8 @@ describe("ACP conversation sessions", () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-shared-generation-"));
         const sessionDatabase = openAcpSessionDatabase(join(temporaryDirectory, "sessions.sqlite"));
         const store = new CachedAcpSessionEventStore(
-            openSessionEventCacheDatabase(join(temporaryDirectory, "events.sqlite")),
-            new SqliteSessionLiveEventPosition(sessionDatabase),
+            new SessionEventCacheTable(openSessionEventCacheDatabase(join(temporaryDirectory, "events.sqlite"))),
+            new SqliteSessionLiveEventPosition(new LiveEventPositionTable(sessionDatabase)),
         );
         const sharedGeneration = "11111111-2222-3333-4444-555555555555";
         const history = Array.from(
@@ -374,8 +377,8 @@ describe("ACP conversation sessions", () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-tiering-"));
         const sessionDatabase = openAcpSessionDatabase(join(temporaryDirectory, "sessions.sqlite"));
         const store = new CachedAcpSessionEventStore(
-            openSessionEventCacheDatabase(join(temporaryDirectory, "events.sqlite")),
-            new SqliteSessionLiveEventPosition(sessionDatabase),
+            new SessionEventCacheTable(openSessionEventCacheDatabase(join(temporaryDirectory, "events.sqlite"))),
+            new SqliteSessionLiveEventPosition(new LiveEventPositionTable(sessionDatabase)),
         );
         try {
             for (let position = 1; position <= 300; position += 1) {
@@ -408,8 +411,8 @@ describe("ACP conversation sessions", () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-session-event-cursor-"));
         const sessionDatabase = openAcpSessionDatabase(join(temporaryDirectory, "sessions.sqlite"));
         const store = new CachedAcpSessionEventStore(
-            openSessionEventCacheDatabase(join(temporaryDirectory, "events.sqlite")),
-            new SqliteSessionLiveEventPosition(sessionDatabase),
+            new SessionEventCacheTable(openSessionEventCacheDatabase(join(temporaryDirectory, "events.sqlite"))),
+            new SqliteSessionLiveEventPosition(new LiveEventPositionTable(sessionDatabase)),
         );
         try {
             for (let eventNumber = 1; eventNumber <= 300; eventNumber += 1) {
@@ -456,8 +459,8 @@ describe("ACP conversation sessions", () => {
         const sessionDatabasePath = join(temporaryDirectory, "sessions.sqlite");
         const firstSessionDatabase = openAcpSessionDatabase(sessionDatabasePath);
         const first = new CachedAcpSessionEventStore(
-            openSessionEventCacheDatabase(databasePath),
-            new SqliteSessionLiveEventPosition(firstSessionDatabase),
+            new SessionEventCacheTable(openSessionEventCacheDatabase(databasePath)),
+            new SqliteSessionLiveEventPosition(new LiveEventPositionTable(firstSessionDatabase)),
         );
         let firstGeneration = "";
         try {
@@ -514,8 +517,8 @@ describe("ACP conversation sessions", () => {
 
         const secondSessionDatabase = openAcpSessionDatabase(sessionDatabasePath);
         const second = new CachedAcpSessionEventStore(
-            openSessionEventCacheDatabase(databasePath),
-            new SqliteSessionLiveEventPosition(secondSessionDatabase),
+            new SessionEventCacheTable(openSessionEventCacheDatabase(databasePath)),
+            new SqliteSessionLiveEventPosition(new LiveEventPositionTable(secondSessionDatabase)),
         );
         try {
             const page = second.page("session-1", 10, null);
@@ -541,7 +544,7 @@ describe("ACP conversation sessions", () => {
             legacyDatabase.close();
         }
 
-        const store = new SqliteAcpSessionStore(openAcpSessionDatabase(databasePath));
+        const store = new SqliteAcpSessionStore(new AcpSessionTable(openAcpSessionDatabase(databasePath)));
         store.close();
         const migratedDatabase = new DatabaseSync(databasePath, { readOnly: true });
         try {
@@ -566,7 +569,7 @@ describe("ACP conversation sessions", () => {
             "Claude Code",
         ]);
         const signal = new AbortController().signal;
-        const firstStore = new SqliteAcpSessionStore(openAcpSessionDatabase(databasePath));
+        const firstStore = new SqliteAcpSessionStore(new AcpSessionTable(openAcpSessionDatabase(databasePath)));
         const firstRuntime = new AgentRuntimeManager({
             observer: new NullAcpSessionObserver(),
             store: firstStore,
@@ -595,7 +598,7 @@ describe("ACP conversation sessions", () => {
             firstStore.close();
         }
 
-        const restartedStore = new SqliteAcpSessionStore(openAcpSessionDatabase(databasePath));
+        const restartedStore = new SqliteAcpSessionStore(new AcpSessionTable(openAcpSessionDatabase(databasePath)));
         const restartedRuntime = new AgentRuntimeManager({
             observer: new NullAcpSessionObserver(),
             store: restartedStore,

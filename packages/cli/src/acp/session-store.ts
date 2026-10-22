@@ -1,8 +1,5 @@
-import { and, desc, eq } from "drizzle-orm";
-import type { NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
 import { z } from "zod";
-import { acpSession } from "../schema/acp-session-store/index.ts";
-import type { LocalSqliteDatabase } from "../storage/sqlite/local-sqlite-database.ts";
+import type { AcpSessionRow, AcpSessionTable } from "../storage/session/acp-session-table.ts";
 import { type AcpStoredSessionConfiguration, decodeStoredSessionConfigurations } from "./session-configuration.ts";
 import { type AcpSessionEventStore, MemoryAcpSessionEventStore } from "./session-event-store.ts";
 
@@ -104,20 +101,7 @@ export class MemoryAcpSessionStore implements AcpSessionStore {
     };
 }
 
-const storedSessionRowSchema = z.object({
-    additionalDirectories: z.string(),
-    agentId: z.string(),
-    configurations: z.string(),
-    cwd: z.string(),
-    nativeSessionId: z.string(),
-    prompted: z.boolean(),
-    sessionId: z.string(),
-    title: z.string(),
-    updatedAt: z.string(),
-});
-
-function decodeStoredSession(value: unknown): AcpStoredSession {
-    const row = storedSessionRowSchema.parse(value);
+function decodeStoredSession(row: AcpSessionRow): AcpStoredSession {
     const decodedAdditionalDirectories: unknown = JSON.parse(row.additionalDirectories);
     const additionalDirectories = z.array(z.string()).parse(decodedAdditionalDirectories);
     const decodedConfigurations: unknown = JSON.parse(row.configurations);
@@ -137,46 +121,38 @@ function decodeStoredSession(value: unknown): AcpStoredSession {
 
 export class SqliteAcpSessionStore implements AcpSessionStore {
     readonly events: AcpSessionEventStore;
-    readonly #database: NodeSQLiteDatabase;
-    readonly #localDatabase: LocalSqliteDatabase;
+    readonly #table: AcpSessionTable;
 
-    constructor(localDatabase: LocalSqliteDatabase, events: AcpSessionEventStore = new MemoryAcpSessionEventStore()) {
+    constructor(table: AcpSessionTable, events: AcpSessionEventStore = new MemoryAcpSessionEventStore()) {
         this.events = events;
-        this.#localDatabase = localDatabase;
-        this.#database = localDatabase.orm;
+        this.#table = table;
     }
 
     readonly close = (): void => {
         try {
-            this.#localDatabase.close();
+            this.#table.close();
         } finally {
             this.events.close();
         }
     };
 
     readonly findNative = (agentId: string, nativeSessionId: string): readonly AcpStoredSession[] =>
-        this.#database
-            .select()
-            .from(acpSession)
-            .where(and(eq(acpSession.agentId, agentId), eq(acpSession.nativeSessionId, nativeSessionId)))
-            .all()
-            .map(decodeStoredSession);
+        this.#table.findNative(agentId, nativeSessionId).map(decodeStoredSession);
 
-    readonly list = (): readonly AcpStoredSession[] =>
-        this.#database.select().from(acpSession).orderBy(desc(acpSession.updatedAt)).all().map(decodeStoredSession);
+    readonly list = (): readonly AcpStoredSession[] => this.#table.list().map(decodeStoredSession);
 
     readonly read = (sessionId: string): AcpStoredSessionLookup => {
-        const row = this.#database.select().from(acpSession).where(eq(acpSession.sessionId, sessionId)).get();
+        const row = this.#table.read(sessionId);
         return row === undefined ? new MissingAcpStoredSession() : new FoundAcpStoredSession(decodeStoredSession(row));
     };
 
     readonly remove = (sessionId: string): void => {
-        this.#database.delete(acpSession).where(eq(acpSession.sessionId, sessionId)).run();
+        this.#table.remove(sessionId);
         this.events.remove(sessionId);
     };
 
     readonly write = (session: AcpStoredSession): void => {
-        const value = {
+        this.#table.upsert({
             additionalDirectories: JSON.stringify(session.additionalDirectories),
             agentId: session.agentId,
             configurations: JSON.stringify(session.configurations),
@@ -186,11 +162,6 @@ export class SqliteAcpSessionStore implements AcpSessionStore {
             sessionId: session.sessionId,
             title: session.title,
             updatedAt: session.updatedAt,
-        };
-        this.#database
-            .insert(acpSession)
-            .values(value)
-            .onConflictDoUpdate({ target: acpSession.sessionId, set: value })
-            .run();
+        });
     };
 }
