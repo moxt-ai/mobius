@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { AgentRuntimeManager, acpAdapters, NullAcpSessionObserver } from "../../src/acp/agent-runtime-manager.ts";
+import { AgentRuntimeManager, NullAcpSessionObserver } from "../../src/acp/agent-runtime-manager.ts";
 import { AcpContentExternalizer } from "../../src/acp/external-content/acp-content-externalizer.ts";
-import { UnretainedExternalContentStore } from "../../src/acp/external-content/local-external-content-store.ts";
 import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
 import { systemTimer } from "../../src/runtime/relay/timer.ts";
+import { acpAdapters } from "../support/acp-adapters.ts";
+import { UnretainedExternalContentStore } from "../support/unretained-external-content-store.ts";
 
 import { fixture } from "./native-session-fixture.ts";
 

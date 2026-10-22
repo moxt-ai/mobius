@@ -2,17 +2,17 @@ import { mkdtemp, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import { acpAdapters } from "../../src/acp/adapter/registry.ts";
 import { AgentRuntimeManager } from "../../src/acp/agent-runtime-manager.ts";
 import { AcpContentExternalizer } from "../../src/acp/external-content/acp-content-externalizer.ts";
-import { UnretainedExternalContentStore } from "../../src/acp/external-content/local-external-content-store.ts";
 import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
 import { CodexAgentSpecification } from "../../src/runtime/agent-catalog/agents/codex-agent.ts";
 import { discoverLocalAgentInventory } from "../../src/runtime/agent-catalog/discover-local-agents.ts";
 import { systemTimer } from "../../src/runtime/relay/timer.ts";
 import { RecordingObserver } from "../sessions/acp-feature-fixture.ts";
+import { acpAdapters } from "../support/acp-adapters.ts";
 import { CodexFixture } from "../support/agents/codex.ts";
 import { FakeOpenAiProvider } from "../support/llm/openai.ts";
+import { UnretainedExternalContentStore } from "../support/unretained-external-content-store.ts";
 
 test("Given real Codex initializes but its process is killed during model discovery, When discovery completes, Then the dead backend is unavailable", async () => {
     await using provider = await FakeOpenAiProvider.start("mobius-test-model", "DISCOVERY_REPLY");

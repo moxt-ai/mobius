@@ -31,8 +31,7 @@ const SESSION_CONTROL_TIMEOUT_MILLISECONDS = 30_000;
 const SESSION_CLOSE_TIMEOUT_MILLISECONDS = 30_000;
 
 export { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp-error.ts";
-export type { Adapter } from "./adapter/context.ts";
-export { type AdapterResolver, acpAdapters } from "./adapter/registry.ts";
+export type { Adapter, AdapterResolver } from "./adapter/context.ts";
 export {
     type AcpAgentSettingsInspectionOptions,
     type AcpAgentSettingsModelEffort,
