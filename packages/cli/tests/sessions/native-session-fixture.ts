@@ -2,9 +2,9 @@ import { mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AcpSessionUpdate, NativeSessionCommand, SessionLiveEvent } from "@moxt-ai/mobius-sdk/protocol";
-import type { AdapterResolver } from "../../src/acp/adapter/context.ts";
 import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
+import type { AdapterResolver } from "../../src/acp/native-history/preview-contract.ts";
 import { createRuntimeConfig } from "../../src/runtime/config.ts";
 import { NullSessionObserver } from "../../src/session/api/session-api.ts";
 import { SessionManager } from "../../src/session/manager/session-manager.ts";

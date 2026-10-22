@@ -1,4 +1,4 @@
-import type { Adapter, AdapterContext, NativeSessionPreviewRequest } from "../context.ts";
+import type { Adapter, AdapterContext, NativeSessionPreviewRequest } from "../../native-history/preview-contract.ts";
 
 /**
  * Pi replays its stored session messages as live ACP session updates during

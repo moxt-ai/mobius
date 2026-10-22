@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { AcpSessionUpdate, ContentBlock, SessionEventPayload } from "@moxt-ai/mobius-sdk/protocol";
-import type { SessionEventPage, SessionEventStore } from "../../../session/history/session-event-store.ts";
+import type { SessionEventPage, SessionEventStore } from "../preview-contract.ts";
 import type { NativeHistoryActivity, NativeHistoryEntry } from "./history-images.ts";
 
 function toolKind(value: string): Extract<AcpSessionUpdate, { readonly sessionUpdate: "tool_call" }>["kind"] {

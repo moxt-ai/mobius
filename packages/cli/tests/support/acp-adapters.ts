@@ -3,7 +3,7 @@ import type {
     AdapterContext,
     AdapterResolver,
     NativeSessionPreviewRequest,
-} from "../../src/acp/adapter/context.ts";
+} from "../../src/acp/native-history/preview-contract.ts";
 
 /** Previews through ACP `session/load` regardless of the agent. */
 class AcpPreviewAdapter implements Adapter {

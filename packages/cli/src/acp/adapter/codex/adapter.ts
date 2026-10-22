@@ -1,8 +1,12 @@
-import type { SessionEventPage } from "../../../session/history/session-event-store.ts";
 import { AcpExecutionError } from "../../acp-error.ts";
 import { readCodexFullHistory } from "../../native-history/codex/codex-history.ts";
 import { nativeHistoryEvents } from "../../native-history/codex/native-history-events.ts";
-import type { Adapter, AdapterContext, NativeSessionPreviewRequest } from "../context.ts";
+import type {
+    Adapter,
+    AdapterContext,
+    NativeSessionPreviewRequest,
+    SessionEventPage,
+} from "../../native-history/preview-contract.ts";
 
 /**
  * Previews saved Codex threads by reading the Codex app-server directly. The read is
@@ -14,7 +18,8 @@ export class CodexAdapter implements Adapter {
         request: NativeSessionPreviewRequest,
         context: AdapterContext,
     ): Promise<SessionEventPage> => {
-        const { agent, cwd, signal, sessionId } = context.options;
+        const { agent, cwd, signal } = context;
+        const { sessionId } = request;
         const snapshot = await readCodexFullHistory(agent, cwd, request.nativeSessionId, signal);
         if (snapshot.history.status === "unavailable") {
             throw new AcpExecutionError(snapshot.history.cause.message, {}, snapshot.history.cause.code);

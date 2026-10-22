@@ -22,6 +22,7 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "../../acp/acp-error.ts";
 import type { AcpAgentDefinition } from "../../acp/agent/agent-definition.ts";
+import { buildPromptContent } from "../../acp/client/prompt-content.ts";
 import { AgentConnection } from "../../acp/connection/agent-connection.ts";
 import { AgentUpdateStream } from "../../acp/connection/agent-update-stream.ts";
 import type { AcpClientHandler } from "../../acp/connection/create-client.ts";
@@ -824,60 +825,8 @@ export class AgentSession implements AcpClientHandler {
         return this.#configOptions;
     };
 
-    readonly buildPrompt = (options: PromptContentOptions): ContentBlock[] => {
-        if (options.images.length > 0 && !this.#capabilities.imagePrompt) {
-            throw new AcpExecutionError(
-                "The selected agent does not accept image prompts",
-                {},
-                "unsupported_prompt_content",
-            );
-        }
-        if (
-            options.resources.some((resource) => resource.type === "embedded") &&
-            !this.#capabilities.embeddedContextPrompt
-        ) {
-            throw new AcpExecutionError(
-                "The selected agent does not accept embedded context",
-                {},
-                "unsupported_prompt_content",
-            );
-        }
-        const prompt: ContentBlock[] = [];
-        if (options.prompt.length > 0) {
-            prompt.push({ text: options.prompt, type: "text" });
-        }
-        for (const image of options.images) {
-            prompt.push({
-                _meta: { mobius: { name: image.name } },
-                data: image.data,
-                mimeType: image.mimeType,
-                type: "image",
-            });
-        }
-        for (const resource of options.resources) {
-            if (resource.type === "embedded") {
-                prompt.push({
-                    resource: {
-                        mimeType: resource.mimeType,
-                        text: resource.text,
-                        uri: resource.uri,
-                    },
-                    type: "resource",
-                });
-            } else {
-                prompt.push({
-                    mimeType: resource.mimeType,
-                    name: resource.name,
-                    type: "resource_link",
-                    uri: resource.uri,
-                });
-            }
-        }
-        if (prompt.length === 0) {
-            throw new AcpExecutionError("A prompt must contain text or an attachment", {}, "empty_prompt");
-        }
-        return prompt;
-    };
+    readonly buildPrompt = (options: PromptContentOptions): ContentBlock[] =>
+        buildPromptContent(options, this.#capabilities);
 
     readonly nativeHistoryTurn = (): { readonly commandId: string; readonly nativeTurnId: string } | null => {
         const prompt = this.#nativePrompt;

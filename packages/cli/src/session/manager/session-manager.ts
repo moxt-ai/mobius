@@ -33,7 +33,11 @@ const SESSION_CLOSE_TIMEOUT_MILLISECONDS = 30_000;
 /** What preparing does with a closed Session: a prepare or restore reopens it, a read must keep it closed. */
 export type ClosedSessionHandling = "reopen" | "keep-closed";
 
-import type { AdapterContext, AdapterResolver, NativeSessionPreviewRequest } from "../../acp/adapter/context.ts";
+import type {
+    AdapterContext,
+    AdapterResolver,
+    NativeSessionPreviewRequest,
+} from "../../acp/native-history/preview-contract.ts";
 import {
     type AgentSettingsInspectionOptions,
     AgentSettingsSnapshot,
@@ -911,7 +915,10 @@ export class SessionManager {
             this.#processes.notifyChanged();
             try {
                 const context: AdapterContext = {
-                    options,
+                    additionalDirectories: options.additionalDirectories,
+                    agent: options.agent,
+                    cwd: options.cwd,
+                    signal: options.signal,
                     events: this.#store.events,
                     previewThroughAcp: async (request: NativeSessionPreviewRequest) =>
                         await this.#queryProcesses.previewEvents(
@@ -922,7 +929,7 @@ export class SessionManager {
                         ),
                 };
                 return await this.#adapters(options.agent).previewSessionEvents(
-                    { nativeSessionId, eventLimit, cursor },
+                    { nativeSessionId, eventLimit, cursor, sessionId: options.sessionId },
                     context,
                 );
             } finally {
