@@ -104,13 +104,6 @@ export class PlatformSessionRecording implements SessionRecording {
         if (this.#provider.kind === "absent") {
             return failed("provider_unavailable");
         }
-        // RuntimeRelay delivers Recording batches; an uncancellable AbortSignal.timeout would keep it awake
-        // for the whole deadline after each write, so the timer is cleared once the write settles.
-        const timeout = new AbortController();
-        const timer = setTimeout(
-            () => timeout.abort(new DOMException("The Recording write timed out", "TimeoutError")),
-            RECORDING_REQUEST_TIMEOUT_MILLISECONDS,
-        );
         try {
             const response = await this.#provider.fetcher.fetch(
                 new Request("https://recording.internal/v1/session-event-batches", {
@@ -121,7 +114,7 @@ export class PlatformSessionRecording implements SessionRecording {
                     }),
                     headers: { "content-type": "application/json" },
                     method: "POST",
-                    signal: AbortSignal.any([signal, timeout.signal]),
+                    signal: AbortSignal.any([signal, AbortSignal.timeout(RECORDING_REQUEST_TIMEOUT_MILLISECONDS)]),
                 }),
             );
             signal.throwIfAborted();
@@ -184,8 +177,6 @@ export class PlatformSessionRecording implements SessionRecording {
         } catch {
             signal.throwIfAborted();
             return failed("write_failed");
-        } finally {
-            clearTimeout(timer);
         }
     };
 
@@ -266,11 +257,6 @@ export class PlatformSessionRecording implements SessionRecording {
             sessionId: target.sessionId,
             status: notification.status,
         });
-        const timeout = new AbortController();
-        const timer = setTimeout(
-            () => timeout.abort(new DOMException("The Session status webhook timed out", "TimeoutError")),
-            SESSION_STATUS_WEBHOOK_TIMEOUT_MILLISECONDS,
-        );
         try {
             const signature = `v1.${await hmacSha256Hex(secret, `${timestamp}.${body}`)}`;
             const response = await this.#transport(webhook.endpoint, {
@@ -281,7 +267,7 @@ export class PlatformSessionRecording implements SessionRecording {
                     "x-mobius-timestamp": timestamp,
                 },
                 method: "POST",
-                signal: AbortSignal.any([signal, timeout.signal]),
+                signal: AbortSignal.any([signal, AbortSignal.timeout(SESSION_STATUS_WEBHOOK_TIMEOUT_MILLISECONDS)]),
             });
             await response.body?.cancel();
             if (!response.ok) {
@@ -291,8 +277,6 @@ export class PlatformSessionRecording implements SessionRecording {
             if (!signal.aborted) {
                 console.warn("Mobius Session status webhook failed");
             }
-        } finally {
-            clearTimeout(timer);
         }
     }
 }
