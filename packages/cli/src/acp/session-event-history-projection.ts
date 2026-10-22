@@ -1,5 +1,7 @@
 import type { AcpSessionUpdate, SessionEvent, SessionLiveEvent } from "@moxt-ai/mobius-sdk/protocol";
 
+export type { ProjectedToolCall } from "./tool-call-projection.ts";
+
 type AcpSessionEvent = Extract<SessionEvent, { readonly type: "acp" }>;
 type ToolCall = Extract<AcpSessionUpdate, { readonly sessionUpdate: "tool_call" | "tool_call_update" }>;
 
@@ -124,6 +126,25 @@ export class SessionEventHistoryProjection {
         this.#latestEvent = event;
         this.#indexToolCall(event);
         return { event, kind: "append" };
+    };
+
+    /**
+     * The projected tool call announced with this identifier, in its current
+     * merged form, or `undefined` when the projection has not recorded one.
+     */
+    readonly getToolCall = (toolCallId: string, resolve: MaterializedEventsResolver): ToolCall | undefined => {
+        const eventId = this.#toolCallEventIds.get(toolCallId);
+        if (eventId === undefined) {
+            return undefined;
+        }
+        const event = resolve([eventId]).get(eventId);
+        if (
+            event?.type === "acp" &&
+            (event.payload.sessionUpdate === "tool_call" || event.payload.sessionUpdate === "tool_call_update")
+        ) {
+            return event.payload;
+        }
+        return undefined;
     };
 
     readonly #replace = (current: SessionEvent, replacement: SessionEvent): SessionEventHistoryProjectionMutation => {
