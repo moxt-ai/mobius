@@ -2,6 +2,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { isAbsolute, resolve } from "node:path";
 
 import { resolveLaunchFiles } from "../../util/process/local-executable.ts";
+import { isRecord } from "../../util/value-utils.ts";
 import { type WorkerLaunch, workerLaunch } from "../control/protocol.ts";
 
 export function currentWorkerLaunch(version: string): WorkerLaunch {
@@ -14,10 +15,6 @@ export function currentWorkerLaunch(version: string): WorkerLaunch {
         entry: resolve(entry),
         version,
     };
-}
-
-export function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-    return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export async function decodeWorkerLaunch(value: unknown): Promise<WorkerLaunch> {

@@ -149,7 +149,6 @@ export class AgentSession implements AcpClientHandler, AgentSessionRestore {
     readonly #sessionConfigurations = new SessionConfigurations();
     #nativeHistoryOwnership: NativeHistoryOwnership = { kind: "unbound" };
     #prompted = false;
-    #nativePrompt: { readonly commandId: string; readonly previousTurnId: string | null } | null = null;
     #sessionLoad: SessionLoadState = { kind: "not-requested" };
     #restored = false;
     #sessionTitle: string | null = null;
@@ -680,14 +679,6 @@ export class AgentSession implements AcpClientHandler, AgentSessionRestore {
     readonly buildPrompt = (options: PromptContentOptions): ContentBlock[] =>
         buildPromptContent(options, this.#capabilities);
 
-    readonly nativeHistoryTurn = (): { readonly commandId: string; readonly nativeTurnId: string } | null => {
-        const prompt = this.#nativePrompt;
-        const nativeTurnId = this.#connection.inProcessAgent?.nativeTurnId?.() ?? null;
-        return prompt === null || nativeTurnId === null || nativeTurnId === prompt.previousTurnId
-            ? null
-            : { commandId: prompt.commandId, nativeTurnId };
-    };
-
     readonly prompt = async (options: SessionTurnOptions): Promise<PromptResult> => {
         if (this.#turn.running) {
             throw new AcpExecutionError("Another prompt is already running in this conversation", {}, "session_busy");
@@ -733,10 +724,6 @@ export class AgentSession implements AcpClientHandler, AgentSessionRestore {
                 type: "lifecycle-metadata",
             });
         }
-        this.#nativePrompt = {
-            commandId: options.commandId,
-            previousTurnId: this.#connection.inProcessAgent?.nativeTurnId?.() ?? null,
-        };
         try {
             const response: unknown = await this.race(
                 this.#connection.connection.agent.request(
