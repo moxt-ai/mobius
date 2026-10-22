@@ -1,8 +1,8 @@
-import { DirectAcpAgentDefinition } from "../../../src/agent/specification/agent-specification.ts";
+import { DirectAcpAgentSpecification } from "../../../src/agent/specification/agent-specification.ts";
 
 const CONTROLLED_ACP_VERSION = "1.0.0";
 
-export class ControlledAcpAgentSpecification extends DirectAcpAgentDefinition {
+export class ControlledAcpAgentSpecification extends DirectAcpAgentSpecification {
     readonly adapterVersion = CONTROLLED_ACP_VERSION;
     readonly agentExecutable = "controlled-acp";
     readonly id = "controlled-acp";

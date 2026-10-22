@@ -3,10 +3,10 @@ import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { NativeSessionCommand } from "@moxt-ai/mobius-sdk/protocol";
 import { describe, expect, it, vi } from "vitest";
-import { AgentRuntimeManager } from "../../src/acp/agent-runtime-manager.ts";
 import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
-import { NullAcpSessionObserver } from "../../src/acp/session-contracts.ts";
-import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
+import { NullSessionObserver } from "../../src/session/api/session-api.ts";
+import { SessionManager } from "../../src/session/manager/session-manager.ts";
+import { MemorySessionStore } from "../../src/session/record/session-store.ts";
 import { systemTimer } from "../../src/util/timer.ts";
 import { acpAdapters } from "../support/acp-adapters.ts";
 import { UnretainedExternalContentStore } from "../support/unretained-external-content-store.ts";
@@ -92,9 +92,9 @@ describe("native session preparation", () => {
         vi.useFakeTimers({ toFake: ["Date"] });
         vi.setSystemTime(new Date("2026-09-14T00:00:00Z"));
         const f = await fixture("Claude Code", "exclusive-writer");
-        const external = new AgentRuntimeManager({
-            observer: new NullAcpSessionObserver(),
-            store: new MemoryAcpSessionStore(),
+        const external = new SessionManager({
+            observer: new NullSessionObserver(),
+            store: new MemorySessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,

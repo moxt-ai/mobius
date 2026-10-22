@@ -10,7 +10,7 @@ import {
     resumeMobiusRuntime,
 } from "../pairing/pair-local-machine.ts";
 import { prepareUpgradeData, recordCurrentData } from "../upgrades/data.ts";
-import { runDaemonReleaseUpgrades } from "../upgrades/upgrade.ts";
+import { reportDaemonUpgradeAvailability, runDaemonReleaseUpgrades } from "../upgrades/upgrade.ts";
 import { surviveUnhandledRejections, type UnhandledRejectionGuard } from "./unhandled-rejection.ts";
 
 class WorkerRuntimeError extends Error {
@@ -120,6 +120,7 @@ async function runWorkerRuntime(
                 // bug report taken through this Runtime reads them from there.
                 const engine = new MobiusRuntimeEngine(paired.config, {
                     processLogsDirectory: control.stateDirectory,
+                    reportUpgradeAvailability: reportDaemonUpgradeAvailability,
                 });
                 const completion = engine
                     .run(AbortSignal.any([combined, controller.signal]))

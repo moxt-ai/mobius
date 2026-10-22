@@ -62,6 +62,20 @@ module.exports = {
             to: { path: "^packages/cli/src/(session|runtime|daemon|cli)/" },
         },
         {
+            // The runtime composes sessions; it never speaks the agent protocol itself.
+            name: "cli-runtime-does-not-import-acp",
+            severity: "error",
+            from: { path: "^packages/cli/src/runtime/" },
+            to: { path: "^packages/cli/src/(acp|daemon)/" },
+        },
+        {
+            // The session layer decides; the runtime only calls it.
+            name: "cli-session-does-not-import-upper-layers",
+            severity: "error",
+            from: { path: "^packages/cli/src/session/" },
+            to: { path: "^packages/cli/src/(runtime|daemon|cli)/" },
+        },
+        {
             name: "relay-core-does-not-depend-on-hosts",
             severity: "error",
             from: { path: "^packages/relay-core/src/" },

@@ -1,0 +1,132 @@
+import type { SessionInfoUpdatedEvent, SessionLiveEvent } from "@moxt-ai/mobius-sdk/protocol";
+import { harnessAdapters } from "../../acp/adapter/registry.ts";
+import { AcpContentExternalizer } from "../../acp/content/content-externalizer.ts";
+import { AcpSessionTable } from "../../storage/session/acp-session-table.ts";
+import { LiveEventPositionTable } from "../../storage/session/live-event-position-table.ts";
+import { SessionEventCacheTable } from "../../storage/session/session-event-cache-table.ts";
+import {
+    channelSessionDatabasePaths,
+    openAcpSessionDatabase,
+    openSessionEventCacheDatabase,
+} from "../../storage/sqlite/local-databases.ts";
+import type { Timer } from "../../util/timer.ts";
+import { LocalExternalContentStore } from "../content/external-content-store.ts";
+import { SqliteSessionLiveEventPosition } from "../history/live-event-positions.ts";
+import { CachedSessionEventStore } from "../history/session-event-store.ts";
+import { SessionManager } from "../manager/session-manager.ts";
+import { NativeSessionService } from "../native/native-session-browser.ts";
+import { resolveMaxAcpProcesses } from "../process/agent-process-pool.ts";
+import { PromptLifecycle } from "../prompt/prompt-lifecycle.ts";
+import { SqliteSessionStore } from "../record/session-store.ts";
+import { ExecutionReceipts } from "../turn/execution-receipts.ts";
+import { SessionTurns } from "../turn/session-turns.ts";
+import { WorkspaceDirectoryService } from "../workspace/workspace-directory.ts";
+import type { ResolveAgent, SessionEventSink } from "./session-api.ts";
+import { NullSessionObserver } from "./session-api.ts";
+
+/** Records live session events through the projection and publishes info updates through the sink. */
+export class SessionLayerObserver extends NullSessionObserver {
+    readonly #publishInfo: (event: SessionInfoUpdatedEvent) => void;
+    readonly #record: (event: SessionLiveEvent) => void;
+
+    constructor(record: (event: SessionLiveEvent) => void, publishInfo: (event: SessionInfoUpdatedEvent) => void) {
+        super();
+        this.#publishInfo = publishInfo;
+        this.#record = record;
+    }
+
+    override readonly onSessionEvent = (event: SessionLiveEvent): Promise<void> => {
+        this.#record(event);
+        return Promise.resolve();
+    };
+
+    override readonly onInfo = (event: SessionInfoUpdatedEvent): Promise<void> => {
+        this.#publishInfo(event);
+        return Promise.resolve();
+    };
+}
+
+/** What the session layer needs to wire itself: the runtime's identity, its agent source, and its sink. */
+export interface SessionLayerOptions {
+    readonly bindingId: string;
+    readonly channelId: string;
+    readonly defaultWorkspace: string;
+    readonly environment: Readonly<NodeJS.ProcessEnv>;
+    readonly resolveAgent: ResolveAgent;
+    readonly sink: SessionEventSink;
+    readonly stateDirectory: string;
+    readonly timer: Timer;
+}
+
+/** Wires the session layer for one runtime: its stores, manager, turns, and native session browsing. */
+export function buildSessionLayer(options: SessionLayerOptions) {
+    const { bindingId, channelId, defaultWorkspace, environment, resolveAgent, sink, stateDirectory, timer } = options;
+    const databases = channelSessionDatabasePaths(stateDirectory, channelId);
+    const sessionDatabase = openAcpSessionDatabase(databases.sessions);
+    let events: CachedSessionEventStore;
+    try {
+        events = new CachedSessionEventStore(
+            new SessionEventCacheTable(openSessionEventCacheDatabase(databases.events)),
+            new SqliteSessionLiveEventPosition(new LiveEventPositionTable(sessionDatabase)),
+        );
+    } catch (error) {
+        sessionDatabase.close();
+        throw error;
+    }
+    const sessionStore = new SqliteSessionStore(new AcpSessionTable(sessionDatabase), events);
+    const externalContent = new LocalExternalContentStore(stateDirectory);
+    const operations = new ExecutionReceipts();
+    const activeSessions = new SessionTurns(operations);
+    const directories = new WorkspaceDirectoryService(bindingId, defaultWorkspace);
+    const manager = new SessionManager({
+        observer: new SessionLayerObserver((event) => eventProjection.record(event), sink.publishInfo),
+        store: sessionStore,
+        adapters: harnessAdapters,
+        sessionIdentity: "native",
+        onSessionStatusChanged: sink.publishStatus,
+        onSessionClosed: sink.publishClosed,
+        contentExternalizer: new AcpContentExternalizer(externalContent),
+        timer,
+        maxProcesses: resolveMaxAcpProcesses(environment),
+    });
+    const eventProjection = new PromptLifecycle(
+        sink,
+        (sessionId, event) => manager.recordLifecycleEvent(sessionId, event),
+        activeSessions.recordSessionEvent,
+    );
+    const nativeSessions = new NativeSessionService(
+        bindingId,
+        resolveAgent,
+        directories,
+        manager,
+        async (request, requestOptions) =>
+            await activeSessions.executionSnapshot(async (command) => {
+                if (command.sessionId !== request.targetSessionId || command.agentId !== request.agentId) {
+                    return false;
+                }
+                const cwd = await directories.resolve(command.bindingId, command.directoryId, requestOptions.signal);
+                const additionalDirectories = await directories.resolveMany(
+                    command.bindingId,
+                    command.additionalDirectoryIds,
+                    requestOptions.signal,
+                );
+                return (
+                    cwd === requestOptions.cwd &&
+                    additionalDirectories.length === requestOptions.additionalDirectories.length &&
+                    additionalDirectories.every(
+                        (directory, index) => directory === requestOptions.additionalDirectories[index],
+                    )
+                );
+            }),
+    );
+    return {
+        activeSessions,
+        directories,
+        eventProjection,
+        externalContent,
+        manager,
+        nativeSessions,
+        operations,
+        sessionStore,
+    };
+}

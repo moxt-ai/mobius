@@ -2,11 +2,15 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { AgentRuntimeManager } from "../../src/acp/agent-runtime-manager.ts";
+import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
-import { NullAcpSessionObserver } from "../../src/acp/session-contracts.ts";
-import { MemoryAcpSessionStore, MissingAcpStoredSession, SqliteAcpSessionStore } from "../../src/acp/session-store.ts";
-import { LocalAgentDefinition } from "../../src/runtime/config.ts";
+import { NullSessionObserver } from "../../src/session/api/session-api.ts";
+import { SessionManager } from "../../src/session/manager/session-manager.ts";
+import {
+    MemorySessionStore,
+    MissingStoredSession,
+    SqliteSessionStore,
+} from "../../src/session/record/session-store.ts";
 import { AcpSessionTable } from "../../src/storage/session/acp-session-table.ts";
 import { openAcpSessionDatabase } from "../../src/storage/sqlite/local-databases.ts";
 import { systemTimer } from "../../src/util/timer.ts";
@@ -47,11 +51,11 @@ async function seedPeerSession(stateDirectory: string, sessionId: string): Promi
 }
 
 function createManager(
-    store: MemoryAcpSessionStore | SqliteAcpSessionStore,
+    store: MemorySessionStore | SqliteSessionStore,
     sessionIdentity: "assigned" | "native" = "assigned",
-): AgentRuntimeManager {
-    return new AgentRuntimeManager({
-        observer: new NullAcpSessionObserver(),
+): SessionManager {
+    return new SessionManager({
+        observer: new NullSessionObserver(),
         store,
         adapters: acpAdapters,
         sessionIdentity,
@@ -64,7 +68,7 @@ function createManager(
 
 describe("Session settings reads after a daemon restart", () => {
     it("Given a stored session, When an unknown session is read, Then the lookup reports it missing", async () => {
-        const manager = createManager(new MemoryAcpSessionStore());
+        const manager = createManager(new MemorySessionStore());
         try {
             expect(manager.findSessions(["missing-session"])).toHaveLength(0);
         } finally {
@@ -78,7 +82,7 @@ describe("Session settings reads after a daemon restart", () => {
         // any history-required preparation would fail with
         // native_history_unsupported before reaching the configuration.
         const { agent } = await controlledAgent("controlled-config-read", ["--no-load-session"]);
-        const store = new MemoryAcpSessionStore();
+        const store = new MemorySessionStore();
         const manager = createManager(store);
         try {
             await manager.runPrompt({
@@ -138,7 +142,7 @@ describe("Session settings reads after a daemon restart", () => {
         const sessionId = crypto.randomUUID();
         const { agent, stateDirectory } = await controlledAgent("claude");
         await seedPeerSession(stateDirectory, sessionId);
-        const store = new SqliteAcpSessionStore(new AcpSessionTable(openAcpSessionDatabase(databasePath)));
+        const store = new SqliteSessionStore(new AcpSessionTable(openAcpSessionDatabase(databasePath)));
         const first = createManager(store, "native");
         try {
             const imported = await first.openNativeSession(
@@ -182,7 +186,7 @@ describe("Session settings reads after a daemon restart", () => {
         // Retiring an imported native chat session deletes its row: the Agent
         // owns the conversation, so a client that still wants it must reload
         // (re-import) first — the same contract session.restore exposes.
-        expect(store.read(sessionId)).toBeInstanceOf(MissingAcpStoredSession);
+        expect(store.read(sessionId)).toBeInstanceOf(MissingStoredSession);
         expect(createManager(store, "native").findSessions([sessionId])).toHaveLength(0);
 
         // After the client reloads the conversation, the settings read finds

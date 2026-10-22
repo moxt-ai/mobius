@@ -3,11 +3,11 @@ import { basename, join, resolve } from "node:path";
 import { isIdentifier, mobiusApiUrl } from "@moxt-ai/mobius-sdk/protocol";
 import { fetch, type Response } from "undici";
 import packageMetadata from "../../../package.json" with { type: "json" };
+import type { CatalogAgent } from "../../agent/catalog.ts";
 import { discoverLocalAgentInventory, type LocalAgentInventory } from "../../agent/discovery/discover-local-agents.ts";
 import { publishAgentCatalog } from "../../runtime/catalog/publish-agent-catalog.ts";
 import { createCatalogAgentResolver } from "../../runtime/catalog/resolve-catalog-agent.ts";
 import {
-    type AcpAgentDefinition,
     createRuntimeConfig,
     loadDefaultWorkspace,
     OpaqueRuntimeReconnectTarget,
@@ -231,7 +231,7 @@ function decodePairingResponse(
 async function claimPairing(
     options: PairCommandOptions,
     defaultWorkspace: string,
-    localAgents: readonly AcpAgentDefinition[],
+    localAgents: readonly CatalogAgent[],
     signal: AbortSignal,
 ): Promise<ClaimPairingResponse> {
     const agents = localAgents.map((agent) => ({

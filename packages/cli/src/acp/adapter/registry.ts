@@ -1,5 +1,5 @@
-import type { AcpAgentDefinition } from "../../runtime/config.ts";
 import { AcpExecutionError } from "../acp-error.ts";
+import type { AcpAgentDefinition } from "../agent/agent-definition.ts";
 import { ClaudeAdapter } from "./claude/adapter.ts";
 import { CodexAdapter } from "./codex/adapter.ts";
 import type { Adapter, AdapterResolver } from "./context.ts";

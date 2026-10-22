@@ -17,38 +17,27 @@ import {
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-sdk/protocol";
 import type { WebSocket } from "undici";
-import { AcpExecutionError } from "../../../acp/acp-error.ts";
-import type {
-    AcpSessionRecovery,
-    AgentRuntimeManager,
-    ClosedSessionHandling,
-} from "../../../acp/agent-runtime-manager.ts";
 import { operationErrorCode } from "../../../infra/operation-error.ts";
 import { AccumulatingOperationMetrics } from "../../../infra/operation-metrics.ts";
-import type { AcpAgentDefinition, RuntimeConfig } from "../../config.ts";
-import type { NativeSessionService } from "../../native-sessions/service.ts";
+import type { SessionRecovery } from "../../../session/api/session-api.ts";
+import { SessionError } from "../../../session/api/session-error.ts";
+import type { ClosedSessionHandling, SessionManager } from "../../../session/manager/session-manager.ts";
+import type { NativeSessionService } from "../../../session/native/native-session-browser.ts";
+import { resolveSessionDirectories } from "../../../session/workspace/resolve-session-directories.ts";
+import type { WorkspaceDirectoryService } from "../../../session/workspace/workspace-directory.ts";
+import { resolveCatalogAgent } from "../../catalog/resolve-catalog-agent.ts";
+import type { RuntimeConfig } from "../../config.ts";
 import type { RelayConnectionDiagnostics } from "../../relay/diagnostics.ts";
-import { resolveSessionDirectories } from "../../workspace/resolve-session-directories.ts";
-import type { WorkspaceDirectoryService } from "../../workspace/workspace-directory.ts";
 import type { RuntimeCommand } from "../definition.ts";
 import { reportOperationFailure, send } from "../transport.ts";
 
-export async function resolveCatalogAgent(
-    config: RuntimeConfig,
-    agentId: string,
-    signal: AbortSignal,
-): Promise<AcpAgentDefinition> {
-    const agent = config.catalog.find(agentId);
-    return config.resolveAgent === undefined ? agent : await config.resolveAgent(agent, signal);
-}
-
 async function prepareSession(
     command: SessionPrepareCommand,
-    recovery: AcpSessionRecovery,
+    recovery: SessionRecovery,
     closed: ClosedSessionHandling,
     config: RuntimeConfig,
     directories: WorkspaceDirectoryService,
-    sessions: AgentRuntimeManager,
+    sessions: SessionManager,
     metrics: AccumulatingOperationMetrics,
     signal: AbortSignal,
 ): Promise<SessionReadyEvent> {
@@ -143,7 +132,7 @@ export async function executeSessionPrepare(
     command: SessionPrepareCommand,
     config: RuntimeConfig,
     directories: WorkspaceDirectoryService,
-    sessions: AgentRuntimeManager,
+    sessions: SessionManager,
     diagnostics: RelayConnectionDiagnostics,
     signal: AbortSignal,
 ): Promise<void> {
@@ -183,7 +172,7 @@ export async function executeSessionRestore(
     command: SessionRestoreCommand,
     config: RuntimeConfig,
     directories: WorkspaceDirectoryService,
-    sessions: AgentRuntimeManager,
+    sessions: SessionManager,
     nativeSessions: NativeSessionService,
     diagnostics: RelayConnectionDiagnostics,
     signal: AbortSignal,
@@ -193,7 +182,7 @@ export async function executeSessionRestore(
         const entry = await metrics.measure("session-lookup", async () => {
             const [found] = await nativeSessions.querySessions([command.sessionId], signal);
             if (found === undefined) {
-                throw new AcpExecutionError("The Session was not found", {}, "session_not_found");
+                throw new SessionError("session_not_found", "The Session was not found");
             }
             return found;
         });
@@ -239,7 +228,7 @@ export async function executeSessionRestore(
 export async function executeSessionRename(
     socket: WebSocket,
     command: SessionRenameCommand,
-    sessions: AgentRuntimeManager,
+    sessions: SessionManager,
     signal: AbortSignal,
 ): Promise<void> {
     try {
@@ -264,7 +253,7 @@ export async function executeSessionConfigure(
     command: SessionConfigureCommand,
     config: RuntimeConfig,
     directories: WorkspaceDirectoryService,
-    sessions: AgentRuntimeManager,
+    sessions: SessionManager,
     signal: AbortSignal,
 ): Promise<void> {
     try {
@@ -380,7 +369,7 @@ export async function executeSessionConfigRead(
     command: SessionConfigReadCommand,
     config: RuntimeConfig,
     directories: WorkspaceDirectoryService,
-    sessions: AgentRuntimeManager,
+    sessions: SessionManager,
     nativeSessions: NativeSessionService,
     diagnostics: RelayConnectionDiagnostics,
     signal: AbortSignal,
@@ -390,7 +379,7 @@ export async function executeSessionConfigRead(
         const entry = await metrics.measure("session-lookup", async () => {
             const [found] = await nativeSessions.querySessions([command.sessionId], signal);
             if (found === undefined) {
-                throw new AcpExecutionError("The Session was not found", {}, "session_not_found");
+                throw new SessionError("session_not_found", "The Session was not found");
             }
             return found;
         });

@@ -7,8 +7,8 @@ import {
     runBoundedProcess,
 } from "../../util/process/executable.ts";
 import {
-    DirectAcpAgentDefinition,
-    InProcessAcpAgentDefinition,
+    DirectAcpAgentSpecification,
+    InProcessAcpAgentSpecification,
     type LocalAgentSpecification,
 } from "../specification/agent-specification.ts";
 import type { LocalAgentDiscoveryContext } from "./agent-discovery-context.ts";
@@ -61,7 +61,10 @@ export async function resolveAdapterExecutables(
     specification: LocalAgentSpecification,
     context: LocalAgentDiscoveryContext,
 ): Promise<readonly ResolvedExecutable[]> {
-    if (specification instanceof DirectAcpAgentDefinition || specification instanceof InProcessAcpAgentDefinition) {
+    if (
+        specification instanceof DirectAcpAgentSpecification ||
+        specification instanceof InProcessAcpAgentSpecification
+    ) {
         return await resolveAgentExecutables(specification, context);
     }
     throw new Error("Unsupported local Agent execution topology");

@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test, vi } from "vitest";
-import { LocalExternalContentStore } from "../../src/acp/external-content/local-external-content-store.ts";
+import { LocalExternalContentStore } from "../../src/session/content/external-content-store.ts";
 
 test("Given two Sessions produce identical media, When each retrieves its granted reference, Then they share one file while an unrelated Session cannot read it", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });

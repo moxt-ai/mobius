@@ -50,7 +50,7 @@ export abstract class LocalAgentSpecification {
     ): Promise<void> => Promise.resolve();
 }
 
-export abstract class DirectAcpAgentDefinition extends LocalAgentSpecification {
+export abstract class DirectAcpAgentSpecification extends LocalAgentSpecification {
     readonly adapterOverrideVariable: string;
     readonly agentOverrideVariable: string;
     readonly launchArguments: readonly string[];
@@ -73,7 +73,7 @@ export abstract class DirectAcpAgentDefinition extends LocalAgentSpecification {
  * manager use it without naming an Agent, so adding an in-process Agent stays a registration rather
  * than an edit to generic code.
  */
-export abstract class InProcessAcpAgentDefinition extends LocalAgentSpecification {
+export abstract class InProcessAcpAgentSpecification extends LocalAgentSpecification {
     abstract readonly createEndpoint: InProcessAcpEndpointFactory;
     readonly launchArguments: readonly string[] = Object.freeze([]);
     readonly adapterOverrideVariable: string;

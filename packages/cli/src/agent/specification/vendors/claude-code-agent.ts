@@ -3,9 +3,9 @@ import { ClaudeAcpEndpoint } from "../../../acp/harness/claude/endpoint.ts";
 import { platformSupportFor } from "../../../util/platform/index.ts";
 import { type ResolvedExecutable, resolveExecutablePath } from "../../../util/process/executable.ts";
 import type { LocalAgentDiscoveryContext } from "../../discovery/agent-discovery-context.ts";
-import { InProcessAcpAgentDefinition } from "../agent-specification.ts";
+import { InProcessAcpAgentSpecification } from "../agent-specification.ts";
 
-export class ClaudeCodeAgentSpecification extends InProcessAcpAgentDefinition {
+export class ClaudeCodeAgentSpecification extends InProcessAcpAgentSpecification {
     readonly agentExecutable = "claude";
     readonly createEndpoint: InProcessAcpEndpointFactory = (options) => new ClaudeAcpEndpoint(options);
     readonly id = "claude";

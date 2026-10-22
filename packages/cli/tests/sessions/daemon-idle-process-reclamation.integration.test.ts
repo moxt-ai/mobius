@@ -20,15 +20,15 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { afterEach, expect, test, vi } from "vitest";
 import {
-    DirectAcpAgentDefinition,
-    InProcessAcpAgentDefinition,
+    DirectAcpAgentSpecification,
+    InProcessAcpAgentSpecification,
 } from "../../src/agent/specification/agent-specification.ts";
 import { ControlledSessionAgent } from "../support/agents/controlled-session-agent.ts";
 import { waitForAgentFile } from "../support/agents/observed-process.ts";
 import { prepareNewRealSession, type RealDaemonPeer, withRealDaemon } from "../support/agents/real-daemon.ts";
 import { IdleTimeoutTimer } from "../support/idle-timeout-timer.ts";
 
-class IdleAgentSpecification extends DirectAcpAgentDefinition {
+class IdleAgentSpecification extends DirectAcpAgentSpecification {
     readonly adapterVersion = "1.0.0";
     readonly agentExecutable = "controlled-acp";
     readonly id = "claude";
@@ -393,7 +393,7 @@ test("Given a canonical native Session is idle, When its process is reclaimed, T
     });
 });
 
-class RetiringIdleAgentSpecification extends InProcessAcpAgentDefinition {
+class RetiringIdleAgentSpecification extends InProcessAcpAgentSpecification {
     readonly agentExecutable = "node";
     readonly id = "claude";
     readonly label = "Controlled retiring Agent";

@@ -1,24 +1,24 @@
 import type { WebSocket } from "undici";
-import type { AgentRuntimeManager } from "../../acp/agent-runtime-manager.ts";
-import type { ExternalContentStore } from "../../acp/external-content/local-external-content-store.ts";
+import type { ExternalContentStore } from "../../session/content/external-content-store.ts";
+import type { SessionManager } from "../../session/manager/session-manager.ts";
+import type { NativeSessionService } from "../../session/native/native-session-browser.ts";
+import type { PromptLifecycle } from "../../session/prompt/prompt-lifecycle.ts";
+import type { ExecutionReceipts } from "../../session/turn/execution-receipts.ts";
+import type { SessionTurns } from "../../session/turn/session-turns.ts";
+import type { WorkspaceDirectoryService } from "../../session/workspace/workspace-directory.ts";
 import type { Timer } from "../../util/timer.ts";
-import type { RuntimeOperationState } from "../admission.ts";
 import type { RuntimeConfig } from "../config.ts";
-import type { NativeSessionService } from "../native-sessions/service.ts";
 import type { RelayConnectionDiagnostics } from "../relay/diagnostics.ts";
-import type { RuntimeSessionEventProjection } from "../session/session-event-projection.ts";
-import type { RuntimeSessions } from "../sessions.ts";
-import type { WorkspaceDirectoryService } from "../workspace/workspace-directory.ts";
 
 export interface CommandContext {
     readonly config: RuntimeConfig;
     readonly directories: WorkspaceDirectoryService;
-    readonly sessions: AgentRuntimeManager;
+    readonly sessions: SessionManager;
     readonly nativeSessions: NativeSessionService;
-    readonly operations: RuntimeOperationState;
-    readonly eventProjection: RuntimeSessionEventProjection;
+    readonly operations: ExecutionReceipts;
+    readonly eventProjection: PromptLifecycle;
     readonly externalContent: ExternalContentStore;
-    readonly sessionTurns: RuntimeSessions;
+    readonly sessionTurns: SessionTurns;
     readonly diagnostics: RelayConnectionDiagnostics;
     readonly socket: WebSocket;
     readonly signal: AbortSignal;

@@ -26,7 +26,7 @@ import type {
     InProcessAcpEndpoint,
     InProcessAcpEndpointFactory,
 } from "../../src/acp/agent/in-process-endpoint.ts";
-import { InProcessAcpAgentDefinition } from "../../src/agent/specification/agent-specification.ts";
+import { InProcessAcpAgentSpecification } from "../../src/agent/specification/agent-specification.ts";
 import { ControlledAcpAgentSpecification } from "../support/agents/controlled-acp.ts";
 import { prepareNewRealSession, withRealDaemon } from "../support/agents/real-daemon.ts";
 
@@ -71,7 +71,7 @@ class ControlledCloseEndpoint implements InProcessAcpEndpoint {
     };
 }
 
-class ControlledCloseAgentSpecification extends InProcessAcpAgentDefinition {
+class ControlledCloseAgentSpecification extends InProcessAcpAgentSpecification {
     readonly agentExecutable = "node";
     readonly id = "controlled-close";
     readonly label = "Controlled Close";

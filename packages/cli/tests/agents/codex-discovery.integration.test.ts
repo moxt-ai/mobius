@@ -2,11 +2,11 @@ import { mkdtemp, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import { AgentRuntimeManager } from "../../src/acp/agent-runtime-manager.ts";
 import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
-import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
 import { discoverLocalAgentInventory } from "../../src/agent/discovery/discover-local-agents.ts";
 import { CodexAgentSpecification } from "../../src/agent/specification/vendors/codex-agent.ts";
+import { SessionManager } from "../../src/session/manager/session-manager.ts";
+import { MemorySessionStore } from "../../src/session/record/session-store.ts";
 import { systemTimer } from "../../src/util/timer.ts";
 import { RecordingObserver } from "../sessions/acp-feature-fixture.ts";
 import { acpAdapters } from "../support/acp-adapters.ts";
@@ -61,9 +61,9 @@ test.skipIf(process.platform === "win32")(
         await using codex = await CodexFixture.create(provider);
         const directory = await mkdtemp(join(tmpdir(), "mobius-real-codex-identity-"));
         const observer = new RecordingObserver();
-        const manager = new AgentRuntimeManager({
+        const manager = new SessionManager({
             observer,
-            store: new MemoryAcpSessionStore(),
+            store: new MemorySessionStore(),
             adapters: acpAdapters,
             sessionIdentity: "assigned",
             onSessionStatusChanged: () => undefined,

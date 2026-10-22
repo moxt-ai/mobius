@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { LocalAgentDefinition } from "../../src/runtime/config.ts";
+import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 
 const harnessPath = fileURLToPath(new URL("../sessions/fixtures/acp-peer.ts", import.meta.url));
 
