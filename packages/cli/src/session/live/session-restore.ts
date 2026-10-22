@@ -1,10 +1,10 @@
 import { methods } from "@agentclientprotocol/sdk";
 import { AcpExecutionError } from "../../acp/acp-error.ts";
 import { type NativeSessionOrigin, nativeSessionIdSchema } from "../../acp/protocol/native-session.ts";
+import { arraysEqual } from "../../util/value-utils.ts";
 import type { SessionRecovery } from "../api/session-api.ts";
 import { FoundStoredSession, StoredSession } from "../record/session-store.ts";
-import type { AgentSessionRestore } from "./agent-session.ts";
-import { arraysEqual } from "./agent-session.ts";
+import type { AgentSessionRestore } from "./agent-session-restore.ts";
 
 /**
  * Decides how the conversation is established and performs it: fork the native session,

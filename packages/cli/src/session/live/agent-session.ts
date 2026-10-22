@@ -40,7 +40,7 @@ import {
 } from "../../acp/protocol/session-config-protocol.ts";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../../infra/operation-metrics.ts";
 import { revalidateExecutable } from "../../util/process/executable.ts";
-import { isRecord, truncate } from "../../util/value-utils.ts";
+import { arraysEqual, isRecord, recordsEqual, truncate } from "../../util/value-utils.ts";
 import {
     type ElicitationResponseOptions,
     type PermissionResponseOptions,
@@ -59,6 +59,7 @@ import { HistoryReplayCapture } from "../history/session-history.ts";
 import { SessionInteractions } from "../interaction/session-interactions.ts";
 import { waitForSharedOperation } from "../manager/operation-drain.ts";
 import { type SessionStore, StoredSession } from "../record/session-store.ts";
+import type { AgentSessionRestore } from "./agent-session-restore.ts";
 import { type AgentTurnState, IdleAgentTurn, RunningAgentTurn } from "./agent-turn.ts";
 import { SessionConfigurations } from "./session-configurations.ts";
 import { restoreSession } from "./session-restore.ts";
@@ -92,16 +93,6 @@ interface LoadedSession {
     readonly history: HistoryReplayCapture;
     readonly kind: "loaded";
     readonly response: unknown;
-}
-
-export function arraysEqual(left: readonly string[], right: readonly string[]): boolean {
-    return left.length === right.length && left.every((value, index) => value === right[index]);
-}
-
-export function recordsEqual(left: Readonly<Record<string, string>>, right: Readonly<Record<string, string>>): boolean {
-    const leftEntries = Object.entries(left);
-    const rightEntries = Object.entries(right);
-    return leftEntries.length === rightEntries.length && leftEntries.every(([name, value]) => right[name] === value);
 }
 
 export class AgentSession implements AcpClientHandler, AgentSessionRestore {
@@ -1126,40 +1117,4 @@ export class AgentSession implements AcpClientHandler, AgentSessionRestore {
             sessionId: this.#mobiusSessionId,
         });
     };
-}
-
-/**
- * The state and operations session restore needs. AgentSession implements it; keeping it
- * declared beside the class documents exactly what the restore decision tree may touch.
- */
-export interface AgentSessionRestore {
-    readonly additionalDirectories: readonly string[];
-    readonly agentId: string;
-    readonly capabilities: SessionCapabilities;
-    readonly cwd: string;
-    readonly metrics: OperationMetrics;
-    readonly restored: boolean;
-    readonly sessionId: string;
-    readonly sessionConfigProtocol: SessionConfigProtocol;
-    readonly store: SessionStore;
-    agentRequest<Params, Result>(
-        method: string,
-        params: Params,
-        options?: { cancellationSignal?: AbortSignal },
-    ): Promise<Result>;
-    drained(): Promise<void>;
-    initializeAgent(signal: AbortSignal): Promise<void>;
-    loadSession(signal: AbortSignal, exitMessage: string): Promise<{ response: unknown }>;
-    nativeSessionId(): string;
-    race<T>(operation: Promise<T>, exitMessage: string, signal: AbortSignal): Promise<T>;
-    restoreStoredConfigurations(session: StoredSession, signal: AbortSignal): Promise<void>;
-    selectNativeSession(sessionId: string): void;
-    setConfigOptions(options: readonly SessionConfigOption[]): void;
-    setNativeHistoryOwnership(
-        ownership: { kind: "unbound" } | { kind: "fresh-session" } | { kind: "agent-owned" },
-    ): void;
-    setPrompted(prompted: boolean): void;
-    setRestored(restored: boolean): void;
-    setSessionTitle(title: string): void;
-    writeStoredSession(updatedAt: string): void;
 }
