@@ -50,6 +50,14 @@ export function registerTurns(agent: ReturnType<typeof acp.agent>) {
             if (prompt === "fail with model unavailable") {
                 throw acp.RequestError.internalError(undefined, "Model unavailable: controlled/test-model");
             }
+            if (prompt.startsWith("fail echoing the prompt ")) {
+                // Mirrors an Agent that quotes the prompt it refused, which is how
+                // user input reaches an error message.
+                throw acp.RequestError.internalError(
+                    undefined,
+                    `Rejected prompt: ${prompt.slice("fail echoing the prompt ".length)}`,
+                );
+            }
             if (prompt === "fail with invalid prompt detail") {
                 throw acp.RequestError.internalError({
                     error: {

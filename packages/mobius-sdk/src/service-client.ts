@@ -4,6 +4,7 @@ import {
     decodeMobiusSessionExport,
     decodeNativeSessionEvents,
     decodeNativeSessionResult,
+    decodeRuntimeDiagnosticsResult,
     decodeSessionClosedEvent,
     decodeSessionConfigUpdatedEvent,
     decodeSessionEventLogPage,
@@ -24,6 +25,7 @@ import {
     type NativeSessionEvents,
     type NativeSessionRequest,
     type NativeSessionResult,
+    type RuntimeDiagnosticsResult,
     type SessionConfigureCommand,
     type SessionEventLogPage,
     type SessionEventOmission,
@@ -787,6 +789,27 @@ export class MobiusRuntimeResources {
                 signal,
             ),
         ).agents;
+
+    /**
+     * Read the Runtime's own bounded local diagnostic log through the Relay, for a
+     * bug report filed without shell access to the machine. Entries carry
+     * correlation identifiers and failure codes only; free text and local paths
+     * stay on that machine. Requires the Runtime to be online: an offline Runtime
+     * has no log reader to answer, so this reports `runtime_unavailable`.
+     */
+    readonly readDiagnostics = async (runtimeId: string, signal: AbortSignal): Promise<RuntimeDiagnosticsResult> => {
+        if (!isIdentifier(runtimeId)) {
+            throw new MobiusValidationError("The Runtime identifier is invalid");
+        }
+        return decodeRuntimeDiagnosticsResult(
+            JSON.stringify(
+                await this.#executor.get(
+                    projectPath(this.#projectId, `runtimes/${encodeURIComponent(runtimeId)}/diagnostics`),
+                    signal,
+                ),
+            ),
+        );
+    };
 
     readonly listWorkspace = async (
         runtimeId: string,
