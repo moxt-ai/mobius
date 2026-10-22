@@ -14,6 +14,7 @@ import {
     type RuntimeConfig,
     RuntimeLocalContext,
 } from "../../runtime/config.ts";
+import { ensureCanonicalDirectory } from "../../storage/files/local-files.ts";
 import type { VerifiedRuntimeConnection } from "../../runtime/connection/runtime-connection.ts";
 import {
     openRuntimeInstallationStore,
