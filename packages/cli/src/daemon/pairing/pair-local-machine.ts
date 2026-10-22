@@ -301,6 +301,12 @@ function buildPairedRuntime(
             () => config,
             publishAgentCatalog,
         ),
+        (refreshSignal: AbortSignal) =>
+            discoverLocalAgentInventory({
+                defaultWorkspace,
+                environment: localContext.environment,
+                signal: refreshSignal,
+            }).then((inventory) => inventory.readyAgents()),
     );
     return {
         channelUrl: new URL(`/channels/${encodeURIComponent(connection.channelId)}`, connection.relayOrigin).toString(),

@@ -137,6 +137,7 @@ export async function createMobiusRuntimeEngine(
             () => config,
             publishAgentCatalog,
         ),
+        (refreshSignal: AbortSignal) => discover(refreshSignal).then((inventory) => inventory.readyAgents()),
     );
     return new MobiusRuntimeEngine(config);
 }

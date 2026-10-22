@@ -23,6 +23,17 @@ import {
 } from "../runtime/liveness.ts";
 import { decodeRuntimeUpgradeResult, encodeRuntimeUpgradeResult } from "../runtime/upgrade.ts";
 import {
+    AGENT_CATALOG_DISCOVER_KIND,
+    AGENT_CATALOG_DISCOVERED_KIND,
+    AGENT_CATALOG_DISCOVERY_FAILED_KIND,
+    decodeAgentCatalogDiscoverCommand,
+    decodeAgentCatalogDiscoveredEvent,
+    decodeAgentCatalogDiscoveryFailedEvent,
+    encodeAgentCatalogDiscoverCommand,
+    encodeAgentCatalogDiscoveredEvent,
+    encodeAgentCatalogDiscoveryFailedEvent,
+} from "../session/agent/catalog.ts";
+import {
     AGENT_SETTINGS_DISCOVER_KIND,
     AGENT_SETTINGS_DISCOVERED_KIND,
     AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
@@ -207,6 +218,11 @@ const serviceToDaemonSignatures = {
         encodeAgentSettingsDiscoverCommand,
         decodeAgentSettingsDiscoverCommand,
     ),
+    [AGENT_CATALOG_DISCOVER_KIND]: defineMessageSignature(
+        AGENT_CATALOG_DISCOVER_KIND,
+        encodeAgentCatalogDiscoverCommand,
+        decodeAgentCatalogDiscoverCommand,
+    ),
     [FILE_READ_KIND]: defineMessageSignature(FILE_READ_KIND, encodeFileReadCommand, decodeFileReadCommand),
     [SESSION_LIST_KIND]: defineMessageSignature(SESSION_LIST_KIND, encodeSessionListCommand, decodeSessionListCommand),
     [SESSION_QUERY_KIND]: defineMessageSignature(
@@ -367,6 +383,16 @@ const daemonToServiceSignatures = {
         AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
         encodeAgentSettingsDiscoveryFailedEvent,
         decodeAgentSettingsDiscoveryFailedEvent,
+    ),
+    [AGENT_CATALOG_DISCOVERED_KIND]: defineMessageSignature(
+        AGENT_CATALOG_DISCOVERED_KIND,
+        encodeAgentCatalogDiscoveredEvent,
+        decodeAgentCatalogDiscoveredEvent,
+    ),
+    [AGENT_CATALOG_DISCOVERY_FAILED_KIND]: defineMessageSignature(
+        AGENT_CATALOG_DISCOVERY_FAILED_KIND,
+        encodeAgentCatalogDiscoveryFailedEvent,
+        decodeAgentCatalogDiscoveryFailedEvent,
     ),
     [FILE_BEGIN_KIND]: defineMessageSignature(FILE_BEGIN_KIND, encodeFileBeginEvent, decodeFileBeginEvent),
     [FILE_CHUNK_KIND]: defineMessageSignature(FILE_CHUNK_KIND, encodeFileChunkEvent, decodeFileChunkEvent),

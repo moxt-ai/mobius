@@ -154,3 +154,18 @@ export class LocalAgentInventory {
 
     readonly readyAgents = (): readonly AcpAgentDefinition[] => this.available.map((discovery) => discovery.agent);
 }
+
+export interface StaticAgentInventory {
+    readonly readyAgents: () => readonly AcpAgentDefinition[];
+}
+
+/**
+ * Builds an inventory-like result from already-ready Agent definitions, for hosts that inject
+ * their Agents instead of discovering executables. Only the ready set is materialized: the
+ * background consumers of a discovery result read no failure details from injected Agents.
+ */
+export function staticLocalAgentInventory(agents: readonly AcpAgentDefinition[]): StaticAgentInventory {
+    return {
+        readyAgents: () => [...agents],
+    };
+}

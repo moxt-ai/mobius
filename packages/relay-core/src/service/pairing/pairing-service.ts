@@ -1,4 +1,9 @@
-import type { AgentSettingsDiscoverCommand, FileReadCommand, WorkspaceListCommand } from "@moxt-ai/mobius-sdk/protocol";
+import type {
+    AgentCatalogDiscoverCommand,
+    AgentSettingsDiscoverCommand,
+    FileReadCommand,
+    WorkspaceListCommand,
+} from "@moxt-ai/mobius-sdk/protocol";
 import { decodeRuntimeDiagnosticsRequest } from "@moxt-ai/mobius-sdk/protocol";
 import { ProjectPermission } from "../../entity/authentication/project-authentication.ts";
 import type { ProjectScope } from "../../entity/do/session.ts";
@@ -10,6 +15,7 @@ import type { LocalSessionOperations } from "../channel/local-session-operations
 import type { PairingOperations } from "./pairing-operations.ts";
 import {
     type RuntimeControlCommand,
+    requestRuntimeAgentCatalog,
     requestRuntimeAgentSettings,
     requestRuntimeControl,
     requestRuntimeFile,
@@ -459,6 +465,41 @@ export class PairingService {
                 throw new PairingDirectoryError("runtime_unavailable", "The Runtime connection is unavailable");
             }
             return await requestRuntimeAgentSettings(response.webSocket, command, deadline);
+        } finally {
+            await this.#pairings.closeControlHost(access, AbortSignal.timeout(15000));
+        }
+    };
+
+    /**
+     * Re-reads the Runtime's live Agent inventory. The daemon re-runs discovery and republishes
+     * its catalog before replying, so this Relay's stored directory is already fresh when the
+     * response arrives; the reply carries the same list for the caller.
+     */
+    readonly discoverRuntimeAgents = async (
+        projectId: string,
+        runtimeId: string,
+        token: string,
+        command: AgentCatalogDiscoverCommand,
+        signal: AbortSignal,
+    ) => {
+        const deadline = AbortSignal.any([signal, AbortSignal.timeout(120000)]);
+        const access = await this.#pairings.openControlHost(
+            projectId,
+            runtimeId,
+            token,
+            ProjectPermission.RuntimeRead,
+            deadline,
+        );
+        try {
+            const response = await this.#channels.acceptHost(
+                access,
+                new Request("https://runtime.internal/host", { headers: { Upgrade: "websocket" } }),
+                deadline,
+            );
+            if (response.webSocket === null) {
+                throw new PairingDirectoryError("runtime_unavailable", "The Runtime connection is unavailable");
+            }
+            return await requestRuntimeAgentCatalog(response.webSocket, command, deadline);
         } finally {
             await this.#pairings.closeControlHost(access, AbortSignal.timeout(15000));
         }

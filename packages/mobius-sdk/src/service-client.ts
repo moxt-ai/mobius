@@ -48,6 +48,7 @@ import { MobiusPublicRequestExecutor } from "./public-request.ts";
 import {
     type CancelMobiusTurnRequest,
     type CreateMobiusSessionRequest,
+    decodeAgentCatalogDiscovered,
     decodeMobiusBrowserCredential,
     decodeMobiusChannelAccessGrant,
     decodeMobiusChannelDescriptor,
@@ -63,6 +64,7 @@ import {
     type MobiusBrowserCredentialRequest,
     type MobiusChannelAccessGrant,
     type MobiusChannelDescriptor,
+    type MobiusDiscoveredAgent,
     type MobiusInteractionResponseRequest,
     type MobiusLinkedChannelDevice,
     type MobiusPageRequest,
@@ -787,6 +789,22 @@ export class MobiusRuntimeResources {
         decodeRuntimeDescriptor(
             await this.#executor.get(
                 projectPath(this.#projectId, `runtimes/${encodeURIComponent(runtimeId)}/agents`),
+                signal,
+            ),
+        ).agents;
+
+    /**
+     * Asks the Runtime to re-run local Agent discovery and republish its catalog. The Relay's
+     * stored directory is fresh once this resolves; the reply carries the discovered list.
+     */
+    readonly discoverAgents = async (
+        runtimeId: string,
+        signal: AbortSignal,
+    ): Promise<readonly MobiusDiscoveredAgent[]> =>
+        decodeAgentCatalogDiscovered(
+            await this.#executor.post(
+                projectPath(this.#projectId, `runtimes/${encodeURIComponent(runtimeId)}/agents/discovery`),
+                {},
                 signal,
             ),
         ).agents;

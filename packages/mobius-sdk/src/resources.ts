@@ -543,6 +543,33 @@ export function decodeRuntimeDescriptor(value: unknown): MobiusRuntimeDescriptor
     );
 }
 
+/** A live Agent-catalog discovery result: the id/label/version the Runtime re-discovered. */
+export class MobiusDiscoveredAgent {
+    readonly agentVersion: string;
+    readonly id: string;
+    readonly label: string;
+
+    constructor(agentVersion: string, id: string, label: string) {
+        this.agentVersion = agentVersion;
+        this.id = id;
+        this.label = label;
+    }
+}
+
+export function decodeAgentCatalogDiscovered(value: unknown): { readonly agents: readonly MobiusDiscoveredAgent[] } {
+    const discovered = record(value, "Agent catalog discovery");
+    return {
+        agents: arrayField(discovered, "agents", 64).map((entry) => {
+            const agent = record(entry, "Discovered Agent");
+            return new MobiusDiscoveredAgent(
+                stringField(agent, "agentVersion", 128),
+                identifierField(agent, "id"),
+                stringField(agent, "label", 255),
+            );
+        }),
+    };
+}
+
 export function decodeMobiusRuntimeList(value: unknown): readonly MobiusRuntimeDescriptor[] {
     const response = record(value, "Runtime list");
     return arrayField(response, "runtimes", 100).map(decodeRuntimeDescriptor);

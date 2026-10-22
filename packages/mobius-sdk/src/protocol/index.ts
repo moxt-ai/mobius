@@ -7,8 +7,9 @@ export * from "./runtime/diagnostics.ts";
 export * from "./runtime/liveness.ts";
 export * from "./runtime/upgrade.ts";
 export * from "./session/access/index.ts";
-export { MAX_LOCAL_AGENT_DIRECTORY_ENTRIES } from "./session/agent/directory.ts";
 // Agent protocol.
+export * from "./session/agent/catalog.ts";
+export { MAX_LOCAL_AGENT_DIRECTORY_ENTRIES } from "./session/agent/directory.ts";
 export * from "./session/agent/settings.ts";
 export {
     AGENT_DEFAULT_EXECUTION_SETTING,
