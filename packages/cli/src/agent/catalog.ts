@@ -1,6 +1,9 @@
 import type { AcpAgentDefinition } from "../acp/agent/agent-definition.ts";
 import { OperationError } from "../infra/operation-error.ts";
 
+/** The launch definition of a cataloged Agent, as the runtime names it. */
+export type CatalogAgent = AcpAgentDefinition;
+
 export class LocalAgentCatalogSnapshot {
     readonly agents: readonly AcpAgentDefinition[];
 

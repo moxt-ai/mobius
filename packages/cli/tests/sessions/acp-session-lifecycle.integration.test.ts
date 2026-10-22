@@ -8,14 +8,15 @@ import { fileURLToPath } from "node:url";
 
 import { SESSION_CLOSED_ERROR_CODE, type SessionStatusChangedEvent } from "@moxt-ai/mobius-sdk/protocol";
 import { describe, expect, it, vi } from "vitest";
+import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
+import { createWritableAcpStream } from "../../src/acp/connection/agent-connection.ts";
 import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
 import { acpSessionStoreMigrations } from "../../src/generated/acp-session-store-migrations.ts";
 import { AccumulatingOperationMetrics } from "../../src/infra/operation-metrics.ts";
-import { LocalAgentDefinition } from "../../src/runtime/config.ts";
 import { NullSessionObserver } from "../../src/session/api/session-api.ts";
 import { SqliteSessionLiveEventPosition } from "../../src/session/history/live-event-positions.ts";
 import { CachedSessionEventStore } from "../../src/session/history/session-event-store.ts";
-import { createWritableAcpStream, SessionManager } from "../../src/session/manager/session-manager.ts";
+import { SessionManager } from "../../src/session/manager/session-manager.ts";
 import { FoundStoredSession, MemorySessionStore, SqliteSessionStore } from "../../src/session/record/session-store.ts";
 import { AcpSessionTable } from "../../src/storage/session/acp-session-table.ts";
 import { LiveEventPositionTable } from "../../src/storage/session/live-event-position-table.ts";

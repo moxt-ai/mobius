@@ -17,30 +17,19 @@ import {
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-sdk/protocol";
 import type { WebSocket } from "undici";
-import { AcpExecutionError } from "../../../acp/acp-error.ts";
 import { operationErrorCode } from "../../../infra/operation-error.ts";
 import { AccumulatingOperationMetrics } from "../../../infra/operation-metrics.ts";
-import type {
-    ClosedSessionHandling,
-    SessionManager,
-    SessionRecovery,
-} from "../../../session/manager/session-manager.ts";
+import type { SessionRecovery } from "../../../session/api/session-api.ts";
+import { SessionError } from "../../../session/api/session-error.ts";
+import type { ClosedSessionHandling, SessionManager } from "../../../session/manager/session-manager.ts";
 import type { NativeSessionService } from "../../../session/native/native-session-browser.ts";
 import { resolveSessionDirectories } from "../../../session/workspace/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "../../../session/workspace/workspace-directory.ts";
-import type { AcpAgentDefinition, RuntimeConfig } from "../../config.ts";
+import { resolveCatalogAgent } from "../../catalog/resolve-catalog-agent.ts";
+import type { RuntimeConfig } from "../../config.ts";
 import type { RelayConnectionDiagnostics } from "../../relay/diagnostics.ts";
 import type { RuntimeCommand } from "../definition.ts";
 import { reportOperationFailure, send } from "../transport.ts";
-
-export async function resolveCatalogAgent(
-    config: RuntimeConfig,
-    agentId: string,
-    signal: AbortSignal,
-): Promise<AcpAgentDefinition> {
-    const agent = config.catalog.find(agentId);
-    return config.resolveAgent === undefined ? agent : await config.resolveAgent(agent, signal);
-}
 
 async function prepareSession(
     command: SessionPrepareCommand,
@@ -193,7 +182,7 @@ export async function executeSessionRestore(
         const entry = await metrics.measure("session-lookup", async () => {
             const [found] = await nativeSessions.querySessions([command.sessionId], signal);
             if (found === undefined) {
-                throw new AcpExecutionError("The Session was not found", {}, "session_not_found");
+                throw new SessionError("session_not_found", "The Session was not found");
             }
             return found;
         });
@@ -390,7 +379,7 @@ export async function executeSessionConfigRead(
         const entry = await metrics.measure("session-lookup", async () => {
             const [found] = await nativeSessions.querySessions([command.sessionId], signal);
             if (found === undefined) {
-                throw new AcpExecutionError("The Session was not found", {}, "session_not_found");
+                throw new SessionError("session_not_found", "The Session was not found");
             }
             return found;
         });

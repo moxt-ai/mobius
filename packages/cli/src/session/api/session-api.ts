@@ -6,6 +6,7 @@ import type {
     PromptImage,
     PromptResource,
     SessionCapabilities,
+    SessionCloseNoticeEvent,
     SessionCommand,
     SessionCommandsUpdatedEvent,
     SessionConfigOption,
@@ -16,6 +17,7 @@ import type {
     SessionLiveEvent,
     SessionPermissionRequestedEvent,
     SessionPermissionResolvedEvent,
+    SessionStatusChangedEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
 import type { AcpAgentDefinition } from "../../acp/agent/agent-definition.ts";
 import type { NativeSessionOrigin } from "../../acp/protocol/native-session.ts";
@@ -160,4 +162,21 @@ export class AgentSettingsSnapshot {
         this.configOptions = configOptions;
         this.modelEffort = modelEffort;
     }
+}
+
+// What the runtime supplies to the session layer. The session layer never imports the runtime.
+
+/** Finds the launch definition for a catalog Agent, re-discovering it when its executable changed. */
+export type ResolveAgent = (agentId: string, signal: AbortSignal) => Promise<AcpAgentDefinition>;
+
+/** Records a failure's code and correlation identifiers in the local diagnostics log, never its text. */
+export type ReportFailure = (event: string, requestId: string, details: Readonly<Record<string, string>>) => void;
+
+/** Delivers session events to connected clients. The runtime's relay publisher implements it. */
+export interface SessionEventSink {
+    readonly publish: (event: SessionLiveEvent) => void;
+    readonly publishClosed: (event: SessionCloseNoticeEvent) => void;
+    readonly publishInfo: (event: SessionInfoUpdatedEvent) => void;
+    readonly publishOperationFailure: (sessionId: string, requestId: string, code: string, message: string) => void;
+    readonly publishStatus: (event: SessionStatusChangedEvent) => void;
 }

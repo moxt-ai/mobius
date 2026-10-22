@@ -1,11 +1,3 @@
-import { AgentSession } from "../live/agent-session.ts";
-import { AgentQueryProcesses } from "../process/agent-query-processes.ts";
-import { RetainedAgentProcesses } from "../process/retained-agent-processes.ts";
-import { ActiveExecutions } from "../turn/active-executions.ts";
-import { RuntimeOperations, waitForSharedOperation } from "./operation-drain.ts";
-
-export { createWritableAcpStream } from "../../acp/connection/agent-connection.ts";
-
 import {
     SESSION_CLOSE_NOTICE_KIND,
     SESSION_CLOSED_ERROR_CODE,
@@ -20,8 +12,11 @@ import type { AcpContentExternalizer } from "../../acp/content/content-externali
 import type { NativeSessionOrigin, NativeSessionPage } from "../../acp/protocol/native-session.ts";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../../infra/operation-metrics.ts";
 import type { Timer } from "../../util/timer.ts";
+import { AgentSession } from "../live/agent-session.ts";
 import { isNativeChatSessionId } from "../native/native-chat-agent.ts";
 import { AgentProcessPool, type AgentProcessRetention } from "../process/agent-process-pool.ts";
+import { AgentQueryProcesses } from "../process/agent-query-processes.ts";
+import { RetainedAgentProcesses } from "../process/retained-agent-processes.ts";
 import {
     FoundStoredSession,
     MemorySessionStore,
@@ -29,32 +24,14 @@ import {
     type SessionStore,
     StoredSession,
 } from "../record/session-store.ts";
+import { ActiveExecutions } from "../turn/active-executions.ts";
+import { RuntimeOperations, waitForSharedOperation } from "./operation-drain.ts";
 
 const SESSION_CONTROL_TIMEOUT_MILLISECONDS = 30_000;
 const SESSION_CLOSE_TIMEOUT_MILLISECONDS = 30_000;
 
 /** What preparing does with a closed Session: a prepare or restore reopens it, a read must keep it closed. */
 export type ClosedSessionHandling = "reopen" | "keep-closed";
-
-export { AcpConfigurationValueUnavailableError, AcpExecutionError } from "../../acp/acp-error.ts";
-export type { Adapter, AdapterResolver } from "../../acp/adapter/context.ts";
-export {
-    type AgentSettingsInspectionOptions,
-    type AgentSettingsModelEffort,
-    AgentSettingsSnapshot,
-    type ElicitationResponseOptions,
-    NullSessionObserver,
-    type PermissionResponseOptions,
-    PreparedSession,
-    type PromptResult,
-    type SessionConfigureOptions,
-    type SessionObserver,
-    type SessionPrepareOptions,
-    type SessionRecovery,
-    type SessionSteerOptions,
-    type SessionTurnOptions,
-} from "../api/session-api.ts";
-export type { SessionEventPage } from "../history/session-event-store.ts";
 
 import type { AdapterContext, AdapterResolver, NativeSessionPreviewRequest } from "../../acp/adapter/context.ts";
 import {

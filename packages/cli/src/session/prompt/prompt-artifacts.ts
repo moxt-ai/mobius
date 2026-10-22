@@ -1,14 +1,7 @@
-import { createHash } from "node:crypto";
-
 import { isIdentifier, type PromptImage, type PromptResource } from "@moxt-ai/mobius-sdk/protocol";
-import { fetch } from "undici";
 import { OperationError } from "../../infra/operation-error.ts";
-import type { RuntimeConfig } from "../../runtime/config.ts";
-import { relayAuthorization, relayHttpEndpoint } from "../../runtime/relay/relay-authentication.ts";
-import { environmentProxyDispatcher } from "../../util/network/environment-proxy.ts";
 
 const ARTIFACT_SCHEME = "mobius-artifact:";
-const ARTIFACT_DOWNLOAD_TIMEOUT_MILLISECONDS = 20_000;
 const MAX_AGENT_IMAGE_BASE64_LENGTH = 4_000_000;
 const MAX_AGENT_RESOURCE_BYTE_LENGTH = 1_000_000;
 
@@ -28,6 +21,19 @@ export class ResolvedPromptArtifacts {
         this.resources = resources;
     }
 }
+
+/** One prompt artifact to download, with the size and digest its reference authorizes. */
+export interface PromptArtifactDownload {
+    readonly artifactId: string;
+    readonly byteLength: number;
+    readonly commandId: string;
+    readonly mimeType: string;
+    readonly sessionId: string;
+    readonly sha256: string;
+}
+
+/** Downloads an artifact and verifies it against its reference. The runtime supplies it. */
+export type DownloadArtifact = (artifact: PromptArtifactDownload, signal: AbortSignal) => Promise<Uint8Array>;
 
 export interface ArtifactPromptCommand {
     readonly commandId: string;
@@ -82,132 +88,6 @@ function parseReference(resource: PromptResource): PromptArtifactReference {
     return new PromptArtifactReference(artifactId, byteLength, sha256, resource);
 }
 
-function downloadUrl(config: RuntimeConfig, command: ArtifactPromptCommand, reference: PromptArtifactReference): URL {
-    const url = relayHttpEndpoint(config.relayUrl);
-    let channelPath = "";
-    if (url.pathname.endsWith("/daemon")) {
-        channelPath = url.pathname.slice(0, -"/daemon".length);
-    } else {
-        const runtimePath = "/v1/runtimes/connect";
-        if (!url.pathname.endsWith(runtimePath)) {
-            throw new PromptArtifactError("artifact_endpoint_invalid", "The Relay artifact endpoint is invalid");
-        }
-        channelPath = `${url.pathname.slice(0, -runtimePath.length)}/channels/${encodeURIComponent(config.channelId)}`;
-    }
-    url.pathname = `${channelPath}/sessions/${encodeURIComponent(command.sessionId)}/commands/${encodeURIComponent(command.commandId)}/artifacts/${encodeURIComponent(reference.artifactId)}/content`;
-    return url;
-}
-
-async function responseBytes(
-    response: Awaited<ReturnType<typeof fetch>>,
-    expectedByteLength: number,
-    signal: AbortSignal,
-): Promise<Uint8Array> {
-    const declaredLength = response.headers.get("content-length") ?? "";
-    if (
-        !/^(0|[1-9][0-9]*)$/.test(declaredLength) ||
-        Number(declaredLength) !== expectedByteLength ||
-        response.body === null
-    ) {
-        throw new PromptArtifactError("artifact_integrity_failed", "The prompt artifact failed integrity validation");
-    }
-    const reader = response.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let byteLength = 0;
-    try {
-        while (true) {
-            signal.throwIfAborted();
-            const chunk = await reader.read();
-            signal.throwIfAborted();
-            if (chunk.done) {
-                break;
-            }
-            byteLength += chunk.value.byteLength;
-            if (byteLength > expectedByteLength) {
-                await reader.cancel("Artifact response exceeded its authorization");
-                throw new PromptArtifactError(
-                    "artifact_integrity_failed",
-                    "The prompt artifact failed integrity validation",
-                );
-            }
-            chunks.push(chunk.value);
-        }
-    } finally {
-        reader.releaseLock();
-    }
-    if (byteLength !== expectedByteLength) {
-        throw new PromptArtifactError("artifact_integrity_failed", "The prompt artifact failed integrity validation");
-    }
-    const bytes = new Uint8Array(byteLength);
-    let offset = 0;
-    for (const chunk of chunks) {
-        bytes.set(chunk, offset);
-        offset += chunk.byteLength;
-    }
-    return bytes;
-}
-
-async function download(
-    config: RuntimeConfig,
-    command: ArtifactPromptCommand,
-    reference: PromptArtifactReference,
-    signal: AbortSignal,
-): Promise<Uint8Array> {
-    signal.throwIfAborted();
-    const timeoutSignal = AbortSignal.timeout(ARTIFACT_DOWNLOAD_TIMEOUT_MILLISECONDS);
-    const requestSignal = AbortSignal.any([signal, timeoutSignal]);
-    let response: Awaited<ReturnType<typeof fetch>>;
-    try {
-        response = await fetch(downloadUrl(config, command, reference), {
-            dispatcher: environmentProxyDispatcher,
-            headers: {
-                accept: reference.resource.mimeType,
-                "accept-encoding": "identity",
-                ...relayAuthorization(config.relayUrl),
-            },
-            signal: requestSignal,
-        });
-        if (!response.ok) {
-            await response.body?.cancel();
-            throw new PromptArtifactError(
-                "artifact_download_rejected",
-                "The Relay rejected the prompt artifact download",
-            );
-        }
-        if (
-            response.headers.get("content-type") !== reference.resource.mimeType ||
-            response.headers.get("x-mobius-artifact-id") !== reference.artifactId ||
-            response.headers.get("x-mobius-sha256") !== reference.sha256
-        ) {
-            await response.body?.cancel();
-            throw new PromptArtifactError(
-                "artifact_integrity_failed",
-                "The prompt artifact failed integrity validation",
-            );
-        }
-        const bytes = await responseBytes(response, reference.byteLength, requestSignal);
-        if (createHash("sha256").update(bytes).digest("hex") !== reference.sha256) {
-            throw new PromptArtifactError(
-                "artifact_integrity_failed",
-                "The prompt artifact failed integrity validation",
-            );
-        }
-        return bytes;
-    } catch (error) {
-        signal.throwIfAborted();
-        if (error instanceof PromptArtifactError) {
-            throw error;
-        }
-        throw new PromptArtifactError(
-            timeoutSignal.aborted ? "artifact_download_timeout" : "artifact_download_failed",
-            timeoutSignal.aborted
-                ? "The prompt artifact download timed out"
-                : "The prompt artifact could not be downloaded",
-            { cause: error },
-        );
-    }
-}
-
 function isTextMediaType(mediaType: string): boolean {
     return (
         mediaType.startsWith("text/") ||
@@ -219,7 +99,7 @@ function isTextMediaType(mediaType: string): boolean {
 }
 
 export async function resolvePromptArtifacts(
-    config: RuntimeConfig,
+    download: DownloadArtifact,
     command: ArtifactPromptCommand,
     signal: AbortSignal,
 ): Promise<ResolvedPromptArtifacts> {
@@ -232,7 +112,17 @@ export async function resolvePromptArtifacts(
             continue;
         }
         const reference = parseReference(resource);
-        const bytes = await download(config, command, reference, signal);
+        const bytes = await download(
+            {
+                artifactId: reference.artifactId,
+                byteLength: reference.byteLength,
+                commandId: command.commandId,
+                mimeType: reference.resource.mimeType,
+                sessionId: command.sessionId,
+                sha256: reference.sha256,
+            },
+            signal,
+        );
         if (resource.mimeType.startsWith("image/")) {
             const data = Buffer.from(bytes).toString("base64");
             if (data.length > MAX_AGENT_IMAGE_BASE64_LENGTH || images.length >= 8) {

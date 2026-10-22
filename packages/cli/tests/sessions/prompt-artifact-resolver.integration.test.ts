@@ -5,6 +5,7 @@ import { MOBIUS_API_PREFIX, SESSION_PROMPT_KIND, type SessionPromptCommand } fro
 import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { afterEach, describe, expect, it } from "vitest";
 import { createRuntimeConfig } from "../../src/runtime/config.ts";
+import { downloadPromptArtifact } from "../../src/runtime/relay/artifact-download.ts";
 import { resolvePromptArtifacts } from "../../src/session/prompt/prompt-artifacts.ts";
 
 function digest(bytes: Uint8Array): string {
@@ -108,7 +109,11 @@ describe("daemon prompt artifact resolution", () => {
             targetCommandId: "",
         };
 
-        const resolved = await resolvePromptArtifacts(config, command, new AbortController().signal);
+        const resolved = await resolvePromptArtifacts(
+            (artifact, signal) => downloadPromptArtifact(config, artifact, signal),
+            command,
+            new AbortController().signal,
+        );
 
         expect(resolved.images).toEqual([
             {
@@ -176,7 +181,13 @@ describe("daemon prompt artifact resolution", () => {
             targetCommandId: "",
         };
 
-        await expect(resolvePromptArtifacts(config, command, new AbortController().signal)).rejects.toMatchObject({
+        await expect(
+            resolvePromptArtifacts(
+                (artifact, signal) => downloadPromptArtifact(config, artifact, signal),
+                command,
+                new AbortController().signal,
+            ),
+        ).rejects.toMatchObject({
             code: "artifact_integrity_failed",
             message: "The prompt artifact failed integrity validation",
         });
@@ -233,7 +244,11 @@ describe("daemon prompt artifact resolution", () => {
             targetCommandId: "",
         };
 
-        const resolved = await resolvePromptArtifacts(config, command, new AbortController().signal);
+        const resolved = await resolvePromptArtifacts(
+            (artifact, signal) => downloadPromptArtifact(config, artifact, signal),
+            command,
+            new AbortController().signal,
+        );
 
         expect(acceptedEncoding).toBe("identity");
         expect(resolved.resources).toEqual([

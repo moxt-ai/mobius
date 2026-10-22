@@ -3,11 +3,11 @@ import {
     isIdentifier,
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_LIVENESS_READY_KIND,
+    type RuntimeUpgradeResult,
     SESSION_OPERATION_FAILED_KIND,
     UnsupportedProtocolMessageKindError,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { type MessageEvent, WebSocket } from "undici";
-import { reportDaemonUpgradeAvailability } from "../../daemon/upgrades/upgrade.ts";
 import type { ExternalContentStore } from "../../session/content/external-content-store.ts";
 import type { SessionManager } from "../../session/manager/session-manager.ts";
 import type { NativeSessionService } from "../../session/native/native-session-browser.ts";
@@ -90,6 +90,11 @@ function rejectUnsupportedCommand(
 
 export interface RelayConnectionOptions {
     readonly config: RuntimeConfig;
+    /** Reports a finished daemon upgrade to the relay. The daemon worker supplies it. */
+    readonly reportUpgradeAvailability: (
+        send: (result: RuntimeUpgradeResult) => void,
+        signal: AbortSignal,
+    ) => Promise<void>;
     readonly directories: WorkspaceDirectoryService;
     readonly sessions: SessionManager;
     readonly nativeSessions: NativeSessionService;
@@ -107,6 +112,7 @@ export interface RelayConnectionOptions {
 
 export async function runRelayConnection({
     config,
+    reportUpgradeAvailability,
     directories,
     sessionTurns,
     nativeSessions,
@@ -140,7 +146,7 @@ export async function runRelayConnection({
         signal: connectionController.signal,
         timer,
     });
-    void reportDaemonUpgradeAvailability((result) => {
+    void reportUpgradeAvailability((result) => {
         if (socket.readyState === WebSocket.OPEN) {
             send(socket, result);
         }

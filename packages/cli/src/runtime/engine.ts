@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { isIdentifier } from "@moxt-ai/mobius-sdk/protocol";
+import { isIdentifier, type RuntimeUpgradeResult } from "@moxt-ai/mobius-sdk/protocol";
 import {
     discoverLocalAgentInventory,
     supportedLocalAgentSpecifications,
@@ -162,6 +162,9 @@ export class MobiusRuntimeEngine {
                 ...(this.#options.onConnectionStatus === undefined
                     ? {}
                     : { onConnectionStatus: this.#options.onConnectionStatus }),
+                ...(this.#options.reportUpgradeAvailability === undefined
+                    ? {}
+                    : { reportUpgradeAvailability: this.#options.reportUpgradeAvailability }),
                 ...(this.#options.processLogsDirectory === undefined
                     ? {}
                     : { processLogsDirectory: this.#options.processLogsDirectory }),
@@ -174,6 +177,11 @@ export class MobiusRuntimeEngine {
 
 export interface MobiusRuntimeEngineOptions {
     readonly onConnectionStatus?: (status: "online" | "reconnecting") => void;
+    /** Reports a finished daemon upgrade to the relay. The daemon worker supplies it. */
+    readonly reportUpgradeAvailability?: (
+        send: (result: RuntimeUpgradeResult) => void,
+        signal: AbortSignal,
+    ) => Promise<void>;
     /**
      * State directory of the daemon processes supervising this Runtime. Passed
      * through to `runRuntime` so the local bug-report log can read the
@@ -182,23 +190,9 @@ export interface MobiusRuntimeEngineOptions {
     readonly processLogsDirectory?: string;
 }
 
-export type {
-    AcpEndpointTermination,
-    InProcessAcpEndpoint,
-    InProcessAcpEndpointFactory,
-    InProcessAcpEndpointOptions,
-} from "../acp/agent/in-process-endpoint.ts";
-export {
-    type MobiusRuntimePairingOptions,
-    type PairedRuntime,
-    PairingClientError,
-    pairMobiusRuntime,
-    resumeMobiusRuntime,
-} from "../daemon/pairing/pair-local-machine.ts";
 export type { RuntimeConfig, RuntimeConnectionConfig } from "./config.ts";
 export {
     createRuntimeConfig,
-    InProcessAcpAgentDefinition,
     OpaqueRuntimeReconnectTarget,
     RuntimeLocalContext,
     RuntimeReconnectTarget,

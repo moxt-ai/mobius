@@ -2,8 +2,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
-import { LocalAgentDefinition } from "../../src/runtime/config.ts";
 import { NullSessionObserver } from "../../src/session/api/session-api.ts";
 import { SessionManager } from "../../src/session/manager/session-manager.ts";
 import {

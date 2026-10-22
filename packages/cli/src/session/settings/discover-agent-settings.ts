@@ -10,16 +10,30 @@ import {
     type AgentSettingsDiscoveredEvent,
     type SessionConfigOption,
 } from "@moxt-ai/mobius-sdk/protocol";
+import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "../../acp/acp-error.ts";
 import type { AcpAgentDefinition } from "../../acp/agent/agent-definition.ts";
 import { agentSettingsAdapterForAgent } from "../../agent/settings/agent-settings-adapter.ts";
-import type { RuntimeConfig } from "../../runtime/config.ts";
-import {
-    AcpConfigurationValueUnavailableError,
-    AcpExecutionError,
-    type AgentSettingsModelEffort,
-    type SessionManager,
-} from "../manager/session-manager.ts";
+import { operationErrorCode } from "../../infra/operation-error.ts";
+import type { AgentSettingsModelEffort, ResolveAgent } from "../api/session-api.ts";
+import type { SessionManager } from "../manager/session-manager.ts";
 import type { WorkspaceDirectoryService } from "../workspace/workspace-directory.ts";
+
+/**
+ * Correlation details for a settings-discovery failure, safe for the remote diagnostic log. The
+ * configuration-value failure carries the requested and offered values itself.
+ */
+export function agentSettingsFailureDetails(agentId: string, failure: unknown): Readonly<Record<string, string>> {
+    const details = { agentId, code: operationErrorCode(failure) };
+    return failure instanceof AcpConfigurationValueUnavailableError
+        ? {
+              ...details,
+              configId: failure.configId,
+              offeredValueCount: failure.offeredValueCount.toString(),
+              offeredValues: JSON.stringify(failure.offeredValues),
+              requestedValue: failure.requestedValue,
+          }
+        : details;
+}
 
 export interface AgentSettingsDiscovery {
     readonly event: AgentSettingsDiscoveredEvent;
@@ -44,14 +58,14 @@ function unsupportedModelIds(unsupportedModels: readonly AcpConfigurationValueUn
 
 export async function discoverAgentSettings(
     command: AgentSettingsDiscoverCommand,
-    config: RuntimeConfig,
+    resolveAgent: ResolveAgent,
+    bindingId: string,
     directories: WorkspaceDirectoryService,
     sessions: SessionManager,
     signal: AbortSignal,
 ): Promise<AgentSettingsDiscovery> {
-    const cataloged = config.catalog.find(command.agentId);
-    const agent = config.resolveAgent === undefined ? cataloged : await config.resolveAgent(cataloged, signal);
-    const cwd = await directories.resolve(config.bindingId, "default", signal);
+    const agent = await resolveAgent(command.agentId, signal);
+    const cwd = await directories.resolve(bindingId, "default", signal);
     const inspectedBaseSnapshot = await sessions.inspectAgentSettings({
         additionalDirectories: [],
         agent,

@@ -11,17 +11,18 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import type { WebSocket } from "undici";
 import { operationErrorCode } from "../../../infra/operation-error.ts";
+import { SessionError } from "../../../session/api/session-error.ts";
 import type { SessionEventPage } from "../../../session/history/session-event-store.ts";
-import { AcpExecutionError, type SessionManager } from "../../../session/manager/session-manager.ts";
+import type { SessionManager } from "../../../session/manager/session-manager.ts";
 import type { NativeSessionService } from "../../../session/native/native-session-browser.ts";
 import type { PromptLifecycle } from "../../../session/prompt/prompt-lifecycle.ts";
 import { resolveSessionDirectories } from "../../../session/workspace/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "../../../session/workspace/workspace-directory.ts";
+import { resolveCatalogAgent } from "../../catalog/resolve-catalog-agent.ts";
 import type { RuntimeConfig } from "../../config.ts";
 import type { RelayConnectionDiagnostics } from "../../relay/diagnostics.ts";
 import type { RuntimeCommand } from "../definition.ts";
 import { reportOperationFailure, send } from "../transport.ts";
-import { resolveCatalogAgent } from "./session.ts";
 
 function isAgentReasoning(event: SessionEvent | undefined): boolean {
     return event?.type === "acp" && event.payload.sessionUpdate === "agent_thought_chunk";
@@ -73,17 +74,16 @@ async function loadHistoryPage(
     do {
         const replay = await load(eventLimit, cursor);
         if (sessionGenerationId !== null && replay.sessionGenerationId !== sessionGenerationId) {
-            throw new AcpExecutionError("The Session reloaded while history was loading", {}, "session_reloaded");
+            throw new SessionError("session_reloaded", "The Session reloaded while history was loading");
         }
         if (
             replay.events.some(
                 (event) => event.sessionId !== sessionId || event.sessionGenerationId !== replay.sessionGenerationId,
             )
         ) {
-            throw new AcpExecutionError(
-                "The Session history contains events from another Session",
-                {},
+            throw new SessionError(
                 "session_history_unavailable",
+                "The Session history contains events from another Session",
             );
         }
         sessionGenerationId = replay.sessionGenerationId;
@@ -102,7 +102,7 @@ async function loadHistoryPage(
     } while (cursor !== null);
 
     if (sessionGenerationId === null) {
-        throw new AcpExecutionError("The Session history is unavailable", {}, "session_history_unavailable");
+        throw new SessionError("session_history_unavailable", "The Session history is unavailable");
     }
     const visible = omitReasoning ? omitAgentReasoning(loaded) : loaded;
     const orderedEvents = visible.slice(-eventLimit);
@@ -135,7 +135,7 @@ export async function executeSessionHistoryPageLoad(
     try {
         const [entry] = await nativeSessions.querySessions([command.sessionId], signal);
         if (entry === undefined) {
-            throw new AcpExecutionError("The Session was not found", {}, "session_not_found");
+            throw new SessionError("session_not_found", "The Session was not found");
         }
         agentId = entry.agentId;
         const resolved = await resolveSessionDirectories(

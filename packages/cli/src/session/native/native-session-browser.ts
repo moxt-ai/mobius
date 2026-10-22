@@ -9,10 +9,11 @@ import {
     type SessionReadyEvent,
     type WorkspaceEntry,
 } from "@moxt-ai/mobius-sdk/protocol";
+import { AcpExecutionError } from "../../acp/acp-error.ts";
 import type { NativeSessionInfo } from "../../acp/protocol/native-session.ts";
 import { nativeSessionIdSchema } from "../../acp/protocol/native-session.ts";
-import type { RuntimeConfig } from "../../runtime/config.ts";
-import { AcpExecutionError, type SessionManager, type SessionPrepareOptions } from "../manager/session-manager.ts";
+import type { ResolveAgent, SessionPrepareOptions } from "../api/session-api.ts";
+import type { SessionManager } from "../manager/session-manager.ts";
 import type { StoredSession } from "../record/session-store.ts";
 import { LocalAuthorizationError } from "../workspace/local-authorization-error.ts";
 import type { WorkspaceDirectoryService } from "../workspace/workspace-directory.ts";
@@ -64,7 +65,8 @@ function nextForkTitle(sourceTitle: string, sessions: readonly StoredSession[]):
 export class NativeSessionService {
     readonly #entries = new Map<string, ListedTarget>();
     readonly #cursors = new Map<string, ListedCursor>();
-    readonly #config: RuntimeConfig;
+    readonly #bindingId: string;
+    readonly #resolveAgent: ResolveAgent;
     readonly #directories: WorkspaceDirectoryService;
     readonly #sessions: SessionManager;
     readonly #activeTurn: (
@@ -73,7 +75,8 @@ export class NativeSessionService {
     ) => Promise<Pick<Extract<NativeSessionResult, { readonly action: "active-turn" }>, "turn" | "queued">>;
 
     constructor(
-        config: RuntimeConfig,
+        bindingId: string,
+        resolveAgent: ResolveAgent,
         directories: WorkspaceDirectoryService,
         sessions: SessionManager,
         activeTurn: (
@@ -81,7 +84,8 @@ export class NativeSessionService {
             options: SessionPrepareOptions,
         ) => Promise<Pick<Extract<NativeSessionResult, { readonly action: "active-turn" }>, "turn" | "queued">>,
     ) {
-        this.#config = config;
+        this.#bindingId = bindingId;
+        this.#resolveAgent = resolveAgent;
         this.#directories = directories;
         this.#sessions = sessions;
         this.#activeTurn = activeTurn;
@@ -89,20 +93,16 @@ export class NativeSessionService {
 
     readonly execute = async (command: NativeSessionCommand, signal: AbortSignal): Promise<NativeSessionResult> => {
         signal.throwIfAborted();
-        const cwd = await this.#directories.resolve(this.#config.bindingId, command.directoryId, signal);
+        const cwd = await this.#directories.resolve(this.#bindingId, command.directoryId, signal);
         const additionalDirectories = await this.#directories.resolveMany(
-            this.#config.bindingId,
+            this.#bindingId,
             command.additionalDirectoryIds,
             signal,
         );
         signal.throwIfAborted();
-        const cataloged = this.#config.catalog.find(command.agentId);
         const options: SessionPrepareOptions = {
             additionalDirectories,
-            agent:
-                this.#config.resolveAgent === undefined
-                    ? cataloged
-                    : await this.#config.resolveAgent(cataloged, signal),
+            agent: await this.#resolveAgent(command.agentId, signal),
             cwd,
             sessionId: command.sessionId,
             signal,
@@ -328,10 +328,10 @@ export class NativeSessionService {
         const entries: SessionMetadata[] = [];
         for (const session of sessions) {
             signal.throwIfAborted();
-            const directory = await this.#directories.identify(this.#config.bindingId, session.cwd, signal);
+            const directory = await this.#directories.identify(this.#bindingId, session.cwd, signal);
             const additionalDirectories = [];
             for (const path of session.additionalDirectories) {
-                const identified = await this.#directories.identify(this.#config.bindingId, path, signal);
+                const identified = await this.#directories.identify(this.#bindingId, path, signal);
                 additionalDirectories.push({ directoryId: identified.directoryId, name: identified.name });
             }
             entries.push({

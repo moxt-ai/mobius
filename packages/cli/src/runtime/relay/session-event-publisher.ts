@@ -9,6 +9,7 @@ import {
     type SessionStatusChangedEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { WebSocket } from "undici";
+import type { SessionEventSink } from "../../session/api/session-api.ts";
 import type { ScheduledTask, Timer } from "../../util/timer.ts";
 
 const MAX_BUFFERED_BYTES = 32 * 1024 * 1024;
@@ -20,7 +21,7 @@ const EMPTY_ENVELOPE_BYTES = Buffer.byteLength(JSON.stringify({ events: [], kind
 export const SESSION_EVENT_BATCH_WINDOW_MILLISECONDS = 100;
 
 /** Live delivery is best-effort. Recovery snapshots are owned by the daemon's local Session cache. */
-export class RuntimeSessionEventPublisher {
+export class RuntimeSessionEventPublisher implements SessionEventSink {
     #pendingEvents: SessionLiveEvent[] = [];
     #pendingBytes = EMPTY_ENVELOPE_BYTES;
     #pendingTask: ScheduledTask | null = null;

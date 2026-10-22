@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { SessionEvent, SessionEventPayload, SessionLiveEvent } from "@moxt-ai/mobius-sdk/protocol";
+import type { ProjectedToolCall } from "../../acp/tool-call-projection.ts";
 import type { SessionEventCacheTable } from "../../storage/session/session-event-cache-table.ts";
 import type { SessionLiveEventPosition } from "./live-event-positions.ts";
 import { type MaterializedEventsResolver, SessionEventHistoryProjection } from "./session-event-history-projection.ts";
 import { InMemorySessionEventIdAllocator, type SessionEventIdAllocator } from "./session-event-id-allocator.ts";
-import type { ProjectedToolCall } from "../../acp/tool-call-projection.ts";
 
 const HOT_EVENT_HIGH_WATER_MARK = 256;
 const HOT_EVENT_RETENTION = 128;

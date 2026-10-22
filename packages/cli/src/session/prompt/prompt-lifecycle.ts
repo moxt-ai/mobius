@@ -7,7 +7,7 @@ import type {
     SessionLiveEvent,
     SessionPromptCommand,
 } from "@moxt-ai/mobius-sdk/protocol";
-import type { RuntimeSessionEventPublisher } from "../../runtime/relay/session-event-publisher.ts";
+import type { SessionEventSink } from "../api/session-api.ts";
 import type { ExecutionReceipts } from "../turn/execution-receipts.ts";
 
 interface QueuedPromptRequest {
@@ -54,7 +54,7 @@ function promptContent(command: SessionPromptCommand): readonly ContentBlock[] {
 }
 
 export class PromptLifecycle {
-    readonly #publisher: RuntimeSessionEventPublisher;
+    readonly #sink: SessionEventSink;
     readonly #terminal = new Map<string, SessionLiveEvent>();
     readonly #publications = new Map<string, SessionLiveEvent[]>();
     readonly #queued = new Map<string, QueuedPromptRequest>();
@@ -62,13 +62,13 @@ export class PromptLifecycle {
 
     readonly #recordLifecycle: (sessionId: string, event: SessionEventPayload) => Promise<boolean>;
     constructor(
-        publisher: RuntimeSessionEventPublisher,
+        sink: SessionEventSink,
         recordLifecycle: (sessionId: string, event: SessionEventPayload) => Promise<boolean>,
         recordActiveTurn: (event: SessionLiveEvent) => void,
     ) {
         this.#recordLifecycle = recordLifecycle;
         this.#recordActiveTurn = recordActiveTurn;
-        this.#publisher = publisher;
+        this.#sink = sink;
     }
 
     readonly requested = (command: SessionPromptCommand): void => {
@@ -136,7 +136,7 @@ export class PromptLifecycle {
         if (pending !== undefined) {
             pending.push(recorded);
         } else {
-            this.#publisher.publish(recorded);
+            this.#sink.publish(recorded);
         }
     };
 
@@ -158,7 +158,7 @@ export class PromptLifecycle {
                     break;
                 }
                 pending.shift();
-                this.#publisher.publish(next);
+                this.#sink.publish(next);
             }
             if (pending.length === 0) {
                 this.#publications.delete(sessionId);
@@ -184,7 +184,7 @@ export class PromptLifecycle {
             payload: { kind: "prompt.completed", commandId, stopReason },
         });
         if (!recorded) {
-            this.#publisher.publishOperationFailure(
+            this.#sink.publishOperationFailure(
                 sessionId,
                 commandId,
                 "cancelled",
@@ -203,7 +203,7 @@ export class PromptLifecycle {
             payload: { kind: "prompt.failed-before-start", commandId, code, message },
         });
         if (!recorded) {
-            this.#publisher.publishOperationFailure(sessionId, commandId, code, message);
+            this.#sink.publishOperationFailure(sessionId, commandId, code, message);
         }
     };
 

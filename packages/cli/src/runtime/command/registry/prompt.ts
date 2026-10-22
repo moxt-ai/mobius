@@ -4,6 +4,8 @@ import {
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { executePrompt } from "../../../session/prompt/execute-prompt.ts";
+import { resolveCatalogAgent } from "../../catalog/resolve-catalog-agent.ts";
+import { downloadPromptArtifact } from "../../relay/artifact-download.ts";
 import type { RuntimeCommand } from "../definition.ts";
 import { send } from "../transport.ts";
 
@@ -45,8 +47,9 @@ export const sessionPromptCommand: RuntimeCommand = {
             operations: context.operations,
             eventProjection: context.eventProjection,
             command: message,
-            config: context.config,
-            diagnostics: context.diagnostics,
+            resolveAgent: (agentId, signal) => resolveCatalogAgent(context.config, agentId, signal),
+            downloadArtifact: (artifact, signal) => downloadPromptArtifact(context.config, artifact, signal),
+            reportFailure: context.diagnostics.daemonDiagnostic,
             directories: context.directories,
             sessions: context.sessions,
             attemptId: receipt.attemptId,

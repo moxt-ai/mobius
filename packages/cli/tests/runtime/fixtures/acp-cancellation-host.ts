@@ -17,7 +17,7 @@ import {
     type InProcessAcpEndpoint,
     MobiusRuntimeEngine,
     RuntimeLocalContext,
-} from "../../../src/runtime/engine.ts";
+} from "../../../src/runtime.ts";
 
 // External Agent failure modes: cancellation before its initialization promise is
 // observed, cancellation while initialization is pending, and ordinary startup failure.

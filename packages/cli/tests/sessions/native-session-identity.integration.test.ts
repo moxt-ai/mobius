@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
-import { NullSessionObserver, SessionManager } from "../../src/session/manager/session-manager.ts";
+import { NullSessionObserver } from "../../src/session/api/session-api.ts";
+import { SessionManager } from "../../src/session/manager/session-manager.ts";
 import { MemorySessionStore } from "../../src/session/record/session-store.ts";
 import { systemTimer } from "../../src/util/timer.ts";
 import { acpAdapters } from "../support/acp-adapters.ts";

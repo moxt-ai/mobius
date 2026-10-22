@@ -6,7 +6,8 @@ import { InProcessAcpAgentDefinition } from "../../../src/acp/agent/agent-defini
 import { AcpContentExternalizer } from "../../../src/acp/content/content-externalizer.ts";
 import { CodexAcpAgent } from "../../../src/acp/harness/codex/agent.ts";
 import { createRuntimeConfig } from "../../../src/runtime/config.ts";
-import { NullSessionObserver, SessionManager } from "../../../src/session/manager/session-manager.ts";
+import { NullSessionObserver } from "../../../src/session/api/session-api.ts";
+import { SessionManager } from "../../../src/session/manager/session-manager.ts";
 import { NativeSessionService } from "../../../src/session/native/native-session-browser.ts";
 import { MemorySessionStore } from "../../../src/session/record/session-store.ts";
 import { WorkspaceDirectoryService } from "../../../src/session/workspace/workspace-directory.ts";
@@ -53,10 +54,16 @@ export async function codexFixture(
         [agent],
     );
     const directories = new WorkspaceDirectoryService("workspace", workspace);
-    const service = new NativeSessionService(config, directories, sessions, async () => ({
-        turn: null,
-        queued: [],
-    }));
+    const service = new NativeSessionService(
+        config.bindingId,
+        (agentId) => Promise.resolve(config.catalog.find(agentId)),
+        directories,
+        sessions,
+        async () => ({
+            turn: null,
+            queued: [],
+        }),
+    );
     const identity = {
         additionalDirectoryIds: [],
         agentId: agent.id,

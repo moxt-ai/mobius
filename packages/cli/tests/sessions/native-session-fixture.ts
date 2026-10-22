@@ -2,13 +2,12 @@ import { mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AcpSessionUpdate, NativeSessionCommand, SessionLiveEvent } from "@moxt-ai/mobius-sdk/protocol";
+import type { AdapterResolver } from "../../src/acp/adapter/context.ts";
+import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
-import { createRuntimeConfig, LocalAgentDefinition } from "../../src/runtime/config.ts";
-import {
-    type AdapterResolver,
-    NullSessionObserver,
-    SessionManager,
-} from "../../src/session/manager/session-manager.ts";
+import { createRuntimeConfig } from "../../src/runtime/config.ts";
+import { NullSessionObserver } from "../../src/session/api/session-api.ts";
+import { SessionManager } from "../../src/session/manager/session-manager.ts";
 import { NativeSessionService } from "../../src/session/native/native-session-browser.ts";
 import { MemorySessionStore } from "../../src/session/record/session-store.ts";
 import { WorkspaceDirectoryService } from "../../src/session/workspace/workspace-directory.ts";
@@ -94,10 +93,16 @@ export async function fixture(
         [agent],
     );
     const directories = new WorkspaceDirectoryService("workspace", workspace);
-    let service = new NativeSessionService(config, directories, sessions, async () => ({
-        turn: null,
-        queued: [],
-    }));
+    let service = new NativeSessionService(
+        config.bindingId,
+        (agentId) => Promise.resolve(config.catalog.find(agentId)),
+        directories,
+        sessions,
+        async () => ({
+            turn: null,
+            queued: [],
+        }),
+    );
     const identity = {
         additionalDirectoryIds: [],
         agentId: agent.id,
@@ -188,10 +193,16 @@ export async function fixture(
                 timer: systemTimer,
                 maxProcesses: null,
             });
-            service = new NativeSessionService(config, directories, sessions, async () => ({
-                turn: null,
-                queued: [],
-            }));
+            service = new NativeSessionService(
+                config.bindingId,
+                (agentId) => Promise.resolve(config.catalog.find(agentId)),
+                directories,
+                sessions,
+                async () => ({
+                    turn: null,
+                    queued: [],
+                }),
+            );
         },
         temporary,
         workspace,

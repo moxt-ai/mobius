@@ -1,9 +1,8 @@
 import { type SessionPromptCommand, SessionPromptDisposition } from "@moxt-ai/mobius-sdk/protocol";
+import { AcpExecutionError } from "../../acp/acp-error.ts";
 import { operationErrorCode, operationErrorMessage } from "../../infra/operation-error.ts";
-import { resolveCatalogAgent } from "../../runtime/command/registry/session.ts";
-import type { RuntimeConfig } from "../../runtime/config.ts";
-import type { RelayConnectionDiagnostics } from "../../runtime/relay/diagnostics.ts";
-import { AcpExecutionError, type SessionManager } from "../manager/session-manager.ts";
+import type { ReportFailure, ResolveAgent } from "../api/session-api.ts";
+import type { SessionManager } from "../manager/session-manager.ts";
 import type { ExecutionReceipts } from "../turn/execution-receipts.ts";
 import { resolveSessionDirectories } from "../workspace/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "../workspace/workspace-directory.ts";
@@ -12,15 +11,16 @@ import {
     applyCompleteSessionConfiguration,
     assertAppliedSessionConfiguration,
 } from "./apply-session-configuration.ts";
-import { resolvePromptArtifacts } from "./prompt-artifacts.ts";
+import { type DownloadArtifact, resolvePromptArtifacts } from "./prompt-artifacts.ts";
 import type { PromptLifecycle } from "./prompt-lifecycle.ts";
 
 export interface ExecutePromptOptions {
     readonly operations: ExecutionReceipts;
     readonly eventProjection: PromptLifecycle;
     readonly command: SessionPromptCommand;
-    readonly config: RuntimeConfig;
-    readonly diagnostics: RelayConnectionDiagnostics;
+    readonly resolveAgent: ResolveAgent;
+    readonly downloadArtifact: DownloadArtifact;
+    readonly reportFailure: ReportFailure;
     readonly directories: WorkspaceDirectoryService;
     readonly sessions: SessionManager;
     readonly attemptId: string;
@@ -41,8 +41,9 @@ export async function executePrompt({
     operations,
     eventProjection,
     command,
-    config,
-    diagnostics,
+    resolveAgent,
+    downloadArtifact,
+    reportFailure,
     directories,
     sessions,
     attemptId,
@@ -60,7 +61,7 @@ export async function executePrompt({
             command.additionalDirectoryIds,
             signal,
         );
-        const agent = await resolveCatalogAgent(config, command.agentId, signal);
+        const agent = await resolveAgent(command.agentId, signal);
         const availability = await waitForSessionAvailability(signal);
         if (availability.kind === "busy") {
             throw new AcpExecutionError("Another prompt is already running in this conversation", {}, "session_busy");
@@ -126,7 +127,7 @@ export async function executePrompt({
             stream.epoch,
             availability.disposition,
         );
-        const attachments = await resolvePromptArtifacts(config, command, signal);
+        const attachments = await resolvePromptArtifacts(downloadArtifact, command, signal);
         let stopReason: string;
         if (availability.disposition === SessionPromptDisposition.Steer) {
             await sessions.steerPrompt({
@@ -186,7 +187,7 @@ export async function executePrompt({
         // must not contain prompt text, so the Agent's free text and the cause
         // chain deliberately stay out of the log. The message still reaches the
         // user through the failure event above.
-        diagnostics.daemonDiagnostic("session_prompt_failed", command.commandId, {
+        reportFailure("session_prompt_failed", command.commandId, {
             agentId: command.agentId,
             code: failureCode,
             commandId: command.commandId,

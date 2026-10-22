@@ -1,7 +1,17 @@
-import type { AcpAgentDefinition as CatalogAgentDefinition } from "../../acp/agent/agent-definition.ts";
+import type { CatalogAgent as CatalogAgentDefinition } from "../../agent/catalog.ts";
 import type { discoverLocalAgentInventory } from "../../agent/discovery/discover-local-agents.ts";
 import { revalidateExecutable } from "../../util/process/executable.ts";
 import { type RuntimeConfig, withRuntimeEnvironment } from "../config.ts";
+
+/** The definition a command for `agentId` runs against, re-discovered when its executable changed. */
+export async function resolveCatalogAgent(
+    config: RuntimeConfig,
+    agentId: string,
+    signal: AbortSignal,
+): Promise<CatalogAgentDefinition> {
+    const agent = config.catalog.find(agentId);
+    return config.resolveAgent === undefined ? agent : await config.resolveAgent(agent, signal);
+}
 
 type DiscoverInventory = (signal: AbortSignal) => Promise<Awaited<ReturnType<typeof discoverLocalAgentInventory>>>;
 type PublishCatalog = (config: RuntimeConfig, signal: AbortSignal) => Promise<void>;

@@ -1,6 +1,6 @@
 import type { AcpSessionUpdate, SessionEvent, SessionLiveEvent } from "@moxt-ai/mobius-sdk/protocol";
 
-export type { ProjectedToolCall } from "./tool-call-projection.ts";
+export type { ProjectedToolCall } from "../../acp/tool-call-projection.ts";
 
 type AcpSessionEvent = Extract<SessionEvent, { readonly type: "acp" }>;
 type ToolCall = Extract<AcpSessionUpdate, { readonly sessionUpdate: "tool_call" | "tool_call_update" }>;
