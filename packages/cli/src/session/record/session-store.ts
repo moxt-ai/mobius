@@ -1,7 +1,10 @@
 import { z } from "zod";
-import type { AcpSessionRow, AcpSessionTable } from "../storage/session/acp-session-table.ts";
-import { type AcpStoredSessionConfiguration, decodeStoredSessionConfigurations } from "./session-configuration.ts";
-import { type AcpSessionEventStore, MemoryAcpSessionEventStore } from "./session-event-store.ts";
+import type { AcpSessionRow, AcpSessionTable } from "../../storage/session/acp-session-table.ts";
+import { type AcpSessionEventStore, MemoryAcpSessionEventStore } from "../history/session-event-store.ts";
+import {
+    type AcpStoredSessionConfiguration,
+    decodeStoredSessionConfigurations,
+} from "../live/session-configurations.ts";
 
 export class AcpStoredSession {
     readonly additionalDirectories: readonly string[];

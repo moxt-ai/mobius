@@ -3,7 +3,7 @@ import {
     SESSION_PROMPT_KIND,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
-import { executePrompt } from "../../session/execute-prompt.ts";
+import { executePrompt } from "../../../session/prompt/execute-prompt.ts";
 import type { RuntimeCommand } from "../definition.ts";
 import { send } from "../transport.ts";
 

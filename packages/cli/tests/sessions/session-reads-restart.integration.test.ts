@@ -2,11 +2,15 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { AgentRuntimeManager } from "../../src/acp/agent-runtime-manager.ts";
 import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
-import { NullAcpSessionObserver } from "../../src/acp/session-contracts.ts";
-import { MemoryAcpSessionStore, MissingAcpStoredSession, SqliteAcpSessionStore } from "../../src/acp/session-store.ts";
 import { LocalAgentDefinition } from "../../src/runtime/config.ts";
+import { NullAcpSessionObserver } from "../../src/session/api/session-api.ts";
+import { AgentRuntimeManager } from "../../src/session/manager/session-manager.ts";
+import {
+    MemoryAcpSessionStore,
+    MissingAcpStoredSession,
+    SqliteAcpSessionStore,
+} from "../../src/session/record/session-store.ts";
 import { AcpSessionTable } from "../../src/storage/session/acp-session-table.ts";
 import { openAcpSessionDatabase } from "../../src/storage/sqlite/local-databases.ts";
 import { systemTimer } from "../../src/util/timer.ts";

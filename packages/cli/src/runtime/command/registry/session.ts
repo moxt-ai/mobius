@@ -18,18 +18,18 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import type { WebSocket } from "undici";
 import { AcpExecutionError } from "../../../acp/acp-error.ts";
+import { operationErrorCode } from "../../../infra/operation-error.ts";
+import { AccumulatingOperationMetrics } from "../../../infra/operation-metrics.ts";
 import type {
     AcpSessionRecovery,
     AgentRuntimeManager,
     ClosedSessionHandling,
-} from "../../../acp/agent-runtime-manager.ts";
-import { operationErrorCode } from "../../../infra/operation-error.ts";
-import { AccumulatingOperationMetrics } from "../../../infra/operation-metrics.ts";
+} from "../../../session/manager/session-manager.ts";
+import type { NativeSessionService } from "../../../session/native/native-session-browser.ts";
+import { resolveSessionDirectories } from "../../../session/workspace/resolve-session-directories.ts";
+import type { WorkspaceDirectoryService } from "../../../session/workspace/workspace-directory.ts";
 import type { AcpAgentDefinition, RuntimeConfig } from "../../config.ts";
-import type { NativeSessionService } from "../../native-sessions/service.ts";
 import type { RelayConnectionDiagnostics } from "../../relay/diagnostics.ts";
-import { resolveSessionDirectories } from "../../workspace/resolve-session-directories.ts";
-import type { WorkspaceDirectoryService } from "../../workspace/workspace-directory.ts";
 import type { RuntimeCommand } from "../definition.ts";
 import { reportOperationFailure, send } from "../transport.ts";
 

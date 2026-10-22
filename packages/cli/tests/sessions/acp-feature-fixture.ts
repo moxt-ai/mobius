@@ -12,8 +12,8 @@ import type {
     SessionPermissionRequestedEvent,
     SessionPermissionResolvedEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
-import type { AcpSessionObserver } from "../../src/acp/agent-runtime-manager.ts";
 import { LocalAgentDefinition } from "../../src/runtime/config.ts";
+import type { AcpSessionObserver } from "../../src/session/manager/session-manager.ts";
 
 export const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
 

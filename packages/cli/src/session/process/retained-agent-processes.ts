@@ -1,4 +1,4 @@
-import type { AgentSession } from "./agent-session.ts";
+import type { AgentSession } from "../live/agent-session.ts";
 
 type Resource = { readonly kind: "empty" } | { readonly kind: "ready"; readonly runtime: AgentSession };
 type Lifecycle =

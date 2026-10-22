@@ -1,4 +1,4 @@
-import { AcpExecutionError } from "./acp-error.ts";
+import { AcpExecutionError } from "../../acp/acp-error.ts";
 
 type Execution =
     | { readonly kind: "running"; readonly commandId: string }

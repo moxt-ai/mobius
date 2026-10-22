@@ -20,30 +20,31 @@ import {
     type SessionConfigOption,
     type SessionEventPayload,
 } from "@moxt-ai/mobius-sdk/protocol";
-import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
-import type { AcpAgentDefinition } from "../runtime/config.ts";
-import { revalidateExecutable } from "../util/process/executable.ts";
-import { isRecord, truncate } from "../util/value-utils.ts";
-import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp-error.ts";
+import { type OperationMetrics, unmeasuredOperationMetrics } from "../../infra/operation-metrics.ts";
+import type { AcpAgentDefinition } from "../../acp/agent/agent-definition.ts";
+import { revalidateExecutable } from "../../util/process/executable.ts";
+import { isRecord, truncate } from "../../util/value-utils.ts";
+import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "../../acp/acp-error.ts";
 import { type AcpTurnState, IdleAcpTurn, RunningAcpTurn } from "./agent-turn.ts";
-import { AgentConnection } from "./connection/agent-connection.ts";
-import { AgentUpdateStream } from "./connection/agent-update-stream.ts";
-import type { AcpClientHandler } from "./connection/create-client.ts";
-import type { AcpContentExternalizer } from "./content/content-externalizer.ts";
+import { AgentConnection } from "../../acp/connection/agent-connection.ts";
+import { AgentUpdateStream } from "../../acp/connection/agent-update-stream.ts";
+import type { AcpClientHandler } from "../../acp/connection/create-client.ts";
+import type { AcpContentExternalizer } from "../../acp/content/content-externalizer.ts";
 import {
     type NativeSessionOrigin,
     type NativeSessionPage,
     nativeSessionIdSchema,
     nativeSessionPageSchema,
-} from "./protocol/native-session.ts";
-import { normalizeAcpCapabilities, unsupportedSessionCapabilities } from "./protocol/session-capabilities.ts";
+} from "../../acp/protocol/native-session.ts";
+import { normalizeAcpCapabilities, unsupportedSessionCapabilities } from "../../acp/protocol/session-capabilities.ts";
 import {
     type SessionConfigProtocol,
     SessionConfigProtocolError,
     sessionConfigProtocolForAgent,
-} from "./protocol/session-config-protocol.ts";
-import { waitForSharedOperation } from "./runtime-operations.ts";
-import { AcpSessionConfigurations } from "./session-configuration.ts";
+} from "../../acp/protocol/session-config-protocol.ts";
+import { type OperationMetrics, unmeasuredOperationMetrics } from "../../infra/operation-metrics.ts";
+import { revalidateExecutable } from "../../util/process/executable.ts";
+import { isRecord, truncate } from "../../util/value-utils.ts";
 import {
     type AcpConfigureOptions,
     type AcpElicitationResponseOptions,
@@ -57,14 +58,17 @@ import {
     type AcpSessionRecovery,
     type AcpSteerOptions,
     type AcpTurnOptions,
-} from "./session-contracts.ts";
-import { AcpHistoryReplay } from "./session-history.ts";
-import { AcpSessionInteractions } from "./session-interactions.ts";
-import { type AcpSessionStore, AcpStoredSession, FoundAcpStoredSession } from "./session-store.ts";
+} from "../api/session-api.ts";
+import { AcpHistoryReplay } from "../history/session-history.ts";
+import { AcpSessionInteractions } from "../interaction/session-interactions.ts";
+import { waitForSharedOperation } from "../manager/operation-drain.ts";
+import { type AcpSessionStore, AcpStoredSession, FoundAcpStoredSession } from "../record/session-store.ts";
+import { type AcpTurnState, IdleAcpTurn, RunningAcpTurn } from "./agent-turn.ts";
+import { AcpSessionConfigurations } from "./session-configurations.ts";
 
 const PROCESS_STOP_TIMEOUT_MILLISECONDS = 1_000;
 
-export { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp-error.ts";
+export { AcpConfigurationValueUnavailableError, AcpExecutionError } from "../../acp/acp-error.ts";
 
 class RetryableAcpInitializationError extends AcpExecutionError {
     constructor(cause: unknown) {

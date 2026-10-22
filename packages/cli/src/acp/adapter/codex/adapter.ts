@@ -1,7 +1,7 @@
+import type { AcpNativeEventReplay } from "../../../session/api/session-api.ts";
 import { AcpExecutionError } from "../../acp-error.ts";
 import { readCodexFullHistory } from "../../native-history/codex/codex-history.ts";
 import { nativeHistoryEvents } from "../../native-history/codex/native-history-events.ts";
-import type { AcpNativeEventReplay } from "../../session-contracts.ts";
 import type { Adapter, AdapterContext, NativeSessionPreviewRequest } from "../context.ts";
 
 /**

@@ -2,16 +2,16 @@ import { mkdir, mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AcpSessionUpdate, NativeSessionCommand, SessionLiveEvent } from "@moxt-ai/mobius-sdk/protocol";
+import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
+import { createRuntimeConfig, LocalAgentDefinition } from "../../src/runtime/config.ts";
 import {
     type AdapterResolver,
     AgentRuntimeManager,
     NullAcpSessionObserver,
-} from "../../src/acp/agent-runtime-manager.ts";
-import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
-import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
-import { createRuntimeConfig, LocalAgentDefinition } from "../../src/runtime/config.ts";
-import { NativeSessionService } from "../../src/runtime/native-sessions/service.ts";
-import { WorkspaceDirectoryService } from "../../src/runtime/workspace/workspace-directory.ts";
+} from "../../src/session/manager/session-manager.ts";
+import { NativeSessionService } from "../../src/session/native/native-session-browser.ts";
+import { MemoryAcpSessionStore } from "../../src/session/record/session-store.ts";
+import { WorkspaceDirectoryService } from "../../src/session/workspace/workspace-directory.ts";
 import { systemTimer } from "../../src/util/timer.ts";
 import { acpAdapters } from "../support/acp-adapters.ts";
 import { UnretainedExternalContentStore } from "../support/unretained-external-content-store.ts";

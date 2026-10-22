@@ -4,8 +4,8 @@ import {
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
-import type { RuntimeOperationState } from "../admission.ts";
-import { ActiveRuntimeTurn, type RecordedSessionEvent } from "./turn/active-turn.ts";
+import { ActiveRuntimeTurn, type RecordedSessionEvent } from "./active-turn.ts";
+import type { RuntimeOperationState } from "./execution-receipts.ts";
 
 export type SessionAdmission =
     | { readonly kind: "available"; readonly disposition: string }

@@ -1,6 +1,6 @@
-import type { AcpAgentDefinition } from "../../runtime/config.ts";
-import type { AcpNativeEventReplay, AcpPrepareOptions } from "../session-contracts.ts";
-import type { AcpSessionEventStore } from "../session-event-store.ts";
+import type { AcpNativeEventReplay, AcpPrepareOptions } from "../../session/api/session-api.ts";
+import type { AcpSessionEventStore } from "../../session/history/session-event-store.ts";
+import type { AcpAgentDefinition } from "../agent/agent-definition.ts";
 
 /** What a caller wants to preview from a saved native session. */
 export interface NativeSessionPreviewRequest {

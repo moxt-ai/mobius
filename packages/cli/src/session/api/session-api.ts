@@ -18,8 +18,8 @@ import type {
     SessionPermissionRequestedEvent,
     SessionPermissionResolvedEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
-import type { AcpAgentDefinition } from "../runtime/config.ts";
-import type { NativeSessionOrigin } from "./protocol/native-session.ts";
+import type { AcpAgentDefinition } from "../../acp/agent/agent-definition.ts";
+import type { NativeSessionOrigin } from "../../acp/protocol/native-session.ts";
 
 export interface AcpPrepareOptions {
     readonly additionalDirectories: readonly string[];

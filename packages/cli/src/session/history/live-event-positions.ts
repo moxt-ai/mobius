@@ -1,4 +1,4 @@
-import type { LiveEventPositionTable } from "../storage/session/live-event-position-table.ts";
+import type { LiveEventPositionTable } from "../../storage/session/live-event-position-table.ts";
 
 const INITIAL_POSITION = 10 ** 4;
 const POSITION_RESERVATION_SIZE = 10_000;

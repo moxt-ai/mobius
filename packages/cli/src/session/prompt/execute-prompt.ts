@@ -1,19 +1,19 @@
 import { type SessionPromptCommand, SessionPromptDisposition } from "@moxt-ai/mobius-sdk/protocol";
-import { AcpExecutionError, type AgentRuntimeManager } from "../../acp/agent-runtime-manager.ts";
+import { operationErrorCode, operationErrorMessage } from "../../infra/operation-error.ts";
+import { resolveCatalogAgent } from "../../runtime/command/registry/session.ts";
+import type { RuntimeConfig } from "../../runtime/config.ts";
+import type { RelayConnectionDiagnostics } from "../../runtime/relay/diagnostics.ts";
+import { AcpExecutionError, type AgentRuntimeManager } from "../manager/session-manager.ts";
+import type { RuntimeOperationState } from "../turn/execution-receipts.ts";
+import { resolveSessionDirectories } from "../workspace/resolve-session-directories.ts";
+import type { WorkspaceDirectoryService } from "../workspace/workspace-directory.ts";
 import {
     agentForSessionConfiguration,
     applyCompleteSessionConfiguration,
     assertAppliedSessionConfiguration,
-} from "../../acp/session-config/apply-session-configuration.ts";
-import { operationErrorCode, operationErrorMessage } from "../../infra/operation-error.ts";
-import type { RuntimeOperationState } from "../admission.ts";
-import { resolveCatalogAgent } from "../command/registry/session.ts";
-import type { RuntimeConfig } from "../config.ts";
-import type { RelayConnectionDiagnostics } from "../relay/diagnostics.ts";
-import { resolveSessionDirectories } from "../workspace/resolve-session-directories.ts";
-import type { WorkspaceDirectoryService } from "../workspace/workspace-directory.ts";
-import { resolvePromptArtifacts } from "./prompt-artifact-resolver.ts";
-import type { RuntimeSessionEventProjection } from "./session-event-projection.ts";
+} from "./apply-session-configuration.ts";
+import { resolvePromptArtifacts } from "./prompt-artifacts.ts";
+import type { RuntimeSessionEventProjection } from "./prompt-lifecycle.ts";
 
 export interface ExecutePromptOptions {
     readonly operations: RuntimeOperationState;

@@ -1,12 +1,17 @@
 import { styleText } from "node:util";
 import { harnessAdapters } from "../acp/adapter/registry.ts";
-import { resolveMaxAcpProcesses } from "../acp/agent-process-pool.ts";
-import { AgentRuntimeManager } from "../acp/agent-runtime-manager.ts";
 import { AcpContentExternalizer } from "../acp/content/content-externalizer.ts";
-import { LocalExternalContentStore } from "../acp/external-content/local-external-content-store.ts";
-import { CachedAcpSessionEventStore } from "../acp/session-event-store.ts";
-import { SqliteSessionLiveEventPosition } from "../acp/session-live-event-position.ts";
-import { SqliteAcpSessionStore } from "../acp/session-store.ts";
+import { LocalExternalContentStore } from "../session/content/external-content-store.ts";
+import { SqliteSessionLiveEventPosition } from "../session/history/live-event-positions.ts";
+import { CachedAcpSessionEventStore } from "../session/history/session-event-store.ts";
+import { AgentRuntimeManager } from "../session/manager/session-manager.ts";
+import { NativeSessionService } from "../session/native/native-session-browser.ts";
+import { resolveMaxAcpProcesses } from "../session/process/agent-process-pool.ts";
+import { RuntimeSessionEventProjection } from "../session/prompt/prompt-lifecycle.ts";
+import { SqliteAcpSessionStore } from "../session/record/session-store.ts";
+import { RuntimeOperationState } from "../session/turn/execution-receipts.ts";
+import { RuntimeSessions } from "../session/turn/session-turns.ts";
+import { WorkspaceDirectoryService } from "../session/workspace/workspace-directory.ts";
 import { AcpSessionTable } from "../storage/session/acp-session-table.ts";
 import { LiveEventPositionTable } from "../storage/session/live-event-position-table.ts";
 import { SessionEventCacheTable } from "../storage/session/session-event-cache-table.ts";
@@ -17,18 +22,13 @@ import {
 } from "../storage/sqlite/local-databases.ts";
 import { systemTimer, type Timer } from "../util/timer.ts";
 import { RuntimeAcpObserver } from "./acp-observer.ts";
-import { RuntimeOperationState } from "./admission.ts";
 import { publishAgentCatalog } from "./catalog/publish-agent-catalog.ts";
 import type { RuntimeConfig } from "./config.ts";
-import { NativeSessionService } from "./native-sessions/service.ts";
 import { RuntimeDiagnosticLog } from "./observability/diagnostic-log.ts";
 import { RelayConnectionDiagnostics } from "./relay/diagnostics.ts";
 import { runRelayConnection } from "./relay/run-relay-connection.ts";
 import { RuntimeRelayRevokedError } from "./relay/runtime-revocation.ts";
 import { RuntimeSessionEventPublisher } from "./relay/session-event-publisher.ts";
-import { RuntimeSessionEventProjection } from "./session/session-event-projection.ts";
-import { RuntimeSessions } from "./sessions.ts";
-import { WorkspaceDirectoryService } from "./workspace/workspace-directory.ts";
 
 const RELAY_RECONNECT_DELAY_MILLISECONDS = 500;
 

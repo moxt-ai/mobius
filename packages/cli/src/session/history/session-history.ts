@@ -1,6 +1,6 @@
 import type { SessionNotification } from "@agentclientprotocol/sdk";
 import type { AcpSessionUpdate, SessionEventPayload, SessionLiveEvent } from "@moxt-ai/mobius-sdk/protocol";
-import type { AcpNativeEventReplay } from "./session-contracts.ts";
+import type { AcpNativeEventReplay } from "../api/session-api.ts";
 import type { AcpSessionEventStore } from "./session-event-store.ts";
 
 /**

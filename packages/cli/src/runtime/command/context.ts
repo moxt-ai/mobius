@@ -1,14 +1,14 @@
 import type { WebSocket } from "undici";
-import type { AgentRuntimeManager } from "../../acp/agent-runtime-manager.ts";
-import type { ExternalContentStore } from "../../acp/external-content/local-external-content-store.ts";
+import type { ExternalContentStore } from "../../session/content/external-content-store.ts";
+import type { AgentRuntimeManager } from "../../session/manager/session-manager.ts";
+import type { NativeSessionService } from "../../session/native/native-session-browser.ts";
+import type { RuntimeSessionEventProjection } from "../../session/prompt/prompt-lifecycle.ts";
+import type { RuntimeOperationState } from "../../session/turn/execution-receipts.ts";
+import type { RuntimeSessions } from "../../session/turn/session-turns.ts";
+import type { WorkspaceDirectoryService } from "../../session/workspace/workspace-directory.ts";
 import type { Timer } from "../../util/timer.ts";
-import type { RuntimeOperationState } from "../admission.ts";
 import type { RuntimeConfig } from "../config.ts";
-import type { NativeSessionService } from "../native-sessions/service.ts";
 import type { RelayConnectionDiagnostics } from "../relay/diagnostics.ts";
-import type { RuntimeSessionEventProjection } from "../session/session-event-projection.ts";
-import type { RuntimeSessions } from "../sessions.ts";
-import type { WorkspaceDirectoryService } from "../workspace/workspace-directory.ts";
 
 export interface CommandContext {
     readonly config: RuntimeConfig;

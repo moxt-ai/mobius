@@ -7,8 +7,8 @@ import type {
     SessionLiveEvent,
     SessionPromptCommand,
 } from "@moxt-ai/mobius-sdk/protocol";
-import type { RuntimeOperationState } from "../admission.ts";
-import type { RuntimeSessionEventPublisher } from "../relay/session-event-publisher.ts";
+import type { RuntimeSessionEventPublisher } from "../../runtime/relay/session-event-publisher.ts";
+import type { RuntimeOperationState } from "../turn/execution-receipts.ts";
 
 interface QueuedPromptRequest {
     readonly commandId: string;

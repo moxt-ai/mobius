@@ -5,7 +5,7 @@ import { MOBIUS_API_PREFIX, SESSION_PROMPT_KIND, type SessionPromptCommand } fro
 import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { afterEach, describe, expect, it } from "vitest";
 import { createRuntimeConfig } from "../../src/runtime/config.ts";
-import { resolvePromptArtifacts } from "../../src/runtime/session/prompt-artifact-resolver.ts";
+import { resolvePromptArtifacts } from "../../src/session/prompt/prompt-artifacts.ts";
 
 function digest(bytes: Uint8Array): string {
     return createHash("sha256").update(bytes).digest("hex");

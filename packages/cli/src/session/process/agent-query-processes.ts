@@ -1,16 +1,16 @@
-import { AcpExecutionError } from "./acp-error.ts";
-import type { AgentProcessPool } from "./agent-process-pool.ts";
-import { AgentSession } from "./agent-session.ts";
-import type { AcpContentExternalizer } from "./content/content-externalizer.ts";
-import { RetainedAgentProcesses } from "./retained-agent-processes.ts";
-import { waitForSharedOperation } from "./runtime-operations.ts";
+import { AcpExecutionError } from "../../acp/acp-error.ts";
+import type { AcpContentExternalizer } from "../../acp/content/content-externalizer.ts";
 import {
     type AcpNativeEventReplay,
     type AcpPreparedSession,
     type AcpPrepareOptions,
     NullAcpSessionObserver,
-} from "./session-contracts.ts";
-import { MemoryAcpSessionStore } from "./session-store.ts";
+} from "../api/session-api.ts";
+import { AgentSession } from "../live/agent-session.ts";
+import { waitForSharedOperation } from "../manager/operation-drain.ts";
+import { MemoryAcpSessionStore } from "../record/session-store.ts";
+import type { AgentProcessPool } from "./agent-process-pool.ts";
+import { RetainedAgentProcesses } from "./retained-agent-processes.ts";
 
 /** Owns query processes; execution processes remain separately retained. */
 export class AgentQueryProcesses {

@@ -1,5 +1,5 @@
-import { type ScheduledTask, systemTimer, type Timer } from "../util/timer.ts";
-import type { AgentSession } from "./agent-session.ts";
+import type { AgentSession } from "../live/agent-session.ts";
+import { type ScheduledTask, systemTimer, type Timer } from "../../util/timer.ts";
 import { AcpProcessCapacityLock, waitForAcpProcessCapacity } from "./process-capacity.ts";
 
 const DEFAULT_MAX_ACP_PROCESSES = 1000;

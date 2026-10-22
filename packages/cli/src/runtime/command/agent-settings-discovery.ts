@@ -1,16 +1,16 @@
 import { AGENT_SETTINGS_DISCOVERY_FAILED_KIND, type AgentSettingsDiscoverCommand } from "@moxt-ai/mobius-sdk/protocol";
 import { WebSocket } from "undici";
+import { operationErrorCode, operationErrorMessage } from "../../infra/operation-error.ts";
 import {
     AcpConfigurationValueUnavailableError,
     AcpExecutionError,
     type AgentRuntimeManager,
-} from "../../acp/agent-runtime-manager.ts";
-import { operationErrorCode, operationErrorMessage } from "../../infra/operation-error.ts";
+} from "../../session/manager/session-manager.ts";
+import { discoverAgentSettings } from "../../session/settings/discover-agent-settings.ts";
+import type { WorkspaceDirectoryService } from "../../session/workspace/workspace-directory.ts";
 import type { Timer } from "../../util/timer.ts";
-import { discoverAgentSettings } from "../agent-catalog/discover-agent-settings.ts";
 import type { RuntimeConfig } from "../config.ts";
 import type { RelayConnectionDiagnostics } from "../relay/diagnostics.ts";
-import type { WorkspaceDirectoryService } from "../workspace/workspace-directory.ts";
 import { agentSettingsFailureDetails, send } from "./transport.ts";
 
 interface SettingsDiscoveryDependencies {

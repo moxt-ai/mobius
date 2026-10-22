@@ -1,8 +1,8 @@
 import type { NativeSessionResult, SessionLiveEvent, SessionPromptCommand } from "@moxt-ai/mobius-sdk/protocol";
-import type { RuntimeOperationState } from "./admission.ts";
-import type { SessionAdmission } from "./session/session-execution.ts";
-import { SessionExecutionState } from "./session/session-execution.ts";
-import type { ActiveRuntimeTurn, RecordedSessionEvent } from "./session/turn/active-turn.ts";
+import type { ActiveRuntimeTurn, RecordedSessionEvent } from "./active-turn.ts";
+import type { RuntimeOperationState } from "./execution-receipts.ts";
+import type { SessionAdmission } from "./session-execution.ts";
+import { SessionExecutionState } from "./session-execution.ts";
 
 type QueuedTurnSnapshot = Extract<NativeSessionResult, { readonly action: "active-turn" }>["queued"];
 

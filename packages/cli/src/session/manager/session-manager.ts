@@ -1,10 +1,10 @@
-import { ActiveExecutions } from "./active-executions.ts";
-import { AgentQueryProcesses } from "./agent-query-processes.ts";
-import { AgentSession } from "./agent-session.ts";
-import { RetainedAgentProcesses } from "./retained-agent-processes.ts";
-import { RuntimeOperations, waitForSharedOperation } from "./runtime-operations.ts";
+import { AgentSession } from "../live/agent-session.ts";
+import { AgentQueryProcesses } from "../process/agent-query-processes.ts";
+import { RetainedAgentProcesses } from "../process/retained-agent-processes.ts";
+import { ActiveExecutions } from "../turn/active-executions.ts";
+import { RuntimeOperations, waitForSharedOperation } from "./operation-drain.ts";
 
-export { createWritableAcpStream } from "./connection/agent-connection.ts";
+export { createWritableAcpStream } from "../../acp/connection/agent-connection.ts";
 
 import {
     SESSION_CLOSE_NOTICE_KIND,
@@ -15,20 +15,20 @@ import {
     type SessionStatus,
     type SessionStatusChangedEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
-import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
-import { isNativeChatSessionId } from "../runtime/native-sessions/chat-agent.ts";
-import type { Timer } from "../util/timer.ts";
-import { AcpExecutionError } from "./acp-error.ts";
-import { AgentProcessPool, type AgentProcessRetention } from "./agent-process-pool.ts";
-import type { AcpContentExternalizer } from "./content/content-externalizer.ts";
-import type { NativeSessionOrigin, NativeSessionPage } from "./protocol/native-session.ts";
+import { AcpExecutionError } from "../../acp/acp-error.ts";
+import type { AcpContentExternalizer } from "../../acp/content/content-externalizer.ts";
+import type { NativeSessionOrigin, NativeSessionPage } from "../../acp/protocol/native-session.ts";
+import { type OperationMetrics, unmeasuredOperationMetrics } from "../../infra/operation-metrics.ts";
+import type { Timer } from "../../util/timer.ts";
+import { isNativeChatSessionId } from "../native/native-chat-agent.ts";
+import { AgentProcessPool, type AgentProcessRetention } from "../process/agent-process-pool.ts";
 import {
     type AcpSessionStore,
     AcpStoredSession,
     FoundAcpStoredSession,
     MemoryAcpSessionStore,
     MissingAcpStoredSession,
-} from "./session-store.ts";
+} from "../record/session-store.ts";
 
 const SESSION_CONTROL_TIMEOUT_MILLISECONDS = 30_000;
 const SESSION_CLOSE_TIMEOUT_MILLISECONDS = 30_000;
@@ -36,8 +36,8 @@ const SESSION_CLOSE_TIMEOUT_MILLISECONDS = 30_000;
 /** What preparing does with a closed Session: a prepare or restore reopens it, a read must keep it closed. */
 export type ClosedSessionHandling = "reopen" | "keep-closed";
 
-export { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp-error.ts";
-export type { Adapter, AdapterResolver } from "./adapter/context.ts";
+export { AcpConfigurationValueUnavailableError, AcpExecutionError } from "../../acp/acp-error.ts";
+export type { Adapter, AdapterResolver } from "../../acp/adapter/context.ts";
 export {
     type AcpAgentSettingsInspectionOptions,
     type AcpAgentSettingsModelEffort,
@@ -54,9 +54,9 @@ export {
     type AcpSteerOptions,
     type AcpTurnOptions,
     NullAcpSessionObserver,
-} from "./session-contracts.ts";
+} from "../api/session-api.ts";
 
-import type { AdapterContext, AdapterResolver, NativeSessionPreviewRequest } from "./adapter/context.ts";
+import type { AdapterContext, AdapterResolver, NativeSessionPreviewRequest } from "../../acp/adapter/context.ts";
 import {
     type AcpAgentSettingsInspectionOptions,
     AcpAgentSettingsSnapshot,
@@ -72,7 +72,7 @@ import {
     type AcpSteerOptions,
     type AcpTurnOptions,
     NullAcpSessionObserver,
-} from "./session-contracts.ts";
+} from "../api/session-api.ts";
 
 export class AgentRuntimeManager {
     readonly #operations = new RuntimeOperations();

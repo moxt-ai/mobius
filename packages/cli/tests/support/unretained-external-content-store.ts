@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ExternalContentStore } from "../../src/acp/external-content/local-external-content-store.ts";
+import type { ExternalContentStore } from "../../src/session/content/external-content-store.ts";
 
 /** Hashes content into a stable reference but retains nothing and resolves no request. */
 export class UnretainedExternalContentStore implements ExternalContentStore {
