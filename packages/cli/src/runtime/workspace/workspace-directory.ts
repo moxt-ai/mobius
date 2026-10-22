@@ -1,4 +1,3 @@
-import { readdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, normalize, relative } from "node:path";
 import {
@@ -6,6 +5,7 @@ import {
     MAX_WORKSPACE_PATH_LENGTH,
     type WorkspaceEntry,
 } from "@moxt-ai/mobius-sdk/protocol";
+import { canonicalPath, listDirectory, readPathMetadata } from "../../storage/files/local-files.ts";
 import { LocalAuthorizationError } from "./local-authorization-error.ts";
 
 export class WorkspaceDirectoryListing {
@@ -103,11 +103,11 @@ export class WorkspaceDirectoryService {
             throw new LocalAuthorizationError("The local directory path is invalid");
         }
         try {
-            const target = await realpath(requested);
+            const target = await canonicalPath(requested);
             signal.throwIfAborted();
-            const metadata = await stat(target);
+            const metadata = await readPathMetadata(target);
             signal.throwIfAborted();
-            if (!isAbsolute(target) || normalize(target) !== target || !metadata.isDirectory()) {
+            if (!isAbsolute(target) || normalize(target) !== target || metadata.kind !== "directory") {
                 throw new LocalAuthorizationError("The selected location is not a directory");
             }
             return target;
@@ -161,7 +161,7 @@ export class WorkspaceDirectoryService {
     readonly list = async (bindingId: string, id: string, signal: AbortSignal): Promise<WorkspaceDirectoryListing> => {
         const target = await this.resolve(bindingId, id, signal);
         try {
-            const children = await readdir(target, { withFileTypes: true });
+            const children = await listDirectory(target);
             signal.throwIfAborted();
             const entries: WorkspaceEntry[] = [];
             for (const child of children) {
@@ -169,11 +169,10 @@ export class WorkspaceDirectoryService {
                     break;
                 }
                 if (
-                    child.isFile() ||
-                    child.isBlockDevice() ||
-                    child.isCharacterDevice() ||
-                    child.isFIFO() ||
-                    child.isSocket()
+                    child.kind === "file" ||
+                    child.kind === "device" ||
+                    child.kind === "fifo" ||
+                    child.kind === "socket"
                 ) {
                     continue;
                 }

@@ -5,9 +5,9 @@ import {
     applyCompleteSessionConfiguration,
     assertAppliedSessionConfiguration,
 } from "../../acp/session-config/apply-session-configuration.ts";
+import { operationErrorCode, operationErrorMessage } from "../../infra/operation-error.ts";
 import type { RuntimeOperationState } from "../admission.ts";
 import { resolveCatalogAgent } from "../command/registry/session.ts";
-import { operationErrorCode, operationErrorMessage } from "../command/transport.ts";
 import type { RuntimeConfig } from "../config.ts";
 import type { RelayConnectionDiagnostics } from "../relay/diagnostics.ts";
 import { resolveSessionDirectories } from "../workspace/resolve-session-directories.ts";

@@ -1,10 +1,10 @@
-import { mkdir, realpath, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { isIdentifier } from "@moxt-ai/mobius-sdk/protocol";
 import {
     discoverLocalAgentInventory,
     supportedLocalAgentSpecifications,
 } from "../agent/discovery/discover-local-agents.ts";
+import { ensureCanonicalDirectory } from "../storage/files/local-files.ts";
 import { readStateDirectory } from "../storage/state-directory.ts";
 import { publishAgentCatalog } from "./catalog/publish-agent-catalog.ts";
 import { createCatalogAgentResolver } from "./catalog/resolve-catalog-agent.ts";
@@ -91,20 +91,16 @@ export function loadMobiusRuntimeConnection(
 
 async function resolveWorkspace(path: string): Promise<string> {
     const requested = resolve(path);
+    let resolved: string | null;
     try {
-        await mkdir(requested, { recursive: true, mode: 0o700 });
-        const resolved = await realpath(requested);
-        const metadata = await stat(resolved);
-        if (!metadata.isDirectory()) {
-            throw new MobiusRuntimeConfigurationError("The Runtime workspace is not a directory");
-        }
-        return resolved;
+        resolved = await ensureCanonicalDirectory(requested);
     } catch (error) {
-        if (error instanceof MobiusRuntimeConfigurationError) {
-            throw error;
-        }
         throw new MobiusRuntimeConfigurationError("The Runtime workspace cannot be resolved", { cause: error });
     }
+    if (resolved === null) {
+        throw new MobiusRuntimeConfigurationError("The Runtime workspace is not a directory");
+    }
+    return resolved;
 }
 
 export async function createMobiusRuntimeEngine(
@@ -199,14 +195,6 @@ export {
     pairMobiusRuntime,
     resumeMobiusRuntime,
 } from "../daemon/pairing/pair-local-machine.ts";
-export {
-    openRuntimeInstallationStore,
-    type RuntimeConnectionInput,
-    RuntimeInstallationStore,
-    RuntimeInstallationStoreError,
-    type RuntimeInstallationStoreOptions,
-    VerifiedRuntimeConnection,
-} from "../storage/runtime-installation-store.ts";
 export type { RuntimeConfig, RuntimeConnectionConfig } from "./config.ts";
 export {
     createRuntimeConfig,
@@ -215,4 +203,11 @@ export {
     RuntimeLocalContext,
     RuntimeReconnectTarget,
 } from "./config.ts";
+export { type RuntimeConnectionInput, VerifiedRuntimeConnection } from "./connection/runtime-connection.ts";
+export {
+    openRuntimeInstallationStore,
+    RuntimeInstallationStore,
+    RuntimeInstallationStoreError,
+    type RuntimeInstallationStoreOptions,
+} from "./connection/runtime-installation-store.ts";
 export { RuntimeRelayRevokedError } from "./relay/runtime-revocation.ts";

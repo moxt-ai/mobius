@@ -1,21 +1,8 @@
-import { realpathSync, statSync } from "node:fs";
 import type { SessionCapabilities } from "@moxt-ai/mobius-sdk/protocol";
-import { ExecutableIdentity } from "../../util/process/executable.ts";
+import type { ExecutableIdentity } from "../../util/process/executable.ts";
+import { readExecutableIdentity } from "../../util/process/local-executable.ts";
 import { unsupportedSessionCapabilities } from "../protocol/session-capabilities.ts";
 import type { InProcessAcpEndpointFactory } from "./in-process-endpoint.ts";
-
-function readTrustedIdentity(path: string): ExecutableIdentity {
-    const resolvedPath = realpathSync(path);
-    const metadata = statSync(resolvedPath);
-    return new ExecutableIdentity(
-        resolvedPath,
-        resolvedPath,
-        metadata.dev,
-        metadata.ino,
-        metadata.size,
-        metadata.ctimeMs,
-    );
-}
 
 abstract class AgentDefinition {
     readonly agentIdentity: ExecutableIdentity;
@@ -64,7 +51,7 @@ export class LocalAgentDefinition extends AgentDefinition {
         environment: Readonly<Record<string, string>> = {},
         adapterVersion = "",
         agentVersion = "",
-        adapterIdentity: ExecutableIdentity = readTrustedIdentity(command),
+        adapterIdentity: ExecutableIdentity = readExecutableIdentity(command),
         agentIdentity: ExecutableIdentity = adapterIdentity,
         capabilities: SessionCapabilities = unsupportedSessionCapabilities(),
     ) {
@@ -104,7 +91,7 @@ export class InProcessAcpAgentDefinition extends AgentDefinition {
         createEndpoint: InProcessAcpEndpointFactory,
         environment: Readonly<Record<string, string>> = {},
         agentVersion = "",
-        agentIdentity: ExecutableIdentity = readTrustedIdentity(command),
+        agentIdentity: ExecutableIdentity = readExecutableIdentity(command),
         capabilities: SessionCapabilities = unsupportedSessionCapabilities(),
     ) {
         super(id, label, command, environment, agentVersion, agentIdentity, capabilities);

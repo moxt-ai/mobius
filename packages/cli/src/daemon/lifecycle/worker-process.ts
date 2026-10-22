@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { realpath, stat } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 
+import { resolveLaunchFiles } from "../../util/process/local-executable.ts";
 import { type WorkerLaunch, workerLaunch } from "../control/protocol.ts";
 
 export function currentWorkerLaunch(version: string): WorkerLaunch {
@@ -25,12 +25,11 @@ export async function decodeWorkerLaunch(value: unknown): Promise<WorkerLaunch> 
     if (!isAbsolute(entry) || !isAbsolute(executable)) {
         throw new Error("Worker launch paths must be absolute");
     }
-    const resolvedEntry = await realpath(entry);
-    const resolvedExecutable = await realpath(executable);
-    if (!(await stat(resolvedEntry)).isFile() || !(await stat(resolvedExecutable)).isFile()) {
+    const resolved = await resolveLaunchFiles(entry, executable);
+    if (resolved === null) {
         throw new Error("Worker launch paths must be files");
     }
-    return { entry: resolvedEntry, executable: resolvedExecutable, version };
+    return { entry: resolved.entry, executable: resolved.executable, version };
 }
 
 export class WorkerStartupError extends Error {

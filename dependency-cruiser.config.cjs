@@ -41,6 +41,20 @@ module.exports = {
             to: { path: "^packages/cli/src/(acp|agent|session|runtime|daemon|cli)/" },
         },
         {
+            // Only storage/ and util/ touch the disk; the layers above reach files through them.
+            name: "cli-disk-access-stays-in-storage",
+            severity: "error",
+            from: { path: "^packages/cli/src/", pathNot: "^packages/cli/src/(storage|util)/|/upstream/" },
+            to: { dependencyTypes: ["core"], path: "^(node:)?(fs|fs/promises|sqlite)$" },
+        },
+        {
+            // Queries live with the tables in storage/; schema/ only declares them.
+            name: "cli-database-access-stays-in-storage",
+            severity: "error",
+            from: { path: "^packages/cli/src/", pathNot: "^packages/cli/src/(storage|schema)/|/upstream/" },
+            to: { path: "/node_modules/drizzle-orm/" },
+        },
+        {
             // Agent discovery and the local catalog sit below the runtime that publishes them.
             name: "cli-agent-is-below-the-runtime",
             severity: "error",

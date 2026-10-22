@@ -1,7 +1,7 @@
-import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdir, readdir, realpath, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { createHash } from "node:crypto";
+import { join } from "node:path";
 import { z } from "zod";
+import { ScratchDirectory } from "../../storage/files/scratch-directory.ts";
 
 const contentRequest = /^mobius-content:(image|audio|resource):([a-f0-9]{64})$/u;
 const CONTENT_LIFETIME_MILLISECONDS = 24 * 60 * 60 * 1_000;
@@ -44,17 +44,6 @@ export interface ExternalContentStore {
     ) => Promise<ResolvedExternalContent | null>;
 }
 
-async function atomicWrite(path: string, bytes: Uint8Array, signal: AbortSignal): Promise<void> {
-    const temporary = `${path}.${randomUUID()}.tmp`;
-    try {
-        await writeFile(temporary, bytes, { mode: 0o600, signal });
-        signal.throwIfAborted();
-        await rename(temporary, path);
-    } finally {
-        await rm(temporary, { force: true });
-    }
-}
-
 interface CachedContent extends ResolvedExternalContent {
     readonly byteLength: number;
     readonly expiresAt: number;
@@ -63,7 +52,7 @@ interface CachedContent extends ResolvedExternalContent {
 
 /** Files are disposable; authorization grants and metadata never leave memory. */
 export class LocalExternalContentStore implements ExternalContentStore, AsyncDisposable {
-    readonly #root: string;
+    readonly #scratch: ScratchDirectory;
     readonly #entries = new Map<string, CachedContent>();
     readonly #operations = new Set<Promise<unknown>>();
     readonly #lifetime = new AbortController();
@@ -71,7 +60,7 @@ export class LocalExternalContentStore implements ExternalContentStore, AsyncDis
     #cleanup: Promise<void> = Promise.resolve();
 
     constructor(stateDirectory: string) {
-        this.#root = join(stateDirectory, "tmp", "session-content", randomUUID());
+        this.#scratch = new ScratchDirectory(join(stateDirectory, "tmp", "session-content"));
         this.#expirationTimer = setInterval(() => {
             // A cleanup failure must not interrupt Agent output. The next pass retries.
             void this.#expire().catch(() => undefined);
@@ -83,33 +72,14 @@ export class LocalExternalContentStore implements ExternalContentStore, AsyncDis
         this.#cleanup = this.#cleanup
             .catch(() => undefined)
             .then(async () => {
-                // Refresh the owner directory lease. A later daemon can remove directories
-                // left by a crash without deleting another running daemon's files.
-                await mkdir(this.#root, { mode: 0o700, recursive: true });
-                const now = new Date();
-                await utimes(this.#root, now, now);
-                for (const directory of await readdir(dirname(this.#root), { withFileTypes: true })) {
-                    if (!directory.isDirectory() || !/^[a-f0-9-]{36}$/u.test(directory.name)) {
-                        continue;
-                    }
-                    const path = join(dirname(this.#root), directory.name);
-                    if (path === this.#root) {
-                        continue;
-                    }
-                    // Another daemon may remove its own directory during this scan.
-                    const modified = await stat(path).then(
-                        (entry) => entry.mtimeMs,
-                        () => Date.now(),
-                    );
-                    if (modified + CONTENT_LIFETIME_MILLISECONDS <= Date.now()) {
-                        await rm(path, { force: true, recursive: true });
-                    }
-                }
+                // A later daemon can remove the directory a crashed daemon left behind
+                // without deleting another running daemon's files.
+                await this.#scratch.refreshLease(CONTENT_LIFETIME_MILLISECONDS);
                 for (const [request, entry] of this.#entries) {
                     if (entry.expiresAt > Date.now()) {
                         continue;
                     }
-                    await rm(entry.path, { force: true });
+                    await this.#scratch.remove(entry.path);
                     this.#entries.delete(request);
                 }
             });
@@ -146,12 +116,7 @@ export class LocalExternalContentStore implements ExternalContentStore, AsyncDis
         }
         await this.#expire();
         active.throwIfAborted();
-        const directory = join(this.#root, kind);
-        await mkdir(directory, { mode: 0o700, recursive: true });
-        active.throwIfAborted();
-        const path = join(directory, key);
-        const write = atomicWrite(path, bytes, active);
-        await write;
+        const path = await this.#scratch.write(kind, key, bytes, active);
         active.throwIfAborted();
         const retained = this.#entries.get(request);
         this.#entries.set(request, {
@@ -183,21 +148,9 @@ export class LocalExternalContentStore implements ExternalContentStore, AsyncDis
             signal.throwIfAborted();
             return null;
         }
-        try {
-            const [resolvedDirectory, resolvedPath, file] = await Promise.all([
-                realpath(dirname(entry.path)),
-                realpath(entry.path),
-                lstat(entry.path),
-            ]);
-            signal.throwIfAborted();
-            if (!file.isFile() || file.isSymbolicLink() || dirname(resolvedPath) !== resolvedDirectory) {
-                return null;
-            }
-            return { mediaType: entry.mediaType, name: entry.name, path: resolvedPath };
-        } catch {
-            signal.throwIfAborted();
-            return null;
-        }
+        const resolvedPath = await this.#scratch.resolveFile(entry.path);
+        signal.throwIfAborted();
+        return resolvedPath === null ? null : { mediaType: entry.mediaType, name: entry.name, path: resolvedPath };
     };
 
     readonly [Symbol.asyncDispose] = async (): Promise<void> => {
@@ -205,6 +158,6 @@ export class LocalExternalContentStore implements ExternalContentStore, AsyncDis
         this.#lifetime.abort();
         await Promise.allSettled([...this.#operations, this.#cleanup]);
         this.#entries.clear();
-        await rm(this.#root, { force: true, recursive: true });
+        await this.#scratch.removeAll();
     };
 }

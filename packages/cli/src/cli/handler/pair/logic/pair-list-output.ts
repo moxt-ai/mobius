@@ -1,7 +1,5 @@
-import { constants } from "node:fs";
-import { type FileHandle, open } from "node:fs/promises";
-
-import type { VerifiedRuntimeConnection } from "../../../../storage/runtime-installation-store.ts";
+import type { VerifiedRuntimeConnection } from "../../../../runtime/connection/runtime-connection.ts";
+import { writeExistingFile } from "../../../../storage/files/output-file.ts";
 
 export interface SavedPairSummary {
     readonly appId: string;
@@ -39,31 +37,22 @@ export async function writePairList(
     signal: AbortSignal,
 ): Promise<void> {
     signal.throwIfAborted();
-    let file: FileHandle;
-    try {
-        file = await open(path, constants.O_WRONLY | constants.O_NOFOLLOW);
-    } catch (cause) {
-        if (typeof cause === "object" && cause !== null && "code" in cause && cause.code === "ENOENT") {
-            throw new Error("The JSON output file does not exist", { cause });
-        }
-        throw new Error("The JSON output file cannot be written", { cause });
-    }
-    try {
-        const metadata = await file.stat();
-        if (!metadata.isFile()) {
+    const output = pairs.map((pair) => ({
+        app_id: pair.appId,
+        connection_id: pair.connectionId,
+        runtime_id: pair.runtimeId,
+        status: pair.status,
+        workspace: pair.workspace,
+    }));
+    const write = await writeExistingFile(path, `${JSON.stringify(output, null, 2)}\n`, signal);
+    switch (write.kind) {
+        case "written":
+            return;
+        case "missing":
+            throw new Error("The JSON output file does not exist", { cause: write.cause });
+        case "unwritable":
+            throw new Error("The JSON output file cannot be written", { cause: write.cause });
+        case "not-a-file":
             throw new Error("The JSON output path is not a regular file");
-        }
-        const output = pairs.map((pair) => ({
-            app_id: pair.appId,
-            connection_id: pair.connectionId,
-            runtime_id: pair.runtimeId,
-            status: pair.status,
-            workspace: pair.workspace,
-        }));
-        signal.throwIfAborted();
-        await file.truncate(0);
-        await file.writeFile(`${JSON.stringify(output, null, 2)}\n`, "utf8");
-    } finally {
-        await file.close();
     }
 }

@@ -2,8 +2,8 @@ import { decodeSessionEvent, type SessionEvent } from "@moxt-ai/mobius-sdk/proto
 import { and, asc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import type { NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
 import { z } from "zod";
-import { sessionEvent } from "../schema/session-event-cache/index.ts";
-import type { LocalSqliteDatabase } from "../storage/sqlite/local-sqlite-database.ts";
+import { sessionEvent } from "../../schema/session-event-cache/index.ts";
+import type { LocalSqliteDatabase } from "../sqlite/local-sqlite-database.ts";
 
 const cachedEventRowSchema = z.object({ eventJson: z.string() });
 const cachedEventOrdinalRowSchema = z.object({ eventJson: z.string(), ordinal: z.number().int().positive() });
@@ -14,7 +14,7 @@ interface SessionEventCacheBatch {
     readonly sessionId: string;
 }
 
-export class SessionEventCacheDatabase {
+export class SessionEventCacheTable {
     readonly #database: NodeSQLiteDatabase;
     readonly #ignoredPersistedSessions = new Set<string>();
     readonly #localDatabase: LocalSqliteDatabase;

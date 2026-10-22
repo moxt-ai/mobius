@@ -1,8 +1,8 @@
-import { mkdir } from "node:fs/promises";
 import type { Command } from "commander";
 import { discoverLocalAgentInventory } from "../../../agent/discovery/discover-local-agents.ts";
 import { openMobiusCliInstallation } from "../../../daemon/pairing/pair-local-machine.ts";
 import { loadDefaultWorkspace, RuntimeLocalContext } from "../../../runtime/config.ts";
+import { ensurePrivateDirectory } from "../../../storage/files/local-files.ts";
 import type { CliContext } from "../../context.ts";
 import { formatAgentDiagnostics } from "./logic/agent-diagnostics.ts";
 
@@ -21,7 +21,7 @@ export function registerAgentsHandler(program: Command, context: CliContext): vo
             const installation = await openMobiusCliInstallation(context.shutdownSignal, process.env);
             const localContext = new RuntimeLocalContext(installation.stateDirectory, process.env);
             const defaultWorkspace = loadDefaultWorkspace(localContext.environment);
-            await mkdir(defaultWorkspace, { recursive: true, mode: 0o700 });
+            await ensurePrivateDirectory(defaultWorkspace);
             const inventory = await discoverLocalAgentInventory({
                 defaultWorkspace,
                 environment: localContext.environment,

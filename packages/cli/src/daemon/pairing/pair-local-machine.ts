@@ -1,4 +1,3 @@
-import { mkdir, realpath, stat } from "node:fs/promises";
 import { hostname } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { isIdentifier, mobiusApiUrl } from "@moxt-ai/mobius-sdk/protocol";
@@ -15,11 +14,12 @@ import {
     type RuntimeConfig,
     RuntimeLocalContext,
 } from "../../runtime/config.ts";
+import type { VerifiedRuntimeConnection } from "../../runtime/connection/runtime-connection.ts";
 import {
     openRuntimeInstallationStore,
     type RuntimeInstallationStore,
-    type VerifiedRuntimeConnection,
-} from "../../storage/runtime-installation-store.ts";
+} from "../../runtime/connection/runtime-installation-store.ts";
+import { ensureCanonicalDirectory } from "../../storage/files/local-files.ts";
 import { readStateDirectory } from "../../storage/state-directory.ts";
 import { environmentProxyDispatcher } from "../../util/network/environment-proxy.ts";
 import { prepareVersionData } from "../upgrades/data.ts";
@@ -158,20 +158,16 @@ function validatePairingId(value: string): string {
 
 async function resolveDefaultWorkspace(path: string): Promise<string> {
     const requestedWorkspace = resolve(path);
+    let defaultWorkspace: string | null;
     try {
-        await mkdir(requestedWorkspace, { recursive: true, mode: 0o700 });
-        const defaultWorkspace = await realpath(requestedWorkspace);
-        const metadata = await stat(defaultWorkspace);
-        if (!metadata.isDirectory()) {
-            throw new PairingClientError("invalid_workspace", "The default workspace is not a directory");
-        }
-        return defaultWorkspace;
+        defaultWorkspace = await ensureCanonicalDirectory(requestedWorkspace);
     } catch (error) {
-        if (error instanceof PairingClientError) {
-            throw error;
-        }
         throw new PairingClientError("invalid_workspace", "The default workspace cannot be resolved", { cause: error });
     }
+    if (defaultWorkspace === null) {
+        throw new PairingClientError("invalid_workspace", "The default workspace is not a directory");
+    }
+    return defaultWorkspace;
 }
 
 async function readJsonResponse(response: Response): Promise<unknown> {

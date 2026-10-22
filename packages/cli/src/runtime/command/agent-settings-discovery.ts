@@ -5,12 +5,13 @@ import {
     AcpExecutionError,
     type AgentRuntimeManager,
 } from "../../acp/agent-runtime-manager.ts";
+import { operationErrorCode, operationErrorMessage } from "../../infra/operation-error.ts";
 import type { Timer } from "../../util/timer.ts";
 import { discoverAgentSettings } from "../agent-catalog/discover-agent-settings.ts";
 import type { RuntimeConfig } from "../config.ts";
 import type { RelayConnectionDiagnostics } from "../relay/diagnostics.ts";
 import type { WorkspaceDirectoryService } from "../workspace/workspace-directory.ts";
-import { agentSettingsFailureDetails, operationErrorCode, operationErrorMessage, send } from "./transport.ts";
+import { agentSettingsFailureDetails, send } from "./transport.ts";
 
 interface SettingsDiscoveryDependencies {
     readonly config: RuntimeConfig;

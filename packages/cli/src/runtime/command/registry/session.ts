@@ -23,6 +23,7 @@ import type {
     AgentRuntimeManager,
     ClosedSessionHandling,
 } from "../../../acp/agent-runtime-manager.ts";
+import { operationErrorCode } from "../../../infra/operation-error.ts";
 import { AccumulatingOperationMetrics } from "../../../infra/operation-metrics.ts";
 import type { AcpAgentDefinition, RuntimeConfig } from "../../config.ts";
 import type { NativeSessionService } from "../../native-sessions/service.ts";
@@ -30,7 +31,7 @@ import type { RelayConnectionDiagnostics } from "../../relay/diagnostics.ts";
 import { resolveSessionDirectories } from "../../workspace/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "../../workspace/workspace-directory.ts";
 import type { RuntimeCommand } from "../definition.ts";
-import { operationErrorCode, reportOperationFailure, send } from "../transport.ts";
+import { reportOperationFailure, send } from "../transport.ts";
 
 export async function resolveCatalogAgent(
     config: RuntimeConfig,
