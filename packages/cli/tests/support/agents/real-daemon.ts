@@ -22,6 +22,7 @@ import type { LocalAgentSpecification } from "../../../src/agent/specification/a
 import { openMobiusCliInstallation } from "../../../src/daemon/pairing/pair-local-machine.ts";
 import { createRuntimeConfig, RuntimeLocalContext } from "../../../src/runtime/config.ts";
 import { runRuntime } from "../../../src/runtime/run.ts";
+import { systemTimer, type Timer } from "../../../src/util/timer.ts";
 
 export interface RealDaemonPeer {
     readonly restart: () => Promise<void>;
@@ -42,6 +43,7 @@ export async function withRealDaemon(
     scenario: (peer: RealDaemonPeer) => Promise<void>,
     launch: "embedded" | "managed" = "embedded",
     workspaceDirectory?: string,
+    timer: Timer = systemTimer,
 ): Promise<void> {
     const directory = await mkdtemp(join(tmpdir(), `mobius-real-${specification.id}-`));
     const workspace = workspaceDirectory ?? join(directory, "workspace");
@@ -164,7 +166,7 @@ export async function withRealDaemon(
                 await cli(["start"]);
             } else {
                 execution = new AbortController();
-                runtime = runRuntime(config, AbortSignal.any([signal, execution.signal]));
+                runtime = runRuntime(config, AbortSignal.any([signal, execution.signal]), timer);
                 void runtime.catch((error: unknown) => {
                     connected.reject(error);
                     waiter?.reject(error);

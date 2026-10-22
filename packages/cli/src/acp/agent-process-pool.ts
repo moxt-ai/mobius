@@ -1,8 +1,10 @@
+import { type ScheduledTask, systemTimer, type Timer } from "../util/timer.ts";
 import type { AgentSession } from "./agent-session.ts";
 import { AcpProcessCapacityLock, waitForAcpProcessCapacity } from "./process-capacity.ts";
 
 const DEFAULT_MAX_ACP_PROCESSES = 1000;
 const MAX_CONCURRENT_STARTS = 8;
+const ACP_PROCESS_IDLE_TIMEOUT_MILLISECONDS = 2 * 60 * 60 * 1_000;
 // Retired Sessions stay resumable through their stored row, so the cap bounds
 // live Agent processes only. Operators and tests may shrink it per daemon.
 const MAX_ACP_PROCESSES_ENVIRONMENT_KEY = "MOBIUS_MAX_ACP_PROCESSES";
@@ -22,6 +24,7 @@ export function resolveMaxAcpProcesses(environment: Readonly<Record<string, stri
 export interface AgentProcessRetention {
     readonly isBusy: () => boolean;
     readonly retire: (runtime: AgentSession) => Promise<void>;
+    readonly retireIdle: (runtime: AgentSession) => Promise<void>;
 }
 
 type ProcessSlot =
@@ -32,19 +35,68 @@ type ProcessSlot =
 /** Owns each capacity slot from reservation until the process has stopped. */
 export class AgentProcessPool {
     readonly #maxProcesses: number;
+    readonly #timer: Timer;
     readonly #slots = new Map<symbol, ProcessSlot>();
+    readonly #idleTimeouts = new Map<symbol, ScheduledTask>();
+    readonly #idleRetirements = new Set<Promise<void>>();
     readonly #lock = new AcpProcessCapacityLock();
+    #stopping = false;
     #starting = 0;
     #changed = Promise.withResolvers<void>();
 
-    constructor(maxProcesses: number = DEFAULT_MAX_ACP_PROCESSES) {
+    constructor(maxProcesses: number = DEFAULT_MAX_ACP_PROCESSES, timer: Timer = systemTimer) {
         this.#maxProcesses = maxProcesses;
+        this.#timer = timer;
     }
 
     readonly notifyChanged = (): void => {
+        for (const [id, slot] of this.#slots) {
+            this.#updateIdleTimeout(id, slot);
+        }
         const changed = this.#changed;
         this.#changed = Promise.withResolvers<void>();
         changed.resolve();
+    };
+
+    readonly #cancelIdleTimeout = (id: symbol): void => {
+        this.#idleTimeouts.get(id)?.cancel();
+        this.#idleTimeouts.delete(id);
+    };
+
+    readonly #updateIdleTimeout = (id: symbol, slot: ProcessSlot): void => {
+        if (this.#stopping || slot.kind !== "retained" || slot.retention.isBusy()) {
+            this.#cancelIdleTimeout(id);
+            return;
+        }
+        if (this.#idleTimeouts.has(id)) {
+            return;
+        }
+        const timeout = this.#timer.schedule(() => {
+            if (this.#idleTimeouts.get(id) !== timeout) {
+                return;
+            }
+            this.#idleTimeouts.delete(id);
+            // Recheck ownership and activity at the deadline. Retirement detaches the process
+            // synchronously before awaiting teardown, so a new request starts a fresh process.
+            if (this.#stopping || this.#slots.get(id) !== slot || slot.retention.isBusy()) {
+                return;
+            }
+            const retirement = slot.retention.retireIdle(slot.runtime);
+            this.#idleRetirements.add(retirement);
+            void retirement
+                .catch((error: unknown) => console.error("The idle Agent process could not be released", error))
+                .finally(() => this.#idleRetirements.delete(retirement));
+        }, ACP_PROCESS_IDLE_TIMEOUT_MILLISECONDS);
+        this.#idleTimeouts.set(id, timeout);
+    };
+
+    /** Stop scheduling before Runtime shutdown and drain teardowns already in flight. */
+    readonly stopIdleReclamation = async (): Promise<void> => {
+        this.#stopping = true;
+        for (const id of this.#idleTimeouts.keys()) {
+            this.#cancelIdleTimeout(id);
+        }
+        await Promise.allSettled([...this.#idleRetirements]);
     };
 
     readonly #find = (runtime: AgentSession): symbol | undefined => {
@@ -65,8 +117,10 @@ export class AgentProcessPool {
         if (slot?.kind !== "retained") {
             return;
         }
+        this.#cancelIdleTimeout(id);
         this.#slots.delete(id);
         this.#slots.set(id, slot);
+        this.#updateIdleTimeout(id, slot);
     };
 
     readonly retain = (runtime: AgentSession, retention: AgentProcessRetention): void => {
@@ -74,12 +128,16 @@ export class AgentProcessPool {
         if (id === undefined) {
             throw new Error("Cannot retain an unowned ACP process");
         }
-        this.#slots.set(id, { kind: "retained", runtime, retention });
+        this.#cancelIdleTimeout(id);
+        const slot = { kind: "retained", runtime, retention } satisfies ProcessSlot;
+        this.#slots.set(id, slot);
+        this.#updateIdleTimeout(id, slot);
     };
 
     readonly releaseClosed = (runtime: AgentSession): void => {
         const id = this.#find(runtime);
         if (id !== undefined) {
+            this.#cancelIdleTimeout(id);
             this.#slots.delete(id);
         }
         this.notifyChanged();
@@ -88,6 +146,7 @@ export class AgentProcessPool {
     readonly retire = async (runtime: AgentSession, close: () => Promise<void>): Promise<void> => {
         const id = this.#find(runtime);
         if (id !== undefined) {
+            this.#cancelIdleTimeout(id);
             this.#slots.set(id, { kind: "retiring", runtime });
         }
         try {
