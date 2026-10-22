@@ -13,6 +13,7 @@ import {
 import {
     decodeMessageKind,
     decodeSessionClosedEvent,
+    decodeSessionCloseNoticeEvent,
     decodeSessionOperationFailedEvent,
     decodeSessionStatusChangedEvent,
     encodeSessionCloseCommand,
@@ -110,6 +111,10 @@ test("Given retained Agent teardown does not finish, When the Session close dead
                 }),
             );
             await agent.closeStarted.promise;
+            expect(decodeSessionCloseNoticeEvent(await peer.nextMessage())).toEqual({
+                kind: "session.close.notice",
+                sessionId,
+            });
             const response = peer.nextMessage();
             await vi.advanceTimersByTimeAsync(30_000);
             expect(decodeSessionOperationFailedEvent(await response)).toEqual({

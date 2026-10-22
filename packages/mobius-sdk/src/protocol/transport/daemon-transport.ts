@@ -83,6 +83,7 @@ import {
 import {
     decodeSessionCloseCommand,
     decodeSessionClosedEvent,
+    decodeSessionCloseNoticeEvent,
     decodeSessionInfoUpdatedEvent,
     decodeSessionListCommand,
     decodeSessionOperationFailedEvent,
@@ -96,6 +97,7 @@ import {
     decodeSessionsQueriedEvent,
     encodeSessionCloseCommand,
     encodeSessionClosedEvent,
+    encodeSessionCloseNoticeEvent,
     encodeSessionInfoUpdatedEvent,
     encodeSessionListCommand,
     encodeSessionOperationFailedEvent,
@@ -108,6 +110,7 @@ import {
     encodeSessionsListedEvent,
     encodeSessionsQueriedEvent,
     SESSION_CLOSE_KIND,
+    SESSION_CLOSE_NOTICE_KIND,
     SESSION_CLOSED_KIND,
     SESSION_INFO_UPDATED_KIND,
     SESSION_LIST_KIND,
@@ -329,6 +332,11 @@ const daemonToServiceSignatures = {
         SESSION_CLOSED_KIND,
         encodeSessionClosedEvent,
         decodeSessionClosedEvent,
+    ),
+    [SESSION_CLOSE_NOTICE_KIND]: defineMessageSignature(
+        SESSION_CLOSE_NOTICE_KIND,
+        encodeSessionCloseNoticeEvent,
+        decodeSessionCloseNoticeEvent,
     ),
     [SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND]: defineMessageSignature(
         SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND,

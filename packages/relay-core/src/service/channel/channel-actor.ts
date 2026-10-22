@@ -47,6 +47,7 @@ import {
     RUNTIME_STATUS_KIND,
     SESSION_CANCEL_KIND,
     SESSION_CLOSE_KIND,
+    SESSION_CLOSE_NOTICE_KIND,
     SESSION_CLOSED_KIND,
     SESSION_CONFIG_READ_KIND,
     SESSION_CONFIG_READ_RESULT_KIND,
@@ -370,6 +371,8 @@ export class ChannelActor {
             case SESSION_RESTORED_KIND:
                 return;
             case SESSION_CLOSED_KIND:
+                return;
+            case SESSION_CLOSE_NOTICE_KIND:
                 return;
             case SESSION_LISTED_KIND:
                 return;

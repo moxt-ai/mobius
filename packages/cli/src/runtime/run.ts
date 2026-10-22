@@ -121,6 +121,7 @@ export async function runRuntime(
         adapters: harnessAdapters,
         sessionIdentity: "native",
         onSessionStatusChanged: publisher.publishStatus,
+        onSessionClosed: publisher.publishClosed,
         contentExternalizer: new AcpContentExternalizer(externalContent),
         timer,
         maxProcesses: resolveMaxAcpProcesses(config.localContext.environment),

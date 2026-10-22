@@ -1374,6 +1374,36 @@ describe.sequential("Platform Session-only boundary", () => {
                     message: "The Codex thread is not loaded",
                 },
             });
+            // A Runtime that closed the Session refuses to load its history. The refusal is a typed conflict, so a
+            // client can offer to reopen the Session instead of retrying the load.
+            const closedHistoryResponse = worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/events-v2?limit=50`,
+                    { headers: { authorization: `Bearer ${text(browserAccess, "credential")}` } },
+                ),
+                environment,
+            );
+            const closedHistoryLoad = decodeServiceToDaemonMessage(await daemonMessages.next());
+            if (closedHistoryLoad.kind !== "session.live-history.v2.page.load") {
+                throw new Error("Expected a live Session history request");
+            }
+            daemon.send(
+                encodeSessionOperationFailedEvent({
+                    code: "session_closed",
+                    kind: "session.operation.failed",
+                    message: "The Session is closed",
+                    requestId: closedHistoryLoad.requestId,
+                    sessionId,
+                }),
+            );
+            expect(decodeDaemonToServiceMessage(await hostMessages.next())).toMatchObject({
+                code: "session_closed",
+                kind: "session.operation.failed",
+                requestId: closedHistoryLoad.requestId,
+            });
+            expect(await responseJson(await closedHistoryResponse, 409)).toEqual({
+                error: { code: "session_closed", message: "The Session is closed" },
+            });
             v2Socket.close(1000, "V2 browser test complete");
             const transportResponse = await worker.fetch(
                 new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/transport`, { headers: { Upgrade: "websocket" } }),
