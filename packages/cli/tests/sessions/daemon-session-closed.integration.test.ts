@@ -177,7 +177,11 @@ test("Given a client closes a Session, When the Runtime stops its Agent process,
             const message = await peer.nextMessage();
             const kind = decodeMessageKind(message);
             if (kind === "session.close.notice") {
-                expect(decodeSessionCloseNoticeEvent(message)).toEqual({ kind, reason: "requested", sessionId });
+                expect(decodeSessionCloseNoticeEvent(message)).toEqual({
+                    kind,
+                    reason: "This Session was closed on request.",
+                    sessionId,
+                });
                 announcements.push(kind);
             }
             if (kind === "session.closed") {

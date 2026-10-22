@@ -33,9 +33,6 @@ import {
 const SESSION_CONTROL_TIMEOUT_MILLISECONDS = 30_000;
 const SESSION_CLOSE_TIMEOUT_MILLISECONDS = 30_000;
 
-/** Why the Runtime closed a Session, as its close notice tells clients. */
-type SessionCloseReason = "requested";
-
 /** What preparing does with a closed Session: a prepare or restore reopens it, a read must keep it closed. */
 export type ClosedSessionHandling = "reopen" | "keep-closed";
 
@@ -199,8 +196,11 @@ export class AgentRuntimeManager {
         );
     }
 
-    /** Marks a Session closed and tells every client why, once for each closing. Unknown Sessions have nothing to close. */
-    #announceClosed(sessionId: string, reason: SessionCloseReason): void {
+    /**
+     * Marks a Session closed and tells every client why, once for each closing. Clients show `reason` to their
+     * users as is. Unknown Sessions have nothing to close.
+     */
+    #announceClosed(sessionId: string, reason: string): void {
         if (this.#closedSessions.has(sessionId) || !this.#isKnownSession(sessionId)) {
             return;
         }
@@ -743,7 +743,7 @@ export class AgentRuntimeManager {
                 return;
             }
             // Announce first: clients must learn of the closing while its process is still going down.
-            this.#announceClosed(options.sessionId, "requested");
+            this.#announceClosed(options.sessionId, "This Session was closed on request.");
             const release = (async (): Promise<void> => {
                 const pending = this.#executionProcesses.pending(options.sessionId);
                 const runtime = pending === undefined ? this.#executionProcesses.get(options.sessionId) : await pending;

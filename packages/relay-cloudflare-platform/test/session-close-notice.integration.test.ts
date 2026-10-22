@@ -99,29 +99,33 @@ it("Given hosts watching every Session and a single Session, When the Runtime re
 
         for (const sessionId of ["session-7", "session-8"]) {
             daemon.socket.send(
-                encodeSessionCloseNoticeEvent({ kind: "session.close.notice", reason: "requested", sessionId }),
+                encodeSessionCloseNoticeEvent({
+                    kind: "session.close.notice",
+                    reason: "This Session was closed on request.",
+                    sessionId,
+                }),
             );
         }
 
         expect(await everySession.inbox.next()).toEqual({
             kind: "session.close.notice",
-            reason: "requested",
+            reason: "This Session was closed on request.",
             sessionId: "session-7",
         });
         expect(await everySession.inbox.next()).toEqual({
             kind: "session.close.notice",
-            reason: "requested",
+            reason: "This Session was closed on request.",
             sessionId: "session-8",
         });
         expect(await sessionSeven.inbox.next()).toEqual({
             kind: "session.close.notice",
-            reason: "requested",
+            reason: "This Session was closed on request.",
             sessionId: "session-7",
         });
         // The first message this host receives is the second notice, so the first never reached it.
         expect(await sessionEight.inbox.next()).toEqual({
             kind: "session.close.notice",
-            reason: "requested",
+            reason: "This Session was closed on request.",
             sessionId: "session-8",
         });
     });
@@ -143,14 +147,14 @@ it("Given a Relay that does not recognize a Runtime message kind, as an older Re
         daemon.socket.send(
             encodeSessionCloseNoticeEvent({
                 kind: "session.close.notice",
-                reason: "requested",
+                reason: "This Session was closed on request.",
                 sessionId: "session-7",
             }),
         );
 
         expect(await host.inbox.next()).toEqual({
             kind: "session.close.notice",
-            reason: "requested",
+            reason: "This Session was closed on request.",
             sessionId: "session-7",
         });
     });
