@@ -30,6 +30,9 @@ import {
 const SESSION_CONTROL_TIMEOUT_MILLISECONDS = 30_000;
 const SESSION_CLOSE_TIMEOUT_MILLISECONDS = 30_000;
 
+/** Why a Session's process is being closed. */
+type SessionCloseReason = "requested" | "idle";
+
 export { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp-error.ts";
 export type { Adapter } from "./adapter/context.ts";
 export { type AdapterResolver, acpAdapters } from "./adapter/registry.ts";
@@ -171,7 +174,7 @@ export class AgentRuntimeManager {
                 this.#executionProcesses.isBusy(sessionId) ||
                 this.#isNativeSessionOperationActive(sessionId),
             retire: (runtime) => this.#retireSessionProcess(sessionId, runtime, () => runtime.close()),
-            expire: () => this.#closeSession(sessionId),
+            expire: () => this.#closeSession(sessionId, "idle"),
         };
     }
 
@@ -180,16 +183,33 @@ export class AgentRuntimeManager {
         try {
             await this.#processes.retire(runtime, close);
         } finally {
-            if (retained && this.#sessionIdentity === "native") {
-                const stored = this.#store.read(sessionId);
-                if (
-                    stored instanceof FoundAcpStoredSession &&
-                    stored.session.nativeSessionId === sessionId &&
-                    isNativeChatSessionId(stored.session.agentId, sessionId)
-                ) {
-                    this.#store.remove(sessionId);
-                }
+            if (retained) {
+                this.#forgetNativeSession(sessionId);
             }
+        }
+    }
+
+    /**
+     * Stops the process of a Session that stayed idle. Unlike retiring it, this keeps the stored Session, so
+     * the Session stays listed with its title and settings and resumes from them on its next request.
+     */
+    async #stopIdleSessionProcess(sessionId: string, runtime: AgentSession): Promise<void> {
+        this.#executionProcesses.detach(sessionId, runtime);
+        await this.#processes.retire(runtime, () => runtime.close());
+    }
+
+    /** A retired native chat Session loses its stored row; its next request imports it from the Agent again. */
+    #forgetNativeSession(sessionId: string): void {
+        if (this.#sessionIdentity !== "native") {
+            return;
+        }
+        const stored = this.#store.read(sessionId);
+        if (
+            stored instanceof FoundAcpStoredSession &&
+            stored.session.nativeSessionId === sessionId &&
+            isNativeChatSessionId(stored.session.agentId, sessionId)
+        ) {
+            this.#store.remove(sessionId);
         }
     }
 
@@ -319,10 +339,7 @@ export class AgentRuntimeManager {
         metrics: OperationMetrics = unmeasuredOperationMetrics,
     ): Promise<AcpPreparedSession> {
         return await this.#operations.run(options, async (options) => {
-            const closing = this.#sessionClosures.get(options.sessionId);
-            if (closing !== undefined) {
-                await waitForSharedOperation(closing, options.signal);
-            }
+            await this.#waitForSessionClosure(options.sessionId, options.signal);
             const stored = metrics.measureSync("session-state-read", () => this.#store.read(options.sessionId));
 
             if (
@@ -476,6 +493,7 @@ export class AgentRuntimeManager {
 
     readonly prepareExecutionSession = async (options: AcpPrepareOptions): Promise<AcpPreparedSession> =>
         this.#operations.run(options, async (options) => {
+            await this.#waitForSessionClosure(options.sessionId, options.signal);
             const pending = this.#executionProcesses.pending(options.sessionId);
             if (pending !== undefined) {
                 await waitForSharedOperation(pending, options.signal);
@@ -525,7 +543,11 @@ export class AgentRuntimeManager {
         await this.#operations.run({ sessionId, signal }, async (options) => {
             const runtime = this.#executionProcesses.get(options.sessionId);
             if (runtime !== undefined) {
-                return await runtime.renameSession(title, options.signal);
+                // Borrowing the Session keeps its process open while the Agent renames it.
+                return await this.#executionProcesses.use(
+                    options.sessionId,
+                    async () => await runtime.renameSession(title, options.signal),
+                );
             }
             const stored = this.#store.read(options.sessionId);
             if (!(stored instanceof FoundAcpStoredSession)) {
@@ -698,11 +720,22 @@ export class AgentRuntimeManager {
 
     readonly closeSession = async (sessionId: string, signal: AbortSignal): Promise<void> =>
         this.#operations.run({ sessionId, signal }, async (options) => {
-            await waitForSharedOperation(this.#closeSession(options.sessionId), options.signal);
+            await waitForSharedOperation(this.#closeSession(options.sessionId, "requested"), options.signal);
         });
 
-    /** Shares one bounded close per Session; preparing the Session again waits for it. */
-    #closeSession(sessionId: string): Promise<void> {
+    /** A Session that is still closing must finish stopping before another process takes it over. */
+    async #waitForSessionClosure(sessionId: string, signal: AbortSignal): Promise<void> {
+        const closing = this.#sessionClosures.get(sessionId);
+        if (closing !== undefined) {
+            await waitForSharedOperation(closing, signal);
+        }
+    }
+
+    /**
+     * Shares one bounded close per Session; preparing the Session again waits for it. A requested close
+     * retires the process, while an idle close keeps the stored Session.
+     */
+    #closeSession(sessionId: string, reason: SessionCloseReason): Promise<void> {
         const existing = this.#sessionClosures.get(sessionId);
         if (existing !== undefined) {
             return existing;
@@ -710,7 +743,12 @@ export class AgentRuntimeManager {
         const release = (async (): Promise<void> => {
             const pending = this.#executionProcesses.pending(sessionId);
             const runtime = pending === undefined ? this.#executionProcesses.get(sessionId) : await pending;
-            if (runtime !== undefined) {
+            if (runtime === undefined) {
+                return;
+            }
+            if (reason === "idle") {
+                await this.#stopIdleSessionProcess(sessionId, runtime);
+            } else {
                 await this.#retireSessionProcess(sessionId, runtime, async () => await runtime.close());
             }
         })();

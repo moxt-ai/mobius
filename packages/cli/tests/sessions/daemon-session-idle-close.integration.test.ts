@@ -1,11 +1,4 @@
 import {
-    type AgentApp,
-    type AgentConnection,
-    agent as createAgentApp,
-    methods,
-    PROTOCOL_VERSION,
-} from "@agentclientprotocol/sdk";
-import {
     decodeMessageKind,
     decodeSessionInfoUpdatedEvent,
     decodeSessionStatusChangedEvent,
@@ -14,88 +7,16 @@ import {
     type SessionStatus,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test, vi } from "vitest";
-import type {
-    AcpEndpointTermination,
-    InProcessAcpEndpoint,
-    InProcessAcpEndpointFactory,
-} from "../../src/acp/in-process/acp-endpoint.ts";
+import type { InProcessAcpEndpointFactory } from "../../src/acp/in-process/acp-endpoint.ts";
 import { waitForSharedOperation } from "../../src/acp/runtime-operations.ts";
 import { InProcessAcpAgentDefinition } from "../../src/runtime/agent-catalog/agent-specification.ts";
+import { ControlledSessionAgent, type ControlledSessionEndpoint } from "../support/agents/controlled-session-agent.ts";
 import { prepareNewRealSession, type RealDaemonPeer, withRealDaemon } from "../support/agents/real-daemon.ts";
 
 // The production idle period spans a day. Relay heartbeats would time out
 // while a fake clock skips that far, so these scenarios shrink the period
 // through the daemon environment and stay inside one heartbeat deadline.
 const IDLE_PERIOD_MILLISECONDS = 1_000;
-
-interface AgentOperation {
-    readonly endpoint: number;
-    readonly method: string;
-    readonly sessionId: string;
-}
-
-/** One Agent process; records the Session requests it serves. */
-class IdleSessionEndpoint implements InProcessAcpEndpoint {
-    readonly #app: AgentApp;
-    #connection: AgentConnection | null = null;
-    readonly #termination = Promise.withResolvers<AcpEndpointTermination>();
-    readonly terminated = this.#termination.promise;
-
-    constructor(endpoint: number, agent: IdleSessionAgentSpecification) {
-        const record = (method: string, sessionId: string): void => {
-            agent.operations.push({ endpoint, method, sessionId });
-        };
-        this.#app = createAgentApp({ name: "controlled-idle-agent" })
-            .onConnect((connection) => {
-                this.#connection = connection;
-            })
-            .onRequest(methods.agent.initialize, () => ({
-                agentCapabilities: {
-                    loadSession: false,
-                    promptCapabilities: { embeddedContext: false, image: false },
-                    sessionCapabilities: { close: {}, resume: {} },
-                },
-                agentInfo: { name: "Controlled Idle Agent", version: "1.0.0" },
-                authMethods: [],
-                protocolVersion: PROTOCOL_VERSION,
-            }))
-            .onRequest(methods.agent.session.new, () => {
-                const sessionId = crypto.randomUUID();
-                record(methods.agent.session.new, sessionId);
-                return { sessionId };
-            })
-            .onRequest(methods.agent.session.resume, (context) => {
-                record(methods.agent.session.resume, context.params.sessionId);
-                return {};
-            })
-            .onRequest(methods.agent.session.prompt, async (context) => {
-                record(methods.agent.session.prompt, context.params.sessionId);
-                await agent.turnsReleased();
-                return { stopReason: "end_turn" as const };
-            })
-            .onRequest(methods.agent.session.close, (context) => {
-                record(methods.agent.session.close, context.params.sessionId);
-                return {};
-            });
-    }
-
-    readonly app = (): AgentApp => this.#app;
-    readonly initialize = async (signal: AbortSignal): Promise<void> => signal.throwIfAborted();
-    readonly close = async (): Promise<void> => {
-        this.#connection?.close();
-        this.#termination.resolve({ kind: "closed" });
-    };
-
-    readonly reportTitle = async (sessionId: string, title: string): Promise<void> => {
-        if (this.#connection === null) {
-            throw new Error("The Agent endpoint is not connected");
-        }
-        await this.#connection.client.notify(methods.client.session.update, {
-            sessionId,
-            update: { sessionUpdate: "session_info_update", title },
-        });
-    };
-}
 
 /** Endpoint 0 serves discovery; each Agent process the daemon starts later gets the next index. */
 class IdleSessionAgentSpecification extends InProcessAcpAgentDefinition {
@@ -104,43 +25,20 @@ class IdleSessionAgentSpecification extends InProcessAcpAgentDefinition {
     readonly label = "Controlled Idle";
     override readonly maximumTestedAgentVersion = process.versions.node;
     override readonly minimumSupportedAgentVersion = process.versions.node;
-    readonly operations: AgentOperation[] = [];
-    readonly #endpoints: IdleSessionEndpoint[] = [];
-    #turns: Promise<void> = Promise.resolve();
-
-    readonly createEndpoint: InProcessAcpEndpointFactory = () => {
-        const endpoint = new IdleSessionEndpoint(this.#endpoints.length, this);
-        this.#endpoints.push(endpoint);
-        return endpoint;
-    };
+    readonly sessions = new ControlledSessionAgent();
+    readonly createEndpoint: InProcessAcpEndpointFactory = this.sessions.createEndpoint;
 
     constructor() {
         super("MOBIUS_TEST_CONTROLLED_IDLE_PATH");
     }
-
-    readonly endpoint = (index: number): IdleSessionEndpoint => {
-        const endpoint = this.#endpoints[index];
-        if (endpoint === undefined) {
-            throw new Error(`Agent endpoint ${index.toString()} was never started`);
-        }
-        return endpoint;
-    };
-
-    readonly holdTurns = (): (() => void) => {
-        const held = Promise.withResolvers<void>();
-        this.#turns = held.promise;
-        return held.resolve;
-    };
-
-    readonly turnsReleased = (): Promise<void> => this.#turns;
 }
 
 async function withIdleDaemon(
-    agent: IdleSessionAgentSpecification,
+    specification: IdleSessionAgentSpecification,
     scenario: (peer: RealDaemonPeer) => Promise<void>,
 ): Promise<void> {
     await withRealDaemon(
-        agent,
+        specification,
         {
             MOBIUS_ACP_PROCESS_IDLE_SECONDS: (IDLE_PERIOD_MILLISECONDS / 1_000).toString(),
             MOBIUS_TEST_CONTROLLED_IDLE_PATH: process.execPath,
@@ -213,11 +111,11 @@ async function waitForTitle(peer: RealDaemonPeer, sessionId: string, title: stri
     }
 }
 
-async function waitForAgentProcessStop(peer: RealDaemonPeer, endpoint: IdleSessionEndpoint): Promise<void> {
+async function waitForAgentProcessStop(peer: RealDaemonPeer, endpoint: ControlledSessionEndpoint): Promise<void> {
     await waitForSharedOperation(endpoint.terminated, peer.signal);
 }
 
-function nativeSessionOf(agent: IdleSessionAgentSpecification): string {
+function nativeSessionOf(agent: ControlledSessionAgent): string {
     const created = agent.operations.find((operation) => operation.method === "session/new");
     if (created === undefined) {
         throw new Error("The Agent did not create a native Session");
@@ -226,10 +124,11 @@ function nativeSessionOf(agent: IdleSessionAgentSpecification): string {
 }
 
 test("Given a Session without events or interaction for its idle period, When the period elapses, Then the daemon closes the Agent session and the next prompt resumes it", async () => {
-    const agent = new IdleSessionAgentSpecification();
-    await withIdleDaemon(agent, async (peer) => {
-        const sessionId = await prepareNewRealSession(peer, agent.id);
-        await prompt(peer, agent.id, sessionId, "first");
+    const specification = new IdleSessionAgentSpecification();
+    const agent = specification.sessions;
+    await withIdleDaemon(specification, async (peer) => {
+        const sessionId = await prepareNewRealSession(peer, specification.id);
+        await prompt(peer, specification.id, sessionId, "first");
         const nativeSessionId = nativeSessionOf(agent);
 
         await vi.advanceTimersByTimeAsync(IDLE_PERIOD_MILLISECONDS - 1);
@@ -240,7 +139,7 @@ test("Given a Session without events or interaction for its idle period, When th
 
         await vi.advanceTimersByTimeAsync(1);
         await waitForAgentProcessStop(peer, agent.endpoint(1));
-        await prompt(peer, agent.id, sessionId, "after the idle period");
+        await prompt(peer, specification.id, sessionId, "after the idle period");
 
         expect(agent.operations).toEqual([
             { endpoint: 1, method: "session/new", sessionId: nativeSessionId },
@@ -253,14 +152,15 @@ test("Given a Session without events or interaction for its idle period, When th
 });
 
 test("Given a prompt before a Session's idle period elapses, When the period passes after that prompt, Then the daemon closes the Agent session only then", async () => {
-    const agent = new IdleSessionAgentSpecification();
-    await withIdleDaemon(agent, async (peer) => {
-        const sessionId = await prepareNewRealSession(peer, agent.id);
-        await prompt(peer, agent.id, sessionId, "first");
+    const specification = new IdleSessionAgentSpecification();
+    const agent = specification.sessions;
+    await withIdleDaemon(specification, async (peer) => {
+        const sessionId = await prepareNewRealSession(peer, specification.id);
+        await prompt(peer, specification.id, sessionId, "first");
         const nativeSessionId = nativeSessionOf(agent);
 
         await vi.advanceTimersByTimeAsync(IDLE_PERIOD_MILLISECONDS / 2);
-        await prompt(peer, agent.id, sessionId, "second");
+        await prompt(peer, specification.id, sessionId, "second");
         await vi.advanceTimersByTimeAsync(IDLE_PERIOD_MILLISECONDS - 1);
         expect(agent.operations).toEqual([
             { endpoint: 1, method: "session/new", sessionId: nativeSessionId },
@@ -275,10 +175,11 @@ test("Given a prompt before a Session's idle period elapses, When the period pas
 });
 
 test("Given the Agent reports a Session update before the idle period elapses, When the period passes after that update, Then the daemon closes the Agent session only then", async () => {
-    const agent = new IdleSessionAgentSpecification();
-    await withIdleDaemon(agent, async (peer) => {
-        const sessionId = await prepareNewRealSession(peer, agent.id);
-        await prompt(peer, agent.id, sessionId, "first");
+    const specification = new IdleSessionAgentSpecification();
+    const agent = specification.sessions;
+    await withIdleDaemon(specification, async (peer) => {
+        const sessionId = await prepareNewRealSession(peer, specification.id);
+        await prompt(peer, specification.id, sessionId, "first");
         const nativeSessionId = nativeSessionOf(agent);
 
         await vi.advanceTimersByTimeAsync(IDLE_PERIOD_MILLISECONDS / 2);
@@ -297,11 +198,12 @@ test("Given the Agent reports a Session update before the idle period elapses, W
 });
 
 test("Given a turn that is still running, When its idle period passes without events or interaction, Then the daemon keeps the Agent session until the period passes after the turn ends", async () => {
-    const agent = new IdleSessionAgentSpecification();
-    await withIdleDaemon(agent, async (peer) => {
-        const sessionId = await prepareNewRealSession(peer, agent.id);
-        const releaseTurn = agent.holdTurns();
-        sendPrompt(peer, agent.id, sessionId, "keep working");
+    const specification = new IdleSessionAgentSpecification();
+    const agent = specification.sessions;
+    await withIdleDaemon(specification, async (peer) => {
+        const sessionId = await prepareNewRealSession(peer, specification.id);
+        const turn = agent.turns.hold();
+        sendPrompt(peer, specification.id, sessionId, "keep working");
         await waitForStatus(peer, sessionId, "working");
         const nativeSessionId = nativeSessionOf(agent);
 
@@ -311,7 +213,7 @@ test("Given a turn that is still running, When its idle period passes without ev
             { endpoint: 1, method: "session/prompt", sessionId: nativeSessionId },
         ]);
 
-        releaseTurn();
+        turn.release();
         await waitForStatus(peer, sessionId, "idle");
         await vi.advanceTimersByTimeAsync(IDLE_PERIOD_MILLISECONDS - 1);
         expect(agent.operations.map((operation) => operation.method)).not.toContain("session/close");
