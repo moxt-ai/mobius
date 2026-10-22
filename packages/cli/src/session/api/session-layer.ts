@@ -85,7 +85,16 @@ export function buildSessionLayer(options: SessionLayerOptions) {
         sessionIdentity: "native",
         onSessionStatusChanged: sink.publishStatus,
         onSessionClosed: sink.publishClosed,
-        contentExternalizer: new AcpContentExternalizer(externalContent),
+        contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+            externalContent.put({
+                bytes: content.bytes,
+                kind: content.kind,
+                mediaType: content.mediaType,
+                name: content.name,
+                sessionId,
+                signal,
+            }),
+        ),
         timer,
         maxProcesses: resolveMaxAcpProcesses(environment),
     });

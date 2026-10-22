@@ -41,7 +41,16 @@ export async function codexFixture(
         adapters: acpAdapters,
         sessionIdentity,
         onSessionStatusChanged: () => undefined,
-        contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+        contentExternalizer: new AcpContentExternalizer((sessionId, content, signal) =>
+            new UnretainedExternalContentStore().put({
+                bytes: content.bytes,
+                kind: content.kind,
+                mediaType: content.mediaType,
+                name: content.name,
+                sessionId,
+                signal,
+            }),
+        ),
         timer: systemTimer,
         maxProcesses: null,
     });

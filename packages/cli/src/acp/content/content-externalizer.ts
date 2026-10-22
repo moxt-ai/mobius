@@ -1,6 +1,20 @@
 import type { ContentBlock, SessionUpdate, ToolCallContent } from "@agentclientprotocol/sdk";
 import { z } from "zod";
-import type { ExternalContentStore } from "../../session/content/external-content-store.ts";
+/** One blob pulled out of an Agent update. The caller stores it and keeps the returned key. */
+export interface ExtractedContent {
+    readonly bytes: Uint8Array;
+    readonly kind: "image" | "audio" | "resource";
+    readonly mediaType: string;
+    readonly name: string;
+}
+
+/** Stores an extracted blob for a session and returns its content-addressed key. */
+export type StoreExtractedContent = (
+    sessionId: string,
+    content: ExtractedContent,
+    signal: AbortSignal,
+) => Promise<{ readonly byteLength: number; readonly key: string }>;
+
 import { sniffRasterMime } from "./raster.ts";
 
 const MAXIMUM_ENCODED_CONTENT_CHARACTERS = 4_000_000;
@@ -70,10 +84,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Stateless: it finds embedded media in Agent output and replaces it with content references. */
 export class AcpContentExternalizer {
-    readonly #store: ExternalContentStore;
+    readonly #store: StoreExtractedContent;
 
-    constructor(store: ExternalContentStore) {
+    constructor(store: StoreExtractedContent) {
         this.#store = store;
     }
 
@@ -91,14 +106,11 @@ export class AcpContentExternalizer {
                     if (sniffRasterMime(bytes) !== content.mimeType) {
                         throw new Error("Embedded image bytes do not match a supported image MIME type");
                     }
-                    const stored = await this.#store.put({
-                        bytes,
-                        kind: "image",
-                        mediaType: content.mimeType,
-                        name: "image",
+                    const stored = await this.#store(
                         sessionId,
+                        { bytes, kind: "image", mediaType: content.mimeType, name: "image" },
                         signal,
-                    });
+                    );
                     return {
                         agent: { ...content, data: "", uri: `mobius-content:image:${stored.key}` },
                         event: {
@@ -121,14 +133,11 @@ export class AcpContentExternalizer {
                 if (content.data.length === 0) {
                     return { agent: content, event: content };
                 }
-                const stored = await this.#store.put({
-                    bytes: decodeBase64(content.data),
-                    kind: "audio",
-                    mediaType: content.mimeType,
-                    name: "audio",
+                const stored = await this.#store(
                     sessionId,
+                    { bytes: decodeBase64(content.data), kind: "audio", mediaType: content.mimeType, name: "audio" },
                     signal,
-                });
+                );
                 return {
                     agent: content,
                     event: {
@@ -149,14 +158,11 @@ export class AcpContentExternalizer {
                     return { agent: content, event: content };
                 }
                 const mediaType = embedded.mimeType ?? "application/octet-stream";
-                const stored = await this.#store.put({
-                    bytes,
-                    kind: "resource",
-                    mediaType,
-                    name: "resource",
+                const stored = await this.#store(
                     sessionId,
+                    { bytes, kind: "resource", mediaType, name: "resource" },
                     signal,
-                });
+                );
                 return {
                     agent: content,
                     event: {
