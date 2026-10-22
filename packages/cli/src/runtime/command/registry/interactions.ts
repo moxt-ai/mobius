@@ -6,8 +6,9 @@ import {
     SESSION_PERMISSION_RESPOND_KIND,
     SESSION_PROMPT_DISPOSITION_KIND,
 } from "@moxt-ai/mobius-sdk/protocol";
+import { settleAbandonedTurn } from "../../session/session-event-projection.ts";
 import type { RuntimeCommand } from "../definition.ts";
-import { reportOperationFailure, send, settleAbandonedTurn } from "../dispatcher.ts";
+import { reportOperationFailure, send } from "../transport.ts";
 
 export const sessionCancelCommand: RuntimeCommand = {
     kind: SESSION_CANCEL_KIND,

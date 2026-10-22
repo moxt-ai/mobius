@@ -3,7 +3,7 @@ import type {
     AcpEndpointTermination,
     InProcessAcpEndpoint,
     InProcessAcpEndpointOptions,
-} from "../../in-process/acp-endpoint.ts";
+} from "../../agent/in-process-endpoint.ts";
 import { PiAcpAgent } from "./upstream/dist/acp/agent.js";
 import { createPiAcpClient } from "./upstream/dist/acp/client.js";
 

@@ -3,7 +3,7 @@ import { appendFile, realpath, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "vitest";
-import { CodexAgentSpecification } from "../../src/runtime/agent-catalog/agents/codex-agent.ts";
+import { CodexAgentSpecification } from "../../src/agent/specification/vendors/codex-agent.ts";
 import { CodexFixture } from "../support/agents/codex.ts";
 import { imageFixture } from "../support/agents/image-fixture.ts";
 import { withRealDaemon } from "../support/agents/real-daemon.ts";

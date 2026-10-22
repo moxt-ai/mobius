@@ -17,7 +17,7 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { listen, port, sendText } from "@moxt-ai/mobius-test/websocket";
 import { describe, expect, it } from "vitest";
-import { LocalAgentDefinition } from "../../src/runtime/agent-catalog/local-agent.ts";
+import { LocalAgentDefinition } from "../../src/acp/agent/agent-definition.ts";
 import { createRuntimeConfig, RuntimeLocalContext } from "../../src/runtime/config.ts";
 import { runRuntime } from "../../src/runtime/run.ts";
 

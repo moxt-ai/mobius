@@ -14,7 +14,7 @@ import type {
     AcpEndpointTermination,
     InProcessAcpEndpoint,
     InProcessAcpEndpointOptions,
-} from "../../in-process/acp-endpoint.ts";
+} from "../../agent/in-process-endpoint.ts";
 import { CodexAppServerClient } from "./app-server-client.ts";
 import {
     CODEX_HISTORY_TURN_PAGE_LIMIT,

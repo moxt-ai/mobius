@@ -17,9 +17,9 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { listen, port } from "@moxt-ai/mobius-test/websocket";
 import { type WebSocket, WebSocketServer } from "ws";
+import { discoverLocalAgentInventory } from "../../../src/agent/discovery/discover-local-agents.ts";
+import type { LocalAgentSpecification } from "../../../src/agent/specification/agent-specification.ts";
 import { openMobiusCliInstallation } from "../../../src/daemon/pairing/pair-local-machine.ts";
-import type { LocalAgentSpecification } from "../../../src/runtime/agent-catalog/agent-specification.ts";
-import { discoverLocalAgentInventory } from "../../../src/runtime/agent-catalog/discover-local-agents.ts";
 import { createRuntimeConfig, RuntimeLocalContext } from "../../../src/runtime/config.ts";
 import { runRuntime } from "../../../src/runtime/run.ts";
 
@@ -73,7 +73,7 @@ export async function withRealDaemon(
     const cli = async (args: readonly string[], deadline = signal): Promise<void> => {
         const child = spawn(
             process.execPath,
-            [resolve(import.meta.dirname, "../../../src/entrypoint/cli.ts"), ...args],
+            [resolve(import.meta.dirname, "../../../src/cli/entrypoint.ts"), ...args],
             {
                 env: cliEnvironment,
                 signal: deadline,

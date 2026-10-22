@@ -34,7 +34,7 @@ async function packedRelease(
         await symlink(resolve(import.meta.dirname, "../../node_modules"), join(source, "node_modules"), "junction");
         await writeFile(
             join(root, "dist/cli.js"),
-            `import ${JSON.stringify(pathToFileURL(join(source, "src/entrypoint/cli.ts")).href)};`,
+            `import ${JSON.stringify(pathToFileURL(join(source, "src/cli/entrypoint.ts")).href)};`,
         );
     } else {
         await writeFile(
@@ -82,7 +82,7 @@ describe("Daemon hourly npm upgrade", () => {
         const cli = async (
             args: readonly string[],
             deadline = signal,
-            entry = resolve(import.meta.dirname, "../../src/entrypoint/cli.ts"),
+            entry = resolve(import.meta.dirname, "../../src/cli/entrypoint.ts"),
         ): Promise<void> => {
             const child = spawn(process.execPath, [entry, ...args], {
                 cwd: directory,
@@ -297,7 +297,7 @@ describe("Daemon hourly npm upgrade", () => {
                 code: "ENOENT",
             });
             await cli(["quit"]);
-            await cli(["start"], signal, join(directory, `source-${reuse}`, "src/entrypoint/cli.ts"));
+            await cli(["start"], signal, join(directory, `source-${reuse}`, "src/cli/entrypoint.ts"));
             expect(
                 await sendLocalRequest(
                     control.stateDirectory,

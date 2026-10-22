@@ -25,8 +25,8 @@ import type {
     AcpEndpointTermination,
     InProcessAcpEndpoint,
     InProcessAcpEndpointFactory,
-} from "../../src/acp/in-process/acp-endpoint.ts";
-import { InProcessAcpAgentDefinition } from "../../src/runtime/agent-catalog/agent-specification.ts";
+} from "../../src/acp/agent/in-process-endpoint.ts";
+import { InProcessAcpAgentDefinition } from "../../src/agent/specification/agent-specification.ts";
 import { ControlledAcpAgentSpecification } from "../support/agents/controlled-acp.ts";
 import { prepareNewRealSession, withRealDaemon } from "../support/agents/real-daemon.ts";
 

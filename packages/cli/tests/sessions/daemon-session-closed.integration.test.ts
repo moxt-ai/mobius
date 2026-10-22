@@ -22,8 +22,8 @@ import {
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { expect, test } from "vitest";
-import type { InProcessAcpEndpointFactory } from "../../src/acp/in-process/acp-endpoint.ts";
-import { InProcessAcpAgentDefinition } from "../../src/runtime/agent-catalog/agent-specification.ts";
+import type { InProcessAcpEndpointFactory } from "../../src/acp/agent/in-process-endpoint.ts";
+import { InProcessAcpAgentDefinition } from "../../src/agent/specification/agent-specification.ts";
 import { ControlledSessionAgent } from "../support/agents/controlled-session-agent.ts";
 import { type RealDaemonPeer, withRealDaemon } from "../support/agents/real-daemon.ts";
 

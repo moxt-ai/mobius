@@ -30,7 +30,7 @@ import type { RelayConnectionDiagnostics } from "../../relay/diagnostics.ts";
 import { resolveSessionDirectories } from "../../workspace/resolve-session-directories.ts";
 import type { WorkspaceDirectoryService } from "../../workspace/workspace-directory.ts";
 import type { RuntimeCommand } from "../definition.ts";
-import { operationErrorCode, reportOperationFailure, send } from "../dispatcher.ts";
+import { operationErrorCode, reportOperationFailure, send } from "../transport.ts";
 
 export async function resolveCatalogAgent(
     config: RuntimeConfig,

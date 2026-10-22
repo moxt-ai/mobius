@@ -10,8 +10,10 @@ import { type MessageEvent, WebSocket } from "undici";
 import type { AgentRuntimeManager } from "../../acp/agent-runtime-manager.ts";
 import type { ExternalContentStore } from "../../acp/external-content/local-external-content-store.ts";
 import { reportDaemonUpgradeAvailability } from "../../daemon/upgrades/upgrade.ts";
+import type { Timer } from "../../util/timer.ts";
 import type { RuntimeOperationState } from "../admission.ts";
-import { createRuntimeCommandDispatcher, send } from "../command/dispatcher.ts";
+import { createRuntimeCommandDispatcher } from "../command/dispatcher.ts";
+import { send } from "../command/transport.ts";
 import type { RuntimeConfig } from "../config.ts";
 import type { NativeSessionService } from "../native-sessions/service.ts";
 import type { RuntimeSessionEventProjection } from "../session/session-event-projection.ts";
@@ -22,7 +24,6 @@ import type { RelayConnectionDiagnostics } from "./diagnostics.ts";
 import { RelayConnectionLiveness } from "./liveness.ts";
 import { isRuntimeRelayRevocation, RuntimeRelayRevokedError } from "./runtime-revocation.ts";
 import type { RuntimeSessionEventPublisher } from "./session-event-publisher.ts";
-import type { Timer } from "./timer.ts";
 
 function closeRelaySocket(socket: WebSocket, code: number, reason: string): void {
     try {

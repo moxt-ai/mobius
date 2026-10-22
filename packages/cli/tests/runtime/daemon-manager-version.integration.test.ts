@@ -242,7 +242,7 @@ describe("Mobius manager version compatibility", () => {
             );
             await data.setConnectionActivation(saved.connectionId, "stopped", deadline);
 
-            const upgraded = await runCli(["start"], environment, deadline, join(release, "src/entrypoint/cli.ts"));
+            const upgraded = await runCli(["start"], environment, deadline, join(release, "src/cli/entrypoint.ts"));
             expect(upgraded).toEqual({ code: 0, stderr: "", stdout: "Mobius daemon is running.\n" });
             expect(await readFile(join(control.stateDirectory, "manager.lock"), "utf8")).toBe(manager);
             const replacement = await readFile(join(control.stateDirectory, "worker.lock"), "utf8");
@@ -252,7 +252,7 @@ describe("Mobius manager version compatibility", () => {
                     (entry) => entry.parentProcessId === Number(manager),
                 ),
             ).toHaveLength(1);
-            expect((await runCli(["start"], environment, deadline, join(release, "src/entrypoint/cli.ts"))).code).toBe(
+            expect((await runCli(["start"], environment, deadline, join(release, "src/cli/entrypoint.ts"))).code).toBe(
                 0,
             );
             expect(await readFile(join(control.stateDirectory, "worker.lock"), "utf8")).toBe(replacement);
@@ -260,7 +260,7 @@ describe("Mobius manager version compatibility", () => {
                 ["pair", "list"],
                 environment,
                 deadline,
-                join(release, "src/entrypoint/cli.ts"),
+                join(release, "src/cli/entrypoint.ts"),
             );
             expect(otherList.code).toBe(0);
             expect(otherList.stdout).toContain(saved.connectionId);
@@ -284,7 +284,7 @@ describe("Mobius manager version compatibility", () => {
         await cp(resolve(import.meta.dirname, "../../src"), join(release, "src"), { recursive: true });
         await writeFile(join(release, "package.json"), JSON.stringify({ ...cliPackage, version: nextVersion }));
         await symlink(resolve(import.meta.dirname, "../../node_modules"), join(release, "node_modules"), "junction");
-        const nextCli = join(release, "src/entrypoint/cli.ts");
+        const nextCli = join(release, "src/cli/entrypoint.ts");
         const pointer = join(stateRoot, "current-data.txt");
         try {
             const data = await openMobiusCliInstallation(deadline, environment);
@@ -583,7 +583,7 @@ async function runCli(
     arguments_: readonly string[],
     environment: Readonly<NodeJS.ProcessEnv>,
     signal: AbortSignal,
-    cliPath = resolve(import.meta.dirname, "../../src/entrypoint/cli.ts"),
+    cliPath = resolve(import.meta.dirname, "../../src/cli/entrypoint.ts"),
 ): Promise<{ readonly code: number | null; readonly stderr: string; readonly stdout: string }> {
     const child = spawn(process.execPath, [cliPath, ...arguments_], {
         env: environment,

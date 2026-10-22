@@ -1,7 +1,7 @@
 import { FILE_FAILED_KIND, FILE_READ_KIND } from "@moxt-ai/mobius-sdk/protocol";
 import { WebSocket } from "undici";
 import type { RuntimeCommand } from "../../definition.ts";
-import { send } from "../../dispatcher.ts";
+import { send } from "../../transport.ts";
 import { streamLocalFile } from "./logic/local-file-streamer.ts";
 
 export const fileReadCommand: RuntimeCommand = {

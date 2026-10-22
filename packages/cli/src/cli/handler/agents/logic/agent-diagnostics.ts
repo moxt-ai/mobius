@@ -4,7 +4,7 @@ import {
     MissingAdapter,
     type UnavailableAgent,
     UnsupportedAgentVersion,
-} from "../../../../runtime/agent-catalog/agent-discovery.ts";
+} from "../../../../agent/discovery/agent-discovery.ts";
 
 class AvailableAgentDiagnostic {
     readonly adapterVersion: string;

@@ -1,8 +1,8 @@
 import { AcpExecutionError } from "../../acp-error.ts";
+import { readCodexFullHistory } from "../../native-history/codex/codex-history.ts";
+import { nativeHistoryEvents } from "../../native-history/codex/native-history-events.ts";
 import type { AcpNativeEventReplay } from "../../session-contracts.ts";
 import type { Adapter, AdapterContext, NativeSessionPreviewRequest } from "../context.ts";
-import { readCodexFullHistory } from "./history.ts";
-import { nativeHistoryEvents } from "./native-history-events.ts";
 
 /**
  * Previews saved Codex threads by reading the Codex app-server directly. The read is

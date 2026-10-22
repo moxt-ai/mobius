@@ -3,7 +3,7 @@ import { setTimeout } from "node:timers/promises";
 import type { PromptResponse, SessionNotification } from "@agentclientprotocol/sdk";
 import { z } from "zod";
 import { AcpExecutionError } from "../../acp-error.ts";
-import { type AcpEndpointTermination, acpEndpointTerminationError } from "../../in-process/acp-endpoint.ts";
+import { type AcpEndpointTermination, acpEndpointTerminationError } from "../../agent/in-process-endpoint.ts";
 import type { CodexAppServerClient, CodexAppServerServerRequest } from "./app-server-client.ts";
 import { CODEX_HISTORY_TURN_PAGE_LIMIT, threadTurnsPageSchema } from "./app-server-protocol.ts";
 import { decodeThreadItem, reasoningText, toolCallUpdate } from "./items.ts";

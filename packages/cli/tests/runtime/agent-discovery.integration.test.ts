@@ -3,13 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { formatAgentDiagnostics } from "../../src/cli/handler/agents/logic/agent-diagnostics.ts";
 import {
     CodexAgentSpecification,
     discoverLocalAgentInventory,
     PiAgentSpecification,
     resolveAgentExecutable,
-} from "../../src/runtime/agent-catalog/discover-local-agents.ts";
+} from "../../src/agent/discovery/discover-local-agents.ts";
+import { formatAgentDiagnostics } from "../../src/cli/handler/agents/logic/agent-diagnostics.ts";
 
 function executableSource(source: string): string {
     return `#!${process.execPath}\n${source}`;

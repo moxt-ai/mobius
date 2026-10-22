@@ -1,6 +1,6 @@
 import { RUNTIME_HEARTBEAT_KIND, type RuntimeHeartbeatEvent } from "@moxt-ai/mobius-sdk/protocol";
 
-import type { ScheduledTask, Timer } from "./timer.ts";
+import type { ScheduledTask, Timer } from "../../util/timer.ts";
 
 const HEARTBEAT_ACK_TIMEOUT_MILLISECONDS = 10_000;
 const HEARTBEAT_INTERVAL_MILLISECONDS = 20_000;

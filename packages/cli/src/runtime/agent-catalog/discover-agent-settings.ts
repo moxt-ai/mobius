@@ -10,16 +10,16 @@ import {
     type AgentSettingsDiscoveredEvent,
     type SessionConfigOption,
 } from "@moxt-ai/mobius-sdk/protocol";
+import type { AcpAgentDefinition } from "../../acp/agent/agent-definition.ts";
 import {
     type AcpAgentSettingsModelEffort,
     AcpConfigurationValueUnavailableError,
     AcpExecutionError,
     type AgentRuntimeManager,
 } from "../../acp/agent-runtime-manager.ts";
+import { agentSettingsAdapterForAgent } from "../../agent/settings/agent-settings-adapter.ts";
 import type { RuntimeConfig } from "../config.ts";
 import type { WorkspaceDirectoryService } from "../workspace/workspace-directory.ts";
-import { agentSettingsAdapterForAgent } from "./agent-settings-adapter.ts";
-import type { AcpAgentDefinition } from "./local-agent.ts";
 
 export interface AgentSettingsDiscovery {
     readonly event: AgentSettingsDiscoveredEvent;

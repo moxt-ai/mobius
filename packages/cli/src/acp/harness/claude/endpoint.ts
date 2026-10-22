@@ -3,7 +3,7 @@ import type {
     AcpEndpointTermination,
     InProcessAcpEndpoint,
     InProcessAcpEndpointOptions,
-} from "../../in-process/acp-endpoint.ts";
+} from "../../agent/in-process-endpoint.ts";
 import { createClaudeAcpApp } from "./upstream/dist/lib.js";
 
 export class ClaudeAcpEndpoint implements InProcessAcpEndpoint {

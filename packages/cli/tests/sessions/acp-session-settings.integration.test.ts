@@ -2,11 +2,11 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 import { AgentRuntimeManager } from "../../src/acp/agent-runtime-manager.ts";
-import { AcpContentExternalizer } from "../../src/acp/external-content/acp-content-externalizer.ts";
+import { AcpContentExternalizer } from "../../src/acp/content/content-externalizer.ts";
 import { NullAcpSessionObserver } from "../../src/acp/session-contracts.ts";
 import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
 import { LocalAgentDefinition } from "../../src/runtime/config.ts";
-import { systemTimer } from "../../src/runtime/relay/timer.ts";
+import { systemTimer } from "../../src/util/timer.ts";
 import { acpAdapters } from "../support/acp-adapters.ts";
 import { UnretainedExternalContentStore } from "../support/unretained-external-content-store.ts";
 

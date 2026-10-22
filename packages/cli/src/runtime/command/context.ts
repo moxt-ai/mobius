@@ -1,11 +1,11 @@
 import type { WebSocket } from "undici";
 import type { AgentRuntimeManager } from "../../acp/agent-runtime-manager.ts";
 import type { ExternalContentStore } from "../../acp/external-content/local-external-content-store.ts";
+import type { Timer } from "../../util/timer.ts";
 import type { RuntimeOperationState } from "../admission.ts";
 import type { RuntimeConfig } from "../config.ts";
 import type { NativeSessionService } from "../native-sessions/service.ts";
 import type { RelayConnectionDiagnostics } from "../relay/diagnostics.ts";
-import type { Timer } from "../relay/timer.ts";
 import type { RuntimeSessionEventProjection } from "../session/session-event-projection.ts";
 import type { RuntimeSessions } from "../sessions.ts";
 import type { WorkspaceDirectoryService } from "../workspace/workspace-directory.ts";

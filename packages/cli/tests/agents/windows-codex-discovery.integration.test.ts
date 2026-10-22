@@ -39,7 +39,7 @@ child.once('exit', code => process.exit(code ?? 1));\n`,
             );
             const result = await promisify(execFile)(
                 process.execPath,
-                [resolve(import.meta.dirname, "../../src/entrypoint/cli.ts"), "agents", "--json"],
+                [resolve(import.meta.dirname, "../../src/cli/entrypoint.ts"), "agents", "--json"],
                 {
                     cwd: workspace,
                     env: {

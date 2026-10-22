@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { BoundedLineLog } from "./bounded-log.ts";
+import { BoundedLineLog } from "../../storage/logs/bounded-log.ts";
 
 const MAXIMUM_RUNTIME_LOG_BYTES = 1 * 1_024 * 1_024;
 const MAXIMUM_ENTRIES = 200;

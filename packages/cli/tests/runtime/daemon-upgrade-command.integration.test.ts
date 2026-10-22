@@ -28,7 +28,7 @@ async function packedRelease(
         await symlink(resolve(import.meta.dirname, "../../node_modules"), join(source, "node_modules"), "junction");
         await writeFile(
             join(root, "dist/cli.js"),
-            `import ${JSON.stringify(pathToFileURL(join(source, "src/entrypoint/cli.ts")).href)};`,
+            `import ${JSON.stringify(pathToFileURL(join(source, "src/cli/entrypoint.ts")).href)};`,
         );
     } else {
         await writeFile(
@@ -80,7 +80,7 @@ describe("Mobius upgrade command", () => {
         }> => {
             const child = spawn(
                 process.execPath,
-                [resolve(import.meta.dirname, "../../src/entrypoint/cli.ts"), ...arguments_],
+                [resolve(import.meta.dirname, "../../src/cli/entrypoint.ts"), ...arguments_],
                 {
                     cwd: directory,
                     env: environment,

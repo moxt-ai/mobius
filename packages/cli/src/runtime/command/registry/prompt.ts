@@ -5,7 +5,7 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import { executePrompt } from "../../session/execute-prompt.ts";
 import type { RuntimeCommand } from "../definition.ts";
-import { send } from "../dispatcher.ts";
+import { send } from "../transport.ts";
 
 export const sessionPromptCommand: RuntimeCommand = {
     kind: SESSION_PROMPT_KIND,

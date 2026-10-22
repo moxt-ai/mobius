@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import { z } from "zod";
-import type { LocalSqliteDatabase } from "../infra/local-sqlite-database.ts";
 import { sessionLiveEventPositionAllocation } from "../schema/acp-session-store/index.ts";
+import type { LocalSqliteDatabase } from "../storage/sqlite/local-sqlite-database.ts";
 
 const INITIAL_POSITION = 10 ** 4;
 const POSITION_RESERVATION_SIZE = 10_000;

@@ -1,4 +1,4 @@
-import { DirectAcpAgentDefinition } from "../../../src/runtime/agent-catalog/agent-specification.ts";
+import { DirectAcpAgentDefinition } from "../../../src/agent/specification/agent-specification.ts";
 
 const CONTROLLED_ACP_VERSION = "1.0.0";
 

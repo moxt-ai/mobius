@@ -1,6 +1,6 @@
 import { methods, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 import { expect, test } from "vitest";
-import { type AcpClientHandler, createAcpClient } from "../../src/acp/create-client.ts";
+import { type AcpClientHandler, createAcpClient } from "../../src/acp/connection/create-client.ts";
 import { createClaudeAcpApp } from "../../src/acp/harness/claude/upstream/dist/lib.js";
 
 const clientHandler: AcpClientHandler = {

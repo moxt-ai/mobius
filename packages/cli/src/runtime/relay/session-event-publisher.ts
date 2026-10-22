@@ -9,7 +9,7 @@ import {
     type SessionStatusChangedEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { WebSocket } from "undici";
-import type { ScheduledTask, Timer } from "./timer.ts";
+import type { ScheduledTask, Timer } from "../../util/timer.ts";
 
 const MAX_BUFFERED_BYTES = 32 * 1024 * 1024;
 const MAX_EVENT_BATCH_BYTES = 1024 * 1024;
