@@ -27,7 +27,6 @@ import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp-
 import { AgentConnection } from "./agent-connection.ts";
 import { type AcpTurnState, IdleAcpTurn, RunningAcpTurn } from "./agent-turn.ts";
 import { AgentUpdateStream } from "./agent-update-stream.ts";
-import { AnnouncedToolCalls } from "./announced-tool-calls.ts";
 import type { AcpClientHandler } from "./create-client.ts";
 import type { AcpContentExternalizer } from "./external-content/acp-content-externalizer.ts";
 import {
@@ -105,7 +104,6 @@ export class AgentSession implements AcpClientHandler {
     readonly #connection: AgentConnection;
     readonly #contentExternalizer: AcpContentExternalizer;
     readonly #interactions: AcpSessionInteractions;
-    readonly #announcedToolCalls = new AnnouncedToolCalls();
     readonly #additionalDirectories: readonly string[];
     readonly #agentId: string;
     readonly #cwd: string;
@@ -157,7 +155,7 @@ export class AgentSession implements AcpClientHandler {
         this.#verifiedAgentVersion = agent.agentVersion;
         this.#interactions = new AcpSessionInteractions({
             cwd: () => this.#cwd,
-            describeToolCall: this.#announcedToolCalls.describe,
+            getToolCall: (toolCallId) => this.#store.events.getToolCall(this.#mobiusSessionId, toolCallId),
             sessionId: () => this.#mobiusSessionId,
             commandId: () => this.#turn.commandId,
             assertNativeSession: (sessionId) => this.assertNativeSession(sessionId),
@@ -990,7 +988,6 @@ export class AgentSession implements AcpClientHandler {
             throw failure;
         } finally {
             this.#turn = new IdleAcpTurn();
-            this.#announcedToolCalls.clear();
         }
     };
 
@@ -1175,9 +1172,6 @@ export class AgentSession implements AcpClientHandler {
                 update.sessionUpdate === "plan_removed")
         ) {
             return;
-        }
-        if (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") {
-            this.#announcedToolCalls.record(update);
         }
         if (update.sessionUpdate === "available_commands_update") {
             const commands: SessionCommand[] = update.availableCommands

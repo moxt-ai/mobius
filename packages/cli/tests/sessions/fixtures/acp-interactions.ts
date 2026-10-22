@@ -124,6 +124,70 @@ export async function runInteractionScenario(
             return { stopReason: "cancelled" };
         }
     }
+    if (prompt === "request permission after a null rawInput update") {
+        // ACP v1: on a tool call update, omission and null are equivalent for
+        // rawInput and both leave the previously reported value unchanged.
+        await context.client.notify(acp.methods.client.session.update, {
+            sessionId: context.params.sessionId,
+            update: {
+                kind: "execute",
+                locations: [{ path: "scripts/release.sh", line: 3 }],
+                rawInput: { command: "sh scripts/release.sh --publish" },
+                sessionUpdate: "tool_call",
+                status: "pending",
+                title: "Release the package",
+                toolCallId: "null-input-tool",
+            },
+        });
+        await context.client.notify(acp.methods.client.session.update, {
+            sessionId: context.params.sessionId,
+            update: {
+                rawInput: null,
+                sessionUpdate: "tool_call_update",
+                status: "in_progress",
+                toolCallId: "null-input-tool",
+            },
+        });
+        const permission = await context.client.request(acp.methods.client.session.requestPermission, {
+            options: [
+                { kind: "allow_once", name: "Allow once", optionId: "allow-once" },
+                { kind: "reject_once", name: "Reject", optionId: "reject" },
+            ],
+            sessionId: context.params.sessionId,
+            toolCall: { title: "Approve the release command", toolCallId: "null-input-tool" },
+        });
+        if (permission.outcome.outcome !== "selected") {
+            return { stopReason: "cancelled" };
+        }
+    }
+    if (prompt === "request permission for an orphan update announcement") {
+        // A tool call update can be the first recorded form of a tool call,
+        // for example when the announcement itself is an update the history
+        // projection cannot merge into an earlier event.
+        await context.client.notify(acp.methods.client.session.update, {
+            sessionId: context.params.sessionId,
+            update: {
+                kind: "fetch",
+                locations: [{ path: "docs/permissions.md", line: 7 }],
+                rawInput: { url: "https://example.test/permissions" },
+                sessionUpdate: "tool_call_update",
+                status: "in_progress",
+                title: "Fetch the permissions guide",
+                toolCallId: "orphan-update-tool",
+            },
+        });
+        const permission = await context.client.request(acp.methods.client.session.requestPermission, {
+            options: [
+                { kind: "allow_once", name: "Allow once", optionId: "allow-once" },
+                { kind: "reject_once", name: "Reject", optionId: "reject" },
+            ],
+            sessionId: context.params.sessionId,
+            toolCall: { title: "Approve the fetch", toolCallId: "orphan-update-tool" },
+        });
+        if (permission.outcome.outcome !== "selected") {
+            return { stopReason: "cancelled" };
+        }
+    }
     if (prompt === "exercise URL elicitation") {
         const elicitationId = `url-${turnNumber.toString()}`;
         const elicitation = await context.client.request(acp.methods.client.elicitation.create, {

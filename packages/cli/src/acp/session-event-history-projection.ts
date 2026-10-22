@@ -1,5 +1,7 @@
 import type { AcpSessionUpdate, SessionEvent, SessionLiveEvent } from "@moxt-ai/mobius-sdk/protocol";
 
+export type { ProjectedToolCall } from "./tool-call-projection.ts";
+
 type AcpSessionEvent = Extract<SessionEvent, { readonly type: "acp" }>;
 type ToolCall = Extract<AcpSessionUpdate, { readonly sessionUpdate: "tool_call" | "tool_call_update" }>;
 
@@ -23,53 +25,74 @@ function replaceAcpPayload(event: AcpSessionEvent, payload: AcpSessionUpdate): A
     return { ...event, payload };
 }
 
-function mergeToolCall(previous: ToolCall, incoming: ToolCall): ToolCall {
-    if (previous.sessionUpdate === "tool_call_update") {
-        return { ...previous, ...incoming, sessionUpdate: "tool_call_update", toolCallId: previous.toolCallId };
-    }
+/**
+ * ACP v1 treats omission and `null` as equivalent on a tool call update:
+ * both leave the previously reported value unchanged. There is no way to
+ * clear a field once it has a value, so an update only contributes fields
+ * it actually carries.
+ */
+function patchToolCallFields<T extends ToolCall>(previous: T, incoming: ToolCall): T {
     const {
         content: previousContent,
         kind: previousKind,
         locations: previousLocations,
+        rawInput: previousRawInput,
+        rawOutput: previousRawOutput,
         status: previousStatus,
         title: previousTitle,
         ...previousFields
     } = previous;
-    const { content, kind, locations, status, title, ...incomingFields } = incoming;
+    const { content, kind, locations, rawInput, rawOutput, status, title, ...incomingFields } = incoming;
     return {
         ...previousFields,
         ...incomingFields,
-        ...(content === undefined
-            ? previousContent === undefined
+        ...(content === undefined || content === null
+            ? previousContent === undefined || previousContent === null
                 ? {}
                 : { content: previousContent }
-            : content === null
-              ? {}
-              : { content }),
-        ...(kind === undefined
-            ? previousKind === undefined
+            : { content }),
+        ...(kind === undefined || kind === null
+            ? previousKind === undefined || previousKind === null
                 ? {}
                 : { kind: previousKind }
-            : kind === null
-              ? {}
-              : { kind }),
-        ...(locations === undefined
-            ? previousLocations === undefined
+            : { kind }),
+        ...(locations === undefined || locations === null
+            ? previousLocations === undefined || previousLocations === null
                 ? {}
                 : { locations: previousLocations }
-            : locations === null
-              ? {}
-              : { locations }),
-        sessionUpdate: "tool_call",
-        ...(status === undefined
-            ? previousStatus === undefined
+            : { locations }),
+        ...(rawInput === undefined || rawInput === null
+            ? previousRawInput === undefined || previousRawInput === null
+                ? {}
+                : { rawInput: previousRawInput }
+            : { rawInput }),
+        ...(rawOutput === undefined || rawOutput === null
+            ? previousRawOutput === undefined || previousRawOutput === null
+                ? {}
+                : { rawOutput: previousRawOutput }
+            : { rawOutput }),
+        ...(status === undefined || status === null
+            ? previousStatus === undefined || previousStatus === null
                 ? {}
                 : { status: previousStatus }
-            : status === null
-              ? {}
-              : { status }),
+            : { status }),
+        // A tool call always carries a title in the session event log, so the
+        // merged form keeps the announced one when an update omits it.
         title: title ?? previousTitle,
         toolCallId: previous.toolCallId,
+    } as T;
+}
+
+function mergeToolCall(previous: ToolCall, incoming: ToolCall): ToolCall {
+    if (previous.sessionUpdate === "tool_call_update") {
+        return {
+            ...patchToolCallFields(previous, incoming),
+            sessionUpdate: "tool_call_update",
+        };
+    }
+    return {
+        ...patchToolCallFields(previous, incoming),
+        sessionUpdate: "tool_call",
     };
 }
 
@@ -124,6 +147,25 @@ export class SessionEventHistoryProjection {
         this.#latestEvent = event;
         this.#indexToolCall(event);
         return { event, kind: "append" };
+    };
+
+    /**
+     * The projected tool call announced with this identifier, in its current
+     * merged form, or `undefined` when the projection has not recorded one.
+     */
+    readonly getToolCall = (toolCallId: string, resolve: MaterializedEventsResolver): ToolCall | undefined => {
+        const eventId = this.#toolCallEventIds.get(toolCallId);
+        if (eventId === undefined) {
+            return undefined;
+        }
+        const event = resolve([eventId]).get(eventId);
+        if (
+            event?.type === "acp" &&
+            (event.payload.sessionUpdate === "tool_call" || event.payload.sessionUpdate === "tool_call_update")
+        ) {
+            return event.payload;
+        }
+        return undefined;
     };
 
     readonly #replace = (current: SessionEvent, replacement: SessionEvent): SessionEventHistoryProjectionMutation => {

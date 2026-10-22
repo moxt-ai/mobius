@@ -355,6 +355,206 @@ test("Given an Agent announced a tool call with its input, When it requests perm
     }
 }, 30_000);
 
+test("Given an Agent announced a tool call and then sent a rawInput null update, When it requests permission referencing only that tool call, Then the permission keeps the announced input", async () => {
+    const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-null-input-permission-"));
+    const workspace = join(stateDirectory, "workspace");
+    await mkdir(workspace);
+    const relay = createServer((_request, response) => response.writeHead(404).end());
+    const websocketServer = new WebSocketServer({ server: relay });
+    const connected = Promise.withResolvers<WebSocket>();
+    websocketServer.on("connection", (socket) => connected.resolve(socket));
+    await listen(relay);
+    const relayUrl = new URL(
+        `ws://127.0.0.1:${port(relay).toString()}${MOBIUS_API_PREFIX}/channels/null-input-permission/daemon`,
+    );
+    relayUrl.searchParams.set("token", "r".repeat(43));
+    const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
+    const agent = new LocalAgentDefinition("claude", "Claude Code", process.execPath, [
+        fakeAgentPath,
+        "--agent-name",
+        "Claude Code",
+    ]);
+    const config = createRuntimeConfig(
+        { channelId: "null-input-permission", defaultWorkspace: workspace, relayUrl },
+        [agent],
+        new RuntimeLocalContext(stateDirectory),
+    );
+    const cancellation = new AbortController();
+    const runtime = runRuntime(config, cancellation.signal);
+    try {
+        const socket = await connected.promise;
+        const messages = new Messages(socket);
+        socket.send(JSON.stringify({ kind: "runtime.liveness.ready" }));
+        const sessionId = "null_input_permission";
+        socket.send(
+            encodeSessionPrepareCommand({
+                additionalDirectoryIds: [],
+                agentId: "claude",
+                bindingId: config.bindingId,
+                directoryId: "default",
+                kind: "session.prepare",
+                requestId: "prepare_request",
+                sessionId,
+                transient: true,
+            }),
+        );
+        await messages.nextKind(SESSION_READY_KIND);
+        socket.send(
+            encodeSessionPromptCommand({
+                additionalDirectoryIds: [],
+                agentId: "claude",
+                bindingId: config.bindingId,
+                commandId: "null_input_turn",
+                directoryId: "default",
+                disposition: SessionPromptDisposition.Reject,
+                images: [],
+                kind: "session.prompt",
+                prompt: "request permission after a null rawInput update",
+                resources: [],
+                sessionId,
+                targetCommandId: "",
+            }),
+        );
+        const permission = decodeSessionPermissionRequestedEvent(
+            await messages.nextKind(SESSION_PERMISSION_REQUESTED_KIND),
+        );
+        expect(permission).toMatchObject({
+            details: {
+                cwd: await realpath(workspace),
+                rawInput: { command: "sh scripts/release.sh --publish" },
+                locations: [{ path: "scripts/release.sh", line: 3 }],
+            },
+            title: "Approve the release command",
+            toolCallId: "null-input-tool",
+            toolKind: "execute",
+        });
+        socket.send(
+            encodeSessionPermissionRespondCommand({
+                interactionId: permission.interactionId,
+                kind: "session.permission.respond",
+                optionId: "allow-once",
+                outcome: "selected",
+                sessionId,
+            }),
+        );
+        // The Agent finishes the Turn only after it receives the permission response.
+        expect(decodeSessionStatusChangedEvent(await messages.nextKind(SESSION_STATUS_CHANGED_KIND))).toEqual({
+            kind: SESSION_STATUS_CHANGED_KIND,
+            sessionId,
+            status: { kind: "idle" },
+        });
+    } finally {
+        cancellation.abort();
+        await runtime;
+        for (const socket of websocketServer.clients) {
+            socket.terminate();
+        }
+        await new Promise<void>((resolve) => websocketServer.close(() => resolve()));
+        await new Promise<void>((resolve) => relay.close(() => resolve()));
+        await rm(stateDirectory, { recursive: true, force: true });
+    }
+}, 30_000);
+
+test("Given an Agent's first recorded form of a tool call is an update, When it requests permission referencing only that tool call, Then the permission carries the update's input, locations and kind", async () => {
+    const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-orphan-update-permission-"));
+    const workspace = join(stateDirectory, "workspace");
+    await mkdir(workspace);
+    const relay = createServer((_request, response) => response.writeHead(404).end());
+    const websocketServer = new WebSocketServer({ server: relay });
+    const connected = Promise.withResolvers<WebSocket>();
+    websocketServer.on("connection", (socket) => connected.resolve(socket));
+    await listen(relay);
+    const relayUrl = new URL(
+        `ws://127.0.0.1:${port(relay).toString()}${MOBIUS_API_PREFIX}/channels/orphan-update-permission/daemon`,
+    );
+    relayUrl.searchParams.set("token", "r".repeat(43));
+    const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
+    const agent = new LocalAgentDefinition("claude", "Claude Code", process.execPath, [
+        fakeAgentPath,
+        "--agent-name",
+        "Claude Code",
+    ]);
+    const config = createRuntimeConfig(
+        { channelId: "orphan-update-permission", defaultWorkspace: workspace, relayUrl },
+        [agent],
+        new RuntimeLocalContext(stateDirectory),
+    );
+    const cancellation = new AbortController();
+    const runtime = runRuntime(config, cancellation.signal);
+    try {
+        const socket = await connected.promise;
+        const messages = new Messages(socket);
+        socket.send(JSON.stringify({ kind: "runtime.liveness.ready" }));
+        const sessionId = "orphan_update_permission";
+        socket.send(
+            encodeSessionPrepareCommand({
+                additionalDirectoryIds: [],
+                agentId: "claude",
+                bindingId: config.bindingId,
+                directoryId: "default",
+                kind: "session.prepare",
+                requestId: "prepare_request",
+                sessionId,
+                transient: true,
+            }),
+        );
+        await messages.nextKind(SESSION_READY_KIND);
+        socket.send(
+            encodeSessionPromptCommand({
+                additionalDirectoryIds: [],
+                agentId: "claude",
+                bindingId: config.bindingId,
+                commandId: "orphan_update_turn",
+                directoryId: "default",
+                disposition: SessionPromptDisposition.Reject,
+                images: [],
+                kind: "session.prompt",
+                prompt: "request permission for an orphan update announcement",
+                resources: [],
+                sessionId,
+                targetCommandId: "",
+            }),
+        );
+        const permission = decodeSessionPermissionRequestedEvent(
+            await messages.nextKind(SESSION_PERMISSION_REQUESTED_KIND),
+        );
+        expect(permission).toMatchObject({
+            details: {
+                cwd: await realpath(workspace),
+                rawInput: { url: "https://example.test/permissions" },
+                locations: [{ path: "docs/permissions.md", line: 7 }],
+            },
+            title: "Approve the fetch",
+            toolCallId: "orphan-update-tool",
+            toolKind: "fetch",
+        });
+        socket.send(
+            encodeSessionPermissionRespondCommand({
+                interactionId: permission.interactionId,
+                kind: "session.permission.respond",
+                optionId: "allow-once",
+                outcome: "selected",
+                sessionId,
+            }),
+        );
+        // The Agent finishes the Turn only after it receives the permission response.
+        expect(decodeSessionStatusChangedEvent(await messages.nextKind(SESSION_STATUS_CHANGED_KIND))).toEqual({
+            kind: SESSION_STATUS_CHANGED_KIND,
+            sessionId,
+            status: { kind: "idle" },
+        });
+    } finally {
+        cancellation.abort();
+        await runtime;
+        for (const socket of websocketServer.clients) {
+            socket.terminate();
+        }
+        await new Promise<void>((resolve) => websocketServer.close(() => resolve()));
+        await new Promise<void>((resolve) => relay.close(() => resolve()));
+        await rm(stateDirectory, { recursive: true, force: true });
+    }
+}, 30_000);
+
 test("Given a real daemon prepared a Session, When Platform queries its metadata, Then the daemon returns it without closing the Runtime", async () => {
     const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-session-query-"));
     const workspace = join(stateDirectory, "workspace");

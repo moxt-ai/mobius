@@ -5,6 +5,7 @@ import { SessionEventCacheDatabase } from "./session-event-cache-database.ts";
 import { type MaterializedEventsResolver, SessionEventHistoryProjection } from "./session-event-history-projection.ts";
 import { InMemorySessionEventIdAllocator, type SessionEventIdAllocator } from "./session-event-id-allocator.ts";
 import type { SessionLiveEventPosition } from "./session-live-event-position.ts";
+import type { ProjectedToolCall } from "./tool-call-projection.ts";
 
 const HOT_EVENT_HIGH_WATER_MARK = 256;
 const HOT_EVENT_RETENTION = 128;
@@ -64,6 +65,10 @@ class SessionEvents {
     get materializedCount(): number {
         return this.#cachedItemsByEventId.size;
     }
+
+    /** The projected tool call for this identifier, materializing it if needed. */
+    readonly toolCall = (toolCallId: string, resolve: MaterializedEventsResolver): ProjectedToolCall | undefined =>
+        this.#projection.getToolCall(toolCallId, resolve);
 
     readonly endIndex = (cursor: string | null): number => {
         if (cursor === null) {
@@ -160,6 +165,11 @@ export interface AcpSessionEventStore {
     readonly append: (sessionId: string, event: SessionEventPayload) => SessionLiveEvent;
     readonly close: () => void;
     /**
+     * The projected tool call announced with this identifier in its current
+     * merged form, or `undefined` when no such announcement is recorded.
+     */
+    readonly getToolCall: (sessionId: string, toolCallId: string) => ProjectedToolCall | undefined;
+    /**
      * Number of projected events whose payloads are currently held in memory.
      * The store keeps this bounded by its retention window; it is the
      * observable memory footprint of the Session event tier.
@@ -224,6 +234,19 @@ export class MemoryAcpSessionEventStore implements AcpSessionEventStore {
         return session;
     };
 
+    readonly #resolver =
+        (session: SessionEvents): MaterializedEventsResolver =>
+        (eventIds) => {
+            const resolved = new Map<string, SessionEvent>();
+            for (const eventId of eventIds) {
+                const current = session.item(eventId);
+                if (current !== undefined) {
+                    resolved.set(eventId, current);
+                }
+            }
+            return resolved;
+        };
+
     readonly append = (sessionId: string, event: SessionEventPayload): SessionLiveEvent => {
         const session = this.#session(sessionId);
         const allocatedPosition = this.#allocatedPositionBySession.get(sessionId) ?? 9_999;
@@ -239,22 +262,18 @@ export class MemoryAcpSessionEventStore implements AcpSessionEventStore {
             position,
             event,
         );
-        session.apply(recorded, (eventIds) => {
-            const resolved = new Map<string, SessionEvent>();
-            for (const eventId of eventIds) {
-                const current = session.item(eventId);
-                if (current !== undefined) {
-                    resolved.set(eventId, current);
-                }
-            }
-            return resolved;
-        });
+        session.apply(recorded, this.#resolver(session));
         return recorded;
     };
 
     readonly close = (): void => {
         this.#allocatedPositionBySession.clear();
         this.#events.clear();
+    };
+
+    readonly getToolCall = (sessionId: string, toolCallId: string): ProjectedToolCall | undefined => {
+        const session = this.#events.get(sessionId);
+        return session === undefined ? undefined : session.toolCall(toolCallId, this.#resolver(session));
     };
 
     readonly materializedEventCount = (sessionId: string): number =>
@@ -318,20 +337,9 @@ export class CachedAcpSessionEventStore implements AcpSessionEventStore {
         return session;
     };
 
-    readonly append = (sessionId: string, event: SessionEventPayload): SessionLiveEvent => {
-        if (this.#flushSchedule.kind === "closed") {
-            throw new Error("The V2 Session event store is closed");
-        }
-        const session = this.#session(sessionId);
-        const position = this.#liveEventPositions.allocate(sessionId);
-        const recorded = liveEvent(
-            sessionId,
-            session.sessionGenerationId,
-            this.#eventIds.allocate(sessionId, session.sessionGenerationId),
-            position,
-            event,
-        );
-        session.apply(recorded, (eventIds) => {
+    readonly #resolver =
+        (sessionId: string, session: SessionEvents): MaterializedEventsResolver =>
+        (eventIds) => {
             const resolved = new Map<string, SessionEvent>();
             const missing: string[] = [];
             for (const eventId of eventIds) {
@@ -352,12 +360,32 @@ export class CachedAcpSessionEventStore implements AcpSessionEventStore {
                 }
             }
             return resolved;
-        });
+        };
+
+    readonly append = (sessionId: string, event: SessionEventPayload): SessionLiveEvent => {
+        if (this.#flushSchedule.kind === "closed") {
+            throw new Error("The V2 Session event store is closed");
+        }
+        const session = this.#session(sessionId);
+        const position = this.#liveEventPositions.allocate(sessionId);
+        const recorded = liveEvent(
+            sessionId,
+            session.sessionGenerationId,
+            this.#eventIds.allocate(sessionId, session.sessionGenerationId),
+            position,
+            event,
+        );
+        session.apply(recorded, this.#resolver(sessionId, session));
         this.#sessions.set(sessionId, session);
         if (session.materializedCount > HOT_EVENT_HIGH_WATER_MARK) {
             this.#scheduleFlush();
         }
         return recorded;
+    };
+
+    readonly getToolCall = (sessionId: string, toolCallId: string): ProjectedToolCall | undefined => {
+        const session = this.#sessions.get(sessionId);
+        return session === undefined ? undefined : session.toolCall(toolCallId, this.#resolver(sessionId, session));
     };
 
     readonly #scheduleFlush = (): void => {
