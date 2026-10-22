@@ -28,7 +28,7 @@ const DAEMON_DETACH_TIMEOUT_MILLISECONDS = 30_000;
 // even though the Relay never saw it close, so commands sent into it would never be answered.
 const DAEMON_HEARTBEAT_SILENCE_LIMIT_MILLISECONDS = 35_000;
 
-/** Whether a daemon connection has proven its liveness with a heartbeat, and when it last did. */
+/** Whether a heartbeat on a daemon connection has been answered, and when it last was. */
 export type DaemonHeartbeat = { readonly kind: "none" } | { readonly kind: "received"; readonly at: number };
 
 export type RuntimeSocketIdentity =
@@ -64,13 +64,19 @@ export type RuntimeSocketIdentity =
       };
 
 export interface RuntimeSocket extends ChannelSocket {
-    readonly lastHeartbeat: () => DaemonHeartbeat;
+    /** Records when the Relay itself answered a heartbeat, which only daemons that identify heartbeats need. */
     readonly recordHeartbeat: (at: number) => void;
     readonly replaceDaemon: () => void;
 }
 
 export interface RuntimePeers extends ChannelPeers {
     readonly sockets: () => readonly { readonly identity: RuntimeSocketIdentity; readonly socket: RuntimeSocket }[];
+    /** Daemon connections with the time each one's heartbeat was last answered, by the host or the Relay. */
+    readonly daemonConnections: () => readonly {
+        readonly identity: RuntimeSocketIdentity;
+        readonly socket: RuntimeSocket;
+        readonly heartbeat: DaemonHeartbeat;
+    }[];
     readonly accept: (identity: RuntimeSocketIdentity) => {
         readonly socket: RuntimeSocket;
         readonly response: Response;
@@ -322,7 +328,7 @@ export class RuntimeService {
         }
     };
 
-    /** Closes daemon connections that stopped heartbeating, so presence reads report them offline. */
+    /** Closes daemon connections that stopped heartbeating or were superseded, so presence reads report them offline. */
     readonly expireSilentDaemons = async (): Promise<void> => {
         await this.detachDaemons(this.closeSilentDaemons());
     };
@@ -432,8 +438,13 @@ export class RuntimeService {
             socket.close(1008, "Invalid protocol message");
             return;
         }
-        // Heartbeats must bypass application message scheduling.
-        if (identity.role === "daemon" && daemonMessage.kind === RUNTIME_HEARTBEAT_KIND) {
+        // The host answers fixed-text heartbeats without the Relay. Daemons released before that send an
+        // identifier the host cannot match, so the Relay answers those itself, bypassing message scheduling.
+        if (
+            identity.role === "daemon" &&
+            daemonMessage.kind === RUNTIME_HEARTBEAT_KIND &&
+            "heartbeatId" in daemonMessage
+        ) {
             if (!this.#cx.services.connections.isCurrent(identity)) {
                 socket.replaceDaemon();
                 return;
@@ -525,13 +536,18 @@ export class RuntimeService {
     private readonly closeSilentDaemons = (): readonly RuntimePeer[] => {
         const now = Date.now();
         const silent: RuntimePeer[] = [];
-        for (const { identity, socket } of this.#cx.gateways.peers.sockets()) {
+        for (const { identity, socket, heartbeat } of this.#cx.gateways.peers.daemonConnections()) {
             if (identity.role !== "daemon" || !socket.isOpen()) {
+                continue;
+            }
+            // The host answers heartbeats without running the Relay, so a superseded connection that
+            // keeps heartbeating is retired here instead of when it heartbeats.
+            if (!this.#cx.services.connections.isCurrent(identity)) {
+                socket.replaceDaemon();
                 continue;
             }
             // A daemon that never heartbeated predates liveness or has just connected; only the
             // connection's own close tells the Relay it has gone.
-            const heartbeat = socket.lastHeartbeat();
             if (heartbeat.kind === "none" || now - heartbeat.at <= DAEMON_HEARTBEAT_SILENCE_LIMIT_MILLISECONDS) {
                 continue;
             }

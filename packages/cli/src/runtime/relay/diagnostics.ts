@@ -115,12 +115,11 @@ export class RelayConnectionDiagnostics {
         );
     };
 
-    readonly heartbeatTimedOut = (connectionEpoch: number, heartbeatId: string, timeoutMilliseconds: number): void => {
+    readonly heartbeatTimedOut = (connectionEpoch: number, timeoutMilliseconds: number): void => {
         this.#record(
             "relay_heartbeat_timed_out",
             {
                 connectionEpoch: connectionEpoch.toString(),
-                heartbeatId,
                 relayOrigin: this.#relayOrigin,
                 timeoutMilliseconds: timeoutMilliseconds.toString(),
                 ...this.#route,

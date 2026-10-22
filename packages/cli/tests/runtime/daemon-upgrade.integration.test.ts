@@ -169,7 +169,7 @@ describe("Daemon hourly npm upgrade", () => {
             socket.on("message", (data) => {
                 const message = decodeDaemonToServiceMessage(data.toString());
                 if (message.kind === "runtime.heartbeat") {
-                    socket.send(JSON.stringify({ kind: "runtime.heartbeat.ack", heartbeatId: message.heartbeatId }));
+                    socket.send(JSON.stringify({ kind: "runtime.heartbeat.ack" }));
                 } else if (message.kind === "runtime.upgrade.result") {
                     if (waiter === undefined) {
                         results.push(message);

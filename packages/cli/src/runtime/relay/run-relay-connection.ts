@@ -210,8 +210,8 @@ export async function runRelayConnection({
                         throw error;
                     }
                 },
-                unresponsive: (heartbeatId, timeoutMilliseconds) => {
-                    diagnostics.heartbeatTimedOut(connectionEpoch, heartbeatId, timeoutMilliseconds);
+                unresponsive: (timeoutMilliseconds) => {
+                    diagnostics.heartbeatTimedOut(connectionEpoch, timeoutMilliseconds);
                     diagnostics.connectionClosed(
                         connectionEpoch,
                         4001,
@@ -264,7 +264,7 @@ export async function runRelayConnection({
                         return;
                     }
                     if (kind === RUNTIME_HEARTBEAT_ACK_KIND) {
-                        connectionLiveness.acknowledge(message);
+                        connectionLiveness.acknowledge();
                         return;
                     }
                     commands.dispatch(message);

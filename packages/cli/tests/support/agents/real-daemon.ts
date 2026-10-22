@@ -6,15 +6,13 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
     decodeMessageKind,
-    decodeRuntimeHeartbeatEvent,
     decodeSessionEventEnvelope,
     decodeSessionReadyEvent,
-    encodeRuntimeHeartbeatAckEvent,
     encodeRuntimeLivenessReadyEvent,
     encodeSessionPrepareCommand,
     MOBIUS_API_PREFIX,
-    RUNTIME_HEARTBEAT_ACK_KIND,
-    RUNTIME_HEARTBEAT_KIND,
+    RUNTIME_HEARTBEAT_ACK_MESSAGE,
+    RUNTIME_HEARTBEAT_MESSAGE,
     RUNTIME_LIVENESS_READY_KIND,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { listen, port } from "@moxt-ai/mobius-test/websocket";
@@ -122,14 +120,9 @@ export async function withRealDaemon(
             socket = connection;
             connection.on("message", (value) => {
                 const message = value.toString();
-                if (decodeMessageKind(message) === RUNTIME_HEARTBEAT_KIND) {
-                    const heartbeat = decodeRuntimeHeartbeatEvent(message);
-                    connection.send(
-                        encodeRuntimeHeartbeatAckEvent({
-                            heartbeatId: heartbeat.heartbeatId,
-                            kind: RUNTIME_HEARTBEAT_ACK_KIND,
-                        }),
-                    );
+                // Like the Relay's host, answer exactly the heartbeat text without the application.
+                if (message === RUNTIME_HEARTBEAT_MESSAGE) {
+                    connection.send(RUNTIME_HEARTBEAT_ACK_MESSAGE);
                     return;
                 }
 

@@ -8,14 +8,12 @@ import {
     decodeFileChunkEvent,
     decodeMessageKind,
     decodeNativeSessionResult,
-    decodeRuntimeHeartbeatEvent,
     decodeSessionEventEnvelope,
     decodeSessionHistoryPageLoaded,
     decodeSessionOperationFailedEvent,
     decodeSessionPromptCommand,
     encodeFileReadCommand,
     encodeNativeSessionCommand,
-    encodeRuntimeHeartbeatAckEvent,
     encodeRuntimeLivenessReadyEvent,
     encodeSessionCancelCommand,
     encodeSessionHistoryPageLoad,
@@ -25,8 +23,8 @@ import {
     FILE_FAILED_KIND,
     MOBIUS_API_PREFIX,
     NATIVE_SESSION_RESULT_KIND,
-    RUNTIME_HEARTBEAT_ACK_KIND,
-    RUNTIME_HEARTBEAT_KIND,
+    RUNTIME_HEARTBEAT_ACK_MESSAGE,
+    RUNTIME_HEARTBEAT_MESSAGE,
     RUNTIME_LIVENESS_READY_KIND,
     SESSION_CANCEL_KIND,
     SESSION_EVENT_KIND,
@@ -54,14 +52,9 @@ class Messages {
         socket.once("close", () => this.#closed.reject(new Error("The daemon disconnected during the request")));
         socket.on("message", (value) => {
             const message = value.toString();
-            if (decodeMessageKind(message) === RUNTIME_HEARTBEAT_KIND) {
-                const heartbeat = decodeRuntimeHeartbeatEvent(message);
-                socket.send(
-                    encodeRuntimeHeartbeatAckEvent({
-                        heartbeatId: heartbeat.heartbeatId,
-                        kind: RUNTIME_HEARTBEAT_ACK_KIND,
-                    }),
-                );
+            // Like the Relay's host, answer exactly the heartbeat text without the application.
+            if (message === RUNTIME_HEARTBEAT_MESSAGE) {
+                socket.send(RUNTIME_HEARTBEAT_ACK_MESSAGE);
                 return;
             }
             const resolve = this.#waiting.shift();
