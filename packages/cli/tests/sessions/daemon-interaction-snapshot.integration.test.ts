@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -189,6 +189,13 @@ test("Given an Agent was inspected transiently, When its first Turn materializes
         const permission = decodeSessionPermissionRequestedEvent(
             await messages.nextKind(SESSION_PERMISSION_REQUESTED_KIND),
         );
+        expect(permission).toMatchObject({
+            details: {
+                cwd: await realpath(workspace),
+                rawInput: { command: "pnpm test -- --reporter=verbose", target: "src/<entry>.ts" },
+                locations: [{ path: "src/<entry>.ts", line: 12 }],
+            },
+        });
         expect(await snapshot("permission_snapshot")).toMatchObject({
             action: "active-turn",
             turn: { interaction: permission },
@@ -236,6 +243,106 @@ test("Given an Agent was inspected transiently, When its first Turn materializes
             status: { kind: "idle" },
         });
         await messages.nextKind("prompt.completed");
+    } finally {
+        cancellation.abort();
+        await runtime;
+        for (const socket of websocketServer.clients) {
+            socket.terminate();
+        }
+        await new Promise<void>((resolve) => websocketServer.close(() => resolve()));
+        await new Promise<void>((resolve) => relay.close(() => resolve()));
+        await rm(stateDirectory, { recursive: true, force: true });
+    }
+}, 30_000);
+
+test("Given an Agent announced a tool call with its input, When it requests permission referencing only that tool call, Then the permission carries the announced input, locations and kind", async () => {
+    const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-announced-permission-"));
+    const workspace = join(stateDirectory, "workspace");
+    await mkdir(workspace);
+    const relay = createServer((_request, response) => response.writeHead(404).end());
+    const websocketServer = new WebSocketServer({ server: relay });
+    const connected = Promise.withResolvers<WebSocket>();
+    websocketServer.on("connection", (socket) => connected.resolve(socket));
+    await listen(relay);
+    const relayUrl = new URL(
+        `ws://127.0.0.1:${port(relay).toString()}${MOBIUS_API_PREFIX}/channels/announced-permission/daemon`,
+    );
+    relayUrl.searchParams.set("token", "r".repeat(43));
+    const fakeAgentPath = fileURLToPath(new URL("./fixtures/acp-peer.ts", import.meta.url));
+    const agent = new LocalAgentDefinition("claude", "Claude Code", process.execPath, [
+        fakeAgentPath,
+        "--agent-name",
+        "Claude Code",
+    ]);
+    const config = createRuntimeConfig(
+        { channelId: "announced-permission", defaultWorkspace: workspace, relayUrl },
+        [agent],
+        new RuntimeLocalContext(stateDirectory),
+    );
+    const cancellation = new AbortController();
+    const runtime = runRuntime(config, cancellation.signal);
+    try {
+        const socket = await connected.promise;
+        const messages = new Messages(socket);
+        socket.send(JSON.stringify({ kind: "runtime.liveness.ready" }));
+        const sessionId = "announced_permission";
+        socket.send(
+            encodeSessionPrepareCommand({
+                additionalDirectoryIds: [],
+                agentId: "claude",
+                bindingId: config.bindingId,
+                directoryId: "default",
+                kind: "session.prepare",
+                requestId: "prepare_request",
+                sessionId,
+                transient: true,
+            }),
+        );
+        await messages.nextKind(SESSION_READY_KIND);
+        socket.send(
+            encodeSessionPromptCommand({
+                additionalDirectoryIds: [],
+                agentId: "claude",
+                bindingId: config.bindingId,
+                commandId: "announced_turn",
+                directoryId: "default",
+                disposition: SessionPromptDisposition.Reject,
+                images: [],
+                kind: "session.prompt",
+                prompt: "request permission for an announced tool call",
+                resources: [],
+                sessionId,
+                targetCommandId: "",
+            }),
+        );
+        const permission = decodeSessionPermissionRequestedEvent(
+            await messages.nextKind(SESSION_PERMISSION_REQUESTED_KIND),
+        );
+        expect(permission).toMatchObject({
+            details: {
+                cwd: await realpath(workspace),
+                rawInput: { command: "sh scripts/release.sh --publish" },
+                locations: [{ path: "scripts/release.sh", line: 3 }],
+            },
+            title: "Approve the release command",
+            toolCallId: "announced-tool",
+            toolKind: "execute",
+        });
+        socket.send(
+            encodeSessionPermissionRespondCommand({
+                interactionId: permission.interactionId,
+                kind: "session.permission.respond",
+                optionId: "allow-once",
+                outcome: "selected",
+                sessionId,
+            }),
+        );
+        // The Agent finishes the Turn only after it receives the permission response.
+        expect(decodeSessionStatusChangedEvent(await messages.nextKind(SESSION_STATUS_CHANGED_KIND))).toEqual({
+            kind: SESSION_STATUS_CHANGED_KIND,
+            sessionId,
+            status: { kind: "idle" },
+        });
     } finally {
         cancellation.abort();
         await runtime;

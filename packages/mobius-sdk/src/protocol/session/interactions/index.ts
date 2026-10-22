@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { identifierStringSchema as IDENTIFIER } from "../../shared/identifier.ts";
 import { decodeZodMessage as decode, encodeZodMessage as encode } from "../../shared/message-codec.ts";
+import { boundedJsonSchema, toolCallLocationSchema } from "../../shared/tool-input.ts";
 import { SHORT_TEXT } from "../shared/index.ts";
 
 export const SESSION_PERMISSION_REQUESTED_KIND = "session.permission.requested";
@@ -57,6 +58,15 @@ export type SessionElicitationField = z.infer<typeof elicitationFieldSchema>;
 export const sessionPermissionRequestedEventSchema = z
     .object({
         commandId: IDENTIFIER,
+        // Absent only for events from older runtimes and saved history.
+        details: z
+            .object({
+                cwd: z.string().min(1).max(4_096),
+                rawInput: boundedJsonSchema.optional(),
+                locations: z.array(toolCallLocationSchema).max(1_000).readonly(),
+            })
+            .readonly()
+            .optional(),
         interactionId: IDENTIFIER,
         kind: z.literal(SESSION_PERMISSION_REQUESTED_KIND),
         options: z.array(permissionOptionSchema).min(1).max(20).readonly(),

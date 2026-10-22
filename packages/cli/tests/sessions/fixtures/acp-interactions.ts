@@ -28,6 +28,8 @@ export async function runInteractionScenario(
                 status: "pending",
                 title: "Run the verification command",
                 toolCallId: "permission-tool",
+                rawInput: { command: "pnpm test -- --reporter=verbose", target: "src/<entry>.ts" },
+                locations: [{ path: "src/<entry>.ts", line: 12 }],
             },
         });
         if (permission.outcome.outcome !== "selected") {
@@ -94,6 +96,33 @@ export async function runInteractionScenario(
                 sessionUpdate: "agent_message_chunk",
             },
         });
+    }
+    if (prompt === "request permission for an announced tool call") {
+        // ACP permission requests carry a ToolCallUpdate: fields it omits are
+        // inherited from the tool call that was already announced.
+        await context.client.notify(acp.methods.client.session.update, {
+            sessionId: context.params.sessionId,
+            update: {
+                kind: "execute",
+                locations: [{ path: "scripts/release.sh", line: 3 }],
+                rawInput: { command: "sh scripts/release.sh --publish" },
+                sessionUpdate: "tool_call",
+                status: "pending",
+                title: "Release the package",
+                toolCallId: "announced-tool",
+            },
+        });
+        const permission = await context.client.request(acp.methods.client.session.requestPermission, {
+            options: [
+                { kind: "allow_once", name: "Allow once", optionId: "allow-once" },
+                { kind: "reject_once", name: "Reject", optionId: "reject" },
+            ],
+            sessionId: context.params.sessionId,
+            toolCall: { title: "Approve the release command", toolCallId: "announced-tool" },
+        });
+        if (permission.outcome.outcome !== "selected") {
+            return { stopReason: "cancelled" };
+        }
     }
     if (prompt === "exercise URL elicitation") {
         const elicitationId = `url-${turnNumber.toString()}`;
