@@ -225,10 +225,14 @@ export class RuntimeService {
     ): void => {
         const attachment = { controller: new AbortController(), identity };
         this.#attachments.add(attachment);
-        const signal = AbortSignal.any([
-            attachment.controller.signal,
-            AbortSignal.timeout(DAEMON_ATTACHMENT_TIMEOUT_MILLISECONDS),
-        ]);
+        // An uncancellable AbortSignal.timeout would keep this Durable Object awake for the whole deadline
+        // after the attachment finished, so the timer is cleared once it settles.
+        const timeout = new AbortController();
+        const timer = setTimeout(
+            () => timeout.abort(new DOMException("The Runtime attachment timed out", "TimeoutError")),
+            DAEMON_ATTACHMENT_TIMEOUT_MILLISECONDS,
+        );
+        const signal = AbortSignal.any([attachment.controller.signal, timeout.signal]);
         const operation = (async () => {
             try {
                 await this.attachDaemon(identity.runtimeId, scope, replaced, signal);
@@ -253,6 +257,7 @@ export class RuntimeService {
                     socket.close(1011, "Runtime attachment failed");
                 }
             } finally {
+                clearTimeout(timer);
                 this.#attachments.delete(attachment);
             }
         })();
@@ -570,7 +575,16 @@ export class RuntimeService {
     // read that noticed the silence may end first, so the detach does not share its cancellation.
     private readonly detachDaemons = async (daemons: readonly RuntimePeer[]): Promise<void> => {
         for (const { identity, socket } of daemons) {
-            await this.detach(identity, socket, AbortSignal.timeout(DAEMON_DETACH_TIMEOUT_MILLISECONDS));
+            const timeout = new AbortController();
+            const timer = setTimeout(
+                () => timeout.abort(new DOMException("The Runtime detach timed out", "TimeoutError")),
+                DAEMON_DETACH_TIMEOUT_MILLISECONDS,
+            );
+            try {
+                await this.detach(identity, socket, timeout.signal);
+            } finally {
+                clearTimeout(timer);
+            }
         }
     };
 
