@@ -58,6 +58,17 @@ test.each(["codex", "claude"] as const)(
                     const exited = waitForAgentFile(join(processes, original), false);
                     timer.advance(1);
                     await exited;
+                    // Idle reclamation tells every client why the Session closed before it is recovered.
+                    for (;;) {
+                        const message = await peer.nextMessage();
+                        if (decodeMessageKind(message) === "session.close.notice") {
+                            expect(JSON.parse(message)).toMatchObject({
+                                reason: "This Session was closed after two idle hours.",
+                                sessionId,
+                            });
+                            break;
+                        }
+                    }
                     await prompt(peer, agentId, sessionId, "Continue AFTER_IDLE_RECOVERY without tools");
                     const resumed = (await readdir(processes)).filter((name) => name.endsWith(".process"));
                     expect(resumed).toHaveLength(1);
@@ -74,7 +85,7 @@ test.each(["codex", "claude"] as const)(
                     for (;;) {
                         const message = await peer.nextMessage();
                         const kind = decodeMessageKind(message);
-                        if (kind === "session.operation.failed" || kind === "session.close.notice") {
+                        if (kind === "session.operation.failed") {
                             throw new Error(message);
                         }
                         if (kind === "session.live-history.v2.page.loaded") {

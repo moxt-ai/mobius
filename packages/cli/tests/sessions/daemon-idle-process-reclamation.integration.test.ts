@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import {
     decodeMessageKind,
+    decodeSessionCloseNoticeEvent,
     decodeSessionEvent,
     decodeSessionReadyEvent,
     decodeSessionsQueriedEvent,
@@ -160,12 +161,16 @@ async function nextResponse(peer: RealDaemonPeer, kind: string): Promise<string>
     for (;;) {
         const message = await peer.nextMessage();
         const received = decodeMessageKind(message);
-        expect(received).not.toBe("session.close.notice");
-        if (received === "session.operation.failed") {
-            throw new Error(message);
-        }
         if (received === kind) {
             return message;
+        }
+        if (received === "session.close.notice") {
+            // Idle reclamation announces the Session while the scenario keeps reading other replies.
+            decodeSessionCloseNoticeEvent(message);
+            continue;
+        }
+        if (received === "session.operation.failed") {
+            throw new Error(message);
         }
     }
 }
@@ -179,7 +184,13 @@ test.each(["resume", "load"] as const)(
             const original = await processId(native);
             timer.advance(twoHours - 1);
             expect(await processId(native)).toBe(original);
+            const closed = nextResponse(peer, "session.close.notice");
             await expire(native, original, timer);
+            expect(decodeSessionCloseNoticeEvent(await closed)).toEqual({
+                kind: "session.close.notice",
+                reason: "This Session was closed after two idle hours.",
+                sessionId,
+            });
             expect((await readdir(native)).filter((file) => file.endsWith(".writer"))).toEqual([]);
             expect(await prompt(peer, sessionId, "Continue after idle reclamation")).toContain("turn 2:");
             expect(await processId(native)).not.toBe(original);
@@ -337,7 +348,7 @@ test("Given native history is loading in a retained process, When three hours pa
     });
 });
 
-test("Given a canonical native Session is idle, When its process is reclaimed, Then it stays queryable before any process is restarted", async () => {
+test("Given a canonical native Session is idle, When its process is reclaimed, Then the daemon holds nothing until the conversation is recovered from the Agent", async () => {
     await withIdleDaemon("resume", async (peer, native, timer) => {
         const sessionId = crypto.randomUUID();
         await writeFile(
@@ -378,6 +389,7 @@ test("Given a canonical native Session is idle, When its process is reclaimed, T
         const original = await processId(native);
         timer.advance(twoHours - 1);
         await expire(native, original, timer);
+        // Like a daemon restart, idle reclamation leaves the stored Session behind nothing.
         peer.send(
             encodeSessionQueryCommand({
                 kind: "session.query",
@@ -385,9 +397,7 @@ test("Given a canonical native Session is idle, When its process is reclaimed, T
                 sessionIds: [sessionId],
             }),
         );
-        expect(decodeSessionsQueriedEvent(await nextResponse(peer, "session.queried")).entries).toEqual([
-            expect.objectContaining({ sessionId, title: "Native title before idle", prompted: true }),
-        ]);
+        expect(decodeSessionsQueriedEvent(await nextResponse(peer, "session.queried")).entries).toEqual([]);
         expect((await readdir(native)).filter((file) => file.endsWith(".process"))).toEqual([]);
         expect(await prompt(peer, sessionId, "Continue the canonical Session")).toContain("turn 2:");
     });

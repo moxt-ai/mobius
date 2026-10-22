@@ -29,6 +29,8 @@ import { RuntimeOperations, waitForSharedOperation } from "./operation-drain.ts"
 
 const SESSION_CONTROL_TIMEOUT_MILLISECONDS = 30_000;
 const SESSION_CLOSE_TIMEOUT_MILLISECONDS = 30_000;
+/** Told to every client when idle reclamation closes a Session; shown as plain text. */
+const SESSION_IDLE_CLOSE_REASON = "This Session was closed after two idle hours.";
 
 /** What preparing does with a closed Session: a prepare or restore reopens it, a read must keep it closed. */
 export type ClosedSessionHandling = "reopen" | "keep-closed";
@@ -143,35 +145,24 @@ export class SessionManager {
                 this.#executionProcesses.isBusy(sessionId) ||
                 this.#isNativeSessionOperationActive(sessionId),
             retire: (runtime) => this.#retireSessionProcess(sessionId, runtime, () => runtime.close()),
-            retireIdle: (runtime) => this.#stopSessionProcess(sessionId, runtime),
+            retireIdle: (runtime) => this.#retireIdleSessionProcess(sessionId, runtime),
         };
     }
 
-    async #retireSessionProcess(sessionId: string, runtime: AgentSession, close: () => Promise<void>): Promise<void> {
-        const retained = this.#executionProcesses.detach(sessionId, runtime);
-        try {
-            await this.#processes.retire(runtime, close);
-        } finally {
-            if (retained && this.#sessionIdentity === "native") {
-                const stored = this.#store.read(sessionId);
-                if (
-                    stored instanceof FoundStoredSession &&
-                    stored.session.nativeSessionId === sessionId &&
-                    isNativeChatSessionId(stored.session.agentId, sessionId)
-                ) {
-                    this.#store.remove(sessionId);
-                }
-            }
-        }
-    }
-
     /**
-     * Releases a closed or idle Session's process while keeping its title, settings and native
-     * identity available for the next preparation. This does not mark the Session closed.
+     * Releases a Session's process. The stored Session is kept when a client closed it, so the closed
+     * Session stays queryable, and dropped when the Runtime stops retaining it — shutdown, replacement,
+     * capacity and idle reclamation — so the daemon again holds only what a restart would.
      */
-    async #stopSessionProcess(sessionId: string, runtime: AgentSession): Promise<void> {
-        this.#executionProcesses.detach(sessionId, runtime);
-        const retirement = this.#processes.retire(runtime, () => runtime.close());
+    async #releaseSessionProcess(
+        sessionId: string,
+        runtime: AgentSession,
+        close: () => Promise<void>,
+        stored: "keep" | "forget",
+    ): Promise<void> {
+        const retained = this.#executionProcesses.detach(sessionId, runtime);
+        const retirement = this.#processes.retire(runtime, close);
+        // A replacement preparation waits for this retirement: the old process may hold the native writer.
         this.#sessionRetirements.set(sessionId, retirement);
         try {
             await retirement;
@@ -179,7 +170,46 @@ export class SessionManager {
             if (this.#sessionRetirements.get(sessionId) === retirement) {
                 this.#sessionRetirements.delete(sessionId);
             }
+            if (retained && stored === "forget" && this.#sessionIdentity === "native") {
+                const row = this.#store.read(sessionId);
+                if (
+                    row instanceof FoundStoredSession &&
+                    row.session.nativeSessionId === sessionId &&
+                    isNativeChatSessionId(row.session.agentId, sessionId)
+                ) {
+                    this.#store.remove(sessionId);
+                }
+            }
         }
+    }
+
+    async #retireSessionProcess(sessionId: string, runtime: AgentSession, close: () => Promise<void>): Promise<void> {
+        await this.#releaseSessionProcess(sessionId, runtime, close, "forget");
+    }
+
+    /**
+     * Closes a Session whose idle deadline passed. Like Runtime shutdown, this forgets the stored
+     * Session, so the next use recovers the native conversation from the Agent as after a restart.
+     * Unlike a client-requested close, the Session is not marked closed: every client is told why
+     * through the notice, and the conversation continues without reopening.
+     */
+    async #retireIdleSessionProcess(sessionId: string, runtime: AgentSession): Promise<void> {
+        if (this.#closedSessions.has(sessionId)) {
+            // A client's close is already releasing this process and keeps the stored Session.
+            await this.#releaseSessionProcess(sessionId, runtime, () => runtime.close(), "keep");
+            return;
+        }
+        this.#onSessionClosed({ kind: SESSION_CLOSE_NOTICE_KIND, reason: SESSION_IDLE_CLOSE_REASON, sessionId });
+        await this.#releaseSessionProcess(sessionId, runtime, () => runtime.close(), "forget");
+    }
+
+    /**
+     * Releases the process of a Session a client closed. The stored Session is kept, so the closed
+     * Session stays listed with its title and settings and can be reopened; the closing itself
+     * already announced the notice.
+     */
+    async #stopSessionProcess(sessionId: string, runtime: AgentSession): Promise<void> {
+        await this.#releaseSessionProcess(sessionId, runtime, () => runtime.close(), "keep");
     }
 
     #isKnownSession(sessionId: string): boolean {
