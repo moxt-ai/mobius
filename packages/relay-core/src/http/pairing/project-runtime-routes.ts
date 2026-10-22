@@ -13,7 +13,9 @@ import {
     decodeSessionRestoreCommand,
     decodeWorkspaceListCommand,
     type Identifier,
+    isDirectoryIdentifier,
     isIdentifier,
+    MAX_DIRECTORY_IDENTIFIER_LENGTH,
     ProtocolMessageError,
     RUNTIME_WORKSPACE_BINDING_ID,
     type SessionPromptCommand,
@@ -31,12 +33,11 @@ import { bodyParser } from "../middleware/body-parser.ts";
 import { errorMiddleware, rethrowHonoError } from "../middleware/error-middleware.ts";
 import type { RelayHttpEnvironment } from "../relay-http-environment.ts";
 
-const boundedString = (maximumLength: number) => v.pipe(v.string(), v.minLength(1), v.maxLength(maximumLength));
 const identifier = v.custom<Identifier>(isIdentifier);
 const sessionIdentitySchema = v.strictObject({
-    additionalDirectoryIds: v.array(boundedString(2_048)),
+    additionalDirectoryIds: v.array(v.custom<string>(isDirectoryIdentifier)),
     agentId: identifier,
-    directoryId: boundedString(2_048),
+    directoryId: v.custom<string>(isDirectoryIdentifier),
 });
 const createSessionSchema = v.strictObject({
     ...sessionIdentitySchema.entries,
@@ -587,7 +588,7 @@ export function createProjectRuntimeRoutes() {
                 const command = decodeWorkspaceListCommand(
                     JSON.stringify({
                         bindingId: RUNTIME_WORKSPACE_BINDING_ID,
-                        directoryId: readString(body, "directoryId", 2_048),
+                        directoryId: readString(body, "directoryId", MAX_DIRECTORY_IDENTIFIER_LENGTH),
                         kind: "workspace.list",
                         requestId: crypto.randomUUID(),
                     }),

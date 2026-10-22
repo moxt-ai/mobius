@@ -1,9 +1,8 @@
 import { z } from "zod";
-
+import { DIRECTORY_IDENTIFIER } from "../../shared/directory.ts";
 import { identifierStringSchema as IDENTIFIER } from "../../shared/identifier.ts";
 
-export const DIRECTORY_IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/;
-export const DIRECTORY_IDENTIFIER = z.string().min(1).max(2_048).regex(DIRECTORY_IDENTIFIER_PATTERN);
+export { DIRECTORY_IDENTIFIER, DIRECTORY_IDENTIFIER_PATTERN } from "../../shared/directory.ts";
 export const SHORT_TEXT = z.string().max(500);
 
 export const workspaceEntrySchema = z

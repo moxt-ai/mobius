@@ -1,8 +1,6 @@
 import type { z } from "zod";
-
+import { isDirectoryIdentifier, MAX_DIRECTORY_IDENTIFIER_LENGTH } from "./directory.ts";
 import { decodeIdentifier, type Identifier } from "./identifier.ts";
-
-const DIRECTORY_IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/;
 
 export class ProtocolMessageError extends Error {
     readonly code = "invalid_protocol_message";
@@ -75,7 +73,7 @@ export function readDirectoryIdentifiers(
     const identifiers: string[] = [];
     const unique = new Set<string>();
     for (const candidate of field) {
-        if (typeof candidate !== "string" || !DIRECTORY_IDENTIFIER_PATTERN.test(candidate) || unique.has(candidate)) {
+        if (!isDirectoryIdentifier(candidate) || unique.has(candidate)) {
             throw new ProtocolMessageError(`Invalid directory in field: ${key}`);
         }
         unique.add(candidate);
@@ -93,8 +91,8 @@ export function readIdentifier(value: Readonly<Record<string, unknown>>, key: st
 }
 
 export function readDirectoryIdentifier(value: Readonly<Record<string, unknown>>, key: string): string {
-    const field = readString(value, key, 2_048);
-    if (!DIRECTORY_IDENTIFIER_PATTERN.test(field)) {
+    const field = readString(value, key, MAX_DIRECTORY_IDENTIFIER_LENGTH);
+    if (!isDirectoryIdentifier(field)) {
         throw new ProtocolMessageError(`Invalid directory identifier field: ${key}`);
     }
     return field;

@@ -84,6 +84,11 @@ export {
 } from "./session/shared/index.ts";
 export * from "./session/turn/index.ts";
 export * from "./session/workspace/index.ts";
+export {
+    isDirectoryIdentifier,
+    MAX_DIRECTORY_IDENTIFIER_LENGTH,
+    MAX_WORKSPACE_PATH_LENGTH,
+} from "./shared/directory.ts";
 export { decodeIdentifier, type Identifier, isIdentifier } from "./shared/identifier.ts";
 export {
     decodeMessageKind,

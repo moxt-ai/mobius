@@ -33,6 +33,7 @@ import {
     decodeSessionQueryCommand,
     decodeSessionRenameCommand,
     type Identifier,
+    isDirectoryIdentifier,
     isIdentifier,
     MOBIUS_API_PREFIX,
     ProtocolMessageError,
@@ -126,7 +127,7 @@ const sessionPromptBody = v.strictObject({
     agentId: v.optional(sessionIdentifier),
     content: v.pipe(v.string(), v.maxLength(100000)),
     disposition: v.optional(v.picklist(["reject", "queue", "steer"]), "reject"),
-    directoryId: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(2048))),
+    directoryId: v.optional(v.custom<string>(isDirectoryIdentifier)),
     idempotencyKey: sessionIdentifier,
     images: v.pipe(v.array(v.unknown()), v.maxLength(8)),
     resources: v.pipe(v.array(v.unknown()), v.maxLength(32)),
@@ -135,11 +136,11 @@ const sessionPromptBody = v.strictObject({
 });
 const sessionPromptDispositionBody = v.strictObject({ disposition: v.literal("steer") });
 const sessionConfigurationBody = v.strictObject({
-    additionalDirectoryIds: v.pipe(v.array(v.pipe(v.string(), v.minLength(1), v.maxLength(2048))), v.maxLength(16)),
+    additionalDirectoryIds: v.pipe(v.array(v.custom<string>(isDirectoryIdentifier)), v.maxLength(16)),
     agentId: sessionIdentifier,
     booleanValue: v.boolean(),
     configId: sessionIdentifier,
-    directoryId: v.pipe(v.string(), v.minLength(1), v.maxLength(2048)),
+    directoryId: v.custom<string>(isDirectoryIdentifier),
     value: v.pipe(v.string(), v.maxLength(500)),
     valueType: v.picklist(["select", "boolean"]),
 });
@@ -336,16 +337,13 @@ export function createPlatformApplication(
                 decodeSessionPreviewHistoryPageLoad(
                     JSON.stringify({
                         additionalDirectoryIds: v.parse(
-                            v.pipe(v.array(v.pipe(v.string(), v.minLength(1), v.maxLength(2048))), v.maxLength(16)),
+                            v.pipe(v.array(v.custom<string>(isDirectoryIdentifier)), v.maxLength(16)),
                             context.req.queries("additionalDirectoryId") ?? [],
                         ),
                         agentId: v.parse(sessionIdentifier, context.req.query("agentId")),
                         bindingId: "workspace",
                         cursor: context.req.query("cursor") ?? null,
-                        directoryId: v.parse(
-                            v.pipe(v.string(), v.minLength(1), v.maxLength(2048)),
-                            context.req.query("directoryId"),
-                        ),
+                        directoryId: v.parse(v.custom<string>(isDirectoryIdentifier), context.req.query("directoryId")),
                         kind: "session.preview-history.page.load",
                         eventLimit,
                         ...(context.req.queries("omit") === undefined
@@ -416,14 +414,11 @@ export function createPlatformApplication(
             );
             const sessionId = v.parse(sessionIdentifier, context.req.param("sessionId"));
             const additionalDirectoryIds = v.parse(
-                v.pipe(v.array(v.pipe(v.string(), v.minLength(1), v.maxLength(2048))), v.maxLength(16)),
+                v.pipe(v.array(v.custom<string>(isDirectoryIdentifier)), v.maxLength(16)),
                 context.req.queries("additionalDirectoryId") ?? [],
             );
             const agentId = v.parse(sessionIdentifier, context.req.query("agentId"));
-            const directoryId = v.parse(
-                v.pipe(v.string(), v.minLength(1), v.maxLength(2048)),
-                context.req.query("directoryId"),
-            );
+            const directoryId = v.parse(v.custom<string>(isDirectoryIdentifier), context.req.query("directoryId"));
             const result = await sessionOperations(context).requestProjectScopeControl(
                 new ProjectScope(access.projectId),
                 access.runtimeId,
