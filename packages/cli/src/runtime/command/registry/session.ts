@@ -18,7 +18,11 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import type { WebSocket } from "undici";
 import { AcpExecutionError } from "../../../acp/acp-error.ts";
-import type { AcpSessionRecovery, AgentRuntimeManager } from "../../../acp/agent-runtime-manager.ts";
+import type {
+    AcpSessionRecovery,
+    AgentRuntimeManager,
+    ClosedSessionHandling,
+} from "../../../acp/agent-runtime-manager.ts";
 import { AccumulatingOperationMetrics } from "../../../infra/operation-metrics.ts";
 import type { AcpAgentDefinition, RuntimeConfig } from "../../config.ts";
 import type { NativeSessionService } from "../../native-sessions/service.ts";
@@ -40,6 +44,7 @@ export async function resolveCatalogAgent(
 async function prepareSession(
     command: SessionPrepareCommand,
     recovery: AcpSessionRecovery,
+    closed: ClosedSessionHandling,
     config: RuntimeConfig,
     directories: WorkspaceDirectoryService,
     sessions: AgentRuntimeManager,
@@ -70,8 +75,8 @@ async function prepareSession(
             command.transient === true
                 ? await sessions.inspectSession(preparation, metrics)
                 : recovery.kind === "history-required"
-                  ? await sessions.restoreSession(preparation, metrics)
-                  : await sessions.prepareSession(preparation, metrics);
+                  ? await sessions.restoreSession(preparation, metrics, closed)
+                  : await sessions.prepareSession(preparation, metrics, closed);
         const configuration = command.configuration;
         const configOptions =
             configuration === undefined
@@ -146,6 +151,7 @@ export async function executeSessionPrepare(
         const readyEvent = await prepareSession(
             command,
             { kind: "interactive-only" },
+            "reopen",
             config,
             directories,
             sessions,
@@ -202,6 +208,7 @@ export async function executeSessionRestore(
                 sessionState: "provisioned",
             },
             { kind: "history-required" },
+            "reopen",
             config,
             directories,
             sessions,
@@ -401,6 +408,8 @@ export async function executeSessionConfigRead(
             // load support would fail even with a live process whose config is
             // already readable, and prepare reuses the current configuration.
             { kind: "interactive-only" },
+            // Reading settings must not reopen a Session that a client closed.
+            "keep-closed",
             config,
             directories,
             sessions,

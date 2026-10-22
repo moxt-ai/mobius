@@ -6,11 +6,14 @@ import { RuntimeOperations, waitForSharedOperation } from "./runtime-operations.
 
 export { createWritableAcpStream } from "./agent-connection.ts";
 
-import type {
-    SessionConfigOption,
-    SessionEventPayload,
-    SessionStatus,
-    SessionStatusChangedEvent,
+import {
+    SESSION_CLOSE_NOTICE_KIND,
+    SESSION_CLOSED_ERROR_CODE,
+    type SessionCloseNoticeEvent,
+    type SessionConfigOption,
+    type SessionEventPayload,
+    type SessionStatus,
+    type SessionStatusChangedEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
 import { isNativeChatSessionId } from "../runtime/native-sessions/chat-agent.ts";
@@ -29,6 +32,9 @@ import {
 
 const SESSION_CONTROL_TIMEOUT_MILLISECONDS = 30_000;
 const SESSION_CLOSE_TIMEOUT_MILLISECONDS = 30_000;
+
+/** What preparing does with a closed Session: a prepare or restore reopens it, a read must keep it closed. */
+export type ClosedSessionHandling = "reopen" | "keep-closed";
 
 export { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp-error.ts";
 export type { Adapter, AdapterResolver } from "./adapter/context.ts";
@@ -80,10 +86,13 @@ export class AgentRuntimeManager {
     readonly #agentSettingsObserver = new NullAcpSessionObserver();
     readonly #nativeOperations = new Set<string>();
     readonly #sessionClosures = new Map<string, Promise<void>>();
+    /** Sessions that were closed and not reopened since. Only a prepare or restore of the Session reopens it. */
+    readonly #closedSessions = new Set<string>();
     readonly #store: AcpSessionStore;
     readonly #adapters: AdapterResolver;
     readonly #sessionIdentity: "assigned" | "native";
     readonly #onSessionStatusChanged: (event: SessionStatusChangedEvent) => void;
+    readonly #onSessionClosed: (event: SessionCloseNoticeEvent) => void;
     readonly #contentExternalizer: AcpContentExternalizer;
     readonly #timer: Timer;
     #observer: AcpSessionObserver;
@@ -94,6 +103,7 @@ export class AgentRuntimeManager {
         adapters,
         sessionIdentity,
         onSessionStatusChanged,
+        onSessionClosed = () => undefined,
         contentExternalizer,
         timer,
         maxProcesses,
@@ -103,6 +113,8 @@ export class AgentRuntimeManager {
         readonly adapters: AdapterResolver;
         readonly sessionIdentity: "assigned" | "native";
         readonly onSessionStatusChanged: (event: SessionStatusChangedEvent) => void;
+        /** Called once each time a Session becomes closed, so every client learns of it. */
+        readonly onSessionClosed?: (event: SessionCloseNoticeEvent) => void;
         readonly contentExternalizer: AcpContentExternalizer;
         readonly timer: Timer;
         readonly maxProcesses: number | null;
@@ -113,6 +125,7 @@ export class AgentRuntimeManager {
         this.#adapters = adapters;
         this.#sessionIdentity = sessionIdentity;
         this.#onSessionStatusChanged = onSessionStatusChanged;
+        this.#onSessionClosed = onSessionClosed;
         this.#contentExternalizer = contentExternalizer;
         this.#timer = timer;
         this.#queryProcesses = new AgentQueryProcesses(this.#processes, contentExternalizer);
@@ -163,6 +176,42 @@ export class AgentRuntimeManager {
                     this.#store.remove(sessionId);
                 }
             }
+        }
+    }
+
+    /**
+     * Stops the process of a Session that is being closed. Unlike retiring it, this keeps the stored Session,
+     * so the closed Session stays listed with its title and settings and can be reopened.
+     */
+    async #stopSessionProcess(sessionId: string, runtime: AgentSession): Promise<void> {
+        this.#executionProcesses.detach(sessionId, runtime);
+        await this.#processes.retire(runtime, () => runtime.close());
+    }
+
+    #isKnownSession(sessionId: string): boolean {
+        return (
+            this.#executionProcesses.get(sessionId) !== undefined ||
+            this.#executionProcesses.pending(sessionId) !== undefined ||
+            this.#store.read(sessionId) instanceof FoundAcpStoredSession
+        );
+    }
+
+    /**
+     * Marks a Session closed and tells every client why, once for each closing. Clients show `reason` to their
+     * users as is. Unknown Sessions have nothing to close.
+     */
+    #announceClosed(sessionId: string, reason: string): void {
+        if (this.#closedSessions.has(sessionId) || !this.#isKnownSession(sessionId)) {
+            return;
+        }
+        this.#closedSessions.add(sessionId);
+        this.#onSessionClosed({ kind: SESSION_CLOSE_NOTICE_KIND, reason, sessionId });
+    }
+
+    /** A closed Session fails the operations that would silently reopen it, so a client learns that its view is stale. */
+    #assertOpen(sessionId: string): void {
+        if (this.#closedSessions.has(sessionId)) {
+            throw new AcpExecutionError("The Session is closed; reopen it to continue", {}, SESSION_CLOSED_ERROR_CODE);
         }
     }
 
@@ -289,12 +338,19 @@ export class AgentRuntimeManager {
     async #prepareSession(
         options: AcpPrepareOptions,
         recovery: AcpSessionRecovery,
+        closed: ClosedSessionHandling,
         metrics: OperationMetrics = unmeasuredOperationMetrics,
     ): Promise<AcpPreparedSession> {
         return await this.#operations.run(options, async (options) => {
             const closing = this.#sessionClosures.get(options.sessionId);
             if (closing !== undefined) {
                 await waitForSharedOperation(closing, options.signal);
+            }
+            if (closed === "reopen") {
+                // Preparing or restoring a Session is how a client reopens it.
+                this.#closedSessions.delete(options.sessionId);
+            } else {
+                this.#assertOpen(options.sessionId);
             }
             const stored = metrics.measureSync("session-state-read", () => this.#store.read(options.sessionId));
 
@@ -320,7 +376,7 @@ export class AgentRuntimeManager {
                     }
                     return runtime.prepared();
                 }
-                return await this.#prepareSession(options, recovery, metrics);
+                return await this.#prepareSession(options, recovery, closed, metrics);
             }
             const existing = this.#executionProcesses.get(options.sessionId);
             if (existing !== undefined) {
@@ -352,12 +408,16 @@ export class AgentRuntimeManager {
     readonly prepareSession = async (
         options: AcpPrepareOptions,
         metrics: OperationMetrics = unmeasuredOperationMetrics,
-    ): Promise<AcpPreparedSession> => await this.#prepareSession(options, { kind: "interactive-only" }, metrics);
+        closed: ClosedSessionHandling = "reopen",
+    ): Promise<AcpPreparedSession> =>
+        await this.#prepareSession(options, { kind: "interactive-only" }, closed, metrics);
 
     readonly restoreSession = async (
         options: AcpPrepareOptions,
         metrics: OperationMetrics = unmeasuredOperationMetrics,
-    ): Promise<AcpPreparedSession> => await this.#prepareSession(options, { kind: "history-required" }, metrics);
+        closed: ClosedSessionHandling = "reopen",
+    ): Promise<AcpPreparedSession> =>
+        await this.#prepareSession(options, { kind: "history-required" }, closed, metrics);
 
     /**
      * Opens a short-lived native ACP session only to read the local Agent's
@@ -449,6 +509,7 @@ export class AgentRuntimeManager {
 
     readonly prepareExecutionSession = async (options: AcpPrepareOptions): Promise<AcpPreparedSession> =>
         this.#operations.run(options, async (options) => {
+            this.#assertOpen(options.sessionId);
             const pending = this.#executionProcesses.pending(options.sessionId);
             if (pending !== undefined) {
                 await waitForSharedOperation(pending, options.signal);
@@ -496,6 +557,7 @@ export class AgentRuntimeManager {
         signal: AbortSignal,
     ): Promise<{ readonly title: string; readonly updatedAt: string }> =>
         await this.#operations.run({ sessionId, signal }, async (options) => {
+            this.#assertOpen(options.sessionId);
             const runtime = this.#executionProcesses.get(options.sessionId);
             if (runtime !== undefined) {
                 return await runtime.renameSession(title, options.signal);
@@ -580,6 +642,8 @@ export class AgentRuntimeManager {
 
     readonly runPrompt = async (options: AcpTurnOptions): Promise<AcpPromptResult> =>
         this.#operations.run(options, async (options) => {
+            // A close can land after the prompt was prepared; fail before the Session is reported working.
+            this.#assertOpen(options.sessionId);
             const stored = this.#store.read(options.sessionId);
             if (
                 stored instanceof FoundAcpStoredSession &&
@@ -654,6 +718,7 @@ export class AgentRuntimeManager {
         });
 
     readonly respondPermission = async (options: AcpPermissionResponseOptions): Promise<void> => {
+        this.#assertOpen(options.sessionId);
         const runtime = this.#executionProcesses.get(options.sessionId);
         if (runtime === undefined) {
             throw new AcpExecutionError("The permission request session is unavailable", {}, "session_not_found");
@@ -662,6 +727,7 @@ export class AgentRuntimeManager {
     };
 
     readonly respondElicitation = async (options: AcpElicitationResponseOptions): Promise<void> => {
+        this.#assertOpen(options.sessionId);
         const runtime = this.#executionProcesses.get(options.sessionId);
         if (runtime === undefined) {
             throw new AcpExecutionError("The elicitation request session is unavailable", {}, "session_not_found");
@@ -676,11 +742,13 @@ export class AgentRuntimeManager {
                 await waitForSharedOperation(existing, options.signal);
                 return;
             }
+            // Announce first: clients must learn of the closing while its process is still going down.
+            this.#announceClosed(options.sessionId, "This Session was closed on request.");
             const release = (async (): Promise<void> => {
                 const pending = this.#executionProcesses.pending(options.sessionId);
                 const runtime = pending === undefined ? this.#executionProcesses.get(options.sessionId) : await pending;
                 if (runtime !== undefined) {
-                    await this.#retireSessionProcess(options.sessionId, runtime, async () => await runtime.close());
+                    await this.#stopSessionProcess(options.sessionId, runtime);
                 }
             })();
             const deadline = Promise.withResolvers<void>();
@@ -790,6 +858,7 @@ export class AgentRuntimeManager {
 
     readonly ensureSession = async (options: AcpPrepareOptions): Promise<AgentSession> =>
         this.#operations.run(options, async (options) => {
+            this.#assertOpen(options.sessionId);
             const existing = this.#executionProcesses.get(options.sessionId);
             if (existing !== undefined) {
                 if (!existing.belongsTo(options.agent.id, options.cwd, options.additionalDirectories)) {
@@ -899,6 +968,8 @@ export class AgentRuntimeManager {
             const existing = linked[0];
             if (origin.kind === "import" && existing !== undefined) {
                 return await this.#executionProcesses.use(existing.sessionId, async () => {
+                    // Importing a Session the Runtime already tracks opens it again, even when it was closed.
+                    this.#closedSessions.delete(existing.sessionId);
                     const runtime = await this.ensureSession({
                         ...options,
                         sessionId: existing.sessionId,

@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
+import { SESSION_CLOSED_ERROR_CODE, type SessionStatusChangedEvent } from "@moxt-ai/mobius-sdk/protocol";
 import { describe, expect, it, vi } from "vitest";
 
 import { AgentRuntimeManager, createWritableAcpStream } from "../../src/acp/agent-runtime-manager.ts";
@@ -789,6 +790,49 @@ child.once("exit", (code) => process.exit(code ?? 84));
                 signal: new AbortController().signal,
             });
             expect(observer.agentText()).toBe("Claude Code turn 1: selected agent");
+        } finally {
+            await manager.close();
+        }
+    });
+
+    it("Given a conversation closed after its prompt was prepared, When the prompt runs, Then the Runtime reports session_closed without reporting the conversation working", async () => {
+        const statuses: SessionStatusChangedEvent[] = [];
+        const manager = new AgentRuntimeManager({
+            observer: new NullAcpSessionObserver(),
+            store: new MemoryAcpSessionStore(),
+            adapters: acpAdapters,
+            sessionIdentity: "assigned",
+            onSessionStatusChanged: (event) => statuses.push(event),
+            contentExternalizer: new AcpContentExternalizer(new UnretainedExternalContentStore()),
+            timer: systemTimer,
+            maxProcesses: null,
+        });
+        const preparation = {
+            additionalDirectories: [],
+            agent: new LocalAgentDefinition("codex", "Codex", process.execPath, [
+                fakeAgentPath,
+                "--agent-name",
+                "Codex",
+            ]),
+            cwd: process.cwd(),
+            sessionId: "closed-conversation",
+            signal: new AbortController().signal,
+        };
+
+        try {
+            await manager.prepareExecutionSession(preparation);
+            await manager.closeSession(preparation.sessionId, preparation.signal);
+
+            await expect(
+                manager.runPrompt({
+                    ...preparation,
+                    commandId: "command-after-close",
+                    images: [],
+                    prompt: "Too late",
+                    resources: [],
+                }),
+            ).rejects.toMatchObject({ code: SESSION_CLOSED_ERROR_CODE });
+            expect(statuses).toEqual([]);
         } finally {
             await manager.close();
         }

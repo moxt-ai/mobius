@@ -1,4 +1,4 @@
-import type { SessionOperationFailedEvent } from "@moxt-ai/mobius-sdk/protocol";
+import { SESSION_CLOSED_ERROR_CODE, type SessionOperationFailedEvent } from "@moxt-ai/mobius-sdk/protocol";
 import type { HttpError } from "../http-error.ts";
 
 export class ProjectScope {
@@ -15,6 +15,7 @@ function sessionRuntimeErrorStatus(code: string): number {
     }
     if (
         code === "session_busy" ||
+        code === SESSION_CLOSED_ERROR_CODE ||
         code === "session_conflict" ||
         code === "idempotency_conflict" ||
         code === "steering_target_unavailable" ||
