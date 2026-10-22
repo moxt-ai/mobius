@@ -4,6 +4,7 @@ import type {
     CreateElicitationResponse,
     RequestPermissionRequest,
     RequestPermissionResponse,
+    ToolCallUpdate,
 } from "@agentclientprotocol/sdk";
 import {
     SESSION_ELICITATION_REQUESTED_KIND,
@@ -18,6 +19,7 @@ import {
     type SessionPermissionResolvedEvent,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { AcpExecutionError } from "./acp-error.ts";
+import type { ToolCallDescription } from "./announced-tool-calls.ts";
 import { normalizeElicitationFields, validateElicitationContent } from "./elicitation.ts";
 import { PendingElicitation, PendingPermission } from "./pending-interactions.ts";
 import type {
@@ -30,6 +32,7 @@ import { readString, truncate } from "./value-utils.ts";
 interface SessionInteractionContext {
     readonly sessionId: () => string;
     readonly cwd: () => string;
+    readonly describeToolCall: (toolCall: ToolCallUpdate) => ToolCallDescription;
     readonly commandId: () => string;
     readonly assertNativeSession: (sessionId: string) => void;
     readonly observer: () => AcpSessionObserver;
@@ -170,20 +173,21 @@ export class AcpSessionInteractions {
         };
         signal.addEventListener("abort", abort, { once: true });
         try {
+            const toolCall = this.#context.describeToolCall(request.toolCall);
             await this.#notifyPermissionRequested({
                 commandId: this.#context.commandId(),
                 details: {
                     cwd: this.#context.cwd(),
-                    rawInput: request.toolCall.rawInput,
-                    locations: request.toolCall.locations ?? [],
+                    rawInput: toolCall.rawInput,
+                    locations: toolCall.locations ?? [],
                 },
                 interactionId,
                 kind: SESSION_PERMISSION_REQUESTED_KIND,
                 options,
                 sessionId: this.#context.sessionId(),
-                title: truncate(request.toolCall.title ?? "Permission required", 500),
+                title: truncate(toolCall.title ?? "Permission required", 500),
                 toolCallId: truncate(request.toolCall.toolCallId, 255),
-                toolKind: truncate(request.toolCall.kind ?? "other", 64),
+                toolKind: truncate(toolCall.kind ?? "other", 64),
             });
             return await pending.completion.promise;
         } finally {

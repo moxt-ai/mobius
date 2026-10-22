@@ -34,10 +34,16 @@ import {
     encodeAgentSettingsDiscoveryFailedEvent,
 } from "../session/agent/settings.ts";
 import {
+    decodeSessionConfigReadCommand,
+    decodeSessionConfigReadResult,
     decodeSessionConfigUpdatedEvent,
     decodeSessionConfigureCommand,
+    encodeSessionConfigReadCommand,
+    encodeSessionConfigReadResult,
     encodeSessionConfigUpdatedEvent,
     encodeSessionConfigureCommand,
+    SESSION_CONFIG_READ_KIND,
+    SESSION_CONFIG_READ_RESULT_KIND,
     SESSION_CONFIG_UPDATED_KIND,
     SESSION_CONFIGURE_KIND,
 } from "../session/configuration/index.ts";
@@ -77,6 +83,7 @@ import {
 import {
     decodeSessionCloseCommand,
     decodeSessionClosedEvent,
+    decodeSessionCloseNoticeEvent,
     decodeSessionInfoUpdatedEvent,
     decodeSessionListCommand,
     decodeSessionOperationFailedEvent,
@@ -90,6 +97,7 @@ import {
     decodeSessionsQueriedEvent,
     encodeSessionCloseCommand,
     encodeSessionClosedEvent,
+    encodeSessionCloseNoticeEvent,
     encodeSessionInfoUpdatedEvent,
     encodeSessionListCommand,
     encodeSessionOperationFailedEvent,
@@ -102,6 +110,7 @@ import {
     encodeSessionsListedEvent,
     encodeSessionsQueriedEvent,
     SESSION_CLOSE_KIND,
+    SESSION_CLOSE_NOTICE_KIND,
     SESSION_CLOSED_KIND,
     SESSION_INFO_UPDATED_KIND,
     SESSION_LIST_KIND,
@@ -251,6 +260,11 @@ const serviceToDaemonSignatures = {
         encodeSessionConfigureCommand,
         decodeSessionConfigureCommand,
     ),
+    [SESSION_CONFIG_READ_KIND]: defineMessageSignature(
+        SESSION_CONFIG_READ_KIND,
+        encodeSessionConfigReadCommand,
+        decodeSessionConfigReadCommand,
+    ),
     [SESSION_RENAME_KIND]: defineMessageSignature(
         SESSION_RENAME_KIND,
         encodeSessionRenameCommand,
@@ -319,6 +333,11 @@ const daemonToServiceSignatures = {
         encodeSessionClosedEvent,
         decodeSessionClosedEvent,
     ),
+    [SESSION_CLOSE_NOTICE_KIND]: defineMessageSignature(
+        SESSION_CLOSE_NOTICE_KIND,
+        encodeSessionCloseNoticeEvent,
+        decodeSessionCloseNoticeEvent,
+    ),
     [SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND]: defineMessageSignature(
         SESSION_PREVIEW_HISTORY_PAGE_LOADED_KIND,
         encodeSessionPreviewHistoryPageLoaded,
@@ -328,6 +347,11 @@ const daemonToServiceSignatures = {
         SESSION_CONFIG_UPDATED_KIND,
         encodeSessionConfigUpdatedEvent,
         decodeSessionConfigUpdatedEvent,
+    ),
+    [SESSION_CONFIG_READ_RESULT_KIND]: defineMessageSignature(
+        SESSION_CONFIG_READ_RESULT_KIND,
+        encodeSessionConfigReadResult,
+        decodeSessionConfigReadResult,
     ),
     [SESSION_RENAMED_KIND]: defineMessageSignature(
         SESSION_RENAMED_KIND,

@@ -94,34 +94,81 @@ it("Given long ASCII and multibyte directory references, When the SDK browses th
     }
 });
 
-it.runIf(process.platform === "linux")(
-    "Given a real project path longer than 1533 UTF-8 bytes, When the SDK browses it, Then the daemon returns its canonical directory and parent references",
-    async () => {
-        const root = await mkdtemp(join(tmpdir(), "mobius-long-workspace-"));
-        try {
-            const path = join(root, ...Array.from({ length: 8 }, () => "\u00e9".repeat(110)));
-            await mkdir(path, { recursive: true });
-            const canonical = await realpath(path);
-            await using platform = await startTestPlatform();
-            const signal = AbortSignal.timeout(30_000);
-            const project = await platform.developer.createProject(
-                platform.appId,
-                {
-                    clientReference: `client-${crypto.randomUUID()}`,
-                    displayName: "Long project",
-                    idempotencyKey: `project-${crypto.randomUUID()}`,
-                    locationHint: "wnam",
-                },
-                signal,
-            );
-            const runtime = await platform.connectAgent(project.projectId);
-            const directoryId = `path-${Buffer.from(canonical).toString("base64url")}`;
-            const listing = await runtime.client.runtimes.listWorkspace(runtime.runtimeId, directoryId, signal);
-            expect(listing.directoryId).toBe(directoryId);
-            expect(listing.directoryLabel).toBe(canonical);
+it("Given a deeply nested multibyte project path, When the SDK browses it and runs a conversation, Then directory metadata and native history remain accessible", async () => {
+    const root = await mkdtemp(join(tmpdir(), "mobius-long-workspace-"));
+    try {
+        const path = join(
+            root,
+            ...Array.from({ length: process.platform === "linux" ? 8 : 3 }, () => "\u00e9".repeat(110)),
+        );
+        await mkdir(path, { recursive: true });
+        const canonical = await realpath(path);
+        await using platform = await startTestPlatform();
+        const signal = AbortSignal.timeout(30_000);
+        const project = await platform.developer.createProject(
+            platform.appId,
+            {
+                clientReference: `client-${crypto.randomUUID()}`,
+                displayName: "Long project",
+                idempotencyKey: `project-${crypto.randomUUID()}`,
+                locationHint: "wnam",
+            },
+            signal,
+        );
+        const runtime = await platform.connectAgent(project.projectId);
+        const directoryId = `path-${Buffer.from(canonical).toString("base64url")}`;
+        const listing = await runtime.client.runtimes.listWorkspace(runtime.runtimeId, directoryId, signal);
+        expect(listing.directoryId).toBe(directoryId);
+        expect(listing.directoryLabel).toBe(canonical);
+        if (process.platform === "linux") {
             expect(listing.parentDirectoryId.length).toBeGreaterThan(2048);
-        } finally {
-            await rm(root, { recursive: true, force: true });
         }
-    },
-);
+        const identity = { additionalDirectoryIds: [], agentId: "claude", directoryId };
+        const sessionId = `session-${crypto.randomUUID()}`;
+        await runtime.client.sessions.create(
+            {
+                ...identity,
+                bindingId: RUNTIME_WORKSPACE_BINDING_ID,
+                policy: new MobiusRecordingPolicy("full", 60_000, 10, 1_024),
+                runtimeId: runtime.runtimeId,
+                sessionId,
+                title: "Long workspace conversation",
+            },
+            signal,
+        );
+        await runtime.client.turns.submitToRuntime(
+            runtime.runtimeId,
+            sessionId,
+            {
+                ...identity,
+                content: "Remember the long workspace conversation",
+                idempotencyKey: `turn-${crypto.randomUUID()}`,
+                images: [],
+                resources: [],
+            },
+            signal,
+        );
+        expect(await runtime.client.runtimes.listSessions(runtime.runtimeId, 100, signal)).toContainEqual(
+            expect.objectContaining({ sessionId, directoryId, directoryLabel: canonical, prompted: true }),
+        );
+        const discovery = await runtime.client.runtimes.nativeSessions(
+            runtime.runtimeId,
+            { ...identity, action: "list", cursor: null, discoveryId: null },
+            signal,
+        );
+        if (discovery.action !== "list" || discovery.entries[0] === undefined) {
+            throw new Error("Missing native conversation in the long workspace");
+        }
+        expect(discovery.entries[0]).toMatchObject({ directoryId, directoryLabel: canonical });
+        const events = await runtime.client.sessions.previewRuntimeNativeEvents(
+            runtime.runtimeId,
+            discovery.entries[0].nativeSessionId,
+            identity,
+            { cursor: null, eventLimit: 100 },
+            signal,
+        );
+        expect(JSON.stringify(events)).toContain("Remember the long workspace conversation");
+    } finally {
+        await rm(root, { recursive: true, force: true });
+    }
+});

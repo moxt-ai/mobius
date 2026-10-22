@@ -23,6 +23,9 @@ export const SESSION_RESTORE_KIND = "session.restore";
 export const SESSION_RESTORED_KIND = "session.restored";
 export const SESSION_CLOSE_KIND = "session.close";
 export const SESSION_CLOSED_KIND = "session.closed";
+export const SESSION_CLOSE_NOTICE_KIND = "session.close.notice";
+/** Failure code of an operation that needs a Session the Runtime has closed and nobody has reopened. */
+export const SESSION_CLOSED_ERROR_CODE = "session_closed";
 export const SESSION_STATUS_CHANGED_KIND = "session.status.changed";
 export const SESSION_COMMANDS_UPDATED_KIND = "session.commands.updated";
 export const SESSION_INFO_UPDATED_KIND = "session.info.updated";
@@ -199,6 +202,22 @@ const sessionClosedEventSchema = z
 
 export type SessionClosedEvent = z.infer<typeof sessionClosedEventSchema>;
 
+/**
+ * Tells every observer that the Runtime closed a Session. Unlike `session.closed`, which answers one
+ * `session.close` request, a notice is not tied to a request, so it also reaches clients that did not ask.
+ * `reason` is a sentence a client can show its user as is, such as "This Session was closed on request.".
+ * Show it as plain text and don't branch on it: its wording can change between Runtime versions.
+ */
+const sessionCloseNoticeEventSchema = z
+    .object({
+        kind: z.literal(SESSION_CLOSE_NOTICE_KIND),
+        reason: z.string().min(1).max(500),
+        sessionId: IDENTIFIER,
+    })
+    .readonly();
+
+export type SessionCloseNoticeEvent = z.infer<typeof sessionCloseNoticeEventSchema>;
+
 const sessionCommandsUpdatedEventSchema = z
     .object({
         commands: z.array(sessionCommandSchema).max(500).readonly(),
@@ -266,6 +285,10 @@ export const decodeSessionClosedEvent = (encoded: string): SessionClosedEvent =>
     decode(encoded, sessionClosedEventSchema);
 export const encodeSessionClosedEvent = (message: SessionClosedEvent): string =>
     encode(message, sessionClosedEventSchema);
+export const decodeSessionCloseNoticeEvent = (encoded: string): SessionCloseNoticeEvent =>
+    decode(encoded, sessionCloseNoticeEventSchema);
+export const encodeSessionCloseNoticeEvent = (message: SessionCloseNoticeEvent): string =>
+    encode(message, sessionCloseNoticeEventSchema);
 export const decodeSessionStatusChangedEvent = (encoded: string): SessionStatusChangedEvent =>
     decode(encoded, sessionStatusChangedEventSchema);
 export const encodeSessionStatusChangedEvent = (message: SessionStatusChangedEvent): string =>

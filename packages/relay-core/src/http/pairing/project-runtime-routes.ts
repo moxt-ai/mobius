@@ -2,6 +2,7 @@ import {
     decodeAgentSettingsDiscoverCommand,
     decodeNativeSessionRequest,
     decodeSessionCloseCommand,
+    decodeSessionConfigReadCommand,
     decodeSessionConfigureCommand,
     decodeSessionListCommand,
     decodeSessionPrepareCommand,
@@ -322,6 +323,24 @@ export function createProjectRuntimeRoutes() {
                 return context.json(result);
             },
         )
+        .get("/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/configuration", async (context) => {
+            const command = decodeSessionConfigReadCommand(
+                JSON.stringify({
+                    kind: "session.config.read",
+                    requestId: crypto.randomUUID(),
+                    sessionId: validateIdentifier(context.req.param("sessionId"), "session_id"),
+                }),
+            );
+            const result = await context.env.services.runtimePairings.requestControl(
+                validateIdentifier(context.req.param("projectId"), "project_id"),
+                validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
+                bearerToken(context.req.raw),
+                command,
+                context.req.raw.signal,
+            );
+            context.header("Cache-Control", "no-store");
+            return context.json(result);
+        })
         .post(
             "/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/configuration",
             bodyParser<RelayHttpEnvironment>(),

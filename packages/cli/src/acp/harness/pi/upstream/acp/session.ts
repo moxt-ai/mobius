@@ -31,7 +31,7 @@ type SessionCreateParams = {
     readonly environment: Readonly<NodeJS.ProcessEnv>;
     readonly mcpServers: McpServer[];
     readonly conn: PiAcpClient;
-    readonly fileCommands?: import("./slash-commands.js").FileSlashCommand[];
+    readonly fileCommands?: FileSlashCommand[];
     readonly piCommand?: string;
     readonly origin: Extract<PiSessionOrigin, { readonly kind: "new" | "fork" }>;
 };

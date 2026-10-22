@@ -7,17 +7,18 @@ import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 import {
     decodeMessageKind,
-    decodeRuntimeHeartbeatEvent,
     decodeSessionEventEnvelope,
-    encodeRuntimeHeartbeatAckEvent,
+    decodeSessionOperationFailedEvent,
     encodeRuntimeLivenessReadyEvent,
     encodeSessionPromptCommand,
     encodeWorkspaceListCommand,
     MOBIUS_API_PREFIX,
-    RUNTIME_HEARTBEAT_ACK_KIND,
+    RUNTIME_HEARTBEAT_ACK_MESSAGE,
     RUNTIME_HEARTBEAT_KIND,
+    RUNTIME_HEARTBEAT_MESSAGE,
     RUNTIME_LIVENESS_READY_KIND,
     SESSION_EVENT_KIND,
+    SESSION_OPERATION_FAILED_KIND,
     SESSION_PROMPT_KIND,
     type SessionEvent,
     WORKSPACE_ENTRIES_KIND,
@@ -206,6 +207,19 @@ class ClientFrameQueue {
     };
 }
 
+/** Reads daemon frames until one carries `kind`, skipping unrelated traffic. */
+async function nextFrameOfKind(
+    frames: ClientFrameQueue,
+    kind: string,
+    remaining: number = 16,
+): Promise<ClientWebSocketFrame> {
+    if (remaining === 0) {
+        throw new Error(`Test relay did not receive a ${kind} frame`);
+    }
+    const frame = await frames.next();
+    return decodeMessageKind(frame.text) === kind ? frame : await nextFrameOfKind(frames, kind, remaining - 1);
+}
+
 function writeServerCloseFrame(socket: Duplex, code: number, reason: string): void {
     const reasonPayload = Buffer.from(reason, "utf8");
     const payload = Buffer.allocUnsafe(reasonPayload.byteLength + 2);
@@ -314,20 +328,14 @@ describe("daemon relay connection liveness", () => {
             const heartbeatFrame = await firstFrame;
             expect(livenessRequested).toBe(true);
             expect(heartbeatFrame.opcode).toBe(1);
-            const firstHeartbeat = decodeRuntimeHeartbeatEvent(heartbeatFrame.text);
-            expect(firstHeartbeat.kind).toBe(RUNTIME_HEARTBEAT_KIND);
+            // The Relay's host answers only this exact text, without waking the Relay.
+            expect(heartbeatFrame.text).toBe(RUNTIME_HEARTBEAT_MESSAGE);
             const firstSocket = daemonSockets[0];
             if (firstSocket === undefined) {
                 throw new Error("Test relay did not retain the daemon connection");
             }
             const controlResponse = readClientFrame(firstSocket);
-            writeServerTextFrame(
-                firstSocket,
-                encodeRuntimeHeartbeatAckEvent({
-                    heartbeatId: firstHeartbeat.heartbeatId,
-                    kind: RUNTIME_HEARTBEAT_ACK_KIND,
-                }),
-            );
+            writeServerTextFrame(firstSocket, RUNTIME_HEARTBEAT_ACK_MESSAGE);
             writeServerTextFrame(
                 firstSocket,
                 encodeWorkspaceListCommand({
@@ -341,8 +349,7 @@ describe("daemon relay connection liveness", () => {
 
             const unacknowledgedHeartbeat = readClientFrame(firstSocket);
             await vi.advanceTimersByTimeAsync(20_000);
-            const secondHeartbeat = decodeRuntimeHeartbeatEvent((await unacknowledgedHeartbeat).text);
-            expect(secondHeartbeat.heartbeatId).not.toBe(firstHeartbeat.heartbeatId);
+            expect((await unacknowledgedHeartbeat).text).toBe(RUNTIME_HEARTBEAT_MESSAGE);
 
             const refreshedConnection = waitForUpgrade();
             await vi.advanceTimersByTimeAsync(10_000);
@@ -614,8 +621,15 @@ describe("daemon relay connection liveness", () => {
             if (socket === undefined) {
                 throw new Error("Test relay did not retain the daemon connection");
             }
-            const response = readClientFrame(socket);
-            writeServerTextFrame(socket, JSON.stringify({ kind: "session.future.changed", sessionId: "session-1" }));
+            const frames = new ClientFrameQueue(socket);
+            writeServerTextFrame(
+                socket,
+                JSON.stringify({
+                    kind: "session.future.changed",
+                    requestId: "future-changed-request",
+                    sessionId: "session-1",
+                }),
+            );
             writeServerTextFrame(
                 socket,
                 encodeWorkspaceListCommand({
@@ -625,7 +639,14 @@ describe("daemon relay connection liveness", () => {
                     requestId: "after-twenty-minutes",
                 }),
             );
-            expect(decodeMessageKind((await response).text)).toBe(WORKSPACE_ENTRIES_KIND);
+            // The unrecognized kind is answered directly instead of skipped, so
+            // a newer sender fails fast; the connection itself must survive.
+            const failed = decodeSessionOperationFailedEvent((await frames.next()).text);
+            expect(failed.kind).toBe(SESSION_OPERATION_FAILED_KIND);
+            expect(failed.code).toBe("unsupported_protocol_message_kind");
+            expect(failed.requestId).toBe("future-changed-request");
+            expect(failed.sessionId).toBe("session-1");
+            expect(decodeMessageKind((await frames.next()).text)).toBe(WORKSPACE_ENTRIES_KIND);
 
             expect({ catalogRequestCount, connectionCount, requestedUrls }).toEqual({
                 catalogRequestCount: 2,
@@ -635,6 +656,156 @@ describe("daemon relay connection liveness", () => {
         } finally {
             cancellation.abort();
             await vi.runAllTimersAsync();
+            await runtime;
+            for (const socket of sockets) {
+                socket.destroy();
+            }
+            await new Promise<void>((resolve, reject) => {
+                relay.close((error) => {
+                    if (error === undefined) {
+                        resolve();
+                        return;
+                    }
+                    reject(error);
+                });
+            });
+            restoreEnvironmentVariable("MOBIUS_CODEX_PATH", previousCodexPath);
+            restoreEnvironmentVariable("MOBIUS_CLAUDE_PATH", previousClaudePath);
+            restoreEnvironmentVariable("MOBIUS_STATE_DIRECTORY", previousStateDirectory);
+            restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
+            restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
+            restoreEnvironmentVariable("PATH", previousPath);
+            await rm(stateDirectory, { force: true, recursive: true });
+        }
+    });
+
+    it("Given a connected daemon, When the Relay sends a command kind the daemon does not recognize, Then the daemon answers with a typed failure and keeps serving the same connection", async () => {
+        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-unsupported-command-"));
+        const defaultWorkspace = join(stateDirectory, "workspace");
+        await mkdir(defaultWorkspace);
+        const relay = createServer((request, response) => {
+            if (
+                request.method === "PUT" &&
+                request.url === `${MOBIUS_API_PREFIX}/channels/unsupported-channel/catalog`
+            ) {
+                request.resume();
+                response.writeHead(204);
+                response.end();
+                return;
+            }
+            response.writeHead(426);
+            response.end();
+        });
+        const sockets = new Set<Duplex>();
+        const upgradeWaiters: Array<() => void> = [];
+        let connectionCount = 0;
+        let daemonSocket: Duplex | undefined;
+        const waitForUpgrade = (): Promise<void> => new Promise((resolve) => upgradeWaiters.push(resolve));
+        relay.on("connection", (socket) => {
+            sockets.add(socket);
+            socket.once("close", () => sockets.delete(socket));
+            socket.on("error", () => undefined);
+        });
+        relay.on("upgrade", (request, socket) => {
+            const key = request.headers["sec-websocket-key"];
+            if (typeof key !== "string") {
+                socket.destroy();
+                return;
+            }
+            const accept = createHash("sha1").update(`${key}${WEBSOCKET_GUID}`).digest("base64");
+            socket.write(
+                "HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+            );
+            daemonSocket = socket;
+            connectionCount += 1;
+            respondToClientClose(socket);
+            writeServerTextFrame(
+                socket,
+                JSON.stringify({
+                    kind: RUNTIME_LIVENESS_READY_KIND,
+                }),
+            );
+            upgradeWaiters.shift()?.();
+        });
+        await listen(relay);
+        const cancellation = new AbortController();
+        const previousCodexPath = process.env["MOBIUS_CODEX_PATH"];
+        const previousClaudePath = process.env["MOBIUS_CLAUDE_PATH"];
+        const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
+        const previousNoProxy = process.env["NO_PROXY"];
+        const previousLowerNoProxy = process.env["no_proxy"];
+        const previousPath = process.env["PATH"];
+        process.env["MOBIUS_CODEX_PATH"] = join(stateDirectory, "missing-codex");
+        process.env["MOBIUS_CLAUDE_PATH"] = join(stateDirectory, "missing-claude");
+        process.env["MOBIUS_STATE_DIRECTORY"] = stateDirectory;
+        process.env["NO_PROXY"] = "127.0.0.1,localhost";
+        process.env["no_proxy"] = "127.0.0.1,localhost";
+        process.env["PATH"] = "";
+        const config = createRuntimeConfig({
+            defaultWorkspace,
+            channelId: "unsupported-channel",
+            relayUrl: new URL(
+                `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/unsupported-channel/daemon`,
+            ),
+        });
+
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date("2026-09-04T00:00:00.000Z"));
+        const firstConnection = waitForUpgrade();
+        const runtime = runRuntime(config, cancellation.signal);
+
+        try {
+            await firstConnection;
+            const socket = daemonSocket;
+            if (socket === undefined) {
+                throw new Error("Test relay did not retain the daemon connection");
+            }
+            const frames = new ClientFrameQueue(socket);
+
+            // A newer Relay sends a command kind this daemon version predates.
+            writeServerTextFrame(
+                socket,
+                JSON.stringify({
+                    kind: "session.future.read",
+                    requestId: "future-read-request",
+                    sessionId: "future-session",
+                }),
+            );
+            const rejection = decodeSessionOperationFailedEvent(
+                (await nextFrameOfKind(frames, SESSION_OPERATION_FAILED_KIND)).text,
+            );
+            expect(rejection.code).toBe("unsupported_protocol_message_kind");
+            expect(rejection.requestId).toBe("future-read-request");
+            expect(rejection.sessionId).toBe("future-session");
+
+            // The rejection must not disturb the connection: a known command
+            // on the same socket still completes.
+            writeServerTextFrame(
+                socket,
+                encodeWorkspaceListCommand({
+                    bindingId: "workspace",
+                    directoryId: "default",
+                    kind: WORKSPACE_LIST_KIND,
+                    requestId: "after-rejection",
+                }),
+            );
+            await nextFrameOfKind(frames, WORKSPACE_ENTRIES_KIND);
+            expect(connectionCount).toBe(1);
+
+            // A command whose identifiers do not satisfy the identifier
+            // contract is still answered, with placeholder correlation.
+            writeServerTextFrame(socket, JSON.stringify({ kind: "session.future.read", requestId: "??" }));
+            const placeholder = decodeSessionOperationFailedEvent(
+                (await nextFrameOfKind(frames, SESSION_OPERATION_FAILED_KIND)).text,
+            );
+            expect(placeholder.requestId).toBe("unsupported");
+            expect(placeholder.sessionId).toBe("");
+            expect(connectionCount).toBe(1);
+        } finally {
+            cancellation.abort();
             await runtime;
             for (const socket of sockets) {
                 socket.destroy();
@@ -800,15 +971,8 @@ describe("daemon relay connection liveness", () => {
             ) {
                 (await timer.waitForTask(SESSION_EVENT_BATCH_WINDOW_MILLISECONDS)).run();
                 let frame = await firstFrame.next();
-                if (decodeMessageKind(frame.text) === RUNTIME_HEARTBEAT_KIND) {
-                    const heartbeat = decodeRuntimeHeartbeatEvent(frame.text);
-                    writeServerTextFrame(
-                        firstSocket,
-                        encodeRuntimeHeartbeatAckEvent({
-                            heartbeatId: heartbeat.heartbeatId,
-                            kind: RUNTIME_HEARTBEAT_ACK_KIND,
-                        }),
-                    );
+                if (frame.text === RUNTIME_HEARTBEAT_MESSAGE) {
+                    writeServerTextFrame(firstSocket, RUNTIME_HEARTBEAT_ACK_MESSAGE);
                     frame = await firstFrame.next();
                 }
                 while (decodeMessageKind(frame.text) !== SESSION_EVENT_KIND) {
@@ -886,19 +1050,12 @@ describe("daemon relay connection liveness", () => {
                 throw new Error("Test relay did not observe resumed live events");
             }
             let replayedFrame = await resumedFrame.next();
-            if (decodeMessageKind(replayedFrame.text) === RUNTIME_HEARTBEAT_KIND) {
-                const heartbeat = decodeRuntimeHeartbeatEvent(replayedFrame.text);
+            if (replayedFrame.text === RUNTIME_HEARTBEAT_MESSAGE) {
                 const secondSocket = daemonSockets[1];
                 if (secondSocket === undefined) {
                     throw new Error("Test relay did not retain the replacement connection");
                 }
-                writeServerTextFrame(
-                    secondSocket,
-                    encodeRuntimeHeartbeatAckEvent({
-                        heartbeatId: heartbeat.heartbeatId,
-                        kind: RUNTIME_HEARTBEAT_ACK_KIND,
-                    }),
-                );
+                writeServerTextFrame(secondSocket, RUNTIME_HEARTBEAT_ACK_MESSAGE);
                 replayedFrame = await resumedFrame.next();
             }
             expect(decodeMessageKind(replayedFrame.text)).toBe(WORKSPACE_ENTRIES_KIND);

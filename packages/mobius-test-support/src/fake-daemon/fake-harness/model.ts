@@ -27,6 +27,11 @@ export type HarnessOutput =
           readonly blocks: readonly string[];
       }
     | {
+          /** Pushes agent-side config options as a config_option_update, including an explicit empty list. */
+          readonly kind: "agent-config";
+          readonly configOptions: readonly import("@agentclientprotocol/sdk").SessionConfigOption[];
+      }
+    | {
           readonly kind: "activity";
           readonly title: string;
           readonly output: string;

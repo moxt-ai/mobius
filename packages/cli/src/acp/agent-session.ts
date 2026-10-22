@@ -1,3 +1,4 @@
+import { setImmediate as yieldToRuntime } from "node:timers/promises";
 import {
     type CompleteElicitationNotification,
     type ContentBlock,
@@ -26,6 +27,7 @@ import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp-
 import { AgentConnection } from "./agent-connection.ts";
 import { type AcpTurnState, IdleAcpTurn, RunningAcpTurn } from "./agent-turn.ts";
 import { AgentUpdateStream } from "./agent-update-stream.ts";
+import { AnnouncedToolCalls } from "./announced-tool-calls.ts";
 import type { AcpClientHandler } from "./create-client.ts";
 import type { AcpContentExternalizer } from "./external-content/acp-content-externalizer.ts";
 import {
@@ -103,6 +105,7 @@ export class AgentSession implements AcpClientHandler {
     readonly #connection: AgentConnection;
     readonly #contentExternalizer: AcpContentExternalizer;
     readonly #interactions: AcpSessionInteractions;
+    readonly #announcedToolCalls = new AnnouncedToolCalls();
     readonly #additionalDirectories: readonly string[];
     readonly #agentId: string;
     readonly #cwd: string;
@@ -154,6 +157,7 @@ export class AgentSession implements AcpClientHandler {
         this.#verifiedAgentVersion = agent.agentVersion;
         this.#interactions = new AcpSessionInteractions({
             cwd: () => this.#cwd,
+            describeToolCall: this.#announcedToolCalls.describe,
             sessionId: () => this.#mobiusSessionId,
             commandId: () => this.#turn.commandId,
             assertNativeSession: (sessionId) => this.assertNativeSession(sessionId),
@@ -986,6 +990,7 @@ export class AgentSession implements AcpClientHandler {
             throw failure;
         } finally {
             this.#turn = new IdleAcpTurn();
+            this.#announcedToolCalls.clear();
         }
     };
 
@@ -1100,8 +1105,17 @@ export class AgentSession implements AcpClientHandler {
         this.#interactions.respondPermission(options);
     readonly respondElicitation = (options: AcpElicitationResponseOptions) =>
         this.#interactions.respondElicitation(options);
-    readonly onPermission = (request: RequestPermissionRequest, signal: AbortSignal) =>
-        this.#interactions.onPermission(request, signal);
+    readonly onPermission = async (request: RequestPermissionRequest, signal: AbortSignal) => {
+        // The ACP connection dispatches incoming messages concurrently, so this
+        // request can reach its handler before updates the Agent wrote earlier.
+        // Those updates were already read; one turn of the event loop lets them
+        // reach the update stream, and draining it applies the tool call this
+        // request references before the permission is described.
+        await yieldToRuntime(undefined, { signal });
+        await this.#updates.drained();
+        signal.throwIfAborted();
+        return await this.#interactions.onPermission(request, signal);
+    };
     readonly onElicitation = (
         request: CreateElicitationRequest,
         signal: AbortSignal,
@@ -1161,6 +1175,9 @@ export class AgentSession implements AcpClientHandler {
                 update.sessionUpdate === "plan_removed")
         ) {
             return;
+        }
+        if (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") {
+            this.#announcedToolCalls.record(update);
         }
         if (update.sessionUpdate === "available_commands_update") {
             const commands: SessionCommand[] = update.availableCommands

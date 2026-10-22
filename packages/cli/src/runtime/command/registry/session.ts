@@ -1,4 +1,5 @@
 import type {
+    SessionConfigReadCommand,
     SessionConfigureCommand,
     SessionPrepareCommand,
     SessionReadyEvent,
@@ -7,6 +8,8 @@ import type {
     WorkspaceListCommand,
 } from "@moxt-ai/mobius-sdk/protocol";
 import {
+    SESSION_CONFIG_READ_KIND,
+    SESSION_CONFIG_READ_RESULT_KIND,
     SESSION_CONFIGURE_KIND,
     SESSION_PREPARE_KIND,
     SESSION_RENAME_KIND,
@@ -15,7 +18,11 @@ import {
 } from "@moxt-ai/mobius-sdk/protocol";
 import type { WebSocket } from "undici";
 import { AcpExecutionError } from "../../../acp/acp-error.ts";
-import type { AcpSessionRecovery, AgentRuntimeManager } from "../../../acp/agent-runtime-manager.ts";
+import type {
+    AcpSessionRecovery,
+    AgentRuntimeManager,
+    ClosedSessionHandling,
+} from "../../../acp/agent-runtime-manager.ts";
 import { AccumulatingOperationMetrics } from "../../../infra/operation-metrics.ts";
 import type { AcpAgentDefinition, RuntimeConfig } from "../../config.ts";
 import type { NativeSessionService } from "../../native-sessions/service.ts";
@@ -37,6 +44,7 @@ export async function resolveCatalogAgent(
 async function prepareSession(
     command: SessionPrepareCommand,
     recovery: AcpSessionRecovery,
+    closed: ClosedSessionHandling,
     config: RuntimeConfig,
     directories: WorkspaceDirectoryService,
     sessions: AgentRuntimeManager,
@@ -67,8 +75,8 @@ async function prepareSession(
             command.transient === true
                 ? await sessions.inspectSession(preparation, metrics)
                 : recovery.kind === "history-required"
-                  ? await sessions.restoreSession(preparation, metrics)
-                  : await sessions.prepareSession(preparation, metrics);
+                  ? await sessions.restoreSession(preparation, metrics, closed)
+                  : await sessions.prepareSession(preparation, metrics, closed);
         const configuration = command.configuration;
         const configOptions =
             configuration === undefined
@@ -143,6 +151,7 @@ export async function executeSessionPrepare(
         const readyEvent = await prepareSession(
             command,
             { kind: "interactive-only" },
+            "reopen",
             config,
             directories,
             sessions,
@@ -199,6 +208,7 @@ export async function executeSessionRestore(
                 sessionState: "provisioned",
             },
             { kind: "history-required" },
+            "reopen",
             config,
             directories,
             sessions,
@@ -361,5 +371,86 @@ export const sessionRenameCommand: RuntimeCommand = {
             throw new Error("Command kind mismatch");
         }
         void executeSessionRename(context.socket, message, context.sessions, context.signal);
+    },
+};
+
+export async function executeSessionConfigRead(
+    socket: WebSocket,
+    command: SessionConfigReadCommand,
+    config: RuntimeConfig,
+    directories: WorkspaceDirectoryService,
+    sessions: AgentRuntimeManager,
+    nativeSessions: NativeSessionService,
+    diagnostics: RelayConnectionDiagnostics,
+    signal: AbortSignal,
+): Promise<void> {
+    const metrics = new AccumulatingOperationMetrics();
+    try {
+        const entry = await metrics.measure("session-lookup", async () => {
+            const [found] = await nativeSessions.querySessions([command.sessionId], signal);
+            if (found === undefined) {
+                throw new AcpExecutionError("The Session was not found", {}, "session_not_found");
+            }
+            return found;
+        });
+        const ready = await prepareSession(
+            {
+                additionalDirectoryIds: entry.additionalDirectories.map((directory) => directory.directoryId),
+                agentId: entry.agentId,
+                bindingId: config.bindingId,
+                directoryId: entry.directoryId,
+                kind: "session.prepare",
+                requestId: command.requestId,
+                sessionId: command.sessionId,
+                sessionState: "provisioned",
+            },
+            // A settings read must not force history loading: Agents without
+            // load support would fail even with a live process whose config is
+            // already readable, and prepare reuses the current configuration.
+            { kind: "interactive-only" },
+            // Reading settings must not reopen a Session that a client closed.
+            "keep-closed",
+            config,
+            directories,
+            sessions,
+            metrics,
+            signal,
+        );
+        send(socket, {
+            configOptions: ready.configOptions,
+            kind: SESSION_CONFIG_READ_RESULT_KIND,
+            requestId: command.requestId,
+            sessionId: command.sessionId,
+        });
+    } catch (error) {
+        diagnostics.daemonDiagnostic(
+            "session_config_read_failed",
+            command.requestId,
+            {
+                code: operationErrorCode(error),
+                sessionId: command.sessionId,
+            },
+            error,
+        );
+        reportOperationFailure(socket, command.requestId, command.sessionId, error, metrics.snapshot());
+    }
+}
+
+export const sessionConfigReadCommand: RuntimeCommand = {
+    kind: SESSION_CONFIG_READ_KIND,
+    handle: (context, message): void => {
+        if (message.kind !== SESSION_CONFIG_READ_KIND) {
+            throw new Error("Command kind mismatch");
+        }
+        void executeSessionConfigRead(
+            context.socket,
+            message,
+            context.config,
+            context.directories,
+            context.sessions,
+            context.nativeSessions,
+            context.diagnostics,
+            context.signal,
+        );
     },
 };

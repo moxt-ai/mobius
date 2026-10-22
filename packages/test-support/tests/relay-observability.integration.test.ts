@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readD1Migrations } from "@cloudflare/vitest-plugin";
+import { RUNTIME_HEARTBEAT_ACK_MESSAGE, RUNTIME_HEARTBEAT_MESSAGE } from "@moxt-ai/mobius-sdk/protocol";
 import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import { afterAll, beforeAll, expect, it } from "vitest";
@@ -36,7 +37,7 @@ beforeAll(async () => {
             compatibilityDate: "2026-09-03",
             durableObjects: {
                 RUNTIME_RELAY: { className: "RuntimeRelay", useSQLite: true },
-                PROJECT_RELAY: { className: "ProjectRelay", useSQLite: true },
+                PROJECT_RELAY: { className: "ProjectDO", useSQLite: true },
                 UNAVAILABLE_PROJECT: { className: "UnavailableProject", useSQLite: true },
             },
             d1Databases: ["PLATFORM_DIRECTORY_DATABASE"],
@@ -271,7 +272,7 @@ it("identifies a Project Relay overload through the public HTTP API", async () =
     expect(logs.slice(start)).toContainEqual(
         expect.objectContaining({
             event: "project_relay_request_failed",
-            durableObjectClass: "ProjectRelay",
+            durableObjectClass: "ProjectDO",
             durableObjectId: expect.any(String),
             projectId,
             cfRay: "project-failure-ray",
@@ -306,7 +307,7 @@ it("identifies a Project database overload through the public project creation A
     const log = logs.slice(start).find((log) => log["event"] === "project_database_request_failed");
     expect(log).toMatchObject({
         event: "project_database_request_failed",
-        durableObjectClass: "ProjectRelay",
+        durableObjectClass: "ProjectDO",
         durableObjectId: expect.any(String),
         projectId: expect.any(String),
         operation: expect.any(String),
@@ -381,15 +382,15 @@ async function daemon() {
 }
 
 // @no-uc: Technical regression; real close callbacks must retain peer diagnostics while detach and reconnect still work.
-it("records overload close details and connection epochs without logging healthy heartbeat payloads", async () => {
+it("records overload close details and connection epochs without logging healthy heartbeats", async () => {
     const socket = await daemon();
     try {
         const start = logs.length;
         const heartbeat = new Promise((resolve) =>
             socket.addEventListener("message", (event) => resolve(event.data), { once: true }),
         );
-        socket.send(JSON.stringify({ kind: "runtime.heartbeat", heartbeatId: "heartbeat-payload-canary" }));
-        expect(JSON.parse(String(await heartbeat))).toMatchObject({ kind: "runtime.heartbeat.ack" });
+        socket.send(RUNTIME_HEARTBEAT_MESSAGE);
+        expect(await heartbeat).toBe(RUNTIME_HEARTBEAT_ACK_MESSAGE);
         expect(logs.slice(start)).toHaveLength(0);
         socket.close(1013, "Service overloaded; retry later.");
         await expect

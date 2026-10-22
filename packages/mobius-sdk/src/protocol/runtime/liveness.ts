@@ -7,6 +7,13 @@ export const RUNTIME_HEARTBEAT_ACK_KIND = "runtime.heartbeat.ack";
 export const RUNTIME_PING_KIND = "runtime.ping";
 export const RUNTIME_PONG_KIND = "runtime.pong";
 
+/**
+ * The Relay's host answers this exact text without waking the Relay, so a heartbeat and its
+ * acknowledgement carry no per-heartbeat data and must keep this byte-for-byte encoding.
+ */
+export const RUNTIME_HEARTBEAT_MESSAGE = `{"kind":"${RUNTIME_HEARTBEAT_KIND}"}`;
+export const RUNTIME_HEARTBEAT_ACK_MESSAGE = `{"kind":"${RUNTIME_HEARTBEAT_ACK_KIND}"}`;
+
 export interface RuntimeStatusEvent {
     readonly kind: typeof RUNTIME_STATUS_KIND;
     readonly online: boolean;
@@ -18,11 +25,23 @@ export interface RuntimeLivenessReadyEvent {
 }
 
 export interface RuntimeHeartbeatEvent {
-    readonly heartbeatId: string;
     readonly kind: typeof RUNTIME_HEARTBEAT_KIND;
 }
 
 export interface RuntimeHeartbeatAckEvent {
+    readonly kind: typeof RUNTIME_HEARTBEAT_ACK_KIND;
+}
+
+/**
+ * A heartbeat from a daemon released before heartbeats became fixed text. The host cannot answer
+ * it, so the Relay echoes the identifier that daemon expects in its acknowledgement.
+ */
+export interface IdentifiedRuntimeHeartbeatEvent {
+    readonly heartbeatId: string;
+    readonly kind: typeof RUNTIME_HEARTBEAT_KIND;
+}
+
+export interface IdentifiedRuntimeHeartbeatAckEvent {
     readonly heartbeatId: string;
     readonly kind: typeof RUNTIME_HEARTBEAT_ACK_KIND;
 }
@@ -54,24 +73,22 @@ export function decodeRuntimeLivenessReadyEvent(encoded: string): RuntimeLivenes
     return { kind: RUNTIME_LIVENESS_READY_KIND };
 }
 
-export function decodeRuntimeHeartbeatEvent(encoded: string): RuntimeHeartbeatEvent {
+export function decodeRuntimeHeartbeatEvent(encoded: string): RuntimeHeartbeatEvent | IdentifiedRuntimeHeartbeatEvent {
     const value = parseJson(encoded);
     assertKind(value, RUNTIME_HEARTBEAT_KIND);
-
-    return {
-        heartbeatId: readIdentifier(value, "heartbeatId"),
-        kind: RUNTIME_HEARTBEAT_KIND,
-    };
+    return "heartbeatId" in value
+        ? { heartbeatId: readIdentifier(value, "heartbeatId"), kind: RUNTIME_HEARTBEAT_KIND }
+        : { kind: RUNTIME_HEARTBEAT_KIND };
 }
 
-export function decodeRuntimeHeartbeatAckEvent(encoded: string): RuntimeHeartbeatAckEvent {
+export function decodeRuntimeHeartbeatAckEvent(
+    encoded: string,
+): RuntimeHeartbeatAckEvent | IdentifiedRuntimeHeartbeatAckEvent {
     const value = parseJson(encoded);
     assertKind(value, RUNTIME_HEARTBEAT_ACK_KIND);
-
-    return {
-        heartbeatId: readIdentifier(value, "heartbeatId"),
-        kind: RUNTIME_HEARTBEAT_ACK_KIND,
-    };
+    return "heartbeatId" in value
+        ? { heartbeatId: readIdentifier(value, "heartbeatId"), kind: RUNTIME_HEARTBEAT_ACK_KIND }
+        : { kind: RUNTIME_HEARTBEAT_ACK_KIND };
 }
 
 export function decodeRuntimePingCommand(encoded: string): RuntimePingCommand {
@@ -94,12 +111,16 @@ export function encodeRuntimeLivenessReadyEvent(message: RuntimeLivenessReadyEve
     return JSON.stringify(decodeRuntimeLivenessReadyEvent(JSON.stringify(message)));
 }
 
-export function encodeRuntimeHeartbeatEvent(message: RuntimeHeartbeatEvent): string {
-    return JSON.stringify(decodeRuntimeHeartbeatEvent(JSON.stringify(message)));
+export function encodeRuntimeHeartbeatEvent(message: RuntimeHeartbeatEvent | IdentifiedRuntimeHeartbeatEvent): string {
+    const decoded = decodeRuntimeHeartbeatEvent(JSON.stringify(message));
+    return "heartbeatId" in decoded ? JSON.stringify(decoded) : RUNTIME_HEARTBEAT_MESSAGE;
 }
 
-export function encodeRuntimeHeartbeatAckEvent(message: RuntimeHeartbeatAckEvent): string {
-    return JSON.stringify(decodeRuntimeHeartbeatAckEvent(JSON.stringify(message)));
+export function encodeRuntimeHeartbeatAckEvent(
+    message: RuntimeHeartbeatAckEvent | IdentifiedRuntimeHeartbeatAckEvent,
+): string {
+    const decoded = decodeRuntimeHeartbeatAckEvent(JSON.stringify(message));
+    return "heartbeatId" in decoded ? JSON.stringify(decoded) : RUNTIME_HEARTBEAT_ACK_MESSAGE;
 }
 
 export function encodeRuntimePingCommand(message: RuntimePingCommand): string {

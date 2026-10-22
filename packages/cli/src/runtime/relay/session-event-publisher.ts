@@ -3,6 +3,7 @@ import {
     encodeDaemonToServiceMessage,
     SESSION_EVENT_BATCH_MAX_SIZE,
     SESSION_EVENT_KIND,
+    type SessionCloseNoticeEvent,
     type SessionInfoUpdatedEvent,
     type SessionLiveEvent,
     type SessionStatusChangedEvent,
@@ -52,6 +53,7 @@ export class RuntimeSessionEventPublisher {
     };
     readonly publishStatus = (event: SessionStatusChangedEvent): void => this.#send(event);
     readonly publishInfo = (event: SessionInfoUpdatedEvent): void => this.#send(event);
+    readonly publishClosed = (event: SessionCloseNoticeEvent): void => this.#send(event);
 
     readonly #send = (message: DaemonToServiceMessage): void => {
         const socket = this.#socket;

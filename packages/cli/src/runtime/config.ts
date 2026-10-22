@@ -1,5 +1,5 @@
 import { join, resolve } from "node:path";
-import { mobiusApiPath, RUNTIME_WORKSPACE_BINDING_ID } from "@moxt-ai/mobius-sdk/protocol";
+import { RUNTIME_WORKSPACE_BINDING_ID } from "@moxt-ai/mobius-sdk/protocol";
 import { readStateDirectory } from "../storage/state-directory.ts";
 import { type AcpAgentDefinition, LocalAgentCatalog } from "./agent-catalog/local-agent.ts";
 
@@ -91,24 +91,4 @@ export function createRuntimeConfig(
         relayUrl: connection.relayUrl,
         ...(resolveAgent === undefined ? {} : { resolveAgent }),
     };
-}
-
-export function loadRuntimeConfig(): RuntimeConfig {
-    const relayUrl = new URL(
-        process.env["MOBIUS_RELAY_URL"] ?? `ws://127.0.0.1:8787${mobiusApiPath("/channels/local/daemon")}`,
-    );
-    relayUrl.searchParams.set("token", process.env["MOBIUS_RELAY_TOKEN"] ?? "local-development-token");
-
-    if (relayUrl.protocol !== "ws:" && relayUrl.protocol !== "wss:") {
-        throw new Error("MOBIUS_RELAY_URL must use ws or wss");
-    }
-
-    return createRuntimeConfig(
-        {
-            defaultWorkspace: loadDefaultWorkspace(),
-            channelId: process.env["MOBIUS_CHANNEL_ID"] ?? "local",
-            relayUrl,
-        },
-        [],
-    );
 }

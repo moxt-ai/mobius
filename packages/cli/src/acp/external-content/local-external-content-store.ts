@@ -44,18 +44,6 @@ export interface ExternalContentStore {
     ) => Promise<ResolvedExternalContent | null>;
 }
 
-export class UnretainedExternalContentStore implements ExternalContentStore {
-    readonly put: ExternalContentStore["put"] = async ({ bytes, signal }) => {
-        signal.throwIfAborted();
-        return { byteLength: bytes.byteLength, key: createHash("sha256").update(bytes).digest("hex") };
-    };
-
-    readonly resolve: ExternalContentStore["resolve"] = (_sessionId, _request, signal) => {
-        signal.throwIfAborted();
-        return Promise.resolve(null);
-    };
-}
-
 async function atomicWrite(path: string, bytes: Uint8Array, signal: AbortSignal): Promise<void> {
     const temporary = `${path}.${randomUUID()}.tmp`;
     try {

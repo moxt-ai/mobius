@@ -1,7 +1,9 @@
 import {
     decodeServiceToDaemonMessage,
+    isIdentifier,
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_LIVENESS_READY_KIND,
+    SESSION_OPERATION_FAILED_KIND,
     UnsupportedProtocolMessageKindError,
 } from "@moxt-ai/mobius-sdk/protocol";
 import { type MessageEvent, WebSocket } from "undici";
@@ -33,6 +35,56 @@ function closeRelaySocket(socket: WebSocket, code: number, reason: string): void
             console.error("Mobius daemon could not release the Relay WebSocket", fallbackError);
         }
     }
+}
+
+interface RelayCommandCorrelation {
+    readonly requestId: string;
+    readonly sessionId: string;
+}
+
+/**
+ * Reads correlation identifiers from a command the daemon rejected. The
+ * message failed schema validation, so its fields are untrusted and are
+ * echoed only when they already satisfy the identifier contract.
+ */
+function readCommandCorrelation(encoded: string): RelayCommandCorrelation {
+    let value: unknown;
+    try {
+        value = JSON.parse(encoded);
+    } catch {
+        return { requestId: "unsupported", sessionId: "" };
+    }
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        return { requestId: "unsupported", sessionId: "" };
+    }
+    const requestId = Reflect.get(value, "requestId");
+    const sessionId = Reflect.get(value, "sessionId");
+    return {
+        requestId: typeof requestId === "string" && isIdentifier(requestId) ? requestId : "unsupported",
+        sessionId: typeof sessionId === "string" && isIdentifier(sessionId) ? sessionId : "",
+    };
+}
+
+/**
+ * Answers a command kind this daemon does not implement. The connection stays
+ * open for adjacent-version senders, but the caller learns immediately that
+ * the operation will not run instead of waiting for its own deadline.
+ */
+function rejectUnsupportedCommand(
+    socket: WebSocket,
+    correlation: RelayCommandCorrelation,
+    rejection: UnsupportedProtocolMessageKindError,
+): void {
+    if (socket.readyState !== WebSocket.OPEN) {
+        return;
+    }
+    send(socket, {
+        code: rejection.code,
+        kind: SESSION_OPERATION_FAILED_KIND,
+        message: "The Relay sent a command this daemon does not support",
+        requestId: correlation.requestId,
+        sessionId: correlation.sessionId,
+    });
 }
 
 export interface RelayConnectionOptions {
@@ -158,8 +210,8 @@ export async function runRelayConnection({
                         throw error;
                     }
                 },
-                unresponsive: (heartbeatId, timeoutMilliseconds) => {
-                    diagnostics.heartbeatTimedOut(connectionEpoch, heartbeatId, timeoutMilliseconds);
+                unresponsive: (timeoutMilliseconds) => {
+                    diagnostics.heartbeatTimedOut(connectionEpoch, timeoutMilliseconds);
                     diagnostics.connectionClosed(
                         connectionEpoch,
                         4001,
@@ -212,17 +264,29 @@ export async function runRelayConnection({
                         return;
                     }
                     if (kind === RUNTIME_HEARTBEAT_ACK_KIND) {
-                        connectionLiveness.acknowledge(message);
+                        connectionLiveness.acknowledge();
                         return;
                     }
                     commands.dispatch(message);
                 } catch (error) {
                     if (error instanceof UnsupportedProtocolMessageKindError) {
-                        console.warn("Mobius daemon skipped an unsupported Relay message", {
+                        const correlation = readCommandCorrelation(encoded);
+                        console.warn("Mobius daemon rejected an unsupported Relay command", {
                             code: error.code,
                             direction: error.direction,
                             messageKind: error.messageKind,
                         });
+                        diagnostics.daemonDiagnostic(
+                            "relay_command_unsupported",
+                            correlation.requestId,
+                            {
+                                code: error.code,
+                                direction: error.direction,
+                                messageKind: error.messageKind,
+                            },
+                            error,
+                        );
+                        rejectUnsupportedCommand(socket, correlation, error);
                         return;
                     }
                     console.error("Mobius daemon rejected a message", error);

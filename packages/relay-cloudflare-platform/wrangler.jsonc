@@ -3,6 +3,7 @@
     "name": "mobius-platform-local",
     "main": "src/worker.ts",
     "compatibility_date": "2026-09-03",
+    "compatibility_flags": ["enable_request_signal"],
     "kv_namespaces": [{ "binding": "APP_CREDENTIAL_CACHE" }],
     "durable_objects": {
         "bindings": [
@@ -12,7 +13,7 @@
             },
             {
                 "name": "PROJECT_RELAY",
-                "class_name": "ProjectRelay"
+                "class_name": "ProjectDO"
             }
         ]
     },
@@ -44,7 +45,8 @@
         {
             "tag": "platform-remove-legacy-session-relays",
             "deleted_classes": ["PlatformSessionRelay", "NonCloudRetentionSessionRelayDO"]
-        }
+        },
+        { "tag": "platform-rename-project-do", "renamed_classes": [{ "from": "ProjectRelay", "to": "ProjectDO" }] }
     ],
     "d1_databases": [
         {
@@ -69,7 +71,10 @@
         "run_worker_first": ["/mobius/api/*"]
     },
     "observability": {
-        "enabled": true
+        "enabled": true,
+        "logs": {
+            "invocation_logs": false
+        }
     },
     "env": {
         "staging": {
@@ -81,7 +86,7 @@
             "durable_objects": {
                 "bindings": [
                     { "name": "RUNTIME_RELAY", "class_name": "RuntimeRelay" },
-                    { "name": "PROJECT_RELAY", "class_name": "ProjectRelay" }
+                    { "name": "PROJECT_RELAY", "class_name": "ProjectDO" }
                 ]
             },
             "d1_databases": [
@@ -107,7 +112,7 @@
             "durable_objects": {
                 "bindings": [
                     { "name": "RUNTIME_RELAY", "class_name": "RuntimeRelay" },
-                    { "name": "PROJECT_RELAY", "class_name": "ProjectRelay" }
+                    { "name": "PROJECT_RELAY", "class_name": "ProjectDO" }
                 ]
             },
             "d1_databases": [

@@ -7,6 +7,7 @@ import { DisabledSessionRecording, type SessionRecording } from "../infra/sessio
 import { BestEffortRecording } from "../service/channel/best-effort-recording.ts";
 import { ChannelActor } from "../service/channel/channel-actor.ts";
 import { ChannelCredentialService } from "../service/channel/channel-credential-service.ts";
+import { LocalRuntimeRequests } from "../service/channel/local-runtime-requests.ts";
 import { RuntimeConnectionService } from "../service/channel/runtime-connection-service.ts";
 import { type RuntimePeers, RuntimeService } from "../service/channel/runtime-service.ts";
 import { ChannelCredentialStorage } from "../storage/channel-credential-storage.ts";
@@ -86,10 +87,23 @@ export function createDurableObjectDependencies(cx: {
         readonly waitUntil: (operation: Promise<void>) => void;
     };
 }) {
+    const requests = new LocalRuntimeRequests();
+    const source = cx.gateways.peers;
+    const peers: RuntimePeers = {
+        accept: source.accept,
+        sockets: source.sockets,
+        daemonConnections: source.daemonConnections,
+        daemons: source.daemons,
+        hosts: source.hosts,
+        nativeRequests: source.nativeRequests,
+        viewers: source.viewers,
+        historyRecipients: () => [...source.historyRecipients(), ...requests.routes().map(({ socket }) => socket)],
+        operations: () => [...source.operations(), ...requests.routes()],
+    };
     const runtime = createRuntimeRelayDependencies({
         database: cx.doDatabase,
         gateways: {
-            peers: cx.gateways.peers,
+            peers,
             recording: cx.gateways.recording ?? new DisabledSessionRecording(),
         },
         storages: cx.storages,
@@ -97,7 +111,7 @@ export function createDurableObjectDependencies(cx: {
     });
     return {
         doDatabase: cx.doDatabase,
-        gateways: cx.gateways,
+        gateways: { ...cx.gateways, peers, requests },
         storages: cx.storages,
         utilities: cx.utilities,
         services: runtime.services,

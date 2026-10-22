@@ -508,7 +508,7 @@ async function startRelay(ready = true): Promise<{ readonly origin: URL; readonl
         socket.on("message", (bytes) => {
             const message = decodeDaemonToServiceMessage(bytes.toString());
             if (message.kind === "runtime.heartbeat") {
-                socket.send(JSON.stringify({ kind: "runtime.heartbeat.ack", heartbeatId: message.heartbeatId }));
+                socket.send(JSON.stringify({ kind: "runtime.heartbeat.ack" }));
             }
         });
         if (ready) {

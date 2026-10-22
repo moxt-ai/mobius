@@ -13,7 +13,9 @@ function socketLogContext(webSocket: WebSocket) {
             role,
             ...("connectionEpoch" in identity
                 ? { connectionEpoch: identity.connectionEpoch, connectionId: identity.connectionId }
-                : { channelId: identity.channelId }),
+                : "channelId" in identity
+                  ? { channelId: identity.channelId }
+                  : {}),
         };
     } catch {
         // A socket can fail before it has a valid attachment.

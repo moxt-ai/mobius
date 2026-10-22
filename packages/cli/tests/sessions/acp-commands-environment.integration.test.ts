@@ -2,14 +2,14 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { acpAdapters } from "../../src/acp/adapter/registry.ts";
 import { AgentRuntimeManager } from "../../src/acp/agent-runtime-manager.ts";
 import { AcpContentExternalizer } from "../../src/acp/external-content/acp-content-externalizer.ts";
-import { UnretainedExternalContentStore } from "../../src/acp/external-content/local-external-content-store.ts";
 import { NullAcpSessionObserver } from "../../src/acp/session-contracts.ts";
 import { MemoryAcpSessionStore } from "../../src/acp/session-store.ts";
 import { createRuntimeConfig, LocalAgentDefinition, RuntimeLocalContext } from "../../src/runtime/config.ts";
 import { systemTimer } from "../../src/runtime/relay/timer.ts";
+import { acpAdapters } from "../support/acp-adapters.ts";
+import { UnretainedExternalContentStore } from "../support/unretained-external-content-store.ts";
 
 import { fakeAgent, fakeAgentPath, RecordingObserver } from "./acp-feature-fixture.ts";
 

@@ -38,6 +38,6 @@ export default {
 };
 
 export {
-    ProjectRelay,
+    ProjectDO,
     RuntimeRelay,
 } from "../../relay-cloudflare-platform/src/worker.ts";
